@@ -1,10 +1,8 @@
 import type { ArtifactRef } from '@forgeloop/contracts';
-import type { GeneratedPackageDraftSetV1, GeneratedPlanDraftV1 } from '@forgeloop/codex-runtime';
+import type { GeneratedPackageDraftSetV1 } from '@forgeloop/codex-runtime';
 import type { AutomationActorClass, AutomationActionRunStatus, AutomationPrecondition, AutomationScope } from '@forgeloop/domain';
 
 export type AutomationActionType =
-  | 'ensure_spec_draft'
-  | 'ensure_plan_draft'
   | 'ensure_package_drafts'
   | 'request_manual_path'
   | 'project_runtime_snapshot';
@@ -381,25 +379,6 @@ export interface FailActionInput {
   next_attempt_at?: string;
 }
 
-export interface EnsurePlanDraftCommandInput {
-  action_run_id: string;
-  claim_token?: string;
-  idempotency_key: string;
-  automation_precondition: AutomationPrecondition;
-  spec_revision_id: string;
-  generated_plan_draft: GeneratedPlanDraftV1;
-  generation_artifacts: ArtifactRef[];
-}
-
-export interface EnsureSpecDraftCommandInput {
-  action_run_id: string;
-  claim_token?: string;
-  idempotency_key: string;
-  automation_precondition: AutomationPrecondition;
-  generated_spec_draft: GeneratedSpecDraftV1;
-  generation_artifacts: ArtifactRef[];
-}
-
 export interface EnsurePackageDraftsCommandInput {
   action_run_id: string;
   claim_token?: string;
@@ -445,8 +424,6 @@ export interface AutomationExecutorClient {
     planRevisionId: string,
     input: { generationKey: string; actionRunId: string; claimToken: string },
   ): Promise<AutomationGenerationPackageContextV1>;
-  ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown>;
-  ensurePlanDraft(workItemId: string, input: EnsurePlanDraftCommandInput): Promise<unknown>;
   ensurePackageDrafts(planRevisionId: string, input: EnsurePackageDraftsCommandInput): Promise<unknown>;
   requestManualPathHold(input: RequestManualPathCommandInput): Promise<unknown>;
 }

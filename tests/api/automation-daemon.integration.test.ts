@@ -37,10 +37,10 @@ const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
 const now = '2026-05-16T00:00:00.000Z';
 const expectedCompletedActionTypes = [
-  'ensure_plan_draft',
+  'ensure_PLAN_draft',
   'project_runtime_snapshot',
 ] as const;
-const expectedInitialPendingActionTypes = ['ensure_plan_draft', 'project_runtime_snapshot'] as const;
+const expectedInitialPendingActionTypes = ['ensure_PLAN_draft', 'project_runtime_snapshot'] as const;
 
 const humanAdminHeaders = {
   'x-forgeloop-actor-id': actorOwner,
@@ -121,8 +121,8 @@ const fakeGenerationPlanning = (
 ): AutomationGenerationPlanningConfig => ({
   mode: 'fake',
   tasks: {
-    spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-    plan_draft: { enabled: true, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+    spec_draft: { enabled: true, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+    plan_draft: { enabled: true, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
     package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
     ...overrides,
   },
@@ -408,12 +408,12 @@ describe('HTTP automation daemon integration', () => {
     await expect(repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).resolves.toEqual([]);
 
     const runs = await actionRuns(repository);
-    expect(runs.map((actionRun) => actionRun.action_type)).toContain('ensure_spec_draft');
+    expect(runs.map((actionRun) => actionRun.action_type)).toContain('ensure_SPEC_draft');
     expect(runs.map((actionRun) => actionRun.action_type)).toContain('project_runtime_snapshot');
-    expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('ensure_plan_draft');
+    expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('ensure_PLAN_draft');
     expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('ensure_package_drafts');
     expect(runs.map((actionRun) => actionRun.action_type)).not.toContain('enqueue_package_run');
-    expectSucceededActionLifecycle(runs, 'ensure_spec_draft');
+    expectSucceededActionLifecycle(runs, 'ensure_SPEC_draft');
   });
 
   it('2A generates a Plan draft from an approved Spec and suppresses Package generation after human Plan approval', async () => {
@@ -445,7 +445,7 @@ describe('HTTP automation daemon integration', () => {
     expect(completedActionRuns).toHaveLength(expectedCompletedActionTypes.length);
     expect(completedActionRuns.filter((actionRun) => actionRun.status !== 'succeeded')).toHaveLength(0);
     expect(sortedActionTypes(completedActionRuns)).toEqual([...expectedCompletedActionTypes]);
-    const planAction = expectSucceededActionLifecycle(completedActionRuns, 'ensure_plan_draft');
+    const planAction = expectSucceededActionLifecycle(completedActionRuns, 'ensure_PLAN_draft');
     expectSucceededActionLifecycle(completedActionRuns, 'project_runtime_snapshot');
     expect(new Set(completedActionRuns.map((actionRun) => actionRun.idempotency_key)).size).toBe(completedActionRuns.length);
     expect(planAction.action_input_json).toMatchObject({ work_item_id: seeded.workItem.id, spec_revision_id: seeded.specRevisionId });
@@ -516,10 +516,10 @@ describe('HTTP automation daemon integration', () => {
     expect(completedActionRuns.filter((actionRun) => actionRun.status !== 'succeeded')).toHaveLength(0);
     expect(sortedActionTypes(completedActionRuns)).toEqual([
       'ensure_package_drafts',
-      'ensure_plan_draft',
+      'ensure_PLAN_draft',
       'project_runtime_snapshot',
     ]);
-    expectSucceededActionLifecycle(completedActionRuns, 'ensure_plan_draft');
+    expectSucceededActionLifecycle(completedActionRuns, 'ensure_PLAN_draft');
     expectSucceededActionLifecycle(completedActionRuns, 'ensure_package_drafts');
     expectSucceededActionLifecycle(completedActionRuns, 'project_runtime_snapshot');
     expect(completedActionRuns.map((actionRun) => actionRun.action_type)).not.toContain('enqueue_package_run');
@@ -568,7 +568,7 @@ describe('HTTP automation daemon integration', () => {
     expect(sortedActionTypes(pendingActionRuns)).toEqual([...expectedInitialPendingActionTypes]);
     expect(pendingActionRuns).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ action_type: 'ensure_plan_draft', status: 'pending', attempt: 0 }),
+        expect.objectContaining({ action_type: 'ensure_PLAN_draft', status: 'pending', attempt: 0 }),
         expect.objectContaining({ action_type: 'project_runtime_snapshot', status: 'pending', attempt: 0 }),
       ]),
     );
@@ -602,7 +602,7 @@ describe('HTTP automation daemon integration', () => {
     const recoveredActionRuns = await actionRuns(repository);
     expect(new Set(recoveredActionRuns.map((actionRun) => actionRun.id))).toEqual(pendingIds);
     expect(new Set(recoveredActionRuns.map((actionRun) => actionRun.idempotency_key))).toEqual(pendingIdempotencyKeys);
-    expectSucceededActionLifecycle(recoveredActionRuns, 'ensure_plan_draft');
+    expectSucceededActionLifecycle(recoveredActionRuns, 'ensure_PLAN_draft');
     expectSucceededActionLifecycle(recoveredActionRuns, 'project_runtime_snapshot');
     expect((await repository.getWorkItem(seeded.workItem.id))?.current_plan_id).toEqual(expect.any(String));
   });

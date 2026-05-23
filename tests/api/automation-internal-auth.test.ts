@@ -40,17 +40,17 @@ describe('internal automation actor auth', () => {
     await request(app.getHttpServer()).get('/internal/automation/runtime-snapshot').expect(401);
   });
 
-  it('rejects unsigned Spec draft command requests', async () => {
+  it('rejects unsigned Package draft command requests', async () => {
     const { app } = await bootAutomationApp();
 
-    await request(app.getHttpServer()).post('/internal/automation/work-items/work-item-auth/ensure-spec-draft').send({}).expect(401);
+    await request(app.getHttpServer()).post('/internal/automation/plan-revisions/plan-revision-auth/ensure-package-drafts').send({}).expect(401);
   });
 
-  it('rejects unsigned Spec draft generation context requests', async () => {
+  it('rejects unsigned Package draft generation context requests', async () => {
     const { app } = await bootAutomationApp();
 
     await request(app.getHttpServer())
-      .get('/internal/automation/generation-context/work-items/work-item-auth/spec-draft?action_run_id=action-auth&claim_token=claim-auth')
+      .get('/internal/automation/generation-context/plan-revisions/plan-revision-auth/package-drafts?generation_key=default%3Aplan-revision-auth&action_run_id=action-auth&claim_token=claim-auth')
       .expect(401);
   });
 
@@ -126,7 +126,7 @@ describe('internal automation actor auth', () => {
     const { app } = await bootAutomationApp();
     const timestamp = new Date().toISOString();
     const rawBody =
-      '{"id":"auth-exact-body-action","action_type":"ensure_plan_draft","target_object_type":"work_item","target_object_id":"work-item-auth","target_revision_id":"spec-revision-auth","target_status":"approved","idempotency_key":"auth-exact-body-action-key","automation_scope":"repo:project-auth:repo-1","automation_settings_version":1,"capability_fingerprint":"capability-auth","precondition_fingerprint":"precondition-auth","action_input_json":{"work_item_id":"work-item-auth","spec_revision_id":"spec-revision-auth"}}';
+      '{"id":"auth-exact-body-action","action_type":"ensure_package_drafts","target_object_type":"plan_revision","target_object_id":"plan-revision-auth","target_revision_id":"default:plan-revision-auth","target_status":"approved","idempotency_key":"auth-exact-body-action-key","automation_scope":"repo:project-auth:repo-1","automation_settings_version":1,"capability_fingerprint":"capability-auth","precondition_fingerprint":"precondition-auth","action_input_json":{"plan_revision_id":"plan-revision-auth","generation_key":"default:plan-revision-auth"}}';
     const headers = signAutomationRequest({
       method: 'POST',
       pathAndQuery: '/internal/automation/actions',
@@ -149,14 +149,55 @@ describe('internal automation actor auth', () => {
       });
   });
 
-  it('authenticates signed Spec draft command requests with an exact JSON body before claim validation', async () => {
+  it('authenticates signed Package draft command requests with an exact JSON body before claim validation', async () => {
     const { app } = await bootAutomationApp();
     const timestamp = new Date().toISOString();
-    const rawBody =
-      '{"action_run_id":"auth-spec-draft-action","claim_token":"auth-spec-draft-claim","idempotency_key":"auth-spec-draft-key","automation_precondition":{"automation_scope":"repo:project-auth:repo-1","project_id":"project-auth","repo_id":"repo-1","automation_settings_version":1,"capability_fingerprint":"capability-auth","required_capability":"canGenerateSpecDraft","actor_class":"automation_daemon","daemon_identity":"daemon-1"},"generated_spec_draft":{"schema_version":"spec_draft.v1","summary":"Generated spec summary","content":"Generated spec content","background":"Generated background","goals":["Goal 1"],"scope_in":["Scope in"],"scope_out":["Scope out"],"acceptance_criteria":["Criterion 1"],"risk_notes":[],"test_strategy_summary":"Run API and daemon tests."},"generation_artifacts":[]}';
+    const rawBody = JSON.stringify({
+      action_run_id: 'auth-package-drafts-action',
+      claim_token: 'auth-package-drafts-claim',
+      idempotency_key: 'auth-package-drafts-key',
+      automation_precondition: {
+        automation_scope: 'repo:project-auth:repo-1',
+        project_id: 'project-auth',
+        repo_id: 'repo-1',
+        target_object_type: 'plan_revision',
+        target_object_id: 'plan-revision-auth',
+        target_revision_id: 'default:plan-revision-auth',
+        target_status: 'approved',
+        automation_settings_version: 1,
+        capability_fingerprint: 'capability-auth',
+        required_capability: 'canGeneratePackageDrafts',
+        actor_class: 'automation_daemon',
+        daemon_identity: 'daemon-1',
+      },
+      generation_key: 'default:plan-revision-auth',
+      generated_package_drafts: {
+        schema_version: 'package_drafts.v1',
+        manifest: {
+          manifest_version: 'execution_package_manifest.v1',
+          package_set_key: 'auth-package-set',
+          package_count: 1,
+          dependency_order: ['auth-package'],
+        },
+        packages: [
+          {
+            package_key: 'auth-package',
+            repo_id: 'repo-1',
+            objective: 'Validate signed package draft command authentication.',
+            required_checks: [{ check_id: 'unit', display_name: 'Unit tests', command: 'pnpm test', timeout_seconds: 120, blocks_review: true }],
+            required_artifact_kinds: ['execution_summary'],
+            allowed_paths: ['apps/control-plane-api/**'],
+            forbidden_paths: [],
+            source_mutation_policy: 'path_policy_scoped',
+          },
+        ],
+        dependencies: [],
+      },
+      generation_artifacts: [],
+    });
     const headers = signAutomationRequest({
       method: 'POST',
-      pathAndQuery: '/internal/automation/work-items/work-item-auth/ensure-spec-draft',
+      pathAndQuery: '/internal/automation/plan-revisions/plan-revision-auth/ensure-package-drafts',
       rawBody,
       actorId: 'daemon-actor',
       actorClass: 'automation_daemon',
@@ -166,17 +207,17 @@ describe('internal automation actor auth', () => {
     });
 
     await request(app.getHttpServer())
-      .post('/internal/automation/work-items/work-item-auth/ensure-spec-draft')
+      .post('/internal/automation/plan-revisions/plan-revision-auth/ensure-package-drafts')
       .set(headers)
       .set('Content-Type', 'application/json')
       .send(rawBody)
       .expect(409);
   });
 
-  it('authenticates signed Spec draft generation context requests before claim validation', async () => {
+  it('authenticates signed Package draft generation context requests before claim validation', async () => {
     const { app } = await bootAutomationApp();
     const pathAndQuery =
-      '/internal/automation/generation-context/work-items/work-item-auth/spec-draft?action_run_id=action-auth&claim_token=claim-auth';
+      '/internal/automation/generation-context/plan-revisions/plan-revision-auth/package-drafts?generation_key=default%3Aplan-revision-auth&action_run_id=action-auth&claim_token=claim-auth';
     const timestamp = new Date().toISOString();
     const headers = signAutomationRequest({
       method: 'GET',

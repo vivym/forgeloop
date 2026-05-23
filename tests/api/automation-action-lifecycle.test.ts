@@ -56,7 +56,7 @@ const signedPost = (app: INestApplication, pathAndQuery: string, body: Record<st
 
 const createActionBody = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
-  action_type: 'ensure_plan_draft',
+  action_type: 'ensure_PLAN_draft',
   target_object_type: 'work_item',
   target_object_id: 'work-item-1',
   target_revision_id: 'spec-revision-1',
@@ -124,7 +124,7 @@ describe('internal automation action lifecycle', () => {
 
     expect(response.body.action).toMatchObject({
       id: 'action-create',
-      action_type: 'ensure_plan_draft',
+      action_type: 'ensure_PLAN_draft',
       target_object_type: 'work_item',
       target_object_id: 'work-item-1',
       status: 'pending',

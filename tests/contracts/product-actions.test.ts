@@ -35,19 +35,19 @@ const validNavigateAction = {
 } as const;
 
 const validCommand = {
-  type: 'generate_spec_draft',
-  object_type: 'spec',
-  object_id: 'spec_1',
+  type: 'generate_packages',
+  object_type: 'plan_revision',
+  object_id: 'plan_rev_1',
   scope_ref: { type: 'requirement', id: 'wi_1' },
-  spec_id: 'spec_1',
+  plan_revision_id: 'plan_rev_1',
 } as const;
 
 const validCommandAction = {
-  id: 'generate-spec-draft',
+  id: 'generate-packages',
   lane_id: 'requirements',
   priority: 'tertiary',
-  label: 'Generate spec draft',
-  description: 'Create the first draft for review.',
+  label: 'Generate packages',
+  description: 'Create package drafts for review.',
   enabled: true,
   kind: 'command',
   command: validCommand,
@@ -112,9 +112,29 @@ describe('ProductAction contracts', () => {
     expect('WorkItemActionsResponse' in contracts).toBe(false);
   });
 
-  it('parses valid navigate and command actions', () => {
+  it('parses valid navigate and package command actions', () => {
     expect(productActionSchema.parse(validNavigateAction)).toEqual(validNavigateAction);
     expect(productActionSchema.parse(validCommandAction)).toEqual(validCommandAction);
+  });
+
+  it('rejects retired direct document draft product commands', () => {
+    const retiredTypes = [
+      ['generate', 'spec', 'draft'].join('_'),
+      ['generate', 'plan', 'draft'].join('_'),
+    ];
+
+    for (const type of retiredTypes) {
+      expect(
+        productCommandSchema.safeParse({
+          type,
+          object_type: type.includes('spec') ? 'spec' : 'plan',
+          object_id: 'doc_1',
+          scope_ref: { type: 'requirement', id: 'wi_1' },
+          spec_id: 'doc_1',
+          plan_id: 'doc_1',
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('does not add typed Work Item intake commands to ProductAction command schemas', () => {
@@ -285,20 +305,6 @@ describe('ProductAction contracts', () => {
   it('validates concrete command object ids and version types', () => {
     const commands = [
       {
-        type: 'generate_spec_draft',
-        object_type: 'spec',
-        object_id: 'spec_1',
-        scope_ref: { type: 'requirement', id: 'wi_1' },
-        spec_id: 'spec_1',
-      },
-      {
-        type: 'generate_plan_draft',
-        object_type: 'plan',
-        object_id: 'plan_1',
-        scope_ref: { type: 'requirement', id: 'wi_1' },
-        plan_id: 'plan_1',
-      },
-      {
         type: 'generate_packages',
         object_type: 'plan_revision',
         object_id: 'plan_rev_1',
@@ -329,7 +335,7 @@ describe('ProductAction contracts', () => {
     expect(
       productActionSchema.safeParse({
         ...validCommandAction,
-        command: { ...validCommand, object_id: 'different_spec' },
+        command: { ...validCommand, object_id: 'different_plan_revision' },
       }).success,
     ).toBe(false);
     expect(

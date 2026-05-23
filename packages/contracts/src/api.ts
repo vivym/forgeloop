@@ -272,42 +272,6 @@ const commandBaseSchema = {
   scope_ref: objectRefSchema,
 } as const;
 
-const generateSpecDraftCommandSchema = z
-  .object({
-    type: z.literal('generate_spec_draft'),
-    object_type: z.literal('spec'),
-    ...commandBaseSchema,
-    spec_id: nonEmptyTrimmedStringSchema,
-  })
-  .strict()
-  .superRefine((command, ctx) => {
-    if (command.object_id !== command.spec_id) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['object_id'],
-        message: 'object_id must match spec_id',
-      });
-    }
-  });
-
-const generatePlanDraftCommandSchema = z
-  .object({
-    type: z.literal('generate_plan_draft'),
-    object_type: z.literal('plan'),
-    ...commandBaseSchema,
-    plan_id: nonEmptyTrimmedStringSchema,
-  })
-  .strict()
-  .superRefine((command, ctx) => {
-    if (command.object_id !== command.plan_id) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['object_id'],
-        message: 'object_id must match plan_id',
-      });
-    }
-  });
-
 const generatePackagesCommandSchema = z
   .object({
     type: z.literal('generate_packages'),
@@ -364,8 +328,6 @@ const runPackageCommandSchema = z
   });
 
 export const productCommandSchema = z.discriminatedUnion('type', [
-  generateSpecDraftCommandSchema,
-  generatePlanDraftCommandSchema,
   generatePackagesCommandSchema,
   markPackageReadyCommandSchema,
   runPackageCommandSchema,

@@ -4562,14 +4562,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         target_status: 'approved',
         project_id: workItem.project_id,
         ...targetScope,
-        ...this.latestMatchingActionFields('ensure_plan_draft', workItem.id, specRevisionId),
       });
     }
     return targets;
   }
 
   private async runtimeSnapshotWorkItemsRequiringSpec(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
-    const suppressingLatestActionStatuses = new Set(['pending', 'running', 'succeeded']);
     const targets: RuntimeSnapshotTargetRow[] = [];
     for (const workItem of valuesFor(this.workItems).sort(byCreatedAtThenId)) {
       if (isWorkItemAutomationTerminal(workItem)) {
@@ -4586,20 +4584,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       if (this.hasActiveManualHold([`work_item:${workItem.id}`])) {
         continue;
       }
-      const latestActionFields = this.latestMatchingActionFields('ensure_spec_draft', workItem.id);
-      if (
-        latestActionFields.latest_matching_action_status !== undefined &&
-        suppressingLatestActionStatuses.has(latestActionFields.latest_matching_action_status)
-      ) {
-        continue;
-      }
       targets.push({
         target_object_type: 'work_item',
         target_object_id: workItem.id,
         target_status: workItem.phase,
         project_id: workItem.project_id,
         ...targetScope,
-        ...latestActionFields,
       });
     }
     return targets;

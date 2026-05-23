@@ -86,12 +86,12 @@ describe('automation idempotency helpers', () => {
     tasks: {
       spec_draft: {
         enabled: false,
-        promptVersion: 'spec-draft.fake.v1',
+        promptVersion: 'SPEC-draft.fake.v1',
         outputSchemaVersion: 'spec_draft.v1',
       },
       plan_draft: {
         enabled: true,
-        promptVersion: overrides.planDraftPromptVersion ?? 'plan-draft.fake.v1',
+        promptVersion: overrides.planDraftPromptVersion ?? 'PLAN-draft.fake.v1',
         outputSchemaVersion: 'plan_draft.v1',
       },
       package_drafts: {
@@ -164,7 +164,7 @@ describe('automation idempotency helpers', () => {
 
   it('includes Spec draft generation mode and schema identity', () => {
     const specDraftBase = {
-      actionType: 'ensure_spec_draft',
+      actionType: 'ensure_SPEC_draft',
       targetObjectType: 'work_item',
       targetObjectId: 'work-item-1',
       automationScope: 'repo:project-1:repo-1',
@@ -172,7 +172,7 @@ describe('automation idempotency helpers', () => {
       capabilityFingerprint: 'capability-1',
       preconditionFingerprint: 'precondition-1',
       generationMode: 'fake',
-      promptVersion: 'spec-draft.fake.v1',
+      promptVersion: 'SPEC-draft.fake.v1',
       outputSchemaVersion: 'spec_draft.v1',
     } satisfies MutatingActionIdentity;
 
@@ -180,7 +180,7 @@ describe('automation idempotency helpers', () => {
       mutatingActionIdempotencyKey({ ...specDraftBase, generationMode: 'codex' }),
     );
     expect(mutatingActionIdempotencyKey(specDraftBase)).not.toBe(
-      mutatingActionIdempotencyKey({ ...specDraftBase, promptVersion: 'spec-draft.fake.v2' }),
+      mutatingActionIdempotencyKey({ ...specDraftBase, promptVersion: 'SPEC-draft.fake.v2' }),
     );
     expect(mutatingActionIdempotencyKey(specDraftBase)).not.toBe(
       mutatingActionIdempotencyKey({ ...specDraftBase, outputSchemaVersion: 'spec_draft.v2' }),
@@ -191,13 +191,13 @@ describe('automation idempotency helpers', () => {
     const baseline = planNextActions(runtimeSnapshot(), { generation: generationPlanning() });
     const changedSchema = planNextActions(runtimeSnapshot(), {
       generation: generationPlanning({
-        planDraftPromptVersion: 'plan-draft.fake.v2',
+        planDraftPromptVersion: 'PLAN-draft.fake.v2',
         packageDraftsPromptVersion: 'package-drafts.fake.v2',
       }),
     });
 
-    expect(changedSchema.find((action) => action.actionType === 'ensure_plan_draft')?.idempotencyKey).not.toBe(
-      baseline.find((action) => action.actionType === 'ensure_plan_draft')?.idempotencyKey,
+    expect(changedSchema.find((action) => action.actionType === 'ensure_PLAN_draft')?.idempotencyKey).not.toBe(
+      baseline.find((action) => action.actionType === 'ensure_PLAN_draft')?.idempotencyKey,
     );
     expect(changedSchema.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey).not.toBe(
       baseline.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey,

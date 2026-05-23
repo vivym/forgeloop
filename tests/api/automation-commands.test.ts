@@ -617,7 +617,7 @@ const planDraftActionBody = (
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> => ({
   id: actionId,
-  action_type: 'ensure_plan_draft',
+  action_type: 'ensure_PLAN_draft',
   target_object_type: 'work_item',
   target_object_id: ctx.workItem.id,
   target_revision_id: ctx.specRevisionId,
@@ -835,7 +835,7 @@ const specDraftActionBody = (
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> => ({
   id: actionId,
-  action_type: 'ensure_spec_draft',
+  action_type: 'ensure_SPEC_draft',
   target_object_type: 'work_item',
   target_object_id: ctx.workItem.id,
   target_status: ctx.workItem.phase,
@@ -1549,12 +1549,12 @@ describe('automation command boundaries', () => {
 
     const first = await signedAutomationPost(
       app,
-      `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-SPEC-draft`,
       ctx.commandBody,
     ).expect(201);
     const second = await signedAutomationPost(
       app,
-      `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-SPEC-draft`,
       ctx.commandBody,
     ).expect(201);
 
@@ -1614,7 +1614,7 @@ describe('automation command boundaries', () => {
     await signedAutomationPost(app, '/internal/automation/actions', specDraftActionBody(ctx, precondition, actionId, {
       action_input_json: {
         work_item_id: ctx.workItem.id,
-        prompt_version: 'spec-draft.fake.v2',
+        prompt_version: 'SPEC-draft.fake.v2',
         output_schema_version: 'spec_draft.v1',
       },
     })).expect(201);
@@ -1633,7 +1633,7 @@ describe('automation command boundaries', () => {
       generation_artifacts: generationArtifacts,
     };
 
-    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`, commandBody)
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-SPEC-draft`, commandBody)
       .expect(201)
       .expect(({ body }) => {
         expect(body).toMatchObject({ status: 'created' });
@@ -1679,7 +1679,7 @@ describe('automation command boundaries', () => {
 
     await signedAutomationPost(
       app,
-      `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-SPEC-draft`,
       ctx.commandBody,
     ).expect(409);
   });
@@ -1696,7 +1696,7 @@ describe('automation command boundaries', () => {
     {
       name: 'wrong action type',
       actionOverrides: {
-        action_type: 'ensure_plan_draft',
+        action_type: 'ensure_PLAN_draft',
         target_revision_id: 'spec-revision-other',
         action_input_json: {
           work_item_id: 'work-item-other',
@@ -1726,7 +1726,7 @@ describe('automation command boundaries', () => {
 
     const response = await signedAutomationPost(
       app,
-      `/internal/automation/work-items/${ctx.workItem.id}/ensure-spec-draft`,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-SPEC-draft`,
       body,
     );
 
@@ -1746,7 +1746,7 @@ describe('automation command boundaries', () => {
 
     await signedAutomationGet(
       app,
-      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/spec-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/SPEC-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
     )
       .expect(200)
       .expect(({ body }) => {
@@ -1780,7 +1780,7 @@ describe('automation command boundaries', () => {
       });
   });
 
-  it('returns Plan generation context for an active claimed ensure_plan_draft action', async () => {
+  it('returns Plan generation context for an active claimed ensure_PLAN_draft action', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
     const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository);
@@ -1794,7 +1794,7 @@ describe('automation command boundaries', () => {
 
     await signedAutomationGet(
       app,
-      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/plan-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/PLAN-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
     )
       .expect(200)
       .expect(({ body }) => {
@@ -1834,7 +1834,7 @@ describe('automation command boundaries', () => {
 
     await signedAutomationGet(
       app,
-      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/plan-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/PLAN-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
     ).expect(409);
   });
 
@@ -1852,7 +1852,7 @@ describe('automation command boundaries', () => {
 
     await signedAutomationGet(
       app,
-      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/plan-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/PLAN-draft?spec_revision_id=${ctx.specRevisionId}&action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
     ).expect(409);
   });
 
@@ -1929,7 +1929,7 @@ describe('automation command boundaries', () => {
 
     await signedAutomationGet(
       app,
-      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/spec-draft?action_run_id=${ctx.actionId}&claim_token=wrong-claim-token`,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/SPEC-draft?action_run_id=${ctx.actionId}&claim_token=wrong-claim-token`,
     )
       .expect(409)
       .expect(({ body }) => {
@@ -1944,7 +1944,7 @@ describe('automation command boundaries', () => {
 
     await signedAutomationGet(
       app,
-      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/spec-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+      `/internal/automation/generation-context/work-items/${ctx.workItem.id}/SPEC-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
     )
       .expect(409)
       .expect(({ body }) => {
@@ -1959,7 +1959,7 @@ describe('automation command boundaries', () => {
 
     await signedAutomationGet(
       app,
-      `/internal/automation/generation-context/work-items/work-item-other/spec-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
+      `/internal/automation/generation-context/work-items/work-item-other/SPEC-draft?action_run_id=${ctx.actionId}&claim_token=${ctx.claimToken}`,
     )
       .expect(409)
       .expect(({ body }) => {
@@ -2044,7 +2044,7 @@ describe('automation command boundaries', () => {
 
       const response = await signedAutomationPost(
         app,
-        `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+        `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`,
         body,
       );
 
@@ -2092,7 +2092,7 @@ describe('automation command boundaries', () => {
       limit: 1,
     }).expect(200);
 
-    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`, {
       action_run_id: actionId,
       claim_token: claimToken,
       spec_revision_id: ctx.specRevisionId,
@@ -2141,7 +2141,7 @@ describe('automation command boundaries', () => {
     const actionInputJson = {
       work_item_id: ctx.workItem.id,
       spec_revision_id: ctx.specRevisionId,
-      prompt_version: 'plan-draft.fake.v2',
+      prompt_version: 'PLAN-draft.fake.v2',
       output_schema_version: 'plan_draft.v1',
     };
 
@@ -2157,7 +2157,7 @@ describe('automation command boundaries', () => {
       limit: 1,
     }).expect(200);
 
-    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`, {
       action_run_id: actionId,
       claim_token: claimToken,
       spec_revision_id: ctx.specRevisionId,
@@ -2170,7 +2170,7 @@ describe('automation command boundaries', () => {
     expect(await service.listPlanRevisions((await repository.getWorkItem(ctx.workItem.id))?.current_plan_id ?? '')).toHaveLength(1);
   });
 
-  it('daemon ensure-plan-draft requires generated Plan payload', async () => {
+  it('daemon ensure-PLAN-draft requires generated Plan payload', async () => {
     const { app, repository } = await createTestApp();
     apps.push(app);
     const ctx = await seedApprovedSpecAndClaimedPlanAction(app, repository, {
@@ -2180,7 +2180,7 @@ describe('automation command boundaries', () => {
 
     await signedAutomationPost(
       app,
-      `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`,
       bodyWithoutGeneratedPlanDraft,
     ).expect(400);
   });
@@ -2192,7 +2192,7 @@ describe('automation command boundaries', () => {
       actionOverrides: { id: 'action-generated-plan-persisted' },
     });
 
-    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`, {
       ...ctx.commandBody,
       generated_plan_draft: {
         ...generatedPlanDraft,
@@ -2231,8 +2231,8 @@ describe('automation command boundaries', () => {
       generation_artifacts: planGenerationArtifacts,
     };
 
-    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, body).expect(201);
-    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`, body).expect(201);
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`, {
       ...body,
       generated_plan_draft: { ...generatedPlanDraft, summary: 'Generated Plan summary changed' },
     })
@@ -2249,7 +2249,7 @@ describe('automation command boundaries', () => {
       actionOverrides: { id: 'action-generated-plan-local-artifact' },
     });
 
-    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`, {
       ...ctx.commandBody,
       generated_plan_draft: generatedPlanDraft,
       generation_artifacts: [
@@ -2278,7 +2278,7 @@ describe('automation command boundaries', () => {
         actionOverrides: { id: `action-generated-plan-local-uri-${storageUri.includes('tmp') ? 'tmp' : 'users'}` },
       });
 
-      await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+      await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`, {
         ...ctx.commandBody,
         generated_plan_draft: generatedPlanDraft,
         generation_artifacts: [
@@ -2307,7 +2307,7 @@ describe('automation command boundaries', () => {
       actionOverrides: { id: 'action-generated-plan-invalid-runtime-payload' },
     });
 
-    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`, {
+    await signedAutomationPost(app, `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`, {
       ...ctx.commandBody,
       generated_plan_draft: {
         ...generatedPlanDraft,
@@ -2523,7 +2523,7 @@ describe('automation command boundaries', () => {
       ctx.workItem.id,
       ctx.specRevisionId,
       precondition,
-      'idem-plan-draft-existing-digest-first',
+      'idem-PLAN-draft-existing-digest-first',
       generatedPlanDraft,
       planGenerationArtifacts,
     );
@@ -2531,7 +2531,7 @@ describe('automation command boundaries', () => {
       ctx.workItem.id,
       ctx.specRevisionId,
       precondition,
-      'idem-plan-draft-existing-digest-second',
+      'idem-PLAN-draft-existing-digest-second',
       generatedPlanDraft,
       planGenerationArtifacts,
     );
@@ -2552,12 +2552,12 @@ describe('automation command boundaries', () => {
 
     const first = await signedAutomationPost(
       app,
-      `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`,
       ctx.commandBody,
     ).expect(201);
     const replay = await signedAutomationPost(
       app,
-      `/internal/automation/work-items/${ctx.workItem.id}/ensure-plan-draft`,
+      `/internal/automation/work-items/${ctx.workItem.id}/ensure-PLAN-draft`,
       ctx.commandBody,
     ).expect(201);
 
@@ -2601,7 +2601,7 @@ describe('automation command boundaries', () => {
       ctx.workItem.id,
       ctx.specRevisionId,
       precondition,
-      'idem-plan-draft-race-digest-first',
+      'idem-PLAN-draft-race-digest-first',
       generatedPlanDraft,
       planGenerationArtifacts,
     );
@@ -2611,7 +2611,7 @@ describe('automation command boundaries', () => {
       ctx.workItem.id,
       ctx.specRevisionId,
       precondition,
-      'idem-plan-draft-race-digest-second',
+      'idem-PLAN-draft-race-digest-second',
       generatedPlanDraft,
       planGenerationArtifacts,
     );
@@ -2652,8 +2652,8 @@ describe('automation command boundaries', () => {
     const commandPrecondition = testPlanCommandPrecondition(precondition, generatedPlanDraft, planGenerationArtifacts);
     await repository.claimCommandIdempotency({
       id: 'command-idem-active-generated-plan',
-      command_name: 'ensure_plan_draft_for_approved_spec',
-      idempotency_key: 'idem-plan-draft-active-generated-plan',
+      command_name: 'ensure_PLAN_draft_for_approved_spec',
+      idempotency_key: 'idem-PLAN-draft-active-generated-plan',
       target_object_type: 'work_item',
       target_object_id: ctx.workItem.id,
       target_revision_id: ctx.specRevisionId,
@@ -2670,7 +2670,7 @@ describe('automation command boundaries', () => {
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
-        'idem-plan-draft-active-generated-plan',
+        'idem-PLAN-draft-active-generated-plan',
         generatedPlanDraft,
         planGenerationArtifacts,
       ),
@@ -2909,7 +2909,7 @@ describe('automation command boundaries', () => {
     apps.push(app);
     const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
-      id: 'automation-settings-plan-draft',
+      id: 'automation-settings-PLAN-draft',
       project_id: ctx.project.id,
       repo_id: 'repo-1',
       scope_type: 'repo',
@@ -2937,7 +2937,7 @@ describe('automation command boundaries', () => {
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
-        'idem-plan-draft-1',
+        'idem-PLAN-draft-1',
         generatedPlanDraft,
         planGenerationArtifacts,
       ),
@@ -2945,7 +2945,7 @@ describe('automation command boundaries', () => {
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
-        'idem-plan-draft-1',
+        'idem-PLAN-draft-1',
         generatedPlanDraft,
         planGenerationArtifacts,
       ),
@@ -2965,7 +2965,7 @@ describe('automation command boundaries', () => {
     apps.push(app);
     const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
-      id: 'automation-settings-plan-draft-target-lock',
+      id: 'automation-settings-PLAN-draft-target-lock',
       project_id: ctx.project.id,
       repo_id: 'repo-1',
       scope_type: 'repo',
@@ -2993,7 +2993,7 @@ describe('automation command boundaries', () => {
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
-        'idem-plan-draft-target-a',
+        'idem-PLAN-draft-target-a',
         generatedPlanDraft,
         planGenerationArtifacts,
       ),
@@ -3001,7 +3001,7 @@ describe('automation command boundaries', () => {
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
-        'idem-plan-draft-target-b',
+        'idem-PLAN-draft-target-b',
         generatedPlanDraft,
         planGenerationArtifacts,
       ),
@@ -3016,7 +3016,7 @@ describe('automation command boundaries', () => {
     apps.push(app);
     const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
-      id: 'automation-settings-plan-draft-malformed-replay',
+      id: 'automation-settings-PLAN-draft-malformed-replay',
       project_id: ctx.project.id,
       repo_id: 'repo-1',
       scope_type: 'repo',
@@ -3039,8 +3039,8 @@ describe('automation command boundaries', () => {
     };
     const claim = await repository.claimCommandIdempotency({
       id: 'command-idem-malformed-plan-replay',
-      command_name: 'ensure_plan_draft_for_approved_spec',
-      idempotency_key: 'idem-plan-draft-malformed-replay',
+      command_name: 'ensure_PLAN_draft_for_approved_spec',
+      idempotency_key: 'idem-PLAN-draft-malformed-replay',
       target_object_type: 'work_item',
       target_object_id: ctx.workItem.id,
       target_revision_id: ctx.specRevisionId,
@@ -3063,7 +3063,7 @@ describe('automation command boundaries', () => {
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
-        'idem-plan-draft-malformed-replay',
+        'idem-PLAN-draft-malformed-replay',
         generatedPlanDraft,
         planGenerationArtifacts,
       ),
@@ -3076,7 +3076,7 @@ describe('automation command boundaries', () => {
     apps.push(app);
     const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
-      id: 'automation-settings-plan-draft-blocked-replay',
+      id: 'automation-settings-PLAN-draft-blocked-replay',
       project_id: ctx.project.id,
       repo_id: 'repo-1',
       scope_type: 'repo',
@@ -3099,8 +3099,8 @@ describe('automation command boundaries', () => {
     };
     const claim = await repository.claimCommandIdempotency({
       id: 'command-idem-blocked-plan-replay',
-      command_name: 'ensure_plan_draft_for_approved_spec',
-      idempotency_key: 'idem-plan-draft-blocked-replay',
+      command_name: 'ensure_PLAN_draft_for_approved_spec',
+      idempotency_key: 'idem-PLAN-draft-blocked-replay',
       target_object_type: 'work_item',
       target_object_id: ctx.workItem.id,
       target_revision_id: ctx.specRevisionId,
@@ -3123,7 +3123,7 @@ describe('automation command boundaries', () => {
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
-        'idem-plan-draft-blocked-replay',
+        'idem-PLAN-draft-blocked-replay',
         generatedPlanDraft,
         planGenerationArtifacts,
       ),
@@ -3136,7 +3136,7 @@ describe('automation command boundaries', () => {
     apps.push(app);
     const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
-      id: 'automation-settings-plan-draft-current-spec-race',
+      id: 'automation-settings-PLAN-draft-current-spec-race',
       project_id: ctx.project.id,
       repo_id: 'repo-1',
       scope_type: 'repo',
@@ -3192,7 +3192,7 @@ describe('automation command boundaries', () => {
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
-        'idem-plan-draft-current-spec-race',
+        'idem-PLAN-draft-current-spec-race',
         generatedPlanDraft,
         planGenerationArtifacts,
       ),
@@ -3206,7 +3206,7 @@ describe('automation command boundaries', () => {
     apps.push(app);
     const ctx = await seedApprovedSpec(app);
     const settings = await repository.setAutomationProjectSettings({
-      id: 'automation-settings-plan-draft-repo-moved',
+      id: 'automation-settings-PLAN-draft-repo-moved',
       project_id: ctx.project.id,
       repo_id: 'repo-1',
       scope_type: 'repo',
@@ -3236,7 +3236,7 @@ describe('automation command boundaries', () => {
         ctx.workItem.id,
         ctx.specRevisionId,
         precondition,
-        'idem-plan-draft-repo-moved',
+        'idem-PLAN-draft-repo-moved',
         generatedPlanDraft,
         planGenerationArtifacts,
       ),

@@ -925,10 +925,6 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
   const command = action.command;
 
   switch (command.type) {
-    case 'generate_spec_draft':
-      throw new Error('Direct Spec draft generation commands are retired; use Development Plan Item scoped commands.');
-    case 'generate_plan_draft':
-      throw new Error('Direct Execution Plan draft generation commands are retired; use Development Plan Item scoped commands.');
     case 'generate_packages':
       return commandApi.generatePackages(command.plan_revision_id);
     case 'mark_package_ready':
@@ -973,10 +969,6 @@ function workItemIdFromCommandScope(scopeRef: ProductCommandAction['command']['s
 
 function invalidateCommandDerivedResources(queryClient: QueryClient, command: ProductCommandAction['command']) {
   switch (command.type) {
-    case 'generate_spec_draft':
-      return queryClient.invalidateQueries({ queryKey: queryKeys.specRevisions(command.spec_id) });
-    case 'generate_plan_draft':
-      return queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(command.plan_id) });
     case 'generate_packages':
       return invalidatePackageDeliveryCollections(queryClient);
     case 'mark_package_ready':

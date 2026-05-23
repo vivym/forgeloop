@@ -18,18 +18,18 @@ const action = {
 } as const;
 
 const commandAction = {
-  id: 'generate-spec-draft',
+  id: 'generate-packages',
   lane_id: 'execution-owner',
   priority: 'primary',
-  label: 'Generate Spec Draft',
+  label: 'Generate packages',
   enabled: true,
   kind: 'command',
   command: {
-    type: 'generate_spec_draft',
-    object_type: 'spec',
-    object_id: 'spec-1',
+    type: 'generate_packages',
+    object_type: 'plan_revision',
+    object_id: 'plan-r1',
     scope_ref: { type: 'requirement', id: 'wi-1' },
-    spec_id: 'spec-1',
+    plan_revision_id: 'plan-r1',
   },
 } as const;
 

@@ -707,4 +707,33 @@ describe('Work Item delivery readiness', () => {
       ]),
     );
   });
+
+  it('does not emit direct document draft commands from Work Item readiness', () => {
+    const retiredCommandTypes = [
+      ['generate', 'spec', 'draft'].join('_'),
+      ['generate', 'plan', 'draft'].join('_'),
+    ];
+    const missingSpecDraft = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        currentSpec: specFixture({ current_revision_id: undefined, approved_revision_id: undefined }),
+        currentSpecRevision: undefined,
+        activeLane: 'requirements',
+      }),
+    );
+    const missingPlanDraft = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        currentPlan: planFixture({ current_revision_id: undefined, approved_revision_id: undefined }),
+        currentPlanRevision: undefined,
+        activeLane: 'requirements',
+      }),
+    );
+
+    for (const readiness of [missingSpecDraft, missingPlanDraft]) {
+      expect(
+        readiness.next_actions.some(
+          (action) => action.kind === 'command' && retiredCommandTypes.includes(action.command.type),
+        ),
+      ).toBe(false);
+    }
+  });
 });

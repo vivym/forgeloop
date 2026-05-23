@@ -104,6 +104,11 @@ const generationPlanning = (overrides: {
   },
 } as const);
 
+const retiredDraftActionTypes = [
+  ['ensure', 'spec', 'draft'].join('_'),
+  ['ensure', 'plan', 'draft'].join('_'),
+] as string[];
+
 describe('automation planner', () => {
   it('suppresses generation actions by default', () => {
     const actions = planNextActions(
@@ -114,8 +119,9 @@ describe('automation planner', () => {
       }),
     );
 
-    expect(actions.map((action) => action.actionType)).not.toContain('ensure_spec_draft');
-    expect(actions.map((action) => action.actionType)).not.toContain('ensure_plan_draft');
+    for (const actionType of retiredDraftActionTypes) {
+      expect(actions.map((action) => action.actionType)).not.toContain(actionType);
+    }
     expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
   });
 
@@ -133,7 +139,9 @@ describe('automation planner', () => {
 
     const actions = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }));
 
-    expect(actions.map((action) => action.actionType)).not.toContain('ensure_plan_draft');
+    for (const actionType of retiredDraftActionTypes) {
+      expect(actions.map((action) => action.actionType)).not.toContain(actionType);
+    }
   });
 
   it('suppresses all generation actions when generation mode is disabled', () => {
@@ -146,8 +154,9 @@ describe('automation planner', () => {
       { generation: generationPlanning({ mode: 'disabled' }) },
     );
 
-    expect(actions.map((action) => action.actionType)).not.toContain('ensure_spec_draft');
-    expect(actions.map((action) => action.actionType)).not.toContain('ensure_plan_draft');
+    for (const actionType of retiredDraftActionTypes) {
+      expect(actions.map((action) => action.actionType)).not.toContain(actionType);
+    }
     expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
   });
 
@@ -159,36 +168,30 @@ describe('automation planner', () => {
     expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
   });
 
-  it('includes generation identity for Plan and package draft actions', () => {
+  it('includes generation identity for package draft actions', () => {
     const baselineActions = planNextActions(
       baseSnapshot({
-        workItemsRequiringPlan: [workItemTarget()],
         planRevisionsRequiringPackages: [packageTarget()],
       }),
       { generation: generationPlanning() },
     );
     const changedPromptActions = planNextActions(
       baseSnapshot({
-        workItemsRequiringPlan: [workItemTarget()],
         planRevisionsRequiringPackages: [packageTarget()],
       }),
       {
         generation: generationPlanning({
-          planDraftPromptVersion: 'plan-draft.fake.v2',
           packageDraftsPromptVersion: 'package-drafts.fake.v2',
         }),
       },
     );
 
-    expect(changedPromptActions.find((action) => action.actionType === 'ensure_plan_draft')?.idempotencyKey).not.toBe(
-      baselineActions.find((action) => action.actionType === 'ensure_plan_draft')?.idempotencyKey,
-    );
     expect(changedPromptActions.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey).not.toBe(
       baselineActions.find((action) => action.actionType === 'ensure_package_drafts')?.idempotencyKey,
     );
-    expect(changedPromptActions.find((action) => action.actionType === 'ensure_plan_draft')?.actionInputJson).toMatchObject({
-      prompt_version: 'plan-draft.fake.v2',
-      output_schema_version: 'plan_draft.v1',
+    expect(changedPromptActions.find((action) => action.actionType === 'ensure_package_drafts')?.actionInputJson).toMatchObject({
+      prompt_version: 'package-drafts.fake.v2',
+      output_schema_version: 'package_drafts.v1',
     });
   });
 
@@ -212,20 +215,18 @@ describe('automation planner', () => {
             },
           },
         ],
-        workItemsRequiringSpec: [specWorkItemTarget()],
-        workItemsRequiringPlan: [workItemTarget()],
+        planRevisionsRequiringPackages: [packageTarget()],
       }),
-      { generation: generationPlanning({ mode: 'app_server', packageDraftsEnabled: false }) },
+      { generation: generationPlanning({ mode: 'app_server' }) },
     );
 
     expect(actions.map((action) => action.actionType)).toEqual([
       'project_runtime_snapshot',
-      'ensure_spec_draft',
-      'ensure_plan_draft',
+      'ensure_package_drafts',
     ]);
   });
 
-  it('emits ensure_spec_draft before downstream draft actions when fake generation is enabled', () => {
+  it('emits package drafts but no direct Work Item draft actions when generation is enabled', () => {
     const actions = planNextActions(
       baseSnapshot({
         workItemsRequiringSpec: [specWorkItemTarget()],
@@ -235,28 +236,19 @@ describe('automation planner', () => {
       { generation: generationPlanning() },
     );
 
-    expect(actions.map((action) => action.actionType).slice(0, 3)).toEqual([
-      'ensure_spec_draft',
-      'ensure_plan_draft',
-      'ensure_package_drafts',
-    ]);
-    expect(actions[0]).toMatchObject({
-      actionType: 'ensure_spec_draft',
-      targetObjectType: 'work_item',
-      targetObjectId: 'work-item-needs-spec',
-      actionInputJson: { work_item_id: 'work-item-needs-spec' },
-    });
+    expect(actions.map((action) => action.actionType)).toEqual(['ensure_package_drafts']);
+    expect(actions.some((action) => retiredDraftActionTypes.includes(action.actionType))).toBe(false);
   });
 
-  it('does not emit ensure_spec_draft when generation is disabled', () => {
+  it('does not emit direct Work Item draft actions when generation is disabled', () => {
     expect(
       planNextActions(baseSnapshot({ workItemsRequiringSpec: [specWorkItemTarget()] }), {
         generation: generationPlanning({ mode: 'disabled' }),
       }).map((action) => action.actionType),
-    ).not.toContain('ensure_spec_draft');
+    ).toEqual([]);
   });
 
-  it('uses canGenerateSpecDraft when a Spec target needs manual path disambiguation', () => {
+  it('does not request manual paths for retired Work Item draft targets', () => {
     const actions = planNextActions(
       baseSnapshot({
         repos: [
@@ -281,31 +273,15 @@ describe('automation planner', () => {
       { generation: generationPlanning() },
     );
 
-    expect(actions[0]).toMatchObject({
-      actionType: 'request_manual_path',
-      actionInputJson: expect.objectContaining({ object_type: 'work_item' }),
-    });
+    expect(actions).toEqual([]);
   });
 
-  it('emits ensure_plan_draft for an approved Spec missing a Plan draft', () => {
+  it('does not emit direct plan draft actions for an approved Spec missing a Plan draft', () => {
     const actions = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }), {
       generation: generationPlanning(),
     });
 
-    expect(actions).toHaveLength(1);
-    expect(actions[0]).toMatchObject({
-      actionType: 'ensure_plan_draft',
-      targetObjectType: 'work_item',
-      targetObjectId: 'work-item-1',
-      targetRevisionId: 'spec-revision-1',
-      targetStatus: 'approved',
-      automationScope: repoScope,
-      actionInputJson: {
-        work_item_id: 'work-item-1',
-        spec_revision_id: 'spec-revision-1',
-      },
-    });
-    expect(actions[0]?.policyDigest).toBeUndefined();
+    expect(actions).toEqual([]);
   });
 
   it('emits ensure_package_drafts for an approved PlanRevision missing package drafts', () => {
@@ -371,8 +347,7 @@ describe('automation planner', () => {
   });
 
   it('requests a manual path when a project-scoped target is ambiguous across multiple repos', () => {
-    const ambiguousTarget = workItemTarget({
-      targetObjectId: 'work-item-ambiguous',
+    const ambiguousTarget = packageTarget({
       projectId: 'project-1',
       repoId: undefined,
       eligibleRepoIds: ['repo-2', 'repo-3'],
@@ -399,7 +374,7 @@ describe('automation planner', () => {
             daemonInternalLocalPath: '/private/repo-3',
           },
         ],
-        workItemsRequiringPlan: [ambiguousTarget],
+        planRevisionsRequiringPackages: [ambiguousTarget],
       }),
       { generation: generationPlanning() },
     );
@@ -407,14 +382,14 @@ describe('automation planner', () => {
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       actionType: 'request_manual_path',
-      targetObjectType: 'work_item',
-      targetObjectId: 'work-item-ambiguous',
+      targetObjectType: 'plan_revision',
+      targetObjectId: 'plan-revision-1',
       automationScope: 'repo:project-1:repo-2',
       reasonCode: 'multi_repo_ambiguity',
       actionInputJson: {
-        object_type: 'work_item',
-        object_id: 'work-item-ambiguous',
-        scope_key: 'work_item:work-item-ambiguous',
+        object_type: 'plan_revision',
+        object_id: 'plan-revision-1',
+        scope_key: 'plan_revision:plan-revision-1',
         reason_code: 'multi_repo_ambiguity',
       },
     });
@@ -422,11 +397,11 @@ describe('automation planner', () => {
   });
 
   it('changes mutating precondition and idempotency when target status changes', () => {
-    const approvedAction = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }), {
+    const approvedAction = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }), {
       generation: generationPlanning(),
     })[0]!;
     const changedStatusAction = planNextActions(
-      baseSnapshot({ workItemsRequiringPlan: [workItemTarget({ targetStatus: 'ready_for_plan' })] }),
+      baseSnapshot({ planRevisionsRequiringPackages: [packageTarget({ targetStatus: 'ready_for_repackage' })] }),
       { generation: generationPlanning() },
     )[0]!;
 
@@ -454,7 +429,7 @@ describe('automation planner', () => {
   });
 
   it('does not include policy projection fields in mutating preconditions', () => {
-    const baseline = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }), {
+    const baseline = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }), {
       generation: generationPlanning(),
     })[0]!;
     const changedPolicyProjection = planNextActions(
@@ -472,10 +447,10 @@ describe('automation planner', () => {
             },
           },
         ],
-        workItemsRequiringPlan: [workItemTarget()],
+        planRevisionsRequiringPackages: [packageTarget()],
       }),
       { generation: generationPlanning() },
-    ).find((action) => action.actionType === 'ensure_plan_draft')!;
+    ).find((action) => action.actionType === 'ensure_package_drafts')!;
 
     expect(changedPolicyProjection.preconditionFingerprint).toBe(baseline.preconditionFingerprint);
     expect(changedPolicyProjection.idempotencyKey).toBe(baseline.idempotencyKey);
@@ -678,7 +653,7 @@ describe('automation planner', () => {
       parserVersion: 'workflow-md-parser:v1',
       reasonCode: 'not_found',
     } as const;
-    const plannedDraft = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }), {
+    const plannedDraft = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }), {
       generation: generationPlanning(),
     })[0]!;
     const plannedProjection = planNextActions(
@@ -689,15 +664,15 @@ describe('automation planner', () => {
 
     const actions = planNextActions(
       baseSnapshot({
-        workItemsRequiringPlan: [workItemTarget()],
+        planRevisionsRequiringPackages: [packageTarget()],
         repos: [{ ...baseSnapshot().repos[0]!, policyProjection: projectionIdentity }],
         recentActionRuns: [
           {
             id: 'action-running',
-            actionType: 'ensure_plan_draft',
-            targetObjectType: 'work_item',
-            targetObjectId: 'work-item-1',
-            targetRevisionId: 'spec-revision-1',
+            actionType: 'ensure_package_drafts',
+            targetObjectType: 'plan_revision',
+            targetObjectId: 'plan-revision-1',
+            targetRevisionId: 'default:plan-revision-1',
             targetStatus: 'approved',
             idempotencyKey: plannedDraft.idempotencyKey,
             automationScope: repoScope,

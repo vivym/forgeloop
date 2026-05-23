@@ -1,13 +1,7 @@
 import type { AutomationPrecondition, AutomationPreconditionCapability, AutomationScope } from '@forgeloop/domain';
 import {
-  planDraftOutputSchemaVersion,
-  planDraftPromptVersion,
-  specDraftOutputSchemaVersion,
-  specDraftPromptVersion,
   CodexGenerationError,
   validateGeneratedPackageDraftSet,
-  validateGeneratedPlanDraft,
-  validateGeneratedSpecDraft,
   type CodexGenerationRuntime,
 } from '@forgeloop/codex-runtime';
 
@@ -49,16 +43,13 @@ const projectAndRepoFromScope = (automationScope: AutomationScope): { projectId:
 };
 
 const requiredCapabilityFor = (action: AutomationActionRunRecord): AutomationPreconditionCapability => {
-  if (action.actionType === 'ensure_spec_draft') {
-    return 'canGenerateSpecDraft';
-  }
   if (action.actionType === 'ensure_package_drafts') {
     return 'canGeneratePackageDrafts';
   }
   if (action.actionType === 'request_manual_path' && action.targetObjectType === 'plan_revision') {
     return 'canGeneratePackageDrafts';
   }
-  return 'canGeneratePlanDraft';
+  return 'canGeneratePackageDrafts';
 };
 
 const stringField = (input: Record<string, unknown>, field: string): string | undefined =>
@@ -94,19 +85,6 @@ const preconditionFor = (action: AutomationActionRunRecord): AutomationPrecondit
     ...(commandConcurrencyToken === undefined ? {} : { command_concurrency_token: commandConcurrencyToken }),
     actor_class: 'automation_daemon',
   };
-};
-
-type EnsurePlanDraftActionInput = {
-  workItemId: string;
-  specRevisionId: string;
-  promptVersion?: string;
-  outputSchemaVersion?: string;
-};
-
-type EnsureSpecDraftActionInput = {
-  workItemId: string;
-  promptVersion?: string;
-  outputSchemaVersion?: string;
 };
 
 type EnsurePackageDraftsActionInput = {
@@ -161,7 +139,7 @@ const requiredString = (input: Record<string, unknown>, field: string): string =
 
 const generationVersionFields = (
   action: AutomationActionRunRecord,
-): Pick<EnsurePlanDraftActionInput, 'promptVersion' | 'outputSchemaVersion'> => {
+): Pick<EnsurePackageDraftsActionInput, 'promptVersion' | 'outputSchemaVersion'> => {
   const promptVersion = stringField(action.actionInputJson, 'prompt_version');
   const outputSchemaVersion = stringField(action.actionInputJson, 'output_schema_version');
   return {
@@ -169,17 +147,6 @@ const generationVersionFields = (
     ...(outputSchemaVersion === undefined ? {} : { outputSchemaVersion }),
   };
 };
-
-const parseEnsurePlanDraftInput = (action: AutomationActionRunRecord): EnsurePlanDraftActionInput => ({
-  workItemId: requiredString(action.actionInputJson, 'work_item_id'),
-  specRevisionId: requiredString(action.actionInputJson, 'spec_revision_id'),
-  ...generationVersionFields(action),
-});
-
-const parseEnsureSpecDraftInput = (action: AutomationActionRunRecord): EnsureSpecDraftActionInput => ({
-  workItemId: requiredString(action.actionInputJson, 'work_item_id'),
-  ...generationVersionFields(action),
-});
 
 const parseEnsurePackageDraftsInput = (action: AutomationActionRunRecord): EnsurePackageDraftsActionInput => ({
   planRevisionId: requiredString(action.actionInputJson, 'plan_revision_id'),
@@ -405,7 +372,7 @@ const requireActionClaimToken = (action: AutomationActionRunRecord): string => {
 
 const generationOrchestrationFor = (
   action: AutomationActionRunRecord,
-  actionType: 'ensure_spec_draft' | 'ensure_plan_draft' | 'ensure_package_drafts',
+  actionType: 'ensure_package_drafts',
 ) => ({
   targetType: 'automation_action_run' as const,
   actionRunId: action.id,
@@ -447,110 +414,6 @@ const executeCommand = async (
   >,
 ): Promise<void> => {
   const precondition = preconditionFor(action);
-  if (action.actionType === 'ensure_spec_draft') {
-    const actionInput = parseEnsureSpecDraftInput(action);
-    const taskConfig = generationTaskConfigFor(input.generationPlanning, 'spec_draft', {
-      enabled: input.generationRuntime !== undefined,
-      promptVersion: specDraftPromptVersion,
-      outputSchemaVersion: specDraftOutputSchemaVersion,
-    });
-    const runtime = input.generationRuntime;
-    if (!taskConfig.enabled || runtime === undefined) {
-      throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Spec draft generation is disabled');
-    }
-    const context = await client.specDraftGenerationContext(actionInput.workItemId, {
-      actionRunId: action.id,
-      claimToken: requireActionClaimToken(action),
-    });
-    const generated = await runtime.generateSpecDraft({
-      actionRunId: action.id,
-      projectId: context.work_item.project_id,
-      repoIds: context.repos.map((repo) => repo.repo_id),
-      context: context as unknown as Record<string, unknown>,
-      promptVersion: actionInput.promptVersion ?? taskConfig.promptVersion,
-      outputSchemaVersion: actionInput.outputSchemaVersion ?? taskConfig.outputSchemaVersion,
-      policyDigests: Object.fromEntries(
-        context.repos.flatMap((repo) => (repo.policy_digest === undefined ? [] : [[repo.repo_id, repo.policy_digest]])),
-      ),
-      orchestration: generationOrchestrationFor(action, 'ensure_spec_draft'),
-    });
-    let generatedSpecDraft;
-    try {
-      generatedSpecDraft = validateGeneratedSpecDraft(generated.generated);
-    } catch (error) {
-      if (error instanceof Error && error.message === 'generated_spec_draft_invalid') {
-        throw new AutomationHttpError(422, { code: 'generated_spec_draft_invalid' }, 'Generated Spec draft is invalid');
-      }
-      throw error;
-    }
-    await client.ensureSpecDraft(actionInput.workItemId, {
-      action_run_id: action.id,
-      ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
-      idempotency_key: action.idempotencyKey,
-      automation_precondition: precondition,
-      generated_spec_draft: generatedSpecDraft,
-      generation_artifacts: generated.generationArtifacts,
-    });
-    return;
-  }
-
-  if (action.actionType === 'ensure_plan_draft') {
-    const actionInput = parseEnsurePlanDraftInput(action);
-    const taskConfig = generationTaskConfigFor(input.generationPlanning, 'plan_draft', {
-      enabled: input.generationRuntime !== undefined,
-      promptVersion: planDraftPromptVersion,
-      outputSchemaVersion: planDraftOutputSchemaVersion,
-    });
-    const runtime = input.generationRuntime;
-    if (!taskConfig.enabled || runtime === undefined) {
-      throw new AutomationHttpError(422, { code: 'generation_disabled' }, 'Plan draft generation is disabled');
-    }
-    const context = await client.planDraftGenerationContext(actionInput.workItemId, {
-      specRevisionId: actionInput.specRevisionId,
-      actionRunId: action.id,
-      claimToken: requireActionClaimToken(action),
-    });
-    let generated;
-    try {
-      generated = await runtime.generatePlanDraft({
-        actionRunId: action.id,
-        projectId: context.work_item.project_id,
-        repoIds: context.repos.map((repo) => repo.repo_id),
-        context: context as unknown as Record<string, unknown>,
-        promptVersion: actionInput.promptVersion ?? taskConfig.promptVersion,
-        outputSchemaVersion: actionInput.outputSchemaVersion ?? taskConfig.outputSchemaVersion,
-        policyDigests: Object.fromEntries(
-          context.repos.flatMap((repo) => (repo.policy_digest === undefined ? [] : [[repo.repo_id, repo.policy_digest]])),
-        ),
-        orchestration: generationOrchestrationFor(action, 'ensure_plan_draft'),
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === 'generated_plan_draft_invalid') {
-        throw new AutomationHttpError(502, { code: 'generated_plan_draft_invalid' }, 'Generated Plan draft is invalid');
-      }
-      throw error;
-    }
-    let generatedPlanDraft;
-    try {
-      generatedPlanDraft = validateGeneratedPlanDraft(generated.generated);
-    } catch (error) {
-      if (error instanceof Error && error.message === 'generated_plan_draft_invalid') {
-        throw new AutomationHttpError(422, { code: 'generated_plan_draft_invalid' }, 'Generated Plan draft is invalid');
-      }
-      throw error;
-    }
-    await client.ensurePlanDraft(actionInput.workItemId, {
-      action_run_id: action.id,
-      ...(action.claimToken === undefined ? {} : { claim_token: action.claimToken }),
-      idempotency_key: action.idempotencyKey,
-      automation_precondition: precondition,
-      spec_revision_id: actionInput.specRevisionId,
-      generated_plan_draft: generatedPlanDraft,
-      generation_artifacts: generated.generationArtifacts,
-    });
-    return;
-  }
-
   if (action.actionType === 'ensure_package_drafts') {
     const actionInput = parseEnsurePackageDraftsInput(action);
     const taskConfig = generationTaskConfigFor(input.generationPlanning, 'package_drafts', {

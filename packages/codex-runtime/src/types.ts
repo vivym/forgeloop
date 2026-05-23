@@ -77,7 +77,7 @@ export interface CodexGenerationResult<TGenerated> {
 export type CodexGenerationOrchestrationContext = {
   targetType: 'automation_action_run';
   actionRunId: string;
-  actionType: 'ensure_spec_draft' | 'ensure_plan_draft' | 'ensure_package_drafts';
+  actionType: 'ensure_package_drafts';
   actionAttempt: number;
   claimToken: string;
   preconditionFingerprint: string;

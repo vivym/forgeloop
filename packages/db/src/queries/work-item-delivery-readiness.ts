@@ -34,8 +34,6 @@ import {
 
 import {
   generatePackagesAction,
-  generatePlanDraftAction,
-  generateSpecDraftAction,
   navigateAction,
   objectTarget,
   routeTarget,
@@ -1164,34 +1162,14 @@ const actionForLane = (
   }
 
   const actions: ProductAction[] = [];
-  if (input.currentSpec === null) {
+  if (input.currentSpec === null || input.currentSpec.current_revision_id === undefined) {
     actions.push(openWorkItemAction(laneId, input.workItem));
-  } else if (input.currentSpec.current_revision_id === undefined) {
-    actions.push(
-      generateSpecDraftAction({
-        id: `generate-spec-draft-${input.currentSpec.id}`,
-        laneId,
-        priority: 'primary',
-        label: 'Generate Spec draft',
-        scopeRef: workItemScopeRef(input.workItem),
-        specId: input.currentSpec.id,
-        target: objectTarget('spec', input.currentSpec.id, `/specs/${input.currentSpec.id}`),
-      }),
-    );
   }
 
   if (specIsStrictlyReady(input) && input.currentPlan !== null && input.currentPlan.current_revision_id === undefined) {
-    actions.push(
-      generatePlanDraftAction({
-        id: `generate-plan-draft-${input.currentPlan.id}`,
-        laneId,
-        priority: actions.length === 0 ? 'primary' : 'secondary',
-        label: 'Generate Plan draft',
-        scopeRef: workItemScopeRef(input.workItem),
-        planId: input.currentPlan.id,
-        target: objectTarget('plan', input.currentPlan.id, `/plans/${input.currentPlan.id}`),
-      }),
-    );
+    if (actions.length === 0) {
+      actions.push(openWorkItemAction(laneId, input.workItem));
+    }
   }
 
   if (

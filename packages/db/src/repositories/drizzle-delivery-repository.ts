@@ -5330,7 +5330,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       holds,
       settingsByScope,
     );
-    const latestMatchingTargets = [...workItemsRequiringSpec, ...workItemsRequiringPlan, ...planRevisionsRequiringPackages];
+    const latestMatchingTargets = planRevisionsRequiringPackages;
     const targetRevisionIds = [
       ...new Set(
         latestMatchingTargets.flatMap((target) =>
@@ -5355,8 +5355,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
               .where(
                 and(
                   inArray(automation_action_runs.actionType, [
-                    'ensure_spec_draft',
-                    'ensure_plan_draft',
                     'ensure_package_drafts',
                   ]),
                   inArray(
@@ -5375,17 +5373,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
               .limit(runtimeSnapshotActionRunLookback(latestMatchingTargets.length))
     ).map((row) => redactAutomationActionClaim(fromDbRecord<AutomationActionRun>(row)));
     const latestMatchingActionFields = this.latestMatchingActionFieldsByTarget(latestMatchingActionRuns);
-    const suppressingLatestActionStatuses = new Set(['pending', 'running', 'succeeded']);
-    const suppressTargetsWithLatestAction = (targets: RuntimeSnapshotTargetRow[]): RuntimeSnapshotTargetRow[] =>
-      targets.filter(
-        (target) =>
-          target.latest_matching_action_status === undefined ||
-          !suppressingLatestActionStatuses.has(target.latest_matching_action_status),
-      );
-    const workItemsRequiringSpecWithActionFields = this.applyLatestMatchingActionFields(
-      workItemsRequiringSpec,
-      latestMatchingActionFields,
-    );
     const policyProjectionActionRuns = (
       await this.db
         .select()
@@ -5398,8 +5385,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return {
       projects: projectSnapshotRows,
       repos: repoSnapshotRows,
-      work_items_requiring_spec: suppressTargetsWithLatestAction(workItemsRequiringSpecWithActionFields),
-      work_items_requiring_plan: this.applyLatestMatchingActionFields(workItemsRequiringPlan, latestMatchingActionFields),
+      work_items_requiring_spec: workItemsRequiringSpec,
+      work_items_requiring_plan: workItemsRequiringPlan,
       plan_revisions_requiring_packages: this.applyLatestMatchingActionFields(
         planRevisionsRequiringPackages,
         latestMatchingActionFields,
@@ -7171,13 +7158,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     };
   }
 
-  private runtimeSnapshotActionTypeForTarget(
-    target: RuntimeSnapshotTargetRow,
-  ): 'ensure_spec_draft' | 'ensure_plan_draft' | 'ensure_package_drafts' {
-    if (target.target_object_type === 'plan_revision') {
-      return 'ensure_package_drafts';
-    }
-    return target.target_revision_id === undefined ? 'ensure_spec_draft' : 'ensure_plan_draft';
+  private runtimeSnapshotActionTypeForTarget(_target: RuntimeSnapshotTargetRow): 'ensure_package_drafts' {
+    return 'ensure_package_drafts';
   }
 
   private latestMatchingActionKey(actionType: string, targetObjectId: string, targetRevisionId?: string): string {

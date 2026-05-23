@@ -1374,7 +1374,7 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   );
 
   const specNeededWorkItem: WorkItem = {
-    id: 'work-item-needs-spec-draft',
+    id: 'work-item-needs-SPEC-draft',
     project_id: ids.project,
     kind: 'requirement',
     title: 'Draft a new Spec',
@@ -1407,7 +1407,7 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   await repository.createOrReplayAutomationActionRun({
     id: 'automation-action-contract-spec-suppression',
-    action_type: 'ensure_spec_draft',
+    action_type: 'ensure_SPEC_draft',
     target_object_type: 'work_item',
     target_object_id: specNeededWorkItem.id,
     target_status: specNeededWorkItem.phase,
@@ -1975,7 +1975,7 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   const actionRun = await repository.claimAutomationActionRun({
     id: 'automation-action-contract',
-    action_type: 'generate_plan_draft',
+    action_type: 'generate_PLAN_draft',
     target_object_type: 'work_item',
     target_object_id: ids.workItem,
     target_revision_id: ids.specRevision2,
@@ -2161,7 +2161,7 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   const pendingActionInput = {
     id: 'automation-action-contract-pending',
-    action_type: 'ensure_plan_draft',
+    action_type: 'ensure_PLAN_draft',
     target_object_type: 'work_item',
     target_object_id: ids.workItem,
     target_revision_id: ids.specRevision2,

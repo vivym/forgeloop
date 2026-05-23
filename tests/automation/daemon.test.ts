@@ -70,7 +70,7 @@ const validEnv = () => ({
 
 const claimedPlanAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord => ({
   id: 'action-run-1',
-  actionType: 'ensure_plan_draft',
+  actionType: 'ensure_PLAN_draft',
   targetObjectType: 'work_item',
   targetObjectId: 'work-item-1',
   targetRevisionId: 'spec-revision-1',
@@ -92,7 +92,7 @@ const claimedPlanAction = (overrides: Partial<AutomationActionRunRecord> = {}): 
 
 const claimedSpecAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord => ({
   id: 'spec-action-run-1',
-  actionType: 'ensure_spec_draft',
+  actionType: 'ensure_SPEC_draft',
   targetObjectType: 'work_item',
   targetObjectId: 'work-item-1',
   targetStatus: 'triage',
@@ -182,7 +182,7 @@ class FakeDaemonClient implements AutomationDaemonClient {
     return { action: this.actionToClaim === null ? null : { ...this.actionToClaim, status: 'failed' } };
   }
 
-  async ensurePlanDraft(workItemId: string, input: Record<string, unknown>): Promise<unknown> {
+  async retiredEnsurePlanDraft(workItemId: string, input: Record<string, unknown>): Promise<unknown> {
     this.calls.push({ method: 'ensurePlanDraft', args: [workItemId, input] });
     return { status: 'created' };
   }
@@ -266,7 +266,7 @@ class FakeDaemonClient implements AutomationDaemonClient {
     };
   }
 
-  async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown> {
+  async retiredEnsureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown> {
     this.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
     return { status: 'created', spec_id: 'spec-1', spec_revision_id: 'spec-revision-1' };
   }
@@ -299,8 +299,8 @@ const daemonOptions = (client: AutomationDaemonClient) => ({
 const generationPlanning = {
   mode: 'fake',
   tasks: {
-    spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-    plan_draft: { enabled: true, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+    spec_draft: { enabled: true, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+    plan_draft: { enabled: true, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
     package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
   },
 } as const;
@@ -424,7 +424,7 @@ describe('automation daemon loop', () => {
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_SPEC_draft',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-1',
@@ -503,7 +503,7 @@ describe('automation daemon loop', () => {
       orchestration: {
         targetType: 'automation_action_run',
         actionRunId: 'action-run-1',
-        actionType: 'ensure_spec_draft',
+        actionType: 'ensure_SPEC_draft',
         actionAttempt: 1,
         claimToken: 'claim-token-1',
         preconditionFingerprint: 'precondition-1',
@@ -581,7 +581,7 @@ describe('automation daemon loop', () => {
               terminal_reason_code: 'codex_runtime_job_succeeded',
               terminal_result_json: {
                 task_kind: 'spec_draft',
-                prompt_version: 'spec-draft.remote.v1',
+                prompt_version: 'SPEC-draft.remote.v1',
                 output_schema_version: 'spec_draft.v1',
                 generated_payload: spec,
                 generated_payload_digest: specDigest,
@@ -602,8 +602,8 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
+          spec_draft: { enabled: true, promptVersion: 'SPEC-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: false, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -627,7 +627,7 @@ describe('automation daemon loop', () => {
         project_id: 'project-1',
         repo_id: 'repo-1',
       },
-      action_type: 'ensure_spec_draft',
+      action_type: 'ensure_SPEC_draft',
       action_attempt: 1,
       action_claim_token: 'claim-token-1',
       precondition_fingerprint: 'precondition-fingerprint-1',
@@ -683,13 +683,13 @@ describe('automation daemon loop', () => {
         projectId: 'project-1',
         repoIds: ['repo-1'],
         context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
+        promptVersion: 'SPEC-draft.remote.v1',
         outputSchemaVersion: 'spec_draft.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_SPEC_draft',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -742,13 +742,13 @@ describe('automation daemon loop', () => {
       projectId: 'project-1',
       repoIds: ['repo-1'],
       context: { context_version: 'generation_context.work_item.v1' },
-      promptVersion: 'spec-draft.remote.v1',
+      promptVersion: 'SPEC-draft.remote.v1',
       outputSchemaVersion: 'spec_draft.v1',
       policyDigests: {},
       orchestration: {
         targetType: 'automation_action_run' as const,
         actionRunId: 'spec-action-run-1',
-        actionType: 'ensure_spec_draft' as const,
+        actionType: 'ensure_SPEC_draft' as const,
         actionAttempt: 1,
         claimToken: 'claim-token-1',
         preconditionFingerprint: 'precondition-fingerprint-1',
@@ -808,13 +808,13 @@ describe('automation daemon loop', () => {
         projectId: 'project-1',
         repoIds: ['repo-1'],
         context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
+        promptVersion: 'SPEC-draft.remote.v1',
         outputSchemaVersion: 'spec_draft.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_SPEC_draft',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -856,7 +856,7 @@ describe('automation daemon loop', () => {
             terminal_status: 'succeeded',
             terminal_result_json: {
               task_kind: 'spec_draft',
-              prompt_version: 'spec-draft.remote.v1',
+              prompt_version: 'SPEC-draft.remote.v1',
               output_schema_version: 'spec_draft.v1',
               generated_payload: spec,
               generated_payload_digest: codexCanonicalDigest(spec),
@@ -883,13 +883,13 @@ describe('automation daemon loop', () => {
         projectId: 'project-1',
         repoIds: ['repo-1'],
         context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
+        promptVersion: 'SPEC-draft.remote.v1',
         outputSchemaVersion: 'spec_draft.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_SPEC_draft',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -928,7 +928,7 @@ describe('automation daemon loop', () => {
             terminal_status: 'succeeded',
             terminal_result_json: {
               task_kind: 'spec_draft',
-              prompt_version: 'spec-draft.remote.v1',
+              prompt_version: 'SPEC-draft.remote.v1',
               output_schema_version: 'spec_draft.v1',
               generated_payload: {
                 schema_version: 'generated_payload_ref.v1',
@@ -964,13 +964,13 @@ describe('automation daemon loop', () => {
         projectId: 'project-1',
         repoIds: ['repo-1'],
         context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
+        promptVersion: 'SPEC-draft.remote.v1',
         outputSchemaVersion: 'spec_draft.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_SPEC_draft',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1020,13 +1020,13 @@ describe('automation daemon loop', () => {
         projectId: 'project-1',
         repoIds: ['repo-1'],
         context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
+        promptVersion: 'SPEC-draft.remote.v1',
         outputSchemaVersion: 'spec_draft.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_SPEC_draft',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1083,13 +1083,13 @@ describe('automation daemon loop', () => {
         projectId: 'project-1',
         repoIds: ['repo-1'],
         context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
+        promptVersion: 'SPEC-draft.remote.v1',
         outputSchemaVersion: 'spec_draft.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_SPEC_draft',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1149,13 +1149,13 @@ describe('automation daemon loop', () => {
         projectId: 'project-1',
         repoIds: ['repo-1'],
         context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
+        promptVersion: 'SPEC-draft.remote.v1',
         outputSchemaVersion: 'spec_draft.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_SPEC_draft',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1212,13 +1212,13 @@ describe('automation daemon loop', () => {
         projectId: 'project-1',
         repoIds: ['repo-1'],
         context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
+        promptVersion: 'SPEC-draft.remote.v1',
         outputSchemaVersion: 'spec_draft.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_SPEC_draft',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1280,7 +1280,7 @@ describe('automation daemon loop', () => {
             terminal_status: 'succeeded',
             terminal_result_json: {
               task_kind: 'spec_draft',
-              prompt_version: 'spec-draft.remote.v1',
+              prompt_version: 'SPEC-draft.remote.v1',
               output_schema_version: 'spec_draft.v1',
               generated_payload: spec,
               generated_payload_digest: codexCanonicalDigest(spec),
@@ -1297,8 +1297,8 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
+          spec_draft: { enabled: true, promptVersion: 'SPEC-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: false, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -1363,8 +1363,8 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
+          spec_draft: { enabled: true, promptVersion: 'SPEC-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: false, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -1435,7 +1435,7 @@ describe('automation daemon loop', () => {
     const createdActions = client.calls
       .filter((call) => call.method === 'createOrReplayAction')
       .map((call) => (call.args[0] as NextAction).actionType);
-    expect(createdActions).toEqual(['ensure_plan_draft', 'project_runtime_snapshot']);
+    expect(createdActions).toEqual(['ensure_PLAN_draft', 'project_runtime_snapshot']);
     expect(JSON.stringify(client.calls)).not.toContain('enqueue');
   });
 
@@ -1535,8 +1535,8 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+          spec_draft: { enabled: true, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -1592,8 +1592,8 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
+          spec_draft: { enabled: true, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
+          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -1677,7 +1677,7 @@ describe('automation daemon loop', () => {
     ]);
     expect(
       client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
-    ).toEqual(['ensure_spec_draft', 'project_runtime_snapshot']);
+    ).toEqual(['ensure_SPEC_draft', 'project_runtime_snapshot']);
   });
 
   it('returns no-claim backoff when nothing is claimable', async () => {

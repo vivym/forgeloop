@@ -1291,7 +1291,7 @@ describe('internal automation runtime snapshot', () => {
     await repository.saveRunSession(runSession);
     await seedCompletedAction(repository, {
       id: 'action-with-private-output',
-      actionType: 'ensure_plan_draft',
+      actionType: 'ensure_PLAN_draft',
       resultJson: { local_path: `${rawSecretPath}/result.json`, raw_metadata: { secret: 'raw-runtime-metadata' } },
     });
 

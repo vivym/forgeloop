@@ -10,11 +10,7 @@ import type {
   FailActionInput,
   GatePendingActionInput,
   AutomationGenerationPackageContextV1,
-  AutomationGenerationPlanContextV1,
-  AutomationGenerationWorkItemContextV1,
-  EnsurePlanDraftCommandInput,
   EnsurePackageDraftsCommandInput,
-  EnsureSpecDraftCommandInput,
   NextAction,
   RequestManualPathCommandInput,
   RuntimeSnapshot,
@@ -301,32 +297,6 @@ export class AutomationHttpClient {
     return actionResponseFromWire(await this.request('POST', `/internal/automation/actions/${actionRunId}/fail`, input));
   }
 
-  async specDraftGenerationContext(workItemId: string, input: { actionRunId: string; claimToken: string }) {
-    const query = new URLSearchParams({
-      action_run_id: input.actionRunId,
-      claim_token: input.claimToken,
-    });
-    return this.request(
-      'GET',
-      `/internal/automation/generation-context/work-items/${workItemId}/spec-draft?${query.toString()}`,
-    ) as Promise<AutomationGenerationWorkItemContextV1>;
-  }
-
-  async planDraftGenerationContext(
-    workItemId: string,
-    input: { specRevisionId: string; actionRunId: string; claimToken: string },
-  ): Promise<AutomationGenerationPlanContextV1> {
-    const query = new URLSearchParams({
-      spec_revision_id: input.specRevisionId,
-      action_run_id: input.actionRunId,
-      claim_token: input.claimToken,
-    });
-    return this.request(
-      'GET',
-      `/internal/automation/generation-context/work-items/${workItemId}/plan-draft?${query.toString()}`,
-    ) as Promise<AutomationGenerationPlanContextV1>;
-  }
-
   async packageDraftsGenerationContext(
     planRevisionId: string,
     input: { generationKey: string; actionRunId: string; claimToken: string },
@@ -340,14 +310,6 @@ export class AutomationHttpClient {
       'GET',
       `/internal/automation/generation-context/plan-revisions/${planRevisionId}/package-drafts?${query.toString()}`,
     ) as Promise<AutomationGenerationPackageContextV1>;
-  }
-
-  async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput) {
-    return this.request('POST', `/internal/automation/work-items/${workItemId}/ensure-spec-draft`, input);
-  }
-
-  async ensurePlanDraft(workItemId: string, input: EnsurePlanDraftCommandInput) {
-    return this.request('POST', `/internal/automation/work-items/${workItemId}/ensure-plan-draft`, input);
   }
 
   async ensurePackageDrafts(planRevisionId: string, input: EnsurePackageDraftsCommandInput) {
