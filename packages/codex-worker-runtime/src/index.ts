@@ -13,3 +13,4 @@ export * from './run-session-driver.js';
 export * from './scavenger.js';
 export * from './task-filesystem.js';
 export * from './workspace-isolation.js';
+export * from './workspace-bundle.js';

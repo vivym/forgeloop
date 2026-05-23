@@ -902,6 +902,26 @@ export class CodexRuntimeService {
     return { artifact };
   }
 
+  async downloadWorkspaceBundle(workerId: string, jobId: string, bundleId: string, query: CodexRuntimeWorkerQueryDto) {
+    assertWorkerBodyDigest(query);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(query.nonce_timestamp, now);
+    return this.repository.getWorkspaceBundleDownloadForRuntimeJob({
+      runtime_job_id: jobId,
+      bundle_id: bundleId,
+      worker_id: workerId,
+      worker_session_token: query.worker_session_token,
+      nonce: query.nonce,
+      nonce_timestamp: query.nonce_timestamp,
+      replay_protection: workerReplayProtection(
+        'GET',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/workspace-bundle/${bundleId}`,
+        query.body_digest,
+      ),
+      now,
+    });
+  }
+
   async getRuntimeJobControl(workerId: string, jobId: string, query: CodexRuntimeWorkerQueryDto) {
     assertWorkerBodyDigest(query);
     const now = nowIso();

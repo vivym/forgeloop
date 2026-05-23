@@ -249,6 +249,7 @@ export interface PendingWorkspaceBundleInput {
   archive_digest: string;
   manifest_digest: string;
   run_worker_lease_id: string;
+  size_bytes: number;
   workspace_acquisition_digest: string;
   workspace_acquisition_json: Record<string, unknown>;
   expires_at: string;
@@ -411,6 +412,9 @@ export interface ListCodexRuntimeJobArtifactsInput {
 
 export interface CreatePendingWorkspaceBundleArtifactInput extends PendingWorkspaceBundleInput {
   id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  archive_bytes_base64: string;
   request_digest: string;
   created_at: string;
 }
@@ -420,7 +424,20 @@ export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
   bundle_id: string;
   worker_id: string;
   worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
   now: string;
+}
+
+export interface WorkspaceBundleDownloadForRuntimeJob {
+  bundle_id: string;
+  archive_bytes_base64: string;
+  archive_digest: string;
+  manifest_digest: string;
+  content_type: 'application/vnd.forgeloop.workspace-bundle';
+  size_bytes: number;
+  expires_at: string;
 }
 
 export interface CancelCodexRuntimeJobInput {
@@ -1211,6 +1228,8 @@ export interface DeliveryRepository {
   appendCodexRuntimeJobEvent(input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob>;
   createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
   listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]>;
+  createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void>;
+  getWorkspaceBundleDownloadForRuntimeJob(input: GetWorkspaceBundleDownloadForRuntimeJobInput): Promise<WorkspaceBundleDownloadForRuntimeJob>;
   cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
   terminalizeCodexRuntimeJob(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
   recoverStaleCodexRuntimeJobs(input: RecoverStaleCodexRuntimeJobsInput): Promise<RecoverStaleCodexRuntimeJobsResult>;

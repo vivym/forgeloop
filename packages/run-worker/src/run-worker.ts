@@ -1,6 +1,17 @@
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
+import { join, relative } from 'node:path';
+
 import type { ExecutorFailure, ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
-import type { DeliveryRepository } from '../../db/src/index.js';
-import type { RunRuntimeMetadata, RunSession } from '../../domain/src/index.js';
+import type { DeliveryRepository, PendingWorkspaceBundleInput } from '../../db/src/index.js';
+import { codexCanonicalDigest, codexWorkspaceAcquisitionDigest } from '../../domain/src/index.js';
+import type { ExecutionPackage, RunRuntimeMetadata, RunSession, RunWorkerLease } from '../../domain/src/index.js';
+import {
+  createWorkspaceBundleArchive,
+  createWorkspaceBundleManifest,
+  workspaceBundleArchiveDigest,
+  workspaceBundleManifestDigest,
+  type WorkspaceBundleFileInput,
+} from '@forgeloop/codex-worker-runtime';
 import type {
   CodexDriverStreamItem,
   CodexSessionDriver,
@@ -222,6 +233,132 @@ const runtimeEvidenceFromExecutorResult = (executorResult: ExecutorResult): Runt
         }
       : { ok: true },
 });
+
+const isInsidePath = (root: string, child: string): boolean => {
+  const childRelative = relative(root, child);
+  return childRelative === '' || (!childRelative.startsWith('..') && !childRelative.startsWith('/'));
+};
+
+const stableUuidFromDigest = (input: Record<string, unknown>): string => {
+  const hex = codexCanonicalDigest(input).slice('sha256:'.length);
+  const variant = (8 + (Number.parseInt(hex[16]!, 16) % 4)).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
+
+const collectWorkspaceFiles = async (workspacePath: string, current = '', rootRealPath?: string): Promise<WorkspaceBundleFileInput[]> => {
+  if (current === '.git' || current === 'node_modules') {
+    return [];
+  }
+  const root = rootRealPath ?? (await realpath(workspacePath));
+  const absolute = current.length === 0 ? workspacePath : join(workspacePath, current);
+  const info = await lstat(absolute);
+  if (info.isSymbolicLink()) {
+    throw new Error('codex_workspace_bundle_invalid: workspace symlinks are not allowed');
+  }
+  const real = await realpath(absolute);
+  if (!isInsidePath(root, real)) {
+    throw new Error('codex_workspace_bundle_invalid: workspace entry escapes root');
+  }
+  if (info.isDirectory()) {
+    const children = await readdir(absolute);
+    const nested = await Promise.all(
+      children.sort().map((child) => collectWorkspaceFiles(workspacePath, current.length === 0 ? child : join(current, child), root)),
+    );
+    return nested.flat();
+  }
+  if (!info.isFile()) {
+    return [];
+  }
+  const path = relative(workspacePath, absolute).replaceAll('\\', '/');
+  return [{ path, content: await readFile(absolute) }];
+};
+
+export const createRunWorkerPendingWorkspaceBundleArtifact = async (input: {
+  repository: DeliveryRepository;
+  runSession: RunSession;
+  executionPackage: ExecutionPackage;
+  runWorkerLease: RunWorkerLease;
+  workspacePath: string;
+  bundleId: string;
+  now: string;
+  expiresAt: string;
+  maxSizeBytes?: number;
+}): Promise<{
+  pending_workspace_bundle: PendingWorkspaceBundleInput;
+  archive_digest: string;
+  manifest_digest: string;
+  size_bytes: number;
+}> => {
+  if (
+    input.runWorkerLease.status !== 'active' ||
+    input.runWorkerLease.expires_at <= input.now ||
+    input.runWorkerLease.run_session_id !== input.runSession.id
+  ) {
+    throw new Error('run_worker_lease_unavailable');
+  }
+  await input.repository.assertActiveRunWorkerLease(
+    input.runSession.id,
+    input.runWorkerLease.worker_id,
+    input.runWorkerLease.lease_token,
+    input.now,
+  );
+  const files = await collectWorkspaceFiles(input.workspacePath);
+  const manifest = createWorkspaceBundleManifest({
+    bundleId: input.bundleId,
+    createdAt: input.now,
+    allowedPaths: ['**'],
+    forbiddenPaths: ['.git/**', 'node_modules/**'],
+    files,
+  });
+  const archiveBytes = createWorkspaceBundleArchive({ manifest, files });
+  if (input.maxSizeBytes !== undefined && archiveBytes.byteLength > input.maxSizeBytes) {
+    throw new Error('codex_workspace_bundle_invalid: archive exceeds byte limit');
+  }
+  const archiveDigest = workspaceBundleArchiveDigest(archiveBytes);
+  const manifestDigest = workspaceBundleManifestDigest(manifest);
+  const pendingArtifactRef = `artifact:codex-pending-bundles:${input.bundleId}`;
+  const workspaceAcquisitionJson = {
+    schema_version: 'workspace_bundle_acquisition.v1',
+    bundle_id: input.bundleId,
+    archive_ref: pendingArtifactRef,
+    archive_digest: archiveDigest,
+    manifest_digest: manifestDigest,
+    size_bytes: archiveBytes.byteLength,
+    expires_at: input.expiresAt,
+  };
+  const pendingWorkspaceBundle: PendingWorkspaceBundleInput = {
+    bundle_id: input.bundleId,
+    pending_artifact_ref: pendingArtifactRef,
+    archive_digest: archiveDigest,
+    manifest_digest: manifestDigest,
+    run_worker_lease_id: input.runWorkerLease.id,
+    size_bytes: archiveBytes.byteLength,
+    workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+    workspace_acquisition_json: workspaceAcquisitionJson,
+    expires_at: input.expiresAt,
+  };
+  await input.repository.createPendingWorkspaceBundleArtifact({
+    ...pendingWorkspaceBundle,
+    id: stableUuidFromDigest({ kind: 'pending_workspace_bundle', bundle_id: input.bundleId }),
+    run_session_id: input.runSession.id,
+    execution_package_id: input.executionPackage.id,
+    archive_bytes_base64: archiveBytes.toString('base64'),
+    request_digest: codexCanonicalDigest({
+      run_session_id: input.runSession.id,
+      execution_package_id: input.executionPackage.id,
+      bundle_id: input.bundleId,
+      archive_digest: archiveDigest,
+      manifest_digest: manifestDigest,
+    }),
+    created_at: input.now,
+  });
+  return {
+    pending_workspace_bundle: pendingWorkspaceBundle,
+    archive_digest: archiveDigest,
+    manifest_digest: manifestDigest,
+    size_bytes: archiveBytes.byteLength,
+  };
+};
 
 const fakeEnvironment = (): LocalCodexEnvironment => ({
   commandExists: async () => false,

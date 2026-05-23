@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { Buffer } from 'node:buffer';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { codexCanonicalDigest } from '@forgeloop/domain';
 
 import { CodexRuntimeControlPlaneClient } from '../../packages/codex-worker-runtime/src/control-plane-client';
+import { workspaceBundleArchiveDigest } from '../../packages/codex-worker-runtime/src/workspace-bundle';
 
 type CapturedRequest = {
   url: string;
@@ -31,7 +37,19 @@ const expectWorkerDigest = (body: Record<string, unknown>) => {
   expect(bodyDigest).toBe(codexCanonicalDigest(unsignedBody));
 };
 
+const tempRoots: string[] = [];
+
+const makeTempDir = async (): Promise<string> => {
+  const dir = await mkdtemp(join(tmpdir(), 'forgeloop-control-plane-client-'));
+  tempRoots.push(dir);
+  return dir;
+};
+
 describe('CodexRuntimeControlPlaneClient', () => {
+  afterEach(async () => {
+    await Promise.all(tempRoots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
   it('signs trusted runtime job orchestration requests with exact path and raw body', async () => {
     const { fetchImpl, requests } = createFetchRecorder();
     const signed: Array<{ method: string; pathAndQuery: string; rawBody: string }> = [];
@@ -234,6 +252,120 @@ describe('CodexRuntimeControlPlaneClient', () => {
       });
       expectWorkerDigest(query);
     }
+  });
+
+  it('downloads workspace bundle bytes with worker GET proof and verifies digest before writing under temp root', async () => {
+    const bundleBytes = Buffer.from('workspace bundle bytes\n');
+    const archiveDigest = workspaceBundleArchiveDigest(bundleBytes);
+    const { fetchImpl, requests } = createFetchRecorder(
+      () =>
+        new Response(bundleBytes, {
+          status: 200,
+          headers: {
+            'content-type': 'application/vnd.forgeloop.workspace-bundle',
+            'content-length': String(bundleBytes.byteLength),
+          },
+        }),
+    );
+    const tempRoot = await makeTempDir();
+    const client = new CodexRuntimeControlPlaneClient({
+      baseUrl: 'https://control.test',
+      fetchImpl,
+      nonceFactory: () => 'nonce-bundle',
+      now: () => '2026-05-23T05:06:07.000Z',
+    });
+
+    const result = await client.downloadWorkspaceBundle('worker/1', 'runtime/job/1', 'bundle/1', {
+      workerSessionToken: 'session-1',
+      tempRoot,
+      expectedArchiveDigest: archiveDigest,
+      maxSizeBytes: 1_000,
+    });
+
+    expect(result).toMatchObject({
+      archive_digest: archiveDigest,
+      size_bytes: bundleBytes.byteLength,
+      content_type: 'application/vnd.forgeloop.workspace-bundle',
+    });
+    await expect(readFile(result.archive_path)).resolves.toEqual(bundleBytes);
+    expect(requests).toHaveLength(1);
+    const requestUrl = new URL(requests[0]!.url);
+    expect([requests[0]!.init.method, requestUrl.pathname]).toEqual([
+      'GET',
+      '/internal/codex-workers/worker%2F1/runtime-jobs/runtime%2Fjob%2F1/workspace-bundle/bundle%2F1',
+    ]);
+    const query = Object.fromEntries(requestUrl.searchParams.entries());
+    expect(query).toMatchObject({
+      worker_session_token: 'session-1',
+      nonce: 'nonce-bundle',
+      nonce_timestamp: '2026-05-23T05:06:07.000Z',
+      body_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
+    expect(query).not.toHaveProperty('expectedArchiveDigest');
+    expect(query).not.toHaveProperty('tempRoot');
+    expectWorkerDigest(query);
+  });
+
+  it('rejects symlinked workspace bundle download directories before writing archive bytes', async () => {
+    const bundleBytes = Buffer.from('workspace bundle bytes\n');
+    const archiveDigest = workspaceBundleArchiveDigest(bundleBytes);
+    const { fetchImpl } = createFetchRecorder(
+      () =>
+        new Response(bundleBytes, {
+          status: 200,
+          headers: { 'content-type': 'application/vnd.forgeloop.workspace-bundle' },
+        }),
+    );
+    const tempRoot = await makeTempDir();
+    const outside = await makeTempDir();
+    await symlink(outside, join(tempRoot, 'workspace-bundles'));
+    const client = new CodexRuntimeControlPlaneClient({
+      baseUrl: 'https://control.test',
+      fetchImpl,
+      nonceFactory: () => 'nonce-symlink-dir',
+      now: () => '2026-05-23T05:06:07.000Z',
+    });
+
+    await expect(
+      client.downloadWorkspaceBundle('worker-1', 'runtime-job-1', 'bundle-1', {
+        workerSessionToken: 'session-1',
+        tempRoot,
+        expectedArchiveDigest: archiveDigest,
+      }),
+    ).rejects.toThrow(/codex_control_plane_workspace_bundle_temp_root_rejected/);
+    await expect(readFile(join(outside, `${archiveDigest.slice('sha256:'.length)}.bundle`))).rejects.toThrow();
+  });
+
+  it('rejects symlinked workspace bundle archive paths before writing archive bytes', async () => {
+    const bundleBytes = Buffer.from('workspace bundle bytes\n');
+    const archiveDigest = workspaceBundleArchiveDigest(bundleBytes);
+    const { fetchImpl } = createFetchRecorder(
+      () =>
+        new Response(bundleBytes, {
+          status: 200,
+          headers: { 'content-type': 'application/vnd.forgeloop.workspace-bundle' },
+        }),
+    );
+    const tempRoot = await makeTempDir();
+    const outside = await makeTempDir();
+    await mkdir(join(tempRoot, 'workspace-bundles'), { mode: 0o700 });
+    await writeFile(join(outside, 'archive.bundle'), 'outside\n');
+    await symlink(join(outside, 'archive.bundle'), join(tempRoot, 'workspace-bundles', `${archiveDigest.slice('sha256:'.length)}.bundle`));
+    const client = new CodexRuntimeControlPlaneClient({
+      baseUrl: 'https://control.test',
+      fetchImpl,
+      nonceFactory: () => 'nonce-symlink-file',
+      now: () => '2026-05-23T05:06:07.000Z',
+    });
+
+    await expect(
+      client.downloadWorkspaceBundle('worker-1', 'runtime-job-1', 'bundle-1', {
+        workerSessionToken: 'session-1',
+        tempRoot,
+        expectedArchiveDigest: archiveDigest,
+      }),
+    ).rejects.toThrow(/codex_control_plane_workspace_bundle_temp_root_rejected/);
+    await expect(readFile(join(outside, 'archive.bundle'), 'utf8')).resolves.toBe('outside\n');
   });
 
   it('keeps existing launch lease worker methods on worker proof auth without trusted actor headers', async () => {

@@ -1,7 +1,11 @@
+import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexWorkspaceAcquisitionDigest,
   codexRuntimeProfileRevisionDigest,
   DomainError,
   validateCodexLaunchTargetKind,
@@ -53,6 +57,7 @@ const runtimeMetadata = {
 } as const;
 
 const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
+const bytesDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const dockerProxyConfig = (): CodexDockerNetworkProxyConfig => {
   const configWithoutDigest = {
@@ -3082,19 +3087,36 @@ describe('codex runtime repository behavior', () => {
       target_kind: 'run_execution',
       target_id: run.id,
     });
-    const pendingBundle = {
+    const archiveBytes = Buffer.from('bundle-archive-1');
+    const workspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: 'pending-bundle-1',
-      pending_artifact_ref: 'artifact://runtime/pending-bundle-1',
-      archive_digest: tokenHash('bundle-archive-1'),
+      archive_ref: 'artifact:codex-pending-bundles:pending-bundle-1',
+      archive_digest: bytesDigest(archiveBytes),
       manifest_digest: tokenHash('bundle-manifest-1'),
-      run_worker_lease_id: runWorkerLease.id,
-      workspace_acquisition_digest: tokenHash('pending-workspace-1'),
-      workspace_acquisition_json: {
-        bundle_id: 'pending-bundle-1',
-        archive_ref: 'artifact://runtime/pending-bundle-1',
-      },
+      size_bytes: archiveBytes.byteLength,
       expires_at: expiresAt,
     };
+    const pendingBundle = {
+      bundle_id: 'pending-bundle-1',
+      pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+      archive_digest: workspaceAcquisitionJson.archive_digest,
+      manifest_digest: workspaceAcquisitionJson.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: archiveBytes.byteLength,
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+      workspace_acquisition_json: workspaceAcquisitionJson,
+      expires_at: expiresAt,
+    };
+    await repository.createPendingWorkspaceBundleArtifact({
+      ...pendingBundle,
+      id: '22222222-2222-4222-8222-222222222222',
+      run_session_id: run.id,
+      execution_package_id: run.execution_package_id,
+      archive_bytes_base64: archiveBytes.toString('base64'),
+      request_digest: tokenHash('pending-workspace-request-1'),
+      created_at: now,
+    });
     const input = await runtimeJobInput(
       repository,
       {
@@ -3180,19 +3202,36 @@ describe('codex runtime repository behavior', () => {
       target_kind: 'run_execution',
       target_id: run.id,
     });
-    const pendingBundle = {
+    const archiveBytes = Buffer.from('bundle-archive-missing-fence');
+    const workspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: 'pending-bundle-missing-fence',
-      pending_artifact_ref: 'artifact://runtime/pending-bundle-missing-fence',
-      archive_digest: tokenHash('bundle-archive-missing-fence'),
+      archive_ref: 'artifact:codex-pending-bundles:pending-bundle-missing-fence',
+      archive_digest: bytesDigest(archiveBytes),
       manifest_digest: tokenHash('bundle-manifest-missing-fence'),
-      run_worker_lease_id: runWorkerLease.id,
-      workspace_acquisition_digest: tokenHash('pending-workspace-missing-fence'),
-      workspace_acquisition_json: {
-        bundle_id: 'pending-bundle-missing-fence',
-        archive_ref: 'artifact://runtime/pending-bundle-missing-fence',
-      },
+      size_bytes: archiveBytes.byteLength,
       expires_at: expiresAt,
     };
+    const pendingBundle = {
+      bundle_id: 'pending-bundle-missing-fence',
+      pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+      archive_digest: workspaceAcquisitionJson.archive_digest,
+      manifest_digest: workspaceAcquisitionJson.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: archiveBytes.byteLength,
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+      workspace_acquisition_json: workspaceAcquisitionJson,
+      expires_at: expiresAt,
+    };
+    await repository.createPendingWorkspaceBundleArtifact({
+      ...pendingBundle,
+      id: '33333333-3333-4333-8333-333333333333',
+      run_session_id: run.id,
+      execution_package_id: run.execution_package_id,
+      archive_bytes_base64: archiveBytes.toString('base64'),
+      request_digest: tokenHash('pending-workspace-request-missing-fence'),
+      created_at: now,
+    });
     const input = await runtimeJobInput(
       repository,
       {

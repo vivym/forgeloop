@@ -1,5 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { Buffer } from 'node:buffer';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -7,11 +8,11 @@ import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
-import { InMemoryDeliveryRepository } from '../../packages/db/src';
+import { InMemoryDeliveryRepository, type CreatePendingWorkspaceBundleArtifactInput } from '../../packages/db/src';
 import { transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
 import type { CodexDriverStartInput, CodexSessionDriver, LocalCodexEvidenceInput, RunRuntimeMetadata } from '../../packages/executor/src';
 
-import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
+import { createRunWorkerPendingWorkspaceBundleArtifact, FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 import {
   seedQueuedPackageRun,
   seedReadyStartedPackageRun,
@@ -44,6 +45,14 @@ const createGitRepo = async (): Promise<{ repo: string; head: string }> => {
   await execGit(repo, ['commit', '-m', 'initial']);
   const head = (await execGit(repo, ['rev-parse', 'HEAD'])).trim();
   return { repo, head };
+};
+
+const createGitWorktree = async (): Promise<{ repo: string; worktree: string; head: string }> => {
+  const { repo, head } = await createGitRepo();
+  const worktreeRoot = await makeTempDir();
+  const worktree = join(worktreeRoot, 'linked-worktree');
+  await execGit(repo, ['worktree', 'add', worktree, head]);
+  return { repo, worktree, head };
 };
 
 const localCodexRunSpec = (runSpec: RunSpec, repo: string, head: string): RunSpec => ({
@@ -108,6 +117,15 @@ class FailingClaimRepository extends InMemoryDeliveryRepository {
 class FailingHeartbeatRepository extends InMemoryDeliveryRepository {
   override async heartbeatRunWorkerLease(): Promise<void> {
     throw new Error('injected heartbeat failure');
+  }
+}
+
+class CapturingWorkspaceBundleRepository extends InMemoryDeliveryRepository {
+  pendingWorkspaceBundleInputs: CreatePendingWorkspaceBundleArtifactInput[] = [];
+
+  override async createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
+    this.pendingWorkspaceBundleInputs.push(input);
+    await super.createPendingWorkspaceBundleArtifact(input);
   }
 }
 
@@ -961,6 +979,148 @@ describe('RunWorker', () => {
       beforePorcelain: '',
     });
   }, 15_000);
+
+  it('stores remote workspace bundle bytes only after holding an active run-worker lease', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    await mkdir(join(repo, 'packages', 'workflow'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'workflow', 'src.ts'), 'export const value = 1;\n');
+    await execGit(repo, ['add', '.']);
+    await execGit(repo, ['commit', '-m', 'add source']);
+    const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
+    const [projectRepo] = await repository.listProjectRepos('project-1');
+    await repository.saveProjectRepo({
+      ...projectRepo!,
+      local_path: repo,
+      base_commit_sha: head,
+      default_branch: 'main',
+    });
+    const activeLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-23T00:00:00.000Z',
+      expires_at: '2026-05-23T00:10:00.000Z',
+    });
+
+    const pending = await createRunWorkerPendingWorkspaceBundleArtifact({
+      repository,
+      runSession,
+      executionPackage,
+      runWorkerLease: activeLease,
+      workspacePath: repo,
+      bundleId: 'run-worker-workspace-bundle-1',
+      now: '2026-05-23T00:00:00.000Z',
+      expiresAt: '2026-05-23T00:10:00.000Z',
+      maxSizeBytes: 1_000_000,
+    });
+
+    expect(repository.pendingWorkspaceBundleInputs).toHaveLength(1);
+    expect(repository.pendingWorkspaceBundleInputs[0]).toMatchObject({
+      bundle_id: 'run-worker-workspace-bundle-1',
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      run_worker_lease_id: activeLease.id,
+      size_bytes: expect.any(Number),
+      archive_bytes_base64: expect.any(String),
+    });
+    expect(pending.pending_workspace_bundle).toMatchObject({
+      bundle_id: 'run-worker-workspace-bundle-1',
+      run_worker_lease_id: activeLease.id,
+      archive_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      manifest_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
+    expect(JSON.stringify(pending.pending_workspace_bundle.workspace_acquisition_json)).not.toContain(repo);
+
+    await expect(
+      createRunWorkerPendingWorkspaceBundleArtifact({
+        repository,
+        runSession,
+        executionPackage,
+        runWorkerLease: { ...activeLease, status: 'expired' },
+        workspacePath: repo,
+        bundleId: 'run-worker-workspace-bundle-expired',
+        now: '2026-05-23T00:00:00.000Z',
+        expiresAt: '2026-05-23T00:10:00.000Z',
+      }),
+    ).rejects.toThrow(/run_worker_lease_unavailable/);
+  });
+
+  it('stores remote workspace bundle bytes from a git worktree without packaging the .git file', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, worktree, head } = await createGitWorktree();
+    const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
+    const [projectRepo] = await repository.listProjectRepos('project-1');
+    await repository.saveProjectRepo({
+      ...projectRepo!,
+      local_path: worktree,
+      base_commit_sha: head,
+      default_branch: 'main',
+    });
+    const activeLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-23T00:00:00.000Z',
+      expires_at: '2026-05-23T00:10:00.000Z',
+    });
+
+    await createRunWorkerPendingWorkspaceBundleArtifact({
+      repository,
+      runSession,
+      executionPackage,
+      runWorkerLease: activeLease,
+      workspacePath: worktree,
+      bundleId: 'run-worker-workspace-bundle-worktree',
+      now: '2026-05-23T00:00:00.000Z',
+      expiresAt: '2026-05-23T00:10:00.000Z',
+      maxSizeBytes: 1_000_000,
+    });
+
+    const archive = JSON.parse(Buffer.from(repository.pendingWorkspaceBundleInputs[0]!.archive_bytes_base64, 'base64').toString('utf8')) as {
+      entries: Array<{ path: string }>;
+    };
+    expect(archive.entries.map((entry) => entry.path)).not.toContain('.git');
+    expect(JSON.stringify(archive)).not.toContain(repo);
+  });
+
+  it('refuses to store remote workspace bundles that contain symlinks escaping the workspace', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    const outside = await makeTempDir();
+    await writeFile(join(outside, 'secret.txt'), 'outside\n');
+    await mkdir(join(repo, 'packages', 'workflow'), { recursive: true });
+    await symlink(join(outside, 'secret.txt'), join(repo, 'packages', 'workflow', 'leak.txt'));
+    const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
+    const [projectRepo] = await repository.listProjectRepos('project-1');
+    await repository.saveProjectRepo({
+      ...projectRepo!,
+      local_path: repo,
+      base_commit_sha: head,
+      default_branch: 'main',
+    });
+    const activeLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: 'worker-1',
+      lease_token: 'lease-token-1',
+      now: '2026-05-23T00:00:00.000Z',
+      expires_at: '2026-05-23T00:10:00.000Z',
+    });
+
+    await expect(
+      createRunWorkerPendingWorkspaceBundleArtifact({
+        repository,
+        runSession,
+        executionPackage,
+        runWorkerLease: activeLease,
+        workspacePath: repo,
+        bundleId: 'run-worker-workspace-bundle-symlink',
+        now: '2026-05-23T00:00:00.000Z',
+        expiresAt: '2026-05-23T00:10:00.000Z',
+      }),
+    ).rejects.toThrow(/codex_workspace_bundle_invalid/);
+    expect(repository.pendingWorkspaceBundleInputs).toHaveLength(0);
+  });
 
   it('uses exec fallback when app-server emits a fallback event after initial progress', async () => {
     const repository = new InMemoryDeliveryRepository();

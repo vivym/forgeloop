@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
@@ -7,14 +7,18 @@ import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
   codexRuntimeProfileRevisionDigest,
+  codexWorkspaceAcquisitionDigest,
+  type ExecutionPackage,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexDockerNetworkProxyConfig,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
+  type RunSession,
 } from '../../packages/domain/src/index';
 import {
   automation_action_runs,
+  codex_pending_workspace_bundles,
   codex_credential_bindings,
   assertResettableDatabaseUrl,
   codex_credential_binding_versions,
@@ -42,6 +46,13 @@ const afterRuntimeJobExpiry = '2026-05-20T00:02:00.000Z';
 const expiresAt = '2026-05-20T00:10:00.000Z';
 
 const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
+const bytesDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+
+const runtimeMetadata = {
+  durability_mode: 'durable',
+  recovery_attempt_count: 0,
+  effective_dangerous_mode: 'confirmed',
+} as const;
 
 const createEnvelopeSealer = (
   calls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [],
@@ -126,6 +137,59 @@ const dockerProxyNetworkPolicy = () => {
     self_test_digest: dockerProxyConfig().self_test_image_digest,
   };
 };
+
+const runSession = (overrides: Partial<RunSession> = {}): RunSession => ({
+  id: overrides.id ?? randomUUID(),
+  execution_package_id: overrides.execution_package_id ?? randomUUID(),
+  requested_by_actor_id: overrides.requested_by_actor_id ?? randomUUID(),
+  status: overrides.status ?? 'running',
+  changed_files: overrides.changed_files ?? [],
+  check_results: overrides.check_results ?? [],
+  artifacts: overrides.artifacts ?? [],
+  log_refs: overrides.log_refs ?? [],
+  runtime_metadata: overrides.runtime_metadata ?? runtimeMetadata,
+  created_at: overrides.created_at ?? now,
+  updated_at: overrides.updated_at ?? now,
+  ...(overrides.executor_type !== undefined ? { executor_type: overrides.executor_type } : {}),
+  ...(overrides.executor_result !== undefined ? { executor_result: overrides.executor_result } : {}),
+  ...(overrides.run_spec !== undefined ? { run_spec: overrides.run_spec } : {}),
+  ...(overrides.summary !== undefined ? { summary: overrides.summary } : {}),
+  ...(overrides.failure_kind !== undefined ? { failure_kind: overrides.failure_kind } : {}),
+  ...(overrides.failure_reason !== undefined ? { failure_reason: overrides.failure_reason } : {}),
+  ...(overrides.started_at !== undefined ? { started_at: overrides.started_at } : {}),
+  ...(overrides.finished_at !== undefined ? { finished_at: overrides.finished_at } : {}),
+});
+
+const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
+  id: overrides.id ?? randomUUID(),
+  work_item_id: overrides.work_item_id ?? randomUUID(),
+  spec_id: overrides.spec_id ?? randomUUID(),
+  spec_revision_id: overrides.spec_revision_id ?? randomUUID(),
+  plan_id: overrides.plan_id ?? randomUUID(),
+  plan_revision_id: overrides.plan_revision_id ?? randomUUID(),
+  project_id: overrides.project_id ?? randomUUID(),
+  repo_id: overrides.repo_id ?? randomUUID(),
+  objective: overrides.objective ?? 'Implement Codex runtime package execution.',
+  owner_actor_id: overrides.owner_actor_id ?? randomUUID(),
+  reviewer_actor_id: overrides.reviewer_actor_id ?? randomUUID(),
+  qa_owner_actor_id: overrides.qa_owner_actor_id ?? randomUUID(),
+  phase: overrides.phase ?? 'execution',
+  activity_state: overrides.activity_state ?? 'idle',
+  gate_state: overrides.gate_state ?? 'none',
+  resolution: overrides.resolution ?? 'none',
+  required_checks: overrides.required_checks ?? [],
+  required_artifact_kinds: overrides.required_artifact_kinds ?? ['execution_summary'],
+  allowed_paths: overrides.allowed_paths ?? ['packages/**'],
+  forbidden_paths: overrides.forbidden_paths ?? [],
+  source_mutation_policy: overrides.source_mutation_policy ?? 'path_policy_scoped',
+  version: overrides.version ?? 1,
+  created_at: overrides.created_at ?? now,
+  updated_at: overrides.updated_at ?? now,
+  ...(overrides.execution_package_set_id !== undefined ? { execution_package_set_id: overrides.execution_package_set_id } : {}),
+  ...(overrides.execution_package_version !== undefined ? { execution_package_version: overrides.execution_package_version } : {}),
+  ...(overrides.last_run_session_id !== undefined ? { last_run_session_id: overrides.last_run_session_id } : {}),
+  ...(overrides.current_run_session_id !== undefined ? { current_run_session_id: overrides.current_run_session_id } : {}),
+});
 
 const profileRevision = (): { profile: CodexRuntimeProfile; revision: CodexRuntimeProfileRevision } => {
   const profileId = randomUUID();
@@ -599,6 +663,28 @@ const installLaunchLeaseUpdateDelay = async (client: ReturnType<typeof createDbC
   `));
 };
 
+const installPendingWorkspaceBundleInsertDelay = async (client: ReturnType<typeof createDbClient>, bundleId: string) => {
+  await client.db.execute(sql.raw(`
+    create or replace function codex_test_delay_pending_workspace_bundle_insert()
+    returns trigger
+    language plpgsql
+    as $$
+    begin
+      if new.bundle_id = '${bundleId}' then
+        perform pg_sleep(0.1);
+      end if;
+      return new;
+    end;
+    $$;
+  `));
+  await client.db.execute(sql.raw(`
+    drop trigger if exists codex_test_delay_pending_workspace_bundle_insert_trigger on codex_pending_workspace_bundles;
+    create trigger codex_test_delay_pending_workspace_bundle_insert_trigger
+    before insert on codex_pending_workspace_bundles
+    for each row execute function codex_test_delay_pending_workspace_bundle_insert();
+  `));
+};
+
 describe('Codex runtime Drizzle materialization concurrency', () => {
   const usableDatabaseUrl = assertUsableDatabaseUrl();
 
@@ -636,6 +722,70 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         expect(JSON.stringify(first)).not.toContain(sealerCalls[0]!.plaintext_launch_token);
         await expectRuntimeJobCreateCounts(firstClient, { jobs: 1, leases: 1, envelopes: 1 });
         await expectWorkerLeaseCount(firstClient, seed.workerId, 1);
+      } finally {
+        await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
+      }
+    });
+
+    it('idempotently replays concurrent pending workspace bundle creation', async () => {
+      await resetForgeloopDatabase(usableDatabaseUrl);
+      const firstClient = createDbClient({ connectionString: usableDatabaseUrl });
+      const secondClient = createDbClient({ connectionString: usableDatabaseUrl });
+      try {
+        const firstRepository = new DrizzleDeliveryRepository(firstClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(),
+        });
+        const secondRepository = new DrizzleDeliveryRepository(secondClient.db, {
+          codexLaunchTokenEnvelopeSealer: createEnvelopeSealer(),
+        });
+        const run = runSession();
+        await firstRepository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+        await firstRepository.saveRunSession(run);
+        const runWorkerLease = await firstRepository.claimRunWorkerLease({
+          run_session_id: run.id,
+          worker_id: 'run-worker-pending-bundle-race',
+          lease_token: 'run-worker-pending-bundle-token',
+          now,
+          expires_at: expiresAt,
+        });
+        const bundleId = 'pending-bundle-race';
+        await installPendingWorkspaceBundleInsertDelay(firstClient, bundleId);
+
+        const archiveBytes = Buffer.from('pending workspace bundle race\n');
+        const workspaceAcquisitionJson = {
+          schema_version: 'workspace_bundle_acquisition.v1',
+          bundle_id: bundleId,
+          archive_ref: `artifact:codex-pending-bundles:${bundleId}`,
+          archive_digest: bytesDigest(archiveBytes),
+          manifest_digest: tokenHash('pending-bundle-race-manifest'),
+          size_bytes: archiveBytes.byteLength,
+          expires_at: expiresAt,
+        };
+        const input = {
+          id: randomUUID(),
+          bundle_id: bundleId,
+          pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+          archive_digest: workspaceAcquisitionJson.archive_digest,
+          manifest_digest: workspaceAcquisitionJson.manifest_digest,
+          run_worker_lease_id: runWorkerLease.id,
+          run_session_id: run.id,
+          execution_package_id: run.execution_package_id,
+          archive_bytes_base64: archiveBytes.toString('base64'),
+          size_bytes: archiveBytes.byteLength,
+          workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+          workspace_acquisition_json: workspaceAcquisitionJson,
+          expires_at: expiresAt,
+          request_digest: tokenHash('pending-bundle-race-request'),
+          created_at: now,
+        };
+
+        await expect(
+          Promise.all([
+            firstRepository.createPendingWorkspaceBundleArtifact(input),
+            secondRepository.createPendingWorkspaceBundleArtifact(input),
+          ]),
+        ).resolves.toEqual([undefined, undefined]);
+        await expect(firstClient.db.select().from(codex_pending_workspace_bundles)).resolves.toHaveLength(1);
       } finally {
         await Promise.all([firstClient.pool.end(), secondClient.pool.end()]);
       }

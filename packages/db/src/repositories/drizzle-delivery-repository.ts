@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -64,6 +65,7 @@ import {
   codexLaunchTokenEnvelopeDigest,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeScopeMatches,
+  codexWorkspaceAcquisitionDigest,
   collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
@@ -142,6 +144,7 @@ import type {
   CodexRuntimeRecoveryResult,
   CodexWorkerReplayProtectionInput,
   ConsumeCodexRuntimeSetupNonceInput,
+  CreatePendingWorkspaceBundleArtifactInput,
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeJobArtifactInput,
   CreateCodexRuntimeProfileWithRevisionInput,
@@ -161,6 +164,7 @@ import type {
   GetCodexRuntimeJobInput,
   GetCodexRuntimeJobWorkloadInput,
   GetCodexRuntimeStatusInput,
+  GetWorkspaceBundleDownloadForRuntimeJobInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
   ListCodexRuntimeJobArtifactsInput,
@@ -178,6 +182,7 @@ import type {
   RefreshCodexWorkerSessionInput,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
+  WorkspaceBundleDownloadForRuntimeJob,
   RenewCommandIdempotencyInput,
   RequestManualPathHoldInput,
   ResolveCodexCredentialForLaunchInput,
@@ -295,6 +300,29 @@ const canonicalizeJson = (value: CanonicalJsonValue): CanonicalJsonValue => {
 const canonicalJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value as CanonicalJsonValue));
 
 const valuesEqual = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
+const rawSha256 = (bytes: Uint8Array | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+const workspaceBundleAcquisitionKeys = new Set([
+  'schema_version',
+  'bundle_id',
+  'archive_ref',
+  'archive_digest',
+  'manifest_digest',
+  'size_bytes',
+  'expires_at',
+]);
+
+const workspaceBundleAcquisitionMatches = (
+  value: Record<string, unknown>,
+  expected: Pick<PendingWorkspaceBundleInput, 'bundle_id' | 'pending_artifact_ref' | 'archive_digest' | 'manifest_digest' | 'size_bytes' | 'expires_at'>,
+): boolean =>
+  Object.keys(value).every((key) => workspaceBundleAcquisitionKeys.has(key)) &&
+  value.schema_version === 'workspace_bundle_acquisition.v1' &&
+  value.bundle_id === expected.bundle_id &&
+  value.archive_ref === expected.pending_artifact_ref &&
+  value.archive_digest === expected.archive_digest &&
+  value.manifest_digest === expected.manifest_digest &&
+  value.size_bytes === expected.size_bytes &&
+  value.expires_at === expected.expires_at;
 
 const timestampMillis = (value: string | undefined): number | undefined => {
   if (value === undefined) {
@@ -460,6 +488,10 @@ type CodexRuntimeJobDbRecord = CodexRuntimeJob & {
 
 type CodexPendingWorkspaceBundleDbRecord = PendingWorkspaceBundleInput & {
   id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  archive_bytes_base64: string;
+  request_digest: string;
   runtime_job_id?: string;
   status: string;
   created_at: string;
@@ -1624,6 +1656,161 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return rows.map((row) => runtimeJobArtifactFromDbRecord(fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>), job));
   }
 
+  async createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
+    return this.withAdvisoryLocks([`codex-pending-workspace-bundle:${input.bundle_id}`], async (repository) =>
+      (repository as DrizzleDeliveryRepository).createPendingWorkspaceBundleArtifactUnlocked(input),
+    );
+  }
+
+  private async createPendingWorkspaceBundleArtifactUnlocked(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
+    const [leaseRow] = await this.db
+      .select()
+      .from(run_worker_leases)
+      .where(eq(run_worker_leases.runSessionId, input.run_session_id))
+      .limit(1);
+    const [runSessionRow] = await this.db
+      .select()
+      .from(run_sessions)
+      .where(eq(run_sessions.id, input.run_session_id))
+      .limit(1);
+    const lease = leaseRow === undefined ? undefined : fromDbRecord<RunWorkerLease>(leaseRow as Record<string, unknown>);
+    const runSession = runSessionRow === undefined ? undefined : fromDbRecord<RunSession>(runSessionRow as Record<string, unknown>);
+    const archiveBytes = Buffer.from(input.archive_bytes_base64, 'base64');
+    if (
+      lease === undefined ||
+      runSession === undefined ||
+      runSession.execution_package_id !== input.execution_package_id ||
+      lease.id !== input.run_worker_lease_id ||
+      lease.status !== 'active' ||
+      lease.expires_at <= input.created_at ||
+      archiveBytes.toString('base64') !== input.archive_bytes_base64 ||
+      archiveBytes.byteLength !== input.size_bytes ||
+      rawSha256(archiveBytes) !== input.archive_digest ||
+      input.expires_at <= input.created_at ||
+      input.pending_artifact_ref !== `artifact:codex-pending-bundles:${input.bundle_id}` ||
+      input.workspace_acquisition_json.bundle_id !== input.bundle_id ||
+      input.workspace_acquisition_json.archive_ref !== input.pending_artifact_ref ||
+      input.workspace_acquisition_json.archive_digest !== input.archive_digest ||
+      input.workspace_acquisition_json.manifest_digest !== input.manifest_digest ||
+      input.workspace_acquisition_json.size_bytes !== input.size_bytes ||
+      !workspaceBundleAcquisitionMatches(input.workspace_acquisition_json, input) ||
+      input.workspace_acquisition_digest !== codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle artifact was rejected.');
+    }
+    const pending: CodexPendingWorkspaceBundleDbRecord = {
+      id: input.id,
+      bundle_id: input.bundle_id,
+      run_session_id: input.run_session_id,
+      execution_package_id: input.execution_package_id,
+      pending_artifact_ref: input.pending_artifact_ref,
+      archive_digest: input.archive_digest,
+      manifest_digest: input.manifest_digest,
+      archive_bytes_base64: input.archive_bytes_base64,
+      size_bytes: input.size_bytes,
+      run_worker_lease_id: input.run_worker_lease_id,
+      workspace_acquisition_digest: input.workspace_acquisition_digest,
+      workspace_acquisition_json: input.workspace_acquisition_json,
+      request_digest: input.request_digest,
+      expires_at: input.expires_at,
+      status: 'pending',
+      created_at: input.created_at,
+    };
+    const [existingRow] = await this.db
+      .select()
+      .from(codex_pending_workspace_bundles)
+      .where(eq(codex_pending_workspace_bundles.bundleId, input.bundle_id))
+      .limit(1);
+    if (existingRow !== undefined) {
+      const existing = fromDbRecord<CodexPendingWorkspaceBundleDbRecord>(existingRow as Record<string, unknown>);
+      if (existing.status === 'pending' && valuesEqual(existing, pending)) {
+        return;
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle replay was rejected.');
+    }
+    await this.db.insert(codex_pending_workspace_bundles).values(toDbRecord(pending, codex_pending_workspace_bundles) as never);
+  }
+
+  async getWorkspaceBundleDownloadForRuntimeJob(
+    input: GetWorkspaceBundleDownloadForRuntimeJobInput,
+  ): Promise<WorkspaceBundleDownloadForRuntimeJob> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+    );
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const [jobRow] = await this.db.select().from(codex_runtime_jobs).where(eq(codex_runtime_jobs.id, input.runtime_job_id)).limit(1);
+    const [pendingRow] = await this.db
+      .select()
+      .from(codex_pending_workspace_bundles)
+      .where(and(eq(codex_pending_workspace_bundles.runtimeJobId, input.runtime_job_id), eq(codex_pending_workspace_bundles.bundleId, input.bundle_id)))
+      .limit(1);
+    const [artifactRow] = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(and(eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id), eq(codex_runtime_job_artifacts.kind, 'workspace_bundle')))
+      .limit(1);
+    const job = jobRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>);
+    const pending =
+      pendingRow === undefined ? undefined : fromDbRecord<CodexPendingWorkspaceBundleDbRecord>(pendingRow as Record<string, unknown>);
+    const artifact =
+      artifactRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobArtifactDbRecord>(artifactRow as Record<string, unknown>);
+    const lease = job === undefined ? undefined : await this.lockCodexLaunchLease(job.launch_lease_id);
+    if (
+      job === undefined ||
+      lease === undefined ||
+      pending === undefined ||
+      artifact === undefined ||
+      job.worker_id !== input.worker_id ||
+      job.target_kind !== 'run_execution' ||
+      (job.status !== 'accepted' && job.status !== 'materializing') ||
+      job.cancel_requested_at !== undefined ||
+      job.expires_at <= input.now ||
+      lease.expires_at <= input.now ||
+      (lease.status !== 'active' && lease.status !== 'materialized') ||
+      pending.status !== 'bound' ||
+      pending.runtime_job_id !== job.id ||
+      pending.expires_at <= input.now ||
+      artifact.runtime_job_id !== job.id ||
+      artifact.kind !== 'workspace_bundle' ||
+      artifact.name !== pending.bundle_id ||
+      artifact.digest !== pending.archive_digest ||
+      artifact.size_bytes !== pending.size_bytes ||
+      artifact.internal_ref !== pending.pending_artifact_ref ||
+      job.workspace_acquisition_json?.bundle_id !== pending.bundle_id ||
+      job.workspace_acquisition_json?.archive_ref !== pending.pending_artifact_ref ||
+      job.workspace_acquisition_json?.archive_digest !== pending.archive_digest ||
+      job.workspace_acquisition_json?.manifest_digest !== pending.manifest_digest ||
+      job.workspace_acquisition_json?.size_bytes !== pending.size_bytes
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle download was denied.');
+    }
+    const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
+    if (archiveBytes.byteLength !== pending.size_bytes || rawSha256(archiveBytes) !== pending.archive_digest) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
+    }
+    return {
+      bundle_id: pending.bundle_id,
+      archive_bytes_base64: pending.archive_bytes_base64,
+      archive_digest: pending.archive_digest,
+      manifest_digest: pending.manifest_digest,
+      content_type: 'application/vnd.forgeloop.workspace-bundle',
+      size_bytes: pending.size_bytes,
+      expires_at: pending.expires_at,
+    };
+  }
+
   async cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
     return this.withAdvisoryLocks([`codex-runtime-job:${input.runtime_job_id}`], async (repository) =>
       (repository as DrizzleDeliveryRepository).cancelCodexRuntimeJobUnlocked(input),
@@ -2703,11 +2890,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       artifact.metadata_json.manifest_digest === stored.manifest_digest &&
       artifact.metadata_json.run_worker_lease_id === stored.run_worker_lease_id &&
       artifact.metadata_json.workspace_acquisition_digest === stored.workspace_acquisition_digest &&
+      artifact.size_bytes === stored.size_bytes &&
       stored.bundle_id === input.bundle_id &&
       stored.pending_artifact_ref === input.pending_artifact_ref &&
       stored.archive_digest === input.archive_digest &&
       stored.manifest_digest === input.manifest_digest &&
       stored.run_worker_lease_id === input.run_worker_lease_id &&
+      stored.size_bytes === input.size_bytes &&
       stored.workspace_acquisition_digest === input.workspace_acquisition_digest &&
       valuesEqual(stored.workspace_acquisition_json, input.workspace_acquisition_json) &&
       stored.expires_at === input.expires_at
@@ -2725,17 +2914,35 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.workspace_acquisition_json === undefined ||
       pending.expires_at <= input.now ||
       pending.run_worker_lease_id !== input.run_worker_lease_id ||
+      pending.size_bytes <= 0 ||
       pending.workspace_acquisition_digest !== input.workspace_acquisition_digest ||
       !valuesEqual(pending.workspace_acquisition_json, input.workspace_acquisition_json)
     ) {
       return false;
     }
     const [existing] = await this.db
-      .select({ id: codex_pending_workspace_bundles.id })
+      .select()
       .from(codex_pending_workspace_bundles)
       .where(eq(codex_pending_workspace_bundles.bundleId, pending.bundle_id))
       .limit(1);
-    return existing === undefined;
+    const stored =
+      existing === undefined ? undefined : fromDbRecord<CodexPendingWorkspaceBundleDbRecord>(existing as Record<string, unknown>);
+    return (
+      stored !== undefined &&
+      stored.status === 'pending' &&
+      stored.runtime_job_id === undefined &&
+      stored.bundle_id === pending.bundle_id &&
+      stored.pending_artifact_ref === pending.pending_artifact_ref &&
+      stored.archive_digest === pending.archive_digest &&
+      stored.manifest_digest === pending.manifest_digest &&
+      stored.run_worker_lease_id === pending.run_worker_lease_id &&
+      stored.size_bytes === pending.size_bytes &&
+      stored.expires_at === pending.expires_at &&
+      stored.workspace_acquisition_digest === pending.workspace_acquisition_digest &&
+      valuesEqual(stored.workspace_acquisition_json, pending.workspace_acquisition_json) &&
+      stored.run_session_id === input.target.target_id &&
+      stored.execution_package_id === input.execution_package_id
+    );
   }
 
   private codexRuntimeJobHasRequiredLaunchFence(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): boolean {
@@ -2875,22 +3082,18 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       return;
     }
     const [pendingRow] = await this.db
-      .insert(codex_pending_workspace_bundles)
-      .values({
-        id: randomUUID(),
-        bundleId: pending.bundle_id,
+      .update(codex_pending_workspace_bundles)
+      .set({
         runtimeJobId: input.runtime_job_id,
-        runWorkerLeaseId: pending.run_worker_lease_id,
         status: 'bound',
-        pendingArtifactRef: pending.pending_artifact_ref,
-        archiveDigest: pending.archive_digest,
-        manifestDigest: pending.manifest_digest,
-        workspaceAcquisitionDigest: pending.workspace_acquisition_digest,
-        workspaceAcquisitionJson: pending.workspace_acquisition_json,
-        expiresAt: pending.expires_at,
-        createdAt: input.now,
-      } as never)
-      .onConflictDoNothing()
+      })
+      .where(
+        and(
+          eq(codex_pending_workspace_bundles.bundleId, pending.bundle_id),
+          eq(codex_pending_workspace_bundles.status, 'pending'),
+          isNull(codex_pending_workspace_bundles.runtimeJobId),
+        ),
+      )
       .returning({ id: codex_pending_workspace_bundles.id });
     if (pendingRow === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle fence was rejected.');
@@ -2907,7 +3110,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         contentType: 'application/vnd.forgeloop.workspace-bundle',
         digest: pending.archive_digest,
         internalRef: pending.pending_artifact_ref,
-        sizeBytes: 0,
+        sizeBytes: pending.size_bytes,
         metadataJson: {
           bundle_id: pending.bundle_id,
           manifest_digest: pending.manifest_digest,

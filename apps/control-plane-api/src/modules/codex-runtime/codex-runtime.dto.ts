@@ -247,6 +247,26 @@ const workerSessionRequestSchema = z.object({
 }).strict();
 
 const runtimeJobInputSchema = z.record(z.string(), z.unknown());
+const workspaceBundleAcquisitionSchema = z.object({
+  schema_version: z.literal('workspace_bundle_acquisition.v1'),
+  bundle_id: z.string().min(1),
+  archive_ref: z.string().min(1),
+  archive_digest: sha256DigestSchema,
+  manifest_digest: sha256DigestSchema,
+  size_bytes: z.number().int().positive(),
+  expires_at: z.string().min(1),
+}).strict();
+const pendingWorkspaceBundleSchema = z.object({
+  bundle_id: z.string().min(1),
+  pending_artifact_ref: z.string().min(1),
+  archive_digest: sha256DigestSchema,
+  manifest_digest: sha256DigestSchema,
+  run_worker_lease_id: z.string().min(1),
+  size_bytes: z.number().int().positive(),
+  workspace_acquisition_digest: sha256DigestSchema,
+  workspace_acquisition_json: workspaceBundleAcquisitionSchema,
+  expires_at: z.string().min(1),
+}).strict();
 
 export const createCodexRuntimeJobSchema = z.object({
   runtime_job_id: z.string().min(1),
@@ -260,16 +280,7 @@ export const createCodexRuntimeJobSchema = z.object({
   credential_payload_digest: sha256DigestSchema,
   input_json: runtimeJobInputSchema,
   workspace_acquisition_json: runtimeJobInputSchema.optional(),
-  pending_workspace_bundle: z.object({
-    bundle_id: z.string().min(1),
-    pending_artifact_ref: z.string().min(1),
-    archive_digest: sha256DigestSchema,
-    manifest_digest: sha256DigestSchema,
-    run_worker_lease_id: z.string().min(1),
-    workspace_acquisition_digest: sha256DigestSchema,
-    workspace_acquisition_json: runtimeJobInputSchema,
-    expires_at: z.string().min(1),
-  }).strict().optional(),
+  pending_workspace_bundle: pendingWorkspaceBundleSchema.optional(),
   launch_attempt: z.number().int().nonnegative(),
   action_type: z.string().min(1).optional(),
   action_attempt: z.number().int().nonnegative().optional(),
@@ -304,6 +315,22 @@ export const createCodexRuntimeJobSchema = z.object({
         message: `${field} is required for run_execution runtime jobs`,
       });
     }
+  }
+  if (value.workspace_acquisition_json === undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['workspace_acquisition_json'],
+      message: 'workspace_acquisition_json is required for run_execution runtime jobs',
+    });
+    return;
+  }
+  const workspaceBundleAcquisition = workspaceBundleAcquisitionSchema.safeParse(value.workspace_acquisition_json);
+  if (!workspaceBundleAcquisition.success) {
+    context.addIssue({
+      code: 'custom',
+      path: ['workspace_acquisition_json'],
+      message: 'workspace_acquisition_json must be a strict workspace_bundle_acquisition.v1 object',
+    });
   }
 });
 

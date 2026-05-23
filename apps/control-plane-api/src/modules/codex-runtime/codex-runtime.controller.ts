@@ -1,4 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Buffer } from 'node:buffer';
+
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Res, StreamableFile, UseGuards } from '@nestjs/common';
 import { codexCanonicalDigest, codexCredentialPayloadDigest } from '@forgeloop/domain';
 
 import { TrustedAutomationActorGuard } from '../automation/trusted-automation-actor.guard';
@@ -245,6 +247,22 @@ export class CodexRuntimeController {
     @Body(new ZodValidationPipe(createCodexRuntimeJobArtifactSchema)) body: CreateCodexRuntimeJobArtifactDto,
   ) {
     return this.service.createRuntimeJobArtifact(workerId, jobId, body);
+  }
+
+  @Get('/internal/codex-workers/:workerId/runtime-jobs/:jobId/workspace-bundle/:bundleId')
+  async downloadWorkspaceBundle(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Param('bundleId') bundleId: string,
+    @Query(new ZodValidationPipe(codexRuntimeWorkerQuerySchema)) query: CodexRuntimeWorkerQueryDto,
+    @Res({ passthrough: true }) response: { setHeader: (name: string, value: string) => void },
+  ) {
+    const download = await this.service.downloadWorkspaceBundle(workerId, jobId, bundleId, query);
+    response.setHeader('content-type', download.content_type);
+    response.setHeader('content-length', String(download.size_bytes));
+    response.setHeader('x-forgeloop-workspace-bundle-digest', download.archive_digest);
+    response.setHeader('x-forgeloop-workspace-bundle-manifest-digest', download.manifest_digest);
+    return new StreamableFile(Buffer.from(download.archive_bytes_base64, 'base64'));
   }
 
   @Get('/internal/codex-workers/:workerId/runtime-jobs/:jobId/control')

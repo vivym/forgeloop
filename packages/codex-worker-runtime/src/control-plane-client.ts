@@ -1,3 +1,6 @@
+import { lstat, mkdir, open, readFile, realpath } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+
 import {
   codexCanonicalDigest,
   type CodexRuntimeStatusProjection,
@@ -11,6 +14,96 @@ import {
   type CodexRuntimeTargetKind,
   type CodexSourceAccessMode,
 } from '@forgeloop/domain';
+
+import { workspaceBundleArchiveDigest } from './workspace-bundle.js';
+
+const hasFilesystemCode = (error: unknown, code: string): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === code;
+
+const maybeLstat = async (path: string) => {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (hasFilesystemCode(error, 'ENOENT')) {
+      return undefined;
+    }
+    throw error;
+  }
+};
+
+const isInsidePath = (root: string, child: string): boolean => {
+  const childRelative = relative(resolve(root), resolve(child));
+  return childRelative === '' || (!childRelative.startsWith('..') && !isAbsolute(childRelative));
+};
+
+const assertSafeWorkspaceBundlePath = (root: string, path: string): void => {
+  if (!isInsidePath(root, path)) {
+    throw new Error('codex_control_plane_workspace_bundle_temp_root_rejected');
+  }
+};
+
+const ensureWorkspaceBundleDirectory = async (root: string): Promise<string> => {
+  const archiveDir = resolve(join(root, 'workspace-bundles'));
+  assertSafeWorkspaceBundlePath(root, archiveDir);
+  const existing = await maybeLstat(archiveDir);
+  if (existing === undefined) {
+    await mkdir(archiveDir, { recursive: false, mode: 0o700 }).catch((error) => {
+      if (!hasFilesystemCode(error, 'EEXIST')) {
+        throw error;
+      }
+    });
+  } else if (existing.isSymbolicLink() || !existing.isDirectory()) {
+    throw new Error('codex_control_plane_workspace_bundle_temp_root_rejected');
+  }
+  const finalInfo = await maybeLstat(archiveDir);
+  if (finalInfo === undefined || finalInfo.isSymbolicLink() || !finalInfo.isDirectory()) {
+    throw new Error('codex_control_plane_workspace_bundle_temp_root_rejected');
+  }
+  const realArchiveDir = await realpath(archiveDir);
+  assertSafeWorkspaceBundlePath(root, realArchiveDir);
+  return realArchiveDir;
+};
+
+const writeWorkspaceBundleArchive = async (archiveDir: string, archiveDigest: string, bytes: Uint8Array): Promise<string> => {
+  const archivePath = resolve(join(archiveDir, `${archiveDigest.slice('sha256:'.length)}.bundle`));
+  assertSafeWorkspaceBundlePath(archiveDir, archivePath);
+  const validateExisting = async (): Promise<string | undefined> => {
+    const existing = await maybeLstat(archivePath);
+    if (existing === undefined) {
+      return undefined;
+    }
+    if (existing.isSymbolicLink() || !existing.isFile()) {
+      throw new Error('codex_control_plane_workspace_bundle_temp_root_rejected');
+    }
+    const existingBytes = await readFile(archivePath);
+    if (workspaceBundleArchiveDigest(existingBytes) !== archiveDigest) {
+      throw new Error('codex_control_plane_workspace_bundle_temp_root_rejected');
+    }
+    return archivePath;
+  };
+  const existing = await validateExisting();
+  if (existing !== undefined) {
+    return existing;
+  }
+  const handle = await open(archivePath, 'wx', 0o600).catch(async (error) => {
+    if (hasFilesystemCode(error, 'EEXIST')) {
+      const racedExisting = await validateExisting();
+      if (racedExisting !== undefined) {
+        return undefined;
+      }
+    }
+    throw error;
+  });
+  if (handle === undefined) {
+    return archivePath;
+  }
+  try {
+    await handle.writeFile(bytes);
+  } finally {
+    await handle.close();
+  }
+  return archivePath;
+};
 
 export interface CodexRuntimeControlPlaneClientOptions {
   baseUrl: string;
@@ -170,6 +263,45 @@ export class CodexRuntimeControlPlaneClient {
     );
   }
 
+  async downloadWorkspaceBundle(
+    workerId: string,
+    jobId: string,
+    bundleId: string,
+    input: WorkerRequestInput & {
+      tempRoot: string;
+      expectedArchiveDigest: string;
+      maxSizeBytes?: number;
+    },
+  ): Promise<{ archive_path: string; archive_digest: string; size_bytes: number; content_type: string }> {
+    const { tempRoot, expectedArchiveDigest, maxSizeBytes, ...workerInput } = input;
+    const response = await this.#workerGetBytes(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/workspace-bundle/${encodeURIComponent(bundleId)}`,
+      workerInput,
+    );
+    const contentType = response.contentType.split(';')[0]?.trim() ?? '';
+    if (contentType !== 'application/vnd.forgeloop.workspace-bundle') {
+      throw new Error('codex_control_plane_workspace_bundle_content_type_rejected');
+    }
+    if (maxSizeBytes !== undefined && response.bytes.byteLength > maxSizeBytes) {
+      throw new Error('codex_control_plane_workspace_bundle_size_rejected');
+    }
+    const archiveDigest = workspaceBundleArchiveDigest(response.bytes);
+    if (archiveDigest !== expectedArchiveDigest) {
+      throw new Error('codex_control_plane_workspace_bundle_digest_rejected');
+    }
+    const root = await realpath(tempRoot).catch(() => {
+      throw new Error('codex_control_plane_workspace_bundle_temp_root_rejected');
+    });
+    const archiveDir = await ensureWorkspaceBundleDirectory(root);
+    const archivePath = await writeWorkspaceBundleArchive(archiveDir, archiveDigest, response.bytes);
+    return {
+      archive_path: archivePath,
+      archive_digest: archiveDigest,
+      size_bytes: response.bytes.byteLength,
+      content_type: contentType,
+    };
+  }
+
   async terminalizeRuntimeJob(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
     return this.#workerPost(
       `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/terminal`,
@@ -208,6 +340,24 @@ export class CodexRuntimeControlPlaneClient {
       query.set(key, String(value));
     }
     return this.#getJson(`${path}?${query.toString()}`);
+  }
+
+  async #workerGetBytes(path: string, input: WorkerRequestInput): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(this.#workerPayload(input))) {
+      query.set(key, String(value));
+    }
+    const response = await this.#fetch(`${this.#baseUrl}${path}?${query.toString()}`, {
+      method: 'GET',
+      headers: { accept: 'application/vnd.forgeloop.workspace-bundle' },
+    });
+    if (!response.ok) {
+      throw new Error(`codex_control_plane_request_failed:${response.status}`);
+    }
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      contentType: response.headers.get('content-type') ?? '',
+    };
   }
 
   async #workerPost(path: string, input: WorkerRequestInput): Promise<any> {
