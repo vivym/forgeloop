@@ -95,6 +95,7 @@ export class DockerizedCodexAppServerLauncher {
       const credential = materialization.resolved_credentials[0];
       filesystem = await prepareCodexTaskFilesystem({
         workerTempRoot: this.options.workerTempRoot,
+        workerId: this.options.workerId,
         launchLeaseId: materialization.lease_id,
         codexConfigToml: materialization.profile_revision.codex_config_toml,
         authJson: credential?.payload ?? {},

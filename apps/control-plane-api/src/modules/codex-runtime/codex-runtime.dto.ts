@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { codexRuntimeRecoveryReasonCodes } from '@forgeloop/domain';
+
 const sha256DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
 const scopeSchema = z.object({
@@ -314,7 +316,7 @@ export const recoverStaleCodexRuntimeJobsSchema = z.object({
   stale_before: z.string().min(1),
   now: z.string().min(1).optional(),
   worker_id: z.string().min(1).optional(),
-  reason_code: z.string().min(1),
+  reason_code: z.enum(codexRuntimeRecoveryReasonCodes),
 }).strict();
 
 export const renewAutomationActionRunClaimSchema = z.object({

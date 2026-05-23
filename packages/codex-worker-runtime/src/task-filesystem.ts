@@ -10,6 +10,7 @@ export interface PreparedCodexTaskFilesystem {
 
 export interface PrepareCodexTaskFilesystemInput {
   workerTempRoot: string;
+  workerId: string;
   launchLeaseId: string;
   codexConfigToml: string;
   authJson: unknown;
@@ -57,6 +58,11 @@ export const prepareCodexTaskFilesystem = async (input: PrepareCodexTaskFilesyst
   await assertNoSymlink(leaseTempRoot);
   await mkdir(leaseTempRoot, { recursive: false, mode: 0o700 });
   await chmod(leaseTempRoot, 0o700);
+  const metadataPath = join(leaseTempRoot, '.forgeloop-resource.json');
+  await writeFile(metadataPath, `${JSON.stringify({ workerId: input.workerId, launchLeaseId: input.launchLeaseId })}\n`, {
+    mode: 0o600,
+  });
+  await chmod(metadataPath, 0o600);
 
   const codexHomeHostPath = join(leaseTempRoot, 'codex-home');
   const artifactHostPath = join(leaseTempRoot, 'artifacts');

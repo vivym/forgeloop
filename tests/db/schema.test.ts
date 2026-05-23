@@ -498,6 +498,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(codex_runtime_jobs, 'terminalResultJson')).toBe('PgJsonb');
     expect(columnType(codex_runtime_jobs, 'acceptedWorkerSessionDigest')).toBe('PgText');
     expect(columnType(codex_runtime_jobs, 'acceptedSessionPublicKeyId')).toBe('PgText');
+    expect(columnType(codex_runtime_jobs, 'acceptedSessionPublicKeyExpiresAt')).toBe('PgTimestampString');
     expect(columnType(codex_runtime_jobs, 'materializationRequestDigest')).toBe('PgText');
     expect(columnType(codex_runtime_jobs, 'runtimeEvidenceDigest')).toBe('PgText');
     expect(columnType(codex_runtime_jobs, 'launchMaterializationDigest')).toBe('PgText');

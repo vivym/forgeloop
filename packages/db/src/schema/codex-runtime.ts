@@ -298,6 +298,7 @@ export const codex_runtime_jobs = pgTable(
     acceptedAt: timestampColumn('accepted_at'),
     acceptedWorkerSessionDigest: text('accepted_worker_session_digest'),
     acceptedSessionPublicKeyId: text('accepted_session_public_key_id'),
+    acceptedSessionPublicKeyExpiresAt: timestampColumn('accepted_session_public_key_expires_at'),
     acceptedSessionEpoch: integer('accepted_session_epoch'),
     materializingAt: timestampColumn('materializing_at'),
     materializationRequestId: text('materialization_request_id'),

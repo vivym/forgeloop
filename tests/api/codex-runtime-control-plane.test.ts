@@ -1644,11 +1644,56 @@ describe('codex runtime control-plane APIs', () => {
     await signedPost(app, '/internal/codex-runtime/runtime-jobs/recover-stale', {
       stale_before: later,
       now: later,
-      reason_code: 'test_runtime_job_recovery_empty',
+      reason_code: 'codex_runtime_job_stale',
     })
       .expect(201)
       .expect(({ body }) => {
         expect(body.recovered_runtime_jobs).toHaveLength(0);
+      });
+  });
+
+  it('returns public-safe runtime job recovery evidence and rejects unsafe recovery reasons', async () => {
+    const { app, repository } = await bootApp();
+    await seedRuntime(app, 'runtime-job-recovery-public');
+    const registration = await registerWorker(app);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/heartbeat`)
+      .send(heartbeatBody(registration.session_token, 'runtime-job-recovery-public-heartbeat', { nonce_timestamp: now }))
+      .expect(201);
+    const claimed = await claimActionRun(repository, 'runtime-job-recovery-public');
+
+    await signedPost(app, '/internal/codex-runtime/runtime-jobs', runtimeJobBody(claimed)).expect(201);
+
+    await signedPost(app, '/internal/codex-runtime/runtime-jobs/recover-stale', {
+      stale_before: later,
+      now: later,
+      reason_code: 'unsafe /tmp/recovery token',
+    }).expect(400);
+
+    await signedPost(app, '/internal/codex-runtime/runtime-jobs/recover-stale', {
+      stale_before: later,
+      now: later,
+      reason_code: 'codex_runtime_job_stale',
+    })
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.recovered_runtime_jobs).toEqual([
+          expect.objectContaining({
+            id: runtimeJobId,
+            worker_id: workerId,
+            launch_lease_id: runtimeJobLaunchLeaseId,
+            status: 'terminal',
+            terminal_status: 'expired',
+            terminal_reason_code: 'codex_runtime_job_stale',
+          }),
+        ]);
+        expect(body.recovered_launch_leases).toEqual([
+          expect.objectContaining({ id: runtimeJobLaunchLeaseId, status: 'expired' }),
+        ]);
+        expect(body.recovered_runtime_jobs[0].input_json).toBeUndefined();
+        expect(body.recovered_runtime_jobs[0].workspace_acquisition_json).toBeUndefined();
+        expect(JSON.stringify(body)).not.toContain('signed-context-ref-1');
+        expect(JSON.stringify(body)).not.toContain('codex_generation_workload.v1');
       });
   });
 

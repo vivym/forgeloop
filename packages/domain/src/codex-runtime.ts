@@ -248,6 +248,7 @@ export interface CodexRuntimeJob {
   accepted_at?: IsoDateTime;
   accepted_worker_session_digest?: string;
   accepted_session_public_key_id?: string;
+  accepted_session_public_key_expires_at?: IsoDateTime;
   accepted_session_epoch?: number;
   materializing_at?: IsoDateTime;
   materialization_request_id?: string;
@@ -480,9 +481,22 @@ export const codexPublicBlockerCodes = [
   'codex_runtime_job_expired',
   'codex_runtime_job_cancelled',
   'codex_workspace_bundle_invalid',
+  'codex_runtime_job_stale',
+  'codex_runtime_job_lease_terminal',
 ] as const;
 
 export type CodexPublicBlockerCode = (typeof codexPublicBlockerCodes)[number];
+export const codexRuntimeRecoveryReasonCodes = ['codex_runtime_job_stale', 'codex_runtime_job_lease_terminal'] as const;
+export type CodexRuntimeRecoveryReasonCode = (typeof codexRuntimeRecoveryReasonCodes)[number];
+export const isCodexRuntimeRecoveryReasonCode = (value: string): value is CodexRuntimeRecoveryReasonCode =>
+  (codexRuntimeRecoveryReasonCodes as readonly string[]).includes(value);
+
+export const assertCodexRuntimeRecoveryReasonCode = (value: string): CodexRuntimeRecoveryReasonCode => {
+  if (!isCodexRuntimeRecoveryReasonCode(value)) {
+    throw new DomainError('codex_runtime_job_unavailable', 'Codex runtime recovery reason code was rejected.');
+  }
+  return value;
+};
 
 type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[] | { [key: string]: CanonicalJsonValue };
 

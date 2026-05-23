@@ -54,6 +54,7 @@ import type {
 } from '@forgeloop/domain';
 import {
   DomainError,
+  assertCodexRuntimeRecoveryReasonCode,
   assertAutomationCapabilityActor,
   assertCanonicalManualScopeKey,
   automationCapabilitiesForPreset,
@@ -396,6 +397,14 @@ type CodexWorkerRegistrationDbRecord = {
   last_heartbeat_at?: string;
 };
 
+type CodexWorkerSessionProof = {
+  worker: CodexWorkerRegistrationDbRecord;
+  session_token_hash: string;
+  session_epoch: number;
+  session_public_key_id: string;
+  session_public_key_expires_at: string;
+};
+
 type CodexLaunchLeaseDbRecord = {
   id: string;
   lease_request_id: string;
@@ -602,6 +611,9 @@ const runtimeJobFromDbRecord = (record: CodexRuntimeJobDbRecord): CodexRuntimeJo
   ...(record.accepted_session_public_key_id === undefined
     ? {}
     : { accepted_session_public_key_id: record.accepted_session_public_key_id }),
+  ...(record.accepted_session_public_key_expires_at === undefined
+    ? {}
+    : { accepted_session_public_key_expires_at: record.accepted_session_public_key_expires_at }),
   ...(record.accepted_session_epoch === undefined ? {} : { accepted_session_epoch: record.accepted_session_epoch }),
   ...(record.materializing_at === undefined ? {} : { materializing_at: record.materializing_at }),
   ...(record.materialization_request_id === undefined ? {} : { materialization_request_id: record.materialization_request_id }),
@@ -1376,12 +1388,46 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         input.now,
         input.replay_protection,
       );
-      const [activeJob] = await tx
+      const [queuedJob] = await tx
         .select({ id: codex_runtime_jobs.id })
         .from(codex_runtime_jobs)
-        .where(and(eq(codex_runtime_jobs.workerId, input.worker_id), sql`${codex_runtime_jobs.status} <> 'terminal'`))
+        .where(and(eq(codex_runtime_jobs.workerId, input.worker_id), eq(codex_runtime_jobs.status, 'queued')))
         .limit(1);
-      if (activeJob !== undefined) {
+      if (queuedJob !== undefined) {
+        throw codexDenied('codex_worker_registration_denied', 'Worker session refresh was rejected while runtime jobs are assigned.');
+      }
+      const activeJobsResult = await tx.execute(sql<Record<string, unknown>>`
+        select
+          j.accepted_session_public_key_expires_at,
+          j.expires_at as job_expires_at,
+          l.expires_at as lease_expires_at,
+          e.expires_at as envelope_expires_at
+        from codex_runtime_jobs j
+        left join codex_launch_leases l on l.id = j.launch_lease_id
+        left join codex_launch_token_envelopes e on e.runtime_job_id = j.id
+        where j.worker_id = ${input.worker_id}
+          and j.status in ('accepted', 'materializing', 'running')
+        for update of j
+      `);
+      const activeJobCanKeepOldSession = (row: Record<string, unknown>): boolean => {
+        const acceptedKeyExpiresAt = normalizeTimestampValue(
+          'accepted_session_public_key_expires_at',
+          row.accepted_session_public_key_expires_at,
+        );
+        const jobExpiresAt = normalizeTimestampValue('job_expires_at', row.job_expires_at);
+        const leaseExpiresAt = normalizeTimestampValue('lease_expires_at', row.lease_expires_at);
+        const envelopeExpiresAt = normalizeTimestampValue('envelope_expires_at', row.envelope_expires_at);
+        if (
+          typeof acceptedKeyExpiresAt !== 'string' ||
+          typeof jobExpiresAt !== 'string' ||
+          typeof leaseExpiresAt !== 'string' ||
+          typeof envelopeExpiresAt !== 'string'
+        ) {
+          return false;
+        }
+        return Date.parse(acceptedKeyExpiresAt) >= Math.max(Date.parse(jobExpiresAt), Date.parse(leaseExpiresAt), Date.parse(envelopeExpiresAt));
+      };
+      if (activeJobsResult.rows.some((row) => !activeJobCanKeepOldSession(row))) {
         throw codexDenied('codex_worker_registration_denied', 'Worker session refresh was rejected while runtime jobs are assigned.');
       }
       const [row] = await tx
@@ -1433,7 +1479,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async getCodexRuntimeJobWorkload(input: GetCodexRuntimeJobWorkloadInput): Promise<CodexRuntimeJob> {
     return this.db.transaction(async (tx) => {
       const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
-      await repository.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now);
+      const session = await repository.assertCodexRuntimeJobWorkerSession(
+        input.runtime_job_id,
+        input.worker_id,
+        input.worker_session_token,
+        'codex_runtime_job_unavailable',
+        input.now,
+      );
       await repository.recordCodexWorkerNonce(
         input.worker_id,
         input.worker_session_token,
@@ -1441,6 +1493,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         input.nonce_timestamp,
         input.now,
         input.replay_protection,
+        session.session_epoch,
       );
       const bundle = await repository.lockCodexRuntimeJobBundle(input.runtime_job_id);
       if (
@@ -1463,7 +1516,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async pollCodexRuntimeJobs(input: PollCodexRuntimeJobsInput): Promise<CodexRuntimeJob[]> {
     return this.db.transaction(async (tx) => {
       const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
-      await repository.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now);
+      const session = await repository.assertCodexWorkerSession(
+        input.worker_id,
+        input.worker_session_token,
+        'codex_runtime_job_unavailable',
+        input.now,
+      );
       await repository.recordCodexWorkerNonce(
         input.worker_id,
         input.worker_session_token,
@@ -1472,6 +1530,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         input.now,
         input.replay_protection,
       );
+      if (session.worker.status === 'draining') {
+        return [];
+      }
       const conditions = [
         eq(codex_runtime_jobs.workerId, input.worker_id),
         eq(codex_runtime_jobs.status, 'queued' as const),
@@ -1672,6 +1733,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         acceptedAt: input.now,
         acceptedWorkerSessionDigest: input.accepted_worker_session_digest,
         acceptedSessionPublicKeyId: input.accepted_session_public_key_id,
+        acceptedSessionPublicKeyExpiresAt: worker.session_public_key_expires_at,
         acceptedSessionEpoch: input.accepted_session_epoch,
         updatedAt: input.now,
       } as never)
@@ -1684,7 +1746,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async claimCodexLaunchTokenEnvelopeUnlocked(input: ClaimCodexLaunchTokenEnvelopeInput): Promise<CodexLaunchTokenEnvelope> {
-    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_launch_materialization_denied', input.now);
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_launch_materialization_denied',
+      input.now,
+    );
     await this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1692,6 +1760,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const worker = await this.lockCodexWorkerRegistration(input.worker_id);
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
@@ -1707,9 +1776,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       bundle.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
       bundle.job.accepted_session_public_key_id !== input.key_id ||
       bundle.job.accepted_session_epoch !== input.accepted_session_epoch ||
-      worker.session_public_key_id !== input.key_id ||
-      worker.session_epoch !== input.accepted_session_epoch ||
-      worker.session_public_key_expires_at <= input.now
+      session.session_public_key_id !== input.key_id ||
+      session.session_epoch !== input.accepted_session_epoch ||
+      session.session_public_key_expires_at <= input.now
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
     }
@@ -1752,7 +1821,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async materializeCodexRuntimeJobUnlocked(input: MaterializeCodexRuntimeJobInput): Promise<CodexLaunchMaterialization> {
-    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_launch_materialization_denied', input.now);
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_launch_materialization_denied',
+      input.now,
+    );
     await this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1760,6 +1835,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const worker = await this.lockCodexWorkerRegistration(input.worker_id);
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
@@ -1780,8 +1856,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       bundle.envelope.status !== 'claimed' ||
       bundle.envelope.claimed_worker_session_digest !== input.accepted_worker_session_digest ||
       bundle.envelope.claimed_key_id !== input.accepted_session_public_key_id ||
-      worker.session_epoch !== input.accepted_session_epoch ||
-      worker.session_public_key_expires_at <= input.now
+      session.session_epoch !== input.accepted_session_epoch ||
+      session.session_public_key_expires_at <= input.now
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
     }
@@ -1832,7 +1908,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async startCodexRuntimeJobUnlocked(input: StartCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
-    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now);
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+    );
     await this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1840,6 +1922,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
     if (
@@ -1886,7 +1969,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async appendCodexRuntimeJobEventUnlocked(input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob> {
-    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now);
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+    );
     await this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1894,6 +1983,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const eventObjectId = this.codexRuntimeJobEventObjectId(input.runtime_job_id, input.event_id);
     const idempotencyObjectId = this.codexRuntimeJobEventIdempotencyObjectId(input.runtime_job_id, input.idempotency_key);
@@ -1966,9 +2056,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async createCodexRuntimeJobArtifactUnlocked(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
-    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now, {
-      requireConnected: false,
-    });
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+      {
+        requireConnected: false,
+      },
+    );
     await this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1976,6 +2073,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     this.assertCodexRuntimeJobArtifactIntake(input);
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
@@ -2102,9 +2200,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async terminalizeCodexRuntimeJobUnlocked(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
-    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now, {
-      requireConnected: false,
-    });
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+      {
+        requireConnected: false,
+      },
+    );
     await this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -2112,6 +2217,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
     if (
@@ -2195,18 +2301,24 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async recoverStaleCodexRuntimeJobsUnlocked(input: RecoverStaleCodexRuntimeJobsInput): Promise<RecoverStaleCodexRuntimeJobsResult> {
-    const workerPredicate = input.worker_id === undefined ? sql`true` : sql`worker_id = ${input.worker_id}`;
+    assertCodexRuntimeRecoveryReasonCode(input.reason_code);
+    const workerPredicate = input.worker_id === undefined ? sql`true` : sql`j.worker_id = ${input.worker_id}`;
     const result = await this.db.execute(sql<Record<string, unknown>>`
-      select *
-      from codex_runtime_jobs
-      where status <> 'terminal'
+      select j.*
+      from codex_runtime_jobs j
+      left join codex_launch_leases l on l.id = j.launch_lease_id
+      where j.status <> 'terminal'
         and ${workerPredicate}
-        and (expires_at <= ${input.stale_before} or coalesce(last_event_at, updated_at) < ${input.stale_before})
-      order by updated_at asc, id asc
-      for update
+        and (
+          j.expires_at <= ${input.stale_before}
+          or coalesce(j.last_event_at, j.updated_at) < ${input.stale_before}
+          or l.status in ('terminal', 'expired', 'revoked')
+        )
+      order by j.updated_at asc, j.id asc
+      for update of j
     `);
-    const recoveredRuntimeJobs: CodexRuntimeJob[] = [];
-    const recoveredLaunchLeases: CodexLaunchLease[] = [];
+    const recoveredRuntimeJobs: RecoverStaleCodexRuntimeJobsResult['recovered_runtime_jobs'] = [];
+    const recoveredLaunchLeases: RecoverStaleCodexRuntimeJobsResult['recovered_launch_leases'] = [];
     const workerIdsToDecrement: string[] = [];
     for (const job of result.rows.map((row) => fromDbRecord<CodexRuntimeJobDbRecord>(row))) {
       const lease = await this.lockCodexLaunchLease(job.launch_lease_id);
@@ -2224,7 +2336,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       if (jobRow === undefined) {
         continue;
       }
-      recoveredRuntimeJobs.push(runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>)));
+      recoveredRuntimeJobs.push(
+        this.codexRuntimeJobRecoveryEvidence(runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>))),
+      );
       if (lease !== undefined && (lease.status === 'active' || lease.status === 'materialized')) {
         const [leaseRow] = await this.db
           .update(codex_launch_leases)
@@ -2238,7 +2352,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           .returning();
         if (leaseRow !== undefined) {
           const leaseRecord = fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>);
-          recoveredLaunchLeases.push(launchLeaseFromDbRecord(leaseRecord));
+          recoveredLaunchLeases.push(this.codexLaunchLeaseRecoveryEvidence(launchLeaseFromDbRecord(leaseRecord)));
           if (leaseRecord.worker_id !== undefined) {
             workerIdsToDecrement.push(leaseRecord.worker_id);
           }
@@ -4993,6 +5107,42 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return row === undefined ? undefined : fromDbRecord<CodexWorkerRegistrationDbRecord>(row);
   }
 
+  private codexRuntimeJobRecoveryEvidence(
+    job: CodexRuntimeJob,
+  ): RecoverStaleCodexRuntimeJobsResult['recovered_runtime_jobs'][number] {
+    return {
+      id: job.id,
+      worker_id: job.worker_id,
+      launch_lease_id: job.launch_lease_id,
+      target_type: job.target_type,
+      target_id: job.target_id,
+      target_kind: job.target_kind,
+      project_id: job.project_id,
+      ...(job.repo_id === undefined ? {} : { repo_id: job.repo_id }),
+      status: job.status,
+      ...(job.terminal_status === undefined ? {} : { terminal_status: job.terminal_status }),
+      ...(job.terminal_reason_code === undefined ? {} : { terminal_reason_code: job.terminal_reason_code }),
+      ...(job.terminal_at === undefined ? {} : { terminal_at: job.terminal_at }),
+      updated_at: job.updated_at,
+    };
+  }
+
+  private codexLaunchLeaseRecoveryEvidence(
+    lease: CodexLaunchLease,
+  ): RecoverStaleCodexRuntimeJobsResult['recovered_launch_leases'][number] {
+    return {
+      id: lease.id,
+      ...(lease.worker_id === undefined ? {} : { worker_id: lease.worker_id }),
+      target_type: lease.target.target_type,
+      target_id: lease.target.target_id,
+      target_kind: lease.target.target_kind,
+      project_id: lease.target.project_id,
+      ...(lease.target.repo_id === undefined ? {} : { repo_id: lease.target.repo_id }),
+      status: lease.status,
+      ...(lease.terminal_reason_code === undefined ? {} : { terminal_reason_code: lease.terminal_reason_code }),
+    };
+  }
+
   private codexLaunchFenceSnapshotMatches(
     record: CodexLaunchLeaseDbRecord,
     activeFence: CodexLaunchFenceSnapshot | undefined,
@@ -5188,26 +5338,96 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     >,
     now: string,
     options: { requireConnected?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<CodexWorkerSessionProof> {
     const requireConnected = options.requireConnected ?? true;
     const [row] = await this.db
-      .select({
-        sessionTokenHash: codex_worker_registrations.sessionTokenHash,
-        sessionTokenExpiresAt: codex_worker_registrations.sessionTokenExpiresAt,
-        status: codex_worker_registrations.status,
-        controlChannelStatus: codex_worker_registrations.controlChannelStatus,
-      })
+      .select()
       .from(codex_worker_registrations)
       .where(eq(codex_worker_registrations.id, workerId))
       .limit(1);
+    const worker = row === undefined ? undefined : fromDbRecord<CodexWorkerRegistrationDbRecord>(row as Record<string, unknown>);
     if (
-      row === undefined ||
-      row.sessionTokenHash !== codexCredentialPayloadDigest(sessionToken) ||
-      !timestampIsAfter(row.sessionTokenExpiresAt, now) ||
-      (requireConnected && ((row.status !== 'online' && row.status !== 'draining') || row.controlChannelStatus !== 'connected'))
+      worker === undefined ||
+      worker.session_token_hash !== codexCredentialPayloadDigest(sessionToken) ||
+      !timestampIsAfter(worker.session_token_expires_at, now) ||
+      (requireConnected &&
+        ((worker.status !== 'online' && worker.status !== 'draining') || worker.control_channel_status !== 'connected'))
     ) {
       throw codexDenied(deniedCode, 'Codex worker session proof was rejected.');
     }
+    return {
+      worker,
+      session_token_hash: worker.session_token_hash,
+      session_epoch: worker.session_epoch,
+      session_public_key_id: worker.session_public_key_id,
+      session_public_key_expires_at: worker.session_public_key_expires_at,
+    };
+  }
+
+  private async assertCodexRuntimeJobWorkerSession(
+    runtimeJobId: string,
+    workerId: string,
+    sessionToken: string,
+    deniedCode: Extract<
+      DomainErrorType['code'],
+      | 'codex_worker_registration_denied'
+      | 'codex_launch_lease_denied'
+      | 'codex_launch_materialization_denied'
+      | 'codex_runtime_job_unavailable'
+    >,
+    now: string,
+    options: { requireConnected?: boolean } = {},
+  ): Promise<CodexWorkerSessionProof> {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    try {
+      return await this.assertCodexWorkerSession(workerId, sessionToken, deniedCode, now, options);
+    } catch (error) {
+      if (!(error instanceof DomainError)) {
+        throw error;
+      }
+    }
+
+    const [workerRow] = await this.db
+      .select()
+      .from(codex_worker_registrations)
+      .where(eq(codex_worker_registrations.id, workerId))
+      .limit(1);
+    const [jobRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, runtimeJobId))
+      .limit(1);
+    const worker =
+      workerRow === undefined ? undefined : fromDbRecord<CodexWorkerRegistrationDbRecord>(workerRow as Record<string, unknown>);
+    const job = jobRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>);
+    const lease = job === undefined ? undefined : await this.lockCodexLaunchLease(job.launch_lease_id);
+    const requireConnected = options.requireConnected ?? true;
+    if (
+      worker === undefined ||
+      job === undefined ||
+      lease === undefined ||
+      job.worker_id !== workerId ||
+      lease.worker_id !== workerId ||
+      job.accepted_worker_session_digest !== sessionTokenHash ||
+      job.accepted_session_epoch === undefined ||
+      job.accepted_session_public_key_id === undefined ||
+      job.accepted_session_public_key_expires_at === undefined ||
+      (job.status !== 'accepted' && job.status !== 'materializing' && job.status !== 'running') ||
+      !timestampIsAfter(job.expires_at, now) ||
+      !timestampIsAfter(lease.expires_at, now) ||
+      !timestampIsAfter(job.accepted_session_public_key_expires_at, now) ||
+      (lease.status !== 'active' && lease.status !== 'materialized') ||
+      (requireConnected && ((worker.status !== 'online' && worker.status !== 'draining') || worker.control_channel_status !== 'connected'))
+    ) {
+      throw codexDenied(deniedCode, 'Codex worker session proof was rejected.');
+    }
+    return {
+      worker,
+      session_token_hash: sessionTokenHash,
+      session_epoch: job.accepted_session_epoch,
+      session_public_key_id: job.accepted_session_public_key_id,
+      session_public_key_expires_at: job.accepted_session_public_key_expires_at,
+    };
   }
 
   private workerRecordMatchesLaunch(
@@ -5236,6 +5456,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     nonceTimestamp: string,
     now: string,
     replayProtection?: CodexWorkerReplayProtectionInput,
+    sessionEpochOverride?: number,
   ): Promise<void> {
     const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
     const nonceHash = codexCredentialPayloadDigest(nonce);
@@ -5244,7 +5465,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .from(codex_worker_registrations)
       .where(eq(codex_worker_registrations.id, workerId))
       .limit(1);
-    const sessionEpoch = worker?.sessionEpoch ?? 1;
+    const sessionEpoch = sessionEpochOverride ?? worker?.sessionEpoch ?? 1;
     const requestBindingDigest =
       replayProtection === undefined
         ? codexCanonicalDigest({ method: 'LEGACY', path: 'legacy-worker-session', body_digest: sessionTokenHash })

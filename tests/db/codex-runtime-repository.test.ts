@@ -1484,6 +1484,59 @@ describe('codex runtime repository behavior', () => {
       name: 'DomainError',
       code: 'codex_launch_materialization_denied',
     });
+
+    const expiredKeyAfterRefresh = await createRuntimeJobWithCapturedToken(
+      {
+        runtime_job_id: 'runtime-job-expired-key-after-refresh',
+        launch_lease_id: 'runtime-launch-lease-expired-key-after-refresh',
+        envelope_id: 'runtime-envelope-expired-key-after-refresh',
+        job_request_id: 'runtime-job-request-expired-key-after-refresh',
+        target: generationTarget({ target_id: 'generation-expired-key-after-refresh' }),
+        expires_at: '2026-05-20T00:30:00.000Z',
+      },
+      {
+        worker_id: 'worker-expired-key-after-refresh',
+        session_token: 'session-token-expired-key-after-refresh',
+        session_expires_at: '2026-05-20T00:30:00.000Z',
+        session_public_key_expires_at: '2026-05-20T00:00:30.000Z',
+      },
+    );
+    await expiredKeyAfterRefresh.repository.acceptCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-expired-key-after-refresh',
+      worker_id: 'worker-expired-key-after-refresh',
+      worker_session_token: 'session-token-expired-key-after-refresh',
+      nonce: 'accept-expired-key-after-refresh-nonce',
+      nonce_timestamp: now,
+      accepted_worker_session_digest: tokenHash('session-token-expired-key-after-refresh'),
+      accepted_session_public_key_id: 'session-key-1',
+      accepted_session_epoch: 1,
+      idempotency_key: 'accept-expired-key-after-refresh',
+      request_digest: tokenHash('accept-expired-key-after-refresh-request'),
+      now,
+    });
+    await expect(
+      expiredKeyAfterRefresh.repository.refreshCodexWorkerSession({
+        worker_id: 'worker-expired-key-after-refresh',
+        current_session_token: 'session-token-expired-key-after-refresh',
+        nonce: 'refresh-expired-key-after-accept',
+        nonce_timestamp: now,
+        next_session_token: 'session-token-expired-key-after-refresh-2',
+        next_session_expires_at: '2026-05-20T00:30:00.000Z',
+        next_session_public_key_id: 'session-key-2',
+        next_session_public_key_material: 'public-key-material-2',
+        next_session_public_key_expires_at: '2026-05-20T00:30:00.000Z',
+        request_digest: tokenHash('refresh-expired-key-after-accept-request'),
+        replay_protection: {
+          method: 'POST',
+          path: '/internal/codex-workers/worker-expired-key-after-refresh/session/refresh',
+          body_digest: tokenHash('refresh-expired-key-after-accept-request'),
+        },
+        now,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_registration_denied',
+    });
   });
 
   it('materializes runtime jobs by launch-token hash only and replays materialization response loss until terminal', async () => {
@@ -2466,12 +2519,136 @@ describe('codex runtime repository behavior', () => {
       ],
       recovered_launch_leases: [{ id: 'runtime-launch-lease-1', status: 'expired' }],
     });
+    expect(recovered.recovered_runtime_jobs[0]).not.toHaveProperty('input_json');
+    expect(recovered.recovered_runtime_jobs[0]).not.toHaveProperty('workspace_acquisition_json');
+    expect(JSON.stringify(recovered)).not.toContain('artifact://runtime/input');
     await expect(
       repository.getClaimedAutomationActionRun({
         id: 'generation-1',
         claim_token: 'runtime-action-claim-token-1',
       }),
     ).resolves.toMatchObject({ id: 'generation-1', status: 'running' });
+  });
+
+  it('rejects non-allowlisted runtime job recovery reason codes', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken({
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+
+    await expect(
+      repository.recoverStaleCodexRuntimeJobs({
+        stale_before: '2026-05-20T00:02:00.000Z',
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'unsafe /tmp/recovery token' as never,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it.each([
+    ['queued', async () => undefined],
+    ['accepted', async (repository: DeliveryRepository) => acceptRuntimeJob(repository)],
+    [
+      'materializing',
+      async (repository: DeliveryRepository, launchToken: string) => {
+        await acceptRuntimeJob(repository);
+        await claimRuntimeJobEnvelope(repository);
+        await materializeRuntimeJob(repository, launchToken);
+      },
+    ],
+    [
+      'running',
+      async (repository: DeliveryRepository, launchToken: string) => {
+        await acceptRuntimeJob(repository);
+        await claimRuntimeJobEnvelope(repository);
+        await materializeRuntimeJob(repository, launchToken);
+        await startRuntimeJob(repository);
+      },
+    ],
+  ])('recovers stale %s runtime jobs idempotently with public-safe reason codes', async (_status, prepare) => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken({
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+    await prepare(repository, launchToken);
+
+    await expect(
+      repository.recoverStaleCodexRuntimeJobs({
+        stale_before: '2026-05-20T00:02:00.000Z',
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'codex_runtime_job_stale',
+      }),
+    ).resolves.toMatchObject({
+      recovered_runtime_jobs: [
+        {
+          id: 'runtime-job-1',
+          status: 'terminal',
+          terminal_status: 'expired',
+          terminal_reason_code: 'codex_runtime_job_stale',
+        },
+      ],
+      recovered_launch_leases: [{ id: 'runtime-launch-lease-1', status: 'expired' }],
+    });
+    await expect(
+      repository.recoverStaleCodexRuntimeJobs({
+        stale_before: '2026-05-20T00:02:00.000Z',
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'codex_runtime_job_stale',
+      }),
+    ).resolves.toEqual({ recovered_runtime_jobs: [], recovered_launch_leases: [] });
+    await expect(
+      repository.getClaimedAutomationActionRun({
+        id: 'generation-1',
+        claim_token: 'runtime-action-claim-token-1',
+      }),
+    ).resolves.toMatchObject({ id: 'generation-1', status: 'running' });
+  });
+
+  it('repairs nonterminal runtime jobs whose launch lease already reached a terminal status', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken({
+      expires_at: '2026-05-20T00:30:00.000Z',
+    });
+    await acceptRuntimeJob(repository);
+    await repository.terminalizeCodexLaunchLease({
+      lease_id: 'runtime-launch-lease-1',
+      worker_id: 'worker-1',
+      worker_session_token: 'session-token-1',
+      nonce: 'terminalize-runtime-lease-before-runtime-recovery',
+      nonce_timestamp: later,
+      terminal_status: 'terminal',
+      reason_code: 'worker_closed_before_runtime_terminal',
+      idempotency_key: 'terminalize-runtime-lease-before-runtime-recovery',
+      evidence_summary: { cleanup_digest: tokenHash('runtime-lease-cleanup') },
+      now: later,
+    });
+
+    await expect(
+      repository.recoverStaleCodexRuntimeJobs({
+        stale_before: now,
+        now: '2026-05-20T00:02:00.000Z',
+        worker_id: 'worker-1',
+        reason_code: 'codex_runtime_job_lease_terminal',
+      }),
+    ).resolves.toMatchObject({
+      recovered_runtime_jobs: [
+        {
+          id: 'runtime-job-1',
+          status: 'terminal',
+          terminal_status: 'expired',
+          terminal_reason_code: 'codex_runtime_job_lease_terminal',
+        },
+      ],
+      recovered_launch_leases: [],
+    });
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: 'runtime-job-1' })).resolves.toMatchObject({
+      status: 'terminal',
+      terminal_status: 'expired',
+      terminal_reason_code: 'codex_runtime_job_lease_terminal',
+    });
   });
 
   it('keeps runtime job launch leases out of legacy stale worker recovery', async () => {
@@ -2521,6 +2698,130 @@ describe('codex runtime repository behavior', () => {
     expect(status).toMatchObject({ id: 'runtime-launch-lease-1', status: 'active', lease_token_hash: tokenHash(launchToken) });
     expect(status).not.toHaveProperty('lease_token');
     expect(JSON.stringify(status)).not.toContain(launchToken);
+  });
+
+  it('does not deliver new queued runtime jobs to draining workers', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken();
+    await repository.heartbeatCodexWorker({
+      worker_id: 'worker-1',
+      session_token: 'session-token-1',
+      nonce: 'runtime-job-draining-heartbeat',
+      nonce_timestamp: later,
+      status: 'draining',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation'],
+      now: later,
+    });
+
+    await expect(
+      repository.pollCodexRuntimeJobs({
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'runtime-job-draining-poll',
+        nonce_timestamp: later,
+        target_kinds: ['generation'],
+        limit: 1,
+        replay_protection: {
+          method: 'POST',
+          path: '/internal/codex-workers/worker-1/runtime-jobs/poll',
+          body_digest: tokenHash('runtime-job-draining-poll-request'),
+        },
+        now: later,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it('refreshes worker sessions only when queued jobs sealed to the current key cannot be stranded', async () => {
+    const { repository } = await createRuntimeJobWithCapturedToken();
+
+    await expect(
+      repository.refreshCodexWorkerSession({
+        worker_id: 'worker-1',
+        current_session_token: 'session-token-1',
+        nonce: 'refresh-with-queued-runtime-job',
+        nonce_timestamp: later,
+        next_session_token: 'session-token-2',
+        next_session_expires_at: expiresAt,
+        next_session_public_key_id: 'session-key-2',
+        next_session_public_key_material: 'public-key-material-2',
+        next_session_public_key_expires_at: expiresAt,
+        request_digest: tokenHash('refresh-with-queued-runtime-job-request'),
+        replay_protection: {
+          method: 'POST',
+          path: '/internal/codex-workers/worker-1/session/refresh',
+          body_digest: tokenHash('refresh-with-queued-runtime-job-request'),
+        },
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_registration_denied',
+    });
+
+    await repository.cancelCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-1',
+      reason_code: 'test_cancel_before_refresh',
+      idempotency_key: 'cancel-before-refresh',
+      request_digest: tokenHash('cancel-before-refresh-request'),
+      now: later,
+    });
+
+    await expect(
+      repository.refreshCodexWorkerSession({
+        worker_id: 'worker-1',
+        current_session_token: 'session-token-1',
+        nonce: 'refresh-after-queued-runtime-job-cancel',
+        nonce_timestamp: later,
+        next_session_token: 'session-token-2',
+        next_session_expires_at: expiresAt,
+        next_session_public_key_id: 'session-key-2',
+        next_session_public_key_material: 'public-key-material-2',
+        next_session_public_key_expires_at: expiresAt,
+        request_digest: tokenHash('refresh-after-queued-runtime-job-cancel-request'),
+        replay_protection: {
+          method: 'POST',
+          path: '/internal/codex-workers/worker-1/session/refresh',
+          body_digest: tokenHash('refresh-after-queued-runtime-job-cancel-request'),
+        },
+        now: later,
+      }),
+    ).resolves.toMatchObject({ id: 'worker-1', session_id: 'session-key-2', session_epoch: 2 });
+  });
+
+  it('keeps the accepted session token valid for already accepted runtime jobs after session refresh', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+
+    await repository.refreshCodexWorkerSession({
+      worker_id: 'worker-1',
+      current_session_token: 'session-token-1',
+      nonce: 'refresh-after-accepted-runtime-job',
+      nonce_timestamp: later,
+      next_session_token: 'session-token-2',
+      next_session_expires_at: expiresAt,
+      next_session_public_key_id: 'session-key-2',
+      next_session_public_key_material: 'public-key-material-2',
+      next_session_public_key_expires_at: expiresAt,
+      request_digest: tokenHash('refresh-after-accepted-runtime-job-request'),
+      replay_protection: {
+        method: 'POST',
+        path: '/internal/codex-workers/worker-1/session/refresh',
+        body_digest: tokenHash('refresh-after-accepted-runtime-job-request'),
+      },
+      now: later,
+    });
+
+    await expect(
+      claimRuntimeJobEnvelope(repository, 'runtime-job-1', 'runtime-envelope-1', {
+        nonce: 'claim-with-accepted-session-after-refresh',
+      }),
+    ).resolves.toMatchObject({ id: 'runtime-envelope-1', status: 'claimed', claimed_key_id: 'session-key-1' });
+    await expect(
+      materializeRuntimeJob(repository, launchToken, 'runtime-job-1', 'runtime-launch-lease-1', {
+        nonce: 'materialize-with-accepted-session-after-refresh',
+      }),
+    ).resolves.toMatchObject({ lease_id: 'runtime-launch-lease-1' });
   });
 
   it('creates runtime jobs with a repository-owned sealed envelope and no raw launch token in the result', async () => {

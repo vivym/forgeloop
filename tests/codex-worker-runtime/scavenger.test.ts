@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -21,7 +21,7 @@ describe('scavengeCodexWorkerResources', () => {
       socketHostPath: join(staleRoot, 'run', 'codex.sock'),
       labels: { 'forgeloop.launch_lease_id': 'lease-old', 'forgeloop.worker_id': 'worker-1' },
     });
-    const terminalized: unknown[] = [];
+    const terminalized: Record<string, unknown>[] = [];
 
     await scavengeCodexWorkerResources({
       workerId: 'worker-1',
@@ -29,7 +29,7 @@ describe('scavengeCodexWorkerResources', () => {
       dockerRunner: runner,
       controlPlaneClient: {
         getLaunchLeaseStatus: async () => ({ status: 'expired' }),
-        terminalizeLaunchLease: async (input: unknown) => {
+        terminalizeLaunchLease: async (_workerId: string, _leaseId: string, input: Record<string, unknown>) => {
           terminalized.push(input);
           return {};
         },
@@ -41,7 +41,71 @@ describe('scavengeCodexWorkerResources', () => {
 
     expect(runner.stoppedContainerDigests).toEqual(['sha256:' + 'c'.repeat(64)]);
     expect(terminalized).toHaveLength(1);
+    expect(terminalized[0]?.evidence_summary).toEqual({
+      cleanup_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
+    expect(JSON.stringify(terminalized[0])).not.toContain(staleRoot);
+    expect(JSON.stringify(terminalized[0])).not.toContain('abcdef123456');
     await expect(stat(staleRoot)).rejects.toThrow();
+  });
+
+  it('ignores unverified directories and symlinked temp roots without lease lookup', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
+    const unverifiedRoot = join(workerTempRoot, 'lease-old');
+    const externalRoot = await mkdtemp(join(tmpdir(), 'forgeloop-external-'));
+    const symlinkedRoot = join(workerTempRoot, 'lease-symlink');
+    await mkdir(unverifiedRoot);
+    await writeFile(join(externalRoot, '.forgeloop-resource.json'), JSON.stringify({ workerId: 'worker-1', launchLeaseId: 'lease-symlink' }));
+    await symlink(externalRoot, symlinkedRoot);
+
+    const runner = new FakeDockerRunner();
+    const statusQueries: string[] = [];
+
+    await scavengeCodexWorkerResources({
+      workerId: 'worker-1',
+      workerTempRoot,
+      dockerRunner: runner,
+      controlPlaneClient: {
+        getLaunchLeaseStatus: async ({ launchLeaseId }) => {
+          statusQueries.push(launchLeaseId);
+          return { status: 'expired' };
+        },
+        terminalizeLaunchLease: async () => ({}),
+      },
+      workerSessionToken: 'session-1',
+    });
+
+    await expect(stat(unverifiedRoot)).resolves.toBeDefined();
+    expect((await lstat(symlinkedRoot)).isSymbolicLink()).toBe(true);
+    expect(statusQueries).toEqual([]);
+    expect(runner.stoppedContainerDigests).toEqual([]);
+  });
+
+  it('ignores temp roots whose metadata lease id does not match the directory name', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
+    const mismatchedRoot = join(workerTempRoot, 'lease-active');
+    await mkdir(mismatchedRoot);
+    await writeFile(join(mismatchedRoot, '.forgeloop-resource.json'), JSON.stringify({ workerId: 'worker-1', launchLeaseId: 'lease-old' }));
+
+    const runner = new FakeDockerRunner();
+    const statusQueries: string[] = [];
+
+    await scavengeCodexWorkerResources({
+      workerId: 'worker-1',
+      workerTempRoot,
+      dockerRunner: runner,
+      controlPlaneClient: {
+        getLaunchLeaseStatus: async ({ launchLeaseId }) => {
+          statusQueries.push(launchLeaseId);
+          return { status: 'expired' };
+        },
+        terminalizeLaunchLease: async () => ({}),
+      },
+      workerSessionToken: 'session-1',
+    });
+
+    await expect(stat(mismatchedRoot)).resolves.toBeDefined();
+    expect(statusQueries).toEqual([]);
   });
 
   it('refuses to stop containers without a verifiable launch lease label', async () => {

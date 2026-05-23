@@ -204,6 +204,8 @@ describe('codex runtime domain contracts', () => {
         'codex_runtime_job_expired',
         'codex_runtime_job_cancelled',
         'codex_workspace_bundle_invalid',
+        'codex_runtime_job_stale',
+        'codex_runtime_job_lease_terminal',
       ]),
     );
   });

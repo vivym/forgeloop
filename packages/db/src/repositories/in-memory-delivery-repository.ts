@@ -53,6 +53,7 @@ import type {
 } from '@forgeloop/domain';
 import {
   DomainError,
+  assertCodexRuntimeRecoveryReasonCode,
   assertAutomationCapabilityActor,
   assertCanonicalManualScopeKey,
   automationCapabilitiesForPreset,
@@ -301,6 +302,14 @@ interface CodexWorkerRegistrationPrivateRecord {
   session_public_key_material: string;
   session_public_key_expires_at: string;
   session_epoch: number;
+}
+
+interface CodexWorkerSessionProof {
+  worker: CodexWorkerRegistrationPrivateRecord;
+  session_token_hash: string;
+  session_epoch: number;
+  session_public_key_id: string;
+  session_public_key_expires_at: string;
 }
 
 interface CodexLaunchLeasePrivateRecord {
@@ -926,9 +935,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.now,
       input.replay_protection,
     );
+    if (valuesFor(this.codexRuntimeJobs).some((record) => record.job.worker_id === input.worker_id && record.job.status === 'queued')) {
+      throw codexDenied('codex_worker_registration_denied', 'Worker session refresh was rejected while runtime jobs are assigned.');
+    }
     if (
       valuesFor(this.codexRuntimeJobs).some(
-        (record) => record.job.worker_id === input.worker_id && record.job.status !== 'terminal',
+        (record) =>
+          record.job.worker_id === input.worker_id &&
+          (record.job.status === 'accepted' || record.job.status === 'materializing' || record.job.status === 'running') &&
+          !this.codexRuntimeJobAcceptedSessionCoversRefresh(record),
       )
     ) {
       throw codexDenied('codex_worker_registration_denied', 'Worker session refresh was rejected while runtime jobs are assigned.');
@@ -1159,7 +1174,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async getCodexRuntimeJobWorkload(input: GetCodexRuntimeJobWorkloadInput): Promise<CodexRuntimeJob> {
-    this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable');
+    const session = this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      input.now,
+      'codex_runtime_job_unavailable',
+    );
     this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1167,6 +1188,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
@@ -1187,7 +1209,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async pollCodexRuntimeJobs(input: PollCodexRuntimeJobsInput): Promise<CodexRuntimeJob[]> {
-    this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable');
+    const worker = this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable');
     this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1196,6 +1218,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.now,
       input.replay_protection,
     );
+    if (worker.registration.status === 'draining') {
+      return [];
+    }
     return valuesFor(this.codexRuntimeJobs)
       .map((record) => record.job)
       .filter(
@@ -1266,6 +1291,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         accepted_at: input.now,
         accepted_worker_session_digest: input.accepted_worker_session_digest,
         accepted_session_public_key_id: input.accepted_session_public_key_id,
+        accepted_session_public_key_expires_at: worker.session_public_key_expires_at,
         accepted_session_epoch: input.accepted_session_epoch,
         updated_at: input.now,
       },
@@ -1275,7 +1301,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async claimCodexLaunchTokenEnvelope(input: ClaimCodexLaunchTokenEnvelopeInput): Promise<CodexLaunchTokenEnvelope> {
-    const worker = this.assertWorkerSession(
+    const session = this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
       input.worker_id,
       input.worker_session_token,
       input.now,
@@ -1288,6 +1315,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     const envelope = this.codexLaunchTokenEnvelopes.get(input.envelope_id);
@@ -1303,9 +1331,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       record.job.accepted_worker_session_digest !== input.accepted_worker_session_digest ||
       record.job.accepted_session_public_key_id !== input.key_id ||
       record.job.accepted_session_epoch !== input.accepted_session_epoch ||
-      worker.session_public_key_id !== input.key_id ||
-      worker.session_epoch !== input.accepted_session_epoch ||
-      worker.session_public_key_expires_at <= input.now
+      session.session_public_key_id !== input.key_id ||
+      session.session_epoch !== input.accepted_session_epoch ||
+      session.session_public_key_expires_at <= input.now
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex launch token envelope claim was denied.');
     }
@@ -1343,7 +1371,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async materializeCodexRuntimeJob(input: MaterializeCodexRuntimeJobInput): Promise<CodexLaunchMaterialization> {
-    const worker = this.assertWorkerSession(
+    const session = this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
       input.worker_id,
       input.worker_session_token,
       input.now,
@@ -1356,6 +1385,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     const leaseRecord = this.codexLaunchLeases.get(input.launch_lease_id);
@@ -1376,8 +1406,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       envelope.status !== 'claimed' ||
       envelope.claimed_worker_session_digest !== input.accepted_worker_session_digest ||
       envelope.claimed_key_id !== input.accepted_session_public_key_id ||
-      worker.session_epoch !== input.accepted_session_epoch ||
-      worker.session_public_key_expires_at <= input.now
+      session.session_epoch !== input.accepted_session_epoch ||
+      session.session_public_key_expires_at <= input.now
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
     }
@@ -1424,7 +1454,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async startCodexRuntimeJob(input: StartCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
-    this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable');
+    const session = this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      input.now,
+      'codex_runtime_job_unavailable',
+    );
     this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1432,6 +1468,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
@@ -1478,7 +1515,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async appendCodexRuntimeJobEvent(input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob> {
-    this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable');
+    const session = this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      input.now,
+      'codex_runtime_job_unavailable',
+    );
     this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1486,6 +1529,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const eventKey = `${input.runtime_job_id}:${input.event_id}`;
     const idempotencyKey = `${input.runtime_job_id}:${input.idempotency_key}`;
@@ -1537,9 +1581,16 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
-    this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable', {
-      requireConnected: false,
-    });
+    const session = this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      input.now,
+      'codex_runtime_job_unavailable',
+      {
+        requireConnected: false,
+      },
+    );
     this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1547,6 +1598,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     this.assertCodexRuntimeJobArtifactIntake(input);
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
@@ -1669,9 +1721,16 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async terminalizeCodexRuntimeJob(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
-    this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable', {
-      requireConnected: false,
-    });
+    const session = this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      input.now,
+      'codex_runtime_job_unavailable',
+      {
+        requireConnected: false,
+      },
+    );
     this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1679,6 +1738,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.nonce_timestamp,
       input.now,
       input.replay_protection,
+      session.session_epoch,
     );
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     const leaseRecord = this.codexLaunchLeases.get(input.launch_lease_id);
@@ -1767,14 +1827,19 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async recoverStaleCodexRuntimeJobs(input: RecoverStaleCodexRuntimeJobsInput): Promise<RecoverStaleCodexRuntimeJobsResult> {
-    const recoveredRuntimeJobs: CodexRuntimeJob[] = [];
-    const recoveredLaunchLeases: CodexLaunchLease[] = [];
+    assertCodexRuntimeRecoveryReasonCode(input.reason_code);
+    const recoveredRuntimeJobs: RecoverStaleCodexRuntimeJobsResult['recovered_runtime_jobs'] = [];
+    const recoveredLaunchLeases: RecoverStaleCodexRuntimeJobsResult['recovered_launch_leases'] = [];
     for (const [id, record] of this.codexRuntimeJobs.entries()) {
       if (record.job.status === 'terminal' || (input.worker_id !== undefined && record.job.worker_id !== input.worker_id)) {
         continue;
       }
+      const leaseRecord = this.codexLaunchLeases.get(record.job.launch_lease_id);
+      const leaseAlreadyTerminal =
+        leaseRecord !== undefined &&
+        (leaseRecord.lease.status === 'terminal' || leaseRecord.lease.status === 'expired' || leaseRecord.lease.status === 'revoked');
       const staleAt = record.job.last_event_at ?? record.job.updated_at;
-      if (record.job.expires_at > input.stale_before && staleAt >= input.stale_before) {
+      if (!leaseAlreadyTerminal && record.job.expires_at > input.stale_before && staleAt >= input.stale_before) {
         continue;
       }
       const terminalJob: CodexRuntimeJobPrivateRecord = {
@@ -1789,8 +1854,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         },
       };
       this.codexRuntimeJobs.set(id, clone(terminalJob));
-      recoveredRuntimeJobs.push(clone(terminalJob.job));
-      const leaseRecord = this.codexLaunchLeases.get(record.job.launch_lease_id);
+      recoveredRuntimeJobs.push(this.codexRuntimeJobRecoveryEvidence(terminalJob.job));
       if (leaseRecord !== undefined && (leaseRecord.lease.status === 'active' || leaseRecord.lease.status === 'materialized')) {
         const expired: CodexLaunchLeasePrivateRecord = {
           ...leaseRecord,
@@ -1799,7 +1863,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         };
         this.codexLaunchLeases.set(leaseRecord.lease.id, clone(expired));
         this.releaseCodexRuntimeWorkerSlot(leaseRecord);
-        recoveredLaunchLeases.push(clone(expired.lease));
+        recoveredLaunchLeases.push(this.codexLaunchLeaseRecoveryEvidence(expired.lease));
       }
     }
     return { recovered_runtime_jobs: recoveredRuntimeJobs, recovered_launch_leases: recoveredLaunchLeases };
@@ -4328,6 +4392,52 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.codexWorkerRegistrations.set(record.lease.worker_id, clone(worker));
   }
 
+  private codexRuntimeJobRecoveryEvidence(
+    job: CodexRuntimeJob,
+  ): RecoverStaleCodexRuntimeJobsResult['recovered_runtime_jobs'][number] {
+    return {
+      id: job.id,
+      worker_id: job.worker_id,
+      launch_lease_id: job.launch_lease_id,
+      target_type: job.target_type,
+      target_id: job.target_id,
+      target_kind: job.target_kind,
+      project_id: job.project_id,
+      ...(job.repo_id === undefined ? {} : { repo_id: job.repo_id }),
+      status: job.status,
+      ...(job.terminal_status === undefined ? {} : { terminal_status: job.terminal_status }),
+      ...(job.terminal_reason_code === undefined ? {} : { terminal_reason_code: job.terminal_reason_code }),
+      ...(job.terminal_at === undefined ? {} : { terminal_at: job.terminal_at }),
+      updated_at: job.updated_at,
+    };
+  }
+
+  private codexRuntimeJobAcceptedSessionCoversRefresh(record: CodexRuntimeJobPrivateRecord): boolean {
+    const lease = this.codexLaunchLeases.get(record.job.launch_lease_id)?.lease;
+    const envelope = this.codexLaunchTokenEnvelopes.get(record.envelope_id);
+    if (record.job.accepted_session_public_key_expires_at === undefined || lease === undefined || envelope === undefined) {
+      return false;
+    }
+    const requiredUntil = Math.max(Date.parse(record.job.expires_at), Date.parse(lease.expires_at), Date.parse(envelope.expires_at));
+    return Date.parse(record.job.accepted_session_public_key_expires_at) >= requiredUntil;
+  }
+
+  private codexLaunchLeaseRecoveryEvidence(
+    lease: CodexLaunchLease,
+  ): RecoverStaleCodexRuntimeJobsResult['recovered_launch_leases'][number] {
+    return {
+      id: lease.id,
+      ...(lease.worker_id === undefined ? {} : { worker_id: lease.worker_id }),
+      target_type: lease.target.target_type,
+      target_id: lease.target.target_id,
+      target_kind: lease.target.target_kind,
+      project_id: lease.target.project_id,
+      ...(lease.target.repo_id === undefined ? {} : { repo_id: lease.target.repo_id }),
+      status: lease.status,
+      ...(lease.terminal_reason_code === undefined ? {} : { terminal_reason_code: lease.terminal_reason_code }),
+    };
+  }
+
   private assertWorkerSession(
     workerId: string,
     sessionToken: string,
@@ -4350,6 +4460,64 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return clone(worker);
   }
 
+  private assertCodexRuntimeJobWorkerSession(
+    runtimeJobId: string,
+    workerId: string,
+    sessionToken: string,
+    now: string,
+    deniedCode: DomainErrorType['code'] = 'codex_runtime_job_unavailable',
+    options: { requireConnected?: boolean } = {},
+  ): CodexWorkerSessionProof {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    try {
+      const worker = this.assertWorkerSession(workerId, sessionToken, now, deniedCode, options);
+      return {
+        worker,
+        session_token_hash: sessionTokenHash,
+        session_epoch: worker.session_epoch,
+        session_public_key_id: worker.session_public_key_id,
+        session_public_key_expires_at: worker.session_public_key_expires_at,
+      };
+    } catch (error) {
+      if (!(error instanceof DomainError)) {
+        throw error;
+      }
+    }
+
+    const worker = this.codexWorkerRegistrations.get(workerId);
+    const record = this.codexRuntimeJobs.get(runtimeJobId);
+    const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
+    const requireConnected = options.requireConnected ?? true;
+    if (
+      worker === undefined ||
+      record === undefined ||
+      leaseRecord === undefined ||
+      record.job.worker_id !== workerId ||
+      leaseRecord.lease.worker_id !== workerId ||
+      record.job.accepted_worker_session_digest !== sessionTokenHash ||
+      record.job.accepted_session_epoch === undefined ||
+      record.job.accepted_session_public_key_id === undefined ||
+      record.job.accepted_session_public_key_expires_at === undefined ||
+      (record.job.status !== 'accepted' && record.job.status !== 'materializing' && record.job.status !== 'running') ||
+      record.job.expires_at <= now ||
+      leaseRecord.lease.expires_at <= now ||
+      record.job.accepted_session_public_key_expires_at <= now ||
+      (leaseRecord.lease.status !== 'active' && leaseRecord.lease.status !== 'materialized') ||
+      (requireConnected &&
+        ((worker.registration.status !== 'online' && worker.registration.status !== 'draining') ||
+          worker.registration.control_channel_status !== 'connected'))
+    ) {
+      throw codexDenied(deniedCode, 'Codex worker session proof was rejected.');
+    }
+    return {
+      worker: clone(worker),
+      session_token_hash: sessionTokenHash,
+      session_epoch: record.job.accepted_session_epoch,
+      session_public_key_id: record.job.accepted_session_public_key_id,
+      session_public_key_expires_at: record.job.accepted_session_public_key_expires_at,
+    };
+  }
+
   private recordCodexWorkerNonce(
     workerId: string,
     sessionToken: string,
@@ -4357,10 +4525,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     nonceTimestamp: string,
     now: string,
     replayProtection?: CodexWorkerReplayProtectionInput,
+    sessionEpochOverride?: number,
   ): void {
     const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
     const nonceHash = codexCredentialPayloadDigest(nonce);
-    const sessionEpoch = this.codexWorkerRegistrations.get(workerId)?.session_epoch ?? 1;
+    const sessionEpoch = sessionEpochOverride ?? this.codexWorkerRegistrations.get(workerId)?.session_epoch ?? 1;
     const requestBindingDigest =
       replayProtection === undefined
         ? codexCanonicalDigest({ method: 'LEGACY', path: 'legacy-worker-session', body_digest: sessionTokenHash })

@@ -18,6 +18,7 @@ import type {
   CodexRuntimeJobArtifact,
   CodexRuntimeProfile,
   CodexRuntimeProfileRevision,
+  CodexRuntimeRecoveryReasonCode,
   CodexRuntimeScope,
   CodexRuntimeStatusProjection,
   CodexRuntimeTargetKind,
@@ -450,12 +451,40 @@ export interface RecoverStaleCodexRuntimeJobsInput {
   stale_before: string;
   now: string;
   worker_id?: string;
-  reason_code: string;
+  reason_code: CodexRuntimeRecoveryReasonCode;
+}
+
+export interface RecoveredCodexRuntimeJobEvidence {
+  id: string;
+  worker_id: string;
+  launch_lease_id: string;
+  target_type: CodexRuntimeJob['target_type'];
+  target_id: string;
+  target_kind: CodexRuntimeJob['target_kind'];
+  project_id: string;
+  repo_id?: string;
+  status: CodexRuntimeJob['status'];
+  terminal_status?: CodexRuntimeJob['terminal_status'];
+  terminal_reason_code?: string;
+  terminal_at?: string;
+  updated_at: string;
+}
+
+export interface RecoveredCodexLaunchLeaseEvidence {
+  id: string;
+  worker_id?: string;
+  target_type: CodexLaunchLease['target']['target_type'];
+  target_id: string;
+  target_kind: CodexLaunchLease['target']['target_kind'];
+  project_id: string;
+  repo_id?: string;
+  status: CodexLaunchLease['status'];
+  terminal_reason_code?: string;
 }
 
 export interface RecoverStaleCodexRuntimeJobsResult {
-  recovered_runtime_jobs: CodexRuntimeJob[];
-  recovered_launch_leases: CodexLaunchLease[];
+  recovered_runtime_jobs: RecoveredCodexRuntimeJobEvidence[];
+  recovered_launch_leases: RecoveredCodexLaunchLeaseEvidence[];
 }
 
 export interface GetCodexLaunchLeaseStatusInput {
