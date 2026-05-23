@@ -1,4 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import type { MarkdownDocument } from '@forgeloop/contracts';
 import { transitionWorkItem, type WorkItem, type WorkItemPhase } from '@forgeloop/domain';
 import type { DeliveryRepository } from '@forgeloop/db';
 
@@ -6,6 +7,7 @@ import { AuditWriterService } from '../audit/audit-writer.service';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type { CreateWorkItemDto, UpdateWorkItemDto } from '../delivery/dto';
+import { MarkdownDocumentService } from '../markdown/markdown-document.service';
 import { ProjectService } from '../projects/project.service';
 
 const serviceOwnedReadinessPhases = new Set<WorkItemPhase>(['draft', 'triage']);
@@ -19,6 +21,7 @@ export class WorkItemService {
     @Inject(ControlPlaneRuntimeService) private readonly runtime: ControlPlaneRuntimeService,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
     @Inject(ProjectService) private readonly projectService: ProjectService,
+    @Inject(MarkdownDocumentService) private readonly markdownDocumentService: MarkdownDocumentService,
   ) {}
 
   async createWorkItem(dto: CreateWorkItemDto): Promise<WorkItem> {
@@ -91,6 +94,7 @@ export class WorkItemService {
         project_id: workItem.project_id,
         kind: workItem.kind,
         title: workItem.title,
+        narrative_markdown: workItem.narrative_markdown,
         goal: dto.goal ?? workItem.goal,
         success_criteria: dto.success_criteria ?? workItem.success_criteria,
         priority: dto.priority ?? workItem.priority,
@@ -143,6 +147,27 @@ export class WorkItemService {
         repository,
       );
       return updated;
+    });
+  }
+
+  async updateTypedNarrative(
+    expectedKind: WorkItem['kind'],
+    workItemId: string,
+    document: MarkdownDocument,
+  ): Promise<WorkItem> {
+    const workItem = await this.getWorkItem(workItemId);
+    if (workItem.kind !== expectedKind) {
+      throw new BadRequestException(`Expected ${expectedKind} narrative target`);
+    }
+    if (document.object_ref.type !== expectedKind || document.object_ref.id !== workItemId) {
+      throw new BadRequestException('Markdown document object_ref must match the typed narrative route');
+    }
+
+    const validated = await this.markdownDocumentService.validateForWrite(document);
+    return this.repository.updateWorkItemNarrative({
+      work_item_id: workItemId,
+      markdown: validated.markdown,
+      updated_at: this.runtime.now(),
     });
   }
 }
