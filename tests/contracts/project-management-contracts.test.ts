@@ -97,26 +97,81 @@ describe('project management typed object contracts', () => {
     expect(session.approval_state).toBe('approved');
   });
 
-  it('rejects boundary approval without recorded questions, answers, and decisions', () => {
-    expect(() =>
-      brainstormingSessionSchema.parse({
-        id: 'bs-1',
-        revision_id: 'bs-rev-1',
-        source_ref: { type: 'requirement', id: 'req-1' },
-        development_plan_id: 'dp-1',
-        development_plan_item_id: 'dpi-1',
-        development_plan_item_revision_id: 'dpi-rev-1',
-        context_manifest_id: 'cm-1',
-        context_manifest_revision_id: 'cm-rev-1',
-        questions: [],
-        answers: [],
-        decisions: [],
-        approval_state: 'approved',
-        boundary_summary_id: 'boundary-1',
-        approver_actor_id: 'actor-tech',
-        approved_at: '2026-05-24T00:03:00.000Z',
-      }),
-    ).toThrow(/questions/i);
+  it.each([
+    {
+      label: 'questions',
+      patch: { questions: [] },
+      message: /questions/i,
+    },
+    {
+      label: 'answers',
+      patch: { answers: [] },
+      message: /answers/i,
+    },
+    {
+      label: 'decisions',
+      patch: { decisions: [] },
+      message: /decisions/i,
+    },
+    {
+      label: 'boundary summary',
+      patch: { boundary_summary_id: undefined },
+      message: /boundary summary/i,
+    },
+    {
+      label: 'approver',
+      patch: { approver_actor_id: undefined },
+      message: /approver/i,
+    },
+    {
+      label: 'approval timestamp',
+      patch: { approved_at: undefined },
+      message: /approval timestamp/i,
+    },
+  ])('rejects boundary approval without persisted $label', ({ patch, message }) => {
+    const approvedSession = {
+      id: 'bs-1',
+      revision_id: 'bs-rev-1',
+      source_ref: { type: 'requirement', id: 'req-1' },
+      development_plan_id: 'dp-1',
+      development_plan_item_id: 'dpi-1',
+      development_plan_item_revision_id: 'dpi-rev-1',
+      context_manifest_id: 'cm-1',
+      context_manifest_revision_id: 'cm-rev-1',
+      questions: [
+        {
+          id: 'q-1',
+          text: 'Which repo is in scope?',
+          author_id: 'codex-runtime',
+          created_at: '2026-05-24T00:00:00.000Z',
+          status: 'answered',
+        },
+      ],
+      answers: [
+        {
+          id: 'a-1',
+          question_id: 'q-1',
+          text: 'Only apps/web.',
+          actor_id: 'actor-tech',
+          created_at: '2026-05-24T00:01:00.000Z',
+        },
+      ],
+      decisions: [
+        {
+          id: 'd-1',
+          text: 'Keep backend out of scope.',
+          actor_id: 'actor-tech',
+          rationale: 'UI-only item.',
+          created_at: '2026-05-24T00:02:00.000Z',
+        },
+      ],
+      approval_state: 'approved',
+      boundary_summary_id: 'boundary-1',
+      approver_actor_id: 'actor-tech',
+      approved_at: '2026-05-24T00:03:00.000Z',
+    };
+
+    expect(() => brainstormingSessionSchema.parse({ ...approvedSession, ...patch })).toThrow(message);
   });
 
   it('accepts typed product refs and keeps work_item storage refs internal only', () => {
