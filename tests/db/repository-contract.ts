@@ -762,10 +762,12 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
 
     expect(await repository.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
     expect(await repository.getDevelopmentPlan(ids.developmentPlan)).toEqual(developmentPlanFixture());
+    expect(await repository.listDevelopmentPlans(ids.project)).toEqual([developmentPlanFixture()]);
     expect(await repository.getDevelopmentPlanItem(ids.developmentPlanItem)).toMatchObject({
       id: ids.developmentPlanItem,
       development_plan_id: ids.developmentPlan,
     });
+    expect(await repository.listDevelopmentPlanItems(ids.developmentPlan)).toEqual([developmentPlanItemFixture()]);
     expect(await repository.listDevelopmentPlanSourceLinksForSource({ type: 'bug', id: ids.workItem2 })).toEqual([
       expect.objectContaining({ development_plan_id: ids.developmentPlan, link_type: 'related' }),
     ]);
@@ -801,6 +803,7 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     });
     expect(await repository.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
     expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
+    expect(await repository.listExecutionPlanRevisions(ids.executionPlan)).toEqual([executionPlanRevisionFixture()]);
     expect(await repository.getExecution(ids.execution)).toMatchObject({
       execution_plan_revision_id: ids.executionPlanRevision,
     });
@@ -844,6 +847,8 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       await transaction.saveDevelopmentPlanItem(developmentPlanItemFixture());
       await transaction.saveBrainstormingSession(brainstormingSessionFixture());
       await transaction.saveBoundarySummary(boundarySummaryFixture());
+      await transaction.saveSpec(specFixture());
+      await transaction.saveSpecRevision(specRevisionFixture());
       await transaction.saveExecutionPlan(executionPlanFixture());
       await transaction.saveExecutionPlanRevision(executionPlanRevisionFixture());
       await transaction.saveExecution(executionFixture());
@@ -944,6 +949,7 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     expect(await repository.listDevelopmentPlanItemRevisions(ids.developmentPlanItem)).toEqual([developmentPlanRevision]);
     expect(await repository.listBoundarySummaryRevisions(ids.boundarySummary)).toEqual([boundaryRevision]);
     expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionRevision);
+    expect(await repository.listExecutionPlanRevisions(ids.executionPlan)).toEqual([executionRevision]);
   });
 }
 

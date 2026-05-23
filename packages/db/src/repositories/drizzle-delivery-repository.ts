@@ -4150,6 +4150,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.getById(execution_plan_revisions, execution_plan_revisions.id, id);
   }
 
+  async listExecutionPlanRevisions(executionPlanId: string): Promise<ExecutionPlanRevision[]> {
+    return this.listWhere<ExecutionPlanRevision>(
+      execution_plan_revisions,
+      eq(execution_plan_revisions.executionPlanId, executionPlanId),
+      execution_plan_revisions.revisionNumber,
+    );
+  }
+
   async saveExecution(execution: Execution): Promise<void> {
     await this.upsert(executions, executions.id, execution);
   }

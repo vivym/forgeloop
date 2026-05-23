@@ -2897,6 +2897,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.executionPlanRevisions.get(id));
   }
 
+  async listExecutionPlanRevisions(executionPlanId: string): Promise<ExecutionPlanRevision[]> {
+    return valuesFor(this.executionPlanRevisions)
+      .filter((revision) => revision.execution_plan_id === executionPlanId)
+      .sort((left, right) => left.revision_number - right.revision_number);
+  }
+
   async saveExecution(execution: Execution): Promise<void> {
     this.executions.set(execution.id, clone(execution));
   }

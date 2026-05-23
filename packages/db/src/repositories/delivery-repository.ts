@@ -1369,6 +1369,7 @@ export interface DeliveryRepository {
   getExecutionPlan(id: string): Promise<ExecutionPlanDocument | undefined>;
   saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void>;
   getExecutionPlanRevision(id: string): Promise<ExecutionPlanRevision | undefined>;
+  listExecutionPlanRevisions(executionPlanId: string): Promise<ExecutionPlanRevision[]>;
   saveExecution(execution: Execution): Promise<void>;
   getExecution(id: string): Promise<Execution | undefined>;
 
