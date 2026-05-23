@@ -41,6 +41,7 @@ Common environment variables:
 - `PORT`: control-plane API port.
 - `FORGELOOP_POSTGRES_PORT`: local Docker Compose host port for Postgres, default `35432`.
 - `FORGELOOP_DATABASE_URL`: Postgres connection string for durable mode, for example `postgresql://forgeloop:forgeloop@localhost:35432/forgeloop`.
+- `FORGELOOP_ATTACHMENT_STORAGE_ROOT`: local directory for attachment binaries, default `.forgeloop/attachments`.
 - `FORGELOOP_API_URL`: API URL used by scripts, default `http://localhost:3000`.
 - `VITE_FORGELOOP_API_URL`: API URL used by the web client, default `http://localhost:3000`.
 - `FORGELOOP_REPO_PATH`: local repo checkout used for dogfood local_codex runs.

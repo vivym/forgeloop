@@ -1,4 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { BadRequestException, ForbiddenException, GoneException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import {
@@ -87,8 +89,8 @@ const attachmentRefObjectTypes = new Set<ObjectRef['type']>([
 
 @Injectable()
 export class AttachmentsService {
-  private readonly binaryByStorageUri = new Map<string, Buffer>();
   private readonly renderTokens = new Map<string, RenderTokenRecord>();
+  private readonly storageRoot = process.env.FORGELOOP_ATTACHMENT_STORAGE_ROOT?.trim() || join(process.cwd(), '.forgeloop', 'attachments');
 
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
@@ -113,7 +115,7 @@ export class AttachmentsService {
     }
 
     const id = this.runtime.id('attachment');
-    const storageUri = `memory://attachments/${id}`;
+    const storageUri = `local://attachments/${id}`;
     const at = this.runtime.now();
     const attachment: Attachment = {
       id,
@@ -135,7 +137,7 @@ export class AttachmentsService {
       reference_status: 'active',
     };
 
-    this.binaryByStorageUri.set(storageUri, Buffer.from(bytes));
+    await this.writeAttachmentBinary(storageUri, bytes);
     await this.repository.saveAttachment(attachment);
     return this.toPublicRef(attachment);
   }
@@ -148,7 +150,7 @@ export class AttachmentsService {
     const attachment = await this.requireAttachment(attachmentId);
     await this.assertAttachmentRenderable(attachment);
     await this.assertObjectReadable(attachment.owner_object_type, attachment.owner_object_id);
-    this.requireAttachmentBinary(attachment);
+    await this.requireAttachmentBinary(attachment);
 
     const token = randomUUID().replace(/-/g, '');
     const expiresAt = new Date(Date.parse(this.runtime.now()) + 5 * 60 * 1000).toISOString();
@@ -182,7 +184,7 @@ export class AttachmentsService {
     await this.assertAttachmentRenderable(attachment);
     await this.assertObjectReadable(attachment.owner_object_type, attachment.owner_object_id);
 
-    const bytes = this.requireAttachmentBinary(attachment);
+    const bytes = await this.requireAttachmentBinary(attachment);
 
     response.status(200);
     response.setHeader('content-type', attachment.content_type);
@@ -327,12 +329,36 @@ export class AttachmentsService {
     }
   }
 
-  private requireAttachmentBinary(attachment: Attachment): Buffer {
-    const bytes = this.binaryByStorageUri.get(attachment.storage_uri);
-    if (bytes === undefined) {
+  private async writeAttachmentBinary(storageUri: string, bytes: Buffer): Promise<void> {
+    await mkdir(this.storageRoot, { recursive: true });
+    await writeFile(this.storagePathForUri(storageUri), bytes);
+  }
+
+  private async requireAttachmentBinary(attachment: Attachment): Promise<Buffer> {
+    try {
+      return await readFile(this.storagePathForUri(attachment.storage_uri));
+    } catch {
       throw new NotFoundException('Attachment binary was not found');
     }
-    return bytes;
+  }
+
+  private storagePathForUri(storageUri: string): string {
+    let parsed: URL;
+    try {
+      parsed = new URL(storageUri);
+    } catch {
+      throw new NotFoundException('Attachment binary was not found');
+    }
+    const attachmentId = parsed.pathname.replace(/^\//, '');
+    if (
+      parsed.protocol !== 'local:' ||
+      parsed.hostname !== 'attachments' ||
+      attachmentId.length === 0 ||
+      !/^[a-zA-Z0-9_-]+$/.test(attachmentId)
+    ) {
+      throw new NotFoundException('Attachment binary was not found');
+    }
+    return join(this.storageRoot, attachmentId);
   }
 
   private async assertObjectReadable(objectType: string, objectId: string): Promise<void> {

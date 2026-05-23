@@ -47,6 +47,55 @@ describe('Task authority API', () => {
     expect(JSON.stringify(response.body)).not.toContain('work_item_kind');
   });
 
+  it('rejects parent refs from a different project', async () => {
+    await seedApprovedParent(repository);
+    await repository.saveProject(projectFixture({ id: 'project-2', name: 'Other project' }));
+    await repository.saveWorkItem(requirementFixture({ id: 'req-2', project_id: 'project-2' }));
+
+    await request(app.getHttpServer())
+      .post('/tasks')
+      .send({
+        project_id: 'project-1',
+        title: 'Implement scoped checkout guard',
+        execution_brief: 'Reject cross-project task parents.',
+        acceptance_checklist: ['Cross-project parent refs are rejected'],
+        parent_ref: { type: 'requirement', id: 'req-2' },
+        controlling_spec_revision_id: 'spec-rev-1',
+        controlling_plan_revision_id: 'plan-rev-1',
+      })
+      .expect(400);
+  });
+
+  it('rejects controlling revisions from a different project', async () => {
+    await seedApprovedParent(repository);
+    await seedApprovedParent(repository, {
+      project: projectFixture({ id: 'project-2', name: 'Other project' }),
+      projectRepo: await projectRepoFixture({ id: 'project-repo-2', project_id: 'project-2', repo_id: 'repo-2' }),
+      workItem: requirementFixture({ id: 'req-2', project_id: 'project-2' }),
+      spec: specFixture({ id: 'spec-2', work_item_id: 'req-2', current_revision_id: 'spec-rev-2', approved_revision_id: 'spec-rev-2' }),
+      specRevision: specRevisionFixture({ id: 'spec-rev-2', spec_id: 'spec-2', work_item_id: 'req-2' }),
+      plan: planFixture({ id: 'plan-2', work_item_id: 'req-2', current_revision_id: 'plan-rev-2', approved_revision_id: 'plan-rev-2' }),
+      planRevision: planRevisionFixture({
+        id: 'plan-rev-2',
+        plan_id: 'plan-2',
+        work_item_id: 'req-2',
+        based_on_spec_revision_id: 'spec-rev-2',
+      }),
+    });
+
+    await request(app.getHttpServer())
+      .post('/tasks')
+      .send({
+        project_id: 'project-1',
+        title: 'Implement scoped authority guard',
+        execution_brief: 'Reject cross-project revision authority.',
+        acceptance_checklist: ['Cross-project revisions are rejected'],
+        controlling_spec_revision_id: 'spec-rev-2',
+        controlling_plan_revision_id: 'plan-rev-2',
+      })
+      .expect(400);
+  });
+
   it('marks independent Tasks stale when their Spec authority is not current approved', async () => {
     await seedApprovedParent(repository);
     await repository.saveSpecRevision(specRevisionFixture({ id: 'spec-rev-old', revision_number: 0 }));
@@ -127,14 +176,25 @@ describe('Task authority API', () => {
   });
 });
 
-async function seedApprovedParent(repository: InMemoryDeliveryRepository): Promise<void> {
-  await repository.saveProject(projectFixture());
-  await repository.saveProjectRepo(await projectRepoFixture());
-  await repository.saveWorkItem(requirementFixture());
-  await repository.saveSpec(specFixture());
-  await repository.saveSpecRevision(specRevisionFixture());
-  await repository.savePlan(planFixture());
-  await repository.savePlanRevision(planRevisionFixture());
+async function seedApprovedParent(
+  repository: InMemoryDeliveryRepository,
+  overrides: {
+    project?: Project;
+    projectRepo?: ProjectRepo;
+    workItem?: WorkItem;
+    spec?: Spec;
+    specRevision?: SpecRevision;
+    plan?: Plan;
+    planRevision?: PlanRevision;
+  } = {},
+): Promise<void> {
+  await repository.saveProject(overrides.project ?? projectFixture());
+  await repository.saveProjectRepo(overrides.projectRepo ?? (await projectRepoFixture()));
+  await repository.saveWorkItem(overrides.workItem ?? requirementFixture());
+  await repository.saveSpec(overrides.spec ?? specFixture());
+  await repository.saveSpecRevision(overrides.specRevision ?? specRevisionFixture());
+  await repository.savePlan(overrides.plan ?? planFixture());
+  await repository.savePlanRevision(overrides.planRevision ?? planRevisionFixture());
 }
 
 async function seedTask(repository: InMemoryDeliveryRepository, overrides: Partial<Task> = {}): Promise<Task> {
@@ -177,7 +237,7 @@ async function seedManualExceptionTask(repository: InMemoryDeliveryRepository, i
   });
 }
 
-function projectFixture(): Project {
+function projectFixture(overrides: Partial<Project> = {}): Project {
   return {
     id: 'project-1',
     name: 'Forgeloop',
@@ -185,10 +245,11 @@ function projectFixture(): Project {
     owner_actor_id: 'actor-product',
     created_at: now,
     updated_at: now,
+    ...overrides,
   };
 }
 
-async function projectRepoFixture(): Promise<ProjectRepo> {
+async function projectRepoFixture(overrides: Partial<ProjectRepo> = {}): Promise<ProjectRepo> {
   return {
     id: 'project-repo-1',
     project_id: 'project-1',
@@ -200,10 +261,11 @@ async function projectRepoFixture(): Promise<ProjectRepo> {
     base_commit_sha: 'abc123',
     created_at: now,
     updated_at: now,
+    ...overrides,
   };
 }
 
-function requirementFixture(): WorkItem {
+function requirementFixture(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
     id: 'req-1',
     project_id: 'project-1',
@@ -232,10 +294,11 @@ function requirementFixture(): WorkItem {
     current_plan_revision_id: 'plan-rev-1',
     created_at: now,
     updated_at: now,
+    ...overrides,
   };
 }
 
-function specFixture(): Spec {
+function specFixture(overrides: Partial<Spec> = {}): Spec {
   return {
     id: 'spec-1',
     work_item_id: 'req-1',
@@ -250,6 +313,7 @@ function specFixture(): Spec {
     approved_by_actor_id: 'actor-reviewer',
     created_at: now,
     updated_at: now,
+    ...overrides,
   };
 }
 
@@ -275,7 +339,7 @@ function specRevisionFixture(overrides: Partial<SpecRevision> = {}): SpecRevisio
   };
 }
 
-function planFixture(): Plan {
+function planFixture(overrides: Partial<Plan> = {}): Plan {
   return {
     id: 'plan-1',
     work_item_id: 'req-1',
@@ -290,10 +354,11 @@ function planFixture(): Plan {
     approved_by_actor_id: 'actor-reviewer',
     created_at: now,
     updated_at: now,
+    ...overrides,
   };
 }
 
-function planRevisionFixture(): PlanRevision {
+function planRevisionFixture(overrides: Partial<PlanRevision> = {}): PlanRevision {
   return {
     id: 'plan-rev-1',
     plan_id: 'plan-1',
@@ -311,5 +376,6 @@ function planRevisionFixture(): PlanRevision {
     artifact_refs: [],
     author_actor_id: 'actor-product',
     created_at: now,
+    ...overrides,
   };
 }
