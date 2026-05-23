@@ -50,18 +50,6 @@ describe('automation idempotency helpers', () => {
         daemonInternalLocalPath: '/repo-1',
       },
     ],
-    workItemsRequiringSpec: [],
-    workItemsRequiringPlan: [
-      {
-        targetObjectType: 'work_item',
-        targetObjectId: 'work-item-1',
-        targetRevisionId: 'spec-revision-1',
-        targetStatus: 'approved',
-        projectId: 'project-1',
-        repoId: 'repo-1',
-        automationScope: repoScope,
-      },
-    ],
     planRevisionsRequiringPackages: [
       {
         targetObjectType: 'plan_revision',
@@ -79,21 +67,10 @@ describe('automation idempotency helpers', () => {
   });
 
   const generationPlanning = (overrides: {
-    planDraftPromptVersion?: string;
     packageDraftsPromptVersion?: string;
   } = {}) => ({
     mode: 'fake',
     tasks: {
-      spec_draft: {
-        enabled: false,
-        promptVersion: 'SPEC-draft.fake.v1',
-        outputSchemaVersion: 'spec_draft.v1',
-      },
-      plan_draft: {
-        enabled: true,
-        promptVersion: overrides.planDraftPromptVersion ?? 'PLAN-draft.fake.v1',
-        outputSchemaVersion: 'plan_draft.v1',
-      },
       package_drafts: {
         enabled: true,
         promptVersion: overrides.packageDraftsPromptVersion ?? 'package-drafts.fake.v1',
@@ -162,32 +139,32 @@ describe('automation idempotency helpers', () => {
     );
   });
 
-  it('includes Spec draft generation mode and schema identity', () => {
-    const specDraftBase = {
+  it('includes package draft generation mode and schema identity', () => {
+    const packageDraftBase = {
       actionType: 'ensure_package_drafts',
-      targetObjectType: 'work_item',
-      targetObjectId: 'work-item-1',
+      targetObjectType: 'plan_revision',
+      targetObjectId: 'plan-revision-1',
       automationScope: 'repo:project-1:repo-1',
       automationSettingsVersion: 3,
       capabilityFingerprint: 'capability-1',
       preconditionFingerprint: 'precondition-1',
       generationMode: 'fake',
-      promptVersion: 'SPEC-draft.fake.v1',
-      outputSchemaVersion: 'spec_draft.v1',
+      promptVersion: 'package-drafts.fake.v1',
+      outputSchemaVersion: 'package_drafts.v1',
     } satisfies MutatingActionIdentity;
 
-    expect(mutatingActionIdempotencyKey(specDraftBase)).not.toBe(
-      mutatingActionIdempotencyKey({ ...specDraftBase, generationMode: 'codex' }),
+    expect(mutatingActionIdempotencyKey(packageDraftBase)).not.toBe(
+      mutatingActionIdempotencyKey({ ...packageDraftBase, generationMode: 'codex' }),
     );
-    expect(mutatingActionIdempotencyKey(specDraftBase)).not.toBe(
-      mutatingActionIdempotencyKey({ ...specDraftBase, promptVersion: 'SPEC-draft.fake.v2' }),
+    expect(mutatingActionIdempotencyKey(packageDraftBase)).not.toBe(
+      mutatingActionIdempotencyKey({ ...packageDraftBase, promptVersion: 'package-drafts.fake.v2' }),
     );
-    expect(mutatingActionIdempotencyKey(specDraftBase)).not.toBe(
-      mutatingActionIdempotencyKey({ ...specDraftBase, outputSchemaVersion: 'spec_draft.v2' }),
+    expect(mutatingActionIdempotencyKey(packageDraftBase)).not.toBe(
+      mutatingActionIdempotencyKey({ ...packageDraftBase, outputSchemaVersion: 'package_drafts.v2' }),
     );
   });
 
-  it('includes Plan and package draft generation prompt identity in planned action keys', () => {
+  it('includes package draft generation prompt identity in planned action keys', () => {
     const baseline = planNextActions(runtimeSnapshot(), { generation: generationPlanning() });
     const changedSchema = planNextActions(runtimeSnapshot(), {
       generation: generationPlanning({
@@ -227,8 +204,6 @@ describe('automation idempotency helpers', () => {
         generatedAt: '2026-05-15T00:00:00.000Z',
         projects: [],
         repos: [],
-        workItemsRequiringSpec: [],
-        workItemsRequiringPlan: [],
         planRevisionsRequiringPackages: [],
         recentActionRuns: [],
         runEnqueueDisabledReason: 'run_enqueue_disabled_by_scope',

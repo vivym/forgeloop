@@ -41,16 +41,6 @@ export interface MutatingActionIdentity {
 export interface AutomationGenerationPlanningConfig {
   mode: 'disabled' | 'fake' | 'app_server';
   tasks: {
-    spec_draft: {
-      enabled: boolean;
-      promptVersion: string;
-      outputSchemaVersion: 'spec_draft.v1';
-    };
-    plan_draft: {
-      enabled: boolean;
-      promptVersion: string;
-      outputSchemaVersion: 'plan_draft.v1';
-    };
     package_drafts: {
       enabled: boolean;
       promptVersion: string;
@@ -77,20 +67,6 @@ export type WorkflowPolicyDigestStatus =
       publicSummary?: string;
     };
 
-export interface GeneratedSpecDraftV1 {
-  schema_version: 'spec_draft.v1';
-  summary: string;
-  content: string;
-  background: string;
-  goals: string[];
-  scope_in: string[];
-  scope_out: string[];
-  acceptance_criteria: string[];
-  risk_notes: string[];
-  test_strategy_summary: string;
-  structured_document?: Record<string, unknown>;
-}
-
 export interface AutomationGenerationRepoContextV1 {
   project_id: string;
   repo_id: string;
@@ -102,25 +78,10 @@ export interface AutomationGenerationRepoContextV1 {
   workspace_summary?: string;
 }
 
-export interface AutomationGenerationWorkItemContextV1 {
-  context_version: 'generation_context.work_item.v1';
+export interface AutomationGenerationPackageContextV1 {
+  context_version: 'generation_context.package.v1';
   action_run_id: string;
-  work_item: {
-    id: string;
-    project_id: string;
-    title: string;
-    goal: string;
-    success_criteria: string[];
-    risk?: string;
-    priority?: string;
-    kind?: string;
-  };
-  repos: AutomationGenerationRepoContextV1[];
-}
-
-export interface AutomationGenerationPlanContextV1 {
-  context_version: 'generation_context.plan.v1';
-  action_run_id: string;
+  generation_key: string;
   work_item: {
     id: string;
     project_id: string;
@@ -145,15 +106,6 @@ export interface AutomationGenerationPlanContextV1 {
     test_strategy_summary: string;
     structured_document?: Record<string, unknown>;
   };
-  repos: AutomationGenerationRepoContextV1[];
-}
-
-export interface AutomationGenerationPackageContextV1 {
-  context_version: 'generation_context.package.v1';
-  action_run_id: string;
-  generation_key: string;
-  work_item: AutomationGenerationPlanContextV1['work_item'];
-  spec_revision: AutomationGenerationPlanContextV1['spec_revision'];
   plan_revision: {
     id: string;
     plan_id: string;
@@ -260,8 +212,6 @@ export interface RuntimeSnapshot {
   generatedAt: string;
   projects: RuntimeSnapshotProject[];
   repos: RuntimeSnapshotRepo[];
-  workItemsRequiringSpec: RuntimeSnapshotTarget[];
-  workItemsRequiringPlan: RuntimeSnapshotTarget[];
   planRevisionsRequiringPackages: RuntimeSnapshotTarget[];
   runEnqueueDisabledPackages?: RuntimeSnapshotTarget[];
   activeHolds?: RuntimeSnapshotManualHold[];
@@ -412,14 +362,6 @@ export interface AutomationExecutorClient {
   gatePendingAction(actionRunId: string, input: GatePendingActionInput): Promise<AutomationActionResponse>;
   blockAction(actionRunId: string, input: BlockActionInput): Promise<AutomationActionResponse>;
   failAction(actionRunId: string, input: FailActionInput): Promise<AutomationActionResponse>;
-  specDraftGenerationContext(
-    workItemId: string,
-    input: { actionRunId: string; claimToken: string },
-  ): Promise<AutomationGenerationWorkItemContextV1>;
-  planDraftGenerationContext(
-    workItemId: string,
-    input: { specRevisionId: string; actionRunId: string; claimToken: string },
-  ): Promise<AutomationGenerationPlanContextV1>;
   packageDraftsGenerationContext(
     planRevisionId: string,
     input: { generationKey: string; actionRunId: string; claimToken: string },

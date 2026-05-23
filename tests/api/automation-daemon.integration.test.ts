@@ -121,8 +121,6 @@ const fakeGenerationPlanning = (
 ): AutomationGenerationPlanningConfig => ({
   mode: 'fake',
   tasks: {
-    spec_draft: { enabled: true, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-    plan_draft: { enabled: true, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
     package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
     ...overrides,
   },
@@ -134,7 +132,7 @@ const createDaemon = (
   options: Partial<
     Pick<
       ConstructorParameters<typeof AutomationDaemon>[0],
-      'generationPlanning' | 'generationRuntime' | 'specDraftGenerationMode'
+      'generationPlanning' | 'generationRuntime'
     >
   > = {},
 ): AutomationDaemon =>
@@ -363,8 +361,6 @@ describe('HTTP automation daemon integration', () => {
       planStatus: 'approved',
     });
     const generationPlanning = fakeGenerationPlanning({
-      spec_draft: { enabled: false, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-      plan_draft: { enabled: false, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
       package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
     });
     const daemon = createDaemon(app, createAutomationClient(app), { generationPlanning });

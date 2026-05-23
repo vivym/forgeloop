@@ -250,8 +250,6 @@ const publicSafeErrorCodes = new Set([
   'generated_package_dependency_invalid',
   'generated_package_manifest_invalid',
   'generated_package_policy_invalid',
-  'generated_spec_draft_invalid',
-  'generated_plan_draft_invalid',
   'generated_payload_idempotency_drift',
 ]);
 
@@ -300,11 +298,9 @@ const isBlockedByGate = (code: string | undefined, error?: unknown): boolean =>
   code === 'codex_runtime_job_expired' ||
   code === 'codex_docker_runtime_evidence_unsafe' ||
   code === 'codex_runtime_profile_invalid' ||
-  code === 'generated_spec_draft_invalid' ||
   code === 'generated_package_dependency_invalid' ||
   code === 'generated_package_manifest_invalid' ||
   code === 'generated_package_policy_invalid' ||
-  (code === 'generated_plan_draft_invalid' && error instanceof AutomationHttpError && error.status < 500) ||
   code === 'generated_payload_idempotency_drift' ||
   code === 'manual_path_hold_active' ||
   code === 'automation_hold_active' ||
@@ -350,8 +346,6 @@ const resultJsonForError = (error: unknown): Record<string, unknown> => {
     code === 'generated_package_dependency_invalid' ||
     code === 'generated_package_manifest_invalid' ||
     code === 'generated_package_policy_invalid' ||
-    code === 'generated_spec_draft_invalid' ||
-    code === 'generated_plan_draft_invalid' ||
     code === 'generated_payload_idempotency_drift'
   ) {
     return { status: 422, code };

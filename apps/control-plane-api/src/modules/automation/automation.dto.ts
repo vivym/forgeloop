@@ -175,8 +175,6 @@ const automationPreconditionSchema = z
     active_hold_fingerprint: nonBlankString.optional(),
     required_capability: z.enum([
       'canProjectRuntimeState',
-      'canGenerateSpecDraft',
-      'canGeneratePlanDraft',
       'canGeneratePackageDrafts',
       'canEnqueueRuns',
     ]),
@@ -359,8 +357,6 @@ export interface AutomationRuntimeSnapshotDto {
   generated_at: string;
   projects: AutomationRuntimeSnapshotProjectDto[];
   repos: AutomationRuntimeSnapshotRepoDto[];
-  work_items_requiring_spec: AutomationRuntimeSnapshotTargetDto[];
-  work_items_requiring_plan: AutomationRuntimeSnapshotTargetDto[];
   plan_revisions_requiring_packages: AutomationRuntimeSnapshotTargetDto[];
   run_enqueue_disabled_packages: AutomationRuntimeSnapshotTargetDto[];
   active_holds: AutomationRuntimeSnapshotManualHoldDto[];
@@ -534,8 +530,6 @@ export const toRuntimeSnapshotDto = (input: {
   generated_at: input.generatedAt,
   projects: input.data.projects.map(toRuntimeSnapshotProjectDto),
   repos: input.data.repos.map((repo) => toRuntimeSnapshotRepoDto(repo, input.policyProjectionsByRepoScope.get(repo.automation_scope))),
-  work_items_requiring_spec: input.data.work_items_requiring_spec.map(toRuntimeSnapshotTargetDto),
-  work_items_requiring_plan: input.data.work_items_requiring_plan.map(toRuntimeSnapshotTargetDto),
   plan_revisions_requiring_packages: input.data.plan_revisions_requiring_packages.map(toRuntimeSnapshotTargetDto),
   run_enqueue_disabled_packages: input.data.run_enqueue_disabled_packages.map(toRuntimeSnapshotTargetDto),
   active_holds: input.data.active_holds.map(toRuntimeSnapshotManualHoldDto),

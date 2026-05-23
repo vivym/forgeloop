@@ -48,8 +48,6 @@ const baseSnapshot = (overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot
       daemonInternalLocalPath: '/workspace/repo-1',
     },
   ],
-  workItemsRequiringSpec: [],
-  workItemsRequiringPlan: [],
   planRevisionsRequiringPackages: [],
   runEnqueueDisabledPackages: [],
   activeHolds: [],
@@ -167,14 +165,6 @@ class FakeDaemonClient implements AutomationDaemonClient {
     return { status: 'created' };
   }
 
-  async specDraftGenerationContext(): Promise<never> {
-    throw new Error('unsupported_work_item_draft_context');
-  }
-
-  async planDraftGenerationContext(): Promise<never> {
-    throw new Error('unsupported_work_item_draft_context');
-  }
-
   async packageDraftsGenerationContext(
     planRevisionId: string,
     input: { generationKey: string; actionRunId: string; claimToken: string },
@@ -268,8 +258,6 @@ const daemonOptions = (client: AutomationDaemonClient) => ({
 const generationPlanning = {
   mode: 'fake',
   tasks: {
-    spec_draft: { enabled: false, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
-    plan_draft: { enabled: false, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
     package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
   },
 } as const;
@@ -343,6 +331,7 @@ describe('automation daemon loop', () => {
     const config = loadAutomationDaemonConfig({
       ...validEnv(),
       FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+      FORGELOOP_CODEX_GENERATION_PACKAGE_DRAFTS_ENABLED: 'true',
       FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'unix:/tmp/forgeloop-codex.sock',
       FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
     });
@@ -552,8 +541,6 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: false, promptVersion: 'SPEC-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: true, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -1238,8 +1225,6 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: false, promptVersion: 'SPEC-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: true, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -1295,8 +1280,6 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: false, promptVersion: 'SPEC-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: true, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -1428,8 +1411,6 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: false, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -1476,8 +1457,6 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: false, promptVersion: 'SPEC-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'PLAN-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
           package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
@@ -1492,29 +1471,6 @@ describe('automation daemon loop', () => {
     });
     expect(client.calls.map((call) => call.method)).not.toContain('packageDraftsGenerationContext');
   });
-
-  it.each(['fake', 'disabled'] as const)(
-    'keeps legacy specDraftGenerationMode=%s scoped to Package draft planning only',
-    async (specDraftGenerationMode) => {
-      const client = new FakeDaemonClient();
-      client.snapshot = baseSnapshot({
-        planRevisionsRequiringPackages: [packageTarget()],
-        planRevisionsRequiringPackages: [packageTarget()],
-      });
-      client.actionToClaim = null;
-      const daemon = new AutomationDaemon({
-        ...daemonOptions(client),
-        specDraftGenerationMode,
-      });
-
-      const result = await daemon.runOnce();
-
-      expect(result).toMatchObject({ plannedActionCount: 1, executed: { status: 'skipped' } });
-      expect(
-        client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
-      ).toEqual(['project_runtime_snapshot']);
-    },
-  );
 
   it('plans and executes Package draft actions when fake generation is enabled', async () => {
     const client = new FakeDaemonClient();

@@ -320,222 +320,23 @@ describe('internal automation runtime snapshot', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('lists work items missing Spec drafts', async () => {
+  it('omits retired WorkItem Spec and Plan draft target arrays', async () => {
     const { app, repository } = await bootAutomationApp();
-    await seedProjectRepo(repository);
-    const {
-      current_spec_id: _currentSpecId,
-      current_spec_revision_id: _currentSpecRevisionId,
-      ...specNeededWorkItem
-    } = workItem({
-      id: 'work-item-needs-spec',
-      title: 'Create first Spec',
-      goal: 'Draft the first Spec from the WorkItem.',
-      success_criteria: ['Spec draft exists.'],
-      phase: 'triage',
-    });
-    await repository.saveWorkItem(specNeededWorkItem);
+    await seedApprovedPlan(repository);
 
     await signedAutomationGet(app)
       .expect(200)
       .expect(({ body }) => {
-        expect(body.work_items_requiring_spec).toContainEqual(
-          expect.objectContaining({
-            target_object_type: 'work_item',
-            target_object_id: specNeededWorkItem.id,
-            target_status: specNeededWorkItem.phase,
-            project_id: specNeededWorkItem.project_id,
-            repo_id: 'repo-1',
-          }),
-        );
-      });
-  });
-
-  it('lists approved spec revisions missing plan drafts', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository);
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).toContainEqual(
-          expect.objectContaining({
-            target_object_type: 'work_item',
-            target_object_id: 'work-item-1',
-            target_revision_id: 'spec-revision-1',
-            target_status: 'approved',
-            project_id: 'project-1',
-            repo_id: 'repo-1',
-            automation_scope: 'repo:project-1:repo-1',
-          }),
-        );
-      });
-  });
-
-  it('lists legacy approved specs without WorkItem revision pointers for plan drafts', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository, { item: { current_spec_revision_id: undefined } });
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).toContainEqual(
-          expect.objectContaining({
-            target_object_type: 'work_item',
-            target_object_id: 'work-item-1',
-            target_revision_id: 'spec-revision-1',
-            target_status: 'approved',
-          }),
-        );
-      });
-  });
-
-  it('does not list approved specs without approved current revisions for plan drafts', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository);
-    await repository.saveSpec(spec({ approved_revision_id: undefined, approved_at: undefined, approved_by_actor_id: undefined }));
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
-        );
-      });
-  });
-
-  it('does not target Plan generation when Spec current revision differs from approved revision', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository, {
-      item: {
-        current_spec_revision_id: 'spec-revision-2',
-      },
-    });
-    await repository.saveSpec(
-      spec({
-        current_revision_id: 'spec-revision-2',
-        approved_revision_id: 'spec-revision-1',
-      }),
-    );
-    await repository.saveSpecRevision(specRevision({ id: 'spec-revision-2', revision_number: 2, summary: 'Unapproved draft spec' }));
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
-        );
-      });
-  });
-
-  it('does not target Plan generation when WorkItem current Spec revision differs from approved revision', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository, {
-      item: {
-        current_spec_revision_id: 'spec-revision-2',
-      },
-    });
-    await repository.saveSpecRevision(specRevision({ id: 'spec-revision-2', revision_number: 2, summary: 'Unapproved draft spec' }));
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
-        );
-      });
-  });
-
-  it('does not target Plan generation when current Spec belongs to a different WorkItem', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository);
-    await repository.saveSpec(spec({ work_item_id: 'work-item-other' }));
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
-        );
-      });
-  });
-
-  it('does not target Plan generation when approved Spec revision belongs to a different Spec', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository);
-    await repository.saveSpecRevision(specRevision({ spec_id: 'spec-other' }));
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
-        );
-      });
-  });
-
-  it('does not target Plan generation when approved Spec revision belongs to a different WorkItem', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository);
-    await repository.saveSpecRevision(specRevision({ work_item_id: 'work-item-other' }));
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ target_object_id: 'work-item-1' })]),
-        );
-      });
-  });
-
-  it('preserves project scope for approved specs when multiple active repos can draft plans', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository);
-    await addDraftOnlyRepo(repository, { repo_id: 'repo-2' });
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).toEqual([
-          expect.objectContaining({
-            target_object_type: 'work_item',
-            target_object_id: 'work-item-1',
-            target_revision_id: 'spec-revision-1',
-            target_status: 'approved',
-            project_id: 'project-1',
-            eligible_repo_ids: ['repo-1', 'repo-2'],
-            automation_scope: 'project:project-1',
-          }),
+        expect(Object.keys(body).sort()).toEqual([
+          'active_holds',
+          'generated_at',
+          'plan_revisions_requiring_packages',
+          'projects',
+          'recent_action_runs',
+          'repos',
+          'run_enqueue_disabled_packages',
+          'run_enqueue_disabled_reason',
         ]);
-        expect(body.work_items_requiring_plan[0]).not.toHaveProperty('repo_id');
-      });
-  });
-
-  it('keeps duplicate active project repo rows as a single logical repo for plan draft targets', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository);
-    await repository.saveProjectRepo(
-      projectRepo({
-        id: 'project-repo-duplicate-row',
-        name: 'forgeloop duplicate row',
-        local_path: '/workspace/forgeloop-duplicate',
-      }),
-    );
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).toEqual([
-          expect.objectContaining({
-            target_object_type: 'work_item',
-            target_object_id: 'work-item-1',
-            target_revision_id: 'spec-revision-1',
-            project_id: 'project-1',
-            repo_id: 'repo-1',
-            automation_scope: 'repo:project-1:repo-1',
-          }),
-        ]);
-        expect(body.work_items_requiring_plan[0]).not.toHaveProperty('eligible_repo_ids');
       });
   });
 
@@ -775,41 +576,6 @@ describe('internal automation runtime snapshot', () => {
           }),
         ]);
         expect(body.plan_revisions_requiring_packages[0]).not.toHaveProperty('eligible_repo_ids');
-      });
-  });
-
-  it('suppresses mutating eligibility for active manual holds and terminal work items', async () => {
-    const { app, repository } = await bootAutomationApp();
-    await seedApprovedSpec(repository);
-    await repository.saveWorkItem(
-      workItem({
-        id: 'work-item-done',
-        current_spec_id: 'spec-done',
-        current_spec_revision_id: 'spec-revision-done',
-        phase: 'done',
-        resolution: 'completed',
-      }),
-    );
-    await repository.saveSpec(spec({ id: 'spec-done', work_item_id: 'work-item-done', current_revision_id: 'spec-revision-done' }));
-    await repository.saveSpecRevision(specRevision({ id: 'spec-revision-done', spec_id: 'spec-done', work_item_id: 'work-item-done' }));
-    await repository.requestManualPathHold({
-      id: 'hold-work-item-1',
-      object_type: 'work_item',
-      object_id: 'work-item-1',
-      scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: 'work-item-1' }),
-      reason_code: 'needs_human_triage',
-      reason: 'Human triage required.',
-      evidence_refs: [],
-      requested_by: 'daemon-1',
-      requested_at: now,
-      idempotency_key: 'hold-work-item-1-idempotency',
-    });
-
-    await signedAutomationGet(app)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.work_items_requiring_plan).toEqual([]);
-        expect(JSON.stringify(body)).not.toContain('work-item-done');
       });
   });
 

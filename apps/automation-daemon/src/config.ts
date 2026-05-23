@@ -260,20 +260,9 @@ const generationDriverEnv = (env: EnvLike): AutomationGenerationPlanningConfig['
 
 const generationPlanningEnv = (env: EnvLike): AutomationGenerationPlanningConfig => {
   const mode = generationDriverEnv(env);
-  const defaultsEnabled = mode !== 'disabled';
   return {
     mode,
     tasks: {
-      spec_draft: {
-        enabled: booleanEnv(env, 'FORGELOOP_CODEX_GENERATION_SPEC_DRAFT_ENABLED', defaultsEnabled),
-        promptVersion: 'spec-draft.fake.v1',
-        outputSchemaVersion: 'spec_draft.v1',
-      },
-      plan_draft: {
-        enabled: booleanEnv(env, 'FORGELOOP_CODEX_GENERATION_PLAN_DRAFT_ENABLED', defaultsEnabled),
-        promptVersion: 'plan-draft.fake.v1',
-        outputSchemaVersion: 'plan_draft.v1',
-      },
       package_drafts: {
         enabled: booleanEnv(env, 'FORGELOOP_CODEX_GENERATION_PACKAGE_DRAFTS_ENABLED', false),
         promptVersion: 'package-drafts.fake.v1',
@@ -286,8 +275,6 @@ const generationPlanningEnv = (env: EnvLike): AutomationGenerationPlanningConfig
 const generationPlanningExplicitEnv = (env: EnvLike): boolean =>
   env.FORGELOOP_CODEX_AUTOMATION_GENERATION !== undefined ||
   env.FORGELOOP_CODEX_GENERATION_DRIVER !== undefined ||
-  env.FORGELOOP_CODEX_GENERATION_SPEC_DRAFT_ENABLED !== undefined ||
-  env.FORGELOOP_CODEX_GENERATION_PLAN_DRAFT_ENABLED !== undefined ||
   env.FORGELOOP_CODEX_GENERATION_PACKAGE_DRAFTS_ENABLED !== undefined;
 
 const assertAppServerRuntimeConfig = (

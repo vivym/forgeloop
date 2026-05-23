@@ -32,34 +32,11 @@ const baseSnapshot = (overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot
       daemonInternalLocalPath: '/private/repo-1',
     },
   ],
-  workItemsRequiringSpec: [],
-  workItemsRequiringPlan: [],
   planRevisionsRequiringPackages: [],
   runEnqueueDisabledPackages: [],
   activeHolds: [],
   recentActionRuns: [],
   runEnqueueDisabledReason: 'run_enqueue_disabled_by_scope',
-  ...overrides,
-});
-
-const specWorkItemTarget = (overrides: Partial<RuntimeSnapshotTarget> = {}): RuntimeSnapshotTarget => ({
-  targetObjectType: 'work_item',
-  targetObjectId: 'work-item-needs-spec',
-  targetStatus: 'triage',
-  projectId: 'project-1',
-  repoId: 'repo-1',
-  automationScope: repoScope,
-  ...overrides,
-});
-
-const workItemTarget = (overrides: Partial<RuntimeSnapshotTarget> = {}): RuntimeSnapshotTarget => ({
-  targetObjectType: 'work_item',
-  targetObjectId: 'work-item-1',
-  targetRevisionId: 'spec-revision-1',
-  targetStatus: 'approved',
-  projectId: 'project-1',
-  repoId: 'repo-1',
-  automationScope: repoScope,
   ...overrides,
 });
 
@@ -77,25 +54,11 @@ const packageTarget = (overrides: Partial<RuntimeSnapshotTarget> = {}): RuntimeS
 
 const generationPlanning = (overrides: {
   mode?: 'disabled' | 'fake' | 'app_server';
-  specDraftEnabled?: boolean;
-  planDraftEnabled?: boolean;
   packageDraftsEnabled?: boolean;
-  specDraftPromptVersion?: string;
-  planDraftPromptVersion?: string;
   packageDraftsPromptVersion?: string;
 } = {}) => ({
   mode: overrides.mode ?? 'fake',
   tasks: {
-    spec_draft: {
-      enabled: overrides.specDraftEnabled ?? true,
-      promptVersion: overrides.specDraftPromptVersion ?? 'spec-draft.fake.v1',
-      outputSchemaVersion: 'spec_draft.v1',
-    },
-    plan_draft: {
-      enabled: overrides.planDraftEnabled ?? true,
-      promptVersion: overrides.planDraftPromptVersion ?? 'plan-draft.fake.v1',
-      outputSchemaVersion: 'plan_draft.v1',
-    },
     package_drafts: {
       enabled: overrides.packageDraftsEnabled ?? true,
       promptVersion: overrides.packageDraftsPromptVersion ?? 'package-drafts.fake.v1',
@@ -104,59 +67,41 @@ const generationPlanning = (overrides: {
   },
 } as const);
 
-const retiredDraftActionTypes = [
-  ['ensure', 'spec', 'draft'].join('_'),
-  ['ensure', 'plan', 'draft'].join('_'),
-] as string[];
-
 describe('automation planner', () => {
   it('suppresses generation actions by default', () => {
     const actions = planNextActions(
       baseSnapshot({
-        workItemsRequiringSpec: [specWorkItemTarget()],
-        workItemsRequiringPlan: [workItemTarget()],
         planRevisionsRequiringPackages: [packageTarget()],
       }),
     );
 
-    for (const actionType of retiredDraftActionTypes) {
-      expect(actions.map((action) => action.actionType)).not.toContain(actionType);
-    }
     expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
   });
 
   it('does not allow external mutation of the default generation planning config', () => {
-    const resetPlanDraftEnabled = defaultGenerationPlanningConfig.tasks.plan_draft.enabled;
+    const resetPackageDraftsEnabled = defaultGenerationPlanningConfig.tasks.package_drafts.enabled;
     try {
       expect(() => {
-        (defaultGenerationPlanningConfig.tasks.plan_draft as { enabled: boolean }).enabled = true;
+        (defaultGenerationPlanningConfig.tasks.package_drafts as { enabled: boolean }).enabled = true;
       }).toThrow();
     } finally {
-      if (!Object.isFrozen(defaultGenerationPlanningConfig.tasks.plan_draft)) {
-        (defaultGenerationPlanningConfig.tasks.plan_draft as { enabled: boolean }).enabled = resetPlanDraftEnabled;
+      if (!Object.isFrozen(defaultGenerationPlanningConfig.tasks.package_drafts)) {
+        (defaultGenerationPlanningConfig.tasks.package_drafts as { enabled: boolean }).enabled = resetPackageDraftsEnabled;
       }
     }
 
-    const actions = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }));
-
-    for (const actionType of retiredDraftActionTypes) {
-      expect(actions.map((action) => action.actionType)).not.toContain(actionType);
-    }
+    const actions = planNextActions(baseSnapshot({ planRevisionsRequiringPackages: [packageTarget()] }));
+    expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
   });
 
   it('suppresses all generation actions when generation mode is disabled', () => {
     const actions = planNextActions(
       baseSnapshot({
-        workItemsRequiringSpec: [specWorkItemTarget()],
-        workItemsRequiringPlan: [workItemTarget()],
         planRevisionsRequiringPackages: [packageTarget()],
       }),
       { generation: generationPlanning({ mode: 'disabled' }) },
     );
 
-    for (const actionType of retiredDraftActionTypes) {
-      expect(actions.map((action) => action.actionType)).not.toContain(actionType);
-    }
     expect(actions.map((action) => action.actionType)).not.toContain('ensure_package_drafts');
   });
 
@@ -226,62 +171,15 @@ describe('automation planner', () => {
     ]);
   });
 
-  it('emits package drafts but no direct Work Item draft actions when generation is enabled', () => {
+  it('emits package drafts when generation is enabled', () => {
     const actions = planNextActions(
       baseSnapshot({
-        workItemsRequiringSpec: [specWorkItemTarget()],
-        workItemsRequiringPlan: [workItemTarget()],
         planRevisionsRequiringPackages: [packageTarget()],
       }),
       { generation: generationPlanning() },
     );
 
     expect(actions.map((action) => action.actionType)).toEqual(['ensure_package_drafts']);
-    expect(actions.some((action) => retiredDraftActionTypes.includes(action.actionType))).toBe(false);
-  });
-
-  it('does not emit direct Work Item draft actions when generation is disabled', () => {
-    expect(
-      planNextActions(baseSnapshot({ workItemsRequiringSpec: [specWorkItemTarget()] }), {
-        generation: generationPlanning({ mode: 'disabled' }),
-      }).map((action) => action.actionType),
-    ).toEqual([]);
-  });
-
-  it('does not request manual paths for retired Work Item draft targets', () => {
-    const actions = planNextActions(
-      baseSnapshot({
-        repos: [
-          baseSnapshot().repos[0]!,
-          {
-            projectId: 'project-1',
-            repoId: 'repo-2',
-            automationScope: 'repo:project-1:repo-2',
-            automationSettingsVersion: 4,
-            capabilityFingerprint: 'capability-fingerprint-2',
-            daemonInternalLocalPath: '/private/repo-2',
-          },
-        ],
-        workItemsRequiringSpec: [
-          specWorkItemTarget({
-            repoId: undefined,
-            eligibleRepoIds: ['repo-1', 'repo-2'],
-            automationScope: 'project:project-1',
-          }),
-        ],
-      }),
-      { generation: generationPlanning() },
-    );
-
-    expect(actions).toEqual([]);
-  });
-
-  it('does not emit direct plan draft actions for an approved Spec missing a Plan draft', () => {
-    const actions = planNextActions(baseSnapshot({ workItemsRequiringPlan: [workItemTarget()] }), {
-      generation: generationPlanning(),
-    });
-
-    expect(actions).toEqual([]);
   });
 
   it('emits ensure_package_drafts for an approved PlanRevision missing package drafts', () => {
@@ -305,7 +203,6 @@ describe('automation planner', () => {
   it('does not create draft actions while an active hold is present', () => {
     const actions = planNextActions(
       baseSnapshot({
-        workItemsRequiringPlan: [workItemTarget({ activeHoldFingerprint: 'work_item:work-item-1:manual' })],
         planRevisionsRequiringPackages: [
           packageTarget({ activeHoldFingerprint: 'package_generation:plan-revision-1:manual' }),
         ],
@@ -316,7 +213,7 @@ describe('automation planner', () => {
     expect(actions).toEqual([]);
   });
 
-  it('suppresses all actions for an active hold before multi-repo ambiguity checks', () => {
+  it('suppresses package actions for an active hold before multi-repo ambiguity checks', () => {
     const actions = planNextActions(
       baseSnapshot({
         repos: [
@@ -330,13 +227,12 @@ describe('automation planner', () => {
             daemonInternalLocalPath: '/private/repo-2',
           },
         ],
-        workItemsRequiringPlan: [
-          workItemTarget({
-            targetObjectId: 'work-item-held',
+        planRevisionsRequiringPackages: [
+          packageTarget({
             projectId: 'project-1',
             repoId: undefined,
             automationScope: 'project:project-1',
-            activeHoldFingerprint: 'work_item:work-item-held:manual',
+            activeHoldFingerprint: 'package_generation:plan-revision-1:manual',
           }),
         ],
       }),
@@ -526,21 +422,11 @@ describe('automation planner', () => {
           generated_at: generatedAt,
           projects: [],
           repos: [],
-          work_items_requiring_spec: [
+          plan_revisions_requiring_packages: [
             {
-              target_object_type: 'work_item',
-              target_object_id: 'work-item-1',
-              target_status: 'triage',
-              project_id: 'project-1',
-              repo_id: 'repo-1',
-              automation_scope: repoScope,
-            },
-          ],
-          work_items_requiring_plan: [
-            {
-              target_object_type: 'work_item',
-              target_object_id: 'work-item-1',
-              target_revision_id: 'spec-revision-1',
+              target_object_type: 'plan_revision',
+              target_object_id: 'plan-revision-1',
+              target_revision_id: 'default:plan-revision-1',
               target_status: 'approved',
               project_id: 'project-1',
               repo_id: 'repo-1',
@@ -549,9 +435,9 @@ describe('automation planner', () => {
               blocked_summary: 'Runtime policy is invalid.',
               blockers: [
                 {
-                  target_object_type: 'work_item',
-                  target_object_id: 'work-item-1',
-                  target_revision_id: 'spec-revision-1',
+                  target_object_type: 'plan_revision',
+                  target_object_id: 'plan-revision-1',
+                  target_revision_id: 'default:plan-revision-1',
                   repo_id: 'repo-1',
                   blocked_reason_code: 'runtime_policy_invalid',
                   blocked_summary: 'Runtime policy is invalid.',
@@ -563,7 +449,6 @@ describe('automation planner', () => {
               ],
             },
           ],
-          plan_revisions_requiring_packages: [],
           run_enqueue_disabled_packages: [],
           active_holds: [],
           recent_action_runs: [],
@@ -575,18 +460,14 @@ describe('automation planner', () => {
 
     const snapshot = await client.runtimeSnapshot();
 
-    expect(snapshot.workItemsRequiringSpec[0]).toMatchObject({
-      targetObjectType: 'work_item',
-      targetObjectId: 'work-item-1',
-    });
-    expect(snapshot.workItemsRequiringPlan[0]).toMatchObject({
+    expect(snapshot.planRevisionsRequiringPackages[0]).toMatchObject({
       blockedReasonCode: 'runtime_policy_invalid',
       blockedSummary: 'Runtime policy is invalid.',
       blockers: [
         {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetRevisionId: 'spec-revision-1',
+          targetObjectType: 'plan_revision',
+          targetObjectId: 'plan-revision-1',
+          targetRevisionId: 'default:plan-revision-1',
           repoId: 'repo-1',
           blockedReasonCode: 'runtime_policy_invalid',
           blockedSummary: 'Runtime policy is invalid.',

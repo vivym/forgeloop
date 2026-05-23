@@ -6,10 +6,6 @@ import {
 } from '@forgeloop/domain';
 
 import { mutatingActionIdempotencyKey, projectRuntimeSnapshotIdempotencyKey } from './idempotency.js';
-import {
-  specDraftOutputSchemaVersion,
-  specDraftPromptVersion,
-} from './spec-draft-generation.js';
 import type {
   ActionInputJson,
   AutomationGenerationPlanningConfig,
@@ -29,8 +25,6 @@ export interface AutomationPlannerOptions {
 }
 
 const freezeGenerationPlanningConfig = (config: AutomationGenerationPlanningConfig): AutomationGenerationPlanningConfig => {
-  Object.freeze(config.tasks.spec_draft);
-  Object.freeze(config.tasks.plan_draft);
   Object.freeze(config.tasks.package_drafts);
   Object.freeze(config.tasks);
   return Object.freeze(config);
@@ -39,16 +33,6 @@ const freezeGenerationPlanningConfig = (config: AutomationGenerationPlanningConf
 export const defaultGenerationPlanningConfig: AutomationGenerationPlanningConfig = freezeGenerationPlanningConfig({
   mode: 'disabled',
   tasks: {
-    spec_draft: {
-      enabled: false,
-      promptVersion: specDraftPromptVersion,
-      outputSchemaVersion: specDraftOutputSchemaVersion,
-    },
-    plan_draft: {
-      enabled: false,
-      promptVersion: 'plan-draft.fake.v1',
-      outputSchemaVersion: 'plan_draft.v1',
-    },
     package_drafts: {
       enabled: false,
       promptVersion: 'package-drafts.fake.v1',

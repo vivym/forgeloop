@@ -53,8 +53,6 @@ const publicDogfoodReasonCodes = new Set([
   'generated_package_dependency_invalid',
   'generated_package_manifest_invalid',
   'generated_package_policy_invalid',
-  'generated_spec_draft_invalid',
-  'generated_plan_draft_invalid',
   'generated_payload_idempotency_drift',
 ]);
 

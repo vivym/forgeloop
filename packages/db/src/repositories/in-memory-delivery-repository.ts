@@ -3958,8 +3958,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return {
       projects: projectRows,
       repos: repoRows,
-      work_items_requiring_spec: await this.runtimeSnapshotWorkItemsRequiringSpec(repos),
-      work_items_requiring_plan: await this.runtimeSnapshotWorkItemsRequiringPlan(repos),
       plan_revisions_requiring_packages: await this.runtimeSnapshotPlanRevisionsRequiringPackages(repos),
       run_enqueue_disabled_packages: this.runtimeSnapshotRunEnqueueDisabledPackages(repos),
       active_holds: this.runtimeSnapshotActiveHolds(),
@@ -4525,76 +4523,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     );
   }
 
-  private async runtimeSnapshotWorkItemsRequiringPlan(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
-    const targets: RuntimeSnapshotTargetRow[] = [];
-    for (const workItem of valuesFor(this.workItems).sort(byCreatedAtThenId)) {
-      if (isWorkItemAutomationTerminal(workItem) || workItem.current_plan_id !== undefined || workItem.current_spec_id === undefined) {
-        continue;
-      }
-      const spec = this.specs.get(workItem.current_spec_id);
-      if (
-        spec === undefined ||
-        spec.work_item_id !== workItem.id ||
-        spec.status !== 'approved' ||
-        spec.resolution !== 'approved' ||
-        spec.approved_revision_id === undefined ||
-        spec.current_revision_id !== spec.approved_revision_id ||
-        (workItem.current_spec_revision_id !== undefined && workItem.current_spec_revision_id !== spec.approved_revision_id)
-      ) {
-        continue;
-      }
-      const specRevisionId = spec.approved_revision_id;
-      const specRevision = this.specRevisions.get(specRevisionId);
-      if (specRevision === undefined || specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
-        continue;
-      }
-      const targetScope = await this.runtimeSnapshotDraftTargetScope(repos, workItem.project_id, 'canGeneratePlanDraft');
-      if (targetScope === undefined) {
-        continue;
-      }
-      if (this.hasActiveManualHold([`work_item:${workItem.id}`, `spec_revision:${specRevisionId}`])) {
-        continue;
-      }
-      targets.push({
-        target_object_type: 'work_item',
-        target_object_id: workItem.id,
-        target_revision_id: specRevisionId,
-        target_status: 'approved',
-        project_id: workItem.project_id,
-        ...targetScope,
-      });
-    }
-    return targets;
-  }
-
-  private async runtimeSnapshotWorkItemsRequiringSpec(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
-    const targets: RuntimeSnapshotTargetRow[] = [];
-    for (const workItem of valuesFor(this.workItems).sort(byCreatedAtThenId)) {
-      if (isWorkItemAutomationTerminal(workItem)) {
-        continue;
-      }
-      const existingSpec = workItem.current_spec_id === undefined ? undefined : this.specs.get(workItem.current_spec_id);
-      if (existingSpec?.current_revision_id !== undefined) {
-        continue;
-      }
-      const targetScope = await this.runtimeSnapshotDraftTargetScope(repos, workItem.project_id, 'canGenerateSpecDraft');
-      if (targetScope === undefined) {
-        continue;
-      }
-      if (this.hasActiveManualHold([`work_item:${workItem.id}`])) {
-        continue;
-      }
-      targets.push({
-        target_object_type: 'work_item',
-        target_object_id: workItem.id,
-        target_status: workItem.phase,
-        project_id: workItem.project_id,
-        ...targetScope,
-      });
-    }
-    return targets;
-  }
-
   private async runtimeSnapshotPlanRevisionsRequiringPackages(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
     const targets: RuntimeSnapshotTargetRow[] = [];
     for (const plan of valuesFor(this.plans).sort(byCreatedAtThenId)) {
@@ -4676,7 +4604,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private async runtimeSnapshotDraftTargetScope(
     repos: ProjectRepo[],
     projectId: string,
-    capability: 'canGenerateSpecDraft' | 'canGeneratePlanDraft' | 'canGeneratePackageDrafts',
+    capability: 'canGeneratePackageDrafts',
   ): Promise<Pick<RuntimeSnapshotTargetRow, 'repo_id' | 'eligible_repo_ids' | 'automation_scope'> | undefined> {
     const eligibleReposById = new Map<string, ProjectRepo>();
     for (const repo of repos) {

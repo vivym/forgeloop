@@ -214,8 +214,6 @@ const runtimeSnapshotFromWire = (wire: unknown): RuntimeSnapshot => {
             }),
       };
     }),
-    workItemsRequiringSpec: targets(snapshot.work_items_requiring_spec),
-    workItemsRequiringPlan: targets(snapshot.work_items_requiring_plan),
     planRevisionsRequiringPackages: targets(snapshot.plan_revisions_requiring_packages),
     runEnqueueDisabledPackages: targets(snapshot.run_enqueue_disabled_packages),
     activeHolds: [],

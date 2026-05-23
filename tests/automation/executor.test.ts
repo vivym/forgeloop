@@ -3,10 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { automationPreconditionFingerprint, type AutomationPrecondition } from '../../packages/domain/src/index';
 import {
   CodexGenerationError,
-  createFakeSpecDraft,
   type CodexGenerationRuntime,
   type GeneratedPackageDraftSetV1,
-  type GeneratedSpecDraftV1,
 } from '../../packages/codex-runtime/src/index';
 import {
   AutomationHttpError,
@@ -16,7 +14,6 @@ import {
   type AutomationActionRunRecord,
   type AutomationGenerationPackageContextV1,
   type AutomationGenerationPlanningConfig,
-  type AutomationGenerationWorkItemContextV1,
   type AutomationExecutorClient,
   type EnsurePackageDraftsCommandInput,
   type NextAction,
@@ -79,29 +76,6 @@ const claimedPackageDraftAction = (overrides: Partial<AutomationActionRunRecord>
     },
     ...overrides,
   });
-
-const specDraftContext = (): AutomationGenerationWorkItemContextV1 => ({
-  context_version: 'generation_context.work_item.v1',
-  action_run_id: 'action-run-1',
-  work_item: {
-    id: 'work-item-1',
-    project_id: 'project-1',
-    title: 'Spec draft work item',
-    goal: 'Ship the spec draft path',
-    success_criteria: ['Draft spec exists'],
-    risk: 'low',
-    priority: 'high',
-    kind: 'initiative',
-  },
-  repos: [
-    {
-      project_id: 'project-1',
-      repo_id: 'repo-1',
-      default_branch: 'main',
-      policy_status: 'missing',
-    },
-  ],
-});
 
 const packageDraftContext = (): AutomationGenerationPackageContextV1 => ({
   context_version: 'generation_context.package.v1',
@@ -351,53 +325,6 @@ const validGeneratedPackageDraftSet = (
   };
 };
 
-const validGeneratedSpecDraft = (overrides: Partial<GeneratedSpecDraftV1> = {}): GeneratedSpecDraftV1 => ({
-  schema_version: 'spec_draft.v1',
-  summary: 'Generated spec summary',
-  content: 'Generated spec body',
-  background: 'Spec generation runtime context',
-  goals: ['Generate a spec draft'],
-  scope_in: ['Spec draft generation'],
-  scope_out: ['Submitting or approving specs'],
-  acceptance_criteria: ['Spec draft command is submitted'],
-  risk_notes: ['Keep human gates intact'],
-  test_strategy_summary: 'Executor unit tests',
-  structured_document: { generated_by: 'test' },
-  ...overrides,
-});
-
-const fakeGenerationRuntimeReturning = (
-  result: Awaited<ReturnType<CodexGenerationRuntime['generatePlanDraft']>>,
-  inputs: unknown[] = [],
-): CodexGenerationRuntime => ({
-  async generateSpecDraft() {
-    throw new Error('unexpected_spec_generation');
-  },
-  async generatePlanDraft(input) {
-    inputs.push(input);
-    return result;
-  },
-  async generatePackageDrafts() {
-    throw new Error('unexpected_package_generation');
-  },
-});
-
-const fakeSpecGenerationRuntimeReturning = (
-  result: Awaited<ReturnType<CodexGenerationRuntime['generateSpecDraft']>>,
-  inputs: unknown[] = [],
-): CodexGenerationRuntime => ({
-  async generateSpecDraft(input) {
-    inputs.push(input);
-    return result;
-  },
-  async generatePlanDraft() {
-    throw new Error('unexpected_plan_generation');
-  },
-  async generatePackageDrafts() {
-    throw new Error('unexpected_package_generation');
-  },
-});
-
 const fakePackageGenerationRuntimeReturning = (
   result: Awaited<ReturnType<CodexGenerationRuntime['generatePackageDrafts']>>,
   inputs: unknown[] = [],
@@ -415,24 +342,10 @@ const fakePackageGenerationRuntimeReturning = (
 });
 
 const generationPlanning = (overrides: {
-  spec_draft?: Partial<AutomationGenerationPlanningConfig['tasks']['spec_draft']>;
-  plan_draft?: Partial<AutomationGenerationPlanningConfig['tasks']['plan_draft']>;
   package_drafts?: Partial<AutomationGenerationPlanningConfig['tasks']['package_drafts']>;
 } = {}): AutomationGenerationPlanningConfig => ({
   mode: 'fake',
   tasks: {
-    spec_draft: {
-      enabled: true,
-      promptVersion: 'spec-draft.fake.v1',
-      outputSchemaVersion: 'spec_draft.v1',
-      ...overrides.spec_draft,
-    },
-    plan_draft: {
-      enabled: true,
-      promptVersion: 'plan-draft.fake.v1',
-      outputSchemaVersion: 'plan_draft.v1',
-      ...overrides.plan_draft,
-    },
     package_drafts: {
       enabled: false,
       promptVersion: 'package-drafts.fake.v1',
@@ -440,26 +353,6 @@ const generationPlanning = (overrides: {
       ...overrides.package_drafts,
     },
   },
-});
-
-const planGenerationPlanning = (
-  overrides: Partial<AutomationGenerationPlanningConfig['tasks']['plan_draft']> = {},
-): AutomationGenerationPlanningConfig => generationPlanning({ spec_draft: { enabled: false }, plan_draft: overrides });
-
-describe('spec draft generation fixtures', () => {
-  it('creates schema-versioned fake Spec drafts from public WorkItem context', async () => {
-    const result = createFakeSpecDraft(specDraftContext());
-
-    expect(result).toMatchObject({
-      generated: {
-        schema_version: 'spec_draft.v1',
-        summary: 'Draft spec for Spec draft work item',
-        goals: ['Ship the spec draft path'],
-        acceptance_criteria: ['Draft spec exists'],
-      },
-      generationArtifacts: [],
-    });
-  });
 });
 
 const execute = (client: FakeAutomationClient, action: NextAction = baseAction()) =>

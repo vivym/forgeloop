@@ -5304,21 +5304,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         runSession,
       ]);
     }
-    const workItemsRequiringSpec = await this.runtimeSnapshotWorkItemsRequiringSpec(
-      workItemRows,
-      repoRows,
-      specsById,
-      holds,
-      settingsByScope,
-    );
-    const workItemsRequiringPlan = await this.runtimeSnapshotWorkItemsRequiringPlan(
-      workItemRows,
-      repoRows,
-      specsById,
-      specRevisionsById,
-      holds,
-      settingsByScope,
-    );
     const planRevisionsRequiringPackages = await this.runtimeSnapshotPlanRevisionsRequiringPackages(
       planRecords.map((row) => fromDbRecord<Plan>(row)),
       repoRows,
@@ -5385,8 +5370,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return {
       projects: projectSnapshotRows,
       repos: repoSnapshotRows,
-      work_items_requiring_spec: workItemsRequiringSpec,
-      work_items_requiring_plan: workItemsRequiringPlan,
       plan_revisions_requiring_packages: this.applyLatestMatchingActionFields(
         planRevisionsRequiringPackages,
         latestMatchingActionFields,
@@ -6840,99 +6823,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
   }
 
-  private async runtimeSnapshotWorkItemsRequiringPlan(
-    workItems: WorkItem[],
-    repos: ProjectRepo[],
-    specsById: Map<string, Spec>,
-    specRevisionsById: Map<string, SpecRevision>,
-    holds: ManualPathHold[],
-    settingsByScope: Map<string, AutomationProjectSettings>,
-  ): Promise<RuntimeSnapshotTargetRow[]> {
-    const targets: RuntimeSnapshotTargetRow[] = [];
-    for (const workItem of workItems) {
-      if (isWorkItemAutomationTerminal(workItem) || workItem.current_plan_id !== undefined || workItem.current_spec_id === undefined) {
-        continue;
-      }
-      const spec = specsById.get(workItem.current_spec_id);
-      if (
-        spec === undefined ||
-        spec.work_item_id !== workItem.id ||
-        spec.status !== 'approved' ||
-        spec.resolution !== 'approved' ||
-        spec.approved_revision_id === undefined ||
-        spec.current_revision_id !== spec.approved_revision_id ||
-        (workItem.current_spec_revision_id !== undefined && workItem.current_spec_revision_id !== spec.approved_revision_id)
-      ) {
-        continue;
-      }
-      const specRevisionId = spec.approved_revision_id;
-      const specRevision = specRevisionsById.get(specRevisionId);
-      if (specRevision === undefined || specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
-        continue;
-      }
-      const targetScope = this.runtimeSnapshotDraftTargetScope(
-        repos,
-        workItem.project_id,
-        'canGeneratePlanDraft',
-        settingsByScope,
-      );
-      if (targetScope === undefined) {
-        continue;
-      }
-      if (this.hasActiveManualHold(holds, [`work_item:${workItem.id}`, `spec_revision:${specRevisionId}`])) {
-        continue;
-      }
-      targets.push({
-        target_object_type: 'work_item',
-        target_object_id: workItem.id,
-        target_revision_id: specRevisionId,
-        target_status: 'approved',
-        project_id: workItem.project_id,
-        ...targetScope,
-      });
-    }
-    return targets;
-  }
-
-  private async runtimeSnapshotWorkItemsRequiringSpec(
-    workItems: WorkItem[],
-    repos: ProjectRepo[],
-    specsById: Map<string, Spec>,
-    holds: ManualPathHold[],
-    settingsByScope: Map<string, AutomationProjectSettings>,
-  ): Promise<RuntimeSnapshotTargetRow[]> {
-    const targets: RuntimeSnapshotTargetRow[] = [];
-    for (const workItem of workItems) {
-      if (isWorkItemAutomationTerminal(workItem)) {
-        continue;
-      }
-      const existingSpec = workItem.current_spec_id === undefined ? undefined : specsById.get(workItem.current_spec_id);
-      if (existingSpec?.current_revision_id !== undefined) {
-        continue;
-      }
-      const targetScope = this.runtimeSnapshotDraftTargetScope(
-        repos,
-        workItem.project_id,
-        'canGenerateSpecDraft',
-        settingsByScope,
-      );
-      if (targetScope === undefined) {
-        continue;
-      }
-      if (this.hasActiveManualHold(holds, [`work_item:${workItem.id}`])) {
-        continue;
-      }
-      targets.push({
-        target_object_type: 'work_item',
-        target_object_id: workItem.id,
-        target_status: workItem.phase,
-        project_id: workItem.project_id,
-        ...targetScope,
-      });
-    }
-    return targets;
-  }
-
   private async runtimeSnapshotPlanRevisionsRequiringPackages(
     plansToEvaluate: Plan[],
     repos: ProjectRepo[],
@@ -7028,7 +6918,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   private runtimeSnapshotDraftTargetScope(
     repos: ProjectRepo[],
     projectId: string,
-    capability: 'canGenerateSpecDraft' | 'canGeneratePlanDraft' | 'canGeneratePackageDrafts',
+    capability: 'canGeneratePackageDrafts',
     settingsByScope: Map<string, AutomationProjectSettings>,
   ): Pick<RuntimeSnapshotTargetRow, 'repo_id' | 'eligible_repo_ids' | 'automation_scope'> | undefined {
     const eligibleReposById = new Map<string, ProjectRepo>();

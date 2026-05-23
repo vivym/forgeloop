@@ -1076,8 +1076,6 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     version: 0,
     capabilities_json: {
       canProjectRuntimeState: false,
-      canGenerateSpecDraft: false,
-      canGeneratePlanDraft: false,
       canGeneratePackageDrafts: false,
       canEnqueueRuns: false,
     },
@@ -1096,8 +1094,6 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     now: at,
   });
   expect(settings.version).toBe(1);
-  expect(settings.capabilities_json.canGenerateSpecDraft).toBe(true);
-  expect(settings.capabilities_json.canGeneratePlanDraft).toBe(true);
 
   const specDrift = {
     workItemId: '33333333-3333-4333-8333-333333333341',
@@ -1321,27 +1317,6 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   });
 
   const driftSnapshot = await repository.getRuntimeSnapshotData();
-  expect(driftSnapshot.work_items_requiring_plan).toContainEqual(
-    expect.objectContaining({
-      target_object_id: legacySpecPointerMissing.workItemId,
-      target_revision_id: legacySpecPointerMissing.approvedRevisionId,
-    }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specDrift.workItemId }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specPointerDrift.workItemId }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specOwnerDrift.workItemId }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specRevisionSpecDrift.workItemId }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specRevisionWorkItemDrift.workItemId }),
-  );
   expect(driftSnapshot.plan_revisions_requiring_packages).not.toContainEqual(
     expect.objectContaining({ target_object_id: planDrift.approvedPlanRevisionId }),
   );
@@ -1370,60 +1345,6 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     expect.objectContaining({
       target_object_id: legacyPackagePointersMissing.approvedPlanRevisionId,
       target_revision_id: `default:${legacyPackagePointersMissing.approvedPlanRevisionId}`,
-    }),
-  );
-
-  const specNeededWorkItem: WorkItem = {
-    id: 'work-item-needs-SPEC-draft',
-    project_id: ids.project,
-    kind: 'requirement',
-    title: 'Draft a new Spec',
-    goal: 'Create the first Spec draft from a WorkItem.',
-    success_criteria: ['Spec draft exists.'],
-    priority: 'p1',
-    risk: 'low',
-    driver_actor_id: ids.human,
-    intake_context: requirementIntakeContext,
-    phase: 'triage',
-    activity_state: 'idle',
-    gate_state: 'none',
-    resolution: 'none',
-    created_at: at,
-    updated_at: at,
-  };
-  await repository.saveWorkItem(specNeededWorkItem);
-
-  let snapshot = await repository.getRuntimeSnapshotData();
-  expect(snapshot.work_items_requiring_spec).toContainEqual(
-    expect.objectContaining({
-      target_object_type: 'work_item',
-      target_object_id: specNeededWorkItem.id,
-      target_status: specNeededWorkItem.phase,
-      project_id: specNeededWorkItem.project_id,
-      repo_id: 'repo-1',
-      automation_scope: `repo:${specNeededWorkItem.project_id}:repo-1`,
-    }),
-  );
-
-  await repository.createOrReplayAutomationActionRun({
-    id: 'automation-action-contract-spec-suppression',
-    action_type: 'ensure_package_drafts',
-    target_object_type: 'work_item',
-    target_object_id: specNeededWorkItem.id,
-    target_status: specNeededWorkItem.phase,
-    idempotency_key: 'action-key-contract-spec-suppression',
-    automation_scope: `repo:${ids.project}:repo-1`,
-    automation_settings_version: settings.version,
-    capability_fingerprint: settings.capability_fingerprint,
-    precondition_fingerprint: 'precondition-contract-spec',
-    action_input_json: { work_item_id: specNeededWorkItem.id },
-    now: at,
-  });
-  snapshot = await repository.getRuntimeSnapshotData();
-  expect(snapshot.work_items_requiring_spec).not.toContainEqual(
-    expect.objectContaining({
-      target_object_type: 'work_item',
-      target_object_id: specNeededWorkItem.id,
     }),
   );
 

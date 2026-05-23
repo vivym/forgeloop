@@ -45,6 +45,7 @@ import {
   renderAutomationDogfoodSummary,
   type AutomationDogfoodSummaryInput,
 } from './automation-dogfood-summary';
+import { seedItemScopedSpecPlan } from '../tests/helpers/item-scoped-artifact-fixtures';
 import { codexCanonicalDigest, validateCodexDockerRuntimeEvidence } from '../packages/domain/src/index';
 
 interface AutomationDogfoodResult extends AutomationDogfoodSummaryInput {
@@ -87,8 +88,6 @@ const createDogfoodGenerationPlanning = (
 ): AutomationGenerationPlanningConfig => ({
   mode,
   tasks: {
-    spec_draft: { enabled: false, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-    plan_draft: { enabled: mode !== 'disabled', promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
     package_drafts: { enabled: mode !== 'disabled', promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
   },
 });
@@ -539,7 +538,7 @@ const createDaemon = (
 
 const seedDraftOnlyApprovedSpec = async (
   app: INestApplication,
-): Promise<{ project: Project; workItem: WorkItem; spec: Spec; specRevisionId: string }> => {
+): Promise<{ project: Project; workItem: WorkItem; spec: Spec; specRevisionId: string; plan: Plan; planRevision: PlanRevision }> => {
   const server = app.getHttpServer();
   const project = (await request(server).post('/projects').send({ name: 'Automation dogfood', owner_actor_id: actorOwner }).expect(201))
     .body as Project;
@@ -579,45 +578,24 @@ const seedDraftOnlyApprovedSpec = async (
       intake_context: requirementIntakeContext,
     })
     .expect(201)).body as WorkItem;
-  const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as Spec;
-  const revision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body as {
-    id: string;
+  const seeded = await seedItemScopedSpecPlan(app, workItem.id, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+    includePlan: true,
+    specStatus: 'approved',
+    planStatus: 'approved',
+  });
+  if (seeded.plan === undefined || seeded.planRevision === undefined) {
+    throw new Error('automation_dogfood_missing_execution_plan');
+  }
+  return {
+    project,
+    workItem: seeded.workItem,
+    spec: seeded.spec,
+    specRevisionId: seeded.specRevision.id,
+    plan: seeded.plan,
+    planRevision: seeded.planRevision,
   };
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
-  const approvedSpec = (await request(server)
-    .post(`/specs/${spec.id}/approve`)
-    .set(reviewerHeaders)
-    .send({ actor_id: actorReviewer })
-    .expect(201)).body as Spec;
-  return { project, workItem, spec: approvedSpec, specRevisionId: revision.id };
-};
-
-const approveCurrentPlan = async (
-  app: INestApplication,
-  repository: DeliveryRepository,
-  workItemId: string,
-): Promise<{ plan: Plan; revision: PlanRevision }> => {
-  const workItem = await repository.getWorkItem(workItemId);
-  if (workItem?.current_plan_id === undefined) {
-    throw new Error('automation_dogfood_missing_plan_draft');
-  }
-  const plan = await repository.getPlan(workItem.current_plan_id);
-  if (plan === undefined || plan.current_revision_id === undefined) {
-    throw new Error('automation_dogfood_missing_plan_revision');
-  }
-  const revision = await repository.getPlanRevision(plan.current_revision_id);
-  if (revision === undefined) {
-    throw new Error('automation_dogfood_missing_plan_revision');
-  }
-
-  const server = app.getHttpServer();
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
-  const approvedPlan = (await request(server)
-    .post(`/plans/${plan.id}/approve`)
-    .set(reviewerHeaders)
-    .send({ actor_id: actorReviewer })
-    .expect(201)).body as Plan;
-  return { plan: approvedPlan, revision };
 };
 
 const runUntil = async (daemon: AutomationDaemon, predicate: () => Promise<boolean>, label: string): Promise<void> => {
@@ -675,8 +653,6 @@ const publicDogfoodErrorCodes = new Set([
   'generated_package_dependency_invalid',
   'generated_package_manifest_invalid',
   'generated_package_policy_invalid',
-  'generated_spec_draft_invalid',
-  'generated_plan_draft_invalid',
   'generated_payload_idempotency_drift',
 ]);
 
@@ -1016,12 +992,6 @@ const runDogfood = async (): Promise<AutomationDogfoodResult> => {
     const pendingBeforeRestartActionTypes = sortedActionTypes(pendingBeforeRestart);
     const daemon = createDaemon(baseUrl, generation);
 
-    await runUntil(
-      daemon,
-      async () => (await repository.getWorkItem(seeded.workItem.id))?.current_plan_id !== undefined,
-      'plan_draft_created',
-    );
-    await approveCurrentPlan(app, repository, seeded.workItem.id);
     await runUntil(
       daemon,
       async () => (await repository.listExecutionPackagesForWorkItem(seeded.workItem.id)).length > 0,

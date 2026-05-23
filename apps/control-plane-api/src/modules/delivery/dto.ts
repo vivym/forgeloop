@@ -236,8 +236,6 @@ export type AutomationActorContextDto = z.infer<typeof automationActorContextSch
 export const automationPresetSchema = z.enum(['off', 'ready_projection', 'draft_only', 'run_enqueue']);
 export const automationCapabilitySchema = z.enum([
   'canProjectRuntimeState',
-  'canGenerateSpecDraft',
-  'canGeneratePlanDraft',
   'canGeneratePackageDrafts',
   'canEnqueueRuns',
 ]);
