@@ -7,6 +7,9 @@ import type {
   Attachment,
   Artifact,
   Actor,
+  BoundarySummary,
+  BoundarySummaryRevision,
+  BrainstormingSession,
   CodexCredentialBinding,
   CodexCredentialBindingPublic,
   CodexCredentialBindingVersion,
@@ -26,8 +29,16 @@ import type {
   CodexWorkerBootstrapToken,
   CodexWorkerRegistration,
   CommandIdempotencyRecord,
+  ContextManifest,
   Decision,
   DomainError as DomainErrorType,
+  DevelopmentPlan,
+  DevelopmentPlanItem,
+  DevelopmentPlanItemRevision,
+  DevelopmentPlanSourceLink,
+  Execution,
+  ExecutionPlanDocument,
+  ExecutionPlanRevision,
   ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
@@ -51,6 +62,8 @@ import type {
   Spec,
   SpecRevision,
   StatusHistory,
+  RevisionCompareQuery,
+  StructuredRevisionDiff,
   Task,
   WorkItem,
 } from '@forgeloop/domain';
@@ -292,6 +305,18 @@ const redactAutomationActionClaim = (actionRun: AutomationActionRun): Automation
 
 const valuesFor = <T>(records: Map<string, T>): T[] => [...records.values()].map(clone);
 
+const revisionDiff = (
+  query: RevisionCompareQuery,
+  base: unknown,
+  compare: unknown,
+): StructuredRevisionDiff => ({
+  base_revision_id: query.base_revision_id,
+  compare_revision_id: query.compare_revision_id,
+  changed_fields: valuesEqual(base, compare) ? [] : ['snapshot'],
+  ...(base === undefined ? {} : { base_snapshot: clone(base) as Record<string, unknown> }),
+  ...(compare === undefined ? {} : { compare_snapshot: clone(compare) as Record<string, unknown> }),
+});
+
 const byCreatedAt = <T extends { created_at: string }>(left: T, right: T) => left.created_at.localeCompare(right.created_at);
 const byCreatedAtThenId = <T extends { created_at: string; id: string }>(left: T, right: T) =>
   byCreatedAt(left, right) || left.id.localeCompare(right.id);
@@ -481,6 +506,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly tasks = new Map<string, Task>();
   private readonly specs = new Map<string, Spec>();
   private readonly specRevisions = new Map<string, SpecRevision>();
+  private readonly contextManifests = new Map<string, ContextManifest>();
+  private readonly developmentPlans = new Map<string, DevelopmentPlan>();
+  private readonly developmentPlanSourceLinks = new Map<string, DevelopmentPlanSourceLink>();
+  private readonly developmentPlanItems = new Map<string, DevelopmentPlanItem>();
+  private readonly developmentPlanItemRevisions = new Map<string, DevelopmentPlanItemRevision>();
+  private readonly brainstormingSessions = new Map<string, BrainstormingSession>();
+  private readonly boundarySummaries = new Map<string, BoundarySummary>();
+  private readonly boundarySummaryRevisions = new Map<string, BoundarySummaryRevision>();
+  private readonly executionPlans = new Map<string, ExecutionPlanDocument>();
+  private readonly executionPlanRevisions = new Map<string, ExecutionPlanRevision>();
+  private readonly executions = new Map<string, Execution>();
   private readonly plans = new Map<string, Plan>();
   private readonly planRevisions = new Map<string, PlanRevision>();
   private readonly executionPackages = new Map<string, ExecutionPackage>();
@@ -2706,6 +2742,137 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return valuesFor(this.specRevisions)
       .filter((specRevision) => specRevision.spec_id === specId)
       .sort((left, right) => left.revision_number - right.revision_number);
+  }
+
+  async saveContextManifest(contextManifest: ContextManifest): Promise<void> {
+    this.contextManifests.set(contextManifest.id, clone(contextManifest));
+  }
+
+  async getContextManifest(contextManifestId: string): Promise<ContextManifest | undefined> {
+    return this.cloneMaybe(this.contextManifests.get(contextManifestId));
+  }
+
+  async saveDevelopmentPlan(plan: DevelopmentPlan): Promise<void> {
+    this.developmentPlans.set(plan.id, clone(plan));
+  }
+
+  async getDevelopmentPlan(id: string): Promise<DevelopmentPlan | undefined> {
+    return this.cloneMaybe(this.developmentPlans.get(id));
+  }
+
+  async listDevelopmentPlans(projectId: string): Promise<DevelopmentPlan[]> {
+    return valuesFor(this.developmentPlans)
+      .filter((plan) => plan.project_id === projectId)
+      .sort(byCreatedAtThenId);
+  }
+
+  async saveDevelopmentPlanSourceLink(link: DevelopmentPlanSourceLink): Promise<void> {
+    this.developmentPlanSourceLinks.set(link.id, clone(link));
+  }
+
+  async listDevelopmentPlanSourceLinks(developmentPlanId: string): Promise<DevelopmentPlanSourceLink[]> {
+    return valuesFor(this.developmentPlanSourceLinks)
+      .filter((link) => link.development_plan_id === developmentPlanId)
+      .sort(byCreatedAtThenId);
+  }
+
+  async listDevelopmentPlanSourceLinksForSource(
+    sourceRef: DevelopmentPlanSourceLink['source_ref'],
+  ): Promise<DevelopmentPlanSourceLink[]> {
+    return valuesFor(this.developmentPlanSourceLinks)
+      .filter(
+        (link) =>
+          link.source_ref.type === sourceRef.type &&
+          link.source_ref.id === sourceRef.id &&
+          (sourceRef.revision_id === undefined || link.source_ref.revision_id === sourceRef.revision_id),
+      )
+      .sort(byCreatedAtThenId);
+  }
+
+  async saveDevelopmentPlanItem(item: DevelopmentPlanItem): Promise<void> {
+    this.developmentPlanItems.set(item.id, clone(item));
+  }
+
+  async getDevelopmentPlanItem(id: string): Promise<DevelopmentPlanItem | undefined> {
+    return this.cloneMaybe(this.developmentPlanItems.get(id));
+  }
+
+  async listDevelopmentPlanItems(developmentPlanId: string): Promise<DevelopmentPlanItem[]> {
+    return valuesFor(this.developmentPlanItems)
+      .filter((item) => item.development_plan_id === developmentPlanId)
+      .sort(byCreatedAtThenId);
+  }
+
+  async saveDevelopmentPlanItemRevision(revision: DevelopmentPlanItemRevision): Promise<void> {
+    this.developmentPlanItemRevisions.set(revision.id, clone(revision));
+  }
+
+  async listDevelopmentPlanItemRevisions(itemId: string): Promise<DevelopmentPlanItemRevision[]> {
+    return valuesFor(this.developmentPlanItemRevisions)
+      .filter((revision) => revision.development_plan_item_id === itemId)
+      .sort((left, right) => left.revision_number - right.revision_number);
+  }
+
+  async compareDevelopmentPlanItemRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff> {
+    return revisionDiff(query, this.developmentPlanItemRevisions.get(query.base_revision_id)?.snapshot, this.developmentPlanItemRevisions.get(query.compare_revision_id)?.snapshot);
+  }
+
+  async saveBrainstormingSession(session: BrainstormingSession): Promise<void> {
+    this.brainstormingSessions.set(session.id, clone(session));
+  }
+
+  async getBrainstormingSession(id: string): Promise<BrainstormingSession | undefined> {
+    return this.cloneMaybe(this.brainstormingSessions.get(id));
+  }
+
+  async saveBoundarySummary(summary: BoundarySummary): Promise<void> {
+    this.boundarySummaries.set(summary.id, clone(summary));
+  }
+
+  async getBoundarySummary(id: string): Promise<BoundarySummary | undefined> {
+    return this.cloneMaybe(this.boundarySummaries.get(id));
+  }
+
+  async saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void> {
+    this.boundarySummaryRevisions.set(revision.id, clone(revision));
+  }
+
+  async listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]> {
+    return valuesFor(this.boundarySummaryRevisions)
+      .filter((revision) => revision.boundary_summary_id === boundarySummaryId)
+      .sort((left, right) => left.revision_number - right.revision_number);
+  }
+
+  async compareBoundarySummaryRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff> {
+    return revisionDiff(
+      query,
+      this.boundarySummaryRevisions.get(query.base_revision_id),
+      this.boundarySummaryRevisions.get(query.compare_revision_id),
+    );
+  }
+
+  async saveExecutionPlan(plan: ExecutionPlanDocument): Promise<void> {
+    this.executionPlans.set(plan.id, clone(plan));
+  }
+
+  async getExecutionPlan(id: string): Promise<ExecutionPlanDocument | undefined> {
+    return this.cloneMaybe(this.executionPlans.get(id));
+  }
+
+  async saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void> {
+    this.executionPlanRevisions.set(revision.id, clone(revision));
+  }
+
+  async getExecutionPlanRevision(id: string): Promise<ExecutionPlanRevision | undefined> {
+    return this.cloneMaybe(this.executionPlanRevisions.get(id));
+  }
+
+  async saveExecution(execution: Execution): Promise<void> {
+    this.executions.set(execution.id, clone(execution));
+  }
+
+  async getExecution(id: string): Promise<Execution | undefined> {
+    return this.cloneMaybe(this.executions.get(id));
   }
 
   async savePlan(plan: Plan): Promise<void> {

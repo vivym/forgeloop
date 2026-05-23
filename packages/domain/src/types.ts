@@ -161,6 +161,9 @@ export type SpecPlanResolution = 'none' | 'approved';
 export interface SpecPlanBase {
   id: string;
   work_item_id: string;
+  development_plan_item_id?: string;
+  boundary_summary_id?: string;
+  context_manifest_id?: string;
   entity_type: SpecPlanEntityType;
   status: SpecPlanStatus;
   editing_state: SpecPlanEditingState;
@@ -188,6 +191,9 @@ export interface SpecRevision {
   id: string;
   spec_id: string;
   work_item_id: string;
+  development_plan_item_id?: string;
+  boundary_summary_id?: string;
+  context_manifest_id?: string;
   revision_number: number;
   summary: string;
   content: string;

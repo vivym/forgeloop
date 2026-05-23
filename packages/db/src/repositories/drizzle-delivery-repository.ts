@@ -10,6 +10,9 @@ import type {
   Attachment,
   Artifact,
   Actor,
+  BoundarySummary,
+  BoundarySummaryRevision,
+  BrainstormingSession,
   CodexCredentialBinding,
   CodexCredentialBindingPublic,
   CodexCredentialBindingVersion,
@@ -27,8 +30,16 @@ import type {
   CodexWorkerBootstrapToken,
   CodexWorkerRegistration,
   CommandIdempotencyRecord,
+  ContextManifest,
   Decision,
   DomainError as DomainErrorType,
+  DevelopmentPlan,
+  DevelopmentPlanItem,
+  DevelopmentPlanItemRevision,
+  DevelopmentPlanSourceLink,
+  Execution,
+  ExecutionPlanDocument,
+  ExecutionPlanRevision,
   ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
@@ -51,6 +62,8 @@ import type {
   Spec,
   SpecRevision,
   StatusHistory,
+  RevisionCompareQuery,
+  StructuredRevisionDiff,
   Task,
   WorkItem,
   ResolvedCodexCredential,
@@ -101,7 +114,18 @@ import {
   codex_worker_session_nonces,
   command_idempotency_records,
   actors,
+  boundary_summaries,
+  boundary_summary_revisions,
+  brainstorming_sessions,
+  context_manifests,
   decisions,
+  development_plan_item_revisions,
+  development_plan_items,
+  development_plan_source_links,
+  development_plans,
+  executions,
+  execution_plan_revisions,
+  execution_plans,
   execution_package_generation_packages,
   execution_package_generation_runs,
   execution_package_dependencies,
@@ -311,6 +335,17 @@ const canonicalizeJson = (value: CanonicalJsonValue): CanonicalJsonValue => {
 const canonicalJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value as CanonicalJsonValue));
 
 const valuesEqual = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
+const revisionDiff = (
+  query: RevisionCompareQuery,
+  base: unknown,
+  compare: unknown,
+): StructuredRevisionDiff => ({
+  base_revision_id: query.base_revision_id,
+  compare_revision_id: query.compare_revision_id,
+  changed_fields: valuesEqual(base, compare) ? [] : ['snapshot'],
+  ...(base === undefined ? {} : { base_snapshot: structuredClone(base) as Record<string, unknown> }),
+  ...(compare === undefined ? {} : { compare_snapshot: structuredClone(compare) as Record<string, unknown> }),
+});
 const rawSha256 = (bytes: Uint8Array | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const workspaceBundleAcquisitionKeys = new Set([
   'schema_version',
@@ -3962,6 +3997,165 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async listSpecRevisions(specId: string): Promise<SpecRevision[]> {
     return this.listWhere<SpecRevision>(spec_revisions, eq(spec_revisions.specId, specId), spec_revisions.revisionNumber);
+  }
+
+  async saveContextManifest(contextManifest: ContextManifest): Promise<void> {
+    await this.upsert(context_manifests, context_manifests.id, contextManifest);
+  }
+
+  async getContextManifest(contextManifestId: string): Promise<ContextManifest | undefined> {
+    return this.getById(context_manifests, context_manifests.id, contextManifestId);
+  }
+
+  async saveDevelopmentPlan(plan: DevelopmentPlan): Promise<void> {
+    await this.upsert(development_plans, development_plans.id, plan);
+  }
+
+  async getDevelopmentPlan(id: string): Promise<DevelopmentPlan | undefined> {
+    return this.getById(development_plans, development_plans.id, id);
+  }
+
+  async listDevelopmentPlans(projectId: string): Promise<DevelopmentPlan[]> {
+    return this.listWhere<DevelopmentPlan>(development_plans, eq(development_plans.projectId, projectId), [
+      development_plans.createdAt,
+      development_plans.id,
+    ]);
+  }
+
+  async saveDevelopmentPlanSourceLink(link: DevelopmentPlanSourceLink): Promise<void> {
+    await this.upsert(development_plan_source_links, development_plan_source_links.id, link);
+  }
+
+  async listDevelopmentPlanSourceLinks(developmentPlanId: string): Promise<DevelopmentPlanSourceLink[]> {
+    return this.listWhere<DevelopmentPlanSourceLink>(
+      development_plan_source_links,
+      eq(development_plan_source_links.developmentPlanId, developmentPlanId),
+      [development_plan_source_links.createdAt, development_plan_source_links.id],
+    );
+  }
+
+  async listDevelopmentPlanSourceLinksForSource(
+    sourceRef: DevelopmentPlanSourceLink['source_ref'],
+  ): Promise<DevelopmentPlanSourceLink[]> {
+    const links = await this.listWhere<DevelopmentPlanSourceLink>(
+      development_plan_source_links,
+      undefined,
+      [development_plan_source_links.createdAt, development_plan_source_links.id],
+    );
+    return links.filter(
+      (link) =>
+        link.source_ref.type === sourceRef.type &&
+        link.source_ref.id === sourceRef.id &&
+        (sourceRef.revision_id === undefined || link.source_ref.revision_id === sourceRef.revision_id),
+    );
+  }
+
+  async saveDevelopmentPlanItem(item: DevelopmentPlanItem): Promise<void> {
+    await this.upsert(development_plan_items, development_plan_items.id, item);
+  }
+
+  async getDevelopmentPlanItem(id: string): Promise<DevelopmentPlanItem | undefined> {
+    return this.getById(development_plan_items, development_plan_items.id, id);
+  }
+
+  async listDevelopmentPlanItems(developmentPlanId: string): Promise<DevelopmentPlanItem[]> {
+    return this.listWhere<DevelopmentPlanItem>(
+      development_plan_items,
+      eq(development_plan_items.developmentPlanId, developmentPlanId),
+      [development_plan_items.createdAt, development_plan_items.id],
+    );
+  }
+
+  async saveDevelopmentPlanItemRevision(revision: DevelopmentPlanItemRevision): Promise<void> {
+    await this.upsert(development_plan_item_revisions, development_plan_item_revisions.id, revision);
+  }
+
+  async listDevelopmentPlanItemRevisions(itemId: string): Promise<DevelopmentPlanItemRevision[]> {
+    return this.listWhere<DevelopmentPlanItemRevision>(
+      development_plan_item_revisions,
+      eq(development_plan_item_revisions.developmentPlanItemId, itemId),
+      development_plan_item_revisions.revisionNumber,
+    );
+  }
+
+  async compareDevelopmentPlanItemRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff> {
+    const [base, compare] = await Promise.all([
+      this.getById<DevelopmentPlanItemRevision>(
+        development_plan_item_revisions,
+        development_plan_item_revisions.id,
+        query.base_revision_id,
+      ),
+      this.getById<DevelopmentPlanItemRevision>(
+        development_plan_item_revisions,
+        development_plan_item_revisions.id,
+        query.compare_revision_id,
+      ),
+    ]);
+    return revisionDiff(query, base?.snapshot, compare?.snapshot);
+  }
+
+  async saveBrainstormingSession(session: BrainstormingSession): Promise<void> {
+    await this.upsert(brainstorming_sessions, brainstorming_sessions.id, session);
+  }
+
+  async getBrainstormingSession(id: string): Promise<BrainstormingSession | undefined> {
+    return this.getById(brainstorming_sessions, brainstorming_sessions.id, id);
+  }
+
+  async saveBoundarySummary(summary: BoundarySummary): Promise<void> {
+    await this.upsert(boundary_summaries, boundary_summaries.id, summary);
+  }
+
+  async getBoundarySummary(id: string): Promise<BoundarySummary | undefined> {
+    return this.getById(boundary_summaries, boundary_summaries.id, id);
+  }
+
+  async saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void> {
+    await this.upsert(boundary_summary_revisions, boundary_summary_revisions.id, revision);
+  }
+
+  async listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]> {
+    return this.listWhere<BoundarySummaryRevision>(
+      boundary_summary_revisions,
+      eq(boundary_summary_revisions.boundarySummaryId, boundarySummaryId),
+      boundary_summary_revisions.revisionNumber,
+    );
+  }
+
+  async compareBoundarySummaryRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff> {
+    const [base, compare] = await Promise.all([
+      this.getById<BoundarySummaryRevision>(boundary_summary_revisions, boundary_summary_revisions.id, query.base_revision_id),
+      this.getById<BoundarySummaryRevision>(
+        boundary_summary_revisions,
+        boundary_summary_revisions.id,
+        query.compare_revision_id,
+      ),
+    ]);
+    return revisionDiff(query, base, compare);
+  }
+
+  async saveExecutionPlan(plan: ExecutionPlanDocument): Promise<void> {
+    await this.upsert(execution_plans, execution_plans.id, plan);
+  }
+
+  async getExecutionPlan(id: string): Promise<ExecutionPlanDocument | undefined> {
+    return this.getById(execution_plans, execution_plans.id, id);
+  }
+
+  async saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void> {
+    await this.upsert(execution_plan_revisions, execution_plan_revisions.id, revision);
+  }
+
+  async getExecutionPlanRevision(id: string): Promise<ExecutionPlanRevision | undefined> {
+    return this.getById(execution_plan_revisions, execution_plan_revisions.id, id);
+  }
+
+  async saveExecution(execution: Execution): Promise<void> {
+    await this.upsert(executions, executions.id, execution);
+  }
+
+  async getExecution(id: string): Promise<Execution | undefined> {
+    return this.getById(executions, executions.id, id);
   }
 
   async savePlan(plan: Plan): Promise<void> {

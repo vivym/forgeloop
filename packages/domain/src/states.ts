@@ -36,6 +36,28 @@ import {
 
 const DEFAULT_TIMESTAMP = '2026-05-05T00:00:00.000Z';
 
+export const aiNativeArtifactReviewStates = [
+  'missing',
+  'draft',
+  'in_review',
+  'approved',
+  'changes_requested',
+  'stale',
+  'blocked',
+] as const;
+
+export const aiNativeExecutionStates = [
+  'not_started',
+  'ready',
+  'running',
+  'paused',
+  'interrupted',
+  'failed',
+  'completed',
+  'awaiting_code_review',
+  'qa_handoff_pending',
+] as const;
+
 type Timestamped = {
   at?: string;
 };

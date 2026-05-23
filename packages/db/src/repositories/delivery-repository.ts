@@ -7,6 +7,9 @@ import type {
   AutomationScope,
   Artifact,
   Actor,
+  BoundarySummary,
+  BoundarySummaryRevision,
+  BrainstormingSession,
   CodexCredentialBinding,
   CodexCredentialBindingPublic,
   CodexCredentialBindingVersion,
@@ -28,7 +31,15 @@ import type {
   CodexWorkerRegistration,
   ResolvedCodexCredential,
   CommandIdempotencyRecord,
+  ContextManifest,
   Decision,
+  DevelopmentPlan,
+  DevelopmentPlanItem,
+  DevelopmentPlanItemRevision,
+  DevelopmentPlanSourceLink,
+  Execution,
+  ExecutionPlanDocument,
+  ExecutionPlanRevision,
   ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
@@ -51,6 +62,8 @@ import type {
   Spec,
   SpecRevision,
   StatusHistory,
+  RevisionCompareQuery,
+  StructuredRevisionDiff,
   Task,
   WorkItem,
 } from '@forgeloop/domain';
@@ -1330,6 +1343,34 @@ export interface DeliveryRepository {
   saveSpecRevision(specRevision: SpecRevision): Promise<void>;
   getSpecRevision(specRevisionId: string): Promise<SpecRevision | undefined>;
   listSpecRevisions(specId: string): Promise<SpecRevision[]>;
+
+  saveContextManifest(contextManifest: ContextManifest): Promise<void>;
+  getContextManifest(contextManifestId: string): Promise<ContextManifest | undefined>;
+  saveDevelopmentPlan(plan: DevelopmentPlan): Promise<void>;
+  getDevelopmentPlan(id: string): Promise<DevelopmentPlan | undefined>;
+  listDevelopmentPlans(projectId: string): Promise<DevelopmentPlan[]>;
+  saveDevelopmentPlanSourceLink(link: DevelopmentPlanSourceLink): Promise<void>;
+  listDevelopmentPlanSourceLinks(developmentPlanId: string): Promise<DevelopmentPlanSourceLink[]>;
+  listDevelopmentPlanSourceLinksForSource(sourceRef: DevelopmentPlanSourceLink['source_ref']): Promise<DevelopmentPlanSourceLink[]>;
+  saveDevelopmentPlanItem(item: DevelopmentPlanItem): Promise<void>;
+  getDevelopmentPlanItem(id: string): Promise<DevelopmentPlanItem | undefined>;
+  listDevelopmentPlanItems(developmentPlanId: string): Promise<DevelopmentPlanItem[]>;
+  saveDevelopmentPlanItemRevision(revision: DevelopmentPlanItemRevision): Promise<void>;
+  listDevelopmentPlanItemRevisions(itemId: string): Promise<DevelopmentPlanItemRevision[]>;
+  compareDevelopmentPlanItemRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
+  saveBrainstormingSession(session: BrainstormingSession): Promise<void>;
+  getBrainstormingSession(id: string): Promise<BrainstormingSession | undefined>;
+  saveBoundarySummary(summary: BoundarySummary): Promise<void>;
+  getBoundarySummary(id: string): Promise<BoundarySummary | undefined>;
+  saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void>;
+  listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]>;
+  compareBoundarySummaryRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
+  saveExecutionPlan(plan: ExecutionPlanDocument): Promise<void>;
+  getExecutionPlan(id: string): Promise<ExecutionPlanDocument | undefined>;
+  saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void>;
+  getExecutionPlanRevision(id: string): Promise<ExecutionPlanRevision | undefined>;
+  saveExecution(execution: Execution): Promise<void>;
+  getExecution(id: string): Promise<Execution | undefined>;
 
   savePlan(plan: Plan): Promise<void>;
   getPlan(planId: string): Promise<Plan | undefined>;

@@ -230,7 +230,7 @@ export async function listProductPlans(
       const title = `${workItem.title} Plan`;
       return {
         id: plan.id,
-        object: objectRef('plan', plan.id, title),
+        object: objectRef('execution_plan', plan.id, title),
         title,
         status: plan.status,
         gate_state: plan.gate_state,
@@ -551,7 +551,7 @@ const workItemListItem = (workItem: WorkItem): ProductListItem => ({
   driver_actor_id: workItem.driver_actor_id,
   related: [
     ...(workItem.current_spec_id === undefined ? [] : [objectRef('spec', workItem.current_spec_id)]),
-    ...(workItem.current_plan_id === undefined ? [] : [objectRef('plan', workItem.current_plan_id)]),
+    ...(workItem.current_plan_id === undefined ? [] : [objectRef('execution_plan', workItem.current_plan_id)]),
     ...(workItem.current_release_id === undefined ? [] : [objectRef('release', workItem.current_release_id)]),
   ],
   counts: {},
@@ -597,7 +597,7 @@ const planListItem = async (
   const title = `${workItem.title} Plan`;
   return {
     id: plan.id,
-    object: objectRef('plan', plan.id, title),
+    object: objectRef('execution_plan', plan.id, title),
     title,
     status: plan.status,
     gate_state: plan.gate_state,
@@ -636,7 +636,7 @@ const executionPackageListItem = async (
     parent: workItemObjectRef(workItem),
     related: [
       objectRef('spec', executionPackage.spec_id),
-      objectRef('plan', executionPackage.plan_id),
+      objectRef('execution_plan', executionPackage.plan_id),
       ...(executionPackage.last_run_session_id === undefined
         ? []
         : [objectRef('run_session', executionPackage.last_run_session_id)]),

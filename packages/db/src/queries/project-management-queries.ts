@@ -24,6 +24,8 @@ import type { DeliveryRepository } from '../repositories/delivery-repository';
 import { serializePublicArtifactRef, serializePublicArtifactRefs } from './public-evidence-serialization';
 
 type WorkItemObjectType = Extract<ObjectRef['type'], 'initiative' | 'requirement' | 'bug' | 'tech_debt'>;
+type MyWorkQueueObjectRef = MyWorkQueueItem['object_ref'];
+type WorkItemPublicRef = Extract<MyWorkQueueObjectRef, { type: WorkItemObjectType }>;
 type TypedWorkItem = WorkItem & { kind: WorkItemObjectType };
 type ProductListQuery = { project_id: string };
 type ReleaseRevisionAuthority = {
@@ -55,7 +57,10 @@ export async function listMyWorkQueue(
   return {
     items: [
       ...actorWorkItems.map((workItem) => ({ item: workItemToMyWorkQueueItem(workItem), updated_at: workItem.updated_at })),
-      ...actorTasks.map((task) => ({ item: taskToMyWorkQueueItem(task), updated_at: task.updated_at })),
+      ...actorTasks.flatMap((task) => {
+        const item = taskToMyWorkQueueItem(task);
+        return item === undefined ? [] : [{ item, updated_at: task.updated_at }];
+      }),
       ...actorReleases.map((release) => ({ item: releaseToMyWorkQueueItem(release), updated_at: release.updated_at })),
     ]
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
@@ -243,8 +248,20 @@ async function typedWorkItemById(
   return workItem?.kind === kind ? (workItem as TypedWorkItem) : undefined;
 }
 
-function workItemRef(workItem: WorkItem): ObjectRef {
+function workItemRef(workItem: WorkItem): WorkItemPublicRef {
   return { type: workItemKindToObjectType(workItem.kind), id: workItem.id };
+}
+
+function publicWorkItemRefFromObjectRef(ref: ObjectRef): WorkItemPublicRef | undefined {
+  switch (ref.type) {
+    case 'initiative':
+    case 'requirement':
+    case 'bug':
+    case 'tech_debt':
+      return { type: ref.type, id: ref.id };
+    default:
+      return undefined;
+  }
 }
 
 function workItemHref(workItem: WorkItem): string {
@@ -268,10 +285,15 @@ function workItemToMyWorkQueueItem(workItem: WorkItem): MyWorkQueueItem {
   };
 }
 
-function taskToMyWorkQueueItem(task: Task): MyWorkQueueItem {
+function taskToMyWorkQueueItem(task: Task): MyWorkQueueItem | undefined {
+  const parentRef = task.parent_ref === undefined ? undefined : publicWorkItemRefFromObjectRef(task.parent_ref);
+  if (parentRef === undefined) {
+    return undefined;
+  }
+
   return {
     id: `task:${task.id}`,
-    object_ref: { type: 'task', id: task.id },
+    object_ref: parentRef,
     title: task.title,
     attention_reason: task.stale_state === 'current' ? 'task_ready_for_developer' : `task_${task.stale_state}`,
     href: `/tasks/${task.id}`,
