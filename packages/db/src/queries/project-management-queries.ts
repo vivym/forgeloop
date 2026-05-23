@@ -474,7 +474,7 @@ function reviewGateFor(
   revisionAuthority: ReleaseRevisionAuthority,
 ): EvidenceRequirementStatus {
   const candidates = evidenceForScope(evidence, scopeRef, 'review');
-  const invalidStatus = recordInvalidStatus(candidates, scopeRef, disabledReasons);
+  const invalidStatus = recordInvalidStatus(candidates, scopeRef, 'review', disabledReasons);
   if (invalidStatus !== undefined) {
     return invalidStatus;
   }
@@ -520,7 +520,7 @@ function testGateFor(
   revisionAuthority: ReleaseRevisionAuthority,
 ): EvidenceRequirementStatus {
   const candidates = evidenceForScope(evidence, scopeRef, 'test');
-  const invalidStatus = recordInvalidStatus(candidates, scopeRef, disabledReasons);
+  const invalidStatus = recordInvalidStatus(candidates, scopeRef, 'qa_acceptance', disabledReasons);
   if (invalidStatus !== undefined) {
     return invalidStatus;
   }
@@ -616,22 +616,23 @@ function recordWrongScopeEvidence(
 function recordInvalidStatus(
   candidates: ReleaseEvidence[],
   scopeRef: ObjectRef,
+  kind: EvidenceRequirementStatus['kind'],
   disabledReasons: ProductSafeDisabledReason[],
 ): EvidenceRequirementStatus | undefined {
   const stale = candidates.find((item) => item.status === 'stale' || value(item.extra, 'freshness') === 'stale');
   if (stale !== undefined) {
     disabledReasons.push(disabled('evidence_stale', scopeRef));
-    return gate(stale.id, scopeRef, 'review', 'stale', disabled('evidence_stale', scopeRef));
+    return gate(stale.id, scopeRef, kind, 'stale', disabled('evidence_stale', scopeRef));
   }
   const unauthorized = candidates.find((item) => value(item.extra, 'authorization') === 'unauthorized' || !isAuthorizedEvidence(item));
   if (unauthorized !== undefined) {
     disabledReasons.push(disabled('evidence_unauthorized', scopeRef));
-    return gate(unauthorized.id, scopeRef, 'review', 'unauthorized', disabled('evidence_unauthorized', scopeRef));
+    return gate(unauthorized.id, scopeRef, kind, 'unauthorized', disabled('evidence_unauthorized', scopeRef));
   }
   const tombstoned = candidates.find((item) => value(item.extra, 'reference_status') === 'tombstoned' || value(item.extra, 'reference_status') === 'deleted');
   if (tombstoned !== undefined) {
     disabledReasons.push(disabled('evidence_tombstoned', scopeRef));
-    return gate(tombstoned.id, scopeRef, 'review', 'tombstoned', disabled('evidence_tombstoned', scopeRef));
+    return gate(tombstoned.id, scopeRef, kind, 'tombstoned', disabled('evidence_tombstoned', scopeRef));
   }
   return undefined;
 }

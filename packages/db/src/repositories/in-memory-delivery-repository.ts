@@ -1449,6 +1449,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (!this.tasks.has(input.task_id)) {
       throw new DomainError('INVALID_TRANSITION', `Task ${input.task_id} was not found`);
     }
+    if (executionPackage.task_id !== undefined && executionPackage.task_id !== input.task_id) {
+      throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} is already linked to another Task`);
+    }
     this.executionPackages.set(input.execution_package_id, clone({ ...executionPackage, task_id: input.task_id }));
   }
 

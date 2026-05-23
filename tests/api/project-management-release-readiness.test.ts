@@ -73,6 +73,7 @@ describe('project management release readiness API', () => {
         { status: 'approved', scope_ref: { type: 'requirement', id: 'req-1' }, freshness: 'stale' },
       ],
       test_evidence: [
+        { status: 'passed', scope_ref: { type: 'requirement', id: 'req-1' }, freshness: 'stale' },
         { status: 'passed', scope_ref: { type: 'task', id: 'task-1' }, authorization: 'unauthorized' },
         { status: 'passed', scope_ref: { type: 'bug', id: 'bug-1' }, reference_status: 'tombstoned' },
       ],
@@ -83,6 +84,28 @@ describe('project management release readiness API', () => {
     expect(response.body.ready).toBe(false);
     expect(response.body.disabled_reasons.map((reason: { code: string }) => reason.code)).toEqual(
       expect.arrayContaining(['evidence_scope_mismatch', 'evidence_stale', 'evidence_unauthorized', 'evidence_tombstoned']),
+    );
+    expect(response.body.required_test_acceptance_evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope_ref: { type: 'requirement', id: 'req-1' },
+          kind: 'qa_acceptance',
+          status: 'stale',
+          disabled_reason: expect.objectContaining({ code: 'evidence_stale' }),
+        }),
+        expect.objectContaining({
+          scope_ref: { type: 'task', id: 'task-1' },
+          kind: 'qa_acceptance',
+          status: 'unauthorized',
+          disabled_reason: expect.objectContaining({ code: 'evidence_unauthorized' }),
+        }),
+        expect.objectContaining({
+          scope_ref: { type: 'bug', id: 'bug-1' },
+          kind: 'qa_acceptance',
+          status: 'tombstoned',
+          disabled_reason: expect.objectContaining({ code: 'evidence_tombstoned' }),
+        }),
+      ]),
     );
   });
 

@@ -2000,10 +2000,19 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const [row] = await this.db
       .update(execution_packages)
       .set({ taskId: input.task_id })
-      .where(eq(execution_packages.id, input.execution_package_id))
+      .where(
+        and(
+          eq(execution_packages.id, input.execution_package_id),
+          or(isNull(execution_packages.taskId), eq(execution_packages.taskId, input.task_id)),
+        ),
+      )
       .returning({ id: execution_packages.id });
     if (row === undefined) {
-      throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} was not found`);
+      const executionPackage = await this.getExecutionPackage(input.execution_package_id);
+      if (executionPackage === undefined) {
+        throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} was not found`);
+      }
+      throw new DomainError('INVALID_TRANSITION', `Execution Package ${input.execution_package_id} is already linked to another Task`);
     }
   }
 

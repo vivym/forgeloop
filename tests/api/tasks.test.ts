@@ -92,6 +92,22 @@ describe('Task authority API', () => {
     await request(app.getHttpServer()).post('/tasks/task-manual/packages').send({ actor_id: 'actor-dev' }).expect(409);
   });
 
+  it('does not relink an existing generated package from another current Task', async () => {
+    await seedTask(repository, { id: 'task-first' });
+    await seedTask(repository, { id: 'task-second' });
+
+    const firstResponse = await request(app.getHttpServer())
+      .post('/tasks/task-first/packages')
+      .send({ actor_id: 'actor-dev' })
+      .expect(201);
+    const packageId = firstResponse.body.package_ref.id;
+
+    await request(app.getHttpServer()).post('/tasks/task-second/packages').send({ actor_id: 'actor-dev' }).expect(409);
+
+    await request(app.getHttpServer()).get(`/query/tasks/task-first/packages/${packageId}`).expect(200);
+    await request(app.getHttpServer()).get(`/query/tasks/task-second/packages/${packageId}`).expect(404);
+  });
+
   it('persists Task narrative Markdown only after shared validation passes', async () => {
     await seedTask(repository, { id: 'task-1' });
 

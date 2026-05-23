@@ -105,10 +105,15 @@ export class TasksService {
     ) {
       throw new ConflictException('Generated package revision authority does not match the Task authority');
     }
-    await this.repository.linkExecutionPackageToTask({
-      task_id: task.id,
-      execution_package_id: generatedPackage.id,
-    });
+    if (generatedPackage.task_id !== undefined && generatedPackage.task_id !== task.id) {
+      throw new ConflictException('Generated package already belongs to another Task');
+    }
+    if (generatedPackage.task_id !== task.id) {
+      await this.repository.linkExecutionPackageToTask({
+        task_id: task.id,
+        execution_package_id: generatedPackage.id,
+      });
+    }
 
     return {
       task_ref: { type: 'task', id: task.id },
