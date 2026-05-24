@@ -374,6 +374,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
       { id: 'flow-health', label: 'Flow Health', value: 1, metrics: [{ label: 'Development Plan Items', value: 1 }] },
       { id: 'blocked-work', label: 'Blocked Work', value: 0, metrics: [] },
       { id: 'aging', label: 'Aging', value: 0, metrics: [] },
+      { id: 'risk-concentration', label: 'Risk Concentration', value: 1, metrics: [] },
       { id: 'role-load', label: 'Role Load', value: 1, metrics: [] },
       { id: 'release-confidence', label: 'Release Confidence', value: 1, metrics: [] },
     ],

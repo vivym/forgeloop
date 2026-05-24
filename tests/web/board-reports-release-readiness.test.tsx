@@ -3,7 +3,7 @@
 import { cleanup } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { boardCards, projectId, reviewPacket, runSession, taskListItem } from './fixtures/product-data';
+import { boardCards, developmentPlanItem, projectId, reviewPacket, runSession } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('board, reports, and release readiness routes', () => {
@@ -11,7 +11,7 @@ describe('board, reports, and release readiness routes', () => {
     const screen = await renderRoute('/board');
 
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
-    for (const label of ['Requirement', 'Initiative', 'Tech Debt', 'Task', 'Bug', 'Spec', 'Plan', 'Release']) {
+    for (const label of ['Requirement', 'Initiative', 'Tech Debt', 'Development Plan Item', 'Bug', 'Release']) {
       expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
     }
   });
@@ -44,14 +44,15 @@ describe('board, reports, and release readiness routes', () => {
     const screen = await renderRoute('/releases/release-web-product');
 
     expect(await screen.findByRole('heading', { name: /release readiness/i })).toBeTruthy();
-    for (const label of ['Initiative', 'Requirement', 'Tech Debt', 'Task', 'Bug']) {
+    for (const label of ['Initiative', 'Requirement', 'Tech Debt', 'Development Plan Item', 'Bug']) {
       expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
     }
     const evidenceHrefs = screen
-      .getAllByRole('link', { name: 'Open task-scoped evidence' })
+      .getAllByRole('link', { name: 'Open execution evidence' })
       .map((link) => link.getAttribute('href'));
-    expect(evidenceHrefs).toContain(`/tasks/${taskListItem.id}/reviews/${reviewPacket.id}`);
-    expect(evidenceHrefs).toContain(`/tasks/${taskListItem.id}/runs/${runSession.id}`);
+    expect(evidenceHrefs).toContain(`/reports?development_plan_item_id=${developmentPlanItem.id}&review_packet_id=${reviewPacket.id}`);
+    expect(evidenceHrefs).toContain(`/board?development_plan_item_id=${developmentPlanItem.id}`);
+    expect(document.body.textContent).not.toContain('/tasks/');
     expect(document.body.textContent).not.toContain('/packages/');
   });
 

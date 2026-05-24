@@ -21,10 +21,11 @@ describe('responsive layout contract', () => {
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
-  it('renders target evidence scaffolds without old responsive class tokens', async () => {
-    const screen = await renderRoute('/tasks/task-1/runs/run-web-product');
+  it('renders source object workspace without old responsive class tokens', async () => {
+    const screen = await renderRoute('/requirements/req-1');
 
-    expect(await screen.findByRole('heading', { name: 'Run Evidence' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
+    expect(await screen.findByRole('complementary', { name: /next action/i })).toBeTruthy();
     expect(screen.getByRole('main')).toBeTruthy();
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });

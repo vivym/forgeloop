@@ -25,11 +25,11 @@ describe('React Router product shell', () => {
   it('shows project management nav labels without removed product route families', async () => {
     const screen = await renderRoute('/my-work');
 
-    for (const label of ['Dashboard', 'My Work', 'Requirements', 'Specs & Plans', 'Tasks', 'Bugs', 'Board', 'Releases', 'Reports']) {
+    for (const label of ['Dashboard', 'My Work', 'Initiatives', 'Requirements', 'Specs & Execution Plans', 'Bugs', 'Board', 'Releases', 'Reports']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
 
-    for (const label of ['Lanes', 'Pipeline', 'Work Items', 'Packages', 'Runs', 'Reviews']) {
+    for (const label of ['Lanes', 'Pipeline', 'Work Items', 'Tasks', 'Packages', 'Runs', 'Reviews']) {
       expect(screen.queryByRole('link', { name: label })).toBeNull();
     }
   });
@@ -63,16 +63,17 @@ describe('React Router product shell', () => {
     expect((await screen.findByRole('link', { name: 'My Work' })).getAttribute('aria-current')).toBe('page');
   });
 
-  it('marks Requirements active for initiative and tech debt routes', async () => {
+  it('marks typed Discovery routes active independently', async () => {
     const screen = await renderRoute('/initiatives/init-1');
 
-    expect(screen.getByRole('link', { name: 'Requirements' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Initiatives' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Requirements' }).getAttribute('aria-current')).toBe(null);
   });
 
-  it('marks Specs & Plans active for spec and plan detail routes', async () => {
-    const screen = await renderRoute('/plans/plan-1');
+  it('marks Specs & Execution Plans active for the governance queue route', async () => {
+    const screen = await renderRoute('/specs-plans');
 
-    expect(screen.getByRole('link', { name: 'Specs & Plans' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Specs & Execution Plans' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('respects the requested route path', async () => {
@@ -118,7 +119,7 @@ describe('React Router product shell', () => {
     const layoutRoute = routeConfigModule.default.find((route) => route.file === './routes/_layout.tsx');
     const serialized = JSON.stringify(layoutRoute);
 
-    for (const forbidden of ['lanes', 'pipeline', 'work-items', 'packages', 'runs', 'reviews']) {
+    for (const forbidden of ['lanes', 'pipeline', 'work-items', 'tasks', 'packages', 'runs', 'reviews']) {
       expect(serialized).not.toContain(`"path":"${forbidden}`);
       expect(serialized).not.toContain(`/routes/${forbidden}`);
     }

@@ -61,7 +61,12 @@ const requirementListResponseSchema = z.object({ items: z.array(requirementListI
 const initiativeListResponseSchema = z.object({ items: z.array(initiativeListItemSchema) }).passthrough();
 const techDebtListResponseSchema = z.object({ items: z.array(techDebtListItemSchema) }).passthrough();
 const bugListResponseSchema = z.object({ items: z.array(bugListItemSchema) }).passthrough();
-const boardResponseSchema = z.object({ items: z.array(boardCardSchema) }).passthrough();
+const boardResponseSchema = z
+  .object({
+    items: z.array(boardCardSchema),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
 const dashboardResponseSchema = z
   .object({
     project_id: z.string(),

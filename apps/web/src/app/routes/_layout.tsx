@@ -5,15 +5,38 @@ import { useProjectContext } from '../../shared/context/project-context';
 import { useRuntimeFlags } from '../../shared/context/runtime-flags';
 import { AppShell, SidebarNav, Topbar } from '../../shared/layout';
 
-const navItems = [
-  { label: 'Dashboard', to: '/dashboard' },
-  { label: 'My Work', to: '/my-work', activeOn: ['/', '/my-work'] },
-  { label: 'Requirements', to: '/requirements', activeOn: ['/requirements', '/initiatives', '/tech-debt'] },
-  { label: 'Specs & Plans', to: '/specs-plans' },
-  { label: 'Bugs', to: '/bugs' },
-  { label: 'Board', to: '/board' },
-  { label: 'Releases', to: '/releases' },
-  { label: 'Reports', to: '/reports' },
+const navGroups = [
+  {
+    label: 'Home',
+    items: [
+      { label: 'Dashboard', to: '/dashboard' },
+      { label: 'My Work', to: '/my-work', activeOn: ['/', '/my-work'] },
+    ],
+  },
+  {
+    label: 'Discovery',
+    items: [
+      { label: 'Initiatives', to: '/initiatives' },
+      { label: 'Requirements', to: '/requirements' },
+      { label: 'Bugs', to: '/bugs' },
+      { label: 'Tech Debt', to: '/tech-debt' },
+    ],
+  },
+  {
+    label: 'Planning',
+    items: [{ label: 'Specs & Execution Plans', to: '/specs-plans' }],
+  },
+  {
+    label: 'Delivery',
+    items: [
+      { label: 'Board', to: '/board' },
+      { label: 'Releases', to: '/releases' },
+    ],
+  },
+  {
+    label: 'Intelligence',
+    items: [{ label: 'Reports', to: '/reports' }],
+  },
 ];
 
 function isNavItemActive(pathname: string, item: { to: string; activeOn?: string[] }) {
@@ -26,17 +49,23 @@ export default function ProductLayoutRoute() {
   const { actorId } = useActorContext();
   const { projectId } = useProjectContext();
   const runtimeFlags = useRuntimeFlags();
-  const items = runtimeFlags.devToolsEnabled ? [...navItems, { label: 'Dev Tools', to: '/dev-tools' }] : navItems;
+  const groups = runtimeFlags.devToolsEnabled
+    ? [...navGroups, { label: 'Tools', items: [{ label: 'Dev Tools', to: '/dev-tools' }] }]
+    : navGroups;
 
   return (
     <AppShell
       sidebar={
         <SidebarNav
           title="ForgeLoop"
-          items={items.map((item) => ({
-            to: item.to,
-            label: item.label,
-            active: isNavItemActive(location.pathname, item),
+          items={[]}
+          groups={groups.map((group) => ({
+            label: group.label,
+            items: group.items.map((item) => ({
+              to: item.to,
+              label: item.label,
+              active: isNavItemActive(location.pathname, item),
+            })),
           }))}
         />
       }

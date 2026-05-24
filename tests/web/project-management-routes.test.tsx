@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+
+import { developmentPlan, developmentPlanItem } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
-import { taskDetail } from './fixtures/product-data';
 
 const removedRoutes = [
   '/lanes',
@@ -13,25 +13,36 @@ const removedRoutes = [
   '/work-items',
   '/work-items/wi-1',
   '/work-items/wi-1/spec-plan',
+  '/tasks',
+  '/tasks/task-1',
+  '/tasks/new',
+  '/tasks/task-1/runs/run-web-product',
   '/specs',
+  '/specs/spec-1',
   '/plans',
+  '/plans/plan-1',
+  '/requirements/req-1/spec',
+  '/requirements/req-1/plan',
+  '/bugs/bug-1/spec',
+  '/bugs/bug-1/plan',
+  '/tech-debt/td-1/spec',
+  '/tech-debt/td-1/plan',
+  '/initiatives/init-1/spec',
+  '/initiatives/init-1/plan',
   '/packages',
-  '/packages/pkg-1',
   '/runs',
-  '/runs/run-1',
   '/reviews',
-  '/reviews/review-1',
 ];
 
 const legacyOwnerPattern = new RegExp(`${['Work', 'Item', 'Owner'].join(' ')}|${['owner', 'actor', 'id'].join('_')}`);
 
 describe('project management route IA', () => {
-  it('renders target primary navigation only', async () => {
+  it('renders grouped primary navigation without generic Tasks or direct artifact routes', async () => {
     const screen = await renderRoute('/my-work');
-    for (const label of ['Dashboard', 'My Work', 'Requirements', 'Specs & Plans', 'Tasks', 'Bugs', 'Board', 'Releases', 'Reports']) {
+    for (const label of ['Dashboard', 'My Work', 'Requirements', 'Bugs', 'Tech Debt', 'Specs & Execution Plans', 'Board', 'Releases', 'Reports']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
-    for (const label of ['Lanes', 'Pipeline', 'Work Items', 'Packages', 'Runs', 'Reviews']) {
+    for (const label of ['Lanes', 'Pipeline', 'Work Items', 'Tasks', 'Packages', 'Runs', 'Reviews', 'Specs', 'Plans']) {
       expect(screen.queryByRole('link', { name: label })).toBeNull();
     }
   });
@@ -39,29 +50,48 @@ describe('project management route IA', () => {
   it.each(removedRoutes)('does not resolve removed product route %s', async (route) => {
     const screen = await renderRoute(route);
     expect(screen.getByRole('heading', { name: /not found|404/i })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: /lanes|pipeline|work items|packages|runs|reviews/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /generate spec|generate execution plan|start execution/i })).toBeNull();
+    cleanup();
   });
 
-  it.each([
-    ['/specs/spec-1', /spec/i],
-    ['/specs/spec-1/revisions/rev-1', /spec/i],
-    ['/plans/plan-1', /plan/i],
-    ['/plans/plan-1/revisions/rev-1', /plan/i],
-  ])('keeps direct spec and plan detail route %s active', async (route, heading) => {
-    const screen = await renderRoute(route);
-    expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: /not found|404/i })).toBeNull();
-  });
-
-  it('renders Specs & Plans as one queue with separate tabs', async () => {
+  it('renders Specs & Execution Plans as a governance queue instead of direct document browsers', async () => {
     const screen = await renderRoute('/specs-plans');
-    expect(await screen.findByRole('heading', { name: 'Specs & Plans' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Specs & Execution Plans' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Specs' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Plans' })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Specs registry' })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Execution Plans' })).toBeTruthy();
+    for (const link of screen.getAllByRole('link')) {
+      expect(link.getAttribute('href')).not.toMatch(/^\/development-plans|^\/executions|^\/code-review-handoffs|^\/qa-handoffs/);
+    }
+    expect(document.body.textContent).not.toMatch(/\/specs\/|\/plans\/|\/tasks\//);
   });
 
-  it('renders typed list and detail surfaces', async () => {
+  it('renders focused Specs & Execution Plans context from Development Plan Item links', async () => {
+    const screen = await renderRoute(`/specs-plans?development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`);
+
+    expect(await screen.findByText(/Focused governance queue/i)).toBeTruthy();
+    expect(await screen.findByText(new RegExp(`Development Plan Item ${developmentPlanItem.id}`, 'i'))).toBeTruthy();
+  });
+
+  it('renders source object workspace with role lens and item-scoped downstream actions', async () => {
+    const screen = await renderRoute('/requirements/req-1');
+
+    expect(await screen.findByRole('heading', { name: /^Requirement$/ })).toBeTruthy();
+    expect(await screen.findByRole('tablist', { name: /source object sections/i })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /brief/i })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /development plan/i })).toBeTruthy();
+    expect(screen.getByRole('radiogroup', { name: /role lens/i })).toBeTruthy();
+    expect(await screen.findByRole('complementary', { name: /next action/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /create development plan/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /generate development plan/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /link existing development plan/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /generate spec/i })).toBeNull();
+    expect(screen.getByRole('link', { name: /open development plan item/i }).getAttribute('href')).toBe(
+      `/specs-plans?development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`,
+    );
+    expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
+  });
+
+  it('renders typed list and detail source object surfaces', async () => {
     for (const [route, heading, expectedText] of [
       ['/requirements', 'Requirements', /checkout requirement/i],
       ['/requirements/req-1', 'Requirement', /checkout validation must block bad payment states/i],
@@ -69,8 +99,6 @@ describe('project management route IA', () => {
       ['/initiatives/init-1', 'Initiative', /coordinate checkout reliability/i],
       ['/tech-debt', 'Tech Debt', /checkout validation debt/i],
       ['/tech-debt/td-1', 'Tech Debt', /validation logic is duplicated/i],
-      ['/tasks', 'Tasks', /developer task/i],
-      ['/tasks/task-1', 'Task', /implement checkout guard/i],
       ['/bugs', 'Bugs', /checkout regression/i],
       ['/bugs/bug-1', 'Bug', /checkout accepts invalid cards/i],
     ] as const) {
@@ -82,12 +110,11 @@ describe('project management route IA', () => {
     }
   });
 
-  it('renders typed create forms with structured fields and object templates', async () => {
+  it('renders typed create forms without Task creation', async () => {
     for (const [route, fields] of [
       ['/requirements/new', ['Stakeholder problem', 'Desired outcome', 'Acceptance criteria', 'Requirement Driver']],
       ['/initiatives/new', ['Business outcome', 'Scope', 'Milestone intent', 'Initiative Driver']],
       ['/tech-debt/new', ['Current pain', 'Desired invariant', 'Affected modules', 'Validation strategy', 'Tech Debt Driver']],
-      ['/tasks/new', ['Execution brief', 'Acceptance checklist', 'Parent context']],
       ['/bugs/new', ['Observed behavior', 'Expected behavior', 'Reproduction steps', 'Environment', 'Severity', 'Bug Driver']],
     ] as const) {
       const screen = await renderRoute(route);
@@ -98,62 +125,5 @@ describe('project management route IA', () => {
       expect(screen.getByRole('link', { name: /cancel/i }).getAttribute('href')).not.toBe('/work-items');
       cleanup();
     }
-  });
-
-  it('persists task narrative and readiness context during typed create', async () => {
-    const screen = await renderRoute('/tasks/new', {
-      apiOverrides: {
-        'POST /tasks': {
-          id: 'task-created',
-          object_ref: { type: 'task', id: 'task-created' },
-          title: 'Implement checkout guard',
-          stale_state: 'current',
-          package_generation_eligible: false,
-          href: '/tasks/task-created',
-        },
-        'PATCH /tasks/task-created/narrative': {
-          ...taskDetail,
-          id: 'task-created',
-          ref: { type: 'task', id: 'task-created' },
-          title: 'Implement checkout guard',
-        },
-      },
-    });
-    const user = userEvent.setup();
-    const fetchMock = vi.mocked(globalThis.fetch);
-
-    await user.clear(screen.getByLabelText(/execution brief/i));
-    await user.type(screen.getByLabelText(/execution brief/i), 'Implement checkout guard');
-    await user.clear(screen.getByLabelText(/acceptance checklist/i));
-    await user.type(screen.getByLabelText(/acceptance checklist/i), 'Focused route test passes');
-    await user.type(screen.getByLabelText(/repo\/package readiness context/i), 'Ready after approved Spec and Plan revisions.');
-    await user.clear(screen.getByLabelText(/narrative markdown/i));
-    await user.type(screen.getByLabelText(/narrative markdown/i), '## Task narrative\n\nKeep validation scoped.');
-
-    await user.click(screen.getByRole('button', { name: 'Create' }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        'http://localhost:3000/tasks/task-created/narrative',
-        expect.objectContaining({
-          method: 'PATCH',
-          body: expect.stringContaining('Ready after approved Spec and Plan revisions.'),
-        }),
-      );
-    });
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/tasks',
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.stringContaining('"execution_brief":"Implement checkout guard"'),
-      }),
-    );
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      'http://localhost:3000/work-items',
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.stringContaining('"execution_brief":"Implement checkout guard"'),
-      }),
-    );
   });
 });

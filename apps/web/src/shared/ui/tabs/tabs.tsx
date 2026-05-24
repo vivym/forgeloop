@@ -12,13 +12,14 @@ export interface TabItem {
 
 export interface TabsProps {
   items: TabItem[];
+  ariaLabel?: string;
   defaultValue?: string;
   value?: string;
   onValueChange?: (value: string) => void;
   className?: string;
 }
 
-export function Tabs({ items, defaultValue, value, onValueChange, className }: TabsProps) {
+export function Tabs({ items, ariaLabel, defaultValue, value, onValueChange, className }: TabsProps) {
   const initialValue = defaultValue ?? items[0]?.value;
   const rootProps = {
     ...(initialValue === undefined ? {} : { defaultValue: initialValue }),
@@ -28,7 +29,7 @@ export function Tabs({ items, defaultValue, value, onValueChange, className }: T
 
   return (
     <RadixTabs.Root className={cn('grid min-w-0 gap-4', className)} {...rootProps}>
-      <RadixTabs.List className="flex flex-wrap gap-1 border-b border-border">
+      <RadixTabs.List aria-label={ariaLabel} className="flex flex-wrap gap-1 border-b border-border">
         {items.map((item) => (
           <RadixTabs.Trigger
             className="border-0 border-b-2 border-transparent bg-transparent px-4 py-3 text-sm font-semibold text-text-muted transition-colors duration-base ease-standard motion-reduce:transition-none data-[state=active]:border-primary data-[state=active]:text-primary disabled:cursor-not-allowed disabled:opacity-60"

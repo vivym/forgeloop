@@ -29,8 +29,10 @@ describe('My Work route', () => {
   it('links queue rows to typed object routes', async () => {
     const screen = await renderRoute('/my-work');
 
-    expect((await screen.findByRole('link', { name: /checkout requirement/i })).getAttribute('href')).toBe('/requirements/req-1');
-    expect(screen.getByRole('link', { name: /developer task/i }).getAttribute('href')).toBe('/tasks/task-1');
+    expect((await screen.findByRole('link', { name: /open requirement/i })).getAttribute('href')).toBe('/requirements/req-1');
+    expect(screen.getByRole('link', { name: /open development plan item/i }).getAttribute('href')).toBe(
+      '/specs-plans?development_plan_id=development-plan-web-product&development_plan_item_id=development-plan-item-web-product',
+    );
   });
 
   it('derives typed links from object refs instead of trusting queue hrefs', async () => {
@@ -48,7 +50,7 @@ describe('My Work route', () => {
       },
     });
 
-    expect((await screen.findByRole('link', { name: /checkout requirement/i })).getAttribute('href')).toBe('/requirements/req-1');
+    expect((await screen.findByRole('link', { name: /open requirement/i })).getAttribute('href')).toBe('/requirements/req-1');
     expect(document.body.textContent).not.toContain('javascript:alert');
   });
 });

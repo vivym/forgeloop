@@ -38,19 +38,21 @@ export function SpecsPlansRoute() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const activeKind = searchParams.get('tab') === 'plans' ? 'plan' : 'spec';
+  const focusedDevelopmentPlanId = searchParams.get('development_plan_id');
+  const focusedDevelopmentPlanItemId = searchParams.get('development_plan_item_id');
   const queueQuery = useSpecExecutionPlanQueueQuery({ project_id: projectId, limit: 100 });
-  const activeItems = ((queueQuery.data?.items ?? []) as QueueItem[]).filter((item) =>
-    activeKind === 'spec' ? item.artifact_type === 'spec' : item.artifact_type === 'execution_plan',
-  );
+  const activeItems = ((queueQuery.data?.items ?? []) as QueueItem[])
+    .filter((item) => (activeKind === 'spec' ? item.artifact_type === 'spec' : item.artifact_type === 'execution_plan'))
+    .filter((item) => isFocusedQueueItem(item, focusedDevelopmentPlanId, focusedDevelopmentPlanItemId));
 
   return (
     <>
       <PageHeader
-        subtitle="Spec and Plan authoring queues grouped by typed source object state."
-        title="Specs & Plans"
+        subtitle="Spec and Execution Plan authoring queues grouped by typed source object state."
+        title="Specs & Execution Plans"
       />
       <Section title="Authoring queue">
-        <InlineActions aria-label="Specs and Plans tabs" role="tablist">
+        <InlineActions aria-label="Specs and Execution Plans tabs" role="tablist">
           <Link
             aria-selected={activeKind === 'spec'}
             className={activeKind === 'spec' ? selectedSegmentClass : unselectedSegmentClass}
@@ -65,7 +67,7 @@ export function SpecsPlansRoute() {
             role="tab"
             to="/specs-plans?tab=plans"
           >
-            Plans
+            Execution Plans
           </Link>
         </InlineActions>
         <QueueStatus
@@ -73,12 +75,34 @@ export function SpecsPlansRoute() {
           isPending={queueQuery.status === 'pending'}
           kind={activeKind}
         />
+        {focusedDevelopmentPlanId !== null || focusedDevelopmentPlanItemId !== null ? (
+          <InlineNotice
+            description={queueFocusDescription(focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}
+            title="Focused governance queue"
+            tone="info"
+          />
+        ) : null}
       </Section>
       {queueQuery.status !== 'pending' && !queueQuery.isError ? (
         <GroupedQueue items={activeItems} kind={activeKind} />
       ) : null}
     </>
   );
+}
+
+function isFocusedQueueItem(item: QueueItem, developmentPlanId: string | null, developmentPlanItemId: string | null): boolean {
+  if (developmentPlanId !== null && item.development_plan_item_ref?.development_plan_id !== developmentPlanId) return false;
+  if (developmentPlanItemId !== null && item.development_plan_item_ref?.id !== developmentPlanItemId) return false;
+  return true;
+}
+
+function queueFocusDescription(developmentPlanId: string | null, developmentPlanItemId: string | null): string {
+  if (developmentPlanId !== null && developmentPlanItemId !== null) {
+    return `Showing governance rows for Development Plan ${developmentPlanId} and Development Plan Item ${developmentPlanItemId}.`;
+  }
+  if (developmentPlanId !== null) return `Showing governance rows for Development Plan ${developmentPlanId}.`;
+  if (developmentPlanItemId !== null) return `Showing governance rows for Development Plan Item ${developmentPlanItemId}.`;
+  return 'Showing all governance rows.';
 }
 
 function GroupedQueue({ items, kind }: { items: QueueItem[]; kind: QueueKind }) {
@@ -88,7 +112,7 @@ function GroupedQueue({ items, kind }: { items: QueueItem[]; kind: QueueKind }) 
     <>
       {queueGroups.map((group) => (
         <Section
-          description={`${groupedItems[group.id].length} ${kind === 'spec' ? 'Spec' : 'Plan'} item${groupedItems[group.id].length === 1 ? '' : 's'}.`}
+          description={`${groupedItems[group.id].length} ${kind === 'spec' ? 'Spec' : 'Execution Plan'} item${groupedItems[group.id].length === 1 ? '' : 's'}.`}
           key={group.id}
           title={group.label}
         >
@@ -108,7 +132,7 @@ function GroupedQueue({ items, kind }: { items: QueueItem[]; kind: QueueKind }) 
 }
 
 function QueueItemCard({ item, kind }: { item: QueueItem; kind: QueueKind }) {
-  const detailHref = item.href ?? '/specs-plans';
+  const detailHref = queueItemHref(item, kind);
 
   return (
     <article className="grid gap-3 rounded-card border border-border bg-surface p-4">
@@ -123,7 +147,7 @@ function QueueItemCard({ item, kind }: { item: QueueItem; kind: QueueKind }) {
           </div>
         </div>
         <Link className={unselectedSegmentClass} to={detailHref}>
-          Open {kind === 'spec' ? 'Spec' : 'Plan'}
+          Open {kind === 'spec' ? 'Spec' : 'Execution Plan'}
         </Link>
       </div>
       <div className="grid gap-2 text-sm text-text-secondary">
@@ -140,8 +164,21 @@ function QueueItemCard({ item, kind }: { item: QueueItem; kind: QueueKind }) {
   );
 }
 
+function queueItemHref(item: QueueItem, kind: QueueKind): string {
+  const tab = kind === 'spec' ? 'specs' : 'plans';
+  if (item.development_plan_item_ref?.development_plan_id !== undefined) {
+    const searchParams = new URLSearchParams({
+      tab,
+      development_plan_id: item.development_plan_item_ref.development_plan_id,
+      development_plan_item_id: item.development_plan_item_ref.id,
+    });
+    return `/specs-plans?${searchParams.toString()}`;
+  }
+  return `/specs-plans?tab=${tab}`;
+}
+
 function QueueStatus({ isError, isPending, kind }: { isError: boolean; isPending: boolean; kind: QueueKind }) {
-  const label = kind === 'spec' ? 'Specs' : 'Plans';
+  const label = kind === 'spec' ? 'Specs' : 'Execution Plans';
 
   if (isPending) {
     return <InlineNotice title={`Loading ${label.toLowerCase()} queue.`} tone="info" />;
@@ -203,7 +240,7 @@ function sourceObjectHref(ref: QueueRef): string {
     case 'development_plan_item':
       return ref.development_plan_id === undefined
         ? '/specs-plans'
-        : `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
+        : `/specs-plans?development_plan_id=${encodeURIComponent(ref.development_plan_id)}&development_plan_item_id=${encodeURIComponent(ref.id)}`;
     case 'execution_plan':
       return '/specs-plans';
     case 'release':
