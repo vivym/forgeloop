@@ -324,12 +324,13 @@ export async function getDevelopmentPlanItemProjection(
   if (plan === undefined || item === undefined || item.development_plan_id !== plan.id) {
     return undefined;
   }
-  const [itemRevisions, boundaryRevisionCandidates, specs, executionPlans, executions, qaHandoffs] = await Promise.all([
+  const [itemRevisions, boundaryRevisionCandidates, specs, executionPlans, executions, codeReviewHandoffs, qaHandoffs] = await Promise.all([
     repository.listDevelopmentPlanItemRevisions(item.id),
     listBoundarySummaryRevisionsForItem(repository, item.id),
     repository.listSpecs(plan.project_id),
     repository.listExecutionPlansForDevelopmentPlanItem(item.id),
     listExecutionsForProject(repository, plan.project_id),
+    listCodeReviewHandoffsForProject(repository, plan.project_id),
     listQaHandoffsForProject(repository, plan.project_id),
   ]);
   return {
@@ -358,6 +359,9 @@ export async function getDevelopmentPlanItemProjection(
     executions: executions
       .filter(({ execution }) => execution.development_plan_item_id === item.id)
       .map(({ execution }) => executionQueueRow(plan, item, execution)),
+    code_review_handoffs: codeReviewHandoffs
+      .filter(({ handoff }) => handoff.development_plan_item_id === item.id)
+      .map(({ handoff, execution }) => codeReviewHandoffItemRow(execution, handoff)),
     qa_handoffs: qaHandoffs
       .filter(({ handoff }) => handoff.development_plan_item_id === item.id)
       .map(({ handoff }) => qaHandoffQueueRow(plan, item, handoff)),
@@ -618,6 +622,8 @@ function specQueueRow(_repository: DeliveryRepository, plan: DevelopmentPlan, it
     risk: item.risk,
     status: spec.status,
     gate_state: spec.gate_state,
+    current_revision_id: spec.current_revision_id,
+    approved_revision_id: spec.approved_revision_id,
     stale: item.spec_status === 'stale',
     blocked: item.spec_status === 'blocked',
     next_action: item.spec_status === 'approved' ? 'generate_execution_plan' : 'review_spec',
@@ -646,6 +652,8 @@ async function executionPlanQueueRow(
     age_seconds: ageSeconds(executionPlan.created_at, executionPlan.updated_at),
     risk: item.risk,
     status: executionPlan.status,
+    current_revision_id: executionPlan.current_revision_id,
+    approved_revision_id: executionPlan.approved_revision_id,
     approved_revision_ref: revision === undefined ? undefined : executionPlanRevisionRef(executionPlan, revision),
     stale: item.execution_plan_status === 'stale',
     blocked: item.execution_plan_status === 'blocked',
@@ -663,6 +671,7 @@ function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, exe
     source_ref: item.source_ref,
     development_plan_item_ref: developmentPlanItemRef(item),
     approved_execution_plan_revision_ref: execution.execution_plan_revision_ref,
+    status: execution.status,
     worker_state: execution.status,
     current_step: execution.status === 'completed' ? 'code_review_handoff' : 'implementation',
     last_event: execution.status,
@@ -707,6 +716,19 @@ function codeReviewHandoffQueueRow(
     verification_evidence_refs: handoff.verification_evidence_refs,
     href: `/executions/${execution.id}`,
     plan_item_href: `/development-plans/${plan.id}/items/${item.id}`,
+    updated_at: handoff.updated_at,
+  };
+}
+
+function codeReviewHandoffItemRow(execution: Execution, handoff: CodeReviewHandoff): Record<string, unknown> {
+  return {
+    id: handoff.id,
+    title: handoff.ref.title ?? `${execution.ref.title ?? execution.id} code review`,
+    status: handoff.status,
+    execution_id: execution.id,
+    reviewer_actor_id: handoff.reviewer_actor_id,
+    audited_exception: handoff.audited_exception,
+    href: `/executions/${execution.id}`,
     updated_at: handoff.updated_at,
   };
 }

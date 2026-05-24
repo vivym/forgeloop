@@ -1,7 +1,25 @@
+import { useState, type ReactElement, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
+import {
+  CheckCircle2,
+  CirclePlay,
+  FileCheck2,
+  GitCompare,
+  PauseCircle,
+  RefreshCcw,
+  RotateCw,
+  Send,
+  ShieldCheck,
+  XCircle,
+} from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 
+import { createForgeloopCommandApi } from '../../shared/api/commands';
+import { queryKeys } from '../../shared/api/query-keys';
+import type { ProductObjectRef } from '../../shared/api/types';
+import { useActorContext } from '../../shared/context/actor-context';
 import { InlineActions, Section } from '../../shared/layout';
-import { Badge, Button, StatusPill } from '../../shared/ui';
+import { Badge, Button, InlineNotice, StatusPill } from '../../shared/ui';
 import { formatValue, itemHref } from './development-plan-table';
 
 export type DevelopmentPlanItemProjection = {
@@ -24,9 +42,17 @@ export type DevelopmentPlanItemProjection = {
   source_ref?: { type: string; id: string; title?: string };
   development_plan_ref?: { id: string; title?: string };
   boundary_summary_revisions?: BoundarySummaryRevision[];
-  specs?: Array<{ id: string; title?: string }>;
-  execution_plans?: Array<{ id: string; title?: string }>;
-  executions?: Array<{ id: string; title?: string; status?: string }>;
+  specs?: Array<{ id: string; title?: string; current_revision_id?: string; approved_revision_id?: string }>;
+  execution_plans?: Array<{ id: string; title?: string; current_revision_id?: string; approved_revision_id?: string }>;
+  executions?: Array<{
+    id: string;
+    title?: string;
+    status?: string;
+    worker_state?: string;
+    evidence_refs?: ProductObjectRef[];
+    test_evidence_refs?: ProductObjectRef[];
+  }>;
+  code_review_handoffs?: Array<{ id: string; title?: string; status?: string; audited_exception?: { reason?: string } }>;
   qa_handoffs?: Array<{ id: string; title?: string; status?: string }>;
 };
 
@@ -88,7 +114,209 @@ export function PlanItemGateSummary({ item }: { item: DevelopmentPlanItemProject
           </article>
         ))}
       </div>
+      <PlanItemLifecycleActions item={item} />
     </Section>
+  );
+}
+
+function PlanItemLifecycleActions({ item }: { item: DevelopmentPlanItemProjection }) {
+  const { actorId } = useActorContext();
+  const queryClient = useQueryClient();
+  const [message, setMessage] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [runningAction, setRunningAction] = useState<string>();
+  const commandApi = createForgeloopCommandApi();
+  const developmentPlanId = item.development_plan_ref?.id ?? item.object_ref?.development_plan_id ?? item.development_plan_id;
+  const execution = item.executions?.[0];
+  const codeReview = item.code_review_handoffs?.[0];
+  const qaHandoff = item.qa_handoffs?.[0];
+  const verificationEvidenceRefs = verificationEvidenceFor(execution);
+  const hasExecutionEvidence = verificationEvidenceRefs.length > 0;
+  const specComparePair = revisionComparePair(item.specs?.[0]);
+  const executionPlanComparePair = revisionComparePair(item.execution_plans?.[0]);
+  const codeReviewApprovedOrException = item.review_status === 'approved' || codeReview?.status === 'approved' || codeReview?.audited_exception !== undefined;
+
+  const state = {
+    generateSpec: developmentPlanId !== undefined && isApproved(item.boundary_status) && isNotStarted(item.spec_status),
+    submitSpec: developmentPlanId !== undefined && isSubmittable(item.spec_status),
+    reviewSpec: developmentPlanId !== undefined && isInReview(item.spec_status),
+    regenerateSpec: developmentPlanId !== undefined && isRegeneratable(item.spec_status),
+    compareSpec: developmentPlanId !== undefined && specComparePair !== undefined,
+    generateExecutionPlan: developmentPlanId !== undefined && isApproved(item.spec_status) && isNotStarted(item.execution_plan_status),
+    submitExecutionPlan: developmentPlanId !== undefined && isSubmittable(item.execution_plan_status),
+    reviewExecutionPlan: developmentPlanId !== undefined && isInReview(item.execution_plan_status),
+    regenerateExecutionPlan: developmentPlanId !== undefined && isRegeneratable(item.execution_plan_status),
+    compareExecutionPlan: developmentPlanId !== undefined && executionPlanComparePair !== undefined,
+    startExecution: developmentPlanId !== undefined && isApproved(item.execution_plan_status) && isNotStarted(item.execution_status),
+    interruptExecution: execution !== undefined && canInterruptExecution(execution),
+    continueExecution: execution !== undefined && canContinueExecution(execution),
+    readyForCodeReview: execution !== undefined && item.execution_status === 'completed' && hasExecutionEvidence && !isReviewOpen(item.review_status),
+    createQaHandoff: codeReview !== undefined && codeReviewApprovedOrException && qaHandoff === undefined,
+    blockQaHandoff: qaHandoff?.status === 'pending',
+    acceptQaHandoff: qaHandoff?.status === 'pending' && (item.review_status === 'approved' || codeReview?.status === 'approved') && hasExecutionEvidence,
+  };
+
+  async function run(label: string, operation: () => Promise<unknown>) {
+    setRunningAction(label);
+    setError(undefined);
+    try {
+      await operation();
+      setMessage(`${label} command completed.`);
+      await invalidateItem(queryClient, developmentPlanId, item.id);
+    } catch (commandError) {
+      setError(commandError instanceof Error ? commandError.message : `${label} command failed.`);
+    } finally {
+      setRunningAction(undefined);
+    }
+  }
+
+  const disabled = developmentPlanId === undefined || runningAction !== undefined;
+
+  return (
+    <section aria-label="Development Plan Item lifecycle actions" className="mt-4 grid gap-4 rounded-md border border-border bg-surface p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-text-primary">Lifecycle actions</h3>
+        <StatusPill tone="info">Item scoped</StatusPill>
+      </div>
+      {message ? <InlineNotice title={message} tone="success" /> : null}
+      {error ? <InlineNotice title={error} tone="danger" /> : null}
+      {codeReview?.audited_exception !== undefined && codeReview.status !== 'approved' ? (
+        <InlineNotice
+          description={codeReview.audited_exception.reason ?? 'QA can be prepared early, but release readiness remains blocked until code review closes.'}
+          title="Audited code review exception enables early QA preparation"
+          tone="warning"
+        />
+      ) : null}
+      <div className="grid gap-3 lg:grid-cols-2">
+        <ActionGroup title="Spec">
+          <LifecycleButton disabled={disabled || !state.generateSpec} icon={<FileCheck2 />} loading={runningAction === 'Generate Spec'} onClick={() => void run('Generate Spec', () => commandApi.generateItemSpecDraft(developmentPlanId!, item.id, { actor_id: actorId }))}>
+            Generate Spec
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.submitSpec} icon={<Send />} loading={runningAction === 'Submit Spec'} onClick={() => void run('Submit Spec', () => commandApi.submitItemSpecForApproval(developmentPlanId!, item.id, { actor_id: actorId }))}>
+            Submit Spec for review
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.reviewSpec} icon={<CheckCircle2 />} loading={runningAction === 'Approve Spec'} onClick={() => void run('Approve Spec', () => commandApi.approveItemSpec(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Approved from Development Plan Item gate.' }))}>
+            Approve Spec
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.reviewSpec} icon={<RotateCw />} loading={runningAction === 'Request Spec Changes'} onClick={() => void run('Request Spec Changes', () => commandApi.requestItemSpecChanges(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Changes requested from Development Plan Item gate.' }))}>
+            Request Spec changes
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.reviewSpec} icon={<XCircle />} loading={runningAction === 'Reject Spec'} onClick={() => void run('Reject Spec', () => commandApi.rejectItemSpec(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Rejected from Development Plan Item gate.' }))}>
+            Reject Spec
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.regenerateSpec} icon={<RefreshCcw />} loading={runningAction === 'Regenerate Spec'} onClick={() => void run('Regenerate Spec', () => commandApi.regenerateItemSpecDraft(developmentPlanId!, item.id, { actor_id: actorId, feedback: 'Regenerate while preserving approved boundary decisions.', preserve_prior_decisions: true }))}>
+            Regenerate Spec
+          </LifecycleButton>
+          <LifecycleButton
+            disabled={disabled || !state.compareSpec}
+            icon={<GitCompare />}
+            loading={runningAction === 'Compare Spec Revisions'}
+            onClick={() =>
+              specComparePair === undefined
+                ? undefined
+                : void run('Compare Spec Revisions', () =>
+                    commandApi.compareItemSpecRevisions(developmentPlanId!, item.id, specComparePair),
+                  )
+            }
+            variant="secondary"
+          >
+            Compare Spec revisions
+          </LifecycleButton>
+        </ActionGroup>
+        <ActionGroup title="Execution Plan">
+          <LifecycleButton disabled={disabled || !state.generateExecutionPlan} icon={<FileCheck2 />} loading={runningAction === 'Generate Execution Plan'} onClick={() => void run('Generate Execution Plan', () => commandApi.generateItemExecutionPlanDraft(developmentPlanId!, item.id, { actor_id: actorId }))}>
+            Generate Execution Plan
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.submitExecutionPlan} icon={<Send />} loading={runningAction === 'Submit Execution Plan'} onClick={() => void run('Submit Execution Plan', () => commandApi.submitItemExecutionPlanForApproval(developmentPlanId!, item.id, { actor_id: actorId }))}>
+            Submit Execution Plan for review
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.reviewExecutionPlan} icon={<CheckCircle2 />} loading={runningAction === 'Approve Execution Plan'} onClick={() => void run('Approve Execution Plan', () => commandApi.approveItemExecutionPlan(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Approved from Development Plan Item gate.' }))}>
+            Approve Execution Plan
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.reviewExecutionPlan} icon={<RotateCw />} loading={runningAction === 'Request Execution Plan Changes'} onClick={() => void run('Request Execution Plan Changes', () => commandApi.requestItemExecutionPlanChanges(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Changes requested from Development Plan Item gate.' }))}>
+            Request Execution Plan changes
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.reviewExecutionPlan} icon={<XCircle />} loading={runningAction === 'Reject Execution Plan'} onClick={() => void run('Reject Execution Plan', () => commandApi.rejectItemExecutionPlan(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Rejected from Development Plan Item gate.' }))}>
+            Reject Execution Plan
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.regenerateExecutionPlan} icon={<RefreshCcw />} loading={runningAction === 'Regenerate Execution Plan'} onClick={() => void run('Regenerate Execution Plan', () => commandApi.regenerateItemExecutionPlanDraft(developmentPlanId!, item.id, { actor_id: actorId, feedback: 'Regenerate while preserving approved Spec decisions.', preserve_prior_decisions: true }))}>
+            Regenerate Execution Plan
+          </LifecycleButton>
+          <LifecycleButton
+            disabled={disabled || !state.compareExecutionPlan}
+            icon={<GitCompare />}
+            loading={runningAction === 'Compare Execution Plan Revisions'}
+            onClick={() =>
+              executionPlanComparePair === undefined
+                ? undefined
+                : void run('Compare Execution Plan Revisions', () =>
+                    commandApi.compareItemExecutionPlanRevisions(developmentPlanId!, item.id, executionPlanComparePair),
+                  )
+            }
+            variant="secondary"
+          >
+            Compare Execution Plan revisions
+          </LifecycleButton>
+        </ActionGroup>
+        <ActionGroup title="Execution and review">
+          <LifecycleButton disabled={disabled || !state.startExecution} icon={<CirclePlay />} loading={runningAction === 'Start Execution'} onClick={() => void run('Start Execution', () => commandApi.startItemExecution(developmentPlanId!, item.id, { actor_id: actorId }))}>
+            Start execution
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.interruptExecution} icon={<PauseCircle />} loading={runningAction === 'Interrupt Execution'} onClick={() => execution === undefined ? undefined : void run('Interrupt Execution', () => commandApi.interruptExecution(execution.id, { actor_id: actorId }))}>
+            Interrupt execution
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.continueExecution} icon={<CirclePlay />} loading={runningAction === 'Continue Execution'} onClick={() => execution === undefined ? undefined : void run('Continue Execution', () => commandApi.continueExecution(execution.id, { actor_id: actorId }))}>
+            Continue execution
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.readyForCodeReview} icon={<ShieldCheck />} loading={runningAction === 'Ready For Code Review'} onClick={() => execution === undefined ? undefined : void run('Ready For Code Review', () => commandApi.markExecutionReadyForCodeReview(execution.id, { actor_id: actorId, summary: 'Execution is ready for code review from the Development Plan Item gate.', changed_surfaces: [item.title], verification_evidence_refs: verificationEvidenceRefs }))}>
+            Ready for code review
+          </LifecycleButton>
+        </ActionGroup>
+        <ActionGroup title="QA">
+          <LifecycleButton disabled={disabled || !state.createQaHandoff} icon={<Send />} loading={runningAction === 'Create QA Handoff'} onClick={() => codeReview === undefined ? undefined : void run('Create QA Handoff', () => commandApi.createQaHandoff(codeReview.id, { actor_id: actorId, acceptance_criteria: ['Approved Spec acceptance criteria remain satisfied.'], test_strategy: 'Run the item-scoped QA plan and focused regression checks.', verification_evidence_refs: verificationEvidenceRefs }))}>
+            Create QA handoff
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.blockQaHandoff} icon={<XCircle />} loading={runningAction === 'Block QA Handoff'} onClick={() => qaHandoff === undefined ? undefined : void run('Block QA Handoff', () => commandApi.blockQaHandoff(qaHandoff.id, { actor_id: actorId, rationale: 'QA blocked from Development Plan Item gate.' }))}>
+            Block QA handoff
+          </LifecycleButton>
+          <LifecycleButton disabled={disabled || !state.acceptQaHandoff} icon={<CheckCircle2 />} loading={runningAction === 'Accept QA Handoff'} onClick={() => qaHandoff === undefined ? undefined : void run('Accept QA Handoff', () => commandApi.acceptQaHandoff(qaHandoff.id, { actor_id: actorId, rationale: 'QA accepted from Development Plan Item gate.', verification_evidence_refs: verificationEvidenceRefs }))}>
+            Accept QA handoff
+          </LifecycleButton>
+        </ActionGroup>
+      </div>
+    </section>
+  );
+}
+
+function ActionGroup({ children, title }: { children: ReactNode; title: string }) {
+  return (
+    <div className="grid content-start gap-2 rounded-md border border-border bg-background p-3">
+      <h4 className="text-xs font-semibold uppercase tracking-normal text-text-muted">{title}</h4>
+      <div className="flex flex-wrap gap-2">{children}</div>
+    </div>
+  );
+}
+
+function LifecycleButton({
+  children,
+  disabled,
+  icon,
+  loading,
+  onClick,
+  variant,
+}: {
+  children: ReactNode;
+  disabled: boolean;
+  icon: ReactElement;
+  loading?: boolean;
+  onClick?: () => void;
+  variant?: 'primary' | 'secondary';
+}) {
+  return (
+    <Button disabled={disabled} loading={loading ?? false} onClick={onClick} type="button" variant={variant ?? 'secondary'}>
+      {icon}
+      {children}
+    </Button>
   );
 }
 
@@ -210,6 +438,60 @@ function isReviewOpen(status: string | undefined): boolean {
 
 function isQaOpen(status: string | undefined): boolean {
   return status === 'pending' || status === 'blocked' || status === 'accepted';
+}
+
+function revisionComparePair(
+  artifact: { current_revision_id?: string; approved_revision_id?: string } | undefined,
+): { base_revision_id: string; compare_revision_id: string } | undefined {
+  const compareRevisionId = artifact?.current_revision_id ?? artifact?.approved_revision_id;
+  const baseRevisionId = artifact?.approved_revision_id ?? compareRevisionId;
+  if (baseRevisionId === undefined || compareRevisionId === undefined) return undefined;
+  return { base_revision_id: baseRevisionId, compare_revision_id: compareRevisionId };
+}
+
+function isNotStarted(status: string | undefined): boolean {
+  return status === undefined || status === 'missing' || status === 'not_started' || status === 'pending';
+}
+
+function isSubmittable(status: string | undefined): boolean {
+  return status === 'draft' || status === 'changes_requested';
+}
+
+function isInReview(status: string | undefined): boolean {
+  return status === 'in_review';
+}
+
+function isRegeneratable(status: string | undefined): boolean {
+  return status === 'changes_requested' || status === 'rejected' || status === 'blocked';
+}
+
+function canInterruptExecution(execution: NonNullable<DevelopmentPlanItemProjection['executions']>[number]): boolean {
+  return execution.status === 'running' || execution.status === 'paused';
+}
+
+function canContinueExecution(execution: NonNullable<DevelopmentPlanItemProjection['executions']>[number]): boolean {
+  return execution.status === 'paused' || execution.status === 'interrupted';
+}
+
+function verificationEvidenceFor(execution: NonNullable<DevelopmentPlanItemProjection['executions']>[number] | undefined): ProductObjectRef[] {
+  if (execution === undefined) return [];
+  return [...(execution.evidence_refs ?? []), ...(execution.test_evidence_refs ?? [])];
+}
+
+function invalidateItem(queryClient: ReturnType<typeof useQueryClient>, developmentPlanId: string | undefined, itemId: string) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['development-plans'] }),
+    queryClient.invalidateQueries({ queryKey: ['development-plan', developmentPlanId] }),
+    queryClient.invalidateQueries({ queryKey: ['development-plan-item', developmentPlanId, itemId] }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId) }),
+    queryClient.invalidateQueries({ queryKey: ['spec-execution-plan-queue'] }),
+    queryClient.invalidateQueries({ queryKey: ['executions'] }),
+    queryClient.invalidateQueries({ queryKey: ['code-review-handoffs'] }),
+    queryClient.invalidateQueries({ queryKey: ['qa-handoffs'] }),
+    queryClient.invalidateQueries({ queryKey: ['my-work'] }),
+    queryClient.invalidateQueries({ queryKey: ['reports'] }),
+    queryClient.invalidateQueries({ queryKey: ['release-readiness'] }),
+  ]);
 }
 
 function decisionCount(revision: BoundarySummaryRevision): number {

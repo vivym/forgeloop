@@ -14,8 +14,16 @@ type RenderState =
   | { state: 'unavailable' };
 
 export function EvidenceAttachments({ attachments, createRenderUrl = defaultCreateRenderUrl }: EvidenceAttachmentsProps) {
+  if (attachments.length === 0) {
+    return (
+      <section aria-label="Evidence attachments" className="rounded-md border border-border bg-surface-muted p-3 text-sm text-text-secondary">
+        No evidence attachments.
+      </section>
+    );
+  }
+
   return (
-    <div className="grid gap-3">
+    <div aria-label="Evidence attachments" className="grid gap-3" role="list">
       {attachments.map((attachment) => (
         <EvidenceAttachmentCard attachment={attachment} createRenderUrl={createRenderUrl} key={attachment.id} />
       ))}
@@ -71,7 +79,7 @@ function EvidenceAttachmentCard({
 
   if (attachment.content_type.startsWith('image/')) {
     return (
-      <figure className="rounded-md border border-border bg-surface p-3">
+      <figure aria-label={`Evidence attachment ${attachment.filename}`} className="rounded-md border border-border bg-surface p-3" role="listitem">
         <img
           alt={attachment.alt_text ?? attachment.caption ?? attachment.filename}
           className="max-h-96 rounded border border-border object-contain"
@@ -83,16 +91,20 @@ function EvidenceAttachmentCard({
   }
 
   return (
-    <section className="flex min-w-0 flex-wrap items-center gap-3 rounded-md border border-border bg-surface p-3">
+    <section
+      aria-label={`Evidence attachment ${attachment.filename}`}
+      className="flex min-w-0 flex-wrap items-center gap-3 rounded-md border border-border bg-surface p-3"
+      role="listitem"
+    >
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-semibold text-text-primary">{attachment.filename}</p>
         <p className="text-xs text-text-muted">{attachment.content_type}</p>
       </div>
-      <a className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-secondary" href={renderState.renderRef.render_url}>
+      <a className={attachmentActionClass} href={renderState.renderRef.render_url}>
         {`Open ${attachment.filename}`}
       </a>
       <a
-        className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-secondary"
+        className={attachmentActionClass}
         download={attachment.filename}
         href={renderState.renderRef.render_url}
       >
@@ -104,12 +116,20 @@ function EvidenceAttachmentCard({
 
 function UnavailableEvidence({ filename, loading }: { filename: string; loading: boolean }) {
   return (
-    <section className="rounded-md border border-border bg-surface-muted p-3 text-sm text-text-secondary">
+    <section
+      aria-busy={loading}
+      aria-label={`Evidence attachment ${filename}`}
+      className="rounded-md border border-border bg-surface-muted p-3 text-sm text-text-secondary"
+      role="listitem"
+    >
       <p className="font-semibold text-text-primary">{filename}</p>
       <p>{loading ? 'Loading evidence' : 'Unavailable evidence'}</p>
     </section>
   );
 }
+
+const attachmentActionClass =
+  'rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-secondary hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface';
 
 function attachmentCanRender(attachment: AttachmentRef) {
   return attachment.reference_status === 'active' && attachment.safety_status === 'passed';

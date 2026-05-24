@@ -14,6 +14,84 @@ describe('ForgeMarkdownEditor', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps MDXEditor behind ForgeMarkdownEditor and supports source mode, image upload, attachments, and revision affordances', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const onUploadAttachment = vi.fn().mockResolvedValue({
+      id: 'attachment-image-1',
+      filename: 'diagram.png',
+      content_type: 'image/png',
+      reference_status: 'active',
+      safety_status: 'passed',
+      alt_text: 'Boundary diagram',
+    });
+
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph', 'image', 'link']}
+        attachments={[
+          {
+            id: 'attachment-doc-1',
+            filename: 'notes.md',
+            content_type: 'text/markdown',
+            reference_status: 'active',
+            safety_status: 'passed',
+          },
+        ]}
+        mode="edit"
+        objectRef={{ type: 'requirement', id: 'req-1', driver_actor_id: 'actor-product' }}
+        onChange={onChange}
+        onSave={vi.fn()}
+        onUploadAttachment={onUploadAttachment}
+        revisions={[
+          { revision_id: 'rev-1', markdown: 'Old body', created_at: '2026-05-22T00:00:00.000Z' },
+          { revision_id: 'rev-2', markdown: 'New body', created_at: '2026-05-23T00:00:00.000Z' },
+        ]}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value="New body"
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /source/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /insert image/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /attachments/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /revisions/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /save/i })).toBeTruthy();
+
+    await user.upload(screen.getByLabelText(/image file/i), new File(['image'], 'diagram.png', { type: 'image/png' }));
+
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ type: 'requirement', id: 'req-1' })));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.stringContaining('![Boundary diagram](attachment://attachment-image-1)')));
+  });
+
+  it('supports keyboard operation and visible focus for editor toolbar controls', async () => {
+    const user = userEvent.setup();
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph', 'image']}
+        attachments={[]}
+        mode="edit"
+        objectRef={{ type: 'requirement', id: 'req-1', driver_actor_id: 'actor-product' }}
+        onChange={vi.fn()}
+        onSave={vi.fn()}
+        onUploadAttachment={vi.fn()}
+        revisions={[{ revision_id: 'rev-1', markdown: 'Initial', created_at: '2026-05-23T00:00:00.000Z' }]}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value="Initial"
+      />,
+    );
+
+    const sourceButton = screen.getByRole('button', { name: /source/i });
+    expect(sourceButton.className).toMatch(/focus-visible:/);
+
+    await user.tab();
+    expect(document.activeElement).toBe(sourceButton);
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('textbox', { name: /markdown source/i })).toBeTruthy();
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /insert image/i }));
+  });
+
   it('renders read-only Markdown and hides editing toolbar', () => {
     render(
       <ForgeMarkdownEditor

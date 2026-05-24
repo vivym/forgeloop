@@ -110,7 +110,7 @@ describe('project management query API', () => {
   });
 
   it('projects AI-native planning, artifact, execution, review, QA, dashboard, board, and report queues', async () => {
-    const { developmentPlan, item, workItem, execution, review, qa } = await seedExecutionReviewAndQa(app);
+    const { developmentPlan, item, workItem, specRevision, executionPlanRevision, execution, review, qa } = await seedExecutionReviewAndQa(app);
     const server = app.getHttpServer();
     const query = { project_id: developmentPlan.project_id };
 
@@ -149,6 +149,30 @@ describe('project management query API', () => {
       source_ref: { type: workItem.kind, id: workItem.id },
       revisions: expect.arrayContaining([expect.objectContaining({ id: item.revision_id })]),
       boundary_summary_revisions: expect.arrayContaining([expect.objectContaining({ development_plan_item_id: item.id })]),
+      specs: expect.arrayContaining([
+        expect.objectContaining({
+          current_revision_id: specRevision.id,
+          approved_revision_id: specRevision.id,
+        }),
+      ]),
+      execution_plans: expect.arrayContaining([
+        expect.objectContaining({
+          current_revision_id: executionPlanRevision.id,
+          approved_revision_id: executionPlanRevision.id,
+        }),
+      ]),
+      executions: expect.arrayContaining([
+        expect.objectContaining({
+          id: execution.id,
+          status: 'qa_handoff_pending',
+        }),
+      ]),
+      code_review_handoffs: expect.arrayContaining([
+        expect.objectContaining({
+          id: review.id,
+          status: 'approved',
+        }),
+      ]),
       compare_links: expect.objectContaining({
         item_revisions_href: `/development-plans/${developmentPlan.id}/items/${item.id}/revisions/compare`,
       }),

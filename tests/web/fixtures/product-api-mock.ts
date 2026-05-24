@@ -452,8 +452,8 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
       decision_count: brainstormingSession.decisions.length,
       decision_snapshot: brainstormingSession.decisions,
     }],
-    specs: [{ id: spec.id, artifact_type: 'spec', title: specRevision.summary }],
-    execution_plans: [{ id: executionPlanRevision.execution_plan_id, artifact_type: 'execution_plan', title: executionPlanRevision.summary }],
+    specs: [{ id: spec.id, artifact_type: 'spec', title: specRevision.summary, current_revision_id: spec.current_revision_id, approved_revision_id: spec.approved_revision_id }],
+    execution_plans: [{ id: executionPlanRevision.execution_plan_id, artifact_type: 'execution_plan', title: executionPlanRevision.summary, current_revision_id: executionPlan.current_revision_id, approved_revision_id: executionPlan.approved_revision_id }],
     executions: [{ id: execution.id, title: execution.ref.title, status: execution.status }],
     qa_handoffs: [{ id: qaHandoff.id, title: qaHandoff.ref.title, status: qaHandoff.status }],
     compare_links: {
@@ -843,6 +843,11 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     specRevision,
     workItem,
   ),
+  'GET /development-plans/development-plan-web-product/items/development-plan-item-web-product/spec/revisions/compare?base_revision_id=spec-revision-web-product&compare_revision_id=spec-revision-web-product': {
+    base_revision_id: specRevision.id,
+    compare_revision_id: specRevision.id,
+    changed_fields: [],
+  },
   'POST /development-plans/development-plan-route/items/development-plan-item-route/spec/generate-draft': {
     ...cockpitSpecRevisionFor(specRevision, routeWorkItem),
     id: 'spec-revision-route',
@@ -857,6 +862,11 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     summary: planRevision.summary,
     content: planRevision.content,
     created_at: planRevision.created_at,
+  },
+  'GET /development-plans/development-plan-web-product/items/development-plan-item-web-product/execution-plan/revisions/compare?base_revision_id=execution-plan-revision-web-product&compare_revision_id=execution-plan-revision-web-product': {
+    base_revision_id: executionPlanRevision.id,
+    compare_revision_id: executionPlanRevision.id,
+    changed_fields: [],
   },
   'POST /development-plans/development-plan-route/items/development-plan-item-route/execution-plan/generate-draft': {
     id: 'execution-plan-revision-route',
