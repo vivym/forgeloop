@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import {
   type AutomationActorClass,
+  type DevelopmentPlanItem,
   type ExecutionPackage,
   type Plan,
   type PlanRevision,
@@ -52,6 +53,7 @@ type PackageContext = {
   specRevision: SpecRevision;
   plan: Plan;
   planRevision: PlanRevision;
+  item?: DevelopmentPlanItem;
 };
 
 export type PublicExecutionPackage = Omit<ExecutionPackage, 'work_item_id'> & { scope_ref: ObjectRef };
@@ -91,6 +93,12 @@ export class ExecutionPackageService {
       if (existingPackage !== undefined) {
         return [existingPackage];
       }
+      const reviewerActorId =
+        context.item?.reviewer_actor_id ??
+        context.plan.approved_by_actor_id ??
+        context.spec.approved_by_actor_id ??
+        context.workItem.driver_actor_id;
+      const qaOwnerActorId = context.workItem.driver_actor_id;
       const executionPackage = await this.createExecutionPackageFromContext(
         repository,
         context,
@@ -98,8 +106,8 @@ export class ExecutionPackageService {
           repo_id: repo.repo_id,
           objective: `Implement ${context.workItem.title}.`,
           owner_actor_id: context.workItem.driver_actor_id,
-          reviewer_actor_id: 'actor-reviewer',
-          qa_owner_actor_id: 'actor-qa',
+          reviewer_actor_id: reviewerActorId,
+          qa_owner_actor_id: qaOwnerActorId,
           required_checks: [
             {
               check_id: 'unit',
@@ -285,6 +293,19 @@ export class ExecutionPackageService {
     if (planRevision.based_on_spec_revision_id !== specRevision.id) {
       throw new ConflictException('PlanRevision is no longer based on the WorkItem current approved SpecRevision');
     }
+    const itemIds = [
+      plan.development_plan_item_id,
+      spec.development_plan_item_id,
+      specRevision.development_plan_item_id,
+    ].filter((id): id is string => id !== undefined);
+    const uniqueItemIds = [...new Set(itemIds)];
+    if (uniqueItemIds.length > 1) {
+      throw new ConflictException('PlanRevision item linkage no longer matches the approved SpecRevision');
+    }
+    const item =
+      uniqueItemIds[0] === undefined
+        ? undefined
+        : this.requireFound(await repository.getDevelopmentPlanItem(uniqueItemIds[0]), `DevelopmentPlanItem ${uniqueItemIds[0]}`);
     return {
       project: this.requireFound(await repository.getProject(workItem.project_id), `Project ${workItem.project_id}`),
       workItem,
@@ -292,6 +313,7 @@ export class ExecutionPackageService {
       specRevision,
       plan,
       planRevision,
+      ...(item === undefined ? {} : { item }),
     };
   }
 

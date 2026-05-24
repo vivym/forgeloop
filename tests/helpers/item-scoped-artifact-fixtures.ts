@@ -37,6 +37,7 @@ export type ItemScopedArtifactSeed = {
 type SeedOptions = {
   actorId?: string;
   reviewerActorId?: string;
+  itemReviewerActorId?: string;
   specStatus?: ArtifactStatus;
   specGateState?: GateState;
   specDecision?: Decision['decision'];
@@ -60,6 +61,7 @@ export async function seedItemScopedSpecPlan(
   const runtime = app.get(ControlPlaneRuntimeService);
   const actorId = options.actorId ?? defaultActorId;
   const reviewerActorId = options.reviewerActorId ?? defaultReviewerActorId;
+  const itemReviewerActorId = options.itemReviewerActorId ?? reviewerActorId;
   const now = runtime.now();
   const workItem = requireFound(await repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
   const sourceRef = { type: workItem.kind, id: workItem.id, title: workItem.title } as const;
@@ -107,7 +109,7 @@ export async function seedItemScopedSpecPlan(
     summary: workItem.goal,
     responsible_role: 'tech_lead',
     driver_actor_id: actorId,
-    reviewer_actor_id: reviewerActorId,
+    reviewer_actor_id: itemReviewerActorId,
     risk: workItem.risk === 'high' ? 'high' : workItem.risk === 'low' ? 'low' : 'medium',
     dependency_hints: [],
     affected_surfaces: ['tests'],
@@ -118,6 +120,7 @@ export async function seedItemScopedSpecPlan(
     review_status: 'not_started',
     qa_handoff_status: 'not_started',
     release_impact: 'release_scoped',
+    next_action: options.includePlan === false ? 'generate_execution_plan' : 'start_execution',
     created_at: now,
     updated_at: now,
   };
@@ -190,6 +193,8 @@ async function saveContextManifest(
     development_plan_item_revision_id: item.revision_id,
     actor_guidance: actorId,
     sources: [{ type: 'development_plan_item', ref: item.id, digest: item.revision_id }],
+    generated_at: now,
+    runtime_identity: 'test:item-scoped-artifact-fixtures',
     created_at: now,
     updated_at: now,
   };
