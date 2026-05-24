@@ -35,6 +35,7 @@ import { DELIVERY_RUN_WORKER } from '../apps/control-plane-api/src/modules/run-c
 import { createDbClient, createDrizzleDeliveryRepository, InMemoryDeliveryRepository, type DbClient, type DeliveryRepository } from '../packages/db/src';
 import type { CodexSessionDriver } from '../packages/executor/src';
 import { FakeCodexSessionDriver, type FakeCodexScriptItem, RunWorker } from '../packages/run-worker/src';
+import { seedItemScopedSpecPlan } from '../tests/helpers/item-scoped-artifact-fixtures';
 
 const execFile = promisify(execFileCallback);
 const techDebtIntakeContext: WorkItem['intake_context'] = {
@@ -675,7 +676,7 @@ const createProjectAndRepo = async (apiUrl: string): Promise<string> => {
   return projectId;
 };
 
-const createApprovedPlan = async (apiUrl: string, projectId: string, label: string): Promise<string> => {
+const createApprovedPlan = async (app: INestApplication, apiUrl: string, projectId: string, label: string): Promise<string> => {
   const workItem = await requestJson(apiUrl, '/work-items', {
     method: 'POST',
     body: {
@@ -691,35 +692,11 @@ const createApprovedPlan = async (apiUrl: string, projectId: string, label: stri
     },
   });
   const workItemId = stringField(workItem, 'id');
-
-  const spec = await requestJson(apiUrl, `/work-items/${encodeURIComponent(workItemId)}/specs`, { method: 'POST', body: {} });
-  const specId = stringField(spec, 'id');
-  await requestJson(apiUrl, `/specs/${encodeURIComponent(specId)}/generate-draft`, { method: 'POST', body: {} });
-  await requestJson(apiUrl, `/specs/${encodeURIComponent(specId)}/submit-for-approval`, {
-    method: 'POST',
-    headers: humanActorHeaders(actorOwner),
-    body: { actor_id: actorOwner },
+  const { planRevision } = await seedItemScopedSpecPlan(app, workItemId, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
   });
-  await requestJson(apiUrl, `/specs/${encodeURIComponent(specId)}/approve`, {
-    method: 'POST',
-    headers: humanActorHeaders(actorReviewer),
-    body: { actor_id: actorReviewer },
-  });
-
-  const plan = await requestJson(apiUrl, `/work-items/${encodeURIComponent(workItemId)}/plans`, { method: 'POST', body: {} });
-  const planId = stringField(plan, 'id');
-  const planRevision = await requestJson(apiUrl, `/plans/${encodeURIComponent(planId)}/generate-draft`, { method: 'POST', body: {} });
-  await requestJson(apiUrl, `/plans/${encodeURIComponent(planId)}/submit-for-approval`, {
-    method: 'POST',
-    headers: humanActorHeaders(actorOwner),
-    body: { actor_id: actorOwner },
-  });
-  await requestJson(apiUrl, `/plans/${encodeURIComponent(planId)}/approve`, {
-    method: 'POST',
-    headers: humanActorHeaders(actorReviewer),
-    body: { actor_id: actorReviewer },
-  });
-  return stringField(planRevision, 'id');
+  return planRevision!.id;
 };
 
 const createReadyPackage = async (apiUrl: string, planRevisionId: string, label: string): Promise<string> => {
@@ -880,6 +857,7 @@ const assertRepositoryFinalEvidence = async (repository: DeliveryRepository, run
 };
 
 const dogfoodLiveInputRun = async (
+  app: INestApplication,
   apiUrl: string,
   repository: DeliveryRepository,
   projectId: string,
@@ -887,7 +865,7 @@ const dogfoodLiveInputRun = async (
   evidence: PublicApiAuthEvidence,
 ): Promise<DogfoodResult> => {
   const notes: string[] = [];
-  const planRevisionId = await createApprovedPlan(apiUrl, projectId, 'live input');
+  const planRevisionId = await createApprovedPlan(app, apiUrl, projectId, 'live input');
   const packageId = await createReadyPackage(apiUrl, planRevisionId, 'live input');
   const runSessionId = await runPackage(apiUrl, packageId, mode, evidence);
   const queued = await waitForEvent(apiUrl, runSessionId, (event) => event.event_type === 'run_queued', {
@@ -986,7 +964,7 @@ const dogfoodRestartRun = async (
   evidence: PublicApiAuthEvidence,
 ): Promise<{ app: INestApplication; apiUrl: string; result: DogfoodResult }> => {
   const notes: string[] = [];
-  const planRevisionId = await createApprovedPlan(apiUrl, projectId, 'restart recovery');
+  const planRevisionId = await createApprovedPlan(app, apiUrl, projectId, 'restart recovery');
   const packageId = await createReadyPackage(apiUrl, planRevisionId, 'restart recovery');
   const runSessionId = await runPackage(apiUrl, packageId, mode, evidence);
   const queued = await waitForEvent(apiUrl, runSessionId, (event) => event.event_type === 'run_queued', {
@@ -1670,7 +1648,7 @@ const main = async (): Promise<number> => {
     apiUrl = started.apiUrl;
     const projectId = await createProjectAndRepo(apiUrl);
 
-    results.push(await dogfoodLiveInputRun(apiUrl, repository, projectId, mode, publicApiAuthEvidence));
+    results.push(await dogfoodLiveInputRun(app, apiUrl, repository, projectId, mode, publicApiAuthEvidence));
     const restarted = await dogfoodRestartRun(app, apiUrl, repository, projectId, mode, publicApiAuthEvidence);
     app = restarted.app;
     apiUrl = restarted.apiUrl;

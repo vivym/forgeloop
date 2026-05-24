@@ -32,9 +32,9 @@ const createActionInput = (
 ): CreateOrReplayAutomationActionRunInput => ({
   id,
   action_type: 'ensure_package_drafts',
-  target_object_type: 'work_item',
-  target_object_id: 'work-item-automation',
-  target_revision_id: 'spec-revision-automation',
+  target_object_type: 'plan_revision',
+  target_object_id: 'plan-revision-automation',
+  target_revision_id: 'plan-revision-automation',
   target_status: 'approved',
   target_version: 1,
   idempotency_key: `${id}-idem`,
@@ -42,7 +42,10 @@ const createActionInput = (
   automation_settings_version: 1,
   capability_fingerprint: 'capability-a',
   precondition_fingerprint: 'precondition-a',
-  action_input_json: { work_item_id: 'work-item-automation', spec_revision_id: 'spec-revision-automation' },
+  action_input_json: {
+    plan_revision_id: 'plan-revision-automation',
+    generation_key: 'default:plan-revision-automation',
+  },
   now,
   ...overrides,
 });
@@ -217,11 +220,11 @@ describe('automation repository primitives', () => {
 
     const claim = await repository.claimCommandIdempotency({
       id: 'command-record',
-      command_name: 'ensure_plan',
+      command_name: 'ensure_package_drafts',
       idempotency_key: 'command-key',
-      target_object_type: 'work_item',
-      target_object_id: 'work-item-automation',
-      target_revision_id: 'spec-revision-automation',
+      target_object_type: 'plan_revision',
+      target_object_id: 'plan-revision-automation',
+      target_revision_id: 'plan-revision-automation',
       target_version: 1,
       precondition_fingerprint: 'fingerprint-a',
       precondition_json: { automation_settings_version: 1 },
@@ -337,7 +340,10 @@ describe('automation repository primitives', () => {
       status: 'pending',
       attempt: 0,
       precondition_fingerprint: 'precondition-a',
-      action_input_json: { work_item_id: 'work-item-automation', spec_revision_id: 'spec-revision-automation' },
+      action_input_json: {
+        plan_revision_id: 'plan-revision-automation',
+        generation_key: 'default:plan-revision-automation',
+      },
     });
     expect(pending.claim_token).toBeUndefined();
 
@@ -372,7 +378,7 @@ describe('automation repository primitives', () => {
     await expect(
       repository.createOrReplayAutomationActionRun({
         ...input,
-        action_input_json: { work_item_id: 'work-item-automation', spec_revision_id: 'changed' },
+        action_input_json: { plan_revision_id: 'changed', generation_key: 'default:changed' },
       }),
     ).rejects.toThrow(/idempotency|identity|action/i);
   });
@@ -381,8 +387,8 @@ describe('automation repository primitives', () => {
     const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const input = createActionInput('action-canonical-json', {
       action_input_json: {
-        work_item_id: 'work-item-automation',
-        spec_revision_id: 'spec-revision-automation',
+        plan_revision_id: 'plan-revision-automation',
+        generation_key: 'default:plan-revision-automation',
         nested: { beta: 2, alpha: 1 },
         list: [{ zeta: true, alpha: false }],
       },
@@ -393,10 +399,10 @@ describe('automation repository primitives', () => {
       repository.createOrReplayAutomationActionRun({
         ...input,
         action_input_json: {
+          generation_key: 'default:plan-revision-automation',
           list: [{ alpha: false, zeta: true }],
           nested: { alpha: 1, beta: 2 },
-          spec_revision_id: 'spec-revision-automation',
-          work_item_id: 'work-item-automation',
+          plan_revision_id: 'plan-revision-automation',
         },
       }),
     ).resolves.toMatchObject({ id: created.id, status: 'pending' });

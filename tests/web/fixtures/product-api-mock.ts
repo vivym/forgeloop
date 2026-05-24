@@ -642,17 +642,34 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     review_packets: [reviewPacket],
     delivery_readiness: deliveryReadiness(routeWorkItem, [], 'execution-owner'),
   },
-  [`POST /specs/${spec.id}/generate-draft`]: cockpitSpecRevisionFor(specRevision, workItem),
-  [`POST /specs/${routeSpec.id}/generate-draft`]: {
+  'POST /development-plans/development-plan-web-product/items/development-plan-item-web-product/spec/generate-draft': cockpitSpecRevisionFor(
+    specRevision,
+    workItem,
+  ),
+  'POST /development-plans/development-plan-route/items/development-plan-item-route/spec/generate-draft': {
     ...cockpitSpecRevisionFor(specRevision, routeWorkItem),
     id: 'spec-revision-route',
     spec_id: routeSpec.id,
   },
-  [`POST /plans/${plan.id}/generate-draft`]: cockpitPlanRevisionFor(planRevision, workItem),
-  [`POST /plans/${routePlan.id}/generate-draft`]: {
-    ...cockpitPlanRevisionFor(planRevision, routeWorkItem),
-    id: 'plan-revision-route',
-    plan_id: routePlan.id,
+  'POST /development-plans/development-plan-web-product/items/development-plan-item-web-product/execution-plan/generate-draft': {
+    id: 'execution-plan-revision-web-product',
+    execution_plan_id: 'execution-plan-web-product',
+    development_plan_item_id: 'development-plan-item-web-product',
+    based_on_spec_revision_id: specRevision.id,
+    revision_number: 1,
+    summary: planRevision.summary,
+    content: planRevision.content,
+    created_at: planRevision.created_at,
+  },
+  'POST /development-plans/development-plan-route/items/development-plan-item-route/execution-plan/generate-draft': {
+    id: 'execution-plan-revision-route',
+    execution_plan_id: 'execution-plan-route',
+    development_plan_item_id: 'development-plan-item-route',
+    based_on_spec_revision_id: specRevision.id,
+    revision_number: 1,
+    summary: planRevision.summary,
+    content: planRevision.content,
+    created_at: planRevision.created_at,
   },
   [`GET /query/release-cockpit/${release.id}`]: {
     release,

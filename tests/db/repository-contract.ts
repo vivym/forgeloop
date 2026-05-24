@@ -1516,11 +1516,11 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   const claimedCommand = await repository.claimCommandIdempotency({
     id: 'command-idem-1',
-    command_name: 'ensure_plan',
+    command_name: 'ensure_package_drafts',
     idempotency_key: 'command-key-1',
-    target_object_type: 'work_item',
-    target_object_id: ids.workItem,
-    target_revision_id: ids.specRevision2,
+    target_object_type: 'plan_revision',
+    target_object_id: ids.planRevision1,
+    target_revision_id: ids.planRevision1,
     target_version: 2,
     precondition_fingerprint: 'fingerprint-a',
     precondition_json: { automation_settings_version: 2 },
@@ -1896,17 +1896,20 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   const actionRun = await repository.claimAutomationActionRun({
     id: 'automation-action-contract',
-    action_type: 'generate_PLAN_draft',
-    target_object_type: 'work_item',
-    target_object_id: ids.workItem,
-    target_revision_id: ids.specRevision2,
+    action_type: 'ensure_package_drafts',
+    target_object_type: 'plan_revision',
+    target_object_id: ids.planRevision1,
+    target_revision_id: ids.planRevision1,
     target_status: 'approved',
     idempotency_key: 'action-key-contract',
     automation_scope: `repo:${ids.project}:repo-1`,
     automation_settings_version: 2,
     capability_fingerprint: disabled.capability_fingerprint,
     precondition_fingerprint: 'precondition-contract-active',
-    action_input_json: { work_item_id: ids.workItem, spec_revision_id: ids.specRevision2 },
+    action_input_json: {
+      plan_revision_id: ids.planRevision1,
+      generation_key: `default:${ids.planRevision1}`,
+    },
     claim_token: 'automation-claim-1',
     locked_until: '2026-05-05T00:05:00.000Z',
     now: at,
@@ -2083,9 +2086,9 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   const pendingActionInput = {
     id: 'automation-action-contract-pending',
     action_type: 'ensure_package_drafts',
-    target_object_type: 'work_item',
-    target_object_id: ids.workItem,
-    target_revision_id: ids.specRevision2,
+    target_object_type: 'plan_revision',
+    target_object_id: ids.planRevision1,
+    target_revision_id: ids.planRevision1,
     target_status: 'approved',
     target_version: 1,
     idempotency_key: 'action-key-contract-pending',
@@ -2093,7 +2096,10 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     automation_settings_version: 2,
     capability_fingerprint: disabled.capability_fingerprint,
     precondition_fingerprint: 'precondition-contract-a',
-    action_input_json: { work_item_id: ids.workItem, spec_revision_id: ids.specRevision2 },
+    action_input_json: {
+      plan_revision_id: ids.planRevision1,
+      generation_key: `default:${ids.planRevision1}`,
+    },
     now: '2026-05-05T00:30:00.000Z',
   };
   const pendingNewAction = await repository.createOrReplayAutomationActionRun(pendingActionInput);
@@ -2108,8 +2114,8 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     repository.createOrReplayAutomationActionRun({
       ...pendingActionInput,
       action_input_json: {
-        spec_revision_id: ids.specRevision2,
-        work_item_id: ids.workItem,
+        generation_key: `default:${ids.planRevision1}`,
+        plan_revision_id: ids.planRevision1,
       },
     }),
   ).resolves.toMatchObject({ id: pendingActionInput.id, status: 'pending' });
@@ -2122,7 +2128,10 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   await expect(
     repository.createOrReplayAutomationActionRun({
       ...pendingActionInput,
-      action_input_json: { work_item_id: ids.workItem2, spec_revision_id: ids.specRevision2 },
+      action_input_json: {
+        plan_revision_id: ids.planRevision2,
+        generation_key: `default:${ids.planRevision2}`,
+      },
     }),
   ).rejects.toThrow(/idempotency|identity|action/i);
   await expect(

@@ -12,6 +12,7 @@ import type { Test as SupertestTest } from 'supertest';
 import { AppModule } from '../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY, RUN_DURABILITY_MODE } from '../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import type { DeliveryRepository } from '../packages/db/src';
+import { seedItemScopedSpecPlan } from '../tests/helpers/item-scoped-artifact-fixtures';
 import {
   deriveRequiredArtifactPresence,
   deriveWorkItemCompletion,
@@ -598,56 +599,12 @@ const approveSpecAndPlan = async (
       .expect(201)
   ).body as { id: string };
 
-  const spec = (await withActor(request(server).post(`/work-items/${workItem.id}/specs`), actorOwner).send({}).expect(201)).body as {
-    id: string;
-  };
-  await withActor(request(server).post(`/specs/${spec.id}/revisions`), actorOwner)
-    .send({
-      summary: `${item.title} spec`,
-      content: item.goal,
-      background: 'Delivery dogfood completion validates the product loop using a real ForgeLoop Work Item record.',
-      goals: [item.goal],
-      scope_in: item.successCriteria,
-      scope_out: ['Release object productization', 'Incident productization', 'Production deployment'],
-      acceptance_criteria: item.successCriteria,
-      risk_notes: [],
-      test_strategy_summary: 'Use ForgeLoop run evidence, Review Packet decision, and timeline evidence.',
-      author_actor_id: actorOwner,
-    })
-    .expect(201);
-  await withActor(request(server).post(`/specs/${spec.id}/submit-for-approval`), actorOwner)
-    .send({ actor_id: actorOwner })
-    .expect(201);
-  await withActor(request(server).post(`/specs/${spec.id}/approve`), actorReviewer)
-    .send({ actor_id: actorReviewer })
-    .expect(201);
+  const { planRevision } = await seedItemScopedSpecPlan(app, workItem.id, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+  });
 
-  const plan = (await withActor(request(server).post(`/work-items/${workItem.id}/plans`), actorOwner).send({}).expect(201)).body as {
-    id: string;
-  };
-  const planRevision = (
-    await withActor(request(server).post(`/plans/${plan.id}/revisions`), actorOwner)
-      .send({
-        summary: `${item.title} plan`,
-        content: item.objective,
-        implementation_summary: item.objective,
-        split_strategy: 'Single package for this dogfood completion item.',
-        dependency_order: [],
-        test_matrix: ['pnpm smoke:delivery', 'pnpm test', 'pnpm build'],
-        risk_mitigations: ['Keep this delivery completion inside review-approved handoff scope.'],
-        rollback_notes: 'Revert the dogfood completion record/report if the evidence is invalid.',
-        author_actor_id: actorOwner,
-      })
-      .expect(201)
-  ).body as { id: string };
-  await withActor(request(server).post(`/plans/${plan.id}/submit-for-approval`), actorOwner)
-    .send({ actor_id: actorOwner })
-    .expect(201);
-  await withActor(request(server).post(`/plans/${plan.id}/approve`), actorReviewer)
-    .send({ actor_id: actorReviewer })
-    .expect(201);
-
-  return { workItemId: workItem.id, planRevisionId: planRevision.id };
+  return { workItemId: workItem.id, planRevisionId: planRevision!.id };
 };
 
 const createReadyPackage = async (

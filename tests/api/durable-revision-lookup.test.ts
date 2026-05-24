@@ -171,14 +171,12 @@ describeIfDb('durable revision lookup', () => {
     return { specId: spec.id, specRevisionId: specRevision.id };
   };
 
-  const createDraftPlan = async (app: INestApplication, workItemId: string) => {
-    const { plan } = await seedItemScopedSpecPlan(app, workItemId, {
+  const seedApprovedSpecItem = async (app: INestApplication, workItemId: string) =>
+    seedItemScopedSpecPlan(app, workItemId, {
       actorId: actorOwner,
       reviewerActorId: actorReviewer,
-      planStatus: 'draft',
+      includePlan: false,
     });
-    return plan!;
-  };
 
   const approvePlan = async (app: INestApplication, workItemId: string) => {
     const server = app.getHttpServer();
@@ -218,16 +216,18 @@ describeIfDb('durable revision lookup', () => {
     expect(planRevisionResponse.body.id).toBe(planRevisionId);
   });
 
-  it('generates plan drafts after restart', async () => {
+  it('generates item-scoped execution plan drafts after restart', async () => {
     const firstApp = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(firstApp);
-    await approveSpec(firstApp, workItem.id);
-    const plan = await createDraftPlan(firstApp, workItem.id);
+    const seed = await seedApprovedSpecItem(firstApp, workItem.id);
 
     await closeApp(firstApp);
 
     const secondApp = await createDurableApp();
-    await request(secondApp.getHttpServer()).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201);
+    await request(secondApp.getHttpServer())
+      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/execution-plan/generate-draft`)
+      .send({ actor_id: actorOwner })
+      .expect(201);
   });
 
   it('generates packages after restart', async () => {
@@ -270,27 +270,35 @@ describeIfDb('durable revision lookup', () => {
   it('returns 400 when approved spec current_revision_id is missing', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
-    const { specId } = await approveSpec(app, workItem.id);
-    const plan = await createDraftPlan(app, workItem.id);
+    const seed = await seedApprovedSpecItem(app, workItem.id);
     await withDb(async (db) => {
-      await db.update(specs).set({ currentRevisionId: null }).where(eq(specs.id, specId));
+      await db.update(specs).set({ currentRevisionId: null }).where(eq(specs.id, seed.spec.id));
     });
 
-    const response = await request(app.getHttpServer()).post(`/plans/${plan.id}/generate-draft`).send({}).expect(400);
-    expect(response.body.message).toContain(`Spec ${specId} is not approved`);
+    const response = await request(app.getHttpServer())
+      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/execution-plan/generate-draft`)
+      .send({ actor_id: actorOwner })
+      .expect(400);
+    expect(response.body.message).toContain('approved_spec_not_current');
   });
 
-  it('returns 404 when approved spec current_revision_id points to a missing revision', async () => {
+  it('returns 400 when the approved spec revision row is missing for item-scoped execution plan generation', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
-    const { specId } = await approveSpec(app, workItem.id);
-    const plan = await createDraftPlan(app, workItem.id);
+    const seed = await seedApprovedSpecItem(app, workItem.id);
+    const missingSpecRevisionId = '00000000-0000-4000-8000-00000000dead';
     await withDb(async (db) => {
-      await db.update(specs).set({ currentRevisionId: 'missing-spec-revision' }).where(eq(specs.id, specId));
+      await db
+        .update(specs)
+        .set({ approvedRevisionId: missingSpecRevisionId, currentRevisionId: missingSpecRevisionId })
+        .where(eq(specs.id, seed.spec.id));
     });
 
-    const response = await request(app.getHttpServer()).post(`/plans/${plan.id}/generate-draft`).send({}).expect(404);
-    expect(response.body.message).toContain('SpecRevision missing-spec-revision not found');
+    const response = await request(app.getHttpServer())
+      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/execution-plan/generate-draft`)
+      .send({ actor_id: actorOwner })
+      .expect(400);
+    expect(response.body.message).toContain('approved_spec_revision_not_loaded');
   });
 
   it('returns 400 when approved plan current_revision_id is missing', async () => {
