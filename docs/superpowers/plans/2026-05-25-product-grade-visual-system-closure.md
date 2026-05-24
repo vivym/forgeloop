@@ -4,7 +4,7 @@
 
 **Goal:** Replace the current debug-like/card-heavy Web UI with a product-grade, action-first ForgeLoop interface across Cockpit, source objects, Development Plans, item gates, delivery, release, and reports.
 
-**Architecture:** This is a Web-first closure pass. The implementation adds shared Tailwind/React layout primitives, explicit route/page-family contracts, feature-level presentation view-model adapters, and route screenshot/first-viewport gates before page rewrites. Backend/API changes are not planned; if a page cannot truthfully render required state from existing projections, pause and amend this plan with the smallest projection exception plus contract/API tests.
+**Architecture:** This is a Web-first closure pass. The implementation adds shared Tailwind/React layout primitives, explicit route/page-family contracts, feature-level presentation view-model adapters, and route screenshot/first-viewport gates before page rewrites. Backend/API changes are not planned; Task 3 records the projection inventory and degraded-state mapping up front, and any later field gap must pause implementation for a plan amendment with the smallest projection exception plus contract/API tests.
 
 **Tech Stack:** React 19, React Router 7 route modules, Tailwind CSS v4 theme tokens, TanStack Query, TanStack Table, MDXEditor through the existing ForgeLoop wrapper, Vitest, Testing Library, axe-core, and Playwright.
 
@@ -42,6 +42,10 @@ The spec covers many route families, but they are not independent subsystems. Th
   - Owns route-family marker names and page-family constants used by app code and tests.
 - Create: `tests/web/helpers/first-viewport-contract.ts`
   - Testing Library helper that asserts heading, state, next action, role/owner, risk/blocker, and page-family marker.
+- Create: `tests/web/helpers/product-route-config.ts`
+  - Test-only helper that flattens `apps/web/src/app/routes.ts` so route-contract tests can reject unclassified public routes.
+- Create: `tests/web/product-grade-first-viewport.test.tsx`
+  - Shared first-viewport contract tests that every page-family task extends before broad screenshot checks run.
 - Modify: `tests/e2e/helpers/capture-route-screenshots.ts`
   - Reuse route manifest and assert first-viewport contract for screenshots.
 
@@ -88,12 +92,16 @@ The spec covers many route families, but they are not independent subsystems. Th
 ### Presentation View Models
 
 - Create: `apps/web/src/features/product-surfaces/view-model-types.ts`
+- Create: `apps/web/src/features/cockpit/cockpit-view-model.ts`
+- Create: `apps/web/src/features/my-work/my-work-view-model.ts`
 - Create: `apps/web/src/features/project-management/source-object-view-model.ts`
 - Create: `apps/web/src/features/development-plans/development-plan-view-model.ts`
 - Create: `apps/web/src/features/spec-plan/spec-plan-view-model.ts`
 - Create: `apps/web/src/features/executions/execution-view-model.ts`
 - Create: `apps/web/src/features/releases/release-view-model.ts`
 - Create: `apps/web/src/features/reports/report-view-model.ts`
+- Create: `docs/superpowers/reports/product-grade-visual-system-projection-inventory.md`
+  - Documents, before page rewrites, which existing projections or derived adapter fields satisfy every UX-required field and confirms no fake fixture-only fields are allowed.
 
 ### Page Families
 
@@ -101,7 +109,11 @@ The spec covers many route families, but they are not independent subsystems. Th
 - Modify: `apps/web/src/features/project-management/object-list.tsx`
 - Modify: `apps/web/src/features/project-management/object-detail-layout.tsx`
 - Modify: `apps/web/src/features/project-management/object-forms.tsx`
-- Modify: `apps/web/src/app/routes/*/*/evidence.tsx` for source-object evidence routes.
+- Modify source-object evidence route modules only:
+  - `apps/web/src/app/routes/requirements/$requirementId/evidence.tsx`;
+  - `apps/web/src/app/routes/initiatives/$initiativeId/evidence.tsx`;
+  - `apps/web/src/app/routes/bugs/$bugId/evidence.tsx`;
+  - `apps/web/src/app/routes/tech-debt/$techDebtId/evidence.tsx`.
 - Modify: `apps/web/src/features/development-plans/development-plans-route.tsx`
 - Modify: `apps/web/src/features/development-plans/development-plan-detail-route.tsx`
 - Modify: `apps/web/src/features/development-plans/development-plan-table.tsx`
@@ -155,7 +167,9 @@ Use these seeded IDs for dynamic route tests and screenshots:
 - Create: `apps/web/src/features/product-surfaces/route-contract.ts`
 - Create: `apps/web/src/features/product-surfaces/first-viewport-contract.ts`
 - Create: `tests/web/helpers/first-viewport-contract.ts`
+- Create: `tests/web/helpers/product-route-config.ts`
 - Create: `tests/web/product-grade-route-contract.test.tsx`
+- Create: `tests/web/product-grade-first-viewport.test.tsx`
 - Modify: `tests/e2e/helpers/capture-route-screenshots.ts`
 
 - [ ] **Step 1: Write the failing route-contract tests**
@@ -171,52 +185,73 @@ import {
   requiredScreenshotRoutes,
   retiredProductRoutes,
 } from '../../apps/web/src/features/product-surfaces/route-contract';
+import appRouteConfig from '../../apps/web/src/app/routes';
+import { flattenProductRouteConfig } from './helpers/product-route-config';
 
 describe('product-grade route contract', () => {
-  it('covers every required product route family', () => {
-    expect(canonicalProductRoutes.map((route) => route.path)).toEqual(
-      expect.arrayContaining([
-        '/',
-        '/cockpit',
-        '/my-work',
-        '/requirements',
-        '/requirements/new',
-        '/requirements/:id',
-        '/requirements/:id/evidence',
-        '/initiatives',
-        '/initiatives/new',
-        '/initiatives/:id',
-        '/initiatives/:id/evidence',
-        '/bugs',
-        '/bugs/new',
-        '/bugs/:id',
-        '/bugs/:id/evidence',
-        '/tech-debt',
-        '/tech-debt/new',
-        '/tech-debt/:id',
-        '/tech-debt/:id/evidence',
-        '/development-plans',
-        '/development-plans/new',
-        '/development-plans/:id',
-        '/development-plans/:id/items/:itemId',
-        '/development-plans/:id/items/:itemId/brainstorming',
-        '/development-plans/:id/items/:itemId/spec',
-        '/development-plans/:id/items/:itemId/execution-plan',
-        '/development-plans/:id/items/:itemId/execution',
-        '/specs-plans',
-        '/executions',
-        '/executions/:id',
-        '/board',
-        '/releases',
-        '/releases/:id',
-        '/releases/:id/evidence',
-        '/reports',
-        '/reports/delivery',
-        '/reports/quality',
-        '/reports/release-readiness',
-        '/reports/observation',
-      ]),
-    );
+  const expectedProductRoutes = [
+    '/',
+    '/cockpit',
+    '/my-work',
+    '/requirements',
+    '/requirements/new',
+    '/requirements/:id',
+    '/requirements/:id/evidence',
+    '/initiatives',
+    '/initiatives/new',
+    '/initiatives/:id',
+    '/initiatives/:id/evidence',
+    '/bugs',
+    '/bugs/new',
+    '/bugs/:id',
+    '/bugs/:id/evidence',
+    '/tech-debt',
+    '/tech-debt/new',
+    '/tech-debt/:id',
+    '/tech-debt/:id/evidence',
+    '/development-plans',
+    '/development-plans/new',
+    '/development-plans/:id',
+    '/development-plans/:id/items/:itemId',
+    '/development-plans/:id/items/:itemId/brainstorming',
+    '/development-plans/:id/items/:itemId/spec',
+    '/development-plans/:id/items/:itemId/execution-plan',
+    '/development-plans/:id/items/:itemId/execution',
+    '/specs-plans',
+    '/executions',
+    '/executions/:id',
+    '/board',
+    '/releases',
+    '/releases/:id',
+    '/releases/:id/evidence',
+    '/reports',
+    '/reports/delivery',
+    '/reports/quality',
+    '/reports/release-readiness',
+    '/reports/observation',
+  ];
+
+  const expectedRetiredSmokeRoutes = [
+    '/dashboard',
+    '/plans',
+    '/plans/:id',
+    '/specs',
+    '/specs/:id',
+    '/tasks',
+    '/tasks/:id',
+  ];
+
+  const expectedScreenshotRoutes = [
+    '/',
+    '/cockpit',
+    '/dashboard',
+    '/my-work',
+    ...expectedProductRoutes.filter((path) => !['/', '/cockpit', '/my-work'].includes(path)),
+  ];
+
+  it('covers every required product route family exactly', () => {
+    expect(canonicalProductRoutes.map((route) => route.path)).toEqual(expectedProductRoutes);
+    expect(requiredScreenshotRoutes.map((route) => route.path)).toEqual(expectedScreenshotRoutes);
   });
 
   it('keeps retired route families out of command search', () => {
@@ -224,19 +259,35 @@ describe('product-grade route contract', () => {
     for (const route of retiredProductRoutes) {
       expect(commandText).not.toContain(route.path);
     }
+    expect(retiredProductRoutes.map((route) => route.path)).toEqual(expectedRetiredSmokeRoutes);
   });
 
   it('requires screenshot fixtures for every route family', () => {
     expect(requiredScreenshotRoutes.every((route) => route.viewports.join(',') === '1440,1024,768,375')).toBe(true);
+    expect(requiredScreenshotRoutes.every((route) => route.concretePath.length > 0)).toBe(true);
+  });
+
+  it('classifies every registered public router path', () => {
+    const registeredPaths = flattenProductRouteConfig(appRouteConfig);
+    const classified = new Set([
+      ...canonicalProductRoutes.map((route) => route.path.replace(/^\//, '')),
+      'dashboard',
+      'dev-tools',
+      '*',
+      '',
+    ]);
+
+    expect(registeredPaths.filter((path) => !classified.has(path))).toEqual([]);
+    expect(registeredPaths.join('\n')).not.toMatch(/(^|\/)(tasks|plans|specs|packages|runs|reviews|replay)(\/|$)/);
   });
 });
 ```
 
 - [ ] **Step 2: Run the route-contract test and verify it fails**
 
-Run: `pnpm vitest run tests/web/product-grade-route-contract.test.tsx`
+Run: `pnpm vitest run tests/web/product-grade-route-contract.test.tsx tests/web/product-grade-first-viewport.test.tsx`
 
-Expected: FAIL because `route-contract.ts` and contract exports do not exist yet.
+Expected: FAIL because `route-contract.ts`, the route-config helper, first-viewport tests, and contract exports do not exist yet.
 
 - [ ] **Step 3: Implement route contract exports**
 
@@ -274,7 +325,7 @@ export interface ProductRouteContract {
 export const visualViewports = [1440, 1024, 768, 375] as const;
 ```
 
-Populate `canonicalProductRoutes`, `requiredScreenshotRoutes`, `retiredProductRoutes`, and `productCommandItems` from the approved spec. Use concrete paths such as `/requirements/req-1` for dynamic screenshot fixtures.
+Populate `canonicalProductRoutes`, `requiredScreenshotRoutes`, `retiredProductRoutes`, and `productCommandItems` from the approved spec. Use concrete paths such as `/requirements/req-1` for dynamic screenshot fixtures. `requiredScreenshotRoutes` must equal the full spec screenshot manifest exactly, with `/dashboard` included as the retired-route screenshot, and it must spell out `/reports`, `/reports/delivery`, `/reports/quality`, `/reports/release-readiness`, and `/reports/observation` instead of using a catch-all label.
 
 - [ ] **Step 4: Implement first-viewport shared contract constants**
 
@@ -291,20 +342,24 @@ export const firstViewportContract = {
 } as const;
 ```
 
-- [ ] **Step 5: Implement the test helper**
+- [ ] **Step 5: Implement the test helpers and first-viewport test file**
 
-Create `tests/web/helpers/first-viewport-contract.ts` with an assertion helper that checks `h1`, `[data-testid="current-state"]`, `[data-testid="next-action"]`, `[data-testid="role-responsibility"]`, `[data-testid="blocker-risk"]`, and a page-family marker.
+Create `tests/web/helpers/first-viewport-contract.ts` with an assertion helper that checks `h1`, `[data-testid="current-state"]`, `[data-testid="next-action"]`, `[data-testid="role-responsibility"]`, `[data-testid="blocker-risk"]`, and a page-family marker. The helper must assert that each required affordance is visible and has non-empty accessible/text content. Current state, disabled reason, blocker/risk, and status affordances must not be empty wrappers or color-only badges.
+
+Create `tests/web/helpers/product-route-config.ts` to flatten `apps/web/src/app/routes.ts` into route paths for the route-contract test. It must normalize route parameter names to the canonical contract names before comparison, for example `requirements/:requirementId` becomes `requirements/:id`, `executions/:executionId` becomes `executions/:id`, and `development-plans/:developmentPlanId/items/:itemId` remains `development-plans/:id/items/:itemId`.
+
+Create `tests/web/product-grade-first-viewport.test.tsx` with an initial fixture-page test for the helper itself. Page-family tasks extend this file as routes are upgraded; do not wait until final screenshot closure to introduce the first-viewport contract.
 
 - [ ] **Step 6: Run the route-contract test and verify it passes**
 
-Run: `pnpm vitest run tests/web/product-grade-route-contract.test.tsx`
+Run: `pnpm vitest run tests/web/product-grade-route-contract.test.tsx tests/web/product-grade-first-viewport.test.tsx`
 
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/web/src/features/product-surfaces tests/web/product-grade-route-contract.test.tsx tests/web/helpers/first-viewport-contract.ts tests/e2e/helpers/capture-route-screenshots.ts
+git add apps/web/src/features/product-surfaces/route-contract.ts apps/web/src/features/product-surfaces/first-viewport-contract.ts tests/web/helpers/first-viewport-contract.ts tests/web/helpers/product-route-config.ts tests/web/product-grade-route-contract.test.tsx tests/web/product-grade-first-viewport.test.tsx tests/e2e/helpers/capture-route-screenshots.ts
 git commit -m "test: define product-grade route contract"
 ```
 
@@ -416,11 +471,102 @@ Expected: PASS.
 - [ ] **Step 10: Commit**
 
 ```bash
-git add apps/web/src/shared tests/web/product-grade-layout-primitives.test.tsx tests/web/design-system.test.tsx
+git add apps/web/src/shared/styles/theme.css apps/web/src/shared/layout/index.ts apps/web/src/shared/layout/section/section.tsx apps/web/src/shared/ui/table/table.tsx apps/web/src/shared/ui/error-state/error-state.tsx apps/web/src/shared/layout/workspace-page/workspace-page.tsx apps/web/src/shared/layout/object-workspace/object-workspace.tsx apps/web/src/shared/layout/queue-workspace/queue-workspace.tsx apps/web/src/shared/layout/planning-table-workspace/planning-table-workspace.tsx apps/web/src/shared/layout/gate-workspace/gate-workspace.tsx apps/web/src/shared/layout/action-strip/action-strip.tsx apps/web/src/shared/layout/priority-summary/priority-summary.tsx apps/web/src/shared/layout/compact-metadata/compact-metadata.tsx apps/web/src/shared/layout/gate-progress/gate-progress.tsx apps/web/src/shared/layout/preview-pane/preview-pane.tsx apps/web/src/shared/layout/evidence-drawer/evidence-drawer.tsx apps/web/src/shared/layout/revision-drawer/revision-drawer.tsx apps/web/src/shared/design-system/docs/component-guidelines.md tests/web/product-grade-layout-primitives.test.tsx tests/web/design-system.test.tsx
 git commit -m "feat: add product-grade layout primitives"
 ```
 
-## Task 3: Shell, Cockpit Route, Retired Dashboard, Navigation, And Command Search
+## Task 3: Presentation View Models, Projection Inventory, And Fixture Manifest
+
+**Files:**
+- Create: `apps/web/src/features/product-surfaces/view-model-types.ts`
+- Create: `apps/web/src/features/cockpit/cockpit-view-model.ts`
+- Create: `apps/web/src/features/my-work/my-work-view-model.ts`
+- Create: view-model files listed in "Presentation View Models"
+- Modify: `tests/web/fixtures/product-data.ts`
+- Modify: `tests/web/fixtures/product-api-mock.ts`
+- Create: `tests/web/product-grade-view-models.test.ts`
+- Create: `docs/superpowers/reports/product-grade-visual-system-projection-inventory.md`
+
+- [ ] **Step 1: Write failing view-model and projection-inventory tests**
+
+Create tests for adapter output names:
+
+```ts
+expect(sourceObjectListViewModel(requirementDetail)).toMatchObject({
+  objectLabel: 'Checkout requirement',
+  objectType: 'Requirement',
+  currentState: expect.any(String),
+  nextAction: expect.any(String),
+  primaryActorOrRole: expect.any(String),
+  riskSignal: expect.any(String),
+});
+```
+
+Also test Cockpit, My Work, Development Plan, Plan Item, Execution, Release, and Report adapters. Include negative tests proving adapters do not invent unavailable data from fixtures:
+
+- missing bulk action eligibility renders a disabled "No shared safe bulk action" state;
+- missing source evidence status renders an unavailable evidence summary instead of a fake ready state;
+- missing execution PR/diff/test evidence renders "Evidence unavailable" compact text;
+- missing release approval or rollback details renders disabled action reasons;
+- missing report signal renders an "Insufficient signal" conclusion and no fake suggested action.
+
+Run: `pnpm vitest run tests/web/product-grade-view-models.test.ts`
+
+Expected: FAIL because adapters do not exist.
+
+- [ ] **Step 2: Write the projection inventory before page rewrites**
+
+Create `docs/superpowers/reports/product-grade-visual-system-projection-inventory.md` with a table for every projection-sensitive UX field. This visual closure plans no backend/API projection exceptions. Each required field must be satisfied by an existing projection, a derived adapter field, or a truthful degraded state:
+
+| UX field | Existing or derived source | Required degraded fallback | Projection exception |
+| --- | --- | --- | --- |
+| Safe bulk action eligibility | Existing scoped `ProductAction` command metadata, selected-row object refs, and disabled reasons | Disabled bulk-action region with "No shared safe bulk action" | None planned |
+| Source evidence status | Existing attachment, evidence, relationship, and unavailable/degraded source data | Evidence readiness unavailable/stale block | None planned |
+| Execution PR/diff/test evidence | Existing execution evidence refs, changed-file summaries, check-result summaries, and lifecycle events where present | Compact "Evidence unavailable" state with recovery link if available | None planned |
+| Release approvals and rollback disabled reasons | Existing release readiness/cockpit data plus command disabled reasons | Launch/rollback disabled with explicit missing approval or blocker reason | None planned |
+| Report conclusions and suggested actions | Existing report rows, degraded source flags, risk counts, and linked object refs | "Insufficient signal" conclusion and no enabled action | None planned |
+
+If implementation discovers a field that cannot be derived or truthfully degraded, stop before the page-family task that needs it and amend this plan with the smallest projection exception plus contract/API tests. Do not fake the field in fixtures or spread raw API payloads directly into page JSX.
+
+- [ ] **Step 3: Define shared view-model types**
+
+In `view-model-types.ts`, define `ProductPageViewModel` and `FirstViewportViewModel` with fields:
+
+- `objectLabel`;
+- `objectType`;
+- `currentState`;
+- `nextAction`;
+- `disabledReason`;
+- `primaryActorOrRole`;
+- `riskSignal`;
+- `gateProgress`;
+- `criticalEvidence`;
+- `secondaryMetadata`;
+- `previewSummary`;
+- `timelineSummary`.
+
+- [ ] **Step 4: Implement feature-level adapters**
+
+Keep adapters close to feature modules. Do not spread raw API payloads directly inside page JSX after this task.
+
+- [ ] **Step 5: Expand fixtures**
+
+Ensure `product-data.ts` and `product-api-mock.ts` include at least one populated example for every dynamic route family in the spec. Add release evidence and source-object evidence data so evidence routes are not skipped.
+
+- [ ] **Step 6: Run view-model tests**
+
+Run: `pnpm vitest run tests/web/product-grade-view-models.test.ts`
+
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/web/src/features/product-surfaces/view-model-types.ts apps/web/src/features/cockpit/cockpit-view-model.ts apps/web/src/features/my-work/my-work-view-model.ts apps/web/src/features/project-management/source-object-view-model.ts apps/web/src/features/development-plans/development-plan-view-model.ts apps/web/src/features/spec-plan/spec-plan-view-model.ts apps/web/src/features/executions/execution-view-model.ts apps/web/src/features/releases/release-view-model.ts apps/web/src/features/reports/report-view-model.ts tests/web/product-grade-view-models.test.ts tests/web/fixtures/product-data.ts tests/web/fixtures/product-api-mock.ts docs/superpowers/reports/product-grade-visual-system-projection-inventory.md
+git commit -m "feat: add product presentation view models"
+```
+
+## Task 4: Shell, Cockpit Route, Retired Dashboard, Navigation, And Command Search
 
 **Files:**
 - Modify: `apps/web/src/app/routes.ts`
@@ -429,6 +575,7 @@ git commit -m "feat: add product-grade layout primitives"
 - Modify: `apps/web/src/app/routes/dashboard/index.tsx`
 - Create: `apps/web/src/app/routes/cockpit/index.tsx`
 - Create: `apps/web/src/features/cockpit/cockpit-route.tsx`
+- Modify: `apps/web/src/features/cockpit/cockpit-view-model.ts`
 - Create: `apps/web/src/shared/navigation/product-navigation.ts`
 - Create: `apps/web/src/shared/navigation/command-search.tsx`
 - Modify: `apps/web/src/shared/layout/app-shell/app-shell.tsx`
@@ -438,6 +585,7 @@ git commit -m "feat: add product-grade layout primitives"
 - Modify: `tests/web/app-shell-routing.test.tsx`
 - Modify: `tests/web/a11y-gates.test.tsx`
 - Modify: `tests/web/project-management-routes.test.tsx`
+- Modify: `tests/web/product-grade-first-viewport.test.tsx`
 - Modify: `tests/e2e/helpers/capture-route-screenshots.ts`
 
 - [ ] **Step 1: Write failing shell tests**
@@ -449,12 +597,13 @@ Update tests so:
 - primary nav shows `Cockpit`, not `Dashboard`;
 - `/dashboard` renders a retired/not-found safe state and not the old dashboard UI;
 - command search suggestions do not include retired routes;
-- Dev Tools remains gated behind runtime flags.
+- Dev Tools remains gated behind runtime flags;
+- Cockpit first viewport exposes non-empty current state, next action, role/responsibility, and blocker/risk text through the shared first-viewport contract.
 
 Run:
 
 ```bash
-pnpm vitest run tests/web/app-shell-routing.test.tsx tests/web/project-management-routes.test.tsx tests/web/a11y-gates.test.tsx
+pnpm vitest run tests/web/app-shell-routing.test.tsx tests/web/project-management-routes.test.tsx tests/web/a11y-gates.test.tsx tests/web/product-grade-first-viewport.test.tsx
 ```
 
 Expected: FAIL because current shell still uses Dashboard as the product entry.
@@ -470,9 +619,9 @@ Create `product-navigation.ts` with canonical groups:
 - Intelligence: Reports;
 - Tools: Dev Tools only when enabled.
 
-- [ ] **Step 3: Add Cockpit route**
+- [ ] **Step 3: Add Cockpit route through its view model**
 
-Create `apps/web/src/features/cockpit/cockpit-route.tsx` from the current dashboard data, but render it through `WorkspacePage` with action-first sections:
+Create `apps/web/src/features/cockpit/cockpit-route.tsx` from the current dashboard data, but transform it through `cockpit-view-model.ts` and render it through `WorkspacePage` with action-first sections:
 
 - role-selected next-action queue;
 - blockers and stale gates;
@@ -480,6 +629,8 @@ Create `apps/web/src/features/cockpit/cockpit-route.tsx` from the current dashbo
 - Spec/Execution Plan review queue;
 - QA and release readiness attention;
 - compact health indicators.
+
+Do not spread raw dashboard/query payloads directly in the route component.
 
 - [ ] **Step 4: Update route config**
 
@@ -507,7 +658,7 @@ Tune `AppShell`, `SidebarNav`, and `Topbar` so:
 Run:
 
 ```bash
-pnpm vitest run tests/web/app-shell-routing.test.tsx tests/web/project-management-routes.test.tsx tests/web/a11y-gates.test.tsx tests/web/responsive-layout.test.tsx
+pnpm vitest run tests/web/app-shell-routing.test.tsx tests/web/project-management-routes.test.tsx tests/web/a11y-gates.test.tsx tests/web/responsive-layout.test.tsx tests/web/product-grade-first-viewport.test.tsx
 ```
 
 Expected: PASS.
@@ -515,15 +666,15 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add apps/web/src/app/routes.ts apps/web/src/app/routes/_index.tsx apps/web/src/app/routes/_layout.tsx apps/web/src/app/routes/dashboard apps/web/src/app/routes/cockpit apps/web/src/features/cockpit apps/web/src/shared/navigation apps/web/src/shared/layout tests/web tests/e2e/helpers/capture-route-screenshots.ts
+git add apps/web/src/app/routes.ts apps/web/src/app/routes/_index.tsx apps/web/src/app/routes/_layout.tsx apps/web/src/app/routes/dashboard/index.tsx apps/web/src/app/routes/cockpit/index.tsx apps/web/src/features/cockpit/cockpit-route.tsx apps/web/src/features/cockpit/cockpit-view-model.ts apps/web/src/shared/navigation/product-navigation.ts apps/web/src/shared/navigation/command-search.tsx apps/web/src/shared/layout/app-shell/app-shell.tsx apps/web/src/shared/layout/sidebar-nav/sidebar-nav.tsx apps/web/src/shared/layout/topbar/topbar.tsx tests/web/router-test-utils.tsx tests/web/app-shell-routing.test.tsx tests/web/a11y-gates.test.tsx tests/web/project-management-routes.test.tsx tests/web/responsive-layout.test.tsx tests/web/product-grade-first-viewport.test.tsx tests/e2e/helpers/capture-route-screenshots.ts
 git commit -m "feat: add cockpit shell and retire dashboard"
 ```
 
-## Task 4: My Work Role-Aware Queue Workspace
+## Task 5: My Work Role-Aware Queue Workspace
 
 **Files:**
 - Modify: `apps/web/src/features/my-work/my-work-route.tsx`
-- Modify: `apps/web/src/features/product-surfaces/view-model-types.ts` if the shared view-model types already exist from a previous task
+- Modify: `apps/web/src/features/my-work/my-work-view-model.ts`
 - Modify: `tests/web/my-work-route.test.tsx`
 - Modify: `tests/web/my-work-board-reports.test.tsx`
 - Modify: `tests/web/product-grade-first-viewport.test.tsx`
@@ -536,10 +687,10 @@ Assert `/my-work` renders:
 - `data-page-family="queue"`;
 - `data-workspace-layout="queue-workspace"`;
 - visible `h1` heading;
-- current-state affordance;
-- next-action region;
-- role/responsibility affordance;
-- blocker/risk affordance;
+- current-state affordance with non-empty text;
+- next-action region with enabled action or disabled reason text;
+- role/responsibility affordance with non-empty text;
+- blocker/risk affordance with non-empty text when blocked, stale, failed, high-risk, or degraded;
 - grouped queue rows for Product, Tech Lead, Developer, QA, Release, and Manager attention;
 - filter chips for role, status, gate, and risk;
 - selected item preview with next action and disabled reason;
@@ -555,11 +706,11 @@ Expected: FAIL because `/my-work` still renders grouped sections without the pro
 
 - [ ] **Step 2: Refactor `/my-work` to `QueueWorkspace`**
 
-Use the shared `QueueWorkspace`, `ActionStrip`, `PrioritySummary`, `PreviewPane`, `CompactMetadata`, and `DataTable` primitives. Keep the current role grouping logic, but make role lens filtering and row preview explicit.
+Use the shared `QueueWorkspace`, `ActionStrip`, `PrioritySummary`, `PreviewPane`, `CompactMetadata`, and `DataTable` primitives. Keep the current role grouping logic, but make role lens filtering and row preview explicit. Render through `my-work-view-model.ts`; do not spread raw query payloads in the route component.
 
 - [ ] **Step 3: Add safe bulk actions**
 
-Render a compact bulk action region only when selected rows share the same scoped safe command. When no safe bulk action exists, show the disabled reason in the next-action region instead of hiding the control.
+Render a compact bulk action region only when selected rows share the same scoped safe command. When no safe bulk action exists, show the disabled reason from `my-work-view-model.ts` in the next-action region instead of hiding the control.
 
 - [ ] **Step 4: Preserve canonical object navigation**
 
@@ -578,76 +729,8 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/features/my-work tests/web/my-work-route.test.tsx tests/web/my-work-board-reports.test.tsx tests/web/product-grade-first-viewport.test.tsx tests/e2e/helpers/capture-route-screenshots.ts
+git add apps/web/src/features/my-work/my-work-route.tsx apps/web/src/features/my-work/my-work-view-model.ts tests/web/my-work-route.test.tsx tests/web/my-work-board-reports.test.tsx tests/web/product-grade-first-viewport.test.tsx tests/e2e/helpers/capture-route-screenshots.ts
 git commit -m "feat: upgrade my work queue workspace"
-```
-
-## Task 5: Presentation View Models And Fixture Manifest
-
-**Files:**
-- Create: `apps/web/src/features/product-surfaces/view-model-types.ts`
-- Create: view-model files listed in "Presentation View Models"
-- Modify: `tests/web/fixtures/product-data.ts`
-- Modify: `tests/web/fixtures/product-api-mock.ts`
-- Create: `tests/web/product-grade-view-models.test.ts`
-
-- [ ] **Step 1: Write failing view-model tests**
-
-Create tests for adapter output names:
-
-```ts
-expect(sourceObjectListViewModel(requirementDetail)).toMatchObject({
-  objectLabel: 'Checkout requirement',
-  objectType: 'Requirement',
-  currentState: expect.any(String),
-  nextAction: expect.any(String),
-  primaryActorOrRole: expect.any(String),
-  riskSignal: expect.any(String),
-});
-```
-
-Also test Development Plan, Plan Item, Execution, Release, and Report adapters.
-
-Run: `pnpm vitest run tests/web/product-grade-view-models.test.ts`
-
-Expected: FAIL because adapters do not exist.
-
-- [ ] **Step 2: Define shared view-model types**
-
-In `view-model-types.ts`, define `ProductPageViewModel` and `FirstViewportViewModel` with fields:
-
-- `objectLabel`;
-- `objectType`;
-- `currentState`;
-- `nextAction`;
-- `disabledReason`;
-- `primaryActorOrRole`;
-- `riskSignal`;
-- `gateProgress`;
-- `criticalEvidence`;
-- `secondaryMetadata`;
-- `previewSummary`;
-- `timelineSummary`.
-
-- [ ] **Step 3: Implement feature-level adapters**
-
-Keep adapters close to feature modules. Do not spread raw API payloads directly inside page JSX after this task.
-
-- [ ] **Step 4: Expand fixtures**
-
-Ensure `product-data.ts` and `product-api-mock.ts` include at least one populated example for every dynamic route family in the spec. Add release evidence and source-object evidence data so evidence routes are not skipped.
-
-- [ ] **Step 5: Run view-model tests**
-
-Run: `pnpm vitest run tests/web/product-grade-view-models.test.ts`
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add apps/web/src/features/product-surfaces apps/web/src/features/*/*view-model.ts tests/web/product-grade-view-models.test.ts tests/web/fixtures
-git commit -m "feat: add product presentation view models"
 ```
 
 ## Task 6: Source Object Lists
@@ -659,7 +742,7 @@ git commit -m "feat: add product presentation view models"
 - Modify: `apps/web/src/features/bugs/bugs-routes.tsx`
 - Modify: `apps/web/src/features/tech-debt/tech-debt-routes.tsx`
 - Modify: `tests/web/project-management-routes.test.tsx`
-- Create or modify: `tests/web/product-grade-first-viewport.test.tsx`
+- Modify: `tests/web/product-grade-first-viewport.test.tsx`
 
 - [ ] **Step 1: Write failing list tests**
 
@@ -704,7 +787,7 @@ Expected: PASS for source list routes.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/features/project-management/object-list.tsx apps/web/src/features/requirements apps/web/src/features/initiatives apps/web/src/features/bugs apps/web/src/features/tech-debt tests/web/project-management-routes.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add apps/web/src/features/project-management/object-list.tsx apps/web/src/features/requirements/requirements-routes.tsx apps/web/src/features/initiatives/initiatives-routes.tsx apps/web/src/features/bugs/bugs-routes.tsx apps/web/src/features/tech-debt/tech-debt-routes.tsx tests/web/project-management-routes.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: upgrade source object lists"
 ```
 
@@ -713,7 +796,11 @@ git commit -m "feat: upgrade source object lists"
 **Files:**
 - Modify: `apps/web/src/features/project-management/object-detail-layout.tsx`
 - Modify: `apps/web/src/features/project-management/object-forms.tsx`
-- Modify: route files for source object detail and new routes through feature modules
+- Modify source object route feature modules:
+  - `apps/web/src/features/requirements/requirements-routes.tsx`;
+  - `apps/web/src/features/initiatives/initiatives-routes.tsx`;
+  - `apps/web/src/features/bugs/bugs-routes.tsx`;
+  - `apps/web/src/features/tech-debt/tech-debt-routes.tsx`.
 - Modify: `tests/web/project-management-routes.test.tsx`
 - Modify: `tests/web/markdown-editor-rich-mode.test.tsx`
 - Modify: `tests/web/markdown-editor-attachments.test.tsx`
@@ -779,7 +866,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/web/src/features/project-management apps/web/src/features/requirements apps/web/src/features/initiatives apps/web/src/features/bugs apps/web/src/features/tech-debt tests/web/project-management-routes.test.tsx tests/web/markdown-editor-*.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add apps/web/src/features/project-management/object-detail-layout.tsx apps/web/src/features/project-management/object-forms.tsx apps/web/src/features/requirements/requirements-routes.tsx apps/web/src/features/initiatives/initiatives-routes.tsx apps/web/src/features/bugs/bugs-routes.tsx apps/web/src/features/tech-debt/tech-debt-routes.tsx tests/web/project-management-routes.test.tsx tests/web/markdown-editor-rich-mode.test.tsx tests/web/markdown-editor-attachments.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: upgrade source object workspaces"
 ```
 
@@ -833,7 +920,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/app/routes/*/*/evidence.tsx apps/web/src/features/project-management/object-evidence-route.tsx tests/web/project-management-routes.test.tsx tests/web/attachment-evidence-rendering.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add 'apps/web/src/app/routes/requirements/$requirementId/evidence.tsx' 'apps/web/src/app/routes/initiatives/$initiativeId/evidence.tsx' 'apps/web/src/app/routes/bugs/$bugId/evidence.tsx' 'apps/web/src/app/routes/tech-debt/$techDebtId/evidence.tsx' apps/web/src/features/project-management/object-evidence-route.tsx tests/web/project-management-routes.test.tsx tests/web/attachment-evidence-rendering.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: add source evidence workspaces"
 ```
 
@@ -886,6 +973,8 @@ Expected: PASS.
 
 ```bash
 git add apps/web/src/features/development-plans/development-plans-route.tsx tests/web/development-plan-routes.test.tsx tests/web/product-grade-first-viewport.test.tsx tests/e2e/ai-native-project-management-visual.e2e.test.ts
+# If Step 3 touched command helper typing, also stage that exact file:
+# git add apps/web/src/shared/api/commands.ts
 git commit -m "feat: upgrade development plan index and authoring"
 ```
 
@@ -970,7 +1059,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/features/development-plans tests/web/development-plan-routes.test.tsx tests/web/responsive-layout.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add apps/web/src/features/development-plans/development-plan-detail-route.tsx apps/web/src/features/development-plans/development-plan-table.tsx apps/web/src/features/development-plans/development-plan-view-model.ts tests/web/development-plan-routes.test.tsx tests/web/responsive-layout.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: upgrade development plan table workspace"
 ```
 
@@ -1025,7 +1114,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/features/development-plans apps/web/src/features/brainstorming tests/web/development-plan-routes.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add apps/web/src/features/development-plans/development-plan-item-detail-route.tsx apps/web/src/features/development-plans/plan-item-gates.tsx apps/web/src/features/brainstorming/brainstorming-panel.tsx tests/web/development-plan-routes.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: upgrade plan item gate workspace"
 ```
 
@@ -1073,7 +1162,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/features/spec-plan tests/web/project-management-routes.test.tsx tests/web/spec-plan-lifecycle-actions.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add apps/web/src/features/spec-plan/spec-execution-plan-queue.tsx apps/web/src/features/spec-plan/spec-plan-view-model.ts tests/web/project-management-routes.test.tsx tests/web/spec-plan-lifecycle-actions.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: upgrade spec execution plan queue"
 ```
 
@@ -1135,7 +1224,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/features/executions tests/web/executions-routes.test.tsx tests/web/code-review-qa-handoff-routes.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add apps/web/src/features/executions/executions-route.tsx apps/web/src/features/executions/execution-detail-route.tsx apps/web/src/features/executions/execution-view-model.ts tests/web/executions-routes.test.tsx tests/web/code-review-qa-handoff-routes.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: upgrade execution supervision workspaces"
 ```
 
@@ -1187,7 +1276,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/features/board tests/web/my-work-board-reports.test.tsx tests/web/board-reports-release-readiness.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add apps/web/src/features/board/board-route.tsx tests/web/my-work-board-reports.test.tsx tests/web/board-reports-release-readiness.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: upgrade delivery flow board"
 ```
 
@@ -1239,7 +1328,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/features/releases tests/web/board-reports-release-readiness.test.tsx tests/web/release-owner-surface.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add apps/web/src/features/releases/release-routes.tsx apps/web/src/features/releases/release-view-model.ts tests/web/board-reports-release-readiness.test.tsx tests/web/release-owner-surface.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: upgrade release readiness workspaces"
 ```
 
@@ -1288,7 +1377,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/features/reports tests/web/my-work-board-reports.test.tsx tests/web/board-reports-release-readiness.test.tsx tests/web/product-grade-first-viewport.test.tsx
+git add apps/web/src/features/reports/reports-routes.tsx apps/web/src/features/reports/report-view-model.ts tests/web/my-work-board-reports.test.tsx tests/web/board-reports-release-readiness.test.tsx tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: upgrade reports intelligence surfaces"
 ```
 
@@ -1341,22 +1430,30 @@ Use `requiredScreenshotRoutes` from `route-contract.ts`. Include:
 - `/releases`;
 - `/releases/:id`;
 - `/releases/:id/evidence`;
-- report routes.
+- `/reports`;
+- `/reports/delivery`;
+- `/reports/quality`;
+- `/reports/release-readiness`;
+- `/reports/observation`.
 
 - [ ] **Step 2: Add retired-route checks**
 
 Ensure `/plans`, `/plans/:id`, `/specs`, `/specs/:id`, `/tasks`, `/tasks/:id`, and raw runtime browser routes if registered render safe retired/not-found states and do not appear in nav/search/product links/happy-path fixtures.
+
+Also assert `apps/web/src/app/routes.ts` has no unclassified public route: each registered product path must be listed in `canonicalProductRoutes`, `retiredProductRoutes`, or an explicit Dev Tools-only allowlist. The check must fail for any extra public route containing legacy `tasks`, `plans`, `specs`, `packages`, `runs`, `reviews`, or raw `replay` path segments.
 
 - [ ] **Step 3: Add first-viewport screenshot assertions**
 
 In Playwright helper, assert for every product route:
 
 - visible heading;
-- current state;
-- next action region;
-- role/responsibility where applicable;
-- blocker/risk where applicable;
+- current state with non-empty accessible text;
+- next action region with enabled action text or explicit disabled reason text;
+- role/responsibility where applicable, with non-empty accessible text;
+- blocker/risk where applicable, with non-empty accessible text;
 - route-family marker.
+
+These assertions must reject empty test-id shells, aria-hidden-only status, and color-only state badges.
 
 - [ ] **Step 4: Run full Web route contract suites**
 
@@ -1386,7 +1483,7 @@ Expected: PASS.
 
 Run: `pnpm vitest run tests/e2e/ai-native-project-management-visual.e2e.test.ts`
 
-Expected: PASS and screenshots written under `test-results/ai-native-project-management`.
+Expected: PASS and screenshots written under `test-results/ai-native-project-management`. The E2E helper must fail if any `requiredScreenshotRoutes` route/viewport pair is not captured, if a PNG path is missing or zero bytes, or if a retired-route smoke target such as `/dashboard` is skipped.
 
 - [ ] **Step 6: Run typecheck and build**
 
@@ -1429,7 +1526,9 @@ Create or update `docs/superpowers/reports/product-grade-visual-system-closure-r
 - [ ] **Step 10: Commit final closure**
 
 ```bash
-git add apps/web tests/web tests/e2e docs/superpowers/reports/product-grade-visual-system-closure-review.md
+git status --short
+git add tests/e2e/ai-native-project-management-visual.e2e.test.ts tests/e2e/helpers/capture-route-screenshots.ts tests/web/no-legacy-web-ui.test.ts tests/web/responsive-layout.test.tsx tests/web/a11y-gates.test.tsx docs/superpowers/reports/product-grade-visual-system-closure-review.md
+# If final screenshot fixes touched app files, stage each changed file by exact path from `git diff --name-only`; do not stage `apps/web`, `tests/web`, or `tests/e2e` as directories.
 git commit -m "test: close product-grade visual system verification"
 ```
 
