@@ -97,7 +97,7 @@ function sectionDescription(id: string): string {
     'blocked-work': 'Gate blockers across boundary, Spec, Execution Plan, execution, review, QA, and release.',
     aging: 'Objects whose current role action has aged past the operating threshold.',
     'risk-concentration': 'High and critical risk concentration across source objects and plan rows.',
-    'role-load': 'Distribution of active attention across Product, Tech Lead, Developer, QA, and Release Owner roles.',
+    'role-load': 'Distribution of active attention across Product, Tech Lead, Developer, QA, and release coordination roles.',
     'release-confidence': 'Current release readiness based on review, QA, evidence, and known risk.',
   };
   return descriptions[id] ?? 'Project-management signal.';
@@ -117,7 +117,7 @@ function dashboardSurfaceState(query: ReturnType<typeof useDashboardQuery>): Sur
   return undefined;
 }
 
-const registeredDashboardReportHrefs = new Set(['/reports', '/reports/delivery', '/reports/quality', '/reports/release-readiness', '/reports/observation', '/reports/replay']);
+const registeredDashboardReportHrefs = new Set(['/reports', '/reports/delivery', '/reports/quality', '/reports/release-readiness', '/reports/observation']);
 
 function dashboardReportHref(link: Record<string, unknown>): string {
   const href = typeof link.href === 'string' ? link.href : undefined;
@@ -126,7 +126,8 @@ function dashboardReportHref(link: Record<string, unknown>): string {
   const id = String(link.id ?? '');
   if (id.includes('release')) return '/reports/release-readiness';
   if (id.includes('quality') || id.includes('qa') || id.includes('code-review')) return '/reports/quality';
-  if (id.includes('observation') || id.includes('replay')) return href === '/reports/replay' ? '/reports/replay' : '/reports/observation';
+  if (id.includes('observation')) return '/reports/observation';
+  if (id.includes('replay')) return '/reports?report=replay';
   if (id.includes('delivery') || id.includes('execution') || id.includes('spec') || id.includes('brainstorming')) return '/reports/delivery';
   return '/reports';
 }

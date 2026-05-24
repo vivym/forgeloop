@@ -41,7 +41,7 @@ export default [
     route('reports/quality', './routes/reports/quality.tsx'),
     route('reports/release-readiness', './routes/reports/release-readiness.tsx'),
     route('reports/observation', './routes/reports/observation.tsx'),
-    route('reports/replay', './routes/reports/replay.tsx'),
     route('dev-tools', './routes/dev-tools/index.tsx'),
+    route('*', './routes/_not-found.tsx'),
   ]),
 ] satisfies RouteConfig;

@@ -13,7 +13,7 @@ const attentionGroups = [
   { id: 'tech-lead', label: 'Tech Lead attention' },
   { id: 'developer', label: 'Developer attention' },
   { id: 'qa', label: 'QA attention' },
-  { id: 'release-owner', label: 'Release Owner attention' },
+  { id: 'release-owner', label: 'Release attention' },
   { id: 'manager', label: 'Manager attention' },
 ] as const;
 
@@ -181,14 +181,14 @@ function typedHrefFor(ref: MyWorkQueueItem['object_ref']): string | undefined {
     case 'bug':
       return `/bugs/${encodeURIComponent(ref.id)}`;
     case 'development_plan_item':
-      return `/specs-plans?development_plan_id=${encodeURIComponent(ref.development_plan_id)}&development_plan_item_id=${encodeURIComponent(ref.id)}`;
+      return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
     case 'spec':
     case 'execution_plan':
       return '/specs-plans';
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
     case 'development_plan':
-      return `/specs-plans?development_plan_id=${encodeURIComponent(ref.id)}`;
+      return `/development-plans/${encodeURIComponent(ref.id)}`;
     case 'execution':
       return `/board?execution_id=${encodeURIComponent(ref.id)}`;
     case 'code_review_handoff':

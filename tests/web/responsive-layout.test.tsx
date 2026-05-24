@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { waitFor } from '@testing-library/react';
+import { cleanup, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
@@ -26,8 +26,24 @@ describe('responsive layout contract', () => {
 
     expect(await screen.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
     expect(await screen.findByRole('complementary', { name: /next action/i })).toBeTruthy();
+    expect(document.querySelector('[data-detail-layout-rail]')).toBeTruthy();
     expect(screen.getByRole('main')).toBeTruthy();
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
+  });
+
+  it('renders item-scoped routes with stable visible status text at desktop and mobile widths', async () => {
+    for (const width of [375, 768, 1024, 1440]) {
+      vi.stubGlobal('innerWidth', width);
+      vi.stubGlobal('matchMedia', createMatchMedia(width));
+
+      const screen = await renderRoute('/development-plans/development-plan-web-product/items/development-plan-item-web-product');
+      expect(await screen.findByRole('heading', { name: /Development Plan Item/i })).toBeTruthy();
+      await waitFor(() => expect(document.body.textContent).toMatch(/approved|running|pending|status/i));
+      expect(document.querySelector('[data-card-in-card="true"]')).toBeNull();
+      expect(legacyRenderedClassTokens(document.body)).toEqual([]);
+      cleanup();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('keeps 768px tablet layouts in mobile drawer mode until navigation opens', async () => {

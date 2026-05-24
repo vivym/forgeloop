@@ -35,6 +35,27 @@ const removedRoutes = [
 ];
 
 const legacyOwnerPattern = new RegExp(`${['Work', 'Item', 'Owner'].join(' ')}|${['owner', 'actor', 'id'].join('_')}`);
+const forbiddenProductStrings = [
+  '/tasks',
+  'Work Item Owner',
+  'owner_actor_id',
+  'Execution Package Browser',
+  'Run Session Browser',
+  'Review Packet Browser',
+  'Raw Replay Browser',
+  '/replay',
+] as const;
+const forbiddenPrimaryNavLabels = ['Execution Packages', 'Run Sessions', 'Review Packets', 'Replay', 'Traces'] as const;
+const renderedProductRoutes = [
+  '/dashboard',
+  '/requirements/req-1',
+  `/development-plans/${developmentPlan.id}`,
+  `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+  '/specs-plans',
+  '/executions',
+  '/reports',
+  '/reports?report=replay',
+] as const;
 
 describe('project management route IA', () => {
   it('renders grouped primary navigation without generic Tasks or direct artifact routes', async () => {
@@ -45,12 +66,36 @@ describe('project management route IA', () => {
     for (const label of ['Lanes', 'Pipeline', 'Work Items', 'Tasks', 'Packages', 'Runs', 'Reviews', 'Specs', 'Plans']) {
       expect(screen.queryByRole('link', { name: label })).toBeNull();
     }
+    for (const label of forbiddenPrimaryNavLabels) {
+      expect(screen.queryByRole('link', { name: label })).toBeNull();
+    }
+  });
+
+  it.each(renderedProductRoutes)('renders %s without historical product baggage', async (route) => {
+    const screen = await renderRoute(route);
+    expect((await screen.findAllByRole('heading')).length).toBeGreaterThan(0);
+
+    const renderedText = document.body.textContent ?? '';
+    const renderedMarkup = document.body.innerHTML;
+    for (const forbidden of forbiddenProductStrings) {
+      expect(renderedText).not.toContain(forbidden);
+      expect(renderedMarkup).not.toContain(forbidden);
+    }
+    if (route === '/reports?report=replay') {
+      expect(renderedText).toContain('Lifecycle replay evidence context');
+      expect(renderedMarkup).toContain('report=replay');
+    }
+    if (!route.startsWith('/releases')) {
+      expect(renderedText).not.toContain('Release Owner');
+    }
+    cleanup();
   });
 
   it.each(removedRoutes)('does not resolve removed product route %s', async (route) => {
     const screen = await renderRoute(route);
     expect(screen.getByRole('heading', { name: /not found|404/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /generate spec|generate execution plan|start execution/i })).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|Raw Replay Browser/i);
     cleanup();
   });
 
@@ -87,7 +132,7 @@ describe('project management route IA', () => {
     expect(screen.getByRole('button', { name: /link existing development plan/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /generate spec/i })).toBeNull();
     expect(screen.getByRole('link', { name: /open development plan item/i }).getAttribute('href')).toBe(
-      `/specs-plans?development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
     expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
   });

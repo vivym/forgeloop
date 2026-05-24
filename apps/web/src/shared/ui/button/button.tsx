@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 
 import { cn } from '../../utils/cn';
@@ -34,20 +34,30 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>, Va
   iconTrailing?: ReactNode;
 }
 
-export function Button({
-  variant = 'secondary',
-  loading = false,
-  iconLeading,
-  iconTrailing,
-  size,
-  className,
-  children,
-  disabled,
-  type = 'button',
-  ...props
-}: ButtonProps) {
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  {
+    variant = 'secondary',
+    loading = false,
+    iconLeading,
+    iconTrailing,
+    size,
+    className,
+    children,
+    disabled,
+    type = 'button',
+    ...props
+  },
+  ref,
+) {
   return (
-    <button {...props} aria-busy={loading || props['aria-busy'] || undefined} className={cn(buttonStyles({ variant, size }), className)} disabled={loading || disabled} type={type}>
+    <button
+      {...props}
+      aria-busy={loading || props['aria-busy'] || undefined}
+      className={cn(buttonStyles({ variant, size }), className)}
+      disabled={loading || disabled}
+      ref={ref}
+      type={type}
+    >
       {iconLeading !== undefined ? <span className="inline-flex min-w-0 shrink-0 items-center">{iconLeading}</span> : null}
       <span className="inline-flex min-w-0 items-center gap-1.5">
         {loading ? (
@@ -63,4 +73,4 @@ export function Button({
       {iconTrailing !== undefined ? <span className="inline-flex min-w-0 shrink-0 items-center">{iconTrailing}</span> : null}
     </button>
   );
-}
+});

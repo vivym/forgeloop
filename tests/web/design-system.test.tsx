@@ -26,6 +26,7 @@ import {
   Input,
   Select,
   Skeleton,
+  StatusPill,
   Toast,
   ToastAction,
   ToastClose,
@@ -173,6 +174,16 @@ describe('design system primitives', () => {
     const rail = screen.getByRole('complementary', { name: 'Release actions' });
     const content = screen.getByRole('article', { name: 'Release detail' });
     expect(rail.compareDocumentPosition(content)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(document.querySelector('[data-detail-layout-rail]')).toBeTruthy();
+    expect(document.querySelector('[data-card-in-card="true"]')).toBeNull();
+    expectNoLegacyRenderedClasses();
+  });
+
+  it('renders status pills with visible text so state is not color-only', () => {
+    render(<StatusPill tone="warning">Blocked</StatusPill>);
+
+    expect(screen.getByText('Blocked')).toBeTruthy();
+    expect(document.body.textContent).toContain('Blocked');
     expectNoLegacyRenderedClasses();
   });
 

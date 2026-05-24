@@ -61,7 +61,7 @@ describe('Development Plan routes', () => {
     await user.click(await screen.findByRole('button', { name: /start boundary brainstorming/i }));
     expect(await screen.findByText(/Brainstorming session started/i)).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /answer first boundary question/i }));
+    await user.click(screen.getByRole('button', { name: /answer boundary questions/i }));
     expect(await screen.findByText(/Boundary answer recorded/i)).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /record boundary decision/i }));

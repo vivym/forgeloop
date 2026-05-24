@@ -17,7 +17,7 @@ describe('My Work route', () => {
       'Tech Lead attention',
       'Developer attention',
       'QA attention',
-      'Release Owner attention',
+      'Release attention',
       'Manager attention',
     ]) {
       expect(screen.getByText(group)).toBeTruthy();
@@ -31,7 +31,7 @@ describe('My Work route', () => {
 
     expect((await screen.findByRole('link', { name: /open requirement/i })).getAttribute('href')).toBe('/requirements/req-1');
     expect(screen.getByRole('link', { name: /open development plan item/i }).getAttribute('href')).toBe(
-      '/specs-plans?development_plan_id=development-plan-web-product&development_plan_item_id=development-plan-item-web-product',
+      '/development-plans/development-plan-web-product/items/development-plan-item-web-product',
     );
   });
 

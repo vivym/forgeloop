@@ -41,7 +41,7 @@ import type { ProductLaneId, ProductLaneItem, ProductLaneResponse } from '@forge
 const { development_plan_id: _developmentPlanItemLegacyPlanId, ...developmentPlanItemProjection } = developmentPlanItem;
 void _developmentPlanItemLegacyPlanId;
 
-export type ProductApiMockHandler = (request: { input: RequestInfo | URL; init?: RequestInit; key: string }) => unknown | Promise<unknown>;
+export type ProductApiMockHandler = (request: { body?: unknown; input: RequestInfo | URL; init?: RequestInit; key: string }) => unknown | Promise<unknown>;
 export type ProductApiResponseMap = Record<string, unknown | ProductApiMockHandler>;
 
 const routeWorkItem = {

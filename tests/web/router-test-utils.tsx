@@ -35,7 +35,6 @@ import DeliveryReportRoute from '../../apps/web/src/app/routes/reports/delivery'
 import ObservationReportRoute from '../../apps/web/src/app/routes/reports/observation';
 import QualityReportRoute from '../../apps/web/src/app/routes/reports/quality';
 import ReleaseReadinessReportRoute from '../../apps/web/src/app/routes/reports/release-readiness';
-import ReplayReportRoute from '../../apps/web/src/app/routes/reports/replay';
 import ReportsRoute from '../../apps/web/src/app/routes/reports';
 import RequirementEvidenceRoute from '../../apps/web/src/app/routes/requirements/$requirementId/evidence';
 import RequirementDetailRoute from '../../apps/web/src/app/routes/requirements/$requirementId';
@@ -108,7 +107,6 @@ const productRoutes: RouteObject[] = [
       { path: 'reports/quality', Component: QualityReportRoute },
       { path: 'reports/release-readiness', Component: ReleaseReadinessReportRoute },
       { path: 'reports/observation', Component: ObservationReportRoute },
-      { path: 'reports/replay', Component: ReplayReportRoute },
       { path: 'dev-tools', Component: DevToolsRoute },
       { path: '*', Component: ProductNotFoundRoute },
     ],

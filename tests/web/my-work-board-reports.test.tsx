@@ -11,7 +11,7 @@ describe('AI-native My Work, Board, and Reports', () => {
     expect(await screen.findByRole('heading', { name: 'My Work' })).toBeTruthy();
     expect(await screen.findByText(/Needs boundary approval/i)).toBeTruthy();
     expect(screen.getByRole('link', { name: /open development plan item/i }).getAttribute('href')).toBe(
-      `/specs-plans?development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
     expect(document.body.textContent).not.toMatch(/\bTasks\b|Work Item Owner|owner_actor_id/);
   });
@@ -38,6 +38,9 @@ describe('AI-native My Work, Board, and Reports', () => {
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
     expect(await screen.findByText(/Requirement/i)).toBeTruthy();
     expect(await screen.findByText(/Development Plan Item/i)).toBeTruthy();
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toContain(
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+    );
     expect(screen.getAllByText(/Next action/i).length).toBeGreaterThan(0);
   });
 

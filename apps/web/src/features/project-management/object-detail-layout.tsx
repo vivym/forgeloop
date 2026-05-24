@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import type { AttachmentRef, EditableObjectRef, MarkdownBlockKind, MarkdownDocument } from '@forgeloop/contracts';
 
 import { createForgeloopCommandApi } from '../../shared/api/commands';
+import { useDevelopmentPlansQuery } from '../../shared/api/hooks';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ActionRail, DetailLayout, MetadataGrid, PageHeader, Section } from '../../shared/layout';
-import { Button, Dialog, DialogPanel, EvidenceAttachments, ForgeMarkdownEditor, InlineNotice, SegmentedControl, StatusPill, Tabs, Textarea } from '../../shared/ui';
+import { Button, Dialog, DialogPanel, EvidenceAttachments, ForgeMarkdownEditor, InlineNotice, Select, SegmentedControl, StatusPill, Tabs, Textarea } from '../../shared/ui';
 import { stateFromStatus, SurfaceStateIndicator, type SurfaceState } from './surface-state';
 
 export interface ProjectObjectDetail {
@@ -52,10 +53,15 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
   const [markdown, setMarkdown] = useState(detail?.narrative_markdown ?? '');
   const [roleLens, setRoleLens] = useState('product');
   const [planTitle, setPlanTitle] = useState('');
+  const [selectedDevelopmentPlanId, setSelectedDevelopmentPlanId] = useState('');
+  const [linkedDevelopmentPlan, setLinkedDevelopmentPlan] = useState<ProductRelationshipRef>();
+  const [isLinkPlanOpen, setIsLinkPlanOpen] = useState(false);
   const [generationGuidance, setGenerationGuidance] = useState('Preserve source decisions and generate a table-first Development Plan.');
   const [actionState, setActionState] = useState<{ status: 'idle' | 'running' | 'success' | 'error'; message?: string }>({ status: 'idle' });
   const { actorId } = useActorContext();
   const { projectId } = useProjectContext();
+  const navigate = useNavigate();
+  const plansQuery = useDevelopmentPlansQuery({ project_id: projectId });
   const developmentPlanItem = useMemo(
     () => detail?.relationship_refs?.find((ref) => ref.type === 'development_plan_item'),
     [detail?.relationship_refs],
@@ -64,6 +70,11 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
     () => detail?.relationship_refs?.find((ref) => ref.type === 'development_plan'),
     [detail?.relationship_refs],
   );
+  const availableDevelopmentPlans = useMemo(
+    () => (plansQuery.data?.items ?? []) as Array<{ id: string; title?: string }>,
+    [plansQuery.data?.items],
+  );
+  const activeDevelopmentPlan = linkedDevelopmentPlan ?? developmentPlan;
 
   useEffect(() => {
     setMarkdown(detail?.narrative_markdown ?? '');
@@ -71,7 +82,16 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   useEffect(() => {
     setPlanTitle(detail === undefined ? '' : `${detail.title} development plan`);
+    setLinkedDevelopmentPlan(undefined);
+    setSelectedDevelopmentPlanId('');
+    setIsLinkPlanOpen(false);
   }, [detail?.id, detail?.title]);
+
+  useEffect(() => {
+    if (selectedDevelopmentPlanId.length > 0) return;
+    const defaultPlanId = activeDevelopmentPlan?.id ?? availableDevelopmentPlans[0]?.id;
+    if (defaultPlanId !== undefined) setSelectedDevelopmentPlanId(defaultPlanId);
+  }, [activeDevelopmentPlan?.id, availableDevelopmentPlans, selectedDevelopmentPlanId]);
 
   if (isLoading) {
     return (
@@ -155,13 +175,15 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
                   variant="primary"
                   onClick={() =>
                     void runAction(
-                      () =>
-                        createForgeloopCommandApi().createDevelopmentPlan({
+                      async () => {
+                        const created = await createForgeloopCommandApi().createDevelopmentPlan({
                           actor_id: actorId,
                           project_id: projectId,
                           source_ref: sourceRef,
                           title: planTitle.trim() || `${detail.title} development plan`,
-                        }),
+                        });
+                        if (typeof created.id === 'string') navigate(`/development-plans/${created.id}`);
+                      },
                       'Development Plan created and context manifest captured.',
                     )
                   }
@@ -173,7 +195,17 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
             description="Create a table-first Development Plan linked to this source object."
             title="Create Development Plan"
           >
-            <Button className="w-full justify-start" variant="primary">Create Development Plan</Button>
+            <Button
+              className="w-full justify-start"
+              variant="primary"
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                event.currentTarget.click();
+              }}
+            >
+              Create Development Plan
+            </Button>
           </Dialog>
           <Textarea
             aria-label="Regeneration feedback"
@@ -198,42 +230,82 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
           >
             Generate Development Plan
           </Button>
+          <Dialog
+            content={
+              <DialogPanel>
+                <label className="grid gap-1 text-sm font-semibold text-text-primary">
+                  Development Plan
+                  <Select
+                    aria-label="Development Plan"
+                    options={availableDevelopmentPlans.map((plan) => ({ label: plan.title ?? plan.id, value: plan.id }))}
+                    value={selectedDevelopmentPlanId}
+                    onChange={(event) => setSelectedDevelopmentPlanId(event.target.value)}
+                  />
+                </label>
+                <Button
+                  disabled={selectedDevelopmentPlanId.length === 0}
+                  loading={actionState.status === 'running'}
+                  variant="primary"
+                  onClick={() =>
+                    selectedDevelopmentPlanId.length === 0
+                      ? undefined
+                      : void runAction(
+                          async () => {
+                            await createForgeloopCommandApi().linkSourceObjectToDevelopmentPlan(sourceRef.type, sourceRef.id, selectedDevelopmentPlanId, {
+                              actor_id: actorId,
+                              rationale: 'Linked from source object workspace.',
+                            });
+                            const selectedPlan = availableDevelopmentPlans.find((plan) => plan.id === selectedDevelopmentPlanId);
+                            setLinkedDevelopmentPlan({
+                              type: 'development_plan',
+                              id: selectedDevelopmentPlanId,
+                              title: selectedPlan?.title ?? selectedDevelopmentPlanId,
+                            });
+                            setIsLinkPlanOpen(false);
+                          },
+                          'Existing Development Plan linked.',
+                        )
+                  }
+                >
+                  Link
+                </Button>
+              </DialogPanel>
+            }
+            description="Link this source object to an existing Development Plan."
+            open={isLinkPlanOpen}
+            title="Link Existing Development Plan"
+            onOpenChange={setIsLinkPlanOpen}
+          >
+            <Button className="w-full justify-start" disabled={availableDevelopmentPlans.length === 0} variant="secondary">
+              Link Existing Development Plan
+            </Button>
+          </Dialog>
+          {activeDevelopmentPlan ? (
+            <Link
+              className="inline-flex min-h-10 items-center justify-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-primary hover:border-primary hover:bg-primary-soft"
+              to={relationshipHref(activeDevelopmentPlan)}
+            >
+              {activeDevelopmentPlan.title ?? 'Open linked Development Plan'}
+            </Link>
+          ) : null}
           <Button
             className="w-full justify-start"
-            disabled={developmentPlan === undefined}
+            disabled={activeDevelopmentPlan === undefined}
             onClick={() =>
-              developmentPlan === undefined
+              activeDevelopmentPlan === undefined
                 ? undefined
                 : void runAction(
                     () =>
-                      createForgeloopCommandApi().linkSourceObjectToDevelopmentPlan(sourceRef.type, sourceRef.id, developmentPlan.id, {
-                        actor_id: actorId,
-                        rationale: 'Linked from source object workspace.',
+                      createForgeloopCommandApi().createDevelopmentPlanItem(activeDevelopmentPlan.id, {
+                        title: `${detail.title} implementation boundary`,
+                        summary: 'Generated from source object workspace.',
+                        responsible_role: 'tech_lead',
+                        ...(detail.driver_actor_id === undefined ? {} : { driver_actor_id: detail.driver_actor_id }),
+                        risk: riskForCommand(detail.risk),
+                        affected_surfaces: [],
+                        dependency_hints: [],
+                        release_impact: 'release_scoped',
                       }),
-                    'Existing Development Plan linked.',
-                  )
-            }
-          >
-            Link Existing Development Plan
-          </Button>
-          <Button
-            className="w-full justify-start"
-            disabled={developmentPlan === undefined}
-            onClick={() =>
-              developmentPlan === undefined
-                ? undefined
-                : void runAction(
-	                    () =>
-	                      createForgeloopCommandApi().createDevelopmentPlanItem(developmentPlan.id, {
-	                        title: `${detail.title} implementation boundary`,
-	                        summary: 'Generated from source object workspace.',
-	                        responsible_role: 'tech_lead',
-	                        ...(detail.driver_actor_id === undefined ? {} : { driver_actor_id: detail.driver_actor_id }),
-	                        risk: riskForCommand(detail.risk),
-	                        affected_surfaces: [],
-	                        dependency_hints: [],
-	                        release_impact: 'release_scoped',
-	                      }),
                     'Development Plan row added for boundary brainstorming.',
                   )
             }
@@ -298,9 +370,9 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
             content: (
               <Section title="Development Plan relationship">
                 <div className="grid gap-3 text-sm">
-                  {developmentPlan ? (
-                    <Link className="font-semibold text-primary hover:underline" to={relationshipHref(developmentPlan)}>
-                      {developmentPlan.title ?? 'Open Development Plan'}
+                  {activeDevelopmentPlan ? (
+                    <Link className="font-semibold text-primary hover:underline" to={relationshipHref(activeDevelopmentPlan)}>
+                      {activeDevelopmentPlan.title ?? 'Open Development Plan'}
                     </Link>
                   ) : (
                     <p className="text-text-secondary">No Development Plan linked yet.</p>
@@ -365,9 +437,9 @@ function EvidencePanel({ detail }: { detail: ProjectObjectDetail }) {
 function relationshipHref(ref: ProductRelationshipRef): string {
   switch (ref.type) {
     case 'development_plan':
-      return `/specs-plans?development_plan_id=${encodeURIComponent(ref.id)}`;
+      return `/development-plans/${encodeURIComponent(ref.id)}`;
     case 'development_plan_item':
-      return `/specs-plans?development_plan_id=${encodeURIComponent(ref.development_plan_id ?? 'unknown')}&development_plan_item_id=${encodeURIComponent(ref.id)}`;
+      return `/development-plans/${encodeURIComponent(ref.development_plan_id ?? 'unknown')}/items/${encodeURIComponent(ref.id)}`;
     case 'bug':
       return `/bugs/${encodeURIComponent(ref.id)}`;
     case 'requirement':

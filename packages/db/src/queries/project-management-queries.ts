@@ -675,9 +675,10 @@ function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, exe
     worker_state: execution.status,
     current_step: execution.status === 'completed' ? 'code_review_handoff' : 'implementation',
     last_event: execution.status,
-    pr_refs: [],
-    diff_refs: [],
-    test_evidence_refs: execution.evidence_refs,
+    evidence_refs: execution.evidence_refs,
+    pr_refs: execution.pr_refs,
+    diff_refs: execution.diff_refs,
+    test_evidence_refs: execution.test_evidence_refs,
     runtime_evidence_refs: execution.runtime_evidence_refs,
     actions: [
       ...(interrupted
@@ -707,10 +708,13 @@ function codeReviewHandoffQueueRow(
   return {
     id: handoff.id,
     object_ref: handoff.ref,
+    execution_id: handoff.execution_id,
     execution_ref: execution.ref,
     development_plan_item_ref: developmentPlanItemRef(item),
     reviewer_actor_id: handoff.reviewer_actor_id,
+    status: handoff.status,
     decision: handoff.status,
+    summary: handoff.summary,
     changed_surfaces: handoff.changed_surfaces,
     blocking_comments: handoff.status === 'changes_requested' ? [handoff.decision_rationale ?? handoff.summary] : [],
     verification_evidence_refs: handoff.verification_evidence_refs,
@@ -737,6 +741,8 @@ function qaHandoffQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, han
   return {
     id: handoff.id,
     object_ref: handoff.ref,
+    code_review_handoff_id: handoff.code_review_handoff_id,
+    execution_id: handoff.execution_id,
     source_ref: handoff.source_ref,
     development_plan_item_ref: developmentPlanItemRef(item),
     approved_spec_revision_ref: handoff.approved_spec_revision_ref,

@@ -59,6 +59,8 @@ describe('web product route smoke', () => {
     const screen = await renderRoute(route);
 
     expect(screen.getByRole('heading', { name: /not found/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /generate spec|generate execution plan|start execution/i })).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|Raw Replay Browser/i);
     cleanup();
   });
 });

@@ -19,13 +19,14 @@ export function Topbar({ actions, actorId, children, className, devToolsEnabled,
       <div className="flex min-w-0 flex-wrap items-center gap-3 text-sm">
         <label className="sr-only" htmlFor="command-search">Command search</label>
         <input
-          className="h-9 w-64 max-w-full rounded-md border border-border bg-background px-3 text-sm text-text-primary outline-none placeholder:text-text-muted focus:border-primary focus:ring-2 focus:ring-primary/20"
+          className="hidden h-9 w-64 max-w-full rounded-md border border-border bg-background px-3 text-sm text-text-primary outline-none placeholder:text-text-muted focus:border-primary focus:ring-2 focus:ring-primary/20 lg:block"
           id="command-search"
           placeholder="Search commands, objects, or reports"
           type="search"
         />
         <SegmentedControl
           ariaLabel="Global role selection"
+          className="hidden lg:inline-flex"
           defaultValue="product"
           options={[
             { label: 'Product', value: 'product' },

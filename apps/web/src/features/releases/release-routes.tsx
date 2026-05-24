@@ -244,7 +244,7 @@ function typedObjectHref(ref: ReleaseScopeRef): string {
     case 'tech_debt':
       return `/tech-debt/${encodeURIComponent(ref.id)}`;
     case 'development_plan_item':
-      return `/specs-plans?development_plan_id=${encodeURIComponent(ref.development_plan_id)}&development_plan_item_id=${encodeURIComponent(ref.id)}`;
+      return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
     case 'bug':
       return `/bugs/${encodeURIComponent(ref.id)}`;
   }

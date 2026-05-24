@@ -19,7 +19,7 @@ const reportCatalog: Array<{
     id: 'delivery',
     title: 'Delivery Flow',
     href: '/reports/delivery',
-    summary: 'Flow, bottlenecks, and task movement across product lifecycle objects.',
+    summary: 'Flow, bottlenecks, and Development Plan Item movement across product lifecycle objects.',
     metrics: [
       { label: 'Flow view', value: 'Typed' },
       { label: 'Bottleneck scan', value: 'Active' },
@@ -58,7 +58,7 @@ const reportCatalog: Array<{
   {
     id: 'replay',
     title: 'Replay',
-    href: '/reports/replay',
+    href: '/reports?report=replay',
     summary: 'Retrospective evidence and lifecycle replay for project management objects.',
     metrics: [
       { label: 'Replay scope', value: 'Product' },
@@ -70,7 +70,8 @@ const reportCatalog: Array<{
 export function ReportsIndexRoute() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
-  const query = useReportQuery('delivery', { project_id: projectId, limit: 100 });
+  const scopedReportId = scopedReportFromSearchParams(searchParams);
+  const query = useReportQuery(scopedReportId ?? 'delivery', { project_id: projectId, limit: 100 });
   const context = reportContextFromSearchParams(searchParams);
 
   return (
@@ -116,6 +117,13 @@ export function ReportsIndexRoute() {
 }
 
 function reportContextFromSearchParams(searchParams: URLSearchParams): { title: string; description: string } | undefined {
+  if (scopedReportFromSearchParams(searchParams) === 'replay') {
+    return {
+      title: 'Lifecycle replay evidence context',
+      description: 'Showing scoped lifecycle evidence inside Reports without exposing a raw replay browser route.',
+    };
+  }
+
   const codeReviewHandoffId = searchParams.get('code_review_handoff_id');
   if (codeReviewHandoffId !== null) {
     return {
@@ -145,6 +153,10 @@ function reportContextFromSearchParams(searchParams: URLSearchParams): { title: 
   }
 
   return undefined;
+}
+
+function scopedReportFromSearchParams(searchParams: URLSearchParams): ReportId | undefined {
+  return searchParams.get('report') === 'replay' ? 'replay' : undefined;
 }
 
 export function ReportFamilyRoute({ reportId }: { reportId: ReportId }) {
@@ -219,7 +231,7 @@ const metricSections = [
   },
   {
     title: 'Release readiness',
-    owner: 'Release Owner',
+    owner: 'Release',
     summary: 'Combines QA acceptance, evidence, known risks, and rollout blockers.',
   },
   {

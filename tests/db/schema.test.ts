@@ -689,6 +689,16 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(code_review_handoffs, 'execution_plan_revision_id', column(execution_plan_revisions, 'id'))).toBe(true);
     expect(hasForeignKey(qa_handoffs, 'code_review_handoff_id', column(code_review_handoffs, 'id'))).toBe(true);
     expect(hasForeignKey(qa_handoffs, 'execution_id', column(executions, 'id'))).toBe(true);
+    for (const columnName of [
+      'interrupt_history',
+      'continuation_history',
+      'pr_refs',
+      'diff_refs',
+      'test_evidence_refs',
+    ]) {
+      expect(columnType(executions, columnName)).toBe('PgJsonb');
+      expect(columnNotNull(executions, columnName)).toBe(true);
+    }
     expect(
       hasUniqueIndex(development_plan_item_revisions, 'dpi_revisions_item_revision_unique', [
         'development_plan_item_id',

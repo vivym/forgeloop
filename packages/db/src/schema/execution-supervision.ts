@@ -22,6 +22,11 @@ export const executions = pgTable('executions', {
   status: text('status').$type<Execution['status']>().notNull(),
   evidenceRefs: jsonb('evidence_refs').$type<Execution['evidence_refs']>().notNull(),
   runtimeEvidenceRefs: jsonb('runtime_evidence_refs').$type<Execution['runtime_evidence_refs']>().notNull(),
+  interruptHistory: jsonb('interrupt_history').$type<Execution['interrupt_history']>().notNull(),
+  continuationHistory: jsonb('continuation_history').$type<Execution['continuation_history']>().notNull(),
+  prRefs: jsonb('pr_refs').$type<Execution['pr_refs']>().notNull(),
+  diffRefs: jsonb('diff_refs').$type<Execution['diff_refs']>().notNull(),
+  testEvidenceRefs: jsonb('test_evidence_refs').$type<Execution['test_evidence_refs']>().notNull(),
   createdAt: timestampColumn('created_at').notNull(),
   updatedAt: timestampColumn('updated_at').notNull(),
 });

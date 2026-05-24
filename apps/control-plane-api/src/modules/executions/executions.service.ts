@@ -123,7 +123,15 @@ export class ExecutionsService {
       if (execution.status !== 'paused' && execution.status !== 'interrupted') {
         throw new BadRequestException(`Execution ${execution.id} cannot continue from ${execution.status}`);
       }
-      const updated = { ...execution, status: 'running' as const, updated_at: this.now() };
+      const updated = {
+        ...execution,
+        status: 'running' as const,
+        continuation_history: [
+          ...execution.continuation_history,
+          { at: this.now(), summary: dto.actor_id === undefined ? 'Execution continued.' : `Execution continued by ${dto.actor_id}.` },
+        ],
+        updated_at: this.now(),
+      };
       await repository.saveExecution(updated);
       await this.eventWithRepository(repository, 'execution', execution.id, 'execution_continued', dto.actor_id, {});
       return updated;
@@ -136,7 +144,15 @@ export class ExecutionsService {
       if (execution.status !== 'running' && execution.status !== 'paused') {
         throw new BadRequestException(`Execution ${execution.id} cannot be interrupted from ${execution.status}`);
       }
-      const updated = { ...execution, status: 'interrupted' as const, updated_at: this.now() };
+      const updated = {
+        ...execution,
+        status: 'interrupted' as const,
+        interrupt_history: [
+          ...execution.interrupt_history,
+          { at: this.now(), reason: dto.actor_id === undefined ? 'Execution interrupted.' : `Execution interrupted by ${dto.actor_id}.` },
+        ],
+        updated_at: this.now(),
+      };
       await repository.saveExecution(updated);
       const item = this.requireFound(
         await repository.getDevelopmentPlanItem(execution.development_plan_item_id),
@@ -537,6 +553,11 @@ export class ExecutionsService {
         },
       ],
       runtime_evidence_refs: [],
+      interrupt_history: [],
+      continuation_history: [],
+      pr_refs: [],
+      diff_refs: [],
+      test_evidence_refs: [],
       created_at: at,
       updated_at: at,
     };
