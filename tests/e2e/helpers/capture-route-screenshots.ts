@@ -19,16 +19,25 @@ import {
   execution,
   projectId,
 } from '../../web/fixtures/product-data';
+import { firstViewportContract } from '../../../apps/web/src/features/product-surfaces/first-viewport-contract';
+import {
+  requiredScreenshotRoutes,
+  visualViewports,
+  type ProductPageFamily,
+  type ProductRouteContract,
+} from '../../../apps/web/src/features/product-surfaces/route-contract';
 
-export const visualViewportWidths = [375, 768, 1024, 1440] as const;
+export const visualViewportWidths = visualViewports;
 
 export type VisualRouteKind = 'active' | 'retired' | 'source-object';
 
 export interface VisualRoute {
+  family?: ProductPageFamily;
   path: string;
   heading: RegExp;
   kind: VisualRouteKind;
   expectActionSurface?: boolean;
+  expectFirstViewportContract?: boolean;
 }
 
 export interface VisualServer {
@@ -53,6 +62,8 @@ export const aiNativeProjectManagementRoutes: VisualRoute[] = [
   { path: '/reports', heading: /^Reports$/, kind: 'active' },
   { path: '/reports?report=replay', heading: /^Reports$/, kind: 'active' },
 ];
+
+export const productGradeScreenshotRoutes: VisualRoute[] = requiredScreenshotRoutes.map(toVisualRoute);
 
 export interface AiNativeProjectManagementFixture {
   baseUrl: string;
@@ -369,6 +380,47 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
   if (route.kind === 'active') {
     expect(mainText, `${route.path} must render an active product surface`).not.toMatch(/not found|not available|retired/i);
   }
+
+  if (route.expectFirstViewportContract) {
+    await assertFirstViewportContract(page, route);
+  }
+}
+
+async function assertFirstViewportContract(page: Page, route: VisualRoute) {
+  if (route.family === undefined) {
+    throw new Error(`${route.path} cannot assert first viewport contract without a page family`);
+  }
+
+  await expectPage(
+    page.locator(`[${firstViewportContract.pageFamilyAttribute}="${route.family}"]`).first(),
+    `${route.path} must expose ${firstViewportContract.pageFamilyAttribute}="${route.family}"`,
+  ).toBeVisible();
+
+  for (const testId of [
+    firstViewportContract.currentStateTestId,
+    firstViewportContract.nextActionTestId,
+    firstViewportContract.roleResponsibilityTestId,
+    firstViewportContract.blockerRiskTestId,
+  ]) {
+    const affordance = page.getByTestId(testId).first();
+    await expectPage(affordance, `${route.path} must expose ${testId}`).toBeVisible();
+    const affordanceText = await affordance.evaluate((element) => [
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.textContent,
+    ].filter(Boolean).join(' ').trim());
+    expect(affordanceText.length, `${route.path} ${testId} must not be an empty or color-only affordance`).toBeGreaterThan(0);
+  }
+}
+
+function toVisualRoute(route: ProductRouteContract): VisualRoute {
+  return {
+    family: route.family,
+    path: route.concretePath,
+    heading: route.heading,
+    kind: route.kind === 'retired' ? 'retired' : route.family === 'source-object-detail' ? 'source-object' : 'active',
+    expectFirstViewportContract: true,
+  };
 }
 
 function isProductApiRequest(url: URL): boolean {
