@@ -3,7 +3,7 @@
 import { cleanup } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { boardCards, developmentPlan, developmentPlanItem, projectId, reviewPacket, runSession } from './fixtures/product-data';
+import { developmentPlan, developmentPlanItem, reviewPacket } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('board, reports, and release readiness routes', () => {
@@ -19,30 +19,6 @@ describe('board, reports, and release readiness routes', () => {
     );
   });
 
-  it('does not render runtime evidence objects as board cards', async () => {
-    const screen = await renderRoute('/board', {
-      apiOverrides: {
-        [`GET /query/board?project_id=${projectId}&limit=100`]: {
-          items: [
-            ...boardCards,
-            {
-              id: 'board:runtime-package',
-              object_ref: { type: 'execution_package', id: 'pkg-runtime', title: 'Runtime package card' },
-              title: 'Runtime package card',
-              column_id: 'active',
-              status: 'ready',
-              blocked: false,
-              href: '/tasks/task-1/packages/pkg-runtime',
-            },
-          ],
-        },
-      },
-    });
-
-    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
-    expect(screen.queryByText('Runtime package card')).toBeNull();
-  });
-
   it('shows release readiness by typed object and scoped evidence', async () => {
     const screen = await renderRoute('/releases/release-web-product');
 
@@ -56,7 +32,9 @@ describe('board, reports, and release readiness routes', () => {
     const evidenceHrefs = screen
       .getAllByRole('link', { name: 'Open execution evidence' })
       .map((link) => link.getAttribute('href'));
-    expect(evidenceHrefs).toContain(`/reports?development_plan_item_id=${developmentPlanItem.id}&review_packet_id=${reviewPacket.id}`);
+    expect(evidenceHrefs).toContain(
+      `/reports?development_plan_item_id=${developmentPlanItem.id}&code_review_handoff_id=${reviewPacket.id}`,
+    );
     expect(evidenceHrefs).toContain(`/board?development_plan_item_id=${developmentPlanItem.id}`);
     expect(document.body.textContent).not.toContain('/tasks/');
     expect(document.body.textContent).not.toContain('/packages/');

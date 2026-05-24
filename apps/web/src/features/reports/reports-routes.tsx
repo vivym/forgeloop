@@ -120,7 +120,7 @@ function reportContextFromSearchParams(searchParams: URLSearchParams): { title: 
   if (scopedReportFromSearchParams(searchParams) === 'replay') {
     return {
       title: 'Lifecycle replay evidence context',
-      description: 'Showing scoped lifecycle evidence inside Reports without exposing a raw replay browser route.',
+      description: 'Showing scoped lifecycle evidence inside Reports without exposing an object-level replay browser route.',
     };
   }
 
@@ -141,14 +141,10 @@ function reportContextFromSearchParams(searchParams: URLSearchParams): { title: 
   }
 
   const developmentPlanItemId = searchParams.get('development_plan_item_id');
-  const reviewPacketId = searchParams.get('review_packet_id');
-  if (developmentPlanItemId !== null || reviewPacketId !== null) {
+  if (developmentPlanItemId !== null) {
     return {
       title: 'Focused evidence context',
-      description: [
-        developmentPlanItemId === null ? undefined : `Development Plan Item ${developmentPlanItemId}`,
-        reviewPacketId === null ? undefined : `review evidence ${reviewPacketId}`,
-      ].filter((part): part is string => part !== undefined).join(' with '),
+      description: `Development Plan Item ${developmentPlanItemId}`,
     };
   }
 

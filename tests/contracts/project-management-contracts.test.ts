@@ -22,10 +22,8 @@ import {
   requirementListItemSchema,
   specDetailSchema,
   specPlanQueueItemSchema,
-  taskListItemSchema,
   techDebtDetailSchema,
   techDebtListItemSchema,
-  taskDetailSchema,
   myWorkQueueItemSchema,
 } from '@forgeloop/contracts';
 
@@ -57,14 +55,14 @@ describe('project management typed object contracts', () => {
     expect(() => productObjectRefSchema.parse({ type: 'plan', id: 'plan-1' })).toThrow();
   });
 
-  it('keeps runtime evidence refs out of public product refs but allows them in query refs', () => {
+  it('keeps runtime evidence refs out of public product and query refs', () => {
     for (const runtimeRef of [
       { type: 'execution_package', id: 'pkg-1' },
       { type: 'run_session', id: 'run-1' },
       { type: 'review_packet', id: 'review-1' },
     ] as const) {
       expect(() => productObjectRefSchema.parse(runtimeRef)).toThrow();
-      expect(productQueryObjectRefSchema.parse(runtimeRef)).toMatchObject(runtimeRef);
+      expect(() => productQueryObjectRefSchema.parse(runtimeRef)).toThrow();
     }
 
     for (const legacyRef of [
@@ -275,7 +273,8 @@ describe('project management typed object contracts', () => {
       type: 'requirement',
       id: 'wi-req',
     });
-    expect(objectRefSchema.parse({ type: 'task', id: 'task-1' })).toEqual({ type: 'task', id: 'task-1' });
+    expect(() => objectRefSchema.parse({ type: 'task', id: 'task-1' })).toThrow();
+    expect(() => objectRefSchema.parse({ type: 'plan', id: 'plan-1' })).toThrow();
     expect(() => objectRefSchema.parse({ type: 'work_item', id: 'wi-1' })).toThrow();
     expect(
       legacyWorkItemStorageRefSchema.parse({
@@ -310,218 +309,6 @@ describe('project management typed object contracts', () => {
     ).toThrow();
   });
 
-  it('requires approved Spec and Plan authority for runtime package eligible tasks', () => {
-    const task = taskDetailSchema.parse({
-      id: 'task-1',
-      ref: { type: 'task', id: 'task-1' },
-      title: 'Implement checkout validation',
-      status: 'ready',
-      parent_ref: { type: 'requirement', id: 'req-1' },
-      controlling_spec_revision_id: 'spec-rev-1',
-      controlling_plan_revision_id: 'plan-rev-1',
-      controlling_spec_revision_authority: 'current_approved',
-      controlling_plan_revision_authority: 'current_approved',
-      stale_state: 'current',
-      package_generation_eligible: true,
-    });
-    expect(task.package_generation_eligible).toBe(true);
-  });
-
-  it('requires current approved revision authority for package generation eligible tasks', () => {
-    expect(() =>
-      taskDetailSchema.parse({
-        id: 'task-1',
-        ref: { type: 'task', id: 'task-1' },
-        title: 'Implement checkout validation',
-        status: 'ready',
-        controlling_spec_revision_id: 'spec-rev-1',
-        controlling_plan_revision_id: 'plan-rev-1',
-        stale_state: 'current',
-        package_generation_eligible: true,
-      }),
-    ).toThrow(/current approved/i);
-
-    expect(() =>
-      taskDetailSchema.parse({
-        id: 'task-1',
-        ref: { type: 'task', id: 'task-1' },
-        title: 'Implement checkout validation',
-        status: 'ready',
-        controlling_spec_revision_id: 'spec-rev-1',
-        controlling_plan_revision_id: 'plan-rev-1',
-        controlling_spec_revision_authority: 'current_approved',
-        controlling_plan_revision_authority: 'stale',
-        stale_state: 'current',
-        package_generation_eligible: true,
-      }),
-    ).toThrow(/current approved/i);
-
-    expect(() =>
-      taskDetailSchema.parse({
-        id: 'task-1',
-        ref: { type: 'task', id: 'task-1' },
-        title: 'Implement checkout validation',
-        status: 'ready',
-        controlling_spec_revision_id: 'spec-rev-1',
-        controlling_plan_revision_id: 'plan-rev-1',
-        controlling_spec_revision_authority: 'unapproved',
-        controlling_plan_revision_authority: 'current_approved',
-        stale_state: 'current',
-        package_generation_eligible: true,
-      }),
-    ).toThrow(/current approved/i);
-
-    expect(
-      taskDetailSchema.parse({
-        id: 'task-1',
-        ref: { type: 'task', id: 'task-1' },
-        title: 'Implement checkout validation',
-        status: 'ready',
-        controlling_spec_revision_id: 'spec-rev-1',
-        controlling_plan_revision_id: 'plan-rev-1',
-        controlling_spec_revision_authority: 'current_approved',
-        controlling_plan_revision_authority: 'current_approved',
-        stale_state: 'current',
-        package_generation_eligible: true,
-      }),
-    ).toMatchObject({
-      package_generation_eligible: true,
-      controlling_spec_revision_authority: 'current_approved',
-      controlling_plan_revision_authority: 'current_approved',
-    });
-  });
-
-  it('does not let manual exceptions authorize runtime packages', () => {
-    expect(() =>
-      taskDetailSchema.parse({
-        id: 'task-manual',
-        ref: { type: 'task', id: 'task-manual' },
-        title: 'Emergency manual follow-up',
-        status: 'blocked',
-        stale_state: 'manual_exception',
-        package_generation_eligible: true,
-        audited_exception: {
-          exception_id: 'ex-1',
-          actor_id: 'actor-tech',
-          reason: 'Manual work before plan approval',
-          risk: 'high',
-          rollback_plan: 'Revert manual change',
-          verification_ref: { type: 'audited_exception_decision', id: 'decision-1' },
-          supporting_attachment_refs: [],
-          release_impact: 'release_scoped',
-          created_at: '2026-05-23T00:00:00.000Z',
-        },
-      }),
-    ).toThrow(/manual_exception/i);
-  });
-
-  it('requires audited exception details for manual exception tasks', () => {
-    expect(() =>
-      taskDetailSchema.parse({
-        id: 'task-manual',
-        ref: { type: 'task', id: 'task-manual' },
-        title: 'Emergency manual follow-up',
-        status: 'blocked',
-        stale_state: 'manual_exception',
-        package_generation_eligible: false,
-      }),
-    ).toThrow(/audited_exception/i);
-
-    expect(
-      taskDetailSchema.parse({
-        id: 'task-manual',
-        ref: { type: 'task', id: 'task-manual' },
-        title: 'Emergency manual follow-up',
-        status: 'blocked',
-        stale_state: 'manual_exception',
-        package_generation_eligible: false,
-        audited_exception: {
-          exception_id: 'ex-1',
-          actor_id: 'actor-tech',
-          reason: 'Manual work before plan approval',
-          risk: 'high',
-          rollback_plan: 'Revert manual change',
-          verification_ref: {
-            id: 'qa-evidence-1',
-            scope_ref: { type: 'task', id: 'task-manual' },
-            evidence_type: 'qa_acceptance',
-            status: 'passed',
-            required: true,
-            attachment_refs: [],
-          },
-          supporting_attachment_refs: [],
-          release_impact: 'release_scoped',
-          created_at: '2026-05-23T00:00:00.000Z',
-        },
-      }),
-    ).toMatchObject({
-      stale_state: 'manual_exception',
-      package_generation_eligible: false,
-    });
-  });
-
-  it('exposes a type-specific ref on task detail read models', () => {
-    expect(
-      taskDetailSchema.parse({
-        id: 'task-1',
-        ref: { type: 'task', id: 'task-1' },
-        title: 'Implement checkout validation',
-        status: 'todo',
-        stale_state: 'current',
-      }),
-    ).toMatchObject({
-      ref: { type: 'task', id: 'task-1' },
-    });
-
-    expect(() =>
-      taskDetailSchema.parse({
-        id: 'task-1',
-        ref: { type: 'requirement', id: 'req-1' },
-        title: 'Implement checkout validation',
-        status: 'todo',
-        stale_state: 'current',
-      }),
-    ).toThrow();
-
-    expect(() =>
-      taskDetailSchema.parse({
-        id: 'task-1',
-        ref: { type: 'release', id: 'rel-1' },
-        title: 'Implement checkout validation',
-        status: 'todo',
-        stale_state: 'current',
-      }),
-    ).toThrow();
-  });
-
-  it('keeps task detail-page state on task detail read models', () => {
-    expect(
-      taskDetailSchema.parse({
-        id: 'task-1',
-        ref: { type: 'task', id: 'task-1' },
-        title: 'Implement checkout validation',
-        status: 'in_progress',
-        stale_state: 'current',
-        driver_actor_id: 'actor-driver',
-        updated_at: '2026-05-23T00:00:00.000Z',
-      }),
-    ).toMatchObject({
-      status: 'in_progress',
-      driver_actor_id: 'actor-driver',
-      updated_at: '2026-05-23T00:00:00.000Z',
-    });
-
-    expect(() =>
-      taskDetailSchema.parse({
-        id: 'task-1',
-        ref: { type: 'release', id: 'rel-1' },
-        title: 'Implement checkout validation',
-        status: 'in_progress',
-        stale_state: 'current',
-      }),
-    ).toThrow();
-  });
-
   it('rejects public product list items that expose work_item refs or owner_actor_id', () => {
     expect(() =>
       productListItemSchema.parse({
@@ -534,36 +321,11 @@ describe('project management typed object contracts', () => {
     ).toThrow();
   });
 
-  it('accepts runtime evidence refs only on runtime-capable query rows', () => {
-    expect(
-      productListItemSchema.parse({
-        id: 'pkg-1',
-        object: { type: 'execution_package', id: 'pkg-1', title: 'Package' },
-        title: 'Package',
-        updated_at: '2026-05-24T00:00:00.000Z',
-      }),
-    ).toMatchObject({ object: { type: 'execution_package', id: 'pkg-1' } });
-
-    expect(
-      myWorkQueueItemSchema.parse({
-        id: 'work-1',
-        object_ref: { type: 'run_session', id: 'run-1', title: 'Run' },
-        title: 'Run needs attention',
-        attention_reason: 'Interrupted',
-      }),
-    ).toMatchObject({ object_ref: { type: 'run_session', id: 'run-1' } });
-
-    expect(
-      boardCardSchema.parse({
-        id: 'card-1',
-        object_ref: { type: 'review_packet', id: 'review-1', title: 'Review' },
-        title: 'Review packet',
-        column_id: 'review',
-        status: 'waiting',
-      }),
-    ).toMatchObject({ object_ref: { type: 'review_packet', id: 'review-1' } });
-
+  it('rejects runtime evidence refs from public product query rows', () => {
     for (const legacyRef of [
+      { type: 'execution_package', id: 'pkg-1' },
+      { type: 'run_session', id: 'run-1' },
+      { type: 'review_packet', id: 'review-1' },
       { type: 'work_item', id: 'wi-1' },
       { type: 'task', id: 'task-1' },
       { type: 'plan', id: 'plan-1' },
@@ -638,7 +400,7 @@ describe('project management typed object contracts', () => {
     ).toMatchObject({ driver_actor_id: 'actor-driver' });
   });
 
-  it('rejects nested package state that exposes legacy work_item_id', () => {
+  it('rejects nested raw package state on public product list items', () => {
     expect(() =>
       productListItemSchema.parse({
         id: 'row-2',
@@ -652,26 +414,6 @@ describe('project management typed object contracts', () => {
         updated_at: '2026-05-23T00:00:00.000Z',
       }),
     ).toThrow();
-  });
-
-  it('accepts nested package state with typed scope refs', () => {
-    expect(
-      productListItemSchema.parse({
-        id: 'row-3',
-        object: { type: 'execution', id: 'exec-1', title: 'Execution' },
-        title: 'Execution',
-        package_state: {
-          scope_ref: { type: 'development_plan_item', id: 'dpi-1', development_plan_id: 'dp-1' },
-          spec_revision_id: 'spec-rev-1',
-          plan_revision_id: 'plan-rev-1',
-        },
-        updated_at: '2026-05-23T00:00:00.000Z',
-      }),
-    ).toMatchObject({
-      package_state: {
-        scope_ref: { type: 'development_plan_item', id: 'dpi-1' },
-      },
-    });
   });
 
   it('uses qualified QA owner queue fields in pipeline readiness details', () => {
@@ -762,7 +504,7 @@ describe('project management typed object contracts', () => {
     expect(
       planDetailSchema.parse({
         id: 'plan-1',
-        ref: { type: 'plan', id: 'plan-1' },
+        ref: { type: 'execution_plan', id: 'plan-1' },
         source_ref: { type: 'requirement', id: 'req-1' },
         title: 'Checkout Plan',
         status: 'approved',
@@ -772,7 +514,7 @@ describe('project management typed object contracts', () => {
         based_on_spec_revision_id: 'spec-rev-2',
       }),
     ).toMatchObject({
-      ref: { type: 'plan', id: 'plan-1' },
+      ref: { type: 'execution_plan', id: 'plan-1' },
     });
   });
 
@@ -803,7 +545,7 @@ describe('project management typed object contracts', () => {
     expect(() =>
       planDetailSchema.parse({
         id: 'plan-legacy',
-        ref: { type: 'plan', id: 'plan-legacy' },
+        ref: { type: 'execution_plan', id: 'plan-legacy' },
         source_ref: { type: 'work_item', id: 'wi-1' },
         title: 'Legacy Plan',
         status: 'approved',
@@ -833,11 +575,6 @@ describe('project management typed object contracts', () => {
         schema: bugListItemSchema,
         valid: { id: 'bug-1', ref: { type: 'bug', id: 'bug-1' }, title: 'Bug', status: 'open' },
         invalid: { id: 'bug-1', ref: { type: 'release', id: 'release-1' }, title: 'Bug', status: 'open' },
-      },
-      {
-        schema: taskListItemSchema,
-        valid: { id: 'task-1', ref: { type: 'task', id: 'task-1' }, title: 'Task', status: 'todo' },
-        invalid: { id: 'task-1', ref: { type: 'requirement', id: 'req-1' }, title: 'Task', status: 'todo' },
       },
     ] as const;
 

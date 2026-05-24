@@ -38,7 +38,6 @@ import {
   useSubmitItemSpecForApprovalMutation,
   useUnlinkReleaseExecutionPackageMutation,
   useUnlinkReleaseWorkItemMutation,
-  useWorkItemCockpitQuery,
 } from '../../apps/web/src/shared/api/hooks';
 import { createForgeloopCommandApi } from '../../apps/web/src/shared/api/commands';
 import { createForgeloopQueryApi } from '../../apps/web/src/shared/api/query';
@@ -70,35 +69,8 @@ import {
 
 const workItemScopeRef = { type: 'requirement', id: workItem.id, title: workItem.title } as const;
 
-type InvalidationInput = {
-  predicate?: (query: { queryKey: readonly unknown[] }) => boolean;
-  queryKey?: readonly unknown[];
-};
-
-const expectWorkItemCockpitInvalidation = (
-  calls: readonly (readonly [unknown, ...unknown[]])[],
-  workItemId: string,
-) => {
-  const input = calls
-    .map(([candidate]) => candidate as InvalidationInput)
-    .find((candidate) => {
-      if (typeof candidate.predicate !== 'function') {
-        return false;
-      }
-      return (
-        candidate.predicate({ queryKey: queryKeys.workItemCockpit(workItemId) }) === true &&
-        candidate.predicate({ queryKey: queryKeys.workItemCockpit(workItemId, 'reviewer') }) === true
-      );
-    });
-
-  expect(input).toBeDefined();
-  expect(input?.predicate?.({ queryKey: queryKeys.workItemCockpit('other-work-item', 'reviewer') })).toBe(false);
-  expect(input?.predicate?.({ queryKey: queryKeys.productLane('requirements', { project_id: projectId }) })).toBe(false);
-};
-
 const expectDeliverySurfaceInvalidation = (invalidateSpy: ReturnType<typeof vi.spyOn<QueryClient, 'invalidateQueries'>>) => {
   expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['product-lanes'] });
-  expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['work-item-cockpit'] });
   expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['runs'] });
   expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['review-packets'] });
 };
@@ -115,10 +87,7 @@ describe('Web product API hooks', () => {
       'bugs',
       { project_id: 'proj', blocked: true },
     ]);
-    expect(queryKeys.specReplay('spec-1')).toEqual(['spec-replay', 'spec-1']);
-    expect(queryKeys.planReplay('plan-1')).toEqual(['plan-replay', 'plan-1']);
-    expect(queryKeys.workItemCockpit('wi-1')).toEqual(['work-item-cockpit', 'wi-1']);
-    expect(queryKeys.workItemCockpit('wi-1', 'reviewer')).toEqual(['work-item-cockpit', 'wi-1', { lane: 'reviewer' }]);
+    expect(queryKeys.execution('exec-1')).toEqual(['execution', 'exec-1']);
   });
 
   it('includes response-affecting Spec and Execution Plan queue filters in stable cache keys', () => {
@@ -695,29 +664,6 @@ describe('Web product API hooks', () => {
     queryClient.clear();
   });
 
-  it('fetches Work Item cockpit data with lane-aware query keys', async () => {
-    const fetchMock = installProductApiMock();
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-
-    const cockpit = renderHook(() => useWorkItemCockpitQuery(workItem.id, 'reviewer'), { wrapper });
-
-    await waitFor(() => expect(cockpit.result.current.isSuccess).toBe(true));
-
-    expect(cockpit.result.current.data?.delivery_readiness.active_lane).toBe('reviewer');
-    expect(fetchMock).toHaveBeenCalledWith(
-      `http://localhost:3000/query/work-item-cockpit/${workItem.id}?lane=reviewer`,
-      expect.objectContaining({ method: 'GET' }),
-    );
-    expect(queryClient.getQueryData(queryKeys.workItemCockpit(workItem.id, 'reviewer'))).toBeDefined();
-    expect(queryClient.getQueryData(queryKeys.workItemCockpit(workItem.id))).toBeUndefined();
-
-    cockpit.unmount();
-    queryClient.clear();
-  });
-
   it('executes ProductAction command mutations and invalidates related product caches', async () => {
     const fetchMock = installProductApiMock({
       'POST /plan-revisions/plan-rev-product-action/generate-packages': [],
@@ -743,7 +689,7 @@ describe('Web product API hooks', () => {
       },
       target: {
         kind: 'object',
-        object_type: 'plan_revision',
+        object_type: 'execution_plan_revision',
         object_id: 'plan-rev-product-action',
         href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
       },
@@ -756,7 +702,6 @@ describe('Web product API hooks', () => {
       'http://localhost:3000/plan-revisions/plan-rev-product-action/generate-packages',
       expect.objectContaining({ method: 'POST' }),
     );
-    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevision('plan-rev-product-action') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
 
@@ -832,8 +777,6 @@ describe('Web product API hooks', () => {
     );
     expectDeliverySurfaceInvalidation(invalidateSpy);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.package(executionPackage.id) });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.packageRuntimeReadiness(executionPackage.id) });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.executionPackageReplay(executionPackage.id) });
 
     generatePackages.unmount();
     createPackage.unmount();
@@ -901,7 +844,6 @@ describe('Web product API hooks', () => {
       expect.objectContaining({ method: 'DELETE' }),
     );
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.releaseCockpit(release.id) });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.releaseReplay(release.id) });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['releases'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
     expectDeliverySurfaceInvalidation(invalidateSpy);
@@ -942,7 +884,7 @@ describe('Web product API hooks', () => {
       },
       target: {
         kind: 'object',
-        object_type: 'plan_revision',
+        object_type: 'execution_plan_revision',
         object_id: 'plan-rev-product-action',
         href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
       },
@@ -955,7 +897,6 @@ describe('Web product API hooks', () => {
       'http://localhost:3000/plan-revisions/plan-rev-product-action/generate-packages',
       expect.objectContaining({ method: 'POST' }),
     );
-    expectWorkItemCockpitInvalidation(invalidateSpy.mock.calls, workItem.id);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planRevision('plan-rev-product-action') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['packages'] });
 

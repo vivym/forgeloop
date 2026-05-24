@@ -70,8 +70,12 @@ const attachmentOwnerTypes = new Set<AttachmentUploadMetadata['object_type']>([
   'requirement',
   'tech_debt',
   'spec',
-  'plan',
-  'task',
+  'spec_revision',
+  'development_plan',
+  'development_plan_item',
+  'execution_plan',
+  'execution_plan_revision',
+  'execution',
   'bug',
   'release',
 ]);
@@ -81,9 +85,13 @@ const attachmentRefObjectTypes = new Set<ObjectRef['type']>([
   'requirement',
   'bug',
   'tech_debt',
-  'task',
   'spec',
-  'plan',
+  'spec_revision',
+  'development_plan',
+  'development_plan_item',
+  'execution_plan',
+  'execution_plan_revision',
+  'execution',
   'release',
 ]);
 
@@ -377,20 +385,44 @@ export class AttachmentsService {
       }
       return;
     }
-    if (objectType === 'task') {
-      if ((await this.repository.getTask(objectId)) === undefined) {
-        throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
-      }
-      return;
-    }
     if (objectType === 'spec') {
       if ((await this.repository.getSpec(objectId)) === undefined) {
         throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
       }
       return;
     }
-    if (objectType === 'plan') {
+    if (objectType === 'spec_revision') {
+      if ((await this.repository.getSpecRevision(objectId)) === undefined) {
+        throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
+      }
+      return;
+    }
+    if (objectType === 'development_plan') {
+      if ((await this.repository.getDevelopmentPlan(objectId)) === undefined) {
+        throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
+      }
+      return;
+    }
+    if (objectType === 'development_plan_item') {
+      if ((await this.repository.getDevelopmentPlanItem(objectId)) === undefined) {
+        throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
+      }
+      return;
+    }
+    if (objectType === 'execution_plan') {
       if ((await this.repository.getPlan(objectId)) === undefined) {
+        throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
+      }
+      return;
+    }
+    if (objectType === 'execution_plan_revision') {
+      if ((await this.repository.getPlanRevision(objectId)) === undefined) {
+        throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
+      }
+      return;
+    }
+    if (objectType === 'execution') {
+      if ((await this.repository.getExecution(objectId)) === undefined) {
         throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
       }
       return;

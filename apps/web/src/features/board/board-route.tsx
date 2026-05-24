@@ -23,7 +23,7 @@ export function BoardRoute() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const query = useBoardQuery({ project_id: projectId, limit: 100 });
-  const allCards = (query.data?.items ?? []).filter(isBoardProductCard);
+  const allCards = query.data?.items ?? [];
   const focus = boardFocusFromSearchParams(searchParams);
   const focusedCards = focus === undefined ? allCards : allCards.filter((card) => isFocusedBoardCard(card, focus));
   const cards = focus === undefined || focusedCards.length > 0 ? focusedCards : allCards;
@@ -136,10 +136,6 @@ function groupByColumn(cards: BoardProductCard[]): [string, BoardProductCard[]][
 
 function columnLabel(columnId: string): string {
   return columnLabels[columnId] ?? titleCase(columnId);
-}
-
-function isBoardProductCard(card: BoardCard): card is BoardProductCard {
-  return card.object_ref.type !== 'execution_package' && card.object_ref.type !== 'run_session' && card.object_ref.type !== 'review_packet';
 }
 
 function objectLabel(type: BoardObjectRef['type']): string {

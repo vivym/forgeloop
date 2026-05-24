@@ -39,10 +39,7 @@ export const productListQuerySchema = z
     plan_id: z.string().min(1).optional(),
     spec_revision_id: z.string().min(1).optional(),
     plan_revision_id: z.string().min(1).optional(),
-    execution_package_id: z.string().min(1).optional(),
     execution_id: z.string().min(1).optional(),
-    run_session_id: z.string().min(1).optional(),
-    review_packet_id: z.string().min(1).optional(),
     release_id: z.string().min(1).optional(),
     surface_type: z.string().min(1).optional(),
     executor_type: z.string().min(1).optional(),
@@ -87,43 +84,10 @@ export const productListItemSchema = z
       })
       .strict()
       .optional(),
-    package_state: z
-      .object({
-        scope_ref: productQueryObjectRefSchema,
-        spec_revision_id: z.string().min(1).optional(),
-        plan_revision_id: z.string().min(1).optional(),
-        surface_type: z.string().min(1).optional(),
-        blocked_reason: z.string().min(1).optional(),
-        last_run_session_id: z.string().min(1).optional(),
-        current_run_session_id: z.string().min(1).optional(),
-        current_review_packet_id: z.string().min(1).optional(),
-        integration_readiness: z.record(z.string(), z.unknown()).optional(),
-        required_test_gates: z.array(z.record(z.string(), z.unknown())).default([]),
-      })
-      .strict()
-      .optional(),
-    run_state: z
-      .object({
-        execution_package_id: z.string().min(1),
-        executor_type: z.string().min(1).optional(),
-        started_at: isoDateTimeSchema.optional(),
-        finished_at: isoDateTimeSchema.optional(),
-      })
-      .strict()
-      .optional(),
-    review_state: z
-      .object({
-        execution_package_id: z.string().min(1),
-        run_session_id: z.string().min(1),
-        decision: z.string().min(1).optional(),
-        changed_file_count: z.number().int().nonnegative().default(0),
-      })
-      .strict()
-      .optional(),
     release_state: z
       .object({
-        work_item_count: z.number().int().nonnegative().default(0),
-        execution_package_count: z.number().int().nonnegative().default(0),
+        source_object_count: z.number().int().nonnegative().default(0),
+        delivery_evidence_count: z.number().int().nonnegative().default(0),
         rollout_complete: z.boolean().default(false),
         rollback_complete: z.boolean().default(false),
         observation_complete: z.boolean().default(false),

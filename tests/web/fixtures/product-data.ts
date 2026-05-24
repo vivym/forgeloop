@@ -689,8 +689,8 @@ export const releaseReadinessDetail = {
       evidence_plan_revision_id: planRevision.id,
       evidence_ref: {
         id: 'review-evidence-1',
-        authority_type: 'review_packet_approval',
-        authority_ref: { type: 'review_packet', id: reviewPacket.id },
+        authority_type: 'code_review_handoff_approval',
+        authority_ref: { type: 'code_review_handoff', id: reviewPacket.id },
         scope_ref: {
           type: 'development_plan_item',
           id: developmentPlanItem.id,
@@ -699,8 +699,8 @@ export const releaseReadinessDetail = {
         },
         status: 'approved',
         required: true,
-        review_packet_id: reviewPacket.id,
-        execution_package_id: executionPackage.id,
+        code_review_handoff_id: reviewPacket.id,
+        execution_id: execution.id,
         spec_revision_id: specRevision.id,
         plan_revision_id: planRevision.id,
         attachment_refs: [],
@@ -746,8 +746,7 @@ export const releaseReadinessDetail = {
         evidence_type: 'package_run',
         status: 'passed',
         required: true,
-        package_ref: { type: 'execution_package', id: executionPackage.id, title: executionPackage.objective },
-        run_session_ref: { type: 'run_session', id: runSession.id, title: runSession.summary },
+        execution_ref: { type: 'execution', id: execution.id, title: execution.title },
       },
     },
   ],
@@ -1250,7 +1249,7 @@ export const functionalLaneItems = [
   {
     id: 'execution-owner-fixture',
     title: executionPackage.objective,
-    object: { type: 'execution_package', id: executionPackage.id },
+    object: { type: 'execution', id: execution.id },
     parent: { type: 'requirement', id: workItem.id, title: workItem.title },
     phase: executionPackage.phase,
     status: executionPackage.activity_state,
@@ -1263,8 +1262,8 @@ export const functionalLaneItems = [
   {
     id: 'reviewer-fixture',
     title: reviewPacket.summary,
-    object: { type: 'review_packet', id: reviewPacket.id },
-    parent: { type: 'execution_package', id: executionPackage.id, title: executionPackage.objective },
+    object: { type: 'code_review_handoff', id: codeReviewHandoff.id },
+    parent: { type: 'execution', id: execution.id, title: executionPackage.objective },
     status: reviewPacket.status,
     updated_at: reviewPacket.updated_at,
     actions: [
@@ -1285,7 +1284,7 @@ export const functionalLaneItems = [
   {
     id: 'qa-owner-fixture',
     title: 'Acknowledge QA acceptance',
-    object: { type: 'execution_package', id: executionPackage.id },
+    object: { type: 'execution', id: execution.id },
     parent: { type: 'requirement', id: workItem.id, title: workItem.title },
     phase: 'test_acceptance',
     status: 'active',

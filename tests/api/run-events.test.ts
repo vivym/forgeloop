@@ -463,7 +463,7 @@ describe('run event API', () => {
       .expect(403);
   });
 
-  it('redacts raw log artifact refs from work item timeline responses', async () => {
+  it('rejects retired work item replay before serializing raw log artifacts', async () => {
     const { app, runSessionId, repo } = await track(seedAppWithRunSession());
     const runSession = await repo.getRunSession(runSessionId);
     const executionPackage = await repo.getExecutionPackage(runSession!.execution_package_id);
@@ -501,18 +501,8 @@ describe('run event API', () => {
       created_at: '2026-05-07T00:00:02.000Z',
     });
 
-    const response = await request(app.getHttpServer()).get(`/query/replay/work_item/${executionPackage!.work_item_id}`).expect(200);
+    const response = await request(app.getHttpServer()).get(`/query/replay/work_item/${executionPackage!.work_item_id}`).expect(404);
 
-    expect(response.body.filter((entry: { source: string }) => entry.source === 'artifact')).toEqual([
-      expect.objectContaining({
-        payload: {
-          kind: 'diff',
-          name: 'Diff',
-          content_type: 'text/x-patch',
-          storage_uri: 's3://forgeloop-test/diff.patch',
-        },
-      }),
-    ]);
     expect(JSON.stringify(response.body)).not.toContain('local_ref');
     expect(JSON.stringify(response.body)).not.toContain('raw-codex.jsonl');
     expect(JSON.stringify(response.body)).not.toContain('raw_ref');

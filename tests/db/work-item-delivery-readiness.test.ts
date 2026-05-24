@@ -557,7 +557,7 @@ describe('Work Item delivery readiness', () => {
     });
   });
 
-  it('blocks review when selected Review Packet is stale or incomplete', () => {
+  it('blocks review when selected code review handoff is stale or incomplete', () => {
     const readiness = deriveWorkItemDeliveryReadiness(
       readyInput({
         packages: [packageFixture({ current_review_packet_id: 'review-1' })],
@@ -646,8 +646,8 @@ describe('Work Item delivery readiness', () => {
   it('returns responsibility-aware next actions for delivery lanes', () => {
     const cases = [
       { lane: 'spec-approver', label: /spec|plan|test strategy/i, objectType: 'spec' },
-      { lane: 'execution-owner', label: /package|run/i, objectType: 'execution_package' },
-      { lane: 'reviewer', label: /review/i, objectType: 'review_packet' },
+      { lane: 'execution-owner', label: /execution/i, objectType: 'execution' },
+      { lane: 'reviewer', label: /review/i, objectType: 'code_review_handoff' },
       { lane: 'qa-test-owner', label: /quality|gate|acceptance/i, objectType: 'release' },
       { lane: 'release-owner', label: /release/i, objectType: 'release' },
     ] as const;

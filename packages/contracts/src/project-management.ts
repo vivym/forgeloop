@@ -11,41 +11,37 @@ import {
 const nonEmpty = z.string().trim().min(1);
 const isoDateTimeSchema = z.string().datetime();
 
-const reviewedAuthoritySchema = z.enum(['review_packet_approval', 'human_review_decision']);
-const taskStaleStateSchema = z.enum(['current', 'stale_spec', 'stale_plan', 'stale_parent', 'manual_exception']);
-const taskStatusSchema = z.enum(['todo', 'ready', 'in_progress', 'blocked', 'review', 'done', 'canceled']);
+const reviewedAuthoritySchema = z.enum(['code_review_handoff_approval', 'human_review_decision']);
 const objectLifecycleStatusSchema = z.string().trim().min(1);
 const evidenceRunStatusSchema = z.enum(['missing', 'pending', 'passed', 'failed', 'stale', 'blocked']);
 const revisionAuthoritySchema = z.enum(['current_approved', 'missing', 'stale', 'unapproved']);
 
 const humanReviewDecisionRefSchema = z.object({ type: z.literal('human_review_decision'), id: nonEmpty }).strict();
-const reviewPacketAuthorityRefSchema = z.object({ type: z.literal('review_packet'), id: nonEmpty }).strict();
+const codeReviewHandoffAuthorityRefSchema = z.object({ type: z.literal('code_review_handoff'), id: nonEmpty }).strict();
 const initiativeObjectRefSchema = z.object({ type: z.literal('initiative'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const requirementObjectRefSchema = z.object({ type: z.literal('requirement'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const techDebtObjectRefSchema = z.object({ type: z.literal('tech_debt'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const bugObjectRefSchema = z.object({ type: z.literal('bug'), id: nonEmpty, title: nonEmpty.optional() }).strict();
-const taskObjectRefSchema = z.object({ type: z.literal('task'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const specObjectRefSchema = z.object({ type: z.literal('spec'), id: nonEmpty, title: nonEmpty.optional() }).strict();
-const planObjectRefSchema = z.object({ type: z.literal('plan'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const executionPlanObjectRefSchema = z.object({ type: z.literal('execution_plan'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const releaseObjectRefSchema = z.object({ type: z.literal('release'), id: nonEmpty, title: nonEmpty.optional() }).strict();
-const executionPackageObjectRefSchema = z
-  .object({ type: z.literal('execution_package'), id: nonEmpty, title: nonEmpty.optional() })
+const executionObjectRefSchema = z.object({ type: z.literal('execution'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+const codeReviewHandoffObjectRefSchema = z
+  .object({ type: z.literal('code_review_handoff'), id: nonEmpty, title: nonEmpty.optional() })
   .strict();
-const runSessionObjectRefSchema = z.object({ type: z.literal('run_session'), id: nonEmpty, title: nonEmpty.optional() }).strict();
-const reviewPacketObjectRefSchema = z.object({ type: z.literal('review_packet'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 
 export const reviewEvidenceRefSchema = z
   .object({
     id: nonEmpty,
     authority_type: reviewedAuthoritySchema,
-    authority_ref: z.union([reviewPacketAuthorityRefSchema, humanReviewDecisionRefSchema]),
+    authority_ref: z.union([codeReviewHandoffAuthorityRefSchema, humanReviewDecisionRefSchema]),
     scope_ref: objectRefSchema,
     status: z.enum(['missing', 'pending', 'approved', 'changes_requested', 'rejected', 'stale', 'blocked']),
     required: z.boolean(),
     reviewer_actor_id: nonEmpty.optional(),
-    review_packet_id: nonEmpty.optional(),
+    code_review_handoff_id: nonEmpty.optional(),
     decision_id: nonEmpty.optional(),
-    execution_package_id: nonEmpty.optional(),
+    execution_id: nonEmpty.optional(),
     spec_revision_id: nonEmpty.optional(),
     plan_revision_id: nonEmpty.optional(),
     approved_at: isoDateTimeSchema.optional(),
@@ -61,11 +57,11 @@ export const reviewEvidenceRefSchema = z
         message: 'human review evidence must reference a human review decision',
       });
     }
-    if (evidence.authority_type === 'review_packet_approval' && evidence.authority_ref.type !== 'review_packet') {
+    if (evidence.authority_type === 'code_review_handoff_approval' && evidence.authority_ref.type !== 'code_review_handoff') {
       ctx.addIssue({
         code: 'custom',
         path: ['authority_ref'],
-        message: 'review packet evidence must reference a review packet',
+        message: 'code review evidence must reference a code review handoff',
       });
     }
     if (
@@ -81,15 +77,15 @@ export const reviewEvidenceRefSchema = z
       });
     }
     if (
-      evidence.authority_type === 'review_packet_approval' &&
-      evidence.authority_ref.type === 'review_packet' &&
-      evidence.review_packet_id !== undefined &&
-      evidence.review_packet_id !== evidence.authority_ref.id
+      evidence.authority_type === 'code_review_handoff_approval' &&
+      evidence.authority_ref.type === 'code_review_handoff' &&
+      evidence.code_review_handoff_id !== undefined &&
+      evidence.code_review_handoff_id !== evidence.authority_ref.id
     ) {
       ctx.addIssue({
         code: 'custom',
-        path: ['review_packet_id'],
-        message: 'review packet id must match authority_ref.id',
+        path: ['code_review_handoff_id'],
+        message: 'code review handoff id must match authority_ref.id',
       });
     }
   });
@@ -104,8 +100,8 @@ export const testAcceptanceEvidenceRefSchema = z
     required: z.boolean(),
     actor_id: nonEmpty.optional(),
     attachment_refs: z.array(attachmentRefSchema).default([]),
-    run_session_id: nonEmpty.optional(),
-    review_packet_id: nonEmpty.optional(),
+    execution_id: nonEmpty.optional(),
+    code_review_handoff_id: nonEmpty.optional(),
     created_at: isoDateTimeSchema.optional(),
     completed_at: isoDateTimeSchema.optional(),
     stale_reason: nonEmpty.optional(),
@@ -120,8 +116,7 @@ export const packageRunEvidenceRefSchema = z
     evidence_type: z.literal('package_run'),
     status: evidenceRunStatusSchema,
     required: z.boolean(),
-    package_ref: executionPackageObjectRefSchema,
-    run_session_ref: runSessionObjectRefSchema.optional(),
+    execution_ref: executionObjectRefSchema,
     created_at: isoDateTimeSchema.optional(),
     completed_at: isoDateTimeSchema.optional(),
     stale_reason: nonEmpty.optional(),
@@ -137,7 +132,7 @@ export const observationEvidenceRefSchema = z
     evidence_type: z.literal('observation'),
     status: evidenceRunStatusSchema,
     required: z.boolean(),
-    observation_ref: z.union([releaseObjectRefSchema, reviewPacketObjectRefSchema]),
+    observation_ref: z.union([releaseObjectRefSchema, codeReviewHandoffObjectRefSchema]),
     created_at: isoDateTimeSchema.optional(),
     completed_at: isoDateTimeSchema.optional(),
     stale_reason: nonEmpty.optional(),
@@ -527,7 +522,7 @@ export type SpecDetail = z.infer<typeof specDetailSchema>;
 export const planDetailSchema = z
   .object({
     id: nonEmpty,
-    ref: planObjectRefSchema,
+    ref: executionPlanObjectRefSchema,
     source_ref: objectRefSchema,
     title: nonEmpty,
     status: nonEmpty,
@@ -610,66 +605,6 @@ export const bugDetailSchema = objectDetailBaseSchema.extend({
   reproduction_steps: z.array(nonEmpty).default([]),
 });
 export type BugDetail = z.infer<typeof bugDetailSchema>;
-
-export const taskListItemSchema = z
-  .object({
-    id: nonEmpty,
-    ref: taskObjectRefSchema,
-    title: nonEmpty,
-    status: taskStatusSchema,
-    parent_ref: objectRefSchema.optional(),
-    driver_actor_id: nonEmpty.optional(),
-    package_generation_eligible: z.boolean().default(false),
-    updated_at: isoDateTimeSchema.optional(),
-  })
-  .strict();
-export type TaskListItem = z.infer<typeof taskListItemSchema>;
-
-export const taskDetailSchema = taskListItemSchema
-  .extend({
-    narrative_markdown: z.string().default(''),
-    acceptance_checklist: z.array(nonEmpty).default([]),
-    controlling_spec_revision_id: nonEmpty.optional(),
-    controlling_plan_revision_id: nonEmpty.optional(),
-    controlling_spec_revision_authority: revisionAuthoritySchema.optional(),
-    controlling_plan_revision_authority: revisionAuthoritySchema.optional(),
-    stale_state: taskStaleStateSchema,
-    audited_exception: auditedExceptionSchema.optional(),
-    attachment_refs: z.array(attachmentRefSchema).default([]),
-  })
-  .strict()
-  .superRefine((task, ctx) => {
-    if (task.stale_state === 'manual_exception' && !task.audited_exception) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['audited_exception'],
-        message: 'manual_exception tasks require an audited_exception block',
-      });
-    }
-    if (task.package_generation_eligible) {
-      if (
-        !task.controlling_spec_revision_id ||
-        !task.controlling_plan_revision_id ||
-        task.stale_state !== 'current' ||
-        task.controlling_spec_revision_authority !== 'current_approved' ||
-        task.controlling_plan_revision_authority !== 'current_approved'
-      ) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['package_generation_eligible'],
-          message: 'package generation requires current approved Spec and Plan revision authority',
-        });
-      }
-    }
-    if (task.stale_state === 'manual_exception' && task.package_generation_eligible) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['audited_exception'],
-        message: 'manual_exception cannot authorize runtime package generation',
-      });
-    }
-  });
-export type TaskDetail = z.infer<typeof taskDetailSchema>;
 
 export const boardCardSchema = z
   .object({

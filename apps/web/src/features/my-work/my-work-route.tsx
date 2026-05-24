@@ -132,9 +132,6 @@ function objectTypeLabel(type: MyWorkQueueItem['object_ref']['type']) {
     code_review_handoff: 'Code Review Handoff',
     qa_handoff: 'QA Handoff',
     release: 'Release',
-    execution_package: 'Evidence Package',
-    run_session: 'Run Evidence',
-    review_packet: 'Review Evidence',
     attachment: 'Attachment',
   };
   return labels[type];
@@ -199,9 +196,6 @@ function typedHrefFor(ref: MyWorkQueueItem['object_ref']): string | undefined {
     case 'boundary_summary':
     case 'spec_revision':
     case 'execution_plan_revision':
-    case 'execution_package':
-    case 'run_session':
-    case 'review_packet':
     case 'attachment':
       return undefined;
   }

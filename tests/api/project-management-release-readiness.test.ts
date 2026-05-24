@@ -12,7 +12,7 @@ import type { Release, ReleaseEvidence } from '../../packages/domain/src';
 const now = '2026-05-23T00:00:00.000Z';
 const defaultScopeRefs: ObjectRef[] = [
   { type: 'requirement', id: 'req-1' },
-  { type: 'task', id: 'task-1' },
+  { type: 'development_plan_item', id: 'dpi-1', development_plan_id: 'dp-1' },
   { type: 'bug', id: 'bug-1' },
 ];
 
@@ -53,7 +53,11 @@ describe('project management release readiness API', () => {
       release_id: 'release-1',
       review_evidence: [
         { authority_type: 'ai_self_review_approval', scope_ref: { type: 'requirement', id: 'req-1' } },
-        { authority_type: 'attachment_only', scope_ref: { type: 'task', id: 'task-1' }, attachment_id: 'att-1' },
+        {
+          authority_type: 'attachment_only',
+          scope_ref: { type: 'development_plan_item', id: 'dpi-1', development_plan_id: 'dp-1' },
+          attachment_id: 'att-1',
+        },
       ],
     });
 
@@ -74,7 +78,11 @@ describe('project management release readiness API', () => {
       ],
       test_evidence: [
         { status: 'passed', scope_ref: { type: 'requirement', id: 'req-1' }, freshness: 'stale' },
-        { status: 'passed', scope_ref: { type: 'task', id: 'task-1' }, authorization: 'unauthorized' },
+        {
+          status: 'passed',
+          scope_ref: { type: 'development_plan_item', id: 'dpi-1', development_plan_id: 'dp-1' },
+          authorization: 'unauthorized',
+        },
         { status: 'passed', scope_ref: { type: 'bug', id: 'bug-1' }, reference_status: 'tombstoned' },
       ],
     });
@@ -94,7 +102,7 @@ describe('project management release readiness API', () => {
           disabled_reason: expect.objectContaining({ code: 'evidence_stale' }),
         }),
         expect.objectContaining({
-          scope_ref: { type: 'task', id: 'task-1' },
+          scope_ref: { type: 'development_plan_item', id: 'dpi-1', development_plan_id: 'dp-1' },
           kind: 'qa_acceptance',
           status: 'unauthorized',
           disabled_reason: expect.objectContaining({ code: 'evidence_unauthorized' }),

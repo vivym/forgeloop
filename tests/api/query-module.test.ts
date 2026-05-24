@@ -213,157 +213,28 @@ describe('query module', () => {
     return { project, workItem };
   };
 
-  it('returns the work item cockpit from the query surface', async () => {
-    const { app, repo } = await track(createTestApp());
+  it('does not expose the retired work item cockpit query surface', async () => {
+    const { app } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
-    await repo.saveRunSession({
-      id: 'run-session-runtime-redaction',
-      execution_package_id: executionPackage.id,
-      requested_by_actor_id: actorOwner,
-      status: 'running',
-      executor_type: 'local_codex',
-      changed_files: [],
-      check_results: [],
-      artifacts: [],
-      log_refs: [],
-      runtime_metadata: {
-        durability_mode: 'durable',
-        driver_kind: 'app_server',
-        driver_status: 'active',
-        worker_id: 'worker-runtime-redaction',
-        worker_lease_status: 'active',
-        worker_lease_heartbeat_at: '2026-05-20T00:00:00.000Z',
-        worker_lease_expires_at: '2026-05-20T00:05:00.000Z',
-        last_event_cursor: 'cursor-runtime-redaction',
-        last_event_at: '2026-05-20T00:00:01.000Z',
-        recovery_attempt_count: 0,
-        runtime_profile_id: 'profile-runtime-redaction',
-        credential_binding_id: 'credential-runtime-redaction',
-        launch_lease_id: 'lease-runtime-redaction',
-        docker_image_digest: `sha256:${'a'.repeat(64)}`,
-        workspace_path: '/workspace/private',
-        codex_config_toml: 'approval_policy = "never"',
-        effective_dangerous_mode: 'not_requested',
-      },
-      created_at: later,
-      updated_at: later,
-    });
 
-    const response = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .get(`/query/work-item-cockpit/${executionPackage.work_item_id}`)
-      .expect(200);
-    const serialized = JSON.stringify(response.body);
-
-    expect(response.body.item).toMatchObject({ id: executionPackage.work_item_id });
-    expect(response.body.packages).toEqual([expect.objectContaining({ id: executionPackage.id })]);
-    expect(response.body.run_sessions).toEqual(expect.any(Array));
-    expect(response.body.run_sessions.find((run: { id: string }) => run.id === 'run-session-runtime-redaction')).toMatchObject({
-      runtime_metadata: {
-        durability_mode: 'durable',
-        driver_kind: 'app_server',
-        driver_status: 'active',
-        last_event_at: '2026-05-20T00:00:01.000Z',
-        recovery_attempt_count: 0,
-      },
-    });
-    for (const unsafeText of [
-      'worker-runtime-redaction',
-      'cursor-runtime-redaction',
-      'profile-runtime-redaction',
-      'credential-runtime-redaction',
-      'lease-runtime-redaction',
-      'sha256:',
-      '/workspace/private',
-      'codex_config_toml',
-    ]) {
-      expect(serialized).not.toContain(unsafeText);
-    }
-    expect(response.body.review_packets).toEqual(expect.any(Array));
-    expect(response.body.delivery_readiness).toMatchObject({
-      scope_ref: { type: 'requirement', id: executionPackage.work_item_id },
-      active_lane: 'requirements',
-    });
-    expect(response.body).not.toHaveProperty('next_actions');
-    expect(response.body).not.toHaveProperty('completion_state');
-
+      .expect(404);
     await request(app.getHttpServer())
       .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.delivery_readiness.active_lane).toBe('execution-owner');
-      });
-
-    await request(app.getHttpServer())
-      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=unknown`)
-      .expect(400);
-    await request(app.getHttpServer())
-      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?foo=bar`)
-      .expect(400);
-
-    vi.spyOn(repo, 'listExecutionPackageDependencies').mockRejectedValueOnce(new Error('dependency read failed'));
-    const degraded = await request(app.getHttpServer())
-      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
-      .expect(200);
-    expect(degraded.body.delivery_readiness.degraded_sources).toContain('package_dependencies');
-    expect(degraded.body.delivery_readiness.stages.find((stage: { id: string }) => stage.id === 'integration_readiness')).toMatchObject({
-      state: 'blocked',
-    });
-
-    vi.spyOn(repo, 'listExecutionPackagesForWorkItem').mockRejectedValueOnce(new Error('package read failed'));
-    const degradedPackages = await request(app.getHttpServer())
-      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
-      .expect(200);
-    expect(degradedPackages.body.delivery_readiness.degraded_sources).toContain('execution_packages');
-    expect(degradedPackages.body.delivery_readiness.stages.find((stage: { id: string }) => stage.id === 'packages')).toMatchObject({
-      state: 'blocked',
-    });
-
-    vi.spyOn(repo, 'getSpecRevision').mockRejectedValueOnce(new Error('spec revision read failed'));
-    const degradedSpecRevision = await request(app.getHttpServer())
-      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}`)
-      .expect(200);
-    expect(degradedSpecRevision.body.delivery_readiness.degraded_sources).toContain('spec_revision');
-    expect(degradedSpecRevision.body.delivery_readiness.stages.find((stage: { id: string }) => stage.id === 'spec')).toMatchObject({
-      state: 'blocked',
-    });
+      .expect(404);
   });
 
-  it('returns public-safe runtime readiness for a local Codex execution package', async () => {
+  it('does not expose raw execution package runtime readiness through query routes', async () => {
     const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
-    const profile = await seedActiveRunExecutionProfile(repo, executionPackage);
-    await seedSingleCredentialBinding(repo, profile, executionPackage);
-    await seedOnlineCompatibleCodexWorker(repo, profile, executionPackage);
 
-    const response = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .get(`/query/execution-packages/${executionPackage.id}/runtime-readiness`)
-      .expect(200);
-    const serialized = JSON.stringify(response.body);
-
-    expect(response.body).toMatchObject({
-      executor_type: 'local_codex',
-      target_kind: 'run_execution',
-    });
-    expect(response.body.state).toMatch(/^(ready|blocked)$/);
-    expect(response.body.generated_at).toBe('2026-05-05T00:00:01.000Z');
-    expect(response.body).not.toHaveProperty('execution_package_id');
-    for (const unsafeText of [
-      'profile-run-execution',
-      'credential-binding',
-      'worker-',
-      'lease-',
-      'sha256:',
-      '/workspace/',
-      'codex_config',
-      'runtime_profile_id',
-      'credential_binding_id',
-      'docker_image_digest',
-    ]) {
-      expect(serialized).not.toContain(unsafeText);
-    }
+      .expect(404);
   });
 
-  it('uses server run execution runtime config for readiness without exposing raw selection ids', async () => {
+  it('uses server run execution runtime config for product lane actions without exposing raw readiness routes', async () => {
     const { app, repo } = await track(createTestApp({ now: '2026-05-20T00:00:00.000Z' }));
     const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
     const profile = await seedActiveRunExecutionProfile(repo, executionPackage);
@@ -373,35 +244,42 @@ describe('query module', () => {
     vi.stubEnv('FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID', profile.profile_id);
     vi.stubEnv('FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID', configuredBinding.bindingId);
 
-    const readiness = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .get(`/query/execution-packages/${executionPackage.id}/runtime-readiness`)
-      .expect(200);
-    expect(readiness.body).toMatchObject({ state: 'ready', blockers: [] });
+      .expect(404);
 
-    const cockpit = await request(app.getHttpServer())
-      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+    const lane = await request(app.getHttpServer())
+      .get(`/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&execution_owner_actor_id=${actorOwner}`)
       .expect(200);
-    const runAction = cockpit.body.delivery_readiness.next_actions.find(
+    const executionItem = lane.body.items.find(
+      (candidate: { object: { type: string; id: string } }) =>
+        candidate.object.type === 'execution' && candidate.object.id === executionPackage.id,
+    );
+    const runAction = executionItem?.actions.find(
       (candidate: { kind: string; command?: { type: string } }) =>
         candidate.kind === 'command' && candidate.command?.type === 'run_package',
     );
     expect(runAction).toMatchObject({ enabled: true });
 
-    const serialized = `${JSON.stringify(readiness.body)} ${JSON.stringify(cockpit.body)}`;
+    const serialized = JSON.stringify(lane.body);
     expect(serialized).not.toContain(profile.profile_id);
     expect(serialized).not.toContain(configuredBinding.bindingId);
     expect(serialized).not.toContain('runtime_profile_id');
     expect(serialized).not.toContain('credential_binding_id');
   });
 
-  it('uses runtime readiness blockers to disable cockpit run package next actions', async () => {
+  it('uses runtime readiness blockers to disable Product Lane run package actions', async () => {
     const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
 
     const response = await request(app.getHttpServer())
-      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=execution-owner`)
+      .get(`/query/product-lanes/execution-owner?project_id=${executionPackage.project_id}&execution_owner_actor_id=${actorOwner}`)
       .expect(200);
-    const action = response.body.delivery_readiness.next_actions.find(
+    const item = response.body.items.find(
+      (candidate: { object: { type: string; id: string } }) =>
+        candidate.object.type === 'execution' && candidate.object.id === executionPackage.id,
+    );
+    const action = item?.actions.find(
       (candidate: { kind: string; command?: { type: string } }) =>
         candidate.kind === 'command' && candidate.command?.type === 'run_package',
     );
@@ -417,7 +295,7 @@ describe('query module', () => {
     expect(JSON.stringify(action)).not.toContain('codex_config');
   });
 
-  it('returns 404 for a missing work item cockpit', async () => {
+  it('returns 404 for the retired work item cockpit route', async () => {
     const { app } = await track(createTestApp());
 
     await request(app.getHttpServer()).get('/query/work-item-cockpit/missing-work-item').expect(404);
@@ -501,10 +379,10 @@ describe('query module', () => {
       ]),
     );
     expect(response.body.stages.find((stage: { id: string }) => stage.id === 'execution').representative_items).toEqual(
-      expect.arrayContaining([expect.objectContaining({ object: expect.objectContaining({ type: 'run_session' }) })]),
+      expect.arrayContaining([expect.objectContaining({ object: expect.objectContaining({ type: 'execution' }) })]),
     );
     expect(response.body.stages.find((stage: { id: string }) => stage.id === 'review').representative_items).toEqual(
-      expect.arrayContaining([expect.objectContaining({ object: expect.objectContaining({ type: 'review_packet' }) })]),
+      expect.arrayContaining([expect.objectContaining({ object: expect.objectContaining({ type: 'code_review_handoff' }) })]),
     );
   });
 
@@ -544,174 +422,32 @@ describe('query module', () => {
     }
   });
 
-  it('serves product list read models for specs, plans, packages, runs, and reviews', async () => {
-    const { app, repo } = await track(createTestApp());
-    const executionPackage = await seedReadyPackage(app);
-    const projectId = executionPackage.project_id;
-    await repo.saveExecutionPackage({
-      ...executionPackage,
-      current_run_session_id: 'run-session-product-list-current',
-      current_review_packet_id: 'review-packet-product-list-current',
-      integration_readiness: { status: 'ready' },
-      required_test_gates: [{ gate_id: 'regression' }],
-      updated_at: later,
-    });
-
-    await request(app.getHttpServer()).get('/query/work-items').query({ project_id: projectId }).expect(200);
-    await request(app.getHttpServer()).get('/query/specs').query({ project_id: projectId }).expect(200);
-    await request(app.getHttpServer()).get('/query/plans').query({ project_id: projectId }).expect(200);
-    const packageResponse = await request(app.getHttpServer())
-      .get('/query/execution-packages')
-      .query({ project_id: projectId })
-      .expect(200);
-    expect(packageResponse.body.items).toContainEqual(
-      expect.objectContaining({
-        id: executionPackage.id,
-        package_state: expect.objectContaining({
-          current_run_session_id: 'run-session-product-list-current',
-          current_review_packet_id: 'review-packet-product-list-current',
-          integration_readiness: { status: 'ready' },
-          required_test_gates: [{ gate_id: 'regression' }],
-        }),
-      }),
-    );
-    await request(app.getHttpServer()).get('/query/runs').query({ project_id: projectId }).expect(200);
-    await request(app.getHttpServer()).get('/query/review-packets').query({ project_id: projectId }).expect(200);
-  });
-
-  it('filters product Work Items by driver_actor_id and does not expose owner_actor_id', async () => {
-    const { app } = await track(createTestApp());
-    const executionPackage = await seedReadyPackage(app);
-    const projectId = executionPackage.project_id;
-
-    const response = await request(app.getHttpServer())
-      .get('/query/work-items')
-      .query({ project_id: projectId, driver_actor_id: actorOwner })
-      .expect(200);
-
-    expect(response.body.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: executionPackage.work_item_id,
-          driver_actor_id: actorOwner,
-        }),
-      ]),
-    );
-    expect(JSON.stringify(response.body.items)).not.toContain('owner_actor_id');
-  });
-
-  it('rejects owner_actor_id on product Work Item registry queries', async () => {
+  it('retires legacy product registry query route families', async () => {
     const { app } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
 
-    await request(app.getHttpServer())
-      .get('/query/work-items')
-      .query({ project_id: executionPackage.project_id, owner_actor_id: actorOwner })
-      .expect(400);
+    for (const route of ['/query/work-items', '/query/specs', '/query/plans', '/query/execution-packages', '/query/runs', '/query/review-packets']) {
+      await request(app.getHttpServer()).get(route).query({ project_id: executionPackage.project_id }).expect(404);
+    }
   });
 
-  it('keeps non-Work-Item product registry owner and reviewer filters', async () => {
-    const { app } = await track(createTestApp());
-    const executionPackage = await seedReadyPackage(app);
-    const projectId = executionPackage.project_id;
-
-    const packagesResponse = await request(app.getHttpServer())
-      .get('/query/execution-packages')
-      .query({ project_id: projectId, execution_owner_actor_id: actorOwner })
-      .expect(200);
-    expect(packagesResponse.body.items).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id, execution_owner_actor_id: actorOwner })]),
-    );
-
-    await request(app.getHttpServer())
-      .get('/query/review-packets')
-      .query({ project_id: projectId, reviewer_actor_id: actorReviewer })
-      .expect(200);
-  });
-
-  it('parses product list boolean query filters from strings', async () => {
-    const { app, repo } = await track(createTestApp());
-    const executionPackage = await seedReadyPackage(app);
-    const projectId = executionPackage.project_id;
-
-    const unblockedResponse = await request(app.getHttpServer())
-      .get('/query/execution-packages')
-      .query({ project_id: projectId, blocked: 'false' })
-      .expect(200);
-    expect(unblockedResponse.body.items).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id })]),
-    );
-
-    await repo.saveExecutionPackage({
-      ...executionPackage,
-      blocked_reason: 'Waiting for manual unblock.',
-      updated_at: later,
-    });
-
-    const blockedResponse = await request(app.getHttpServer())
-      .get('/query/execution-packages')
-      .query({ project_id: projectId, blocked: 'true' })
-      .expect(200);
-    expect(blockedResponse.body.items).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id })]),
-    );
-
-    const blockedFalseResponse = await request(app.getHttpServer())
-      .get('/query/execution-packages')
-      .query({ project_id: projectId, blocked: 'false' })
-      .expect(200);
-    expect(blockedFalseResponse.body.items).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: executionPackage.id })]),
-    );
-  });
-
-  it('serves Spec and Plan history through replay-compatible endpoints', async () => {
+  it('does not expose replay route families from the product query surface', async () => {
     const { app } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
     const specId = executionPackage.spec_id;
     const planId = executionPackage.plan_id;
 
-    await request(app.getHttpServer()).get(`/query/replay/spec/${specId}`).expect(200);
-    await request(app.getHttpServer()).get(`/query/replay/plan/${planId}`).expect(200);
-  });
-
-  it('includes Spec and Plan approval decisions in replay timelines', async () => {
-    const { app } = await track(createTestApp());
-    const server = app.getHttpServer();
-    const { workItem } = await createProjectRepoWorkItem(app);
-    const { spec, plan } = await seedItemScopedSpecPlan(app, workItem.id, {
-      actorId: actorOwner,
-      reviewerActorId: actorReviewer,
-      specDecision: 'approved',
-      specDecisionSummary: 'Spec approved for replay.',
-      planDecision: 'approved',
-      planDecisionSummary: 'Plan approved for replay.',
-    });
-
-    const specReplay = await request(server).get(`/query/replay/spec/${spec.id}`).expect(200);
-    const planReplay = await request(server).get(`/query/replay/plan/${plan!.id}`).expect(200);
-
-    expect(specReplay.body).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: 'decision',
-          object_type: 'spec',
-          object_id: spec.id,
-          summary: 'Spec approved for replay.',
-        }),
-      ]),
-    );
-    expect(planReplay.body).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: 'decision',
-          object_type: 'plan',
-          object_id: plan.id,
-          summary: 'Plan approved for replay.',
-        }),
-      ]),
-    );
-    expect(JSON.stringify([...specReplay.body, ...planReplay.body])).not.toContain('raw_ref');
+    for (const route of [
+      `/query/replay/spec/${specId}`,
+      `/query/replay/plan/${planId}`,
+      `/query/replay/execution_package/${executionPackage.id}`,
+      '/query/replay/review_packet/review-1',
+      '/query/replay/release/release-1',
+      `/query/replay/work_item/${executionPackage.work_item_id}`,
+      '/query/replay/unsupported/missing',
+    ]) {
+      await request(app.getHttpServer()).get(route).expect(404);
+    }
   });
 
   it('does not expose unsafe release cockpit internals', async () => {
@@ -746,30 +482,16 @@ describe('query module', () => {
     }
   });
 
-  it('returns the work item replay from the query surface', async () => {
+  it('rejects retired work_item replay from the query surface', async () => {
     const { app } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
 
-    const response = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .get(`/query/replay/work_item/${executionPackage.work_item_id}`)
-      .expect(200);
-
-    expect(response.body).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: 'object_event',
-          object_type: 'work_item',
-          object_id: executionPackage.work_item_id,
-        }),
-        expect.objectContaining({
-          object_type: 'execution_package',
-          object_id: executionPackage.id,
-        }),
-      ]),
-    );
+      .expect(404);
   });
 
-  it('returns execution package and review packet replay from the query surface', async () => {
+  it('keeps review packet detail available without exposing replay timelines', async () => {
     const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
     const runSession: RunSession = {
@@ -824,43 +546,19 @@ describe('query module', () => {
       created_at: later,
     });
 
-    const packageReplay = await request(app.getHttpServer())
-      .get(`/query/replay/execution_package/${executionPackage.id}`)
-      .expect(200);
-    const reviewDetail = await request(app.getHttpServer()).get(`/query/reviews/${reviewPacketId}`).expect(200);
-    const reviewReplay = await request(app.getHttpServer()).get(`/query/replay/review_packet/${reviewPacketId}`).expect(200);
-
-    expect(packageReplay.body).toEqual(
-      expect.arrayContaining([expect.objectContaining({ object_type: 'execution_package', object_id: executionPackage.id })]),
-    );
-    expect(reviewDetail.body).toEqual(expect.objectContaining({ id: reviewPacketId, execution_package_id: executionPackage.id }));
-    expect(reviewReplay.body).toEqual(
-      expect.arrayContaining([expect.objectContaining({ object_type: 'review_packet', object_id: reviewPacketId })]),
-    );
+    await request(app.getHttpServer()).get(`/query/reviews/${reviewPacketId}`).expect(404);
+    await request(app.getHttpServer()).get(`/query/replay/execution_package/${executionPackage.id}`).expect(404);
+    await request(app.getHttpServer()).get(`/query/replay/review_packet/${reviewPacketId}`).expect(404);
   });
 
-  it('returns the release replay from the query surface through the public boundary', async () => {
+  it('does not expose release replay from the query surface', async () => {
     const { app } = await track(createTestApp());
     const { releaseId } = await createLinkedRelease(app);
 
-    const response = await request(app.getHttpServer()).get(`/query/replay/release/${releaseId}`).expect(200);
-    const serialized = JSON.stringify(response.body);
-
-    expect(response.body).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: 'object_event',
-          object_type: 'release',
-          object_id: releaseId,
-        }),
-      ]),
-    );
-    for (const unsafeText of unsafeInternalStrings) {
-      expect(serialized).not.toContain(unsafeText);
-    }
+    await request(app.getHttpServer()).get(`/query/replay/release/${releaseId}`).expect(404);
   });
 
-  it('redacts unsafe release evidence backlinks from cockpit and replay links', async () => {
+  it('redacts unsafe release evidence backlinks from cockpit links', async () => {
     const { app } = await track(createTestApp());
     const { releaseId } = await createLinkedRelease(app);
 
@@ -890,17 +588,15 @@ describe('query module', () => {
     );
 
     const cockpit = await request(app.getHttpServer()).get(`/query/release-cockpit/${releaseId}`).expect(200);
-    const replay = await request(app.getHttpServer()).get(`/query/replay/release/${releaseId}`).expect(200);
 
     expect(JSON.stringify(cockpit.body.evidences)).not.toContain('missing-work-item');
     expect(JSON.stringify(cockpit.body.observations)).not.toContain('missing-work-item');
-    expect(JSON.stringify(replay.body)).not.toContain('missing-work-item');
     expect(cockpit.body.blockers.map((blocker: { code: string }) => blocker.code)).toContain(
       'unsafe_or_redacted_evidence_backlink',
     );
   });
 
-  it('serializes replay payloads through the public evidence boundary', async () => {
+  it('rejects retired work_item replay before serializing stored unsafe payloads', async () => {
     const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyPackage(app);
     const workItemId = executionPackage.work_item_id;
@@ -974,7 +670,7 @@ describe('query module', () => {
       created_at: createdAt,
     });
 
-    const response = await request(app.getHttpServer()).get(`/query/replay/work_item/${workItemId}`).expect(200);
+    const response = await request(app.getHttpServer()).get(`/query/replay/work_item/${workItemId}`).expect(404);
     const serialized = JSON.stringify(response.body);
 
     expect(serialized).not.toContain('accessToken');
@@ -986,58 +682,20 @@ describe('query module', () => {
     expect(serialized).not.toContain('metadata');
     expect(serialized).not.toContain('internal_payload');
 
-    expect(response.body).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'object-event-public-boundary',
-          source: 'object_event',
-          payload: expect.objectContaining({
-            payload: { work_item_id: workItemId, required_check_ids: ['contracts'] },
-          }),
-        }),
-        expect.objectContaining({
-          id: 'status-history-public-boundary',
-          source: 'status_history',
-          payload: expect.objectContaining({
-            context: { work_item_id: workItemId, failed_check_ids: ['api'] },
-          }),
-        }),
-        expect.objectContaining({
-          id: 'decision-public-boundary',
-          source: 'decision',
-          payload: expect.not.objectContaining({ evidence_refs: expect.anything() }),
-        }),
-        expect.objectContaining({
-          id: 'artifact-safe-uri',
-          source: 'artifact',
-          payload: {
-            kind: 'diff',
-            name: 'Safe patch',
-            content_type: 'text/x-patch',
-            storage_uri: 'https://example.test/out.patch',
-            digest: 'sha256:1234',
-          },
-        }),
-      ]),
-    );
-
-    expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'artifact-unsafe-uri' })]));
   });
 
-  it('returns 404 for a missing supported replay object', async () => {
+  it('returns 404 for retired replay routes', async () => {
     const { app } = await track(createTestApp());
 
     await request(app.getHttpServer()).get('/query/replay/work_item/missing-work-item').expect(404);
     await request(app.getHttpServer()).get('/query/replay/release/missing-release').expect(404);
   });
 
-  it('rejects unsupported replay object types before lookup', async () => {
+  it('rejects unsupported replay object types with retired route semantics', async () => {
     const { app } = await track(createTestApp());
 
-    const response = await request(app.getHttpServer()).get('/query/replay/unsupported/missing').expect(400);
-    await request(app.getHttpServer()).get('/query/replay/incident/incident-1').expect(400);
-
-    expect(response.body.message).toContain('Unsupported replay object type');
+    await request(app.getHttpServer()).get('/query/replay/unsupported/missing').expect(404);
+    await request(app.getHttpServer()).get('/query/replay/incident/incident-1').expect(404);
   });
 
   it('does not expose old work item read routes', async () => {
@@ -1048,7 +706,7 @@ describe('query module', () => {
     await request(app.getHttpServer()).get(`/work-items/${executionPackage.work_item_id}/timeline`).expect(404);
   });
 
-  it('preserves only public-safe durable runtime metadata fallback when a leased run has no persisted runtime metadata', async () => {
+  it('keeps durable worker lease metadata behind the retired work item cockpit route', async () => {
     const { app, repo } = await track(createTestApp({ durabilityMode: 'durable' }));
     const executionPackage = await seedReadyPackage(app);
     const runSession: RunSession = {
@@ -1076,12 +734,8 @@ describe('query module', () => {
 
     const response = await request(app.getHttpServer())
       .get(`/query/work-item-cockpit/${executionPackage.work_item_id}`)
-      .expect(200);
+      .expect(404);
 
-    expect(response.body.run_sessions[0].runtime_metadata).toEqual({
-      durability_mode: 'durable',
-      recovery_attempt_count: 0,
-    });
     expect(JSON.stringify(response.body)).not.toContain('worker-1');
     expect(JSON.stringify(response.body)).not.toContain('lease-token-1');
   });

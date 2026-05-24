@@ -15,7 +15,7 @@ const releaseScope = [
   { type: 'initiative', id: 'init-1' },
   { type: 'requirement', id: 'req-1' },
   { type: 'tech_debt', id: 'td-1' },
-  { type: 'task', id: 'task-1' },
+  { type: 'development_plan_item', id: 'dpi-1', development_plan_id: 'dp-1' },
   { type: 'bug', id: 'bug-1' },
 ] as const;
 
@@ -67,8 +67,7 @@ const passedPackageRunEvidence = {
   evidence_type: 'package_run',
   status: 'passed',
   required: true,
-  package_ref: { type: 'execution_package', id: 'pkg-1' },
-  run_session_ref: { type: 'run_session', id: 'run-1' },
+  execution_ref: { type: 'execution', id: 'exec-1' },
   attachment_refs: [],
 } as const;
 
@@ -120,9 +119,9 @@ describe('project management release readiness contracts', () => {
     expect(() =>
       reviewEvidenceRefSchema.parse({
         ...approvedReviewEvidence,
-        authority_type: 'review_packet_approval',
-        authority_ref: { type: 'review_packet', id: 'review-packet-1' },
-        review_packet_id: 'review-packet-other',
+        authority_type: 'code_review_handoff_approval',
+        authority_ref: { type: 'code_review_handoff', id: 'review-handoff-1' },
+        code_review_handoff_id: 'review-handoff-other',
       }),
     ).toThrow();
 
@@ -143,11 +142,11 @@ describe('project management release readiness contracts', () => {
     expect(
       reviewEvidenceRefSchema.parse({
         ...approvedReviewEvidence,
-        authority_type: 'review_packet_approval',
-        authority_ref: { type: 'review_packet', id: 'review-packet-1' },
-        review_packet_id: 'review-packet-1',
+        authority_type: 'code_review_handoff_approval',
+        authority_ref: { type: 'code_review_handoff', id: 'review-handoff-1' },
+        code_review_handoff_id: 'review-handoff-1',
       }),
-    ).toMatchObject({ review_packet_id: 'review-packet-1' });
+    ).toMatchObject({ code_review_handoff_id: 'review-handoff-1' });
   });
 
   it('requires typed evidence authority for passed readiness gates', () => {
@@ -303,7 +302,7 @@ describe('project management release readiness contracts', () => {
         ...matchingRevisionAuthority,
         evidence_ref: {
           ...passedQaEvidence,
-          scope_ref: { type: 'task', id: 'task-1' },
+          scope_ref: { type: 'development_plan_item', id: 'dpi-1', development_plan_id: 'dp-1' },
         },
       }).success,
     ).toBe(false);

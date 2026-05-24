@@ -6,10 +6,16 @@ import axe from 'axe-core';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { developmentPlan, developmentPlanItem, execution } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('web accessibility gates', () => {
-  it.each(['/my-work', '/tasks/task-1/runs/run-web-product', '/releases/release-web-product'])(
+  it.each([
+    '/my-work',
+    `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+    `/executions/${execution.id}`,
+    '/releases/release-web-product',
+  ])(
     'renders a skip link to the primary main landmark on %s',
     async (route) => {
       const screen = await renderRoute(route);
@@ -20,7 +26,7 @@ describe('web accessibility gates', () => {
     },
   );
 
-  it.each(['/my-work', '/dashboard', '/tasks/task-1/packages/package-web-product', '/reports'])(
+  it.each(['/my-work', '/dashboard', '/specs-plans', '/executions', '/reports'])(
     'has no automated axe violations on %s',
     async (route) => {
       await renderRoute(route);
@@ -85,11 +91,11 @@ describe('web accessibility gates', () => {
     expect(screen.queryByRole('link', { name: 'Releases' })).toBeNull();
   });
 
-  it('allows task-scoped evidence pages to receive programmatic main focus', async () => {
-    const screen = await renderRoute('/tasks/task-1/packages/package-web-product');
+  it('allows execution detail pages to receive programmatic main focus', async () => {
+    const screen = await renderRoute(`/executions/${execution.id}`);
     const main = screen.getByRole('main');
 
-    expect(await screen.findByRole('heading', { name: 'Package Evidence' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Execution' })).toBeTruthy();
     main.focus();
     expect(document.activeElement).toBe(main);
   });

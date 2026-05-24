@@ -139,7 +139,7 @@ function ReadinessSection({ readiness }: { readiness: ReleaseReadinessDetail }) 
   const groups = [
     { title: 'Review evidence', items: readiness.required_review_evidence },
     { title: 'Test acceptance evidence', items: readiness.required_test_acceptance_evidence },
-    { title: 'Package and run evidence', items: readiness.package_run_evidence },
+    { title: 'Execution evidence', items: readiness.package_run_evidence },
     { title: 'Observation evidence', items: readiness.observation_evidence },
   ];
 
@@ -200,11 +200,11 @@ function executionEvidenceHref(item: ReleaseReadinessDetail['required_review_evi
   if ('evidence_type' in evidenceRef && evidenceRef.evidence_type === 'package_run') {
     return `/board?development_plan_item_id=${itemId}`;
   }
-  if ('authority_ref' in evidenceRef && evidenceRef.authority_ref.type === 'review_packet') {
-    return `/reports?development_plan_item_id=${itemId}&review_packet_id=${encodeURIComponent(evidenceRef.authority_ref.id)}`;
+  if ('authority_ref' in evidenceRef && evidenceRef.authority_ref.type === 'code_review_handoff') {
+    return `/reports?development_plan_item_id=${itemId}&code_review_handoff_id=${encodeURIComponent(evidenceRef.authority_ref.id)}`;
   }
-  if ('review_packet_id' in evidenceRef && evidenceRef.review_packet_id !== undefined) {
-    return `/reports?development_plan_item_id=${itemId}&review_packet_id=${encodeURIComponent(evidenceRef.review_packet_id)}`;
+  if ('code_review_handoff_id' in evidenceRef && evidenceRef.code_review_handoff_id !== undefined) {
+    return `/reports?development_plan_item_id=${itemId}&code_review_handoff_id=${encodeURIComponent(evidenceRef.code_review_handoff_id)}`;
   }
   return undefined;
 }

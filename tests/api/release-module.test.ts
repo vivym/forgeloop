@@ -922,20 +922,7 @@ describe('release module', () => {
       ]),
     );
 
-    const replay = await request(app.getHttpServer()).get(`/query/replay/release/${blocked.id}`).expect(200);
-    expect(replay.body).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: 'decision',
-          payload: expect.objectContaining({
-            decision_type: 'manual_override',
-            blocker_snapshot: expect.objectContaining({
-              blockers: expect.arrayContaining([expect.objectContaining({ code: 'missing_observation_plan' })]),
-            }),
-          }),
-        }),
-      ]),
-    );
+    await request(app.getHttpServer()).get(`/query/replay/release/${blocked.id}`).expect(404);
 
     const ready = await createReadyRelease(app, repo);
     await request(app.getHttpServer()).post(`/releases/${ready.releaseId}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);

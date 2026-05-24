@@ -10,25 +10,19 @@ import {
   myWorkQueueItemSchema,
   pipelineResponseSchema,
   productLaneResponseSchema,
-  deliveryRunReadinessResponseSchema,
   releaseReadinessDetailSchema,
   requirementDetailSchema,
   requirementListItemSchema,
   techDebtDetailSchema,
   techDebtListItemSchema,
-  workItemCockpitResponseSchema,
 } from '@forgeloop/contracts';
 import type {
-  CockpitResponse,
-  DeliveryRunReadiness,
   ListProductQuery,
   PipelineResponse,
   ProductLaneId,
   ProductLaneQuery,
   ProductLaneResponse,
   ReleaseCockpitResponse,
-  ReviewPacket,
-  TimelineEntry,
 } from './types';
 
 export interface ProjectQuery {
@@ -49,6 +43,16 @@ const queryString = (params: object = {}) => {
   const encoded = searchParams.toString();
   return encoded ? `?${encoded}` : '';
 };
+
+const projectManagementListQueryString = (query: ProjectManagementListQuery) =>
+  queryString({
+    project_id: query.project_id,
+    status: query.status,
+    risk: query.risk,
+    driver_actor_id: query.driver_actor_id,
+    cursor: query.cursor,
+    limit: query.limit,
+  });
 
 const projectManagementQueueResponseSchema = z
   .object({
@@ -161,7 +165,7 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       ),
     listRequirements: async (query: ProjectManagementListQuery) =>
       requirementListResponseSchema.parse(
-        await request<unknown>(`/query/requirements${queryString(query)}`),
+        await request<unknown>(`/query/requirements${projectManagementListQueryString(query)}`),
       ),
     getRequirement: async (requirementId: string) =>
       requirementDetailSchema.parse(
@@ -169,7 +173,7 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       ),
     listInitiatives: async (query: ProjectManagementListQuery) =>
       initiativeListResponseSchema.parse(
-        await request<unknown>(`/query/initiatives${queryString(query)}`),
+        await request<unknown>(`/query/initiatives${projectManagementListQueryString(query)}`),
       ),
     getInitiative: async (initiativeId: string) =>
       initiativeDetailSchema.parse(
@@ -177,14 +181,14 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       ),
     listTechDebt: async (query: ProjectManagementListQuery) =>
       techDebtListResponseSchema.parse(
-        await request<unknown>(`/query/tech-debt${queryString(query)}`),
+        await request<unknown>(`/query/tech-debt${projectManagementListQueryString(query)}`),
       ),
     getTechDebt: async (techDebtId: string) =>
       techDebtDetailSchema.parse(
         await request<unknown>(`/query/tech-debt/${encodeURIComponent(techDebtId)}`),
       ),
     listBugs: async (query: ProjectManagementListQuery) =>
-      bugListResponseSchema.parse(await request<unknown>(`/query/bugs${queryString(query)}`)),
+      bugListResponseSchema.parse(await request<unknown>(`/query/bugs${projectManagementListQueryString(query)}`)),
     getBug: async (bugId: string) =>
       bugDetailSchema.parse(await request<unknown>(`/query/bugs/${encodeURIComponent(bugId)}`)),
     listBoardCards: async (query: ProductRegistryQuery) =>
@@ -207,7 +211,6 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/code-review-handoffs${queryString(query)}`)),
     listQaHandoffs: async (query: ProductRegistryQuery) =>
       aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/qa-handoffs${queryString(query)}`)),
-    getReview: (reviewPacketId: string) => request<ReviewPacket>(`/query/reviews/${encodeURIComponent(reviewPacketId)}`),
   };
 
   const api = {
@@ -217,28 +220,8 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
           await request<unknown>(`/query/product-lanes/${encodeURIComponent(laneId)}${queryString(query)}`),
         ),
       ) as ProductLaneResponse,
-    getWorkItemCockpit: async (workItemId: string, options: { lane?: ProductLaneId } = {}) =>
-      workItemCockpitResponseSchema.parse(
-        hardenManagerCockpitActions(
-          await request<unknown>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}${queryString(options)}`),
-        ),
-      ) as CockpitResponse,
-    getWorkItemReplay: (workItemId: string) =>
-      request<TimelineEntry[]>(`/query/replay/work_item/${encodeURIComponent(workItemId)}`),
-    getSpecReplay: (specId: string) => request<TimelineEntry[]>(`/query/replay/spec/${encodeURIComponent(specId)}`),
-    getPlanReplay: (planId: string) => request<TimelineEntry[]>(`/query/replay/plan/${encodeURIComponent(planId)}`),
-    getExecutionPackageReplay: (executionPackageId: string) =>
-      request<TimelineEntry[]>(`/query/replay/execution_package/${encodeURIComponent(executionPackageId)}`),
-    getExecutionPackageRuntimeReadiness: async (executionPackageId: string) =>
-      deliveryRunReadinessResponseSchema.parse(
-        await request<unknown>(`/query/execution-packages/${encodeURIComponent(executionPackageId)}/runtime-readiness`),
-      ) as DeliveryRunReadiness,
-    getReviewPacketReplay: (reviewPacketId: string) =>
-      request<TimelineEntry[]>(`/query/replay/review_packet/${encodeURIComponent(reviewPacketId)}`),
     getReleaseCockpit: (releaseId: string) =>
       request<ReleaseCockpitResponse>(`/query/release-cockpit/${encodeURIComponent(releaseId)}`),
-    getReleaseReplay: (releaseId: string) =>
-      request<TimelineEntry[]>(`/query/replay/release/${encodeURIComponent(releaseId)}`),
   };
 
   return Object.defineProperties(
@@ -248,23 +231,6 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
 }
 
 export type ForgeloopQueryApi = ReturnType<typeof createForgeloopQueryApi>;
-
-function hardenManagerCockpitActions(response: unknown): unknown {
-  if (!isRecord(response) || !isRecord(response.delivery_readiness) || response.delivery_readiness.active_lane !== 'manager') {
-    return response;
-  }
-
-  const rawActions = response.delivery_readiness.next_actions;
-  if (!Array.isArray(rawActions)) return response;
-
-  return {
-    ...response,
-    delivery_readiness: {
-      ...response.delivery_readiness,
-      next_actions: rawActions.flatMap((action) => hardenManagerAction(action)),
-    },
-  };
-}
 
 function hardenManagerProductLaneActions(response: unknown): unknown {
   if (!isRecord(response) || response.lane_id !== 'manager' || !Array.isArray(response.items)) {
@@ -311,12 +277,10 @@ function hardenManagerAction(action: unknown): unknown[] {
 
 function managerObjectActionLabel(objectType: unknown) {
   switch (objectType) {
-    case 'execution_package':
-      return 'Open package';
-    case 'run_session':
-      return 'Open run';
-    case 'review_packet':
-      return 'Open review';
+    case 'execution':
+      return 'Open execution';
+    case 'code_review_handoff':
+      return 'Open code review';
     case 'initiative':
     case 'requirement':
     case 'bug':

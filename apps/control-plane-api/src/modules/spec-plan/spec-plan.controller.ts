@@ -21,29 +21,9 @@ import { SpecPlanService } from './spec-plan.service';
 export class SpecPlanController {
   constructor(@Inject(SpecPlanService) private readonly specPlanService: SpecPlanService) {}
 
-  @Get('specs/:specId')
-  getSpec(@Param('specId') specId: string) {
-    return this.specPlanService.getPublicSpec(specId);
-  }
-
-  @Get('specs/:specId/revisions')
-  listSpecRevisions(@Param('specId') specId: string) {
-    return this.specPlanService.listPublicSpecRevisions(specId);
-  }
-
   @Get('spec-revisions/:specRevisionId')
   getSpecRevision(@Param('specRevisionId') specRevisionId: string) {
     return this.specPlanService.getPublicSpecRevision(specRevisionId);
-  }
-
-  @Get('plans/:planId')
-  getPlan(@Param('planId') planId: string) {
-    return this.specPlanService.getPublicPlan(planId);
-  }
-
-  @Get('plans/:planId/revisions')
-  listPlanRevisions(@Param('planId') planId: string) {
-    return this.specPlanService.listPublicPlanRevisions(planId);
   }
 
   @Get('plan-revisions/:planRevisionId')

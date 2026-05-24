@@ -118,15 +118,19 @@ export const productObjectTypeSchema = z.enum([
   'requirement',
   'bug',
   'tech_debt',
-  'task',
+  'development_plan',
+  'development_plan_item',
+  'brainstorming_session',
+  'boundary_summary',
   'spec',
   'spec_revision',
-  'plan',
-  'plan_revision',
-  'execution_package',
-  'run_session',
-  'review_packet',
+  'execution_plan',
+  'execution_plan_revision',
+  'execution',
+  'code_review_handoff',
+  'qa_handoff',
   'release',
+  'attachment',
 ]);
 export type ProductObjectType = z.infer<typeof productObjectTypeSchema>;
 
@@ -242,7 +246,7 @@ export const productHrefSchema = nonEmptyTrimmedStringSchema.refine(
       return false;
     }
 
-    if (pathname === '/specs' || pathname === '/plans') {
+    if (pathname === '/specs' || pathname === '/plans' || pathname === '/reports/replay' || pathname.startsWith('/reports/replay/')) {
       return false;
     }
 

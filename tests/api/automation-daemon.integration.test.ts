@@ -26,7 +26,7 @@ import {
 } from '../../packages/automation/src/index';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import type { AutomationActionRun } from '../../packages/domain/src/automation';
-import type { Plan, PlanRevision, Project, Spec, WorkItem } from '../../packages/domain/src/index';
+import type { Project, Spec, WorkItem } from '../../packages/domain/src/index';
 import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 import { testRuntimePolicyMarkdown } from '../helpers/runtime-policy-repo';
 
@@ -45,10 +45,6 @@ const expectedInitialPendingActionTypes = ['ensure_package_drafts', 'project_run
 const humanAdminHeaders = {
   'x-forgeloop-actor-id': actorOwner,
   'x-forgeloop-actor-class': 'human_admin',
-};
-const reviewerHeaders = {
-  'x-forgeloop-actor-id': actorReviewer,
-  'x-forgeloop-actor-class': 'human',
 };
 const requirementIntakeContext = {
   type: 'requirement',
@@ -242,27 +238,6 @@ const seedDraftOnlyWorkItemWithoutSpec = async (app: INestApplication): Promise<
     .expect(201)).body as WorkItem;
 
   return { project, workItem };
-};
-
-const approveCurrentPlan = async (
-  app: INestApplication,
-  repository: DeliveryRepository,
-  workItemId: string,
-): Promise<{ plan: Plan; revision: PlanRevision }> => {
-  const workItem = await repository.getWorkItem(workItemId);
-  expect(workItem?.current_plan_id).toEqual(expect.any(String));
-  const plan = (await repository.getPlan(workItem!.current_plan_id!))!;
-  const revision = (await repository.listPlanRevisions(plan.id)).find((item) => item.id === plan.current_revision_id);
-  expect(revision).toBeDefined();
-
-  const server = app.getHttpServer();
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(humanAdminHeaders).send({ actor_id: actorOwner }).expect(201);
-  const approvedPlan = (await request(server)
-    .post(`/plans/${plan.id}/approve`)
-    .set(reviewerHeaders)
-    .send({ actor_id: actorReviewer })
-    .expect(201)).body as Plan;
-  return { plan: approvedPlan, revision: revision! };
 };
 
 const runUntil = async (daemon: AutomationDaemon, predicate: () => Promise<boolean>, label: string): Promise<void> => {

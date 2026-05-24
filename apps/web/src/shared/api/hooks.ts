@@ -19,7 +19,6 @@ import {
   queryKeys,
 } from './query-keys';
 import type {
-  CockpitResponse,
   AcknowledgeReleaseTestAcceptanceBody,
   ApproveArtifactBody,
   ApproveReleaseBody,
@@ -39,13 +38,10 @@ import type {
   ProductCommandAction,
   ProductLaneId,
   ProductLaneQuery,
-  PlanRevision,
   ReleaseCommandBody,
   RequestArtifactChangesBody,
   RequestReleaseChangesBody,
   ReviewDecisionBody,
-  SpecPlan,
-  SpecRevision,
   StartReleaseObservingBody,
   SubmitForApprovalBody,
   UnlinkReleaseScopeBody,
@@ -333,7 +329,6 @@ export function useProductActionCommandMutation(input: { projectId: string; acti
     onSettled: () =>
       invalidateProductActionTargets(queryClient, {
         projectId: input.projectId,
-        workItemId: workItemIdFromCommandScope(input.action.command.scope_ref),
         action: input.action,
       }),
   });
@@ -387,34 +382,10 @@ export function useQaHandoffsQuery(query: ListProductQuery) {
   });
 }
 
-export function useSpecReplayQuery(specId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.specReplay(specId),
-    queryFn: () => createQueryApi().getSpecReplay(requiredId(specId, 'specId')),
-    enabled: specId !== undefined,
-  });
-}
-
-export function usePlanReplayQuery(planId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.planReplay(planId),
-    queryFn: () => createQueryApi().getPlanReplay(requiredId(planId, 'planId')),
-    enabled: planId !== undefined,
-  });
-}
-
 export function usePackageQuery(packageId: string) {
   return useQuery({
     queryKey: queryKeys.package(packageId),
     queryFn: () => createCommandApi().getExecutionPackage(packageId),
-  });
-}
-
-export function usePackageRuntimeReadinessQuery(packageId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.packageRuntimeReadiness(packageId),
-    queryFn: () => createQueryApi().getExecutionPackageRuntimeReadiness(requiredId(packageId, 'packageId')),
-    enabled: packageId !== undefined,
   });
 }
 
@@ -429,14 +400,6 @@ export function useRunEventsQuery(input: { runSessionId: string; actorId: string
   return useQuery({
     queryKey: queryKeys.runEvents(input.runSessionId, input.actorId),
     queryFn: () => createCommandApi().listRunEvents(input.runSessionId, { actorId: input.actorId }),
-  });
-}
-
-export function useReviewQuery(reviewPacketId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.review(reviewPacketId),
-    queryFn: () => createQueryApi().getReview(requiredId(reviewPacketId, 'reviewPacketId')),
-    enabled: reviewPacketId !== undefined,
   });
 }
 
@@ -561,29 +524,6 @@ export function useReleaseReadinessQuery(releaseId: string | undefined, projectI
   });
 }
 
-export function useWorkItemCockpitQuery(workItemId: string | undefined, lane?: ProductLaneId) {
-  return useQuery({
-    queryKey: queryKeys.workItemCockpit(workItemId, lane),
-    queryFn: () => createQueryApi().getWorkItemCockpit(requiredId(workItemId, 'workItemId'), lane === undefined ? {} : { lane }),
-    enabled: workItemId !== undefined,
-  });
-}
-
-export function useWorkItemReplayQuery(workItemId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.workItemReplay(workItemId),
-    queryFn: () => createQueryApi().getWorkItemReplay(requiredId(workItemId, 'workItemId')),
-    enabled: workItemId !== undefined,
-  });
-}
-
-export function useExecutionPackageReplayQuery(executionPackageId: string) {
-  return useQuery({
-    queryKey: queryKeys.executionPackageReplay(executionPackageId),
-    queryFn: () => createQueryApi().getExecutionPackageReplay(executionPackageId),
-  });
-}
-
 export function useGeneratePackagesMutation(planRevisionId: string | undefined) {
   const queryClient = useQueryClient();
 
@@ -618,24 +558,10 @@ export function usePatchExecutionPackageMutation(packageId: string) {
   });
 }
 
-export function useReviewPacketReplayQuery(reviewPacketId: string) {
-  return useQuery({
-    queryKey: queryKeys.reviewPacketReplay(reviewPacketId),
-    queryFn: () => createQueryApi().getReviewPacketReplay(reviewPacketId),
-  });
-}
-
 export function useReleaseCockpitQuery(releaseId: string) {
   return useQuery({
     queryKey: queryKeys.releaseCockpit(releaseId),
     queryFn: () => createQueryApi().getReleaseCockpit(releaseId),
-  });
-}
-
-export function useReleaseReplayQuery(releaseId: string) {
-  return useQuery({
-    queryKey: queryKeys.releaseReplay(releaseId),
-    queryFn: () => createQueryApi().getReleaseReplay(releaseId),
   });
 }
 
@@ -886,7 +812,6 @@ type ProductActionCommandInput = {
 
 type ProductActionInvalidationInput = {
   projectId: string;
-  workItemId: string | undefined;
   action: ProductCommandAction;
 };
 
@@ -919,24 +844,9 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
 export function invalidateProductActionTargets(queryClient: QueryClient, input: ProductActionInvalidationInput) {
   return Promise.all([
     invalidateProductLaneProjectQueries(queryClient, input.projectId),
-    input.workItemId === undefined ? Promise.resolve() : invalidateWorkItemCockpit(queryClient, input.workItemId),
-    invalidateObjectQuery(queryClient, input.action.command.object_type, input.action.command.object_id),
     invalidateCommandDerivedResources(queryClient, input.action.command),
     input.action.target === undefined ? Promise.resolve() : invalidateTargetQuery(queryClient, input.action.target),
   ]);
-}
-
-function workItemIdFromCommandScope(scopeRef: ProductCommandAction['command']['scope_ref']): string | undefined {
-  switch (scopeRef.type) {
-    case 'initiative':
-    case 'requirement':
-    case 'bug':
-    case 'tech_debt':
-    case 'task':
-      return scopeRef.id;
-    default:
-      return undefined;
-  }
 }
 
 function invalidateCommandDerivedResources(queryClient: QueryClient, command: ProductCommandAction['command']) {
@@ -945,7 +855,7 @@ function invalidateCommandDerivedResources(queryClient: QueryClient, command: Pr
       return invalidatePackageDeliveryCollections(queryClient);
     case 'mark_package_ready':
     case 'run_package':
-      return Promise.resolve();
+      return invalidatePackageResources(queryClient, command.package_id);
     default: {
       const exhaustive: never = command;
       throw new Error(`Unsupported ProductAction command for invalidation: ${JSON.stringify(exhaustive)}`);
@@ -985,62 +895,37 @@ function invalidateObjectQuery(queryClient: QueryClient, objectType: ProductObje
     case 'requirement':
     case 'bug':
     case 'tech_debt':
-    case 'task':
-      return Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.workItem(objectId) }),
-        invalidateWorkItemCockpit(queryClient, objectId),
-      ]);
+      return queryClient.invalidateQueries({ queryKey: queryKeys.workItem(objectId) });
+    case 'development_plan':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlan(objectId) });
+    case 'development_plan_item':
+      return queryClient.invalidateQueries({ queryKey: ['development-plan-item'] });
+    case 'brainstorming_session':
+    case 'boundary_summary':
+      return queryClient.invalidateQueries({ queryKey: ['development-plans'] });
     case 'spec':
       return queryClient.invalidateQueries({ queryKey: queryKeys.spec(objectId) });
     case 'spec_revision':
       return queryClient.invalidateQueries({ queryKey: queryKeys.specRevision(objectId) });
-    case 'plan':
+    case 'execution_plan':
       return queryClient.invalidateQueries({ queryKey: queryKeys.plan(objectId) });
-    case 'plan_revision':
+    case 'execution_plan_revision':
       return queryClient.invalidateQueries({ queryKey: queryKeys.planRevision(objectId) });
-    case 'execution_package':
-      return invalidatePackageResources(queryClient, objectId);
-    case 'run_session':
-      return invalidateRunDetail(queryClient, objectId);
-    case 'review_packet':
-      return invalidateReviewPacketResources(queryClient, objectId);
+    case 'execution':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.execution(objectId) });
+    case 'code_review_handoff':
+      return queryClient.invalidateQueries({ queryKey: ['code-review-handoffs'] });
+    case 'qa_handoff':
+      return queryClient.invalidateQueries({ queryKey: ['qa-handoffs'] });
     case 'release':
       return invalidateReleaseCockpit(queryClient, objectId);
+    case 'attachment':
+      return Promise.resolve();
     default: {
       const exhaustive: never = objectType;
       throw new Error(`Unsupported ProductAction target object type: ${exhaustive}`);
     }
   }
-}
-
-function invalidateWorkItemCockpit(queryClient: QueryClient, workItemId: string | undefined) {
-  if (workItemId === undefined) {
-    return Promise.resolve();
-  }
-
-  return queryClient.invalidateQueries({
-    predicate: ({ queryKey }) => queryKey[0] === 'work-item-cockpit' && queryKey[1] === workItemId,
-  });
-}
-
-function invalidateSpecLifecycleResources(queryClient: QueryClient, specId: string, workItemId: string | undefined) {
-  return Promise.all([
-    queryClient.invalidateQueries({ queryKey: queryKeys.spec(specId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.specRevisions(specId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.specReplay(specId) }),
-    queryClient.invalidateQueries({ queryKey: ['specs'] }),
-    invalidateWorkItemCockpit(queryClient, workItemId),
-  ]);
-}
-
-function invalidatePlanLifecycleResources(queryClient: QueryClient, planId: string, workItemId: string | undefined) {
-  return Promise.all([
-    queryClient.invalidateQueries({ queryKey: queryKeys.plan(planId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(planId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.planReplay(planId) }),
-    queryClient.invalidateQueries({ queryKey: ['plans'] }),
-    invalidateWorkItemCockpit(queryClient, workItemId),
-  ]);
 }
 
 function invalidateItemScopedArtifactResources(
@@ -1066,8 +951,6 @@ function invalidatePackageDetail(queryClient: QueryClient, packageId: string) {
 function invalidatePackageResources(queryClient: QueryClient, packageId: string) {
   return Promise.all([
     invalidatePackageDetail(queryClient, packageId),
-    queryClient.invalidateQueries({ queryKey: queryKeys.packageRuntimeReadiness(packageId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.executionPackageReplay(packageId) }),
     invalidatePackageDeliveryCollections(queryClient),
   ]);
 }
@@ -1079,7 +962,6 @@ function invalidatePackages(queryClient: QueryClient) {
 function invalidateDeliverySurfaces(queryClient: QueryClient) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
-    queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
     queryClient.invalidateQueries({ queryKey: ['runs'] }),
     queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
   ]);
@@ -1092,13 +974,9 @@ function invalidatePackageDeliveryCollections(queryClient: QueryClient) {
 function invalidateReviewPacketResources(queryClient: QueryClient, reviewPacketId: string) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: ['review'] }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.review(reviewPacketId) }),
-    queryClient.invalidateQueries({ queryKey: ['review-packet-replay'] }),
-    queryClient.invalidateQueries({ queryKey: ['replay'] }),
     queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
     queryClient.invalidateQueries({ queryKey: ['packages'] }),
     queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
-    queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
   ]);
 }
 
@@ -1113,7 +991,6 @@ function invalidateReleaseCockpit(queryClient: QueryClient, releaseId: string) {
 function invalidateReleaseDeliveryResources(queryClient: QueryClient, releaseId: string) {
   return Promise.all([
     invalidateReleaseCockpit(queryClient, releaseId),
-    queryClient.invalidateQueries({ queryKey: queryKeys.releaseReplay(releaseId) }),
     queryClient.invalidateQueries({ queryKey: ['releases'] }),
     invalidatePackageDeliveryCollections(queryClient),
   ]);
@@ -1139,42 +1016,6 @@ function invalidateRunDetail(queryClient: QueryClient, runSessionId: string) {
   ]);
 }
 
-function normalizePackageRunQuery(query: ListProductQuery): ListProductQuery {
-  return {
-    project_id: query.project_id,
-    ...(query.plan_revision_id === undefined ? {} : { plan_revision_id: query.plan_revision_id }),
-    ...(query.execution_owner_actor_id === undefined ? {} : { execution_owner_actor_id: query.execution_owner_actor_id }),
-    ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
-    ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
-    ...(query.surface_type === undefined ? {} : { surface_type: query.surface_type }),
-    ...(query.phase === undefined ? {} : { phase: query.phase }),
-    ...(query.status === undefined ? {} : { status: query.status }),
-    ...(query.gate_state === undefined ? {} : { gate_state: query.gate_state }),
-    ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
-    ...(query.risk === undefined ? {} : { risk: query.risk }),
-    ...(query.blocked === undefined ? {} : { blocked: query.blocked }),
-    ...(query.executor_type === undefined ? {} : { executor_type: query.executor_type }),
-    ...(query.execution_package_id === undefined ? {} : { execution_package_id: query.execution_package_id }),
-    ...(query.run_session_id === undefined ? {} : { run_session_id: query.run_session_id }),
-    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-  };
-}
-
-function normalizeReviewPacketQuery(query: ListProductQuery): ListProductQuery {
-  return {
-    project_id: query.project_id,
-    ...(query.status === undefined ? {} : { status: query.status }),
-    ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
-    ...(query.execution_package_id === undefined ? {} : { execution_package_id: query.execution_package_id }),
-    ...(query.run_session_id === undefined ? {} : { run_session_id: query.run_session_id }),
-    ...(query.review_packet_id === undefined ? {} : { review_packet_id: query.review_packet_id }),
-    ...(query.decision === undefined ? {} : { decision: query.decision }),
-    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-  };
-}
-
 function normalizeReleaseQuery(query: ReleaseProductQuery): ReleaseProductQuery {
   return {
     project_id: query.project_id,
@@ -1185,88 +1026,6 @@ function normalizeReleaseQuery(query: ReleaseProductQuery): ReleaseProductQuery 
     ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
     ...(query.limit === undefined ? {} : { limit: query.limit }),
   };
-}
-
-function updateWorkItemCockpit(
-  queryClient: QueryClient,
-  workItemId: string | undefined,
-  updater: (current: CockpitResponse) => CockpitResponse,
-) {
-  if (workItemId === undefined) {
-    return;
-  }
-
-  queryClient.setQueriesData<CockpitResponse>({ queryKey: queryKeys.workItemCockpit(workItemId) }, (current) =>
-    current === undefined ? current : updater(current),
-  );
-}
-
-function setCockpitSpec(queryClient: QueryClient, workItemId: string | undefined, spec: SpecPlan) {
-  updateWorkItemCockpit(queryClient, workItemId, (current) =>
-    current.item === undefined
-      ? {
-          ...current,
-          current_spec: spec,
-        }
-      : {
-          ...current,
-          current_spec: spec,
-          item: {
-            ...current.item,
-            current_spec_id: spec.id,
-          },
-        },
-  );
-}
-
-function setCockpitPlan(queryClient: QueryClient, workItemId: string | undefined, plan: SpecPlan) {
-  updateWorkItemCockpit(queryClient, workItemId, (current) =>
-    current.item === undefined
-      ? {
-          ...current,
-          current_plan: plan,
-        }
-      : {
-          ...current,
-          current_plan: plan,
-          item: {
-            ...current.item,
-            current_plan_id: plan.id,
-          },
-        },
-  );
-}
-
-function setCockpitSpecRevision(queryClient: QueryClient, workItemId: string | undefined, revision: SpecRevision) {
-  updateWorkItemCockpit(queryClient, workItemId, (current) => {
-    if (current.current_spec === undefined || current.current_spec === null || current.current_spec.id !== revision.spec_id) {
-      return current;
-    }
-
-    return {
-      ...current,
-      current_spec: {
-        ...current.current_spec,
-        current_revision_id: revision.id,
-      },
-    };
-  });
-}
-
-function setCockpitPlanRevision(queryClient: QueryClient, workItemId: string | undefined, revision: PlanRevision) {
-  updateWorkItemCockpit(queryClient, workItemId, (current) => {
-    if (current.current_plan === undefined || current.current_plan === null || current.current_plan.id !== revision.plan_id) {
-      return current;
-    }
-
-    return {
-      ...current,
-      current_plan: {
-        ...current.current_plan,
-        current_revision_id: revision.id,
-      },
-    };
-  });
 }
 
 function requiredId(id: string | undefined, label: string) {

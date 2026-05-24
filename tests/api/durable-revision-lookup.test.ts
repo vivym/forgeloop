@@ -217,8 +217,6 @@ describeIfDb('durable revision lookup', () => {
       reviewerActorId: actorReviewer,
       includePlan: false,
     });
-    await request(server).get(`/specs/${spec.id}`).expect(200);
-    await request(server).get(`/specs/${spec.id}/revisions`).expect(200);
     const generatedRevisionResponse = await request(server).get(`/spec-revisions/${specRevision.id}`).expect(200);
     expect(generatedRevisionResponse.body.id).toBe(specRevision.id);
 
@@ -239,8 +237,6 @@ describeIfDb('durable revision lookup', () => {
       reviewerActorId: actorReviewer,
       itemReviewerActorId: actorItemReviewer,
     });
-    await request(server).get(`/plans/${plan.id}`).expect(200);
-    await request(server).get(`/plans/${plan.id}/revisions`).expect(200);
     const generatedRevisionResponse = await request(server).get(`/plan-revisions/${planRevision!.id}`).expect(200);
     expect(generatedRevisionResponse.body.id).toBe(planRevision!.id);
 

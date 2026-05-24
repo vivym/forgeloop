@@ -144,7 +144,7 @@ describe('ForgeMarkdownEditor', () => {
         allowedBlocks={['paragraph']}
         autosave={{ debounceMs: 10, onAutosaveDraft }}
         mode="edit"
-        objectRef={{ type: 'task', id: 'task-1' }}
+        objectRef={{ type: 'requirement', id: 'req-1' }}
         onChange={vi.fn()}
         onUploadAttachment={vi.fn()}
         validationPolicy={{ validation_version: '2026-05-23' }}
@@ -168,7 +168,7 @@ describe('ForgeMarkdownEditor', () => {
           <ForgeMarkdownEditor
             allowedBlocks={['paragraph']}
             mode="edit"
-            objectRef={{ type: 'task', id: 'task-1' }}
+            objectRef={{ type: 'requirement', id: 'req-1' }}
             onChange={vi.fn()}
             onUploadAttachment={vi.fn()}
             validationPolicy={{ validation_version: '2026-05-23' }}
@@ -206,7 +206,7 @@ describe('ForgeMarkdownEditor', () => {
         <ForgeMarkdownEditor
           allowedBlocks={['paragraph']}
           mode="edit"
-          objectRef={{ type: 'task', id: 'task-1' }}
+          objectRef={{ type: 'requirement', id: 'req-1' }}
           onChange={setValue}
           onUploadAttachment={vi.fn()}
           validationPolicy={{ validation_version: '2026-05-23' }}
@@ -237,7 +237,7 @@ describe('ForgeMarkdownEditor', () => {
           <ForgeMarkdownEditor
             allowedBlocks={['paragraph']}
             mode="edit"
-            objectRef={{ type: 'task', id: 'task-1' }}
+            objectRef={{ type: 'requirement', id: 'req-1' }}
             onChange={vi.fn()}
             onUploadAttachment={vi.fn()}
             validationPolicy={{ validation_version: '2026-05-23' }}
@@ -263,7 +263,7 @@ describe('ForgeMarkdownEditor', () => {
   it('does not overwrite an unsaved same-object draft from incoming props', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    const objectRef = { type: 'task' as const, id: 'task-1' };
+    const objectRef = { type: 'requirement' as const, id: 'req-1' };
     const { rerender } = render(
       <ForgeMarkdownEditor
         allowedBlocks={['paragraph']}
@@ -298,7 +298,7 @@ describe('ForgeMarkdownEditor', () => {
       <ForgeMarkdownEditor
         allowedBlocks={['paragraph']}
         mode="edit"
-        objectRef={{ type: 'task', id: 'task-1' }}
+        objectRef={{ type: 'requirement', id: 'req-1' }}
         onChange={vi.fn()}
         onUploadAttachment={vi.fn()}
         validationPolicy={{ validation_version: '2026-05-23' }}

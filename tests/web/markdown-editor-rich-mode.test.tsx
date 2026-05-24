@@ -8,8 +8,8 @@ import { ForgeMarkdownEditor } from '../../apps/web/src/shared/ui/markdown-edito
 
 const publicAttachmentFixture = (overrides: Partial<AttachmentRef> = {}): AttachmentRef => ({
   id: 'att-rich',
-  owner_object_type: 'task',
-  owner_object_id: 'task-1',
+  owner_object_type: 'requirement',
+  owner_object_id: 'req-1',
   linked_object_refs: [],
   filename: 'flow.png',
   content_type: 'image/png',
@@ -42,7 +42,7 @@ describe('ForgeMarkdownEditor rich editor events', () => {
       <ForgeMarkdownEditor
         allowedBlocks={['paragraph', 'image']}
         mode="edit"
-        objectRef={{ type: 'task', id: 'task-1' }}
+        objectRef={{ type: 'requirement', id: 'req-1' }}
         onChange={vi.fn()}
         onUploadAttachment={onUploadAttachment}
         validationPolicy={{ validation_version: '2026-05-23' }}

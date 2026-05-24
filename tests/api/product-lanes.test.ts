@@ -77,11 +77,12 @@ const seedDraftWorkItem = async (
   kind: 'initiative' | 'requirement' | 'bug' | 'tech_debt' = 'bug',
 ) => {
   const server = app.getHttpServer();
-  const project = (await request(server).post('/projects').send({ name: 'Product Lane Project', owner_actor_id: actorOwner }).expect(201))
+  const project = (await request(server).post('/projects').set(ownerHeaders).send({ name: 'Product Lane Project', owner_actor_id: actorOwner }).expect(201))
     .body;
 
   await request(server)
     .post(`/projects/${project.id}/repos`)
+    .set(ownerHeaders)
     .send({
       repo_id: `repo-${kind}`,
       name: 'forgeloop',
@@ -94,6 +95,7 @@ const seedDraftWorkItem = async (
   const workItem = (
     await request(server)
       .post('/work-items')
+      .set(ownerHeaders)
       .send({
         project_id: project.id,
         kind,
@@ -333,13 +335,6 @@ const collectKeys = (value: unknown, keys = new Set<string>()): Set<string> => {
   return keys;
 };
 
-const getPrimaryCockpitAction = async (app: INestApplication, workItemId: string, lane: ProductLaneId) => {
-  const response = await request(app.getHttpServer()).get(`/query/work-item-cockpit/${workItemId}?lane=${lane}`).expect(200);
-  const action = response.body.delivery_readiness.next_actions[0];
-  expect(action).toBeDefined();
-  return action;
-};
-
 describe('product lane projections', () => {
   const apps: INestApplication[] = [];
 
@@ -449,7 +444,7 @@ describe('product lane projections', () => {
       const response = await request(app.getHttpServer()).get(path).expect(200);
       const item = response.body.items.find(
         (candidate: { object: { type: string; id: string } }) =>
-          candidate.object.type === 'execution_package' && candidate.object.id === executionPackage.id,
+          candidate.object.type === 'execution' && candidate.object.id === (executionPackage.execution_id ?? executionPackage.id),
       );
       const action = item?.actions.find(
         (candidate: { kind: string; command?: { type: string } }) =>
@@ -468,163 +463,13 @@ describe('product lane projections', () => {
     }
   });
 
-  it('returns reviewer Work Item Cockpit next actions that distinguish pending decisions from missing evidence', async () => {
-    const { app, repo } = await track(createTestApp());
+  it('does not expose Work Item Cockpit action compatibility from Product Lane tests', async () => {
+    const { app } = await track(createTestApp());
     const executionPackage = await seedReadyExecutionPackageThroughApi(app);
 
-    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'reviewer')).resolves.toMatchObject({
-      kind: 'navigate',
-      label: 'Generate Review Packet evidence first',
-      description: expect.stringMatching(/review evidence must be generated before the reviewer can decide/i),
-      target: expect.objectContaining({
-        kind: 'object',
-        object_type: 'execution_package',
-        object_id: executionPackage.id,
-        href: `/executions?execution_package_id=${executionPackage.id}`,
-      }),
-    });
-    const forbiddenFallbackHref = ['/tasks', executionPackage.work_item_id, 'packages', executionPackage.id].join('/');
-    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'reviewer')).resolves.not.toMatchObject({
-      target: expect.objectContaining({ href: forbiddenFallbackHref }),
-    });
-
-    const taskScopedPackage = await saveTaskScopedPackage(repo, executionPackage);
-    await expect(getPrimaryCockpitAction(app, taskScopedPackage.work_item_id, 'reviewer')).resolves.toMatchObject({
-      kind: 'navigate',
-      label: 'Generate Review Packet evidence first',
-      description: expect.stringMatching(/review evidence must be generated before the reviewer can decide/i),
-      target: expect.objectContaining({
-        kind: 'object',
-        object_type: 'execution_package',
-        object_id: taskScopedPackage.id,
-        href: `/executions?execution_package_id=${taskScopedPackage.id}`,
-      }),
-    });
-
-    const { reviewPacket } = await saveReviewPacket(repo, taskScopedPackage);
-
-    await expect(getPrimaryCockpitAction(app, taskScopedPackage.work_item_id, 'reviewer')).resolves.toMatchObject({
-      kind: 'navigate',
-      label: 'Decide Review Packet',
-      description: expect.stringMatching(/approve.*request changes/i),
-      target: expect.objectContaining({
-        kind: 'object',
-        object_type: 'review_packet',
-        object_id: reviewPacket.id,
-        href: `/executions?execution_package_id=${taskScopedPackage.id}`,
-      }),
-    });
-  });
-
-  it('returns QA Work Item Cockpit next actions for blocked quality gates and release test acceptance handoff', async () => {
-    const { app, repo } = await track(createTestApp());
-    const executionPackage = await seedReadyExecutionPackageThroughApi(app);
-
-    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'qa-test-owner')).resolves.toMatchObject({
-      kind: 'navigate',
-      label: 'Review Quality Gate blockers',
-      description: expect.stringMatching(/resolve.*quality gate blockers/i),
-      target: expect.objectContaining({
-        kind: 'object',
-        object_type: 'requirement',
-        object_id: executionPackage.work_item_id,
-      }),
-    });
-
-    await saveApprovedReviewPacket(repo, executionPackage);
-    const reviewedPackage = await repo.getExecutionPackage(executionPackage.id);
-    await repo.saveExecutionPackage({
-      ...(reviewedPackage ?? executionPackage),
-      required_artifact_kinds: [],
-      updated_at: now,
-    });
-
-    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'qa-test-owner')).resolves.toMatchObject({
-      kind: 'navigate',
-      label: 'Open Release inventory',
-      description: expect.stringMatching(/release scope.*established/i),
-      target: {
-        kind: 'route',
-        href: '/releases',
-      },
-    });
-
-    const createdRelease = await seedLinkedRelease(app, executionPackage);
-    const release = (await repo.getRelease(createdRelease.id)) ?? createdRelease;
-
-    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'qa-test-owner')).resolves.toMatchObject({
-      kind: 'navigate',
-      label: 'Acknowledge Release Test Acceptance',
-      description: expect.stringMatching(/acknowledge.*test acceptance/i),
-      target: expect.objectContaining({
-        kind: 'object',
-        object_type: 'release',
-        object_id: release.id,
-        href: `/releases/${release.id}#release-test-acceptance`,
-      }),
-    });
-  });
-
-  it('returns release-owner Work Item Cockpit next actions with state-specific decisions', async () => {
-    const { app, repo } = await track(createTestApp());
-    const executionPackage = await saveTaskScopedPackage(repo, await seedReadyExecutionPackageThroughApi(app));
-    await saveApprovedReviewPacket(repo, executionPackage);
-    const reviewedPackage = await repo.getExecutionPackage(executionPackage.id);
-    await repo.saveExecutionPackage({
-      ...(reviewedPackage ?? executionPackage),
-      required_artifact_kinds: [],
-      updated_at: now,
-    });
-
-    await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'release-owner')).resolves.toMatchObject({
-      kind: 'navigate',
-      label: 'Create or link Release',
-      description: expect.stringMatching(/release scope must be established/i),
-      target: {
-        kind: 'route',
-        href: '/releases',
-      },
-    });
-
-    const createdRelease = await seedLinkedRelease(app, executionPackage);
-    const release = (await repo.getRelease(createdRelease.id)) ?? createdRelease;
-    const cases: Array<{ release: Release; label: string; description: RegExp }> = [
-      {
-        release: { ...release, phase: 'candidate', gate_state: 'not_submitted', activity_state: 'idle' },
-        label: 'Submit Release for Approval',
-        description: /submit.*release.*approval/i,
-      },
-      {
-        release: { ...release, phase: 'approval', gate_state: 'awaiting_approval', activity_state: 'awaiting_human' },
-        label: 'Approve or Request Release Changes',
-        description: /approve.*request changes/i,
-      },
-      {
-        release: { ...release, phase: 'rollout', gate_state: 'approved', activity_state: 'idle' },
-        label: 'Start Release Observation',
-        description: /start.*observation/i,
-      },
-      {
-        release: { ...release, phase: 'observing', gate_state: 'rollout_succeeded', activity_state: 'idle' },
-        label: 'Close Release',
-        description: /close.*release/i,
-      },
-    ];
-
-    for (const entry of cases) {
-      await repo.saveRelease(entry.release);
-      await expect(getPrimaryCockpitAction(app, executionPackage.work_item_id, 'release-owner')).resolves.toMatchObject({
-        kind: 'navigate',
-        label: entry.label,
-        description: expect.stringMatching(entry.description),
-        target: expect.objectContaining({
-          kind: 'object',
-          object_type: 'release',
-          object_id: release.id,
-          href: `/releases/${release.id}`,
-        }),
-      });
-    }
+    await request(app.getHttpServer())
+      .get(`/query/work-item-cockpit/${executionPackage.work_item_id}?lane=reviewer`)
+      .expect(404);
   });
 
   it('keeps unsupported execution_owner_actor_id response metadata for non-execution-owner lanes', async () => {
@@ -795,7 +640,7 @@ describe('product lane projections', () => {
     expect(executionLane.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          object: { type: 'execution_package', id: upstreamPackage.id },
+          object: { type: 'execution', id: upstreamPackage.execution_id ?? upstreamPackage.id },
           actions: expect.arrayContaining([
             expect.objectContaining({
               kind: 'command',
@@ -814,7 +659,7 @@ describe('product lane projections', () => {
     expect(reviewerLane.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          object: { type: 'review_packet', id: reviewPacket.id },
+          object: { type: 'code_review_handoff', id: reviewPacket.id },
           actions: [],
         }),
       ]),
@@ -825,9 +670,7 @@ describe('product lane projections', () => {
       'qa-test-owner',
       resolveLaneFilters('qa-test-owner', { project_id: executionPackage.project_id, qa_owner_actor_id: actorQa }),
     );
-    expect(qaLane.items.map((item) => item.object.type)).toEqual(
-      expect.arrayContaining(['requirement', 'execution_package', 'release']),
-    );
+    expect(qaLane.items.map((item) => item.object.type)).toEqual(expect.arrayContaining(['requirement', 'execution', 'release']));
     await expect(
       getProductLane(
         repo,
@@ -913,7 +756,7 @@ describe('product lane projections', () => {
         resolveLaneFilters('spec-approver', { project_id: planSeed.project.id, actor_id: actorReviewer }),
       ),
     ).resolves.toMatchObject({
-      items: [expect.objectContaining({ object: { type: 'plan', id: planSeed.plan.id } })],
+      items: [expect.objectContaining({ object: { type: 'execution_plan', id: planSeed.plan.id } })],
       summary: expect.objectContaining({ total: 1 }),
     });
     await expect(

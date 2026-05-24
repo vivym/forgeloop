@@ -172,27 +172,28 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
 };
 
 const approveSpec = async (app: INestApplication, workItemId: string) => {
-  const server = app.getHttpServer();
   const { spec, specRevision } = await seedItemScopedSpecPlan(app, workItemId, {
     repository: repositoryFor(app),
     actorId: actorOwner,
     reviewerActorId: actorReviewer,
   });
-  const specResponse = (await request(server).get(`/specs/${spec.id}`).expect(200)).body;
-  expect(specResponse).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(specResponse).not.toHaveProperty('work_item_id');
-  const revisionListResponse = (await request(server).get(`/specs/${spec.id}/revisions`).expect(200)).body;
-  expect(revisionListResponse[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(revisionListResponse[0]).not.toHaveProperty('work_item_id');
-  const generatedRevisionResponse = (await request(server).get(`/spec-revisions/${specRevision.id}`).expect(200)).body;
-  expect(generatedRevisionResponse).toMatchObject({ id: specRevision.id, scope_ref: { type: 'requirement', id: workItemId } });
-  expect(generatedRevisionResponse).not.toHaveProperty('work_item_id');
+  expect(spec).toMatchObject({
+    work_item_id: workItemId,
+    development_plan_item_id: expect.any(String),
+    status: 'approved',
+    approved_revision_id: specRevision.id,
+  });
+  expect(specRevision).toMatchObject({
+    id: specRevision.id,
+    spec_id: spec.id,
+    work_item_id: workItemId,
+    development_plan_item_id: spec.development_plan_item_id,
+  });
 
   return { specId: spec.id, specRevisionId: specRevision.id };
 };
 
 const approvePlan = async (app: INestApplication, workItemId: string) => {
-  const server = app.getHttpServer();
   const repository = repositoryFor(app);
   const workItem = await repository.getWorkItem(workItemId);
   if (workItem === undefined || workItem.current_plan_id === undefined || workItem.current_plan_revision_id === undefined) {
@@ -203,17 +204,19 @@ const approvePlan = async (app: INestApplication, workItemId: string) => {
   if (plan === undefined || planRevision === undefined) {
     throw new Error(`WorkItem ${workItemId} current plan graph is incomplete`);
   }
-  const planResponse = (await request(server).get(`/plans/${plan!.id}`).expect(200)).body;
-  expect(planResponse).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(planResponse).not.toHaveProperty('work_item_id');
-  const revisionListResponse = (await request(server).get(`/plans/${plan.id}/revisions`).expect(200)).body;
-  expect(revisionListResponse[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
-  expect(revisionListResponse[0]).not.toHaveProperty('work_item_id');
-  const generatedRevisionResponse = (await request(server).get(`/plan-revisions/${planRevision!.id}`).expect(200)).body;
-  expect(generatedRevisionResponse).toMatchObject({ id: planRevision!.id, scope_ref: { type: 'requirement', id: workItemId } });
-  expect(generatedRevisionResponse).not.toHaveProperty('work_item_id');
+  expect(plan).toMatchObject({
+    work_item_id: workItemId,
+    development_plan_item_id: expect.any(String),
+    status: 'approved',
+    approved_revision_id: planRevision.id,
+  });
+  expect(planRevision).toMatchObject({
+    id: planRevision.id,
+    plan_id: plan.id,
+    work_item_id: workItemId,
+  });
 
-  return { planId: plan!.id, planRevisionId: planRevision!.id };
+  return { planId: plan.id, planRevisionId: planRevision.id };
 };
 
 const createManualPackage = async (
@@ -399,8 +402,8 @@ describe('delivery control plane API', () => {
     );
     await request(server).get(`/work-items/${workItem.id}`).expect(200);
 
-    const { specRevisionId } = await approveSpec(app, workItem.id);
-    const { planRevisionId } = await approvePlan(app, workItem.id);
+    const { specId, specRevisionId } = await approveSpec(app, workItem.id);
+    const { planId, planRevisionId } = await approvePlan(app, workItem.id);
     expect(specRevisionId).toContain('spec-revision');
 
     const generatedPackages = (
@@ -491,21 +494,34 @@ describe('delivery control plane API', () => {
       })
       .expect(201);
 
-    const cockpit = (await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(200)).body;
-    expect(cockpit.current_spec.current_revision_id).toBe(specRevisionId);
-    expect(cockpit.current_plan.current_revision_id).toBe(planRevisionId);
-    expect(cockpit.packages.find((item: { id: string }) => item.id === executionPackage.id).resolution).toBe('completed');
-    expect(cockpit.delivery_readiness).toMatchObject({
-      scope_ref: { type: 'requirement', id: workItem.id },
+    const specPlanQueue = (await request(server).get('/query/specs-execution-plans').query({ project_id: project.id }).expect(200)).body;
+    expect(specPlanQueue.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          object_ref: expect.objectContaining({ type: 'spec', id: specId }),
+          current_revision_id: specRevisionId,
+        }),
+      ]),
+    );
+    expect((await request(server).get(`/plan-revisions/${planRevisionId}`).expect(200)).body).toMatchObject({
+      id: planRevisionId,
+      plan_id: planId,
     });
-    expect(cockpit).not.toHaveProperty('completion_state');
-    expect(cockpit).not.toHaveProperty('next_actions');
-    expect(cockpit.delivery_readiness.next_actions).toEqual(expect.any(Array));
 
-    const timeline = (await request(server).get(`/query/replay/work_item/${workItem.id}`).expect(200)).body;
-    const timelineSources = timeline.map((entry: { source: string }) => entry.source);
-    expect(timelineSources).toEqual(expect.arrayContaining(['object_event', 'status_history', 'decision']));
-    expect(timelineSources).not.toContain('artifact');
+    const executionLane = (
+      await request(server)
+        .get('/query/product-lanes/execution-owner')
+        .query({ project_id: project.id, execution_owner_actor_id: actorOwner })
+        .expect(200)
+    ).body;
+    expect(executionLane.items.map((item: { object: { type: string } }) => item.object.type)).not.toContain('execution_package');
+    expect((await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200)).body).toMatchObject({
+      id: executionPackage.id,
+      resolution: 'completed',
+    });
+
+    await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(404);
+    await request(server).get(`/query/replay/work_item/${workItem.id}`).expect(404);
   });
 
   it('serves POST /projects when booted through the tsx runtime entrypoint', async () => {

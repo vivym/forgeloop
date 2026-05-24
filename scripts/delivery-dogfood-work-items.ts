@@ -175,7 +175,6 @@ export const dogfoodRequiredChecks = [
 const requiredChecks = dogfoodRequiredChecks;
 
 const requiredArtifactKinds: ArtifactKind[] = ['diff', 'changed_files', 'check_output', 'execution_summary', 'review_packet'];
-const publicTimelineEvidenceSources = ['decision', 'object_event', 'status_history'] as const satisfies readonly ProductEvidenceSource[];
 const productEvidenceSources = ['artifact', 'decision', 'object_event', 'status_history'] as const satisfies readonly ProductEvidenceSource[];
 
 export const STRICT_WORK_ITEMS_DOGFOOD_DIRTY_ALLOWLIST_SOURCE = STRICT_LOCAL_CODEX_DOGFOOD_DIRTY_ALLOWLIST_SOURCE;
@@ -742,42 +741,28 @@ const completeDogfoodItem = async (
     await approveReviewPacket(app, firstPacket.id, 'Approved for Delivery dogfood completion.');
   }
 
-  const cockpit = (await withActor(
-    request(app.getHttpServer()).get(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}`),
-    actorOwner,
-  ).expect(200)).body as {
-    item?: unknown;
-    packages?: ExecutionPackage[];
-    run_sessions?: RunSession[];
-    review_packets?: ReviewPacket[];
-  };
-  const packageRecord = cockpit.packages?.find((candidate) => candidate.id === packageId);
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const workItemRecord = await repository.getWorkItem(workItemId);
+  const packageRecord = await repository.getExecutionPackage(packageId);
   if (packageRecord?.resolution !== 'completed') {
     throw new Error(`Package ${packageId} did not complete review handoff`);
   }
-  const finalPacket = cockpit.review_packets?.find((candidate) => candidate.id === reviewPacketIds.at(-1));
+  const finalReviewPacketId = reviewPacketIds.at(-1);
+  const finalPacket = finalReviewPacketId === undefined ? undefined : await repository.getReviewPacket(finalReviewPacketId);
   if (finalPacket?.decision !== 'approved') {
     throw new Error(`Final ReviewPacket for ${item.key} is not approved`);
   }
 
-  const timeline = (await withActor(
-    request(app.getHttpServer()).get(`/query/replay/work_item/${encodeURIComponent(workItemId)}`),
-    actorOwner,
-  ).expect(200)).body as Array<{
-    source: string;
-  }>;
-  const timelineSources = uniqueSortedSources(timeline);
-  expectSources(item.key, 'timeline', timelineSources, publicTimelineEvidenceSources);
   const evidenceChain = (await withActor(request(app.getHttpServer()).get(`/work-items/${workItemId}/evidence-chain`), actorOwner).expect(200))
     .body as EvidenceChainResponse;
   const evidenceChainSources = uniqueSortedSources(evidenceChain.items);
   expectSources(item.key, 'Evidence Chain', evidenceChainSources, productEvidenceSources);
-  const reportEvidenceSources = [...new Set([...timelineSources, ...evidenceChainSources])].sort();
+  const reportEvidenceSources = evidenceChainSources;
 
-  if (cockpit.item === undefined) {
-    throw new Error(`Cockpit response for ${item.key} is missing Work Item record`);
+  if (workItemRecord === undefined) {
+    throw new Error(`Repository record for ${item.key} is missing Work Item record`);
   }
-  const records = await loadCompletedDogfoodRecordsFromRepository(app.get(DELIVERY_REPOSITORY) as DeliveryRepository, workItemId);
+  const records = await loadCompletedDogfoodRecordsFromRepository(repository, workItemId);
 
   return {
     result: {

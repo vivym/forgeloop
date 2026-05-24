@@ -3,57 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createForgeloopCommandApi } from '../../apps/web/src/shared/api/commands';
 import { ForgeloopApiError } from '../../apps/web/src/shared/api/common';
 import { createForgeloopQueryApi } from '../../apps/web/src/shared/api/query';
-import type { ProductLaneId, WorkItemDeliveryReadiness } from '@forgeloop/contracts';
 import {
-  cockpitPackageFor,
-  cockpitPlanFor,
-  cockpitSpecFor,
   executionPackage,
   plan,
-  productActionFixtures,
-  reviewPacket,
-  runSession,
   spec,
   workItem,
 } from './fixtures/product-data';
-
-const cockpitReadiness = (lane: ProductLaneId = 'requirements'): WorkItemDeliveryReadiness => ({
-  scope_ref: { type: workItem.kind, id: workItem.id, title: workItem.title },
-  active_lane: lane,
-  overall_state: 'in_progress',
-  stages: [
-    'spec',
-    'plan',
-    'packages',
-    'execution',
-    'review',
-    'integration_readiness',
-    'quality_gate',
-    'release_readiness',
-  ].map((id) => ({
-    id: id as WorkItemDeliveryReadiness['stages'][number]['id'],
-    label: id,
-    state: 'ready',
-    owner_lane: lane,
-    object_refs: [],
-    blockers: [],
-    evidence_refs: [],
-  })),
-  blockers: [],
-  evidence: [],
-  next_actions: [],
-  degraded_sources: [],
-});
-
-const cockpitResponse = (lane?: ProductLaneId) => ({
-  item: workItem,
-  current_spec: cockpitSpecFor(workItem),
-  current_plan: cockpitPlanFor(workItem),
-  packages: [cockpitPackageFor(workItem)],
-  run_sessions: [runSession],
-  review_packets: [reviewPacket],
-  delivery_readiness: cockpitReadiness(lane),
-});
 
 describe('Forgeloop web API client', () => {
   afterEach(() => {
@@ -148,10 +103,10 @@ describe('Forgeloop web API client', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify([]), { status: 200 }));
     const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
-    await api.listWorkItems('project with spaces');
+    await api.listReleases({ project_id: 'project with spaces' });
     await api.approveItemSpec('development-plan-1', 'development-plan-item-1', { actor_id: 'actor-reviewer' });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/work-items?project_id=project+with+spaces', {
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/releases?project_id=project+with+spaces', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
@@ -423,108 +378,20 @@ describe('Forgeloop web API client', () => {
     expect(onError).toHaveBeenCalledWith(expect.any(Error));
   });
 
-  it('routes work item cockpit and replay reads through the query client', async () => {
+  it('routes typed product queries through the query client without raw runtime reads', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/query/work-item-cockpit/')) {
-        return new Response(JSON.stringify(cockpitResponse(url.includes('lane=reviewer') ? 'reviewer' : undefined)), {
-          status: 200,
-        });
-      }
       return new Response(JSON.stringify({ items: [], degraded_sources: [] }), { status: 200 });
     });
     const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
-    await queryApi.getWorkItemCockpit('work item/1', { lane: 'reviewer' });
-    await queryApi.getWorkItemReplay('work item/1');
-    await queryApi.listWorkItems({ project_id: 'project 1', limit: 25 });
-    await queryApi.getExecutionPackageReplay('package/1');
-    await queryApi.getReview('review/1');
-    await queryApi.getReviewPacketReplay('review/1');
+    await queryApi.listRequirements({ project_id: 'project 1', limit: 25 });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/work-item-cockpit/work%20item%2F1?lane=reviewer', {
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/root/query/requirements?project_id=project+1&limit=25', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/root/query/replay/work_item/work%20item%2F1', {
-      method: 'GET',
-      headers: { 'content-type': 'application/json' },
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://api.local/root/query/work-items?project_id=project+1&limit=25', {
-      method: 'GET',
-      headers: { 'content-type': 'application/json' },
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://api.local/root/query/replay/execution_package/package%2F1', {
-      method: 'GET',
-      headers: { 'content-type': 'application/json' },
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://api.local/root/query/reviews/review%2F1', {
-      method: 'GET',
-      headers: { 'content-type': 'application/json' },
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://api.local/root/query/replay/review_packet/review%2F1', {
-      method: 'GET',
-      headers: { 'content-type': 'application/json' },
-    });
-  });
-
-  it('rejects legacy work item cockpit response shapes at the query boundary', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          item: workItem,
-          current_spec: cockpitSpecFor(workItem),
-          current_plan: cockpitPlanFor(workItem),
-          packages: [cockpitPackageFor(workItem)],
-          run_sessions: [runSession],
-          review_packets: [reviewPacket],
-          completion_state: {},
-        }),
-        { status: 200 },
-      ),
-    );
-    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
-
-    await expect(queryApi.getWorkItemCockpit(workItem.id)).rejects.toThrow();
-  });
-
-  it('routes package runtime readiness through the query API', async () => {
-    const readiness = {
-      executor_type: 'local_codex',
-      target_kind: 'run_execution',
-      state: 'ready',
-      blockers: [],
-      generated_at: '2026-05-18T00:23:00.000Z',
-    };
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(readiness), { status: 200 }));
-    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
-
-    await expect(queryApi.getExecutionPackageRuntimeReadiness('package/1')).resolves.toEqual(readiness);
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://api.local/root/query/execution-packages/package%2F1/runtime-readiness',
-      expect.objectContaining({ method: 'GET' }),
-    );
-  });
-
-  it('hardens bad manager cockpit command actions before strict response parsing', async () => {
-    const response = cockpitResponse('manager');
-    response.delivery_readiness.next_actions = [productActionFixtures.commandTargetFollowUp];
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
-    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
-
-    const cockpit = await queryApi.getWorkItemCockpit(workItem.id, { lane: 'manager' });
-
-    expect(cockpit.delivery_readiness.next_actions).toEqual([
-      expect.objectContaining({
-        enabled: true,
-        kind: 'navigate',
-        label: 'Open package',
-        lane_id: 'manager',
-        priority: 'secondary',
-        target: productActionFixtures.commandTargetFollowUp.target,
-      }),
-    ]);
-    expect('command' in cockpit.delivery_readiness.next_actions[0]!).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('routes release command methods through the release API', async () => {
@@ -598,7 +465,7 @@ describe('Forgeloop web API client', () => {
     });
   });
 
-  it('routes release cockpit, replay, Product Lane, and Work Item action reads through the query client', async () => {
+  it('routes release cockpit, Product Lane, and Work Item action reads through the query client', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/query/product-lanes/')) {
@@ -619,7 +486,6 @@ describe('Forgeloop web API client', () => {
     const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local/root/', fetch: fetchMock });
 
     await queryApi.getReleaseCockpit('release/1');
-    await queryApi.getReleaseReplay('release/1');
     await queryApi.getProductLane('execution-owner', {
       project_id: 'project 1',
       actor_id: 'actor-owner',
@@ -631,19 +497,15 @@ describe('Forgeloop web API client', () => {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/root/query/replay/release/release%2F1', {
-      method: 'GET',
-      headers: { 'content-type': 'application/json' },
-    });
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
+      2,
       'http://api.local/root/query/product-lanes/execution-owner?project_id=project+1&actor_id=actor-owner&limit=25&blocked=true',
       {
         method: 'GET',
         headers: { 'content-type': 'application/json' },
       },
     );
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('fetches Product Lane projections with all supported filters', async () => {
@@ -684,7 +546,7 @@ describe('Forgeloop web API client', () => {
     );
   });
 
-  it('whitelists product Work Item query filters before sending requests', async () => {
+  it('whitelists source-object query filters before sending requests', async () => {
     const fetchMock = vi.fn(async () =>
       new Response(
         JSON.stringify({
@@ -696,14 +558,14 @@ describe('Forgeloop web API client', () => {
     );
     const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
-    await queryApi.listWorkItems({
+    await queryApi.listRequirements({
       project_id: 'project-1',
       driver_actor_id: 'actor-driver',
       owner_actor_id: 'actor-owner',
     } as any);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://api.local/query/work-items?project_id=project-1&driver_actor_id=actor-driver',
+      'http://api.local/query/requirements?project_id=project-1&driver_actor_id=actor-driver',
       expect.objectContaining({ method: 'GET' }),
     );
   });
@@ -720,17 +582,6 @@ describe('Forgeloop web API client', () => {
     }
     expect(commandMethods).not.toContain('getWorkItemCockpit');
     expect(commandMethods).not.toContain('getWorkItemReplay');
-    expect(Object.keys(queryApi).sort()).toEqual([
-      'getExecutionPackageReplay',
-      'getExecutionPackageRuntimeReadiness',
-      'getPlanReplay',
-      'getProductLane',
-      'getReleaseCockpit',
-      'getReleaseReplay',
-      'getReviewPacketReplay',
-      'getSpecReplay',
-      'getWorkItemCockpit',
-      'getWorkItemReplay',
-    ]);
+    expect(Object.keys(queryApi).sort()).toEqual(['getProductLane', 'getReleaseCockpit']);
   });
 });

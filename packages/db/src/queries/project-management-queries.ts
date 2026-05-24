@@ -15,7 +15,7 @@ import type {
   TechDebtDetail,
   TechDebtListItem,
 } from '@forgeloop/contracts';
-import { releaseReadinessDetailSchema } from '@forgeloop/contracts';
+import { productObjectRefSchema, releaseReadinessDetailSchema } from '@forgeloop/contracts';
 import type {
   CodeReviewHandoff,
   DevelopmentPlan,
@@ -1185,7 +1185,10 @@ function workItemToBugDetail(workItem: TypedWorkItem, relationshipRefs: ProductO
 
 function releaseScopeRefs(release: Release): ObjectRef[] {
   const refs = isRecord(release.extra) && Array.isArray(release.extra.project_management_scope_refs) ? release.extra.project_management_scope_refs : [];
-  return refs.filter(isObjectRef);
+  return refs.flatMap((ref) => {
+    const productRef = productSafeObjectRef(ref);
+    return productRef === undefined ? [] : [productRef];
+  });
 }
 
 function releaseRevisionAuthority(release: Release): ReleaseRevisionAuthority {
@@ -1228,10 +1231,18 @@ function reviewGateFor(
     ...revisionFields(revisionAuthority, evidenceSpecRevisionId, evidencePlanRevisionId),
     evidence_ref: {
       id: authoritative.id,
-      authority_type: value(authoritative.extra, 'authority_type') === 'review_packet_approval' ? 'review_packet_approval' : 'human_review_decision',
-      authority_ref:
+      authority_type:
+        value(authoritative.extra, 'authority_type') === 'code_review_handoff_approval' ||
         value(authoritative.extra, 'authority_type') === 'review_packet_approval'
-          ? { type: 'review_packet', id: stringValue(authoritative.extra, 'review_packet_id') ?? authoritative.id }
+          ? 'code_review_handoff_approval'
+          : 'human_review_decision',
+      authority_ref:
+        value(authoritative.extra, 'authority_type') === 'code_review_handoff_approval' ||
+        value(authoritative.extra, 'authority_type') === 'review_packet_approval'
+          ? {
+              type: 'code_review_handoff',
+              id: stringValue(authoritative.extra, 'code_review_handoff_id') ?? stringValue(authoritative.extra, 'review_packet_id') ?? authoritative.id,
+            }
           : { type: 'human_review_decision', id: stringValue(authoritative.extra, 'decision_id') ?? authoritative.id },
       scope_ref: scopeRef,
       status: 'approved',
@@ -1283,12 +1294,12 @@ function testGateFor(
 
 function evidenceForScope(evidence: ReleaseEvidence[], scopeRef: ObjectRef, kind: 'review' | 'test'): ReleaseEvidence[] {
   return evidence.filter((item) => {
-    const itemScopeRef = isRecord(item.extra) ? item.extra.scope_ref : undefined;
+    const itemScopeRef = isRecord(item.extra) ? productSafeObjectRef(item.extra.scope_ref) : undefined;
     const kindMatches =
       kind === 'review'
         ? evidenceType(item) === 'review_packet' || evidenceType(item) === 'review_authority' || value(item.extra, 'authority_type') !== undefined
         : evidenceType(item) === 'test_report' || evidenceType(item) === 'test_acceptance' || value(item.extra, 'evidence_type') !== undefined;
-    return kindMatches && isObjectRef(itemScopeRef) && itemScopeRef.type === scopeRef.type && itemScopeRef.id === scopeRef.id;
+    return kindMatches && itemScopeRef !== undefined && itemScopeRef.type === scopeRef.type && itemScopeRef.id === scopeRef.id;
   });
 }
 
@@ -1333,8 +1344,8 @@ function recordWrongScopeEvidence(
   disabledReasons: ProductSafeDisabledReason[],
 ): void {
   for (const item of evidence) {
-    const scopeRef = isRecord(item.extra) ? item.extra.scope_ref : undefined;
-    if (!isObjectRef(scopeRef)) {
+    const scopeRef = isRecord(item.extra) ? productSafeObjectRef(item.extra.scope_ref) : undefined;
+    if (scopeRef === undefined) {
       continue;
     }
     if (!scopeRefs.some((releaseScopeRef) => releaseScopeRef.type === scopeRef.type && releaseScopeRef.id === scopeRef.id)) {
@@ -1370,7 +1381,9 @@ function recordInvalidStatus(
 function isAuthoritativeReview(evidence: ReleaseEvidence): boolean {
   const authorityType = value(evidence.extra, 'authority_type');
   return (
-    (authorityType === 'human_review_decision' || authorityType === 'review_packet_approval') &&
+    (authorityType === 'human_review_decision' ||
+      authorityType === 'code_review_handoff_approval' ||
+      authorityType === 'review_packet_approval') &&
     isAuthorizedEvidence(evidence) &&
     value(evidence.extra, 'freshness') !== 'stale' &&
     value(evidence.extra, 'reference_status') !== 'tombstoned'
@@ -1403,16 +1416,20 @@ function disabled(code: ProductSafeDisabledReason['code'], scopeRef: ObjectRef):
     code,
     message: `Release is blocked by ${code.replaceAll('_', ' ')}.`,
     target_ref: scopeRef,
-    remediation_route: `/${routeSegmentFor(scopeRef)}/${scopeRef.id}/evidence`,
+    remediation_route: remediationRouteFor(scopeRef),
   };
+}
+
+function remediationRouteFor(ref: ObjectRef): string {
+  if (ref.type === 'development_plan_item') {
+    return `/development-plans/${ref.development_plan_id}/items/${ref.id}`;
+  }
+  return `/${routeSegmentFor(ref)}/${ref.id}/evidence`;
 }
 
 function routeSegmentFor(ref: ObjectRef): string {
   if (ref.type === 'tech_debt') {
     return 'tech-debt';
-  }
-  if (ref.type === 'task') {
-    return 'tasks';
   }
   if (ref.type === 'bug') {
     return 'bugs';
@@ -1420,7 +1437,45 @@ function routeSegmentFor(ref: ObjectRef): string {
   if (ref.type === 'initiative') {
     return 'initiatives';
   }
+  if (ref.type === 'development_plan') {
+    return 'development-plans';
+  }
+  if (ref.type === 'execution') {
+    return 'executions';
+  }
+  if (ref.type === 'release') {
+    return 'releases';
+  }
   return 'requirements';
+}
+
+function productSafeObjectRef(valueToCheck: unknown): ObjectRef | undefined {
+  if (!isRecord(valueToCheck) || typeof valueToCheck.type !== 'string' || typeof valueToCheck.id !== 'string') {
+    return undefined;
+  }
+
+  const parsed = productObjectRefSchema.safeParse(valueToCheck);
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  switch (valueToCheck.type) {
+    case 'plan':
+      return { type: 'execution_plan', id: valueToCheck.id };
+    case 'plan_revision': {
+      const executionPlanId = stringValue(valueToCheck, 'execution_plan_id') ?? stringValue(valueToCheck, 'plan_id');
+      return executionPlanId === undefined
+        ? undefined
+        : { type: 'execution_plan_revision', id: valueToCheck.id, execution_plan_id: executionPlanId };
+    }
+    case 'execution_package':
+    case 'run_session':
+      return { type: 'execution', id: stringValue(valueToCheck, 'execution_id') ?? valueToCheck.id };
+    case 'review_packet':
+      return { type: 'code_review_handoff', id: valueToCheck.id };
+    default:
+      return undefined;
+  }
 }
 
 function uniqueDisabledReasons(reasons: ProductSafeDisabledReason[]): ProductSafeDisabledReason[] {
@@ -1468,12 +1523,7 @@ function evidenceType(evidence: ReleaseEvidence): string {
 }
 
 function isObjectRef(valueToCheck: unknown): valueToCheck is ObjectRef {
-  return (
-    isRecord(valueToCheck) &&
-    typeof valueToCheck.type === 'string' &&
-    typeof valueToCheck.id === 'string' &&
-    ['initiative', 'requirement', 'bug', 'tech_debt', 'task', 'release'].includes(valueToCheck.type)
-  );
+  return productSafeObjectRef(valueToCheck) !== undefined;
 }
 
 function isRecord(valueToCheck: unknown): valueToCheck is Record<string, unknown> {
