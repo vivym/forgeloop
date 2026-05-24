@@ -140,9 +140,8 @@ function typedHrefFor(ref: MyWorkQueueItem['object_ref']): string | undefined {
     case 'development_plan_item':
       return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
     case 'spec':
-      return `/specs/${encodeURIComponent(ref.id)}`;
     case 'execution_plan':
-      return `/plans/${encodeURIComponent(ref.id)}`;
+      return '/specs-plans';
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
     case 'development_plan':

@@ -8,28 +8,25 @@ import {
   getProductLane as getProductLaneQuery,
   getReleaseCockpit as getReleaseCockpitQuery,
   getBugDetail as getProjectBugDetail,
+  getDashboard as getProjectDashboard,
+  getDevelopmentPlanItemProjection as getProjectDevelopmentPlanItem,
+  getDevelopmentPlanProjection as getProjectDevelopmentPlan,
   getInitiativeDetail as getProjectInitiativeDetail,
   getReleaseReadinessDetail as getProjectReleaseReadinessDetail,
   getReport as getProjectReport,
   getRequirementDetail as getProjectRequirementDetail,
-  getTaskDetail as getProjectTaskDetail,
-  getTaskPackageEvidence as getProjectTaskPackageEvidence,
-  getTaskReviewEvidence as getProjectTaskReviewEvidence,
-  getTaskRunEvidence as getProjectTaskRunEvidence,
   getTechDebtDetail as getProjectTechDebtDetail,
   getSpecReplayTimeline,
   listBoardCards as listProjectBoardCards,
   listBugs as listProjectBugs,
+  listCodeReviewHandoffQueue as listProjectCodeReviewHandoffs,
+  listDevelopmentPlanProjections as listProjectDevelopmentPlans,
+  listExecutionQueue as listProjectExecutions,
   listInitiatives as listProjectInitiatives,
   listMyWorkQueue,
-  listProductExecutionPackages,
-  listProductPlans,
-  listProductReviewPackets,
-  listProductRuns,
-  listProductSpecs,
-  listProductWorkItems,
+  listQaHandoffQueue as listProjectQaHandoffs,
   listRequirements as listProjectRequirements,
-  listTasks as listProjectTasks,
+  listSpecsExecutionPlans as listProjectSpecsExecutionPlans,
   listTechDebt as listProjectTechDebt,
   deriveDeliveryRunReadiness,
   getWorkItemCockpit,
@@ -124,6 +121,41 @@ export class QueryService {
     return listMyWorkQueue(this.repository, query.actor_id === undefined ? { project_id: query.project_id } : { project_id: query.project_id, actor_id: query.actor_id });
   }
 
+  getDashboard(query: ProductListQuery) {
+    return getProjectDashboard(this.repository, query);
+  }
+
+  listDevelopmentPlans(query: ProductListQuery) {
+    return listProjectDevelopmentPlans(this.repository, query);
+  }
+
+  async getDevelopmentPlan(developmentPlanId: string) {
+    return this.requireFound(await getProjectDevelopmentPlan(this.repository, developmentPlanId), `Development Plan ${developmentPlanId}`);
+  }
+
+  async getDevelopmentPlanItem(developmentPlanId: string, itemId: string) {
+    return this.requireFound(
+      await getProjectDevelopmentPlanItem(this.repository, developmentPlanId, itemId),
+      `Development Plan Item ${developmentPlanId}/${itemId}`,
+    );
+  }
+
+  listSpecsExecutionPlans(query: ProductListQuery) {
+    return listProjectSpecsExecutionPlans(this.repository, query);
+  }
+
+  listExecutions(query: ProductListQuery) {
+    return listProjectExecutions(this.repository, query);
+  }
+
+  listCodeReviewHandoffs(query: ProductListQuery) {
+    return listProjectCodeReviewHandoffs(this.repository, query);
+  }
+
+  listQaHandoffs(query: ProductListQuery) {
+    return listProjectQaHandoffs(this.repository, query);
+  }
+
   listRequirements(query: ProductListQuery) {
     return listProjectRequirements(this.repository, query);
   }
@@ -156,35 +188,6 @@ export class QueryService {
     return this.requireFound(await getProjectBugDetail(this.repository, bugId), `Bug ${bugId}`);
   }
 
-  listTasks(query: ProductListQuery) {
-    return listProjectTasks(this.repository, query);
-  }
-
-  async getTaskDetail(taskId: string) {
-    return this.requireFound(await getProjectTaskDetail(this.repository, taskId), `Task ${taskId}`);
-  }
-
-  async getTaskPackageEvidence(taskId: string, packageId: string) {
-    return this.requireFound(
-      await getProjectTaskPackageEvidence(this.repository, taskId, packageId),
-      `Task package evidence ${taskId}/${packageId}`,
-    );
-  }
-
-  async getTaskRunEvidence(taskId: string, runSessionId: string) {
-    return this.requireFound(
-      await getProjectTaskRunEvidence(this.repository, taskId, runSessionId),
-      `Task run evidence ${taskId}/${runSessionId}`,
-    );
-  }
-
-  async getTaskReviewEvidence(taskId: string, reviewPacketId: string) {
-    return this.requireFound(
-      await getProjectTaskReviewEvidence(this.repository, taskId, reviewPacketId),
-      `Task review evidence ${taskId}/${reviewPacketId}`,
-    );
-  }
-
   listBoardCards(query: ProductListQuery) {
     return listProjectBoardCards(this.repository, query);
   }
@@ -200,22 +203,6 @@ export class QueryService {
     );
   }
 
-  listWorkItems(query: ProductListQuery) {
-    return listProductWorkItems(this.repository, query);
-  }
-
-  listSpecs(query: ProductListQuery) {
-    return listProductSpecs(this.repository, query);
-  }
-
-  listPlans(query: ProductListQuery) {
-    return listProductPlans(this.repository, query);
-  }
-
-  listExecutionPackages(query: ProductListQuery) {
-    return listProductExecutionPackages(this.repository, query);
-  }
-
   async getExecutionPackageRuntimeReadiness(packageId: string) {
     const executionPackage = await this.repository.getExecutionPackage(packageId);
     if (executionPackage === undefined) {
@@ -227,14 +214,6 @@ export class QueryService {
       now: this.runtime.now(),
       ...(runtimeSelection === undefined ? {} : { runtime_selection: runtimeSelection }),
     });
-  }
-
-  listRuns(query: ProductListQuery) {
-    return listProductRuns(this.repository, query);
-  }
-
-  listReviewPackets(query: ProductListQuery) {
-    return listProductReviewPackets(this.repository, query);
   }
 
   getReview(reviewPacketId: string) {

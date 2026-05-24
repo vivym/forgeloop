@@ -260,6 +260,12 @@ describe('ProductAction contracts', () => {
       '/work-items/wi_1/request-changes',
       '/development-plans/development-plan-1/items/development-plan-item-1/spec/generate-draft',
       '/development-plans/development-plan-1/items/development-plan-item-1/execution-plan/generate-draft',
+      '/executions/exec-1/continue',
+      '/executions/exec-1/interrupt',
+      '/executions/exec-1/ready-for-code-review',
+      '/qa-handoffs/qa-1/accept',
+      '/qa-handoffs/qa-1/block',
+      '/code-review-handoffs/cr-1/qa-handoff',
       '/execution-packages/pkg_1/run',
       '/lanes/bugs',
       '/pipeline',
@@ -297,9 +303,14 @@ describe('ProductAction contracts', () => {
     expect(
       productActionSchema.safeParse({
         ...validNavigateAction,
-        target: { kind: 'route', href: '/tasks?project_id=p1&reviewer_actor_id=actor-reviewer' },
+        target: { kind: 'route', href: '/code-review-handoffs?project_id=p1&reviewer_actor_id=actor-reviewer' },
       }).success,
     ).toBe(true);
+    for (const href of ['/executions/exec-1', '/qa-handoffs/qa-1', '/code-review-handoffs/cr-1']) {
+      expect(productActionSchema.safeParse({ ...validNavigateAction, target: { ...validObjectTarget, href } }).success).toBe(
+        true,
+      );
+    }
   });
 
   it('validates concrete command object ids and version types', () => {

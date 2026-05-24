@@ -44,7 +44,6 @@ function objectTypeActionLabel(objectType: ProductObjectActionTarget['object_typ
     case 'requirement':
     case 'bug':
     case 'tech_debt':
-    case 'task':
       return 'Open item';
     default:
       return `Open ${objectType.replace(/[_-]+/g, ' ')}`;

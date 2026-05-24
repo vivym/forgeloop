@@ -7,21 +7,34 @@ import type {
   InitiativeListItem,
   MyWorkQueueItem,
   ObjectRef,
+  ProductObjectRef,
   ProductSafeDisabledReason,
   ReleaseReadinessDetail,
   RequirementDetail,
   RequirementListItem,
-  TaskDetail,
-  TaskListItem,
   TechDebtDetail,
   TechDebtListItem,
 } from '@forgeloop/contracts';
 import { releaseReadinessDetailSchema } from '@forgeloop/contracts';
-import type { ExecutionPackage, Release, ReleaseEvidence, ReviewPacket, RunSession, Task, WorkItem } from '@forgeloop/domain';
-import { canGenerateRuntimePackageForTask } from '@forgeloop/domain';
+import type {
+  CodeReviewHandoff,
+  DevelopmentPlan,
+  DevelopmentPlanItem,
+  Execution,
+  ExecutionPackage,
+  ExecutionPlanDocument,
+  ExecutionPlanRevision,
+  QaHandoff,
+  Release,
+  ReleaseEvidence,
+  ReviewPacket,
+  RunSession,
+  Spec,
+  SpecRevision,
+  WorkItem,
+} from '@forgeloop/domain';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
-import { serializePublicArtifactRef, serializePublicArtifactRefs } from './public-evidence-serialization';
 
 type WorkItemObjectType = Extract<ObjectRef['type'], 'initiative' | 'requirement' | 'bug' | 'tech_debt'>;
 type MyWorkQueueObjectRef = MyWorkQueueItem['object_ref'];
@@ -32,23 +45,65 @@ type ReleaseRevisionAuthority = {
   current_spec_revision_id?: string;
   current_plan_revision_id?: string;
 };
+type AiNativeQuery = { project_id: string; actor_id?: string | undefined };
+type DevelopmentPlanItemWithPlan = { plan: DevelopmentPlan; item: DevelopmentPlanItem };
+type ExecutionPlanWithContext = { executionPlan: ExecutionPlanDocument; plan: DevelopmentPlan; item: DevelopmentPlanItem };
+type ExecutionWithContext = { execution: Execution; plan: DevelopmentPlan; item: DevelopmentPlanItem };
+type CodeReviewWithContext = { handoff: CodeReviewHandoff; execution: Execution; plan: DevelopmentPlan; item: DevelopmentPlanItem };
+type QaWithContext = { handoff: QaHandoff; plan: DevelopmentPlan; item: DevelopmentPlanItem };
 
 export async function listMyWorkQueue(
   repository: DeliveryRepository,
   query: { project_id: string; actor_id?: string },
 ): Promise<{ items: MyWorkQueueItem[]; degraded_sources: [] }> {
-  const [workItems, tasks, releases] = await Promise.all([
+  const [workItems, developmentPlans, developmentPlanItems, specs, executions, qaHandoffs, releases] = await Promise.all([
     repository.listWorkItems(query.project_id),
-    repository.listTasks(query.project_id),
+    repository.listDevelopmentPlans(query.project_id),
+    listDevelopmentPlanItemsForProject(repository, query.project_id),
+    repository.listSpecs(query.project_id),
+    listExecutionsForProject(repository, query.project_id),
+    listQaHandoffsForProject(repository, query.project_id),
     repository.listReleases(query.project_id),
   ]);
   const actorWorkItems =
     query.actor_id === undefined ? workItems : workItems.filter((workItem) => workItem.driver_actor_id === query.actor_id);
-  const actorWorkItemKeys = new Set(actorWorkItems.map((workItem) => objectRefKey(workItemRef(workItem))));
-  const actorTasks =
+  const actorItems =
     query.actor_id === undefined
-      ? tasks
-      : tasks.filter((task) => task.parent_ref !== undefined && actorWorkItemKeys.has(objectRefKey(task.parent_ref)));
+      ? developmentPlanItems
+      : developmentPlanItems.filter(
+          ({ item }) => item.driver_actor_id === query.actor_id || item.reviewer_actor_id === query.actor_id,
+        );
+  const actorPlanIds = new Set(actorItems.map(({ plan }) => plan.id));
+  const actorPlans =
+    query.actor_id === undefined
+      ? developmentPlans
+      : developmentPlans.filter(
+          (plan) =>
+            actorPlanIds.has(plan.id) ||
+            plan.source_refs.some((sourceRef) =>
+              actorWorkItems.some((workItem) => workItem.id === sourceRef.id && workItem.kind === sourceRef.type),
+            ),
+        );
+  const actorItemIds = new Set(actorItems.map(({ item }) => item.id));
+  const actorSpecs =
+    query.actor_id === undefined
+      ? specs
+      : specs.filter(
+          (spec) =>
+            spec.development_plan_item_id !== undefined && actorItemIds.has(spec.development_plan_item_id),
+        );
+  const actorExecutionPlans =
+    query.actor_id === undefined
+      ? await listExecutionPlansForProject(repository, query.project_id)
+      : (await listExecutionPlansForProject(repository, query.project_id)).filter(({ item }) => actorItemIds.has(item.id));
+  const actorExecutions =
+    query.actor_id === undefined
+      ? executions
+      : executions.filter(({ item }) => item.driver_actor_id === query.actor_id || item.reviewer_actor_id === query.actor_id);
+  const actorQaHandoffs =
+    query.actor_id === undefined
+      ? qaHandoffs
+      : qaHandoffs.filter(({ item, handoff }) => item.driver_actor_id === query.actor_id || handoff.accepted_by_actor_id === query.actor_id);
   const actorReleases =
     query.actor_id === undefined
       ? releases
@@ -57,15 +112,24 @@ export async function listMyWorkQueue(
   return {
     items: [
       ...actorWorkItems.map((workItem) => ({ item: workItemToMyWorkQueueItem(workItem), updated_at: workItem.updated_at })),
-      ...actorTasks.flatMap((task) => {
-        const parentRefKey = task.parent_ref === undefined ? undefined : objectRefKey(task.parent_ref);
-        const parent =
-          parentRefKey === undefined
+      ...actorPlans.map((plan) => ({ item: developmentPlanToMyWorkQueueItem(plan), updated_at: plan.updated_at })),
+      ...actorItems.map(({ plan, item }) => ({ item: developmentPlanItemToMyWorkQueueItem(plan, item), updated_at: item.updated_at })),
+      ...actorSpecs.flatMap((spec) => {
+        const context =
+          spec.development_plan_item_id === undefined
             ? undefined
-            : workItems.find((workItem) => objectRefKey(workItemRef(workItem)) === parentRefKey);
-        const item = parent === undefined ? undefined : taskToMyWorkQueueItem(task, parent);
-        return item === undefined ? [] : [{ item, updated_at: task.updated_at }];
+            : developmentPlanItems.find(({ item }) => item.id === spec.development_plan_item_id);
+        return context === undefined ? [] : [{ item: specToMyWorkQueueItem(spec, context.plan, context.item), updated_at: spec.updated_at }];
       }),
+      ...actorExecutionPlans.map(({ executionPlan, plan, item }) => ({
+        item: executionPlanToMyWorkQueueItem(executionPlan, plan, item),
+        updated_at: executionPlan.updated_at,
+      })),
+      ...actorExecutions.map(({ execution, plan, item }) => ({
+        item: executionToMyWorkQueueItem(execution, plan, item),
+        updated_at: execution.updated_at,
+      })),
+      ...actorQaHandoffs.map(({ handoff, plan, item }) => ({ item: qaHandoffToMyWorkQueueItem(handoff, plan, item), updated_at: handoff.updated_at })),
       ...actorReleases.map((release) => ({ item: releaseToMyWorkQueueItem(release), updated_at: release.updated_at })),
     ]
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
@@ -79,7 +143,10 @@ export async function listRequirements(repository: DeliveryRepository, query: Pr
 }
 
 export async function getRequirementDetail(repository: DeliveryRepository, requirementId: string): Promise<RequirementDetail | undefined> {
-  return workItemToRequirementDetail(await typedWorkItemById(repository, requirementId, 'requirement'), await repository.listTasksForParent({ type: 'requirement', id: requirementId }));
+  const workItem = await typedWorkItemById(repository, requirementId, 'requirement');
+  return workItem === undefined
+    ? undefined
+    : workItemToRequirementDetail(workItem, await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listInitiatives(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: InitiativeListItem[] }> {
@@ -88,7 +155,9 @@ export async function listInitiatives(repository: DeliveryRepository, query: Pro
 
 export async function getInitiativeDetail(repository: DeliveryRepository, initiativeId: string): Promise<InitiativeDetail | undefined> {
   const workItem = await typedWorkItemById(repository, initiativeId, 'initiative');
-  return workItem === undefined ? undefined : workItemToInitiativeDetail(workItem);
+  return workItem === undefined
+    ? undefined
+    : workItemToInitiativeDetail(workItem, await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listTechDebt(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: TechDebtListItem[] }> {
@@ -96,7 +165,8 @@ export async function listTechDebt(repository: DeliveryRepository, query: Produc
 }
 
 export async function getTechDebtDetail(repository: DeliveryRepository, techDebtId: string): Promise<TechDebtDetail | undefined> {
-  return workItemToTechDebtDetail(await typedWorkItemById(repository, techDebtId, 'tech_debt'), await repository.listTasksForParent({ type: 'tech_debt', id: techDebtId }));
+  const workItem = await typedWorkItemById(repository, techDebtId, 'tech_debt');
+  return workItem === undefined ? undefined : workItemToTechDebtDetail(workItem, await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listBugs(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: BugListItem[] }> {
@@ -104,77 +174,8 @@ export async function listBugs(repository: DeliveryRepository, query: ProductLis
 }
 
 export async function getBugDetail(repository: DeliveryRepository, bugId: string): Promise<BugDetail | undefined> {
-  return workItemToBugDetail(await typedWorkItemById(repository, bugId, 'bug'), await repository.listTasksForParent({ type: 'bug', id: bugId }));
-}
-
-export async function listTasks(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: TaskListItem[] }> {
-  return { items: (await repository.listTasks(query.project_id)).map(taskToListItem) };
-}
-
-export async function getTaskDetail(repository: DeliveryRepository, taskId: string): Promise<TaskDetail | undefined> {
-  const task = await repository.getTask(taskId);
-  return task === undefined ? undefined : taskToDetail(task);
-}
-
-export async function getTaskPackageEvidence(
-  repository: DeliveryRepository,
-  taskId: string,
-  packageId: string,
-): Promise<Record<string, unknown> | undefined> {
-  const executionPackage = await repository.getExecutionPackage(packageId);
-  if (executionPackage === undefined || executionPackage.task_id !== taskId) {
-    return undefined;
-  }
-  return {
-    object_ref: { type: 'execution_package', id: executionPackage.id },
-    task_ref: { type: 'task', id: taskId },
-    href: `/tasks/${taskId}/packages/${executionPackage.id}`,
-    package: publicPackageEvidence(executionPackage, taskId),
-  };
-}
-
-export async function getTaskRunEvidence(
-  repository: DeliveryRepository,
-  taskId: string,
-  runSessionId: string,
-): Promise<Record<string, unknown> | undefined> {
-  const runSession = await repository.getRunSession(runSessionId);
-  if (runSession === undefined) {
-    return undefined;
-  }
-  const executionPackage = await repository.getExecutionPackage(runSession.execution_package_id);
-  if (executionPackage === undefined || executionPackage.task_id !== taskId) {
-    return undefined;
-  }
-  return {
-    object_ref: { type: 'run_session', id: runSession.id },
-    task_ref: { type: 'task', id: taskId },
-    package_ref: { type: 'execution_package', id: executionPackage.id },
-    href: `/tasks/${taskId}/runs/${runSession.id}`,
-    run_session: publicRunEvidence(runSession),
-  };
-}
-
-export async function getTaskReviewEvidence(
-  repository: DeliveryRepository,
-  taskId: string,
-  reviewPacketId: string,
-): Promise<Record<string, unknown> | undefined> {
-  const reviewPacket = await repository.getReviewPacket(reviewPacketId);
-  if (reviewPacket === undefined) {
-    return undefined;
-  }
-  const executionPackage = await repository.getExecutionPackage(reviewPacket.execution_package_id);
-  if (executionPackage === undefined || executionPackage.task_id !== taskId) {
-    return undefined;
-  }
-  return {
-    object_ref: { type: 'review_packet', id: reviewPacket.id },
-    task_ref: { type: 'task', id: taskId },
-    package_ref: { type: 'execution_package', id: executionPackage.id },
-    href: `/tasks/${taskId}/reviews/${reviewPacket.id}`,
-    review_packet: publicReviewEvidence(reviewPacket),
-  };
+  const workItem = await typedWorkItemById(repository, bugId, 'bug');
+  return workItem === undefined ? undefined : workItemToBugDetail(workItem, await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function getReleaseReadinessDetail(
@@ -207,16 +208,232 @@ export async function getReleaseReadinessDetail(
   return releaseReadinessDetailSchema.parse(detail);
 }
 
-export async function listBoardCards(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: BoardCard[] }> {
-  const [workItems, tasks, releases] = await Promise.all([
+export async function getDashboard(
+  repository: DeliveryRepository,
+  query: AiNativeQuery,
+): Promise<Record<string, unknown>> {
+  const [workItems, developmentPlanItems, executions, codeReviews, qaHandoffs, releases] = await Promise.all([
     repository.listWorkItems(query.project_id),
-    repository.listTasks(query.project_id),
+    listDevelopmentPlanItemsForProject(repository, query.project_id),
+    listExecutionsForProject(repository, query.project_id),
+    listCodeReviewHandoffsForProject(repository, query.project_id),
+    listQaHandoffsForProject(repository, query.project_id),
+    repository.listReleases(query.project_id),
+  ]);
+  const blockedItemCount = developmentPlanItems.filter(({ item }) => isDevelopmentPlanItemBlocked(item)).length;
+  const interruptedCount = executions.filter(({ execution }) => execution.status === 'interrupted' || execution.status === 'paused').length;
+  const qaBlockedCount = qaHandoffs.filter(({ handoff }) => handoff.status === 'blocked').length;
+
+  return {
+    project_id: query.project_id,
+    sections: [
+      dashboardSection('flow-health', 'Flow Health', developmentPlanItems.length, [
+        { label: 'Source objects', value: workItems.length },
+        { label: 'Development Plan Items', value: developmentPlanItems.length },
+        { label: 'Executions', value: executions.length },
+      ]),
+      dashboardSection('blocked-work', 'Blocked Work', blockedItemCount + interruptedCount + qaBlockedCount, [
+        { label: 'Blocked items', value: blockedItemCount },
+        { label: 'Interrupted executions', value: interruptedCount },
+        { label: 'Blocked QA handoffs', value: qaBlockedCount },
+      ]),
+      dashboardSection('aging', 'Aging', agingScore(developmentPlanItems), [
+        { label: 'Specs waiting review', value: developmentPlanItems.filter(({ item }) => item.spec_status === 'in_review').length },
+        {
+          label: 'Execution plans waiting review',
+          value: developmentPlanItems.filter(({ item }) => item.execution_plan_status === 'in_review').length,
+        },
+      ]),
+      dashboardSection('role-load', 'Role Load', developmentPlanItems.length, roleLoadMetrics(developmentPlanItems)),
+      dashboardSection('release-confidence', 'Release Confidence', releases.length, [
+        { label: 'Releases', value: releases.length },
+        { label: 'QA accepted', value: qaHandoffs.filter(({ handoff }) => handoff.status === 'accepted').length },
+      ]),
+    ],
+    next_actions: [
+      { id: 'unblock-items', label: 'Unblock blocked items', href: '/my-work' },
+      { id: 'review-aging-artifacts', label: 'Review aging artifacts', href: '/reports/spec-review-aging' },
+      { id: 'continue-executions', label: 'Continue interrupted executions', href: '/reports/execution-continuation' },
+    ],
+    report_links: reportLinks(),
+    degraded_sources: [],
+  };
+}
+
+export async function listDevelopmentPlanProjections(
+  repository: DeliveryRepository,
+  query: AiNativeQuery,
+): Promise<Record<string, unknown>> {
+  const plans = await repository.listDevelopmentPlans(query.project_id);
+  const rows = await Promise.all(
+    plans.map(async (plan) => {
+      const items = await repository.listDevelopmentPlanItems(plan.id);
+      return {
+        id: plan.id,
+        object_ref: developmentPlanRef(plan),
+        title: plan.title,
+        status: plan.status,
+        source_refs: plan.source_refs,
+        item_count: items.length,
+        blocked_count: items.filter(isDevelopmentPlanItemBlocked).length,
+        href: `/development-plans/${plan.id}`,
+        updated_at: plan.updated_at,
+      };
+    }),
+  );
+
+  return {
+    items: rows.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at))),
+    degraded_sources: [],
+  };
+}
+
+export async function getDevelopmentPlanProjection(
+  repository: DeliveryRepository,
+  developmentPlanId: string,
+): Promise<Record<string, unknown> | undefined> {
+  const plan = await repository.getDevelopmentPlan(developmentPlanId);
+  if (plan === undefined) {
+    return undefined;
+  }
+  const [items, revisions, sourceLinks] = await Promise.all([
+    repository.listDevelopmentPlanItems(plan.id),
+    repository.listDevelopmentPlanRevisions(plan.id),
+    repository.listDevelopmentPlanSourceLinks(plan.id),
+  ]);
+  return {
+    id: plan.id,
+    object_ref: developmentPlanRef(plan),
+    title: plan.title,
+    status: plan.status,
+    source_refs: plan.source_refs,
+    source_links: sourceLinks,
+    revisions,
+    items: items.map((item) => developmentPlanItemQueueRow(plan, item)),
+    href: `/development-plans/${plan.id}`,
+    updated_at: plan.updated_at,
+  };
+}
+
+export async function getDevelopmentPlanItemProjection(
+  repository: DeliveryRepository,
+  developmentPlanId: string,
+  itemId: string,
+): Promise<Record<string, unknown> | undefined> {
+  const [plan, item] = await Promise.all([repository.getDevelopmentPlan(developmentPlanId), repository.getDevelopmentPlanItem(itemId)]);
+  if (plan === undefined || item === undefined || item.development_plan_id !== plan.id) {
+    return undefined;
+  }
+  const [itemRevisions, boundaryRevisionCandidates, specs, executionPlans, executions, qaHandoffs] = await Promise.all([
+    repository.listDevelopmentPlanItemRevisions(item.id),
+    listBoundarySummaryRevisionsForItem(repository, item.id),
+    repository.listSpecs(plan.project_id),
+    repository.listExecutionPlansForDevelopmentPlanItem(item.id),
+    listExecutionsForProject(repository, plan.project_id),
+    listQaHandoffsForProject(repository, plan.project_id),
+  ]);
+  return {
+    id: item.id,
+    object_ref: developmentPlanItemRef(item),
+    development_plan_ref: developmentPlanRef(plan),
+    source_ref: item.source_ref,
+    title: item.title,
+    summary: item.summary,
+    responsible_role: item.responsible_role,
+    driver_actor_id: item.driver_actor_id,
+    reviewer_actor_id: item.reviewer_actor_id,
+    risk: item.risk,
+    boundary_status: item.boundary_status,
+    spec_status: item.spec_status,
+    execution_plan_status: item.execution_plan_status,
+    execution_status: item.execution_status,
+    review_status: item.review_status,
+    qa_handoff_status: item.qa_handoff_status,
+    release_impact: item.release_impact,
+    next_action: item.next_action,
+    revisions: itemRevisions,
+    boundary_summary_revisions: boundaryRevisionCandidates,
+    specs: specs.filter((spec) => spec.development_plan_item_id === item.id).map(specQueueRow(repository, plan, item)),
+    execution_plans: await Promise.all(executionPlans.map((executionPlan) => executionPlanQueueRow(repository, plan, item, executionPlan))),
+    executions: executions
+      .filter(({ execution }) => execution.development_plan_item_id === item.id)
+      .map(({ execution }) => executionQueueRow(plan, item, execution)),
+    qa_handoffs: qaHandoffs
+      .filter(({ handoff }) => handoff.development_plan_item_id === item.id)
+      .map(({ handoff }) => qaHandoffQueueRow(plan, item, handoff)),
+    compare_links: {
+      item_revisions_href: `/development-plans/${plan.id}/items/${item.id}/revisions/compare`,
+      boundary_summary_revisions_href: boundaryRevisionCandidates[0]
+        ? `/boundary-summaries/${boundaryRevisionCandidates[0].boundary_summary_id}/revisions/compare`
+        : undefined,
+    },
+    href: `/development-plans/${plan.id}/items/${item.id}`,
+    updated_at: item.updated_at,
+  };
+}
+
+export async function listSpecsExecutionPlans(
+  repository: DeliveryRepository,
+  query: AiNativeQuery,
+): Promise<Record<string, unknown>> {
+  const planItems = await listDevelopmentPlanItemsForProject(repository, query.project_id);
+  const specs = await repository.listSpecs(query.project_id);
+  const rows: Record<string, unknown>[] = [];
+  for (const { plan, item } of planItems) {
+    rows.push(...specs.filter((spec) => spec.development_plan_item_id === item.id).map(specQueueRow(repository, plan, item)));
+    for (const executionPlan of await repository.listExecutionPlansForDevelopmentPlanItem(item.id)) {
+      rows.push(await executionPlanQueueRow(repository, plan, item, executionPlan));
+    }
+  }
+  return { items: rows.sort(byUpdatedAtDesc), degraded_sources: [] };
+}
+
+export async function listExecutionQueue(
+  repository: DeliveryRepository,
+  query: AiNativeQuery,
+): Promise<Record<string, unknown>> {
+  const executions = await listExecutionsForProject(repository, query.project_id);
+  return {
+    items: executions.map(({ execution, plan, item }) => executionQueueRow(plan, item, execution)).sort(byUpdatedAtDesc),
+    degraded_sources: [],
+  };
+}
+
+export async function listCodeReviewHandoffQueue(
+  repository: DeliveryRepository,
+  query: AiNativeQuery,
+): Promise<Record<string, unknown>> {
+  const reviews = await listCodeReviewHandoffsForProject(repository, query.project_id);
+  const rows = await Promise.all(
+    reviews.map(async ({ handoff, execution, plan, item }) => ({
+      ...codeReviewHandoffQueueRow(plan, item, execution, handoff),
+      qa_handoff_available: (await repository.listQaHandoffsForCodeReview(handoff.id)).length === 0,
+    })),
+  );
+  return { items: rows.sort(byUpdatedAtDesc), degraded_sources: [] };
+}
+
+export async function listQaHandoffQueue(
+  repository: DeliveryRepository,
+  query: AiNativeQuery,
+): Promise<Record<string, unknown>> {
+  const handoffs = await listQaHandoffsForProject(repository, query.project_id);
+  return {
+    items: handoffs.map(({ handoff, plan, item }) => qaHandoffQueueRow(plan, item, handoff)).sort(byUpdatedAtDesc),
+    degraded_sources: [],
+  };
+}
+
+export async function listBoardCards(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: BoardCard[] }> {
+  const [workItems, developmentPlanItems, releases] = await Promise.all([
+    repository.listWorkItems(query.project_id),
+    listDevelopmentPlanItemsForProject(repository, query.project_id),
     repository.listReleases(query.project_id),
   ]);
   return {
     items: [
       ...workItems.map(workItemToBoardCard),
-      ...tasks.map(taskToBoardCard),
+      ...developmentPlanItems.map(({ plan, item }) => developmentPlanItemToBoardCard(plan, item)),
       ...releases.map(releaseToBoardCard),
     ],
   };
@@ -226,14 +443,540 @@ export async function getReport(
   repository: DeliveryRepository,
   reportId: string,
   query: ProductListQuery,
-): Promise<{ id: string; project_id: string; generated_at?: string; degraded_sources: [] }> {
-  const releases = await repository.listReleases(query.project_id);
+): Promise<Record<string, unknown>> {
+  const [developmentPlanItems, executions, codeReviews, qaHandoffs, releases, workItems] = await Promise.all([
+    listDevelopmentPlanItemsForProject(repository, query.project_id),
+    listExecutionsForProject(repository, query.project_id),
+    listCodeReviewHandoffsForProject(repository, query.project_id),
+    listQaHandoffsForProject(repository, query.project_id),
+    repository.listReleases(query.project_id),
+    repository.listWorkItems(query.project_id),
+  ]);
+  const groups = reportGroupsFor(reportId, {
+    developmentPlanItems,
+    executions,
+    codeReviews,
+    qaHandoffs,
+    releases,
+    workItems,
+  });
   return {
     id: reportId,
     project_id: query.project_id,
+    groups,
+    links: reportLinks(),
     degraded_sources: [],
-    ...(releases[0]?.updated_at === undefined ? {} : { generated_at: releases[0].updated_at }),
+    generated_at: latestUpdatedAt([
+      ...developmentPlanItems.map(({ item }) => item.updated_at),
+      ...executions.map(({ execution }) => execution.updated_at),
+      ...codeReviews.map(({ handoff }) => handoff.updated_at),
+      ...qaHandoffs.map(({ handoff }) => handoff.updated_at),
+      ...releases.map((release) => release.updated_at),
+      ...workItems.map((workItem) => workItem.updated_at),
+    ]),
   };
+}
+
+async function listDevelopmentPlanItemsForProject(
+  repository: DeliveryRepository,
+  projectId: string,
+): Promise<DevelopmentPlanItemWithPlan[]> {
+  const plans = await repository.listDevelopmentPlans(projectId);
+  const rows = await Promise.all(
+    plans.map(async (plan) => (await repository.listDevelopmentPlanItems(plan.id)).map((item) => ({ plan, item }))),
+  );
+  return rows.flat().sort((left, right) => right.item.updated_at.localeCompare(left.item.updated_at) || left.item.id.localeCompare(right.item.id));
+}
+
+async function listExecutionPlansForProject(repository: DeliveryRepository, projectId: string): Promise<ExecutionPlanWithContext[]> {
+  const itemContexts = await listDevelopmentPlanItemsForProject(repository, projectId);
+  const rows = await Promise.all(
+    itemContexts.map(async ({ plan, item }) =>
+      (await repository.listExecutionPlansForDevelopmentPlanItem(item.id)).map((executionPlan) => ({ executionPlan, plan, item })),
+    ),
+  );
+  return rows.flat().sort((left, right) => right.executionPlan.updated_at.localeCompare(left.executionPlan.updated_at));
+}
+
+async function listExecutionsForProject(repository: DeliveryRepository, projectId: string): Promise<ExecutionWithContext[]> {
+  const executions = await repository.listExecutions();
+  const rows: ExecutionWithContext[] = [];
+  for (const execution of executions) {
+    const context = await itemContextFor(repository, execution.development_plan_item_id);
+    if (context !== undefined && context.plan.project_id === projectId) {
+      rows.push({ execution, ...context });
+    }
+  }
+  return rows.sort((left, right) => right.execution.updated_at.localeCompare(left.execution.updated_at));
+}
+
+async function listCodeReviewHandoffsForProject(repository: DeliveryRepository, projectId: string): Promise<CodeReviewWithContext[]> {
+  const handoffs = await repository.listCodeReviewHandoffs();
+  const rows: CodeReviewWithContext[] = [];
+  for (const handoff of handoffs) {
+    const execution = await repository.getExecution(handoff.execution_id);
+    const context = await itemContextFor(repository, handoff.development_plan_item_id);
+    if (execution !== undefined && context !== undefined && context.plan.project_id === projectId) {
+      rows.push({ handoff, execution, ...context });
+    }
+  }
+  return rows.sort((left, right) => right.handoff.updated_at.localeCompare(left.handoff.updated_at));
+}
+
+async function listQaHandoffsForProject(repository: DeliveryRepository, projectId: string): Promise<QaWithContext[]> {
+  const handoffs = await repository.listQaHandoffs();
+  const rows: QaWithContext[] = [];
+  for (const handoff of handoffs) {
+    const context = await itemContextFor(repository, handoff.development_plan_item_id);
+    if (context !== undefined && context.plan.project_id === projectId) {
+      rows.push({ handoff, ...context });
+    }
+  }
+  return rows.sort((left, right) => right.handoff.updated_at.localeCompare(left.handoff.updated_at));
+}
+
+async function itemContextFor(
+  repository: DeliveryRepository,
+  developmentPlanItemId: string,
+): Promise<{ plan: DevelopmentPlan; item: DevelopmentPlanItem } | undefined> {
+  const item = await repository.getDevelopmentPlanItem(developmentPlanItemId);
+  if (item === undefined) {
+    return undefined;
+  }
+  const plan = await repository.getDevelopmentPlan(item.development_plan_id);
+  return plan === undefined ? undefined : { plan, item };
+}
+
+async function listBoundarySummaryRevisionsForItem(repository: DeliveryRepository, itemId: string) {
+  const summaries = (await repository.listBoundarySummaries()).filter((summary) => summary.development_plan_item_id === itemId);
+  const revisions = await Promise.all(summaries.map((summary) => repository.listBoundarySummaryRevisions(summary.id)));
+  return revisions.flat();
+}
+
+function developmentPlanRef(plan: DevelopmentPlan) {
+  return { type: 'development_plan' as const, id: plan.id, revision_id: plan.revision_id, title: plan.title };
+}
+
+function developmentPlanItemRef(item: DevelopmentPlanItem) {
+  return {
+    type: 'development_plan_item' as const,
+    id: item.id,
+    development_plan_id: item.development_plan_id,
+    revision_id: item.revision_id,
+    title: item.title,
+  };
+}
+
+function executionPlanRevisionRef(executionPlan: ExecutionPlanDocument, revision?: ExecutionPlanRevision) {
+  return {
+    type: 'execution_plan_revision' as const,
+    id: revision?.id ?? executionPlan.approved_revision_id ?? executionPlan.current_revision_id ?? executionPlan.id,
+    execution_plan_id: executionPlan.id,
+    title: revision?.summary,
+  };
+}
+
+function developmentPlanItemQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem) {
+  return {
+    id: item.id,
+    object_ref: developmentPlanItemRef(item),
+    development_plan_ref: developmentPlanRef(plan),
+    source_ref: item.source_ref,
+    title: item.title,
+    responsible_role: item.responsible_role,
+    reviewer_actor_id: item.reviewer_actor_id,
+    risk: item.risk,
+    status: item.next_action,
+    boundary_status: item.boundary_status,
+    spec_status: item.spec_status,
+    execution_plan_status: item.execution_plan_status,
+    execution_status: item.execution_status,
+    review_status: item.review_status,
+    qa_handoff_status: item.qa_handoff_status,
+    stale: item.spec_status === 'stale' || item.execution_plan_status === 'stale' || item.boundary_status === 'stale',
+    blocked: isDevelopmentPlanItemBlocked(item),
+    next_action: item.next_action,
+    href: `/development-plans/${plan.id}/items/${item.id}`,
+    updated_at: item.updated_at,
+  };
+}
+
+function specQueueRow(_repository: DeliveryRepository, plan: DevelopmentPlan, item: DevelopmentPlanItem) {
+  return (spec: Spec) => ({
+    id: spec.id,
+    object_ref: { type: 'spec' as const, id: spec.id, title: `${item.title} Spec` },
+    artifact_type: 'spec',
+    source_ref: item.source_ref,
+    development_plan_item_ref: developmentPlanItemRef(item),
+    reviewer_actor_id: spec.approved_by_actor_id ?? item.reviewer_actor_id,
+    age_seconds: ageSeconds(spec.created_at, spec.updated_at),
+    risk: item.risk,
+    status: spec.status,
+    gate_state: spec.gate_state,
+    stale: item.spec_status === 'stale',
+    blocked: item.spec_status === 'blocked',
+    next_action: item.spec_status === 'approved' ? 'generate_execution_plan' : 'review_spec',
+    href: `/development-plans/${plan.id}/items/${item.id}`,
+    updated_at: spec.updated_at,
+  });
+}
+
+async function executionPlanQueueRow(
+  repository: DeliveryRepository,
+  plan: DevelopmentPlan,
+  item: DevelopmentPlanItem,
+  executionPlan: ExecutionPlanDocument,
+): Promise<Record<string, unknown>> {
+  const revision =
+    executionPlan.approved_revision_id === undefined
+      ? undefined
+      : await repository.getExecutionPlanRevision(executionPlan.approved_revision_id);
+  return {
+    id: executionPlan.id,
+    object_ref: { type: 'execution_plan' as const, id: executionPlan.id, title: revision?.summary ?? `${item.title} Execution Plan` },
+    artifact_type: 'execution_plan',
+    source_ref: item.source_ref,
+    development_plan_item_ref: developmentPlanItemRef(item),
+    reviewer_actor_id: executionPlan.approved_by_actor_id ?? item.reviewer_actor_id,
+    age_seconds: ageSeconds(executionPlan.created_at, executionPlan.updated_at),
+    risk: item.risk,
+    status: executionPlan.status,
+    approved_revision_ref: revision === undefined ? undefined : executionPlanRevisionRef(executionPlan, revision),
+    stale: item.execution_plan_status === 'stale',
+    blocked: item.execution_plan_status === 'blocked',
+    next_action: executionPlan.status === 'approved' ? 'start_execution' : 'review_execution_plan',
+    href: `/development-plans/${plan.id}/items/${item.id}`,
+    updated_at: executionPlan.updated_at,
+  };
+}
+
+function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, execution: Execution): Record<string, unknown> {
+  const interrupted = execution.status === 'interrupted' || execution.status === 'paused';
+  return {
+    id: execution.id,
+    object_ref: execution.ref,
+    source_ref: item.source_ref,
+    development_plan_item_ref: developmentPlanItemRef(item),
+    approved_execution_plan_revision_ref: execution.execution_plan_revision_ref,
+    worker_state: execution.status,
+    current_step: execution.status === 'completed' ? 'code_review_handoff' : 'implementation',
+    last_event: execution.status,
+    pr_refs: [],
+    diff_refs: [],
+    test_evidence_refs: execution.evidence_refs,
+    runtime_evidence_refs: execution.runtime_evidence_refs,
+    actions: [
+      ...(interrupted
+        ? [
+            {
+              id: 'continue',
+              href: `/executions/${execution.id}`,
+              label: 'Continue',
+              command: { type: 'continue_execution', execution_id: execution.id },
+            },
+          ]
+        : []),
+      { id: 'inspect', href: `/executions/${execution.id}`, label: 'Inspect' },
+    ],
+    href: `/executions/${execution.id}`,
+    plan_item_href: `/development-plans/${plan.id}/items/${item.id}`,
+    updated_at: execution.updated_at,
+  };
+}
+
+function codeReviewHandoffQueueRow(
+  plan: DevelopmentPlan,
+  item: DevelopmentPlanItem,
+  execution: Execution,
+  handoff: CodeReviewHandoff,
+): Record<string, unknown> {
+  return {
+    id: handoff.id,
+    object_ref: handoff.ref,
+    execution_ref: execution.ref,
+    development_plan_item_ref: developmentPlanItemRef(item),
+    reviewer_actor_id: handoff.reviewer_actor_id,
+    decision: handoff.status,
+    changed_surfaces: handoff.changed_surfaces,
+    blocking_comments: handoff.status === 'changes_requested' ? [handoff.decision_rationale ?? handoff.summary] : [],
+    verification_evidence_refs: handoff.verification_evidence_refs,
+    href: `/code-review-handoffs/${handoff.id}`,
+    plan_item_href: `/development-plans/${plan.id}/items/${item.id}`,
+    updated_at: handoff.updated_at,
+  };
+}
+
+function qaHandoffQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, handoff: QaHandoff): Record<string, unknown> {
+  return {
+    id: handoff.id,
+    object_ref: handoff.ref,
+    source_ref: handoff.source_ref,
+    development_plan_item_ref: developmentPlanItemRef(item),
+    approved_spec_revision_ref: handoff.approved_spec_revision_ref,
+    approved_execution_plan_revision_ref: handoff.approved_execution_plan_revision_ref,
+    acceptance_criteria: handoff.acceptance_criteria,
+    test_strategy: handoff.test_strategy,
+    verification_evidence_refs: handoff.verification_evidence_refs,
+    risk: item.risk,
+    known_risks: handoff.known_risks,
+    changed_surfaces: handoff.changed_surfaces,
+    release_impact: handoff.release_impact,
+    status: handoff.status,
+    actions:
+      handoff.status === 'pending' || handoff.status === 'blocked'
+        ? [
+            {
+              id: 'accept',
+              href: `/qa-handoffs/${handoff.id}`,
+              label: 'Accept',
+              command: { type: 'accept_qa_handoff', qa_handoff_id: handoff.id },
+            },
+            {
+              id: 'block',
+              href: `/qa-handoffs/${handoff.id}`,
+              label: 'Block',
+              command: { type: 'block_qa_handoff', qa_handoff_id: handoff.id },
+            },
+          ]
+        : [{ id: 'inspect', href: `/qa-handoffs/${handoff.id}`, label: 'Inspect' }],
+    href: `/qa-handoffs/${handoff.id}`,
+    plan_item_href: `/development-plans/${plan.id}/items/${item.id}`,
+    updated_at: handoff.updated_at,
+  };
+}
+
+function developmentPlanItemToMyWorkQueueItem(plan: DevelopmentPlan, item: DevelopmentPlanItem): MyWorkQueueItem {
+  return {
+    id: `development_plan_item:${item.id}`,
+    object_ref: developmentPlanItemRef(item),
+    title: item.title,
+    attention_reason: item.next_action,
+    actor_id: item.driver_actor_id,
+    expected_action: item.next_action,
+    href: `/development-plans/${plan.id}/items/${item.id}`,
+  };
+}
+
+function developmentPlanToMyWorkQueueItem(plan: DevelopmentPlan): MyWorkQueueItem {
+  return {
+    id: `development_plan:${plan.id}`,
+    object_ref: developmentPlanRef(plan),
+    title: plan.title,
+    attention_reason: `development_plan_${plan.status}`,
+    expected_action: plan.status === 'draft' ? 'Review Development Plan items' : 'Inspect Development Plan',
+    href: `/development-plans/${plan.id}`,
+  };
+}
+
+function specToMyWorkQueueItem(spec: Spec, plan: DevelopmentPlan, item: DevelopmentPlanItem): MyWorkQueueItem {
+  return {
+    id: `spec:${spec.id}`,
+    object_ref: { type: 'spec', id: spec.id, title: `${item.title} Spec` },
+    title: `${item.title} Spec`,
+    attention_reason: `spec_${spec.gate_state}`,
+    actor_id: spec.approved_by_actor_id ?? item.reviewer_actor_id,
+    expected_action: spec.status === 'approved' ? 'Inspect approved Spec' : 'Review Spec',
+    href: `/development-plans/${plan.id}/items/${item.id}`,
+  };
+}
+
+function executionPlanToMyWorkQueueItem(
+  executionPlan: ExecutionPlanDocument,
+  plan: DevelopmentPlan,
+  item: DevelopmentPlanItem,
+): MyWorkQueueItem {
+  return {
+    id: `execution_plan:${executionPlan.id}`,
+    object_ref: { type: 'execution_plan', id: executionPlan.id, title: `${item.title} Execution Plan` },
+    title: `${item.title} Execution Plan`,
+    attention_reason: `execution_plan_${executionPlan.status}`,
+    actor_id: executionPlan.approved_by_actor_id ?? item.reviewer_actor_id,
+    expected_action: executionPlan.status === 'approved' ? 'Start execution' : 'Review Execution Plan',
+    href: `/development-plans/${plan.id}/items/${item.id}`,
+  };
+}
+
+function executionToMyWorkQueueItem(execution: Execution, plan: DevelopmentPlan, item: DevelopmentPlanItem): MyWorkQueueItem {
+  return {
+    id: `execution:${execution.id}`,
+    object_ref: execution.ref,
+    title: `${item.title} execution`,
+    attention_reason: execution.status,
+    expected_action: execution.status === 'interrupted' ? 'Continue execution' : 'Inspect execution',
+    href: `/executions/${execution.id}`,
+    actor_id: item.driver_actor_id,
+  };
+}
+
+function qaHandoffToMyWorkQueueItem(handoff: QaHandoff, plan: DevelopmentPlan, item: DevelopmentPlanItem): MyWorkQueueItem {
+  return {
+    id: `qa_handoff:${handoff.id}`,
+    object_ref: handoff.ref,
+    title: `${item.title} QA handoff`,
+    attention_reason: `qa_${handoff.status}`,
+    expected_action: handoff.status === 'pending' ? 'Accept or block QA handoff' : 'Resolve QA blocker',
+    href: `/qa-handoffs/${handoff.id}`,
+    actor_id: item.driver_actor_id,
+  };
+}
+
+function developmentPlanItemToBoardCard(plan: DevelopmentPlan, item: DevelopmentPlanItem): BoardCard {
+  return {
+    id: `development_plan_item:${item.id}`,
+    object_ref: developmentPlanItemRef(item),
+    title: item.title,
+    column_id: item.next_action,
+    status: `${item.boundary_status}/${item.spec_status}/${item.execution_plan_status}/${item.execution_status}`,
+    risk: item.risk,
+    driver_actor_id: item.driver_actor_id,
+    blocked: isDevelopmentPlanItemBlocked(item),
+    href: `/development-plans/${plan.id}/items/${item.id}`,
+  };
+}
+
+function isDevelopmentPlanItemBlocked(item: DevelopmentPlanItem): boolean {
+  return (
+    item.boundary_status === 'changes_requested' ||
+    item.spec_status === 'blocked' ||
+    item.spec_status === 'changes_requested' ||
+    item.execution_plan_status === 'blocked' ||
+    item.execution_plan_status === 'changes_requested' ||
+    item.execution_status === 'failed' ||
+    item.execution_status === 'interrupted' ||
+    item.review_status === 'blocked' ||
+    item.review_status === 'changes_requested' ||
+    item.qa_handoff_status === 'blocked' ||
+    item.qa_handoff_status === 'changes_requested'
+  );
+}
+
+function dashboardSection(id: string, label: string, value: number, metrics: Array<{ label: string; value: number }>) {
+  return {
+    id,
+    label,
+    value,
+    metrics,
+    next_action: id === 'blocked-work' && value > 0 ? 'unblock' : 'inspect',
+  };
+}
+
+function roleLoadMetrics(items: DevelopmentPlanItemWithPlan[]): Array<{ label: string; value: number }> {
+  const counts = new Map<string, number>();
+  for (const { item } of items) {
+    counts.set(item.responsible_role, (counts.get(item.responsible_role) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([label, value]) => ({ label, value }));
+}
+
+function agingScore(items: DevelopmentPlanItemWithPlan[]): number {
+  return items.filter(({ item }) => item.spec_status === 'in_review' || item.execution_plan_status === 'in_review').length;
+}
+
+function ageSeconds(createdAt: string, updatedAt: string): number {
+  const created = Date.parse(createdAt);
+  const updated = Date.parse(updatedAt);
+  if (Number.isNaN(created) || Number.isNaN(updated) || updated < created) {
+    return 0;
+  }
+  return Math.floor((updated - created) / 1000);
+}
+
+function reportLinks(): Array<{ id: string; href: string }> {
+  return [
+    'development-plan-throughput',
+    'brainstorming-bottlenecks',
+    'spec-review-aging',
+    'execution-plan-review-aging',
+    'execution-continuation',
+    'execution-outcomes',
+    'code-review',
+    'qa-handoff-readiness',
+    'release-readiness',
+    'quality-bug-escape',
+  ].map((id) => ({ id, href: `/reports/${id}` }));
+}
+
+function reportGroupsFor(
+  reportId: string,
+  context: {
+    developmentPlanItems: DevelopmentPlanItemWithPlan[];
+    executions: ExecutionWithContext[];
+    codeReviews: CodeReviewWithContext[];
+    qaHandoffs: QaWithContext[];
+    releases: Release[];
+    workItems: WorkItem[];
+  },
+): Array<Record<string, unknown>> {
+  switch (reportId) {
+    case 'development-plan-throughput':
+      return [
+        group('draft_or_active', context.developmentPlanItems.length),
+        group('approved_items', context.developmentPlanItems.filter(({ item }) => item.execution_plan_status === 'approved').length),
+      ];
+    case 'brainstorming-bottlenecks':
+      return [
+        group('not_started', context.developmentPlanItems.filter(({ item }) => item.boundary_status === 'not_started').length),
+        group('changes_requested', context.developmentPlanItems.filter(({ item }) => item.boundary_status === 'changes_requested').length),
+      ];
+    case 'spec-review-aging':
+      return [
+        group('in_review', context.developmentPlanItems.filter(({ item }) => item.spec_status === 'in_review').length),
+        group('changes_requested', context.developmentPlanItems.filter(({ item }) => item.spec_status === 'changes_requested').length),
+      ];
+    case 'execution-plan-review-aging':
+      return [
+        group('in_review', context.developmentPlanItems.filter(({ item }) => item.execution_plan_status === 'in_review').length),
+        group('changes_requested', context.developmentPlanItems.filter(({ item }) => item.execution_plan_status === 'changes_requested').length),
+      ];
+    case 'execution-continuation':
+      return [
+        group('interrupted_or_resumable', context.executions.filter(({ execution }) => execution.status === 'interrupted' || execution.status === 'paused').length),
+        group('running', context.executions.filter(({ execution }) => execution.status === 'running').length),
+      ];
+    case 'execution-outcomes':
+      return [
+        group('succeeded', context.executions.filter(({ execution }) => execution.status === 'completed').length),
+        group('failed', context.executions.filter(({ execution }) => execution.status === 'failed').length),
+      ];
+    case 'code-review':
+      return [
+        group('in_review', context.codeReviews.filter(({ handoff }) => handoff.status === 'in_review').length),
+        group('approved', context.codeReviews.filter(({ handoff }) => handoff.status === 'approved').length),
+        group('changes_requested', context.codeReviews.filter(({ handoff }) => handoff.status === 'changes_requested').length),
+      ];
+    case 'qa-handoff-readiness':
+      return [
+        group('pending', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'pending').length),
+        group('blocked', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'blocked').length),
+        group('accepted', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'accepted').length),
+      ];
+    case 'release-readiness':
+      return [
+        group('planned_releases', context.releases.length),
+        group('release_blocking_items', context.developmentPlanItems.filter(({ item }) => item.release_impact === 'release_blocking').length),
+      ];
+    case 'quality-bug-escape':
+      return [
+        group('escaped_bugs', context.workItems.filter((workItem) => workItem.kind === 'bug' && workItem.phase !== 'done').length),
+        group('qa_blockers', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'blocked').length),
+      ];
+    default:
+      return [group('items', context.developmentPlanItems.length)];
+  }
+}
+
+function group(id: string, count: number): Record<string, unknown> {
+  return { id, count, items: [] };
+}
+
+function latestUpdatedAt(values: string[]): string | undefined {
+  return values.sort((left, right) => right.localeCompare(left))[0];
+}
+
+function byUpdatedAtDesc(left: Record<string, unknown>, right: Record<string, unknown>): number {
+  const leftUpdated = typeof left.updated_at === 'string' ? left.updated_at : '';
+  const rightUpdated = typeof right.updated_at === 'string' ? right.updated_at : '';
+  return rightUpdated.localeCompare(leftUpdated);
 }
 
 function workItemKindToObjectType(kind: WorkItem['kind']): WorkItemObjectType {
@@ -253,20 +996,43 @@ async function typedWorkItemById(
   return workItem?.kind === kind ? (workItem as TypedWorkItem) : undefined;
 }
 
-function workItemRef(workItem: WorkItem): WorkItemPublicRef {
-  return { type: workItemKindToObjectType(workItem.kind), id: workItem.id };
+async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: TypedWorkItem): Promise<ProductObjectRef[]> {
+  const sourceRef = { type: workItem.kind, id: workItem.id } as const;
+  const sourceLinks = await repository.listDevelopmentPlanSourceLinksForSource(sourceRef);
+  const refs: ProductObjectRef[] = [];
+  const seen = new Set<string>();
+
+  const push = (ref: ProductObjectRef) => {
+    const key = JSON.stringify(ref);
+    if (!seen.has(key)) {
+      seen.add(key);
+      refs.push(ref);
+    }
+  };
+
+  for (const link of sourceLinks) {
+    const plan = await repository.getDevelopmentPlan(link.development_plan_id);
+    if (plan === undefined) {
+      continue;
+    }
+    push(developmentPlanRef(plan));
+    const items = await repository.listDevelopmentPlanItems(plan.id);
+    for (const item of items) {
+      push(developmentPlanItemRef(item));
+      for (const spec of (await repository.listSpecs(workItem.project_id)).filter((candidate) => candidate.development_plan_item_id === item.id)) {
+        push({ type: 'spec', id: spec.id });
+      }
+      for (const executionPlan of await repository.listExecutionPlansForDevelopmentPlanItem(item.id)) {
+        push({ type: 'execution_plan', id: executionPlan.id });
+      }
+    }
+  }
+
+  return refs;
 }
 
-function publicWorkItemRefFromObjectRef(ref: ObjectRef): WorkItemPublicRef | undefined {
-  switch (ref.type) {
-    case 'initiative':
-    case 'requirement':
-    case 'bug':
-    case 'tech_debt':
-      return { type: ref.type, id: ref.id };
-    default:
-      return undefined;
-  }
+function workItemRef(workItem: WorkItem): WorkItemPublicRef {
+  return { type: workItemKindToObjectType(workItem.kind), id: workItem.id };
 }
 
 function workItemHref(workItem: WorkItem): string {
@@ -287,22 +1053,6 @@ function workItemToMyWorkQueueItem(workItem: WorkItem): MyWorkQueueItem {
     attention_reason: `${workItem.kind}_needs_attention`,
     actor_id: workItem.driver_actor_id,
     href: workItemHref(workItem),
-  };
-}
-
-function taskToMyWorkQueueItem(task: Task, parent: WorkItem): MyWorkQueueItem | undefined {
-  const parentRef = task.parent_ref === undefined ? undefined : publicWorkItemRefFromObjectRef(task.parent_ref);
-  if (parentRef === undefined || parentRef.id !== parent.id || parentRef.type !== workItemKindToObjectType(parent.kind)) {
-    return undefined;
-  }
-
-  return {
-    id: `${parentRef.type}:${parentRef.id}:task-attention:${task.id}`,
-    object_ref: parentRef,
-    title: parent.title,
-    attention_reason: task.stale_state === 'current' ? 'task_ready_for_developer' : `task_${task.stale_state}`,
-    expected_action: task.title,
-    href: workItemHref(parent),
   };
 }
 
@@ -343,18 +1093,14 @@ function workItemToRequirementListItem(workItem: TypedWorkItem): RequirementList
   return { ...baseWorkItemListItem(workItem), ref: { type: 'requirement', id: workItem.id }, phase: workItem.phase };
 }
 
-function workItemToRequirementDetail(workItem: TypedWorkItem | undefined, tasks: Task[]): RequirementDetail | undefined {
-  return workItem === undefined
-    ? undefined
-    : {
-        ...baseWorkItemDetail(workItem),
-        ref: { type: 'requirement', id: workItem.id },
-        ...(workItem.current_spec_id === undefined ? {} : { spec_ref: { type: 'spec', id: workItem.current_spec_id } }),
-        ...(workItem.current_plan_id === undefined ? {} : { plan_ref: { type: 'plan', id: workItem.current_plan_id } }),
-        task_refs: tasks.map((task) => ({ type: 'task', id: task.id })),
-        bug_refs: [],
-        release_refs: workItem.current_release_id === undefined ? [] : [{ type: 'release', id: workItem.current_release_id }],
-      };
+function workItemToRequirementDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): RequirementDetail {
+  return {
+    ...baseWorkItemDetail(workItem),
+    ref: { type: 'requirement', id: workItem.id },
+    relationship_refs: relationshipRefs,
+    bug_refs: [],
+    release_refs: workItem.current_release_id === undefined ? [] : [{ type: 'release', id: workItem.current_release_id }],
+  };
 }
 
 function workItemToInitiativeListItem(workItem: TypedWorkItem): InitiativeListItem {
@@ -362,10 +1108,11 @@ function workItemToInitiativeListItem(workItem: TypedWorkItem): InitiativeListIt
   return { ...baseWorkItemListItem(workItem), ref: { type: 'initiative', id: workItem.id }, business_outcome: context?.business_outcome };
 }
 
-function workItemToInitiativeDetail(workItem: TypedWorkItem): InitiativeDetail {
+function workItemToInitiativeDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): InitiativeDetail {
   return {
     ...baseWorkItemDetail(workItem),
     ref: { type: 'initiative', id: workItem.id },
+    relationship_refs: relationshipRefs,
     child_refs: [],
     release_refs: workItem.current_release_id === undefined ? [] : [{ type: 'release', id: workItem.current_release_id }],
   };
@@ -376,19 +1123,14 @@ function workItemToTechDebtListItem(workItem: TypedWorkItem): TechDebtListItem {
   return { ...baseWorkItemListItem(workItem), ref: { type: 'tech_debt', id: workItem.id }, affected_modules: context?.affected_modules ?? [] };
 }
 
-function workItemToTechDebtDetail(workItem: TypedWorkItem | undefined, tasks: Task[]): TechDebtDetail | undefined {
-  if (workItem === undefined) {
-    return undefined;
-  }
+function workItemToTechDebtDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): TechDebtDetail {
   const context = workItem.intake_context.type === 'tech_debt' ? workItem.intake_context : undefined;
   return {
     ...baseWorkItemDetail(workItem),
     ref: { type: 'tech_debt', id: workItem.id },
+    relationship_refs: relationshipRefs,
     affected_modules: context?.affected_modules ?? [],
     validation_strategy: context?.validation_strategy,
-    ...(workItem.current_spec_id === undefined ? {} : { spec_ref: { type: 'spec', id: workItem.current_spec_id } }),
-    ...(workItem.current_plan_id === undefined ? {} : { plan_ref: { type: 'plan', id: workItem.current_plan_id } }),
-    task_refs: tasks.map((task) => ({ type: 'task', id: task.id })),
   };
 }
 
@@ -396,143 +1138,15 @@ function workItemToBugListItem(workItem: TypedWorkItem): BugListItem {
   return { ...baseWorkItemListItem(workItem), ref: { type: 'bug', id: workItem.id }, severity: workItem.risk };
 }
 
-function workItemToBugDetail(workItem: TypedWorkItem | undefined, tasks: Task[]): BugDetail | undefined {
-  if (workItem === undefined) {
-    return undefined;
-  }
+function workItemToBugDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): BugDetail {
   const context = workItem.intake_context.type === 'bug' ? workItem.intake_context : undefined;
   return {
     ...baseWorkItemDetail(workItem),
     ref: { type: 'bug', id: workItem.id },
+    relationship_refs: relationshipRefs,
     observed_behavior: context?.observed_behavior,
     expected_behavior: context?.expected_behavior,
     reproduction_steps: context?.reproduction_steps ?? [],
-    task_refs: tasks.map((task) => ({ type: 'task', id: task.id })),
-  };
-}
-
-function taskToListItem(task: Task): TaskListItem {
-  return {
-    id: task.id,
-    ref: { type: 'task', id: task.id },
-    title: task.title,
-    status: taskStatusForContract(task.status),
-    parent_ref: task.parent_ref,
-    package_generation_eligible: canGenerateRuntimePackageForTask(task),
-    updated_at: task.updated_at,
-  };
-}
-
-function taskToDetail(task: Task): TaskDetail {
-  const packageGenerationEligible = canGenerateRuntimePackageForTask(task);
-  return {
-    ...taskToListItem(task),
-    narrative_markdown: task.narrative_markdown,
-    acceptance_checklist: task.acceptance_checklist,
-    controlling_spec_revision_id: task.controlling_spec_revision_id,
-    controlling_plan_revision_id: task.controlling_plan_revision_id,
-    controlling_spec_revision_authority: task.controlling_spec_revision_id === undefined ? 'missing' : 'current_approved',
-    controlling_plan_revision_authority: task.controlling_plan_revision_id === undefined ? 'missing' : 'current_approved',
-    stale_state: task.stale_state,
-    package_generation_eligible: packageGenerationEligible,
-    audited_exception: task.audited_exception,
-    attachment_refs: [],
-  };
-}
-
-function taskStatusForContract(status: Task['status']): TaskListItem['status'] {
-  return status === 'draft' ? 'todo' : status === 'cancelled' ? 'canceled' : status;
-}
-
-function publicPackageEvidence(executionPackage: ExecutionPackage, taskId: string): Record<string, unknown> {
-  return {
-    id: executionPackage.id,
-    object_ref: { type: 'execution_package', id: executionPackage.id },
-    scope_ref: { type: 'task', id: taskId },
-    spec_revision_id: executionPackage.spec_revision_id,
-    plan_revision_id: executionPackage.plan_revision_id,
-    project_id: executionPackage.project_id,
-    repo_id: executionPackage.repo_id,
-    objective: executionPackage.objective,
-    reviewer_actor_id: executionPackage.reviewer_actor_id,
-    qa_owner_actor_id: executionPackage.qa_owner_actor_id,
-    phase: executionPackage.phase,
-    activity_state: executionPackage.activity_state,
-    gate_state: executionPackage.gate_state,
-    resolution: executionPackage.resolution,
-    required_checks: executionPackage.required_checks,
-    required_artifact_kinds: executionPackage.required_artifact_kinds,
-    allowed_paths: executionPackage.allowed_paths,
-    forbidden_paths: executionPackage.forbidden_paths,
-    version: executionPackage.version,
-    ...(executionPackage.current_run_session_id === undefined ? {} : { current_run_session_id: executionPackage.current_run_session_id }),
-    ...(executionPackage.current_review_packet_id === undefined ? {} : { current_review_packet_id: executionPackage.current_review_packet_id }),
-    ...(executionPackage.current_release_id === undefined ? {} : { current_release_id: executionPackage.current_release_id }),
-    ...(executionPackage.last_run_session_id === undefined ? {} : { last_run_session_id: executionPackage.last_run_session_id }),
-    ...(executionPackage.last_failure_summary === undefined ? {} : { last_failure_summary: executionPackage.last_failure_summary }),
-    ...(executionPackage.blocked_reason === undefined ? {} : { blocked_reason: executionPackage.blocked_reason }),
-    ...(executionPackage.created_at === undefined ? {} : { created_at: executionPackage.created_at }),
-    updated_at: executionPackage.updated_at,
-  };
-}
-
-function publicCheckResult(checkResult: RunSession['check_results'][number]): Record<string, unknown> {
-  const stdout = checkResult.stdout === undefined ? undefined : serializePublicArtifactRef(checkResult.stdout);
-  const stderr = checkResult.stderr === undefined ? undefined : serializePublicArtifactRef(checkResult.stderr);
-  return {
-    check_id: checkResult.check_id,
-    command: checkResult.command,
-    status: checkResult.status,
-    exit_code: checkResult.exit_code,
-    duration_seconds: checkResult.duration_seconds,
-    blocks_review: checkResult.blocks_review,
-    ...(stdout === undefined ? {} : { stdout }),
-    ...(stderr === undefined ? {} : { stderr }),
-  };
-}
-
-function publicRunEvidence(runSession: RunSession): Record<string, unknown> {
-  return {
-    id: runSession.id,
-    object_ref: { type: 'run_session', id: runSession.id },
-    execution_package_id: runSession.execution_package_id,
-    requested_by_actor_id: runSession.requested_by_actor_id,
-    status: runSession.status,
-    executor_type: runSession.executor_type,
-    changed_files: runSession.changed_files,
-    check_results: runSession.check_results.map(publicCheckResult),
-    artifacts: serializePublicArtifactRefs(runSession.artifacts),
-    log_refs: serializePublicArtifactRefs(runSession.log_refs),
-    summary: runSession.summary,
-    failure_kind: runSession.failure_kind,
-    failure_reason: runSession.failure_reason,
-    created_at: runSession.created_at,
-    updated_at: runSession.updated_at,
-    started_at: runSession.started_at,
-    finished_at: runSession.finished_at,
-  };
-}
-
-function publicReviewEvidence(reviewPacket: ReviewPacket): Record<string, unknown> {
-  return {
-    id: reviewPacket.id,
-    object_ref: { type: 'review_packet', id: reviewPacket.id },
-    execution_package_id: reviewPacket.execution_package_id,
-    run_session_id: reviewPacket.run_session_id,
-    status: reviewPacket.status,
-    decision: reviewPacket.decision,
-    summary: reviewPacket.summary,
-    changed_files: reviewPacket.changed_files,
-    check_result_summary: reviewPacket.check_result_summary,
-    self_review: reviewPacket.self_review,
-    independent_ai_review: reviewPacket.independent_ai_review,
-    test_mapping: reviewPacket.test_mapping,
-    risk_notes: reviewPacket.risk_notes,
-    requested_changes: reviewPacket.requested_changes,
-    reviewed_by_actor_id: reviewPacket.reviewed_by_actor_id,
-    reviewed_at: reviewPacket.reviewed_at,
-    created_at: reviewPacket.created_at,
-    updated_at: reviewPacket.updated_at,
   };
 }
 
@@ -800,18 +1414,6 @@ function workItemToBoardCard(workItem: WorkItem): BoardCard {
     driver_actor_id: workItem.driver_actor_id,
     blocked: false,
     href: workItemHref(workItem),
-  };
-}
-
-function taskToBoardCard(task: Task): BoardCard {
-  return {
-    id: `task:${task.id}`,
-    object_ref: { type: 'task', id: task.id },
-    title: task.title,
-    column_id: task.status,
-    status: task.status,
-    blocked: task.status === 'blocked' || task.stale_state !== 'current',
-    href: `/tasks/${task.id}`,
   };
 }
 

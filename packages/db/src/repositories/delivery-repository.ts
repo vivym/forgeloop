@@ -1365,6 +1365,7 @@ export interface DeliveryRepository {
   getBrainstormingSession(id: string): Promise<BrainstormingSession | undefined>;
   saveBoundarySummary(summary: BoundarySummary): Promise<void>;
   getBoundarySummary(id: string): Promise<BoundarySummary | undefined>;
+  listBoundarySummaries(): Promise<BoundarySummary[]>;
   saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void>;
   listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]>;
   compareBoundarySummaryRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
@@ -1376,10 +1377,13 @@ export interface DeliveryRepository {
   listExecutionPlansForDevelopmentPlanItem(itemId: string): Promise<ExecutionPlanDocument[]>;
   saveExecution(execution: Execution): Promise<void>;
   getExecution(id: string): Promise<Execution | undefined>;
+  listExecutions(): Promise<Execution[]>;
   saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void>;
   getCodeReviewHandoff(id: string): Promise<CodeReviewHandoff | undefined>;
+  listCodeReviewHandoffs(): Promise<CodeReviewHandoff[]>;
   saveQaHandoff(handoff: QaHandoff): Promise<void>;
   getQaHandoff(id: string): Promise<QaHandoff | undefined>;
+  listQaHandoffs(): Promise<QaHandoff[]>;
   listQaHandoffsForCodeReview(handoffId: string): Promise<QaHandoff[]>;
 
   savePlan(plan: Plan): Promise<void>;

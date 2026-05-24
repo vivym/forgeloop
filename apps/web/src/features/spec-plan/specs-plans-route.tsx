@@ -1,13 +1,25 @@
 import { Link, useSearchParams } from 'react-router';
 
-import { usePlansQuery, useSpecsQuery } from '../../shared/api/hooks';
-import type { ProductListItem } from '../../shared/api/types';
+import { useSpecExecutionPlanQueueQuery } from '../../shared/api/hooks';
 import { useProjectContext } from '../../shared/context/project-context';
 import { InlineActions, PageHeader, Section } from '../../shared/layout';
 import { Badge, InlineNotice, StatusPill } from '../../shared/ui';
 
 type QueueKind = 'spec' | 'plan';
 type QueueGroupId = 'needs-authoring' | 'needs-review' | 'approved' | 'stale' | 'blocked';
+type QueueRef = { type: string; id: string; title?: string; development_plan_id?: string };
+type QueueItem = {
+  id: string;
+  title: string;
+  status?: string;
+  gate_state?: string;
+  stale?: boolean;
+  blocked?: boolean;
+  href?: string;
+  artifact_type: 'spec' | 'execution_plan';
+  source_ref?: QueueRef;
+  development_plan_item_ref?: QueueRef;
+};
 
 const selectedSegmentClass =
   'inline-flex min-h-9 items-center justify-center rounded-md border border-primary bg-primary px-3 text-sm font-semibold text-white transition-colors duration-base ease-standard';
@@ -26,10 +38,10 @@ export function SpecsPlansRoute() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const activeKind = searchParams.get('tab') === 'plans' ? 'plan' : 'spec';
-  const specsQuery = useSpecsQuery({ project_id: projectId, limit: 100 });
-  const plansQuery = usePlansQuery({ project_id: projectId, limit: 100 });
-  const activeQuery = activeKind === 'spec' ? specsQuery : plansQuery;
-  const activeItems = activeKind === 'spec' ? specsQuery.data?.items ?? [] : plansQuery.data?.items ?? [];
+  const queueQuery = useSpecExecutionPlanQueueQuery({ project_id: projectId, limit: 100 });
+  const activeItems = ((queueQuery.data?.items ?? []) as QueueItem[]).filter((item) =>
+    activeKind === 'spec' ? item.artifact_type === 'spec' : item.artifact_type === 'execution_plan',
+  );
 
   return (
     <>
@@ -57,19 +69,19 @@ export function SpecsPlansRoute() {
           </Link>
         </InlineActions>
         <QueueStatus
-          isError={activeQuery.isError}
-          isPending={activeQuery.status === 'pending'}
+          isError={queueQuery.isError}
+          isPending={queueQuery.status === 'pending'}
           kind={activeKind}
         />
       </Section>
-      {activeQuery.status !== 'pending' && !activeQuery.isError ? (
+      {queueQuery.status !== 'pending' && !queueQuery.isError ? (
         <GroupedQueue items={activeItems} kind={activeKind} />
       ) : null}
     </>
   );
 }
 
-function GroupedQueue({ items, kind }: { items: ProductListItem[]; kind: QueueKind }) {
+function GroupedQueue({ items, kind }: { items: QueueItem[]; kind: QueueKind }) {
   const groupedItems = groupItems(items);
 
   return (
@@ -95,8 +107,8 @@ function GroupedQueue({ items, kind }: { items: ProductListItem[]; kind: QueueKi
   );
 }
 
-function QueueItemCard({ item, kind }: { item: ProductListItem; kind: QueueKind }) {
-  const detailHref = kind === 'spec' ? `/specs/${encodeURIComponent(item.id)}` : `/plans/${encodeURIComponent(item.id)}`;
+function QueueItemCard({ item, kind }: { item: QueueItem; kind: QueueKind }) {
+  const detailHref = item.href ?? '/specs-plans';
 
   return (
     <article className="grid gap-3 rounded-card border border-border bg-surface p-4">
@@ -117,9 +129,12 @@ function QueueItemCard({ item, kind }: { item: ProductListItem; kind: QueueKind 
       <div className="grid gap-2 text-sm text-text-secondary">
         <div>
           <span className="font-semibold text-text-primary">Source Object Context: </span>
-          {item.parent ? <Link to={sourceObjectHref(item.parent)}>{sourceObjectLabel(item.parent)}</Link> : 'Not linked'}
+          {item.source_ref ? <Link to={sourceObjectHref(item.source_ref)}>{sourceObjectLabel(item.source_ref)}</Link> : 'Not linked'}
         </div>
-        <div>Gate: {formatValue(item.gate_state)} | Resolution: {formatValue(item.resolution)}</div>
+        <div>
+          Gate: {formatValue(item.gate_state)}
+          {item.development_plan_item_ref ? ` | Development Plan Item: ${item.development_plan_item_ref.id}` : ''}
+        </div>
       </div>
     </article>
   );
@@ -139,8 +154,8 @@ function QueueStatus({ isError, isPending, kind }: { isError: boolean; isPending
   return null;
 }
 
-function groupItems(items: ProductListItem[]): Record<QueueGroupId, ProductListItem[]> {
-  const grouped: Record<QueueGroupId, ProductListItem[]> = {
+function groupItems(items: QueueItem[]): Record<QueueGroupId, QueueItem[]> {
+  const grouped: Record<QueueGroupId, QueueItem[]> = {
     'needs-authoring': [],
     'needs-review': [],
     approved: [],
@@ -155,19 +170,18 @@ function groupItems(items: ProductListItem[]): Record<QueueGroupId, ProductListI
   return grouped;
 }
 
-function groupForItem(item: ProductListItem): QueueGroupId {
+function groupForItem(item: QueueItem): QueueGroupId {
   const status = item.status?.toLowerCase();
   const gate = item.gate_state?.toLowerCase();
-  const resolution = item.resolution?.toLowerCase();
-  const flags = item as ProductListItem & { stale?: boolean; stale_state?: string; blocked?: boolean };
+  const flags = item as QueueItem & { stale_state?: string };
 
-  if (flags.blocked || status === 'blocked' || gate === 'blocked' || resolution === 'blocked') {
+  if (flags.blocked || status === 'blocked' || gate === 'blocked') {
     return 'blocked';
   }
   if (flags.stale || flags.stale_state === 'stale' || status === 'stale') {
     return 'stale';
   }
-  if (status === 'approved' || gate === 'approved' || resolution === 'approved') {
+  if (status === 'approved' || gate === 'approved') {
     return 'approved';
   }
   if (status === 'submitted' || status === 'in_review' || gate === 'awaiting_review' || gate === 'review') {
@@ -176,7 +190,7 @@ function groupForItem(item: ProductListItem): QueueGroupId {
   return 'needs-authoring';
 }
 
-function sourceObjectHref(ref: NonNullable<ProductListItem['parent']>): string {
+function sourceObjectHref(ref: QueueRef): string {
   switch (ref.type) {
     case 'initiative':
       return `/initiatives/${encodeURIComponent(ref.id)}`;
@@ -187,11 +201,11 @@ function sourceObjectHref(ref: NonNullable<ProductListItem['parent']>): string {
     case 'tech_debt':
       return `/tech-debt/${encodeURIComponent(ref.id)}`;
     case 'development_plan_item':
-      return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
-    case 'spec':
-      return `/specs/${encodeURIComponent(ref.id)}`;
+      return ref.development_plan_id === undefined
+        ? '/specs-plans'
+        : `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
     case 'execution_plan':
-      return `/plans/${encodeURIComponent(ref.id)}`;
+      return '/specs-plans';
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
     default:
@@ -199,16 +213,12 @@ function sourceObjectHref(ref: NonNullable<ProductListItem['parent']>): string {
   }
 }
 
-function sourceObjectLabel(ref: NonNullable<ProductListItem['parent']>) {
+function sourceObjectLabel(ref: QueueRef) {
   return `${formatValue(ref.type)} ${ref.title ?? ref.id}`;
 }
 
-function revisionLabel(item: ProductListItem) {
-  const revisionNumber = item.revision_state?.revision_number;
-  if (revisionNumber !== undefined) {
-    return `Revision ${revisionNumber}`;
-  }
-  return item.revision_state?.current_revision_id ? 'Current revision' : 'No revision';
+function revisionLabel(item: QueueItem) {
+  return item.artifact_type === 'spec' ? 'Spec artifact' : 'Execution plan artifact';
 }
 
 function statusTone(status: string | undefined) {

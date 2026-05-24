@@ -595,7 +595,7 @@ describe('project management typed object contracts', () => {
         status: 'todo',
       }),
     ).toThrow();
-    expect(
+    expect(() =>
       boardCardSchema.parse({
         id: 'card-task',
         object_ref: { type: 'task', id: 'task-1', title: 'Task' },
@@ -603,8 +603,8 @@ describe('project management typed object contracts', () => {
         column_id: 'ready',
         status: 'ready',
       }),
-    ).toMatchObject({ object_ref: { type: 'task', id: 'task-1' } });
-    expect(
+    ).toThrow();
+    expect(() =>
       boardCardSchema.parse({
         id: 'card-plan',
         object_ref: { type: 'plan', id: 'plan-1', title: 'Plan' },
@@ -612,7 +612,7 @@ describe('project management typed object contracts', () => {
         column_id: 'ready',
         status: 'approved',
       }),
-    ).toMatchObject({ object_ref: { type: 'plan', id: 'plan-1' } });
+    ).toThrow();
   });
 
   it('rejects public product query filters with legacy owner or work item fields', () => {
@@ -728,7 +728,7 @@ describe('project management typed object contracts', () => {
         current_revision_id: 'spec-rev-2',
         approved_revision_id: 'spec-rev-2',
         updated_at: '2026-05-23T00:00:00.000Z',
-        href: '/specs/spec-1',
+        href: '/specs-plans',
       }),
     ).toMatchObject({
       entity_type: 'spec',
@@ -770,11 +770,9 @@ describe('project management typed object contracts', () => {
         current_revision_id: 'plan-rev-2',
         approved_revision_id: 'plan-rev-2',
         based_on_spec_revision_id: 'spec-rev-2',
-        task_refs: [{ type: 'task', id: 'task-1' }],
       }),
     ).toMatchObject({
       ref: { type: 'plan', id: 'plan-1' },
-      task_refs: [{ type: 'task', id: 'task-1' }],
     });
   });
 

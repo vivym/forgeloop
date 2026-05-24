@@ -1,4 +1,4 @@
-import type { MyWorkQuery, ProductWorkItemRegistryQuery, ProjectManagementListQuery } from './query';
+import type { MyWorkQuery, ProjectManagementListQuery } from './query';
 import type { AttachmentOwnerObjectType, ListProductQuery, ProductLaneId, ProductLaneQuery } from './types';
 
 export const normalizeProductLaneQuery = (query: ProductLaneQuery): ProductLaneQuery => ({
@@ -51,23 +51,6 @@ export const normalizeProductRegistryQuery = (query: ListProductQuery): ListProd
   ...(query.limit === undefined ? {} : { limit: query.limit }),
 });
 
-export const normalizeProductWorkItemRegistryQuery = (
-  query: ProductWorkItemRegistryQuery,
-): ProductWorkItemRegistryQuery => ({
-  project_id: query.project_id,
-  ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
-  ...(query.status === undefined ? {} : { status: query.status }),
-  ...(query.phase === undefined ? {} : { phase: query.phase }),
-  ...(query.gate_state === undefined ? {} : { gate_state: query.gate_state }),
-  ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
-  ...(query.risk === undefined ? {} : { risk: query.risk }),
-  ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
-  ...(query.blocked === undefined ? {} : { blocked: query.blocked }),
-  ...(query.stale === undefined ? {} : { stale: query.stale }),
-  ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-  ...(query.limit === undefined ? {} : { limit: query.limit }),
-});
-
 export const normalizeMyWorkQuery = (query: MyWorkQuery): MyWorkQuery => ({
   project_id: query.project_id,
   ...(query.actor_id === undefined ? {} : { actor_id: query.actor_id }),
@@ -92,8 +75,6 @@ export const queryKeys = {
   initiative: (initiativeId: string | undefined) => ['initiative', initiativeId],
   techDebt: (query: ProjectManagementListQuery) => ['tech-debt', normalizeProjectManagementListQuery(query)],
   techDebtDetail: (techDebtId: string | undefined) => ['tech-debt-detail', techDebtId],
-  tasks: (query: ProjectManagementListQuery) => ['tasks', normalizeProjectManagementListQuery(query)],
-  task: (taskId: string | undefined) => ['task', taskId],
   bugs: (query: ProjectManagementListQuery) => ['bugs', normalizeProjectManagementListQuery(query)],
   bug: (bugId: string | undefined) => ['bug', bugId],
   board: (query: ListProductQuery) => ['board', normalizeProductRegistryQuery(query)],
@@ -101,33 +82,23 @@ export const queryKeys = {
   releaseReadiness: (releaseId: string | undefined, projectId: string) => ['release-readiness', releaseId, { project_id: projectId }],
   productLane: (laneId: ProductLaneId, query: ProductLaneQuery) => ['product-lanes', laneId, normalizeProductLaneQuery(query)],
   pipeline: (projectId: string) => ['pipeline', { projectId }],
-  workItems: (projectId: string) => ['work-items', { projectId }],
-  productWorkItems: (query: ProductWorkItemRegistryQuery) => ['product-work-items', normalizeProductWorkItemRegistryQuery(query)],
   workItem: (workItemId: string) => ['work-item', workItemId],
   workItemCockpit: (workItemId: string | undefined, lane?: ProductLaneId) =>
     lane === undefined ? ['work-item-cockpit', workItemId] : ['work-item-cockpit', workItemId, { lane }],
   workItemReplay: (workItemId: string | undefined) => ['work-item-replay', workItemId],
-  specs: (query: ListProductQuery) => ['specs', normalizeProductRegistryQuery(query)],
+  specExecutionPlanQueue: (query: Pick<ListProductQuery, 'project_id' | 'cursor' | 'limit'>) => ['spec-execution-plan-queue', query],
   spec: (specId: string) => ['spec', specId],
   specRevisions: (specId: string) => ['spec-revisions', specId],
   specReplay: (specId: string | undefined) => ['spec-replay', specId],
   specRevision: (revisionId: string | undefined) => ['spec-revision', revisionId],
-  plans: (query: ListProductQuery) => ['plans', normalizeProductRegistryQuery(query)],
   plan: (planId: string) => ['plan', planId],
   planRevisions: (planId: string) => ['plan-revisions', planId],
   planReplay: (planId: string | undefined) => ['plan-replay', planId],
   planRevision: (revisionId: string | undefined) => ['plan-revision', revisionId],
-  packages: (query: ListProductQuery) => ['packages', normalizeProductRegistryQuery(query)],
   package: (packageId: string) => ['package', packageId],
   packageRuntimeReadiness: (packageId: string | undefined) => ['package-runtime-readiness', packageId],
-  taskPackageEvidence: (taskId: string | undefined, packageId: string | undefined) => ['task-package-evidence', taskId, packageId],
-  taskRunEvidence: (taskId: string | undefined, runSessionId: string | undefined) => ['task-run-evidence', taskId, runSessionId],
-  taskReviewEvidence: (taskId: string | undefined, reviewPacketId: string | undefined) => ['task-review-evidence', taskId, reviewPacketId],
-  runs: (query: ListProductQuery) => ['runs', normalizeProductRegistryQuery(query)],
   runEvents: (runSessionId: string, actorId: string) => ['run-events', runSessionId, { actorId }],
   run: (runSessionId: string) => ['run', runSessionId],
-  reviews: (projectId: string) => ['reviews', { projectId }],
-  reviewPackets: (query: ListProductQuery) => ['review-packets', normalizeProductRegistryQuery(query)],
   review: (reviewPacketId: string | undefined) => ['review', reviewPacketId],
   reviewPacketReplay: (reviewPacketId: string) => ['review-packet-replay', reviewPacketId],
   releases: (query: { project_id: string; release_owner_actor_id?: string; phase?: string; gate_state?: string; resolution?: string; cursor?: string; limit?: number }) => [

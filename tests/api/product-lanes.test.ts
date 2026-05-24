@@ -478,9 +478,9 @@ describe('product lane projections', () => {
       description: expect.stringMatching(/review evidence must be generated before the reviewer can decide/i),
       target: expect.objectContaining({
         kind: 'object',
-        object_type: 'requirement',
-        object_id: executionPackage.work_item_id,
-        href: `/requirements/${executionPackage.work_item_id}`,
+        object_type: 'execution_package',
+        object_id: executionPackage.id,
+        href: `/executions?execution_package_id=${executionPackage.id}`,
       }),
     });
     const forbiddenFallbackHref = ['/tasks', executionPackage.work_item_id, 'packages', executionPackage.id].join('/');
@@ -497,7 +497,7 @@ describe('product lane projections', () => {
         kind: 'object',
         object_type: 'execution_package',
         object_id: taskScopedPackage.id,
-        href: `/tasks/${taskScopedPackage.task_id}/packages/${taskScopedPackage.id}`,
+        href: `/executions?execution_package_id=${taskScopedPackage.id}`,
       }),
     });
 
@@ -511,7 +511,7 @@ describe('product lane projections', () => {
         kind: 'object',
         object_type: 'review_packet',
         object_id: reviewPacket.id,
-        href: `/tasks/${taskScopedPackage.task_id}/reviews/${reviewPacket.id}`,
+        href: `/executions?execution_package_id=${taskScopedPackage.id}`,
       }),
     });
   });
@@ -815,12 +815,7 @@ describe('product lane projections', () => {
       expect.arrayContaining([
         expect.objectContaining({
           object: { type: 'review_packet', id: reviewPacket.id },
-          actions: expect.arrayContaining([
-            expect.objectContaining({
-              kind: 'navigate',
-              target: expect.objectContaining({ kind: 'object', object_type: 'review_packet', object_id: reviewPacket.id }),
-            }),
-          ]),
+          actions: [],
         }),
       ]),
     );

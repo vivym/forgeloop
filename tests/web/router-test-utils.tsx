@@ -18,8 +18,6 @@ import InitiativeEvidenceRoute from '../../apps/web/src/app/routes/initiatives/$
 import InitiativesRoute from '../../apps/web/src/app/routes/initiatives';
 import NewInitiativeRoute from '../../apps/web/src/app/routes/initiatives/new';
 import MyWorkRoute from '../../apps/web/src/app/routes/my-work';
-import PlanDetailRoute from '../../apps/web/src/app/routes/plans/$planId';
-import PlanRevisionRoute from '../../apps/web/src/app/routes/plans/$planId/revisions/$revisionId';
 import ReleaseDetailRoute from '../../apps/web/src/app/routes/releases/$releaseId';
 import ReleaseEvidenceRoute from '../../apps/web/src/app/routes/releases/$releaseId/evidence';
 import ReleasesRoute from '../../apps/web/src/app/routes/releases';
@@ -30,20 +28,10 @@ import ReleaseReadinessReportRoute from '../../apps/web/src/app/routes/reports/r
 import ReplayReportRoute from '../../apps/web/src/app/routes/reports/replay';
 import ReportsRoute from '../../apps/web/src/app/routes/reports';
 import RequirementEvidenceRoute from '../../apps/web/src/app/routes/requirements/$requirementId/evidence';
-import RequirementPlanRoute from '../../apps/web/src/app/routes/requirements/$requirementId/plan';
-import RequirementSpecRoute from '../../apps/web/src/app/routes/requirements/$requirementId/spec';
 import RequirementDetailRoute from '../../apps/web/src/app/routes/requirements/$requirementId';
 import RequirementsRoute from '../../apps/web/src/app/routes/requirements';
 import NewRequirementRoute from '../../apps/web/src/app/routes/requirements/new';
-import SpecDetailRoute from '../../apps/web/src/app/routes/specs/$specId';
-import SpecRevisionRoute from '../../apps/web/src/app/routes/specs/$specId/revisions/$revisionId';
 import SpecsPlansRoute from '../../apps/web/src/app/routes/specs-plans';
-import TaskPackageEvidenceRoute from '../../apps/web/src/app/routes/tasks/$taskId/packages/$packageId';
-import TaskReviewEvidenceRoute from '../../apps/web/src/app/routes/tasks/$taskId/reviews/$reviewPacketId';
-import TaskRunEvidenceRoute from '../../apps/web/src/app/routes/tasks/$taskId/runs/$runSessionId';
-import TaskDetailRoute from '../../apps/web/src/app/routes/tasks/$taskId';
-import TasksRoute from '../../apps/web/src/app/routes/tasks';
-import NewTaskRoute from '../../apps/web/src/app/routes/tasks/new';
 import TechDebtDetailRoute from '../../apps/web/src/app/routes/tech-debt/$techDebtId';
 import TechDebtEvidenceRoute from '../../apps/web/src/app/routes/tech-debt/$techDebtId/evidence';
 import TechDebtRoute from '../../apps/web/src/app/routes/tech-debt';
@@ -77,8 +65,6 @@ const productRoutes: RouteObject[] = [
       { path: 'requirements', Component: RequirementsRoute },
       { path: 'requirements/new', Component: NewRequirementRoute },
       { path: 'requirements/:requirementId', Component: RequirementDetailRoute },
-      { path: 'requirements/:requirementId/spec', Component: RequirementSpecRoute },
-      { path: 'requirements/:requirementId/plan', Component: RequirementPlanRoute },
       { path: 'requirements/:requirementId/evidence', Component: RequirementEvidenceRoute },
       { path: 'initiatives', Component: InitiativesRoute },
       { path: 'initiatives/new', Component: NewInitiativeRoute },
@@ -89,16 +75,6 @@ const productRoutes: RouteObject[] = [
       { path: 'tech-debt/:techDebtId', Component: TechDebtDetailRoute },
       { path: 'tech-debt/:techDebtId/evidence', Component: TechDebtEvidenceRoute },
       { path: 'specs-plans', Component: SpecsPlansRoute },
-      { path: 'specs/:specId', Component: SpecDetailRoute },
-      { path: 'specs/:specId/revisions/:revisionId', Component: SpecRevisionRoute },
-      { path: 'plans/:planId', Component: PlanDetailRoute },
-      { path: 'plans/:planId/revisions/:revisionId', Component: PlanRevisionRoute },
-      { path: 'tasks', Component: TasksRoute },
-      { path: 'tasks/new', Component: NewTaskRoute },
-      { path: 'tasks/:taskId', Component: TaskDetailRoute },
-      { path: 'tasks/:taskId/packages/:packageId', Component: TaskPackageEvidenceRoute },
-      { path: 'tasks/:taskId/runs/:runSessionId', Component: TaskRunEvidenceRoute },
-      { path: 'tasks/:taskId/reviews/:reviewPacketId', Component: TaskReviewEvidenceRoute },
       { path: 'bugs', Component: BugsRoute },
       { path: 'bugs/new', Component: NewBugRoute },
       { path: 'bugs/:bugId', Component: BugDetailRoute },

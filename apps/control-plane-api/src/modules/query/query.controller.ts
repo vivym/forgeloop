@@ -29,6 +29,46 @@ export class QueryController {
     return this.service.listMyWork(query);
   }
 
+  @Get('dashboard')
+  getDashboard(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.getDashboard(query);
+  }
+
+  @Get('development-plans')
+  listDevelopmentPlans(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listDevelopmentPlans(query);
+  }
+
+  @Get('development-plans/:developmentPlanId/items/:itemId')
+  getDevelopmentPlanItem(@Param('developmentPlanId') developmentPlanId: string, @Param('itemId') itemId: string) {
+    return this.service.getDevelopmentPlanItem(developmentPlanId, itemId);
+  }
+
+  @Get('development-plans/:developmentPlanId')
+  getDevelopmentPlan(@Param('developmentPlanId') developmentPlanId: string) {
+    return this.service.getDevelopmentPlan(developmentPlanId);
+  }
+
+  @Get('specs-execution-plans')
+  listSpecsExecutionPlans(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listSpecsExecutionPlans(query);
+  }
+
+  @Get('executions')
+  listExecutions(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listExecutions(query);
+  }
+
+  @Get('code-review-handoffs')
+  listCodeReviewHandoffs(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listCodeReviewHandoffs(query);
+  }
+
+  @Get('qa-handoffs')
+  listQaHandoffs(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listQaHandoffs(query);
+  }
+
   @Get('requirements')
   listRequirements(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
     return this.service.listRequirements(query);
@@ -69,31 +109,6 @@ export class QueryController {
     return this.service.getBugDetail(bugId);
   }
 
-  @Get('tasks')
-  listTasks(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listTasks(query);
-  }
-
-  @Get('tasks/:taskId/packages/:packageId')
-  getTaskPackageEvidence(@Param('taskId') taskId: string, @Param('packageId') packageId: string) {
-    return this.service.getTaskPackageEvidence(taskId, packageId);
-  }
-
-  @Get('tasks/:taskId/runs/:runSessionId')
-  getTaskRunEvidence(@Param('taskId') taskId: string, @Param('runSessionId') runSessionId: string) {
-    return this.service.getTaskRunEvidence(taskId, runSessionId);
-  }
-
-  @Get('tasks/:taskId/reviews/:reviewPacketId')
-  getTaskReviewEvidence(@Param('taskId') taskId: string, @Param('reviewPacketId') reviewPacketId: string) {
-    return this.service.getTaskReviewEvidence(taskId, reviewPacketId);
-  }
-
-  @Get('tasks/:taskId')
-  getTaskDetail(@Param('taskId') taskId: string) {
-    return this.service.getTaskDetail(taskId);
-  }
-
   @Get('board')
   listBoardCards(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
     return this.service.listBoardCards(query);
@@ -109,39 +124,9 @@ export class QueryController {
     return this.service.getReleaseReadinessDetail(releaseId, projectId === undefined ? {} : { project_id: projectId });
   }
 
-  @Get('work-items')
-  listWorkItems(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listWorkItems(query);
-  }
-
-  @Get('specs')
-  listSpecs(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listSpecs(query);
-  }
-
-  @Get('plans')
-  listPlans(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listPlans(query);
-  }
-
-  @Get('execution-packages')
-  listExecutionPackages(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listExecutionPackages(query);
-  }
-
   @Get('execution-packages/:packageId/runtime-readiness')
   getExecutionPackageRuntimeReadiness(@Param('packageId') packageId: string) {
     return this.service.getExecutionPackageRuntimeReadiness(packageId);
-  }
-
-  @Get('runs')
-  listRuns(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listRuns(query);
-  }
-
-  @Get('review-packets')
-  listReviewPackets(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listReviewPackets(query);
   }
 
   @Get('reviews/:reviewPacketId')

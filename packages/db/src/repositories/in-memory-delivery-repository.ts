@@ -2895,6 +2895,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.boundarySummaries.get(id));
   }
 
+  async listBoundarySummaries(): Promise<BoundarySummary[]> {
+    return valuesFor(this.boundarySummaries).sort(byCreatedAtThenId);
+  }
+
   async saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void> {
     const existing = valuesFor(this.boundarySummaryRevisions).find(
       (candidate) =>
@@ -2966,6 +2970,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.executions.get(id));
   }
 
+  async listExecutions(): Promise<Execution[]> {
+    return valuesFor(this.executions).sort(byCreatedAtThenId);
+  }
+
   async saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void> {
     this.codeReviewHandoffs.set(handoff.id, clone(handoff));
   }
@@ -2974,12 +2982,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.codeReviewHandoffs.get(id));
   }
 
+  async listCodeReviewHandoffs(): Promise<CodeReviewHandoff[]> {
+    return valuesFor(this.codeReviewHandoffs).sort(byCreatedAtThenId);
+  }
+
   async saveQaHandoff(handoff: QaHandoff): Promise<void> {
     this.qaHandoffs.set(handoff.id, clone(handoff));
   }
 
   async getQaHandoff(id: string): Promise<QaHandoff | undefined> {
     return this.cloneMaybe(this.qaHandoffs.get(id));
+  }
+
+  async listQaHandoffs(): Promise<QaHandoff[]> {
+    return valuesFor(this.qaHandoffs).sort(byCreatedAtThenId);
   }
 
   async listQaHandoffsForCodeReview(handoffId: string): Promise<QaHandoff[]> {

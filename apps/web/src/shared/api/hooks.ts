@@ -40,9 +40,6 @@ import type {
   SpecRevision,
   StartReleaseObservingBody,
   SubmitForApprovalBody,
-  TaskPackageEvidence,
-  TaskReviewEvidence,
-  TaskRunEvidence,
   UnlinkReleaseScopeBody,
 } from './types';
 
@@ -63,30 +60,6 @@ export function usePipelineQuery(projectId: string) {
   return useQuery({
     queryKey: queryKeys.pipeline(projectId),
     queryFn: () => createQueryApi().getPipeline({ project_id: projectId }),
-  });
-}
-
-export function useWorkItemsQuery(projectId: string) {
-  return useQuery({
-    queryKey: queryKeys.workItems(projectId),
-    queryFn: () => createCommandApi().listWorkItems(projectId),
-  });
-}
-
-export function useProductWorkItemsQuery(query: Pick<ListProductQuery, 'project_id' | 'phase' | 'status' | 'risk' | 'driver_actor_id' | 'cursor' | 'limit'>) {
-  const normalizedQuery = {
-    project_id: query.project_id,
-    ...(query.phase === undefined ? {} : { phase: query.phase }),
-    ...(query.status === undefined ? {} : { status: query.status }),
-    ...(query.risk === undefined ? {} : { risk: query.risk }),
-    ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
-    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-  };
-
-  return useQuery({
-    queryKey: queryKeys.productWorkItems(normalizedQuery),
-    queryFn: () => createQueryApi().listWorkItems(normalizedQuery),
   });
 }
 
@@ -147,23 +120,6 @@ export function useTechDebtDetailQuery(techDebtId: string | undefined) {
     queryKey: queryKeys.techDebtDetail(techDebtId),
     queryFn: () => createQueryApi().getTechDebt(requiredId(techDebtId, 'techDebtId')),
     enabled: techDebtId !== undefined,
-  });
-}
-
-export function useTasksQuery(query: ProjectManagementListQuery) {
-  const normalizedQuery = normalizeProjectManagementListQuery(query);
-
-  return useQuery({
-    queryKey: queryKeys.tasks(normalizedQuery),
-    queryFn: () => createQueryApi().listTasks(normalizedQuery),
-  });
-}
-
-export function useTaskQuery(taskId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.task(taskId),
-    queryFn: () => createQueryApi().getTask(requiredId(taskId, 'taskId')),
-    enabled: taskId !== undefined,
   });
 }
 
@@ -238,18 +194,6 @@ export function useUpdateTechDebtNarrativeMutation(techDebtId: string | undefine
   });
 }
 
-export function useUpdateTaskNarrativeMutation(taskId: string | undefined) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: MarkdownDocument) => createCommandApi().updateTaskNarrative(requiredId(taskId, 'taskId'), body),
-    onSuccess: () => Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.task(taskId) }),
-      queryClient.invalidateQueries({ queryKey: ['tasks'] }),
-    ]),
-  });
-}
-
 export function useUpdateBugNarrativeMutation(bugId: string | undefined) {
   const queryClient = useQueryClient();
 
@@ -285,31 +229,16 @@ export function useProductActionCommandMutation(input: { projectId: string; acti
   });
 }
 
-export function useSpecsQuery(query: Pick<ListProductQuery, 'project_id' | 'status' | 'cursor' | 'limit'>) {
+export function useSpecExecutionPlanQueueQuery(query: Pick<ListProductQuery, 'project_id' | 'cursor' | 'limit'>) {
   const normalizedQuery = {
     project_id: query.project_id,
-    ...(query.status === undefined ? {} : { status: query.status }),
     ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
     ...(query.limit === undefined ? {} : { limit: query.limit }),
   };
 
   return useQuery({
-    queryKey: queryKeys.specs(normalizedQuery),
-    queryFn: () => createQueryApi().listSpecs(normalizedQuery),
-  });
-}
-
-export function useSpecQuery(specId: string) {
-  return useQuery({
-    queryKey: queryKeys.spec(specId),
-    queryFn: () => createCommandApi().getSpec(specId),
-  });
-}
-
-export function useSpecRevisionsQuery(specId: string) {
-  return useQuery({
-    queryKey: queryKeys.specRevisions(specId),
-    queryFn: () => createCommandApi().listSpecRevisions(specId),
+    queryKey: queryKeys.specExecutionPlanQueue(normalizedQuery),
+    queryFn: () => createQueryApi().listSpecExecutionPlanQueue(normalizedQuery),
   });
 }
 
@@ -321,64 +250,11 @@ export function useSpecReplayQuery(specId: string | undefined) {
   });
 }
 
-export function useSpecRevisionQuery(revisionId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.specRevision(revisionId),
-    queryFn: () => createCommandApi().getSpecRevision(requiredId(revisionId, 'revisionId')),
-    enabled: revisionId !== undefined,
-  });
-}
-
-export function usePlansQuery(query: Pick<ListProductQuery, 'project_id' | 'status' | 'cursor' | 'limit'>) {
-  const normalizedQuery = {
-    project_id: query.project_id,
-    ...(query.status === undefined ? {} : { status: query.status }),
-    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-  };
-
-  return useQuery({
-    queryKey: queryKeys.plans(normalizedQuery),
-    queryFn: () => createQueryApi().listPlans(normalizedQuery),
-  });
-}
-
-export function usePlanQuery(planId: string) {
-  return useQuery({
-    queryKey: queryKeys.plan(planId),
-    queryFn: () => createCommandApi().getPlan(planId),
-  });
-}
-
-export function usePlanRevisionsQuery(planId: string) {
-  return useQuery({
-    queryKey: queryKeys.planRevisions(planId),
-    queryFn: () => createCommandApi().listPlanRevisions(planId),
-  });
-}
-
 export function usePlanReplayQuery(planId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.planReplay(planId),
     queryFn: () => createQueryApi().getPlanReplay(requiredId(planId, 'planId')),
     enabled: planId !== undefined,
-  });
-}
-
-export function usePlanRevisionQuery(revisionId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.planRevision(revisionId),
-    queryFn: () => createCommandApi().getPlanRevision(requiredId(revisionId, 'revisionId')),
-    enabled: revisionId !== undefined,
-  });
-}
-
-export function usePackagesQuery(query: ListProductQuery) {
-  const normalizedQuery = normalizePackageRunQuery(query);
-
-  return useQuery({
-    queryKey: queryKeys.packages(normalizedQuery),
-    queryFn: () => createQueryApi().listPackages(normalizedQuery),
   });
 }
 
@@ -397,35 +273,10 @@ export function usePackageRuntimeReadinessQuery(packageId: string | undefined) {
   });
 }
 
-export function useTaskPackageEvidenceQuery(taskId: string | undefined, packageId: string | undefined) {
-  return useQuery<TaskPackageEvidence>({
-    queryKey: queryKeys.taskPackageEvidence(taskId, packageId),
-    queryFn: () => createQueryApi().getTaskPackageEvidence(requiredId(taskId, 'taskId'), requiredId(packageId, 'packageId')),
-    enabled: taskId !== undefined && packageId !== undefined,
-  });
-}
-
-export function useRunsQuery(query: ListProductQuery) {
-  const normalizedQuery = normalizePackageRunQuery(query);
-
-  return useQuery({
-    queryKey: queryKeys.runs(normalizedQuery),
-    queryFn: () => createQueryApi().listRuns(normalizedQuery),
-  });
-}
-
 export function useRunQuery(runSessionId: string) {
   return useQuery({
     queryKey: queryKeys.run(runSessionId),
     queryFn: () => createCommandApi().getRunSession(runSessionId),
-  });
-}
-
-export function useTaskRunEvidenceQuery(taskId: string | undefined, runSessionId: string | undefined) {
-  return useQuery<TaskRunEvidence>({
-    queryKey: queryKeys.taskRunEvidence(taskId, runSessionId),
-    queryFn: () => createQueryApi().getTaskRunEvidence(requiredId(taskId, 'taskId'), requiredId(runSessionId, 'runSessionId')),
-    enabled: taskId !== undefined && runSessionId !== undefined,
   });
 }
 
@@ -436,35 +287,11 @@ export function useRunEventsQuery(input: { runSessionId: string; actorId: string
   });
 }
 
-export function useReviewsQuery(projectId: string) {
-  return useQuery({
-    queryKey: queryKeys.reviews(projectId),
-    queryFn: () => createQueryApi().listReviews({ project_id: projectId }),
-  });
-}
-
-export function useReviewPacketsQuery(query: ListProductQuery) {
-  const normalizedQuery = normalizeReviewPacketQuery(query);
-
-  return useQuery({
-    queryKey: queryKeys.reviewPackets(normalizedQuery),
-    queryFn: () => createQueryApi().listReviewPackets(normalizedQuery),
-  });
-}
-
 export function useReviewQuery(reviewPacketId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.review(reviewPacketId),
     queryFn: () => createQueryApi().getReview(requiredId(reviewPacketId, 'reviewPacketId')),
     enabled: reviewPacketId !== undefined,
-  });
-}
-
-export function useTaskReviewEvidenceQuery(taskId: string | undefined, reviewPacketId: string | undefined) {
-  return useQuery<TaskReviewEvidence>({
-    queryKey: queryKeys.taskReviewEvidence(taskId, reviewPacketId),
-    queryFn: () => createQueryApi().getTaskReviewEvidence(requiredId(taskId, 'taskId'), requiredId(reviewPacketId, 'reviewPacketId')),
-    enabled: taskId !== undefined && reviewPacketId !== undefined,
   });
 }
 

@@ -228,6 +228,7 @@ const specPlanItem = async (
     item.approved_by_actor_id,
     ...decisions.flatMap((decision) => [decision.actor_id, decision.decided_by_actor_id]),
   ]);
+  const artifactHref = await specPlanProductHref(repository, item, workItem);
 
   return itemBase(
     {
@@ -247,7 +248,7 @@ const specPlanItem = async (
       actorIdValues: approvalActorIds,
       blocked: item.gate_state === 'changes_requested',
     },
-    [openObjectAction(laneId, objectType, item.id, `Open ${objectType === 'spec' ? 'Spec' : 'Plan'}`, `/${objectType}s/${item.id}`)],
+    [openObjectAction(laneId, objectType, item.id, `Open ${objectType === 'spec' ? 'Spec' : 'Plan'}`, artifactHref)],
   );
 };
 
@@ -256,7 +257,7 @@ const packageItem = (
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
 ): ProductLaneProjectionItem => {
-  const packageHref = taskPackageHref(executionPackage);
+  const packageHref = executionPackageProductHref(executionPackage);
   const actions = packageHref === undefined ? [] : [openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', packageHref)];
 
   if (executionPackage.phase === 'draft' || executionPackage.gate_state === 'changes_requested') {
@@ -317,7 +318,7 @@ const packageReadOnlyItem = (
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
 ): ProductLaneProjectionItem => {
-  const packageHref = taskPackageHref(executionPackage);
+  const packageHref = executionPackageProductHref(executionPackage);
   return itemBase(
     {
       id: executionPackage.id,
@@ -348,7 +349,7 @@ const reviewPacketItem = (
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
 ): ProductLaneProjectionItem => {
-  const reviewHref = taskReviewHref(executionPackage, reviewPacket.id);
+  const reviewHref = reviewPacketProductHref(executionPackage);
   return itemBase(
     {
       id: reviewPacket.id,
@@ -370,11 +371,21 @@ const reviewPacketItem = (
   );
 };
 
-const taskPackageHref = (executionPackage: ExecutionPackage) =>
-  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`;
+const executionPackageProductHref = (executionPackage: ExecutionPackage) =>
+  executionPackage.execution_id === undefined ? undefined : `/executions/${executionPackage.execution_id}`;
 
-const taskReviewHref = (executionPackage: ExecutionPackage, reviewPacketId: string) =>
-  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/reviews/${reviewPacketId}`;
+const reviewPacketProductHref = (executionPackage: ExecutionPackage) =>
+  executionPackage.execution_id === undefined ? undefined : `/executions/${executionPackage.execution_id}`;
+
+const specPlanProductHref = async (repository: DeliveryRepository, item: SpecPlan, workItem: WorkItem): Promise<string> => {
+  if (item.development_plan_item_id === undefined) {
+    return workItemHref(workItem);
+  }
+  const developmentPlanItem = await repository.getDevelopmentPlanItem(item.development_plan_item_id);
+  return developmentPlanItem === undefined
+    ? workItemHref(workItem)
+    : `/development-plans/${developmentPlanItem.development_plan_id}/items/${developmentPlanItem.id}`;
+};
 
 const releaseItem = async (
   repository: DeliveryRepository,

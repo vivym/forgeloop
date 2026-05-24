@@ -1,16 +1,13 @@
 import { Link } from 'react-router';
 
 import { useBoardQuery } from '../../shared/api/hooks';
-import type { BoardCard, ObjectRef } from '../../shared/api/types';
+import type { BoardCard } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
 import { PageHeader, Section } from '../../shared/layout';
 import { InlineNotice, StatusPill } from '../../shared/ui';
 
-type BoardObjectRef = Extract<
-  ObjectRef,
-  { type: 'initiative' | 'requirement' | 'tech_debt' | 'task' | 'bug' | 'spec' | 'plan' | 'release' }
->;
-type BoardProductCard = BoardCard & { object_ref: BoardObjectRef };
+type BoardObjectRef = BoardCard['object_ref'];
+type BoardProductCard = BoardCard;
 
 const columnLabels: Record<string, string> = {
   planning: 'Planning',
@@ -90,16 +87,7 @@ function columnLabel(columnId: string): string {
 }
 
 function isBoardProductCard(card: BoardCard): card is BoardProductCard {
-  return (
-    card.object_ref.type === 'initiative' ||
-    card.object_ref.type === 'requirement' ||
-    card.object_ref.type === 'tech_debt' ||
-    card.object_ref.type === 'task' ||
-    card.object_ref.type === 'bug' ||
-    card.object_ref.type === 'spec' ||
-    card.object_ref.type === 'plan' ||
-    card.object_ref.type === 'release'
-  );
+  return card.object_ref.type !== 'execution_package' && card.object_ref.type !== 'run_session' && card.object_ref.type !== 'review_packet';
 }
 
 function objectLabel(type: BoardObjectRef['type']): string {
@@ -119,16 +107,20 @@ function typedObjectHref(ref: BoardObjectRef): string {
       return `/requirements/${encodeURIComponent(ref.id)}`;
     case 'tech_debt':
       return `/tech-debt/${encodeURIComponent(ref.id)}`;
-    case 'task':
-      return `/tasks/${encodeURIComponent(ref.id)}`;
     case 'bug':
       return `/bugs/${encodeURIComponent(ref.id)}`;
-    case 'spec':
-      return `/specs/${encodeURIComponent(ref.id)}`;
-    case 'plan':
-      return `/plans/${encodeURIComponent(ref.id)}`;
+    case 'development_plan_item':
+      return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
+    case 'execution':
+      return `/executions/${encodeURIComponent(ref.id)}`;
+    case 'code_review_handoff':
+      return `/code-review-handoffs/${encodeURIComponent(ref.id)}`;
+    case 'qa_handoff':
+      return `/qa-handoffs/${encodeURIComponent(ref.id)}`;
+    default:
+      return '/my-work';
   }
 }
 

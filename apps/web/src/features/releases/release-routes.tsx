@@ -89,7 +89,7 @@ function ReleaseDetailContent({ releaseId }: { releaseId: string }) {
       header={
         <PageHeader
           eyebrow={<StatusPill tone={readiness.ready ? 'success' : 'warning'}>{readiness.ready ? 'Ready' : 'Blocked'}</StatusPill>}
-          subtitle={release.scope_summary ?? 'Release readiness, typed scope, and task-scoped evidence.'}
+          subtitle={release.scope_summary ?? 'Release readiness, typed scope, and execution evidence.'}
           title="Release Readiness"
         />
       }
@@ -171,7 +171,7 @@ function ReadinessSection({ readiness }: { readiness: ReleaseReadinessDetail }) 
 }
 
 function ReadinessEvidenceCard({ item }: { item: ReleaseReadinessDetail['required_review_evidence'][number] }) {
-  const evidenceHref = taskScopedEvidenceHref(item);
+  const evidenceHref = executionEvidenceHref(item);
 
   return (
     <div className="grid gap-2 rounded-card border border-border bg-surface p-3 text-sm">
@@ -183,7 +183,7 @@ function ReadinessEvidenceCard({ item }: { item: ReleaseReadinessDetail['require
       <div className="text-text-secondary">{formatValue(item.kind)}</div>
       {evidenceHref ? (
         <Link className="text-primary hover:underline" to={evidenceHref}>
-          Open task-scoped evidence
+          Open execution evidence
         </Link>
       ) : null}
       {item.disabled_reason ? <p className="text-text-secondary">{item.disabled_reason.message}</p> : null}
@@ -191,7 +191,7 @@ function ReadinessEvidenceCard({ item }: { item: ReleaseReadinessDetail['require
   );
 }
 
-function taskScopedEvidenceHref(item: ReleaseReadinessDetail['required_review_evidence'][number]): string | undefined {
+function executionEvidenceHref(item: ReleaseReadinessDetail['required_review_evidence'][number]): string | undefined {
   if (item.scope_ref.type !== 'task' || item.evidence_ref === undefined) {
     return undefined;
   }
@@ -199,15 +199,15 @@ function taskScopedEvidenceHref(item: ReleaseReadinessDetail['required_review_ev
   const evidenceRef = item.evidence_ref;
   if ('evidence_type' in evidenceRef && evidenceRef.evidence_type === 'package_run') {
     if (evidenceRef.run_session_ref !== undefined) {
-      return `/tasks/${taskId}/runs/${encodeURIComponent(evidenceRef.run_session_ref.id)}`;
+      return `/executions?task_id=${taskId}&run_session_id=${encodeURIComponent(evidenceRef.run_session_ref.id)}`;
     }
-    return `/tasks/${taskId}/packages/${encodeURIComponent(evidenceRef.package_ref.id)}`;
+    return `/executions?task_id=${taskId}&execution_package_id=${encodeURIComponent(evidenceRef.package_ref.id)}`;
   }
   if ('authority_ref' in evidenceRef && evidenceRef.authority_ref.type === 'review_packet') {
-    return `/tasks/${taskId}/reviews/${encodeURIComponent(evidenceRef.authority_ref.id)}`;
+    return `/code-review-handoffs?task_id=${taskId}&review_packet_id=${encodeURIComponent(evidenceRef.authority_ref.id)}`;
   }
   if ('review_packet_id' in evidenceRef && evidenceRef.review_packet_id !== undefined) {
-    return `/tasks/${taskId}/reviews/${encodeURIComponent(evidenceRef.review_packet_id)}`;
+    return `/code-review-handoffs?task_id=${taskId}&review_packet_id=${encodeURIComponent(evidenceRef.review_packet_id)}`;
   }
   return undefined;
 }
@@ -241,7 +241,7 @@ function typedObjectHref(ref: ReleaseScopeRef): string {
     case 'tech_debt':
       return `/tech-debt/${encodeURIComponent(ref.id)}`;
     case 'task':
-      return `/tasks/${encodeURIComponent(ref.id)}`;
+      return `/executions?task_id=${encodeURIComponent(ref.id)}`;
     case 'bug':
       return `/bugs/${encodeURIComponent(ref.id)}`;
   }

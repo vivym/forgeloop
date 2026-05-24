@@ -61,7 +61,7 @@ const reportCatalog: Array<{
     summary: 'Retrospective evidence and lifecycle replay for project management objects.',
     metrics: [
       { label: 'Replay scope', value: 'Product' },
-      { label: 'Evidence', value: 'Task-scoped' },
+      { label: 'Evidence', value: 'Execution-scoped' },
     ],
   },
 ];
@@ -111,7 +111,7 @@ export function ReportFamilyRoute({ reportId }: { reportId: ReportId }) {
             <Metric label="Generated" value={formatDate(query.data?.generated_at)} />
           </MetricGrid>
           <p className="text-sm text-text-secondary">
-            This report summarizes typed project-management objects and links follow-up work through task-scoped evidence routes.
+            This report summarizes typed project-management objects and links follow-up work through execution evidence routes.
           </p>
         </div>
       </Section>

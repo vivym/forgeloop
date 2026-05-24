@@ -4152,6 +4152,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.getById(boundary_summaries, boundary_summaries.id, id);
   }
 
+  async listBoundarySummaries(): Promise<BoundarySummary[]> {
+    return this.listWhere<BoundarySummary>(boundary_summaries, undefined, [
+      boundary_summaries.createdAt,
+      boundary_summaries.id,
+    ]);
+  }
+
   async saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void> {
     await this.insertImmutable(boundary_summary_revisions, revision);
   }
@@ -4216,6 +4223,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.getById(executions, executions.id, id);
   }
 
+  async listExecutions(): Promise<Execution[]> {
+    return this.listWhere<Execution>(executions, undefined, [executions.createdAt, executions.id]);
+  }
+
   async saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void> {
     await this.upsert(code_review_handoffs, code_review_handoffs.id, handoff);
   }
@@ -4224,12 +4235,23 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.getById(code_review_handoffs, code_review_handoffs.id, id);
   }
 
+  async listCodeReviewHandoffs(): Promise<CodeReviewHandoff[]> {
+    return this.listWhere<CodeReviewHandoff>(code_review_handoffs, undefined, [
+      code_review_handoffs.createdAt,
+      code_review_handoffs.id,
+    ]);
+  }
+
   async saveQaHandoff(handoff: QaHandoff): Promise<void> {
     await this.upsert(qa_handoffs, qa_handoffs.id, handoff);
   }
 
   async getQaHandoff(id: string): Promise<QaHandoff | undefined> {
     return this.getById(qa_handoffs, qa_handoffs.id, id);
+  }
+
+  async listQaHandoffs(): Promise<QaHandoff[]> {
+    return this.listWhere<QaHandoff>(qa_handoffs, undefined, [qa_handoffs.createdAt, qa_handoffs.id]);
   }
 
   async listQaHandoffsForCodeReview(handoffId: string): Promise<QaHandoff[]> {

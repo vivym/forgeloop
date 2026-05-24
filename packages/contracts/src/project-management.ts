@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
+import { productHrefSchema } from './api.js';
 import { attachmentRefSchema } from './attachments.js';
 import {
-  legacyBoardQueryObjectRefSchema,
   objectRefSchema,
   productObjectRefSchema,
   productQueryObjectRefSchema,
@@ -473,6 +473,7 @@ const objectDetailBaseSchema = objectListItemBaseSchema
     narrative_markdown: z.string().default(''),
     evidence_refs: z.array(objectRefSchema).default([]),
     attachment_refs: z.array(attachmentRefSchema).default([]),
+    relationship_refs: z.array(productObjectRefSchema).default([]),
   })
   .strict();
 
@@ -500,7 +501,7 @@ export const specPlanQueueItemSchema = z
     current_revision_id: nonEmpty.optional(),
     approved_revision_id: nonEmpty.optional(),
     updated_at: isoDateTimeSchema.optional(),
-    href: nonEmpty.optional(),
+    href: productHrefSchema.optional(),
   })
   .strict();
 export type SpecPlanQueueItem = z.infer<typeof specPlanQueueItemSchema>;
@@ -538,7 +539,6 @@ export const planDetailSchema = z
     narrative_markdown: z.string().default(''),
     attachment_refs: z.array(attachmentRefSchema).default([]),
     based_on_spec_revision_id: nonEmpty.optional(),
-    task_refs: z.array(objectRefSchema).default([]),
   })
   .strict();
 export type PlanDetail = z.infer<typeof planDetailSchema>;
@@ -579,9 +579,6 @@ export type RequirementListItem = z.infer<typeof requirementListItemSchema>;
 
 export const requirementDetailSchema = objectDetailBaseSchema.extend({
   ref: requirementObjectRefSchema,
-  spec_ref: objectRefSchema.optional(),
-  plan_ref: objectRefSchema.optional(),
-  task_refs: z.array(objectRefSchema).default([]),
   bug_refs: z.array(objectRefSchema).default([]),
   release_refs: z.array(objectRefSchema).default([]),
 });
@@ -597,9 +594,6 @@ export const techDebtDetailSchema = objectDetailBaseSchema.extend({
   ref: techDebtObjectRefSchema,
   affected_modules: z.array(nonEmpty).default([]),
   validation_strategy: nonEmpty.optional(),
-  spec_ref: objectRefSchema.optional(),
-  plan_ref: objectRefSchema.optional(),
-  task_refs: z.array(objectRefSchema).default([]),
 });
 export type TechDebtDetail = z.infer<typeof techDebtDetailSchema>;
 
@@ -614,7 +608,6 @@ export const bugDetailSchema = objectDetailBaseSchema.extend({
   observed_behavior: nonEmpty.optional(),
   expected_behavior: nonEmpty.optional(),
   reproduction_steps: z.array(nonEmpty).default([]),
-  task_refs: z.array(objectRefSchema).default([]),
 });
 export type BugDetail = z.infer<typeof bugDetailSchema>;
 
@@ -681,7 +674,7 @@ export type TaskDetail = z.infer<typeof taskDetailSchema>;
 export const boardCardSchema = z
   .object({
     id: nonEmpty,
-    object_ref: legacyBoardQueryObjectRefSchema,
+    object_ref: productQueryObjectRefSchema,
     title: nonEmpty,
     column_id: nonEmpty,
     status: nonEmpty,
