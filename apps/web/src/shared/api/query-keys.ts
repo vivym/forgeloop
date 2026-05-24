@@ -39,6 +39,7 @@ export const normalizeProductRegistryQuery = (query: ListProductQuery): ListProd
   ...(query.spec_revision_id === undefined ? {} : { spec_revision_id: query.spec_revision_id }),
   ...(query.plan_revision_id === undefined ? {} : { plan_revision_id: query.plan_revision_id }),
   ...(query.execution_package_id === undefined ? {} : { execution_package_id: query.execution_package_id }),
+  ...(query.execution_id === undefined ? {} : { execution_id: query.execution_id }),
   ...(query.run_session_id === undefined ? {} : { run_session_id: query.run_session_id }),
   ...(query.review_packet_id === undefined ? {} : { review_packet_id: query.review_packet_id }),
   ...(query.release_id === undefined ? {} : { release_id: query.release_id }),

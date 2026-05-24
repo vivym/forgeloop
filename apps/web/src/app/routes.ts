@@ -31,6 +31,8 @@ export default [
     route('bugs/:bugId', './routes/bugs/$bugId.tsx'),
     route('bugs/:bugId/evidence', './routes/bugs/$bugId/evidence.tsx'),
     route('board', './routes/board/index.tsx'),
+    route('executions', './routes/executions/index.tsx'),
+    route('executions/:executionId', './routes/executions/$executionId.tsx'),
     route('releases', './routes/releases/index.tsx'),
     route('releases/:releaseId', './routes/releases/$releaseId.tsx'),
     route('releases/:releaseId/evidence', './routes/releases/$releaseId/evidence.tsx'),

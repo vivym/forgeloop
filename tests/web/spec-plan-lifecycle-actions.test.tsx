@@ -13,6 +13,8 @@ import {
 import type { SpecPlan } from '../../apps/web/src/shared/api/types';
 import { installProductApiMock } from './fixtures/product-api-mock';
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
+import { developmentPlan, developmentPlanItem } from './fixtures/product-data';
+import { renderRoute } from './router-test-utils';
 
 const inReviewSpec: SpecPlan = {
   id: 'spec-1',
@@ -199,5 +201,45 @@ describe('SpecPlanLifecycleActions', () => {
     expect(isStrictlyApproved({ ...approvedPlan, approved_revision_id: undefined })).toBe(false);
     expect(isStrictlyApproved({ ...approvedPlan, resolution: 'none' })).toBe(false);
     expect(isStrictlyApproved(undefined)).toBe(false);
+  });
+});
+
+describe('Specs & Execution Plans route queue', () => {
+  it('renders governance queues scoped to Development Plan Items', async () => {
+    const routeScreen = await renderRoute('/specs-plans');
+
+    expect(await routeScreen.findByRole('heading', { name: 'Specs & Execution Plans' })).toBeTruthy();
+    expect((await routeScreen.findAllByText(/Spec needs generation/i)).length).toBeGreaterThan(0);
+    expect((await routeScreen.findAllByRole('link', { name: /open plan item/i })).map((link) => link.getAttribute('href'))).toEqual([
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
+    ]);
+    const plansTab = routeScreen.getByRole('tab', { name: 'Execution Plans' });
+    expect(plansTab.getAttribute('href')).toBe('/specs-plans?tab=plans');
+    cleanup();
+    const plansScreen = await renderRoute('/specs-plans?tab=plans');
+    expect((await plansScreen.findAllByText(/Execution Plan needs review/i)).length).toBeGreaterThan(0);
+    expect((await plansScreen.findAllByRole('link', { name: /open plan item/i })).map((link) => link.getAttribute('href'))).toEqual([
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
+    ]);
+    expect(document.body.textContent).not.toMatch(/\/plans\/|\/specs\/|\/tasks\//);
+  });
+
+  it.each([
+    '/plans',
+    '/plans/plan-1',
+    '/specs',
+    '/specs/spec-1',
+    '/requirements/req-1/spec',
+    '/requirements/req-1/plan',
+    '/bugs/bug-1/spec',
+    '/bugs/bug-1/plan',
+    '/tech-debt/td-1/spec',
+    '/tech-debt/td-1/plan',
+    '/initiatives/init-1/spec',
+    '/initiatives/init-1/plan',
+  ])('does not expose legacy or direct artifact route %s', async (route) => {
+    const routeScreen = await renderRoute(route);
+    expect(await routeScreen.findByRole('heading', { name: /not found/i })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/generate spec|generate execution plan|start execution/i);
   });
 });

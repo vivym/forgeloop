@@ -33,6 +33,7 @@ const navGroups = [
     label: 'Delivery',
     items: [
       { label: 'Board', to: '/board' },
+      { label: 'Executions', to: '/executions' },
       { label: 'Releases', to: '/releases' },
     ],
   },

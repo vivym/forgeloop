@@ -75,7 +75,7 @@ const productLaneRouteHref: Record<ProductLaneId, string> = {
   initiatives: '/initiatives',
   'spec-approver': '/specs-plans',
   'execution-owner': '/executions',
-  reviewer: '/code-review-handoffs',
+  reviewer: '/executions',
   'qa-test-owner': '/reports/quality',
   'release-owner': '/releases',
   manager: '/dashboard',

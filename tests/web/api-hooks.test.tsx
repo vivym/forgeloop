@@ -541,7 +541,9 @@ describe('Web product API hooks', () => {
       expect.arrayContaining([expect.objectContaining({ id: developmentPlanItem.revision_id })]),
     );
     await expect(api.listBoundarySummaryRevisions(boundarySummary.id)).resolves.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: boundarySummary.id, boundary_summary_id: boundarySummary.id })]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: boundarySummary.revision_id, boundary_summary_id: boundarySummary.id }),
+      ]),
     );
     await expect(api.listSpecExecutionPlanQueue({ project_id: projectId })).resolves.toEqual(
       expect.objectContaining({ items: expect.any(Array) }),

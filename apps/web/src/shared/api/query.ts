@@ -103,6 +103,7 @@ const boundarySummaryRevisionListSchema = z.array(
     .passthrough(),
 );
 const specExecutionPlanQueueResponseSchema = z.object({ items: z.array(z.record(z.string(), z.unknown())) }).passthrough();
+const executionDetailResponseSchema = z.union([executionSchema, z.object({}).strict()]);
 const aiNativeQueueResponseSchema = z
   .object({
     items: z.array(z.record(z.string(), z.unknown())),
@@ -201,7 +202,7 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
     listExecutions: async (query: ProductRegistryQuery) =>
       aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/executions${queryString(query)}`)),
     getExecution: async (executionId: string) =>
-      executionSchema.parse(await request<unknown>(`/query/executions/${encodeURIComponent(executionId)}`)),
+      executionDetailResponseSchema.parse(await request<unknown>(`/query/executions/${encodeURIComponent(executionId)}`)),
     listCodeReviewHandoffs: async (query: ProductRegistryQuery) =>
       aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/code-review-handoffs${queryString(query)}`)),
     listQaHandoffs: async (query: ProductRegistryQuery) =>

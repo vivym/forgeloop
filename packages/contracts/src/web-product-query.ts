@@ -40,6 +40,7 @@ export const productListQuerySchema = z
     spec_revision_id: z.string().min(1).optional(),
     plan_revision_id: z.string().min(1).optional(),
     execution_package_id: z.string().min(1).optional(),
+    execution_id: z.string().min(1).optional(),
     run_session_id: z.string().min(1).optional(),
     review_packet_id: z.string().min(1).optional(),
     release_id: z.string().min(1).optional(),

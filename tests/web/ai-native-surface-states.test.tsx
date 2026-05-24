@@ -8,6 +8,7 @@ import {
   boardCards,
   developmentPlan,
   developmentPlanItem,
+  execution,
   myWorkQueueResponse,
   projectId,
   requirementDetail,
@@ -26,6 +27,9 @@ describe('AI-native surface states', () => {
     ['/reports', 'Reports'],
     [`/development-plans/${developmentPlan.id}`, 'Development Plan Page'],
     [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, 'Development Plan Item Detail'],
+    ['/specs-plans', 'Specs & Execution Plans Queue'],
+    ['/executions', 'Executions Queue'],
+    [`/executions/${execution.id}`, 'Execution Detail'],
   ] as const)('renders loading, empty, error, stale, blocked, approved, running, and resumable states for %s', async (route) => {
     for (const state of ['loading', 'empty', 'error', 'stale', 'blocked', 'approved', 'running', 'resumable'] as const) {
       const screen = await renderRoute(route, { apiOverrides: overridesFor(route, state) });
@@ -46,6 +50,9 @@ function overridesFor(route: string, state: SurfaceState): ProductApiResponseMap
   if (route === '/board') return boardOverrides(state);
   if (route === `/development-plans/${developmentPlan.id}`) return developmentPlanOverrides(state);
   if (route === `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`) return developmentPlanItemOverrides(state);
+  if (route === '/specs-plans') return specExecutionPlanQueueOverrides(state);
+  if (route === '/executions') return executionsOverrides(state);
+  if (route === `/executions/${execution.id}`) return executionDetailOverrides(state);
   return reportOverrides(state);
 }
 
@@ -183,4 +190,74 @@ function developmentPlanItemOverrides(state: SurfaceState): ProductApiResponseMa
       boundary_summary_revisions: [],
     },
   };
+}
+
+function specExecutionPlanQueueOverrides(state: SurfaceState): ProductApiResponseMap {
+  const key = `GET /query/specs-execution-plans?project_id=${projectId}&limit=100`;
+  if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
+  if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
+  if (state === 'empty') return { [key]: { items: [], degraded_sources: [] } };
+  return {
+    [key]: {
+      degraded_sources: state === 'stale' ? ['stale_specs_execution_plans_projection'] : [],
+      items: [
+        {
+          id: 'spec-queue-state',
+          artifact_type: 'spec',
+          title: 'Spec needs generation',
+          status: state === 'approved' ? 'approved' : state === 'running' ? 'running' : state === 'resumable' ? 'interrupted' : state,
+          gate_state: state,
+          blocked: state === 'blocked',
+          stale: state === 'stale',
+          development_plan_item_ref: {
+            type: 'development_plan_item',
+            id: developmentPlanItem.id,
+            development_plan_id: developmentPlan.id,
+            title: developmentPlanItem.title,
+          },
+        },
+      ],
+    },
+  };
+}
+
+function executionsOverrides(state: SurfaceState): ProductApiResponseMap {
+  const key = `GET /query/executions?project_id=${projectId}&limit=100`;
+  if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
+  if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
+  if (state === 'empty') return { [key]: { items: [], degraded_sources: [] } };
+  return {
+    [key]: {
+      degraded_sources: state === 'stale' ? ['stale_executions_projection'] : [],
+      items: [{ ...execution, status: statusForState(state), worker_state: statusForState(state), blocked: state === 'blocked' }],
+    },
+  };
+}
+
+function executionDetailOverrides(state: SurfaceState): ProductApiResponseMap {
+  const key = `GET /query/executions/${execution.id}`;
+  if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
+  if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
+  if (state === 'empty') return { [key]: {} };
+  return {
+    [key]: {
+      ...execution,
+      status: statusForExecutionDetailState(state),
+      worker_state: statusForExecutionDetailState(state),
+      stale: state === 'stale',
+      blocked: state === 'blocked',
+    },
+  };
+}
+
+function statusForState(state: SurfaceState): string {
+  if (state === 'resumable') return 'interrupted';
+  if (state === 'approved') return 'completed';
+  return state;
+}
+
+function statusForExecutionDetailState(state: SurfaceState): string {
+  if (state === 'blocked') return 'failed';
+  if (state === 'stale') return 'ready';
+  return statusForState(state);
 }

@@ -45,7 +45,7 @@ type ReleaseRevisionAuthority = {
   current_spec_revision_id?: string;
   current_plan_revision_id?: string;
 };
-type AiNativeQuery = { project_id: string; actor_id?: string | undefined };
+type AiNativeQuery = { project_id: string; actor_id?: string | undefined; execution_id?: string | undefined };
 type DevelopmentPlanItemWithPlan = { plan: DevelopmentPlan; item: DevelopmentPlanItem };
 type ExecutionPlanWithContext = { executionPlan: ExecutionPlanDocument; plan: DevelopmentPlan; item: DevelopmentPlanItem };
 type ExecutionWithContext = { execution: Execution; plan: DevelopmentPlan; item: DevelopmentPlanItem };
@@ -403,7 +403,9 @@ export async function listCodeReviewHandoffQueue(
   repository: DeliveryRepository,
   query: AiNativeQuery,
 ): Promise<Record<string, unknown>> {
-  const reviews = await listCodeReviewHandoffsForProject(repository, query.project_id);
+  const reviews = (await listCodeReviewHandoffsForProject(repository, query.project_id)).filter(
+    ({ handoff }) => query.execution_id === undefined || handoff.execution_id === query.execution_id,
+  );
   const rows = await Promise.all(
     reviews.map(async ({ handoff, execution, plan, item }) => ({
       ...codeReviewHandoffQueueRow(plan, item, execution, handoff),
@@ -417,7 +419,9 @@ export async function listQaHandoffQueue(
   repository: DeliveryRepository,
   query: AiNativeQuery,
 ): Promise<Record<string, unknown>> {
-  const handoffs = await listQaHandoffsForProject(repository, query.project_id);
+  const handoffs = (await listQaHandoffsForProject(repository, query.project_id)).filter(
+    ({ handoff }) => query.execution_id === undefined || handoff.execution_id === query.execution_id,
+  );
   return {
     items: handoffs.map(({ handoff, plan, item }) => qaHandoffQueueRow(plan, item, handoff)).sort(byUpdatedAtDesc),
     degraded_sources: [],
@@ -701,7 +705,7 @@ function codeReviewHandoffQueueRow(
     changed_surfaces: handoff.changed_surfaces,
     blocking_comments: handoff.status === 'changes_requested' ? [handoff.decision_rationale ?? handoff.summary] : [],
     verification_evidence_refs: handoff.verification_evidence_refs,
-    href: `/code-review-handoffs/${handoff.id}`,
+    href: `/executions/${execution.id}`,
     plan_item_href: `/development-plans/${plan.id}/items/${item.id}`,
     updated_at: handoff.updated_at,
   };
@@ -724,23 +728,23 @@ function qaHandoffQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, han
     release_impact: handoff.release_impact,
     status: handoff.status,
     actions:
-      handoff.status === 'pending' || handoff.status === 'blocked'
+      handoff.status === 'pending'
         ? [
             {
               id: 'accept',
-              href: `/qa-handoffs/${handoff.id}`,
+              href: `/executions/${handoff.execution_id}`,
               label: 'Accept',
               command: { type: 'accept_qa_handoff', qa_handoff_id: handoff.id },
             },
             {
               id: 'block',
-              href: `/qa-handoffs/${handoff.id}`,
+              href: `/executions/${handoff.execution_id}`,
               label: 'Block',
               command: { type: 'block_qa_handoff', qa_handoff_id: handoff.id },
             },
           ]
-        : [{ id: 'inspect', href: `/qa-handoffs/${handoff.id}`, label: 'Inspect' }],
-    href: `/qa-handoffs/${handoff.id}`,
+        : [{ id: 'inspect', href: `/executions/${handoff.execution_id}`, label: 'Inspect' }],
+    href: `/executions/${handoff.execution_id}`,
     plan_item_href: `/development-plans/${plan.id}/items/${item.id}`,
     updated_at: handoff.updated_at,
   };
@@ -816,7 +820,7 @@ function qaHandoffToMyWorkQueueItem(handoff: QaHandoff, plan: DevelopmentPlan, i
     title: `${item.title} QA handoff`,
     attention_reason: `qa_${handoff.status}`,
     expected_action: handoff.status === 'pending' ? 'Accept or block QA handoff' : 'Resolve QA blocker',
-    href: `/qa-handoffs/${handoff.id}`,
+    href: `/executions/${handoff.execution_id}`,
     actor_id: item.driver_actor_id,
   };
 }

@@ -247,8 +247,23 @@ export const executionSchema = z
       })
       .strict(),
     status: executionStatusSchema,
+    worker_state: nonEmpty.optional(),
+    current_step: nonEmpty.optional(),
+    source_ref: sourceObjectRefSchema.optional(),
+    stale: z.boolean().optional(),
+    blocked: z.boolean().optional(),
+    last_event_at: isoDateTimeSchema.optional(),
+    interrupt_history: z
+      .array(z.object({ at: isoDateTimeSchema.optional(), reason: nonEmpty.optional() }).strict())
+      .default([]),
+    continuation_history: z
+      .array(z.object({ at: isoDateTimeSchema.optional(), summary: nonEmpty.optional() }).strict())
+      .default([]),
     evidence_refs: z.array(productObjectRefSchema).default([]),
     runtime_evidence_refs: z.array(runtimeEvidenceObjectRefSchema).default([]),
+    pr_refs: z.array(z.object({ id: nonEmpty, title: nonEmpty.optional() }).strict()).default([]),
+    diff_refs: z.array(z.object({ id: nonEmpty, title: nonEmpty.optional() }).strict()).default([]),
+    test_evidence_refs: z.array(z.object({ id: nonEmpty, title: nonEmpty.optional() }).strict()).default([]),
     created_at: isoDateTimeSchema,
     updated_at: isoDateTimeSchema,
   })

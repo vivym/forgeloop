@@ -21,6 +21,8 @@ import DevelopmentPlanItemSpecRoute from '../../apps/web/src/app/routes/developm
 import DevelopmentPlansRoute from '../../apps/web/src/app/routes/development-plans';
 import NewDevelopmentPlanRoute from '../../apps/web/src/app/routes/development-plans/new';
 import DevToolsRoute from '../../apps/web/src/app/routes/dev-tools';
+import ExecutionDetailRoute from '../../apps/web/src/app/routes/executions/$executionId';
+import ExecutionsRoute from '../../apps/web/src/app/routes/executions';
 import InitiativeDetailRoute from '../../apps/web/src/app/routes/initiatives/$initiativeId';
 import InitiativeEvidenceRoute from '../../apps/web/src/app/routes/initiatives/$initiativeId/evidence';
 import InitiativesRoute from '../../apps/web/src/app/routes/initiatives';
@@ -96,6 +98,8 @@ const productRoutes: RouteObject[] = [
       { path: 'bugs/:bugId', Component: BugDetailRoute },
       { path: 'bugs/:bugId/evidence', Component: BugEvidenceRoute },
       { path: 'board', Component: BoardRoute },
+      { path: 'executions', Component: ExecutionsRoute },
+      { path: 'executions/:executionId', Component: ExecutionDetailRoute },
       { path: 'releases', Component: ReleasesRoute },
       { path: 'releases/:releaseId', Component: ReleaseDetailRoute },
       { path: 'releases/:releaseId/evidence', Component: ReleaseEvidenceRoute },

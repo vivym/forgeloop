@@ -183,18 +183,44 @@ describe('project management query API', () => {
           object_ref: expect.objectContaining({ type: 'code_review_handoff', id: review.id }),
           execution_ref: expect.objectContaining({ type: 'execution', id: execution.id }),
           qa_handoff_available: false,
+          href: `/executions/${execution.id}`,
         }),
       ]),
     );
+    const executionScopedReviews = await request(server).get('/query/code-review-handoffs').query({ ...query, execution_id: execution.id }).expect(200);
+    expect(executionScopedReviews.body.items).toEqual([
+      expect.objectContaining({ id: review.id, href: `/executions/${execution.id}` }),
+    ]);
 
     const qaHandoffs = await request(server).get('/query/qa-handoffs').query(query).expect(200);
+    const projectedQaHandoff = qaHandoffs.body.items.find((handoff: { id: string }) => handoff.id === qa.id);
     expect(qaHandoffs.body.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           object_ref: expect.objectContaining({ type: 'qa_handoff', id: qa.id }),
           source_ref: expect.objectContaining({ type: workItem.kind, id: workItem.id }),
           development_plan_item_ref: expect.objectContaining({ id: item.id }),
-          actions: expect.arrayContaining([expect.objectContaining({ id: 'accept' })]),
+          href: `/executions/${execution.id}`,
+          status: 'blocked',
+        }),
+      ]),
+    );
+    expect(projectedQaHandoff.actions).toEqual([{ id: 'inspect', href: `/executions/${execution.id}`, label: 'Inspect' }]);
+    expect(JSON.stringify(projectedQaHandoff.actions)).not.toMatch(/accept_qa_handoff|block_qa_handoff/);
+    const executionScopedQaHandoffs = await request(server).get('/query/qa-handoffs').query({ ...query, execution_id: execution.id }).expect(200);
+    expect(executionScopedQaHandoffs.body.items).toEqual([
+      expect.objectContaining({ id: qa.id, href: `/executions/${execution.id}` }),
+    ]);
+
+    const qaMyWork = await request(server)
+      .get('/query/my-work')
+      .query({ ...query, actor_id: executionActorOwner })
+      .expect(200);
+    expect(qaMyWork.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          object_ref: expect.objectContaining({ type: 'qa_handoff', id: qa.id }),
+          href: `/executions/${execution.id}`,
         }),
       ]),
     );
