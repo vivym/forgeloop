@@ -68,6 +68,24 @@ export const normalizeProjectManagementListQuery = (query: ProjectManagementList
 });
 
 export const queryKeys = {
+  dashboard: (query: ListProductQuery) => ['dashboard', normalizeProductRegistryQuery(query)],
+  developmentPlans: (query: ListProductQuery) => ['development-plans', normalizeProductRegistryQuery(query)],
+  developmentPlan: (developmentPlanId: string | undefined) => ['development-plan', developmentPlanId],
+  developmentPlanItem: (developmentPlanId: string | undefined, itemId: string | undefined) => [
+    'development-plan-item',
+    developmentPlanId,
+    itemId,
+  ],
+  developmentPlanItemRevisions: (developmentPlanId: string | undefined, itemId: string | undefined) => [
+    'development-plan-item-revisions',
+    developmentPlanId,
+    itemId,
+  ],
+  boundarySummaryRevisions: (boundarySummaryId: string | undefined) => ['boundary-summary-revisions', boundarySummaryId],
+  executions: (query: ListProductQuery) => ['executions', normalizeProductRegistryQuery(query)],
+  execution: (executionId: string | undefined) => ['execution', executionId],
+  codeReviewHandoffs: (query: ListProductQuery) => ['code-review-handoffs', normalizeProductRegistryQuery(query)],
+  qaHandoffs: (query: ListProductQuery) => ['qa-handoffs', normalizeProductRegistryQuery(query)],
   myWork: (query: MyWorkQuery) => ['my-work', normalizeMyWorkQuery(query)],
   requirements: (query: ProjectManagementListQuery) => ['requirements', normalizeProjectManagementListQuery(query)],
   requirement: (requirementId: string | undefined) => ['requirement', requirementId],

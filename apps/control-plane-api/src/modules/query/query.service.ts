@@ -148,6 +148,10 @@ export class QueryService {
     return listProjectExecutions(this.repository, query);
   }
 
+  async getExecution(executionId: string) {
+    return this.requireFound(await this.repository.getExecution(executionId), `Execution ${executionId}`);
+  }
+
   listCodeReviewHandoffs(query: ProductListQuery) {
     return listProjectCodeReviewHandoffs(this.repository, query);
   }

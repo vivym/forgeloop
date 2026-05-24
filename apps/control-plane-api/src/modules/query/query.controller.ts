@@ -59,6 +59,11 @@ export class QueryController {
     return this.service.listExecutions(query);
   }
 
+  @Get('executions/:executionId')
+  getExecution(@Param('executionId') executionId: string) {
+    return this.service.getExecution(executionId);
+  }
+
   @Get('code-review-handoffs')
   listCodeReviewHandoffs(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
     return this.service.listCodeReviewHandoffs(query);

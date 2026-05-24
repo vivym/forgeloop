@@ -63,6 +63,64 @@ export function usePipelineQuery(projectId: string) {
   });
 }
 
+export function useDashboardQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.dashboard(normalizedQuery),
+    queryFn: () => createQueryApi().getDashboard(normalizedQuery),
+  });
+}
+
+export function useDevelopmentPlansQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.developmentPlans(normalizedQuery),
+    queryFn: () => createQueryApi().listDevelopmentPlans(normalizedQuery),
+  });
+}
+
+export function useDevelopmentPlanQuery(developmentPlanId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.developmentPlan(developmentPlanId),
+    queryFn: () => createQueryApi().getDevelopmentPlan(requiredId(developmentPlanId, 'developmentPlanId')),
+    enabled: developmentPlanId !== undefined,
+  });
+}
+
+export function useDevelopmentPlanItemQuery(developmentPlanId: string | undefined, itemId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.developmentPlanItem(developmentPlanId, itemId),
+    queryFn: () =>
+      createQueryApi().getDevelopmentPlanItem(
+        requiredId(developmentPlanId, 'developmentPlanId'),
+        requiredId(itemId, 'itemId'),
+      ),
+    enabled: developmentPlanId !== undefined && itemId !== undefined,
+  });
+}
+
+export function useDevelopmentPlanItemRevisionsQuery(developmentPlanId: string | undefined, itemId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId),
+    queryFn: () =>
+      createQueryApi().listDevelopmentPlanItemRevisions(
+        requiredId(developmentPlanId, 'developmentPlanId'),
+        requiredId(itemId, 'itemId'),
+      ),
+    enabled: developmentPlanId !== undefined && itemId !== undefined,
+  });
+}
+
+export function useBoundarySummaryRevisionsQuery(boundarySummaryId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.boundarySummaryRevisions(boundarySummaryId),
+    queryFn: () => createQueryApi().listBoundarySummaryRevisions(requiredId(boundarySummaryId, 'boundarySummaryId')),
+    enabled: boundarySummaryId !== undefined,
+  });
+}
+
 export function useMyWorkQuery(query: MyWorkQuery) {
   const normalizedQuery = normalizeMyWorkQuery(query);
 
@@ -239,6 +297,41 @@ export function useSpecExecutionPlanQueueQuery(query: Pick<ListProductQuery, 'pr
   return useQuery({
     queryKey: queryKeys.specExecutionPlanQueue(normalizedQuery),
     queryFn: () => createQueryApi().listSpecExecutionPlanQueue(normalizedQuery),
+  });
+}
+
+export function useExecutionsQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.executions(normalizedQuery),
+    queryFn: () => createQueryApi().listExecutions(normalizedQuery),
+  });
+}
+
+export function useExecutionQuery(executionId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.execution(executionId),
+    queryFn: () => createQueryApi().getExecution(requiredId(executionId, 'executionId')),
+    enabled: executionId !== undefined,
+  });
+}
+
+export function useCodeReviewHandoffsQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.codeReviewHandoffs(normalizedQuery),
+    queryFn: () => createQueryApi().listCodeReviewHandoffs(normalizedQuery),
+  });
+}
+
+export function useQaHandoffsQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.qaHandoffs(normalizedQuery),
+    queryFn: () => createQueryApi().listQaHandoffs(normalizedQuery),
   });
 }
 
@@ -907,10 +1000,10 @@ function invalidateItemScopedArtifactResources(
     queryClient.invalidateQueries({ queryKey: ['development-plans'] }),
     queryClient.invalidateQueries({ queryKey: ['development-plan', developmentPlanId] }),
     queryClient.invalidateQueries({ queryKey: ['development-plan-item', developmentPlanId, itemId] }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId) }),
     queryClient.invalidateQueries({ queryKey: ['item-spec-revision-compare', developmentPlanId, itemId] }),
     queryClient.invalidateQueries({ queryKey: ['item-execution-plan-revision-compare', developmentPlanId, itemId] }),
-    queryClient.invalidateQueries({ queryKey: ['specs'] }),
-    queryClient.invalidateQueries({ queryKey: ['plans'] }),
+    queryClient.invalidateQueries({ queryKey: ['spec-execution-plan-queue'] }),
   ]);
 }
 

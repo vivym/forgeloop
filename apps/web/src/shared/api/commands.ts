@@ -5,11 +5,17 @@ import type {
   AcknowledgeReleaseTestAcceptanceBody,
   ApproveArtifactBody,
   ApproveReleaseBody,
+  BoundarySummary,
+  BrainstormingSession,
+  CodeReviewHandoff,
   CreateExecutionPackageBody,
   CreateReleaseBody,
   CreateReleaseEvidenceBody,
   CreateWorkItemBody,
+  DevelopmentPlan,
+  DevelopmentPlanItem,
   EvidenceChainResponse,
+  Execution,
   ExecutionPackage,
   CloseReleaseBody,
   LinkReleaseObjectResponse,
@@ -20,6 +26,7 @@ import type {
   OverrideApproveReleaseBody,
   PatchExecutionPackageBody,
   PatchReleaseBody,
+  ProductObjectRef,
   ReleaseCommandBody,
   ReleaseControlResponse,
   ReleaseListResponse,
@@ -42,7 +49,9 @@ import type {
   StartReleaseObservingBody,
   SubmitForApprovalBody,
   RequirementDetail,
+  SourceObjectRef,
   TechDebtDetail,
+  QaHandoff,
   UnlinkReleaseScopeBody,
   WorkItem,
   WorkItemIntakeContext,
@@ -105,9 +114,96 @@ export type CreateInitiativeBody = TypedWorkItemCreateBody<'initiative'>;
 export type CreateTechDebtBody = TypedWorkItemCreateBody<'tech_debt'>;
 export type CreateBugBody = TypedWorkItemCreateBody<'bug'>;
 
+export interface CreateDevelopmentPlanBody extends ActorCommandBody {
+  project_id: string;
+  source_ref: SourceObjectRef;
+  title: string;
+}
+
+export interface CreateDevelopmentPlanItemBody {
+  title: string;
+  summary: string;
+  responsible_role: 'product' | 'tech_lead' | 'developer' | 'qa' | 'release_owner' | 'manager';
+  driver_actor_id?: string;
+  reviewer_actor_id?: string;
+  risk: 'low' | 'medium' | 'high' | 'critical';
+  dependency_hints?: string[];
+  affected_surfaces?: string[];
+  release_impact: 'none' | 'release_scoped' | 'release_blocking';
+}
+
+export interface GenerateDevelopmentPlanDraftBody extends ActorCommandBody {
+  project_id: string;
+  source_ref: SourceObjectRef;
+  guidance?: string;
+}
+
+export interface LinkSourceObjectToDevelopmentPlanBody extends ActorCommandBody {
+  rationale?: string;
+}
+
 export interface RegenerateArtifactDraftBody extends ActorCommandBody {
   feedback: string;
   preserve_prior_decisions?: boolean;
+}
+
+export type RegenerateDevelopmentPlanDraftBody = RegenerateArtifactDraftBody;
+
+export interface StartBrainstormingSessionBody {
+  actor_id: string;
+}
+
+export interface AnswerBrainstormingQuestionBody {
+  question_id: string;
+  text: string;
+  actor_id: string;
+}
+
+export interface RecordBrainstormingDecisionBody {
+  text: string;
+  rationale?: string;
+  actor_id: string;
+}
+
+export interface ApproveBoundaryBody {
+  confirmed_scope?: string[];
+  confirmed_out_of_scope?: string[];
+  accepted_assumptions?: string[];
+  open_risks?: string[];
+  validation_expectations?: string[];
+  actor_id: string;
+  final_decision?: string;
+}
+
+export interface ReadyForCodeReviewBody extends ActorCommandBody {
+  summary: string;
+  changed_surfaces: string[];
+  verification_evidence_refs: ProductObjectRef[];
+}
+
+export interface CodeReviewDecisionBody extends ActorCommandBody {
+  rationale: string;
+}
+
+export interface CodeReviewAuditedExceptionBody extends ActorCommandBody {
+  reason: string;
+  risk: 'low' | 'medium' | 'high' | 'critical';
+  rollback_plan: string;
+}
+
+export interface CreateQaHandoffBody extends ActorCommandBody {
+  acceptance_criteria: string[];
+  test_strategy: string;
+  verification_evidence_refs?: ProductObjectRef[];
+  known_risks?: string[];
+}
+
+export interface QaHandoffDecisionBody extends ActorCommandBody {
+  rationale: string;
+}
+
+export interface AcceptQaHandoffBody extends QaHandoffDecisionBody {
+  verification_evidence_refs: ProductObjectRef[];
 }
 
 export interface RevisionCompareQuery {
@@ -269,6 +365,73 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         method: 'POST',
         body: createWorkItemRequestSchema.parse({ ...body, kind: 'bug' }),
       }),
+    createDevelopmentPlan: (body: CreateDevelopmentPlanBody) =>
+      request<DevelopmentPlan>('/development-plans', {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    createDevelopmentPlanItem: (developmentPlanId: string, body: CreateDevelopmentPlanItemBody) =>
+      request<DevelopmentPlanItem>(`/development-plans/${encodeURIComponent(developmentPlanId)}/items`, {
+        method: 'POST',
+        body,
+      }),
+    generateDevelopmentPlanDraft: (body: GenerateDevelopmentPlanDraftBody) =>
+      request<Record<string, unknown>>('/development-plans/generate-draft', {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    regenerateDevelopmentPlanDraft: (developmentPlanId: string, body: RegenerateDevelopmentPlanDraftBody) =>
+      request<Record<string, unknown>>(`/development-plans/${encodeURIComponent(developmentPlanId)}/regenerate-draft`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    linkSourceObjectToDevelopmentPlan: (
+      sourceType: SourceObjectRef['type'],
+      sourceId: string,
+      developmentPlanId: string,
+      body: LinkSourceObjectToDevelopmentPlanBody,
+    ) =>
+      request<Record<string, unknown>>(
+        `/source-objects/${encodeURIComponent(sourceType)}/${encodeURIComponent(sourceId)}/development-plans/${encodeURIComponent(developmentPlanId)}/link`,
+        {
+          method: 'POST',
+          body,
+          ...actorRequest(body.actor_id),
+        },
+      ),
+    startBrainstormingSession: (developmentPlanId: string, itemId: string, body: StartBrainstormingSessionBody) =>
+      request<BrainstormingSession>(
+        `/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}/brainstorming-sessions`,
+        {
+          method: 'POST',
+          body,
+          ...actorRequest(body.actor_id),
+        },
+      ),
+    answerBrainstormingQuestion: (sessionId: string, body: AnswerBrainstormingQuestionBody) =>
+      request<Record<string, unknown>>(`/brainstorming-sessions/${encodeURIComponent(sessionId)}/answers`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    recordBrainstormingDecision: (sessionId: string, body: RecordBrainstormingDecisionBody) =>
+      request<Record<string, unknown>>(`/brainstorming-sessions/${encodeURIComponent(sessionId)}/decisions`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    approveBoundary: (sessionId: string, body: ApproveBoundaryBody) =>
+      request<{ session: BrainstormingSession; boundary_summary: BoundarySummary }>(
+        `/brainstorming-sessions/${encodeURIComponent(sessionId)}/approve-boundary`,
+        {
+          method: 'POST',
+          body,
+          ...actorRequest(body.actor_id),
+        },
+      ),
     updateRequirementNarrative: (requirementId: string, body: MarkdownDocument) =>
       request<RequirementDetail>(`/requirements/${encodeURIComponent(requirementId)}/narrative`, {
         method: 'PATCH',
@@ -296,8 +459,12 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         }`,
       ),
 
-    generateItemSpecDraft: (developmentPlanId: string, itemId: string) =>
-      request<SpecRevision>(itemSpecPath(developmentPlanId, itemId, 'generate-draft'), { method: 'POST', body: {} }),
+    generateItemSpecDraft: (developmentPlanId: string, itemId: string, body: ActorCommandBody = {}) =>
+      request<SpecRevision>(itemSpecPath(developmentPlanId, itemId, 'generate-draft'), {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
     submitItemSpecForApproval: (developmentPlanId: string, itemId: string, body: SubmitForApprovalBody) =>
       request<SpecPlan>(itemSpecPath(developmentPlanId, itemId, 'submit-for-approval'), {
         method: 'POST',
@@ -331,10 +498,11 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
     compareItemSpecRevisions: (developmentPlanId: string, itemId: string, query: RevisionCompareQuery) =>
       request<StructuredRevisionDiff>(`${itemSpecPath(developmentPlanId, itemId, 'revisions/compare')}${queryString({ ...query })}`),
 
-    generateItemExecutionPlanDraft: (developmentPlanId: string, itemId: string) =>
+    generateItemExecutionPlanDraft: (developmentPlanId: string, itemId: string, body: ActorCommandBody = {}) =>
       request<ExecutionPlanRevision>(itemExecutionPlanPath(developmentPlanId, itemId, 'generate-draft'), {
         method: 'POST',
-        body: {},
+        body,
+        ...actorRequest(body.actor_id),
       }),
     submitItemExecutionPlanForApproval: (developmentPlanId: string, itemId: string, body: SubmitForApprovalBody) =>
       request<ExecutionPlanDocument>(itemExecutionPlanPath(developmentPlanId, itemId, 'submit-for-approval'), {
@@ -370,6 +538,70 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
       request<StructuredRevisionDiff>(
         `${itemExecutionPlanPath(developmentPlanId, itemId, 'revisions/compare')}${queryString({ ...query })}`,
       ),
+
+    startItemExecution: (developmentPlanId: string, itemId: string, body: ActorCommandBody) =>
+      request<Execution>(
+        `/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}/execution/start`,
+        {
+          method: 'POST',
+          body,
+          ...actorRequest(body.actor_id),
+        },
+      ),
+    continueExecution: (executionId: string, body: ActorCommandBody) =>
+      request<Execution>(`/executions/${encodeURIComponent(executionId)}/continue`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    interruptExecution: (executionId: string, body: ActorCommandBody) =>
+      request<Execution>(`/executions/${encodeURIComponent(executionId)}/interrupt`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    markExecutionReadyForCodeReview: (executionId: string, body: ReadyForCodeReviewBody) =>
+      request<CodeReviewHandoff>(`/executions/${encodeURIComponent(executionId)}/ready-for-code-review`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    approveCodeReviewHandoff: (handoffId: string, body: CodeReviewDecisionBody) =>
+      request<CodeReviewHandoff>(`/code-review-handoffs/${encodeURIComponent(handoffId)}/approve`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    requestCodeReviewChanges: (handoffId: string, body: CodeReviewDecisionBody) =>
+      request<CodeReviewHandoff>(`/code-review-handoffs/${encodeURIComponent(handoffId)}/request-changes`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    recordCodeReviewAuditedException: (handoffId: string, body: CodeReviewAuditedExceptionBody) =>
+      request<CodeReviewHandoff>(`/code-review-handoffs/${encodeURIComponent(handoffId)}/audited-exception`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    createQaHandoff: (handoffId: string, body: CreateQaHandoffBody) =>
+      request<QaHandoff>(`/code-review-handoffs/${encodeURIComponent(handoffId)}/qa-handoff`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    blockQaHandoff: (qaHandoffId: string, body: QaHandoffDecisionBody) =>
+      request<QaHandoff>(`/qa-handoffs/${encodeURIComponent(qaHandoffId)}/block`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    acceptQaHandoff: (qaHandoffId: string, body: AcceptQaHandoffBody) =>
+      request<QaHandoff>(`/qa-handoffs/${encodeURIComponent(qaHandoffId)}/accept`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
 
     generatePackages: (planRevisionId: string) =>
       request<ExecutionPackage[]>(`/plan-revisions/${encodeURIComponent(planRevisionId)}/generate-packages`, { method: 'POST' }),

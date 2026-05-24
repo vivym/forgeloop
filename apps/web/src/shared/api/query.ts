@@ -4,6 +4,7 @@ import {
   boardCardSchema,
   bugDetailSchema,
   bugListItemSchema,
+  executionSchema,
   initiativeDetailSchema,
   initiativeListItemSchema,
   myWorkQueueItemSchema,
@@ -61,7 +62,48 @@ const initiativeListResponseSchema = z.object({ items: z.array(initiativeListIte
 const techDebtListResponseSchema = z.object({ items: z.array(techDebtListItemSchema) }).passthrough();
 const bugListResponseSchema = z.object({ items: z.array(bugListItemSchema) }).passthrough();
 const boardResponseSchema = z.object({ items: z.array(boardCardSchema) }).passthrough();
+const dashboardResponseSchema = z
+  .object({
+    project_id: z.string(),
+    sections: z.array(z.record(z.string(), z.unknown())).default([]),
+    next_actions: z.array(z.record(z.string(), z.unknown())).default([]),
+    report_links: z.array(z.record(z.string(), z.unknown())).default([]),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
+const developmentPlanListResponseSchema = z
+  .object({
+    items: z.array(z.record(z.string(), z.unknown())),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
+const developmentPlanProjectionSchema = z.record(z.string(), z.unknown());
+const developmentPlanItemProjectionSchema = z.record(z.string(), z.unknown());
+const developmentPlanItemRevisionListSchema = z.array(
+  z
+    .object({
+      id: z.string(),
+      development_plan_item_id: z.string(),
+      revision_number: z.number().int().positive(),
+    })
+    .passthrough(),
+);
+const boundarySummaryRevisionListSchema = z.array(
+  z
+    .object({
+      id: z.string(),
+      boundary_summary_id: z.string(),
+      revision_number: z.number().int().positive(),
+    })
+    .passthrough(),
+);
 const specExecutionPlanQueueResponseSchema = z.object({ items: z.array(z.record(z.string(), z.unknown())) }).passthrough();
+const aiNativeQueueResponseSchema = z
+  .object({
+    items: z.array(z.record(z.string(), z.unknown())),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
 const reportResponseSchema = z
   .object({
     id: z.string(),
@@ -75,6 +117,38 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
   const { request } = createApiContext(options);
 
   const productMethods = {
+    getDashboard: async (query: ProductRegistryQuery) =>
+      dashboardResponseSchema.parse(await request<unknown>(`/query/dashboard${queryString(query)}`)),
+    listDevelopmentPlans: async (query: ProductRegistryQuery) =>
+      developmentPlanListResponseSchema.parse(await request<unknown>(`/query/development-plans${queryString(query)}`)),
+    getDevelopmentPlan: async (developmentPlanId: string) =>
+      developmentPlanProjectionSchema.parse(await request<unknown>(`/query/development-plans/${encodeURIComponent(developmentPlanId)}`)),
+    getDevelopmentPlanItem: async (developmentPlanId: string, itemId: string) =>
+      developmentPlanItemProjectionSchema.parse(
+        await request<unknown>(
+          `/query/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}`,
+        ),
+      ),
+    listDevelopmentPlanItemRevisions: async (developmentPlanId: string, itemId: string) =>
+      developmentPlanItemRevisionListSchema.parse(
+        await request<unknown>(
+          `/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}/revisions`,
+        ),
+      ),
+    compareDevelopmentPlanItemRevisions: async (developmentPlanId: string, itemId: string, query: { base_revision_id: string; compare_revision_id: string }) =>
+      developmentPlanItemProjectionSchema.parse(
+        await request<unknown>(
+          `/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}/revisions/compare${queryString(query)}`,
+        ),
+      ),
+    listBoundarySummaryRevisions: async (boundarySummaryId: string) =>
+      boundarySummaryRevisionListSchema.parse(
+        await request<unknown>(`/boundary-summaries/${encodeURIComponent(boundarySummaryId)}/revisions`),
+      ),
+    compareBoundarySummaryRevisions: async (boundarySummaryId: string, query: { base_revision_id: string; compare_revision_id: string }) =>
+      developmentPlanItemProjectionSchema.parse(
+        await request<unknown>(`/boundary-summaries/${encodeURIComponent(boundarySummaryId)}/revisions/compare${queryString(query)}`),
+      ),
     listMyWork: async (query: MyWorkQuery) =>
       projectManagementQueueResponseSchema.parse(
         await request<unknown>(`/query/my-work${queryString(query)}`),
@@ -119,6 +193,14 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       pipelineResponseSchema.parse(await request<unknown>(`/query/pipeline${queryString(query)}`)) as PipelineResponse,
     listSpecExecutionPlanQueue: async (query: ProductRegistryQuery) =>
       specExecutionPlanQueueResponseSchema.parse(await request<unknown>(`/query/specs-execution-plans${queryString(query)}`)),
+    listExecutions: async (query: ProductRegistryQuery) =>
+      aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/executions${queryString(query)}`)),
+    getExecution: async (executionId: string) =>
+      executionSchema.parse(await request<unknown>(`/query/executions/${encodeURIComponent(executionId)}`)),
+    listCodeReviewHandoffs: async (query: ProductRegistryQuery) =>
+      aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/code-review-handoffs${queryString(query)}`)),
+    listQaHandoffs: async (query: ProductRegistryQuery) =>
+      aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/qa-handoffs${queryString(query)}`)),
     getReview: (reviewPacketId: string) => request<ReviewPacket>(`/query/reviews/${encodeURIComponent(reviewPacketId)}`),
   };
 
