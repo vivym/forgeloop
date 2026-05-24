@@ -22,6 +22,19 @@ export function flattenProductRouteConfig(routeConfig: readonly RouteConfigEntry
   return paths;
 }
 
+export function duplicateProductRoutePaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const path of paths) {
+    if (seen.has(path)) {
+      duplicates.add(path);
+      continue;
+    }
+    seen.add(path);
+  }
+  return [...duplicates];
+}
+
 function collectRoutePaths(route: RouteConfigEntry, parentPath: string, paths: string[]) {
   const ownPath = route.index === true ? parentPath : joinRoutePaths(parentPath, route.path);
 

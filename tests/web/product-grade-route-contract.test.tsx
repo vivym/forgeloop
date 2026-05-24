@@ -7,7 +7,7 @@ import {
   retiredProductRoutes,
 } from '../../apps/web/src/features/product-surfaces/route-contract';
 import appRouteConfig from '../../apps/web/src/app/routes';
-import { flattenProductRouteConfig } from './helpers/product-route-config';
+import { duplicateProductRoutePaths, flattenProductRouteConfig } from './helpers/product-route-config';
 
 describe('product-grade route contract', () => {
   const expectedProductRoutes = [
@@ -76,10 +76,13 @@ describe('product-grade route contract', () => {
   });
 
   it('keeps retired route families out of command search', () => {
-    const commandText = JSON.stringify(productCommandItems);
+    const commandPaths = productCommandItems.map((item) => item.path);
+    expect(commandPaths).toEqual(expectedProductRoutes);
+
     for (const route of retiredProductRoutes) {
-      expect(commandText).not.toContain(route.path);
+      expect(commandPaths).not.toContain(route.path);
     }
+    expect(commandPaths).not.toContain('/dev-tools');
     expect(retiredProductRoutes.map((route) => route.path)).toEqual(expectedRetiredSmokeRoutes);
   });
 
@@ -99,6 +102,7 @@ describe('product-grade route contract', () => {
     ]);
 
     expect(registeredPaths.filter((path) => !classified.has(path))).toEqual([]);
+    expect(duplicateProductRoutePaths(registeredPaths)).toEqual([]);
     expect(registeredPaths.join('\n')).not.toMatch(/(^|\/)(tasks|plans|specs|packages|runs|reviews|replay)(\/|$)/);
   });
 });

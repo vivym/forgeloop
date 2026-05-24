@@ -16,7 +16,9 @@ export function expectFirstViewportContract(
   screen: ScreenQueries,
   options: FirstViewportContractOptions,
 ) {
-  const heading = screen.getByRole('heading', { level: 1, name: options.heading });
+  const heading = options.heading === undefined
+    ? screen.getByRole('heading', { level: 1 })
+    : screen.getByRole('heading', { level: 1, name: options.heading });
   expectVisibleAffordance(heading, 'first viewport must expose a visible h1 with text');
 
   const marker = document.querySelector(`[${firstViewportContract.pageFamilyAttribute}]`);

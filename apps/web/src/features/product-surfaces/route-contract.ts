@@ -30,6 +30,7 @@ export interface ProductRouteContract {
 export interface ProductCommandItem {
   id: string;
   label: string;
+  path: string;
   family: ProductPageFamily;
   kind: Exclude<ProductRouteKind, 'retired'>;
 }
@@ -163,6 +164,7 @@ export const requiredScreenshotRoutes: readonly ProductRouteContract[] = [
 export const productCommandItems: readonly ProductCommandItem[] = canonicalProductRoutes.map((route) => ({
   id: route.path === '/' ? 'root' : route.path.replace(/^\/+/, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, ''),
   label: route.label,
+  path: route.path,
   family: route.family,
   kind: 'product',
 }));
