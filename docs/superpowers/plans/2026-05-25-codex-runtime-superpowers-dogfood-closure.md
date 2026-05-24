@@ -33,7 +33,8 @@ Related product direction:
 
 - Modify `packages/contracts/src/ai-project-management.ts`
   - Add Leader/delegate fields to Development Plan Item.
-  - Add Boundary Session status, Boundary Round, round-scoped question/answer/decision schemas, and expanded Boundary Summary Revision contract.
+  - Add Boundary Session status, Leader/delegate snapshot fields, current/latest/approved round pointers, Boundary Round, round-scoped question/answer/decision schemas, and expanded Boundary Summary Revision contract.
+  - Add required `approved_spec_revision_id` and public approved Spec revision ref on product `Execution`.
   - Keep compatibility fields for old session-level arrays while new callers use row-level artifacts.
 - Modify `packages/domain/src/brainstorming.ts`
   - Export `BoundaryRound`, `BoundaryQuestion`, `BoundaryAnswer`, `BoundaryDecision`, expanded `BoundarySummaryRevision`.
@@ -56,6 +57,10 @@ Related product direction:
   - Add repository methods for rounds/questions/answers/decisions.
   - Update save/list mappings and revision compare snapshots.
   - Add migration/backfill helper for synthetic round 1 and summary revision eligibility.
+- Modify `packages/db/src/repositories/in-memory-delivery-repository.ts`
+  - Implement all new repository methods for API/unit tests that use the in-memory repository.
+- Modify `packages/db/src/repositories/drizzle-delivery-repository.ts`
+  - Implement Drizzle persistence/mappers for the new tables, fields, and backfill helper.
 - Test in `tests/contracts/project-management-contracts.test.ts`
 - Test in `tests/db/brainstorming-repository.test.ts`
 - Update existing fixtures in `tests/helpers/*` as needed.
@@ -74,13 +79,22 @@ Related product direction:
 - Modify `apps/control-plane-api/src/modules/spec-plan/spec-plan.service.ts`
   - Add generated Spec revision writer from `GeneratedSpecRevisionV1`.
   - Add generated Execution Plan revision writer from `GeneratedExecutionPlanRevisionV1`.
+  - Persist generated Execution Plan structured path policy fields into `ExecutionPlanRevision.structured_document`.
   - Re-check approved Boundary Summary / Spec preconditions at write time.
 - Modify `apps/control-plane-api/src/modules/executions/executions.service.ts`
-  - Ensure product Execution public linkage contains approved Spec, approved Execution Plan revision, and internal backing refs only as evidence.
+  - Ensure product Execution public linkage contains required approved Spec, approved Execution Plan revision, and internal backing refs only as evidence.
   - Ensure run execution path policy derives from approved Execution Plan revision.
+  - Bridge Start Execution into the existing run runtime queue.
+- Modify `apps/control-plane-api/src/modules/executions/executions.module.ts`
+  - Import/export the existing run-control dependency needed by Start Execution.
+- Modify `apps/control-plane-api/src/modules/run-control/run-control.service.ts`
+  - Reuse `enqueueRunWithRepository(...)` for product Execution start.
+- Modify `packages/db/src/schema/execution-supervision.ts`
+  - Persist required approved Spec revision linkage on `executions`.
 - Test in `tests/api/brainstorming.test.ts`
 - Test in `tests/api/spec-plan-service.test.ts`
 - Test in `tests/api/executions.test.ts`
+- Test in `tests/db/repository-contract.ts`
 
 ### Automation Action And Runtime Launch
 
@@ -179,9 +193,11 @@ Append tests that parse a Development Plan Item with Leader fields and reject un
 
 ```ts
 import {
+  brainstormingSessionSchema,
   boundarySummaryRevisionSchema,
   boundaryRoundSchema,
   developmentPlanItemSchema,
+  executionSchema,
 } from '../packages/contracts/src/ai-project-management';
 
 it('accepts Leader and delegate fields on Development Plan Item', () => {
@@ -214,6 +230,108 @@ it('accepts Leader and delegate fields on Development Plan Item', () => {
     leader_actor_id: 'actor-leader',
     leader_delegate_actor_ids: ['actor-delegate'],
   });
+});
+
+it('accepts Boundary Brainstorming session process fields and Leader snapshot', () => {
+  expect(
+    brainstormingSessionSchema.parse({
+      id: 'session-1',
+      revision_id: 'session-rev-1',
+      source_ref: { type: 'requirement', id: 'req-1', revision_id: 'req-rev-1' },
+      development_plan_id: 'plan-1',
+      development_plan_revision_id: 'plan-rev-1',
+      development_plan_item_id: 'item-1',
+      development_plan_item_revision_id: 'item-rev-1',
+      leader_actor_id: 'actor-leader',
+      leader_delegate_actor_ids: ['actor-delegate'],
+      context_manifest_id: 'context-1',
+      context_manifest_revision_id: 'context-rev-1',
+      status: 'waiting_for_leader',
+      current_round_id: 'round-1',
+      latest_summary_revision_id: undefined,
+      approved_summary_revision_id: undefined,
+      questions: [],
+      answers: [],
+      decisions: [],
+      approval_state: 'questions_open',
+      created_at: '2026-05-25T00:00:00.000Z',
+      updated_at: '2026-05-25T00:00:00.000Z',
+    }),
+  ).toMatchObject({
+    leader_actor_id: 'actor-leader',
+    current_round_id: 'round-1',
+    status: 'waiting_for_leader',
+  });
+});
+
+it('requires product Execution to publicly link approved Spec revision', () => {
+  expect(() =>
+    executionSchema.parse({
+      id: 'execution-1',
+      development_plan_item_id: 'item-1',
+      execution_plan_revision_id: 'execution-plan-rev-1',
+      ref: { type: 'execution', id: 'execution-1' },
+      development_plan_item_ref: {
+        type: 'development_plan_item',
+        id: 'item-1',
+        development_plan_id: 'plan-1',
+        revision_id: 'item-rev-1',
+      },
+      execution_plan_revision_ref: {
+        type: 'execution_plan_revision',
+        id: 'execution-plan-rev-1',
+        execution_plan_id: 'execution-plan-1',
+      },
+      status: 'running',
+      evidence_refs: [],
+      runtime_evidence_refs: [],
+      interrupt_history: [],
+      continuation_history: [],
+      pr_refs: [],
+      diff_refs: [],
+      test_evidence_refs: [],
+      created_at: '2026-05-25T00:00:00.000Z',
+      updated_at: '2026-05-25T00:00:00.000Z',
+    }),
+  ).toThrow(/approved_spec_revision_id/i);
+});
+
+it('accepts product Execution with approved Spec revision linkage and internal runtime evidence refs', () => {
+  expect(
+    executionSchema.parse({
+      id: 'execution-1',
+      development_plan_item_id: 'item-1',
+      approved_spec_revision_id: 'spec-rev-1',
+      approved_spec_revision_ref: {
+        type: 'spec_revision',
+        id: 'spec-rev-1',
+        spec_id: 'spec-1',
+      },
+      execution_plan_revision_id: 'execution-plan-rev-1',
+      ref: { type: 'execution', id: 'execution-1' },
+      development_plan_item_ref: {
+        type: 'development_plan_item',
+        id: 'item-1',
+        development_plan_id: 'plan-1',
+        revision_id: 'item-rev-1',
+      },
+      execution_plan_revision_ref: {
+        type: 'execution_plan_revision',
+        id: 'execution-plan-rev-1',
+        execution_plan_id: 'execution-plan-1',
+      },
+      status: 'running',
+      evidence_refs: [{ type: 'spec_revision', id: 'spec-rev-1', spec_id: 'spec-1' }],
+      runtime_evidence_refs: [{ type: 'execution_package', id: 'package-1' }],
+      interrupt_history: [],
+      continuation_history: [],
+      pr_refs: [],
+      diff_refs: [],
+      test_evidence_refs: [],
+      created_at: '2026-05-25T00:00:00.000Z',
+      updated_at: '2026-05-25T00:00:00.000Z',
+    }),
+  ).toMatchObject({ approved_spec_revision_id: 'spec-rev-1' });
 });
 
 it('rejects approved Boundary Summary revisions without round and context evidence', () => {
@@ -296,7 +414,7 @@ Run:
 pnpm vitest run tests/contracts/project-management-contracts.test.ts tests/domain/ai-native-planning-gates.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 ```
 
-Expected: FAIL because `leader_actor_id`, `leader_delegate_actor_ids`, `boundaryRoundSchema`, and approved Boundary Summary evidence guards do not exist yet.
+Expected: FAIL because `leader_actor_id`, `leader_delegate_actor_ids`, `development_plan_revision_id`, session `status` / round pointers, `boundaryRoundSchema`, and approved Boundary Summary evidence guards do not exist yet.
 
 - [ ] **Step 3: Add contract schemas**
 
@@ -313,6 +431,17 @@ export const boundarySessionStatusSchema = z.enum([
   'stale',
   'cancelled',
 ]);
+
+const boundaryBrainstormingSessionProcessShape = {
+  development_plan_revision_id: nonEmpty,
+  leader_actor_id: nonEmpty,
+  leader_delegate_actor_ids: z.array(nonEmpty).default([]),
+  status: boundarySessionStatusSchema,
+  current_round_id: nonEmpty.optional(),
+  latest_summary_revision_id: nonEmpty.optional(),
+  approved_summary_revision_id: nonEmpty.optional(),
+  closed_at: isoDateTimeSchema.optional(),
+} satisfies z.ZodRawShape;
 
 export const boundaryRoundSchema = z
   .object({
@@ -335,9 +464,13 @@ export const boundaryRoundSchema = z
   .strict();
 ```
 
+Merge `boundaryBrainstormingSessionProcessShape` into the existing `brainstormingSessionSchema` object before `.strict().superRefine(...)`, preserving read-only compatibility arrays `questions`, `answers`, and `decisions`.
+
 Also:
 
 - Add `leader_actor_id: nonEmpty.optional()` and `leader_delegate_actor_ids: z.array(nonEmpty).default([])` to `developmentPlanItemSchema`.
+- Add `development_plan_revision_id`, `leader_actor_id`, `leader_delegate_actor_ids`, explicit `status`, `current_round_id`, `latest_summary_revision_id`, `approved_summary_revision_id`, and `closed_at` to `brainstormingSessionSchema` and exported `BrainstormingSession` type.
+- Add required `approved_spec_revision_id: nonEmpty` and `approved_spec_revision_ref` with `{ type: 'spec_revision', id, spec_id }` to `executionSchema` and exported `Execution` type. Keep execution package and run session ids in `runtime_evidence_refs`, not as primary public identity.
 - Add `round_id`, `required`, `rationale`, `answered_by_answer_id`, `waived_by_decision_id`, and `superseded` status support to question schema.
 - Add `round_id` and Leader/delegate actor semantics fields to answer/decision schemas.
 - Add `boundarySummaryRevisionSchema` and export its type.
@@ -345,6 +478,8 @@ Also:
 - [ ] **Step 4: Add domain types and gate helpers**
 
 In `packages/domain/src/brainstorming.ts`, export contract-backed interfaces and helper functions:
+
+- `BrainstormingSession` must expose the contract fields `development_plan_revision_id`, `leader_actor_id`, `leader_delegate_actor_ids`, `status`, `current_round_id`, `latest_summary_revision_id`, and `approved_summary_revision_id`; do not keep these only in repository JSON.
 
 ```ts
 export const actorCanActForBoundaryLeader = (
@@ -405,12 +540,21 @@ git commit -m "feat: add boundary brainstorming product contracts"
 - Modify: `packages/db/src/schema/development-plan.ts`
 - Modify: `packages/db/src/schema/brainstorming.ts`
 - Modify: `packages/db/src/repositories/delivery-repository.ts`
+- Modify: `packages/db/src/repositories/in-memory-delivery-repository.ts`
+- Modify: `packages/db/src/repositories/drizzle-delivery-repository.ts`
 - Create: `tests/db/brainstorming-repository.test.ts`
 - Modify: `tests/helpers/*` only where existing fixtures fail type checks.
 
 - [ ] **Step 1: Write failing repository tests**
 
 Create `tests/db/brainstorming-repository.test.ts` with a focused repository test that saves a session, a round, a required question, an answer, a decision, and an approved summary revision.
+
+Add migration/default tests proving:
+
+- existing Development Plan Items with `reviewer_actor_id` get `leader_actor_id = reviewer_actor_id`;
+- items without reviewer but with `driver_actor_id` get `leader_actor_id = driver_actor_id`;
+- items with neither reviewer nor driver remain without a Leader and start requests fail until explicitly assigned;
+- existing active Brainstorming Sessions receive a stored Leader/delegate snapshot from the item default, not from the actor making the migration.
 
 ```ts
 it('persists round-scoped Boundary Brainstorming evidence', async () => {
@@ -509,13 +653,21 @@ saveBoundaryDecision(decision: BoundaryDecision): Promise<void>;
 listBoundaryDecisions(sessionId: string): Promise<BoundaryDecision[]>;
 ```
 
-Implement mapping functions next to the existing brainstorming mappers.
+Implement mapping functions next to the existing brainstorming mappers, then implement every new method in both concrete repositories:
 
-- [ ] **Step 5: Add summary revision backfill helper**
+- `packages/db/src/repositories/in-memory-delivery-repository.ts` must store the new rows in deterministic arrays/maps and return sorted lists for round/question/answer/decision sequence tests.
+- `packages/db/src/repositories/drizzle-delivery-repository.ts` must map the new Drizzle tables/columns and preserve the same replay/update semantics as existing product objects.
+- Add a repository contract assertion that calls the interface through `createInMemoryDeliveryRepository()` and through the Drizzle test repository so missing concrete methods fail before API tests run.
+
+- [ ] **Step 5: Add Leader/default and summary revision backfill helpers**
 
 Add a repository helper:
 
 ```ts
+backfillBoundaryLeaderDefaults(input: {
+  now: string;
+}): Promise<{ updated_item_ids: string[]; updated_session_ids: string[]; blocked_item_ids: string[] }>;
+
 backfillBoundarySummaryRevisionEligibility(input: {
   session_id: string;
   boundary_summary_id: string;
@@ -525,6 +677,10 @@ backfillBoundarySummaryRevisionEligibility(input: {
 
 Rules:
 
+- `backfillBoundaryLeaderDefaults` sets item `leader_actor_id` from `reviewer_actor_id ?? driver_actor_id` only when present.
+- `backfillBoundaryLeaderDefaults` writes `leader_delegate_actor_ids: []` for legacy rows with missing delegates.
+- `backfillBoundaryLeaderDefaults` writes the same Leader/delegate snapshot to active sessions that do not yet have one.
+- It must not invent a Leader when both reviewer and driver are absent; report those item ids in `blocked_item_ids`.
 - Create synthetic round 1 when no rounds exist.
 - Attach old session arrays to round 1.
 - Keep `approved` status only when new required fields can be populated.
@@ -543,7 +699,7 @@ Expected: PASS after updating existing API fixtures for new required fields.
 - [ ] **Step 7: Commit Task 2**
 
 ```bash
-git add packages/db/src/schema/development-plan.ts packages/db/src/schema/brainstorming.ts packages/db/src/repositories/delivery-repository.ts tests/db/brainstorming-repository.test.ts tests/api/brainstorming.test.ts tests/helpers
+git add packages/db/src/schema/development-plan.ts packages/db/src/schema/brainstorming.ts packages/db/src/repositories/delivery-repository.ts packages/db/src/repositories/in-memory-delivery-repository.ts packages/db/src/repositories/drizzle-delivery-repository.ts tests/db/brainstorming-repository.test.ts tests/api/brainstorming.test.ts tests/helpers
 git commit -m "feat: persist boundary brainstorming rounds"
 ```
 
@@ -635,7 +791,7 @@ In `automation.dto.ts`, add input schemas:
 ```ts
 import { sourceObjectRefSchema } from '@forgeloop/contracts';
 
-const productGenerationPreconditionFingerprintSchema = z.object({
+const productGenerationPreconditionFingerprintJsonSchema = z.object({
   source_object_ref: sourceObjectRefSchema,
   source_object_revision_id: nonBlankString,
   development_plan_id: nonBlankString,
@@ -664,7 +820,7 @@ const boundaryRoundActionInputSchema = z.object({
   context_manifest_id: nonBlankString,
   context_manifest_revision_id: nonBlankString,
   requested_by_actor_id: nonBlankString,
-  precondition_fingerprint: productGenerationPreconditionFingerprintSchema.extend({
+  precondition_fingerprint_json: productGenerationPreconditionFingerprintJsonSchema.extend({
     boundary_session_id: nonBlankString,
     boundary_session_revision_id: nonBlankString,
     boundary_round_id: nonBlankString,
@@ -682,7 +838,7 @@ const generateDevelopmentPlanItemSpecRevisionActionInputSchema = z.object({
   context_manifest_id: nonBlankString,
   context_manifest_revision_id: nonBlankString,
   requested_by_actor_id: nonBlankString,
-  precondition_fingerprint: productGenerationPreconditionFingerprintSchema.extend({
+  precondition_fingerprint_json: productGenerationPreconditionFingerprintJsonSchema.extend({
     boundary_session_id: nonBlankString,
     boundary_session_revision_id: nonBlankString,
     approved_boundary_summary_revision_id: nonBlankString,
@@ -701,7 +857,7 @@ const generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema = z.obje
   context_manifest_id: nonBlankString,
   context_manifest_revision_id: nonBlankString,
   requested_by_actor_id: nonBlankString,
-  precondition_fingerprint: productGenerationPreconditionFingerprintSchema.extend({
+  precondition_fingerprint_json: productGenerationPreconditionFingerprintJsonSchema.extend({
     boundary_session_id: nonBlankString,
     boundary_session_revision_id: nonBlankString,
     approved_boundary_summary_revision_id: nonBlankString,
@@ -710,7 +866,7 @@ const generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema = z.obje
 }).strict();
 ```
 
-Extend `createAutomationActionRunSchema` and `claimNextAutomationActionRunSchema` action type enum with the three new action types, and dispatch each action type to exactly one input schema. Add tests that reject missing `precondition_fingerprint` for all three action types, stale `development_plan_item_revision_id`, missing `boundary_round_id` on Boundary Brainstorming, missing `approved_boundary_summary_revision_id` on Spec generation, and missing `approved_spec_revision_id` on Execution Plan generation.
+Extend `createAutomationActionRunSchema` and `claimNextAutomationActionRunSchema` action type enum with the three new action types, and dispatch each action type to exactly one input schema. The existing top-level `precondition_fingerprint: string` remains the canonical digest over `action_input_json.precondition_fingerprint_json`; do not replace it with an object. Add tests that reject missing `precondition_fingerprint_json` for all three action types, stale `development_plan_item_revision_id`, missing `boundary_round_id` on Boundary Brainstorming, missing `approved_boundary_summary_revision_id` on Spec generation, missing `approved_spec_revision_id` on Execution Plan generation, and a top-level `precondition_fingerprint` that does not match the canonical digest of `precondition_fingerprint_json`.
 
 - [ ] **Step 6: Implement Leader resolution**
 
@@ -1116,9 +1272,9 @@ Add tests proving:
 - terminal boundary round result writes questions/decisions/proposed summary to product rows;
 - stale action run stores evidence but does not mutate product state;
 - Spec generation terminal result creates a draft Spec revision only from approved Boundary Summary revision;
-- Spec generation terminal result with a mismatched `precondition_fingerprint.development_plan_item_revision_id` or `approved_boundary_summary_revision_id` stores evidence but does not create a Spec revision;
+- Spec generation terminal result with a mismatched `precondition_fingerprint_json.development_plan_item_revision_id` or `approved_boundary_summary_revision_id` stores evidence but does not create a Spec revision;
 - Execution Plan generation terminal result creates a draft Execution Plan revision only from approved Spec revision;
-- Execution Plan generation terminal result with a mismatched `precondition_fingerprint.approved_spec_revision_id`, item revision, or approved Boundary Summary revision stores evidence but does not create an Execution Plan revision;
+- Execution Plan generation terminal result with a mismatched `precondition_fingerprint_json.approved_spec_revision_id`, item revision, or approved Boundary Summary revision stores evidence but does not create an Execution Plan revision;
 - generated revisions are not auto-approved.
 
 - [ ] **Step 2: Run failing result writer tests**
@@ -1202,9 +1358,10 @@ Both methods must:
 
 - re-check item revision;
 - re-check approved Boundary Summary / Spec revision;
-- compare the action run input `precondition_fingerprint` against the currently loaded source object revision, Development Plan revision, Development Plan Item revision, approved Boundary Summary revision, approved Spec revision when applicable, and context manifest revision;
+- verify top-level `actionRun.precondition_fingerprint` equals the canonical digest of `action_input_json.precondition_fingerprint_json`, then compare `precondition_fingerprint_json` against the currently loaded source object revision, Development Plan revision, Development Plan Item revision, approved Boundary Summary revision, approved Spec revision when applicable, and context manifest revision;
 - return `{ applied: false, reason: 'stale_precondition_fingerprint' }` after storing terminal evidence if any fingerprint member differs;
 - write draft revision;
+- for `GeneratedExecutionPlanRevisionV1`, persist `implementation_sequence`, `validation_strategy`, `allowed_paths`, `forbidden_paths`, `required_checks`, `rollback_notes`, and `handoff_criteria` into `ExecutionPlanRevision.structured_document` in addition to rendering `content_markdown`; Task 7 must not have to re-parse markdown to recover these fields;
 - update Development Plan Item status to `draft`;
 - record object events;
 - reject raw runtime evidence in public fields.
@@ -1231,7 +1388,7 @@ In `spec-plan.controller.ts`, ensure endpoints:
 
 These should schedule action run + runtime job. If existing endpoints generate synchronous drafts, keep them as compatibility helpers but route strict dogfood through runtime-backed endpoints.
 
-The Spec generation endpoint must create an `AutomationActionRun` with `action_type: 'generate_development_plan_item_spec_revision'` and `input` matching `generateDevelopmentPlanItemSpecRevisionActionInputSchema`, including the approved Boundary Summary revision id and full precondition fingerprint. The Execution Plan generation endpoint must create `action_type: 'generate_development_plan_item_execution_plan_revision'` with `input` matching `generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema`, including both approved Boundary Summary and approved Spec revision ids. Add controller/service tests that inspect the created action run input before the runtime job is claimed.
+The Spec generation endpoint must create an `AutomationActionRun` with `action_type: 'generate_development_plan_item_spec_revision'` and `action_input_json` matching `generateDevelopmentPlanItemSpecRevisionActionInputSchema`, including the approved Boundary Summary revision id and full `precondition_fingerprint_json`; the top-level `precondition_fingerprint` must be the digest of that JSON. The Execution Plan generation endpoint must create `action_type: 'generate_development_plan_item_execution_plan_revision'` with `action_input_json` matching `generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema`, including both approved Boundary Summary and approved Spec revision ids. Add controller/service tests that inspect the created action run input before the runtime job is claimed.
 
 - [ ] **Step 8: Run targeted product generation tests**
 
@@ -1256,13 +1413,18 @@ git commit -m "feat: apply product generation runtime results"
 
 **Files:**
 - Modify: `apps/control-plane-api/src/modules/executions/executions.service.ts`
+- Modify: `apps/control-plane-api/src/modules/executions/executions.module.ts`
 - Modify: `apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts`
+- Modify: `apps/control-plane-api/src/modules/run-control/run-control.service.ts`
+- Modify: `packages/db/src/schema/execution-supervision.ts`
 - Modify: `packages/codex-worker-runtime/src/workspace-bundle.ts`
 - Modify: `packages/codex-worker-runtime/src/workspace-isolation.ts`
 - Modify: `packages/codex-worker-runtime/src/remote-worker-client.ts`
 - Modify: `scripts/codex-remote-worker-dogfood.ts`
 - Test: `tests/api/executions.test.ts`
 - Test: `tests/api/execution-package-service.test.ts`
+- Test: `tests/db/repository.test.ts`
+- Test: `tests/db/schema.test.ts`
 - Test: `tests/codex-worker-runtime/workspace-bundle.test.ts`
 - Test: `tests/codex-worker-runtime/workspace-isolation.test.ts`
 
@@ -1272,7 +1434,10 @@ Add tests proving:
 
 - `startExecution` fails without approved current Execution Plan revision.
 - internal package policy derives `allowed_paths`, `forbidden_paths`, required checks, and objective from approved Execution Plan revision.
+- product Execution response includes required `approved_spec_revision_id` / `approved_spec_revision_ref` and approved `execution_plan_revision_ref`.
 - product Execution response does not expose raw package/run ids as primary public identity.
+- `startExecution` creates or reuses the execution package, enqueues a `RunSession` through `RunControlService.enqueueRunWithRepository(...)`, and stores the run session as runtime evidence after it exists.
+- with remote run runtime enabled, the queued run path creates a `run_execution` Codex runtime job for the run session.
 - docs-only dogfood plan without `docs/**` allowlist fails before launch.
 
 - [ ] **Step 2: Write failing no-shared-filesystem worker tests**
@@ -1289,18 +1454,62 @@ Add tests proving:
 Run:
 
 ```bash
-pnpm vitest run tests/api/executions.test.ts tests/api/execution-package-service.test.ts tests/codex-worker-runtime/workspace-bundle.test.ts tests/codex-worker-runtime/workspace-isolation.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/api/executions.test.ts tests/api/execution-package-service.test.ts tests/db/repository.test.ts tests/db/schema.test.ts tests/codex-worker-runtime/workspace-bundle.test.ts tests/codex-worker-runtime/workspace-isolation.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 ```
 
 Expected: FAIL until bridge and worker evidence are tightened.
 
 - [ ] **Step 4: Tighten product Execution linkage**
 
-In `executions.service.ts`, add `approved_spec_revision_id`, `internal_execution_package_id`, and `internal_run_session_id` only where domain/contracts support them, or map internal refs into `runtime_evidence_refs` if adding fields is too invasive for v0.
+Using the required `Execution` fields added in Task 1, update `executions.service.ts` to make the approved Spec revision chain explicit:
 
-Public DTOs must keep `Execution` as identity.
+- `executionSchema` requires `approved_spec_revision_id`.
+- `executionSchema` includes `approved_spec_revision_ref: { type: 'spec_revision'; id: string; spec_id: string; title?: string }`.
+- `buildExecution(...)` sets both from the approved current Spec revision already loaded by `requireApprovedExecutionPlanContext(...)`.
+- `evidence_refs` includes the approved Spec revision and approved Execution Plan revision.
+- `runtime_evidence_refs` includes execution package and run session refs only after those internal records exist.
 
-- [ ] **Step 5: Derive package policy from approved Execution Plan revision**
+Do not make `approved_spec_revision_id` optional, and do not hide the approved Spec chain only in generic evidence refs. Public DTOs must keep `Execution` as identity while exposing the approved Spec/Execution Plan chain as product fields.
+
+- [ ] **Step 5: Persist Execution linkage in DB schema and repository fixtures**
+
+In `packages/db/src/schema/execution-supervision.ts`, add columns:
+
+```ts
+import { spec_revisions } from './spec';
+
+approvedSpecRevisionId: uuid('approved_spec_revision_id').notNull().references(() => spec_revisions.id),
+approvedSpecRevisionRef: jsonb('approved_spec_revision_ref').$type<Execution['approved_spec_revision_ref']>().notNull(),
+```
+
+Update Drizzle/in-memory repository fixtures and `tests/db/repository-contract.ts` so `saveExecution` / `getExecution` round-trip the required approved Spec fields. Add `tests/db/schema.test.ts` coverage for the new `executions.approved_spec_revision_id` and `executions.approved_spec_revision_ref` columns. This catches contract/schema drift before API tests.
+
+For existing execution rows, add a migration/backfill that loads each execution's `execution_plan_revision_id`, reads `ExecutionPlanRevision.based_on_spec_revision_id`, and writes `approved_spec_revision_id` / `approved_spec_revision_ref` before enforcing non-null constraints. If the chain cannot be reconstructed, the migration must fail loudly rather than inventing a Spec revision.
+
+- [ ] **Step 6: Bridge Start Execution into run runtime**
+
+In `executions.module.ts`, import `RunControlModule` so `ExecutionsService` can inject `RunControlService`.
+
+In `executions.service.ts`, after creating or reusing the execution package inside the same object lock, call:
+
+```ts
+const run = await this.runControlService.enqueueRunWithRepository(repository, executionPackage, {
+  actorContext: actorContextFromExecutionCommand(dto),
+  automationPrecondition: {},
+  executorType: 'local_codex',
+  workflowOnly: false,
+});
+```
+
+Then:
+
+- add a small local helper that maps the product command actor to `ActorContext` without requiring raw auth headers in this service;
+- save the product `Execution` with a runtime evidence ref for the execution package;
+- after `enqueueRunWithRepository` returns, add a run-session runtime evidence ref and keep `Execution.status = 'running'`;
+- keep duplicate start idempotent by returning the existing Execution and not enqueueing a second active run session;
+- when remote run runtime is enabled, preserve the existing run worker path that turns the queued run session into a `target_type: 'run_session'`, `target_kind: 'run_execution'` runtime job.
+
+- [ ] **Step 7: Derive package policy from approved Execution Plan revision**
 
 In `execution-package.service.ts`, parse `executionPlanRevision.structured_document` for:
 
@@ -1315,7 +1524,7 @@ In `execution-package.service.ts`, parse `executionPlanRevision.structured_docum
 
 If structured fields are absent, derive conservative defaults from `content`, but strict dogfood must require structured fields and fail closed.
 
-- [ ] **Step 6: Add no-shared-filesystem worker mode**
+- [ ] **Step 8: Add no-shared-filesystem worker mode**
 
 In `scripts/codex-remote-worker-dogfood.ts`, add env:
 
@@ -1330,7 +1539,7 @@ When enabled:
 - the worker must depend on workspace bundle acquisition for run execution;
 - public start summary prints only digests.
 
-- [ ] **Step 7: Add mounted workspace digest evidence**
+- [ ] **Step 9: Add mounted workspace digest evidence**
 
 In `remote-worker-client.ts` or workspace isolation helpers, compute digest over the mounted task workspace manifest and include it in run-execution terminal result public evidence:
 
@@ -1342,20 +1551,20 @@ mounted_task_workspace_digest: workspace.mountedWorkspaceDigest,
 
 Only include digests, never absolute paths.
 
-- [ ] **Step 8: Run targeted execution tests**
+- [ ] **Step 10: Run targeted execution tests**
 
 Run:
 
 ```bash
-pnpm vitest run tests/api/executions.test.ts tests/api/execution-package-service.test.ts tests/codex-worker-runtime/workspace-bundle.test.ts tests/codex-worker-runtime/workspace-isolation.test.ts tests/codex-worker-runtime/remote-worker-client.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/api/executions.test.ts tests/api/execution-package-service.test.ts tests/db/repository.test.ts tests/db/schema.test.ts tests/codex-worker-runtime/workspace-bundle.test.ts tests/codex-worker-runtime/workspace-isolation.test.ts tests/codex-worker-runtime/remote-worker-client.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 ```
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 7**
+- [ ] **Step 11: Commit Task 7**
 
 ```bash
-git add apps/control-plane-api/src/modules/executions apps/control-plane-api/src/modules/execution-packages packages/codex-worker-runtime/src scripts/codex-remote-worker-dogfood.ts tests/api/executions.test.ts tests/api/execution-package-service.test.ts tests/codex-worker-runtime
+git add apps/control-plane-api/src/modules/executions apps/control-plane-api/src/modules/execution-packages apps/control-plane-api/src/modules/run-control packages/db/src/schema/execution-supervision.ts packages/codex-worker-runtime/src scripts/codex-remote-worker-dogfood.ts tests/api/executions.test.ts tests/api/execution-package-service.test.ts tests/db/repository-contract.ts tests/db/repository.test.ts tests/db/schema.test.ts tests/codex-worker-runtime
 git commit -m "feat: harden execution bridge workspace isolation"
 ```
 
