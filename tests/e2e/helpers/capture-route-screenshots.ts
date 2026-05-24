@@ -45,25 +45,9 @@ export interface VisualServer {
   url: string;
 }
 
-export const aiNativeProjectManagementRoutes: VisualRoute[] = [
-  { path: '/dashboard', heading: /^Dashboard$/, kind: 'active' },
-  { path: '/plans', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/plans/plan-1', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/specs', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/specs/spec-1', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/requirements/req-1', heading: /^Requirement$/, kind: 'source-object', expectActionSurface: true },
-  { path: '/requirements/req-1/spec', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/requirements/req-1/plan', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/development-plans/dp-1', heading: /Web product UI architecture foundation plan|Development Plan/i, kind: 'active' },
-  { path: '/development-plans/dp-1/items/dpi-1', heading: /Build AI-native project management API clients|Development Plan Item/i, kind: 'active' },
-  { path: '/specs-plans', heading: /^Specs & Execution Plans$/, kind: 'active' },
-  { path: '/executions', heading: /^Executions$/, kind: 'active' },
-  { path: '/executions/exec-1', heading: /Execute AI-native Web API client work|Execution/i, kind: 'active' },
-  { path: '/reports', heading: /^Reports$/, kind: 'active' },
-  { path: '/reports?report=replay', heading: /^Reports$/, kind: 'active' },
-];
+export const aiNativeProjectManagementRoutes: VisualRoute[] = requiredScreenshotRoutes.map(toVisualRoute);
 
-export const productGradeScreenshotRoutes: VisualRoute[] = requiredScreenshotRoutes.map(toVisualRoute);
+export const productGradeScreenshotRoutes = aiNativeProjectManagementRoutes;
 
 export interface AiNativeProjectManagementFixture {
   baseUrl: string;
