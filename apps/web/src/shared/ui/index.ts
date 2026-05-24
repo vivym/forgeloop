@@ -17,6 +17,7 @@ export {
   type MarkdownRevision,
 } from './markdown-editor';
 export { Select, type SelectOption, type SelectProps } from './select/select';
+export { SegmentedControl, type SegmentedControlOption, type SegmentedControlProps } from './segmented-control/segmented-control';
 export { Skeleton, type SkeletonProps } from './skeleton/skeleton';
 export { StatusPill, type StatusPillProps } from './status-pill/status-pill';
 export {

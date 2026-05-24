@@ -7,6 +7,9 @@ import type {
   Attachment,
   Artifact,
   Actor,
+  BoundarySummary,
+  BoundarySummaryRevision,
+  BrainstormingSession,
   CodexCredentialBinding,
   CodexCredentialBindingPublic,
   CodexCredentialBindingVersion,
@@ -26,8 +29,18 @@ import type {
   CodexWorkerBootstrapToken,
   CodexWorkerRegistration,
   CommandIdempotencyRecord,
+  ContextManifest,
+  CodeReviewHandoff,
   Decision,
   DomainError as DomainErrorType,
+  DevelopmentPlan,
+  DevelopmentPlanItem,
+  DevelopmentPlanItemRevision,
+  DevelopmentPlanRevision,
+  DevelopmentPlanSourceLink,
+  Execution,
+  ExecutionPlanDocument,
+  ExecutionPlanRevision,
   ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
@@ -42,6 +55,7 @@ import type {
   ReleaseEvidence,
   ReleaseExecutionPackage,
   ReleaseWorkItem,
+  QaHandoff,
   ReviewPacket,
   RunCommand,
   RunEvent,
@@ -51,6 +65,8 @@ import type {
   Spec,
   SpecRevision,
   StatusHistory,
+  RevisionCompareQuery,
+  StructuredRevisionDiff,
   Task,
   WorkItem,
 } from '@forgeloop/domain';
@@ -292,6 +308,33 @@ const redactAutomationActionClaim = (actionRun: AutomationActionRun): Automation
 
 const valuesFor = <T>(records: Map<string, T>): T[] => [...records.values()].map(clone);
 
+const revisionDiff = (
+  query: RevisionCompareQuery,
+  base: unknown,
+  compare: unknown,
+): StructuredRevisionDiff => ({
+  base_revision_id: query.base_revision_id,
+  compare_revision_id: query.compare_revision_id,
+  changed_fields: changedFields(base, compare),
+  ...(base === undefined ? {} : { base_snapshot: clone(base) as Record<string, unknown> }),
+  ...(compare === undefined ? {} : { compare_snapshot: clone(compare) as Record<string, unknown> }),
+});
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const changedFields = (base: unknown, compare: unknown): string[] => {
+  if (valuesEqual(base, compare)) {
+    return [];
+  }
+  if (!isRecord(base) || !isRecord(compare)) {
+    return ['value'];
+  }
+  return [...new Set([...Object.keys(base), ...Object.keys(compare)])]
+    .filter((key) => !valuesEqual(base[key], compare[key]))
+    .sort();
+};
+
 const byCreatedAt = <T extends { created_at: string }>(left: T, right: T) => left.created_at.localeCompare(right.created_at);
 const byCreatedAtThenId = <T extends { created_at: string; id: string }>(left: T, right: T) =>
   byCreatedAt(left, right) || left.id.localeCompare(right.id);
@@ -481,6 +524,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly tasks = new Map<string, Task>();
   private readonly specs = new Map<string, Spec>();
   private readonly specRevisions = new Map<string, SpecRevision>();
+  private readonly contextManifests = new Map<string, ContextManifest>();
+  private readonly developmentPlans = new Map<string, DevelopmentPlan>();
+  private readonly developmentPlanRevisions = new Map<string, DevelopmentPlanRevision>();
+  private readonly developmentPlanSourceLinks = new Map<string, DevelopmentPlanSourceLink>();
+  private readonly developmentPlanItems = new Map<string, DevelopmentPlanItem>();
+  private readonly developmentPlanItemRevisions = new Map<string, DevelopmentPlanItemRevision>();
+  private readonly brainstormingSessions = new Map<string, BrainstormingSession>();
+  private readonly boundarySummaries = new Map<string, BoundarySummary>();
+  private readonly boundarySummaryRevisions = new Map<string, BoundarySummaryRevision>();
+  private readonly executionPlans = new Map<string, ExecutionPlanDocument>();
+  private readonly executionPlanRevisions = new Map<string, ExecutionPlanRevision>();
+  private readonly executions = new Map<string, Execution>();
+  private readonly codeReviewHandoffs = new Map<string, CodeReviewHandoff>();
+  private readonly qaHandoffs = new Map<string, QaHandoff>();
   private readonly plans = new Map<string, Plan>();
   private readonly planRevisions = new Map<string, PlanRevision>();
   private readonly executionPackages = new Map<string, ExecutionPackage>();
@@ -2708,6 +2765,245 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       .sort((left, right) => left.revision_number - right.revision_number);
   }
 
+  async saveContextManifest(contextManifest: ContextManifest): Promise<void> {
+    this.contextManifests.set(contextManifest.id, clone(contextManifest));
+  }
+
+  async getContextManifest(contextManifestId: string): Promise<ContextManifest | undefined> {
+    return this.cloneMaybe(this.contextManifests.get(contextManifestId));
+  }
+
+  async saveDevelopmentPlan(plan: DevelopmentPlan): Promise<void> {
+    this.developmentPlans.set(plan.id, clone({ ...plan, items: [] }));
+  }
+
+  async getDevelopmentPlan(id: string): Promise<DevelopmentPlan | undefined> {
+    const plan = this.developmentPlans.get(id);
+    return plan === undefined ? undefined : this.hydrateDevelopmentPlan(plan);
+  }
+
+  async listDevelopmentPlans(projectId: string): Promise<DevelopmentPlan[]> {
+    const plans = valuesFor(this.developmentPlans)
+      .filter((plan) => plan.project_id === projectId)
+      .sort(byCreatedAtThenId);
+    return Promise.all(plans.map((plan) => this.hydrateDevelopmentPlan(plan)));
+  }
+
+  async saveDevelopmentPlanRevision(revision: DevelopmentPlanRevision): Promise<void> {
+    const existing = valuesFor(this.developmentPlanRevisions).find(
+      (candidate) =>
+        candidate.id === revision.id ||
+        (candidate.development_plan_id === revision.development_plan_id &&
+          candidate.revision_number === revision.revision_number),
+    );
+    if (existing !== undefined) {
+      return;
+    }
+    this.developmentPlanRevisions.set(revision.id, clone(revision));
+  }
+
+  async listDevelopmentPlanRevisions(developmentPlanId: string): Promise<DevelopmentPlanRevision[]> {
+    return valuesFor(this.developmentPlanRevisions)
+      .filter((revision) => revision.development_plan_id === developmentPlanId)
+      .sort((left, right) => left.revision_number - right.revision_number);
+  }
+
+  async saveDevelopmentPlanSourceLink(link: DevelopmentPlanSourceLink): Promise<void> {
+    this.developmentPlanSourceLinks.set(link.id, clone(link));
+  }
+
+  async listDevelopmentPlanSourceLinks(developmentPlanId: string): Promise<DevelopmentPlanSourceLink[]> {
+    return valuesFor(this.developmentPlanSourceLinks)
+      .filter((link) => link.development_plan_id === developmentPlanId)
+      .sort(byCreatedAtThenId);
+  }
+
+  async listDevelopmentPlanSourceLinksForSource(
+    sourceRef: DevelopmentPlanSourceLink['source_ref'],
+  ): Promise<DevelopmentPlanSourceLink[]> {
+    return valuesFor(this.developmentPlanSourceLinks)
+      .filter(
+        (link) =>
+          link.source_ref.type === sourceRef.type &&
+          link.source_ref.id === sourceRef.id &&
+          (sourceRef.revision_id === undefined || link.source_ref.revision_id === sourceRef.revision_id),
+      )
+      .sort(byCreatedAtThenId);
+  }
+
+  async saveDevelopmentPlanItem(item: DevelopmentPlanItem): Promise<void> {
+    this.developmentPlanItems.set(item.id, clone(item));
+  }
+
+  async getDevelopmentPlanItem(id: string): Promise<DevelopmentPlanItem | undefined> {
+    return this.cloneMaybe(this.developmentPlanItems.get(id));
+  }
+
+  async listDevelopmentPlanItems(developmentPlanId: string): Promise<DevelopmentPlanItem[]> {
+    return valuesFor(this.developmentPlanItems)
+      .filter((item) => item.development_plan_id === developmentPlanId)
+      .sort(byCreatedAtThenId);
+  }
+
+  private async hydrateDevelopmentPlan(plan: DevelopmentPlan): Promise<DevelopmentPlan> {
+    return {
+      ...clone(plan),
+      items: await this.listDevelopmentPlanItems(plan.id),
+    };
+  }
+
+  async saveDevelopmentPlanItemRevision(revision: DevelopmentPlanItemRevision): Promise<void> {
+    const existing = valuesFor(this.developmentPlanItemRevisions).find(
+      (candidate) =>
+        candidate.id === revision.id ||
+        (candidate.development_plan_item_id === revision.development_plan_item_id &&
+          candidate.revision_number === revision.revision_number),
+    );
+    if (existing !== undefined) {
+      return;
+    }
+    this.developmentPlanItemRevisions.set(revision.id, clone(revision));
+  }
+
+  async listDevelopmentPlanItemRevisions(itemId: string): Promise<DevelopmentPlanItemRevision[]> {
+    return valuesFor(this.developmentPlanItemRevisions)
+      .filter((revision) => revision.development_plan_item_id === itemId)
+      .sort((left, right) => left.revision_number - right.revision_number);
+  }
+
+  async compareDevelopmentPlanItemRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff> {
+    return revisionDiff(
+      query,
+      this.developmentPlanItemRevisions.get(query.base_revision_id)?.snapshot,
+      this.developmentPlanItemRevisions.get(query.compare_revision_id)?.snapshot,
+    );
+  }
+
+  async saveBrainstormingSession(session: BrainstormingSession): Promise<void> {
+    this.brainstormingSessions.set(session.id, clone(session));
+  }
+
+  async getBrainstormingSession(id: string): Promise<BrainstormingSession | undefined> {
+    return this.cloneMaybe(this.brainstormingSessions.get(id));
+  }
+
+  async saveBoundarySummary(summary: BoundarySummary): Promise<void> {
+    this.boundarySummaries.set(summary.id, clone(summary));
+  }
+
+  async getBoundarySummary(id: string): Promise<BoundarySummary | undefined> {
+    return this.cloneMaybe(this.boundarySummaries.get(id));
+  }
+
+  async listBoundarySummaries(): Promise<BoundarySummary[]> {
+    return valuesFor(this.boundarySummaries).sort(byCreatedAtThenId);
+  }
+
+  async saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void> {
+    const existing = valuesFor(this.boundarySummaryRevisions).find(
+      (candidate) =>
+        candidate.id === revision.id ||
+        (candidate.boundary_summary_id === revision.boundary_summary_id &&
+          candidate.revision_number === revision.revision_number),
+    );
+    if (existing !== undefined) {
+      return;
+    }
+    this.boundarySummaryRevisions.set(revision.id, clone(revision));
+  }
+
+  async listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]> {
+    return valuesFor(this.boundarySummaryRevisions)
+      .filter((revision) => revision.boundary_summary_id === boundarySummaryId)
+      .sort((left, right) => left.revision_number - right.revision_number);
+  }
+
+  async compareBoundarySummaryRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff> {
+    return revisionDiff(
+      query,
+      this.boundarySummaryRevisions.get(query.base_revision_id),
+      this.boundarySummaryRevisions.get(query.compare_revision_id),
+    );
+  }
+
+  async saveExecutionPlan(plan: ExecutionPlanDocument): Promise<void> {
+    this.executionPlans.set(plan.id, clone(plan));
+  }
+
+  async getExecutionPlan(id: string): Promise<ExecutionPlanDocument | undefined> {
+    return this.cloneMaybe(this.executionPlans.get(id));
+  }
+
+  async saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void> {
+    const existing = valuesFor(this.executionPlanRevisions).find(
+      (candidate) =>
+        candidate.id === revision.id ||
+        (candidate.execution_plan_id === revision.execution_plan_id && candidate.revision_number === revision.revision_number),
+    );
+    if (existing !== undefined) {
+      return;
+    }
+    this.executionPlanRevisions.set(revision.id, clone(revision));
+  }
+
+  async getExecutionPlanRevision(id: string): Promise<ExecutionPlanRevision | undefined> {
+    return this.cloneMaybe(this.executionPlanRevisions.get(id));
+  }
+
+  async listExecutionPlanRevisions(executionPlanId: string): Promise<ExecutionPlanRevision[]> {
+    return valuesFor(this.executionPlanRevisions)
+      .filter((revision) => revision.execution_plan_id === executionPlanId)
+      .sort((left, right) => left.revision_number - right.revision_number);
+  }
+
+  async listExecutionPlansForDevelopmentPlanItem(itemId: string): Promise<ExecutionPlanDocument[]> {
+    return valuesFor(this.executionPlans)
+      .filter((plan) => plan.development_plan_item_id === itemId)
+      .sort(byCreatedAtThenId);
+  }
+
+  async saveExecution(execution: Execution): Promise<void> {
+    this.executions.set(execution.id, clone(execution));
+  }
+
+  async getExecution(id: string): Promise<Execution | undefined> {
+    return this.cloneMaybe(this.executions.get(id));
+  }
+
+  async listExecutions(): Promise<Execution[]> {
+    return valuesFor(this.executions).sort(byCreatedAtThenId);
+  }
+
+  async saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void> {
+    this.codeReviewHandoffs.set(handoff.id, clone(handoff));
+  }
+
+  async getCodeReviewHandoff(id: string): Promise<CodeReviewHandoff | undefined> {
+    return this.cloneMaybe(this.codeReviewHandoffs.get(id));
+  }
+
+  async listCodeReviewHandoffs(): Promise<CodeReviewHandoff[]> {
+    return valuesFor(this.codeReviewHandoffs).sort(byCreatedAtThenId);
+  }
+
+  async saveQaHandoff(handoff: QaHandoff): Promise<void> {
+    this.qaHandoffs.set(handoff.id, clone(handoff));
+  }
+
+  async getQaHandoff(id: string): Promise<QaHandoff | undefined> {
+    return this.cloneMaybe(this.qaHandoffs.get(id));
+  }
+
+  async listQaHandoffs(): Promise<QaHandoff[]> {
+    return valuesFor(this.qaHandoffs).sort(byCreatedAtThenId);
+  }
+
+  async listQaHandoffsForCodeReview(handoffId: string): Promise<QaHandoff[]> {
+    return valuesFor(this.qaHandoffs)
+      .filter((handoff) => handoff.code_review_handoff_id === handoffId)
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+  }
+
   async savePlan(plan: Plan): Promise<void> {
     this.plans.set(plan.id, clone(plan));
   }
@@ -3710,8 +4006,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return {
       projects: projectRows,
       repos: repoRows,
-      work_items_requiring_spec: await this.runtimeSnapshotWorkItemsRequiringSpec(repos),
-      work_items_requiring_plan: await this.runtimeSnapshotWorkItemsRequiringPlan(repos),
       plan_revisions_requiring_packages: await this.runtimeSnapshotPlanRevisionsRequiringPackages(repos),
       run_enqueue_disabled_packages: this.runtimeSnapshotRunEnqueueDisabledPackages(repos),
       active_holds: this.runtimeSnapshotActiveHolds(),
@@ -4277,86 +4571,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     );
   }
 
-  private async runtimeSnapshotWorkItemsRequiringPlan(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
-    const targets: RuntimeSnapshotTargetRow[] = [];
-    for (const workItem of valuesFor(this.workItems).sort(byCreatedAtThenId)) {
-      if (isWorkItemAutomationTerminal(workItem) || workItem.current_plan_id !== undefined || workItem.current_spec_id === undefined) {
-        continue;
-      }
-      const spec = this.specs.get(workItem.current_spec_id);
-      if (
-        spec === undefined ||
-        spec.work_item_id !== workItem.id ||
-        spec.status !== 'approved' ||
-        spec.resolution !== 'approved' ||
-        spec.approved_revision_id === undefined ||
-        spec.current_revision_id !== spec.approved_revision_id ||
-        (workItem.current_spec_revision_id !== undefined && workItem.current_spec_revision_id !== spec.approved_revision_id)
-      ) {
-        continue;
-      }
-      const specRevisionId = spec.approved_revision_id;
-      const specRevision = this.specRevisions.get(specRevisionId);
-      if (specRevision === undefined || specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
-        continue;
-      }
-      const targetScope = await this.runtimeSnapshotDraftTargetScope(repos, workItem.project_id, 'canGeneratePlanDraft');
-      if (targetScope === undefined) {
-        continue;
-      }
-      if (this.hasActiveManualHold([`work_item:${workItem.id}`, `spec_revision:${specRevisionId}`])) {
-        continue;
-      }
-      targets.push({
-        target_object_type: 'work_item',
-        target_object_id: workItem.id,
-        target_revision_id: specRevisionId,
-        target_status: 'approved',
-        project_id: workItem.project_id,
-        ...targetScope,
-        ...this.latestMatchingActionFields('ensure_plan_draft', workItem.id, specRevisionId),
-      });
-    }
-    return targets;
-  }
-
-  private async runtimeSnapshotWorkItemsRequiringSpec(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
-    const suppressingLatestActionStatuses = new Set(['pending', 'running', 'succeeded']);
-    const targets: RuntimeSnapshotTargetRow[] = [];
-    for (const workItem of valuesFor(this.workItems).sort(byCreatedAtThenId)) {
-      if (isWorkItemAutomationTerminal(workItem)) {
-        continue;
-      }
-      const existingSpec = workItem.current_spec_id === undefined ? undefined : this.specs.get(workItem.current_spec_id);
-      if (existingSpec?.current_revision_id !== undefined) {
-        continue;
-      }
-      const targetScope = await this.runtimeSnapshotDraftTargetScope(repos, workItem.project_id, 'canGenerateSpecDraft');
-      if (targetScope === undefined) {
-        continue;
-      }
-      if (this.hasActiveManualHold([`work_item:${workItem.id}`])) {
-        continue;
-      }
-      const latestActionFields = this.latestMatchingActionFields('ensure_spec_draft', workItem.id);
-      if (
-        latestActionFields.latest_matching_action_status !== undefined &&
-        suppressingLatestActionStatuses.has(latestActionFields.latest_matching_action_status)
-      ) {
-        continue;
-      }
-      targets.push({
-        target_object_type: 'work_item',
-        target_object_id: workItem.id,
-        target_status: workItem.phase,
-        project_id: workItem.project_id,
-        ...targetScope,
-        ...latestActionFields,
-      });
-    }
-    return targets;
-  }
-
   private async runtimeSnapshotPlanRevisionsRequiringPackages(repos: ProjectRepo[]): Promise<RuntimeSnapshotTargetRow[]> {
     const targets: RuntimeSnapshotTargetRow[] = [];
     for (const plan of valuesFor(this.plans).sort(byCreatedAtThenId)) {
@@ -4438,7 +4652,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private async runtimeSnapshotDraftTargetScope(
     repos: ProjectRepo[],
     projectId: string,
-    capability: 'canGenerateSpecDraft' | 'canGeneratePlanDraft' | 'canGeneratePackageDrafts',
+    capability: 'canGeneratePackageDrafts',
   ): Promise<Pick<RuntimeSnapshotTargetRow, 'repo_id' | 'eligible_repo_ids' | 'automation_scope'> | undefined> {
     const eligibleReposById = new Map<string, ProjectRepo>();
     for (const repo of repos) {
@@ -5462,6 +5676,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.tasks,
       this.specs,
       this.specRevisions,
+      this.contextManifests,
+      this.developmentPlans,
+      this.developmentPlanRevisions,
+      this.developmentPlanSourceLinks,
+      this.developmentPlanItems,
+      this.developmentPlanItemRevisions,
+      this.brainstormingSessions,
+      this.boundarySummaries,
+      this.boundarySummaryRevisions,
+      this.executionPlans,
+      this.executionPlanRevisions,
+      this.executions,
+      this.codeReviewHandoffs,
+      this.qaHandoffs,
       this.plans,
       this.planRevisions,
       this.executionPackages,

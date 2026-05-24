@@ -5,6 +5,19 @@ import { Inject, Injectable } from '@nestjs/common';
 import { RUN_DURABILITY_MODE, type RunDurabilityMode } from './control-plane-tokens';
 
 const uuidBackedDeliveryIdPrefixes = new Set([
+  'attachment',
+  'boundary-summary',
+  'boundary-summary-revision',
+  'brainstorming-session',
+  'brainstorming-session-revision',
+  'code-review-handoff',
+  'context-manifest',
+  'context-manifest-revision',
+  'development-plan',
+  'development-plan-item',
+  'development-plan-item-revision',
+  'development-plan-revision',
+  'development-plan-source-link',
   'project',
   'work-item',
   'spec',
@@ -12,7 +25,12 @@ const uuidBackedDeliveryIdPrefixes = new Set([
   'plan',
   'plan-revision',
   'execution-package',
+  'execution',
+  'execution-plan',
+  'execution-plan-revision',
+  'qa-handoff',
   'run-session',
+  'task',
   'decision',
 ]);
 

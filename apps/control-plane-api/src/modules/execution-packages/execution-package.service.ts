@@ -10,7 +10,11 @@ import {
 } from '@nestjs/common';
 import {
   type AutomationActorClass,
+  type DevelopmentPlanItem,
+  type ExecutionPlanDocument,
+  type ExecutionPlanRevision,
   type ExecutionPackage,
+  type Execution,
   type Plan,
   type PlanRevision,
   type Project,
@@ -52,6 +56,18 @@ type PackageContext = {
   specRevision: SpecRevision;
   plan: Plan;
   planRevision: PlanRevision;
+  item?: DevelopmentPlanItem;
+};
+
+type ItemExecutionPackageContext = {
+  project: Project;
+  workItem: WorkItem;
+  item: DevelopmentPlanItem;
+  spec: Spec;
+  specRevision: SpecRevision;
+  executionPlan: ExecutionPlanDocument;
+  executionPlanRevision: ExecutionPlanRevision;
+  execution: Execution;
 };
 
 export type PublicExecutionPackage = Omit<ExecutionPackage, 'work_item_id'> & { scope_ref: ObjectRef };
@@ -91,6 +107,12 @@ export class ExecutionPackageService {
       if (existingPackage !== undefined) {
         return [existingPackage];
       }
+      const reviewerActorId =
+        context.item?.reviewer_actor_id ??
+        context.plan.approved_by_actor_id ??
+        context.spec.approved_by_actor_id ??
+        context.workItem.driver_actor_id;
+      const qaOwnerActorId = context.workItem.driver_actor_id;
       const executionPackage = await this.createExecutionPackageFromContext(
         repository,
         context,
@@ -98,8 +120,8 @@ export class ExecutionPackageService {
           repo_id: repo.repo_id,
           objective: `Implement ${context.workItem.title}.`,
           owner_actor_id: context.workItem.driver_actor_id,
-          reviewer_actor_id: 'actor-reviewer',
-          qa_owner_actor_id: 'actor-qa',
+          reviewer_actor_id: reviewerActorId,
+          qa_owner_actor_id: qaOwnerActorId,
           required_checks: [
             {
               check_id: 'unit',
@@ -157,6 +179,102 @@ export class ExecutionPackageService {
 
   async getPublicExecutionPackage(packageId: string): Promise<PublicExecutionPackage> {
     return this.toPublicExecutionPackage(await this.getExecutionPackage(packageId));
+  }
+
+  async createOrReuseItemExecutionPackage(
+    repository: DeliveryRepository,
+    context: ItemExecutionPackageContext,
+  ): Promise<ExecutionPackage> {
+    const existing = (await repository.listExecutionPackagesForWorkItem(context.workItem.id)).find(
+      (executionPackage) =>
+        executionPackage.development_plan_item_id === context.item.id &&
+        executionPackage.execution_plan_revision_id === context.executionPlanRevision.id &&
+        executionPackage.generation_key === 'item-execution',
+    );
+    if (existing !== undefined) {
+      if (existing.execution_id !== context.execution.id) {
+        throw new ConflictException('DevelopmentPlanItem already has an execution package for a different Execution');
+      }
+      return existing;
+    }
+
+    const repo = (await repository.listProjectRepos(context.project.id))[0];
+    if (repo === undefined) {
+      throw new BadRequestException('Project has no bound repos');
+    }
+    const reviewerActorId =
+      context.item.reviewer_actor_id ?? context.executionPlan.approved_by_actor_id ?? context.spec.approved_by_actor_id ?? context.workItem.driver_actor_id;
+    const ownerActorId = context.item.driver_actor_id ?? context.workItem.driver_actor_id;
+    const createdAt = this.now();
+    const sourceMutationPolicy = DEFAULT_SOURCE_MUTATION_POLICY;
+    const allowedPaths = ['apps/control-plane-api/**', 'apps/web/**', 'packages/domain/**', 'packages/contracts/**', 'tests/**'];
+    const forbiddenPaths = ['packages/db/**'];
+    const requiredChecks = [
+      {
+        check_id: 'focused',
+        display_name: 'Focused verification',
+        command: 'pnpm test',
+        timeout_seconds: 120,
+        blocks_review: true,
+      },
+    ];
+    const packagePolicyFields = await defaultPackagePolicyFields(repository, {
+      projectId: context.project.id,
+      repoId: repo.repo_id,
+      loadedAt: createdAt,
+      requiredChecks,
+      allowedPaths,
+      forbiddenPaths,
+      sourceMutationPolicy,
+    });
+    const executionPackage = {
+      ...transitionExecutionPackage(undefined, {
+        type: 'generate_package',
+        id: this.id('execution-package'),
+        work_item_id: context.workItem.id,
+        spec_id: context.spec.id,
+        spec_revision_id: context.specRevision.id,
+        plan_id: context.executionPlan.id,
+        plan_revision_id: context.executionPlanRevision.id,
+        project_id: context.project.id,
+        repo_id: repo.repo_id,
+        objective: `Execute ${context.item.title}.`,
+        owner_actor_id: ownerActorId,
+        reviewer_actor_id: reviewerActorId,
+        qa_owner_actor_id: context.workItem.driver_actor_id,
+        required_checks: requiredChecks,
+        required_artifact_kinds: ['execution_summary'],
+        allowed_paths: allowedPaths,
+        forbidden_paths: forbiddenPaths,
+        source_mutation_policy: sourceMutationPolicy,
+        at: createdAt,
+      }),
+      development_plan_item_id: context.item.id,
+      execution_id: context.execution.id,
+      execution_plan_id: context.executionPlan.id,
+      execution_plan_revision_id: context.executionPlanRevision.id,
+      execution_package_set_id: `item-execution:${context.item.id}:${context.executionPlanRevision.id}`,
+      generation_key: 'item-execution',
+      package_key: 'default-runtime-package',
+      sequence: 0,
+      manifest_digest: `execution-plan-revision:${context.executionPlanRevision.id}`,
+      required_test_gates: [],
+      ...packagePolicyFields,
+    };
+    validateExecutionPackage(context.project, executionPackage);
+    await repository.saveExecutionPackage(executionPackage);
+    await this.eventWithRepository(
+      repository,
+      'execution_package',
+      executionPackage.id,
+      'item_execution_package_created',
+      ownerActorId,
+      {
+        development_plan_item_id: context.item.id,
+        execution_plan_revision_id: context.executionPlanRevision.id,
+      },
+    );
+    return executionPackage;
   }
 
   async patchExecutionPackage(packageId: string, dto: PatchExecutionPackageDto): Promise<ExecutionPackage> {
@@ -285,6 +403,19 @@ export class ExecutionPackageService {
     if (planRevision.based_on_spec_revision_id !== specRevision.id) {
       throw new ConflictException('PlanRevision is no longer based on the WorkItem current approved SpecRevision');
     }
+    const itemIds = [
+      plan.development_plan_item_id,
+      spec.development_plan_item_id,
+      specRevision.development_plan_item_id,
+    ].filter((id): id is string => id !== undefined);
+    const uniqueItemIds = [...new Set(itemIds)];
+    if (uniqueItemIds.length > 1) {
+      throw new ConflictException('PlanRevision item linkage no longer matches the approved SpecRevision');
+    }
+    const item =
+      uniqueItemIds[0] === undefined
+        ? undefined
+        : this.requireFound(await repository.getDevelopmentPlanItem(uniqueItemIds[0]), `DevelopmentPlanItem ${uniqueItemIds[0]}`);
     return {
       project: this.requireFound(await repository.getProject(workItem.project_id), `Project ${workItem.project_id}`),
       workItem,
@@ -292,6 +423,7 @@ export class ExecutionPackageService {
       specRevision,
       plan,
       planRevision,
+      ...(item === undefined ? {} : { item }),
     };
   }
 
@@ -324,6 +456,49 @@ export class ExecutionPackageService {
     }
     if (workItem.current_spec_id !== executionPackage.spec_id) {
       stale(`ExecutionPackage ${executionPackage.id} spec_id ${executionPackage.spec_id} is not the WorkItem current spec`);
+    }
+    if (executionPackage.development_plan_item_id !== undefined && executionPackage.execution_plan_revision_id !== undefined) {
+      const item = this.requireFound(
+        await repository.getDevelopmentPlanItem(executionPackage.development_plan_item_id),
+        `DevelopmentPlanItem ${executionPackage.development_plan_item_id}`,
+      );
+      if (item.source_ref.id !== workItem.id) {
+        stale(`ExecutionPackage ${executionPackage.id} item no longer belongs to the WorkItem`);
+      }
+      const executionPlanRevision = this.requireFound(
+        await repository.getExecutionPlanRevision(executionPackage.execution_plan_revision_id),
+        `ExecutionPlanRevision ${executionPackage.execution_plan_revision_id}`,
+      );
+      if (executionPlanRevision.development_plan_item_id !== item.id) {
+        stale(`ExecutionPackage ${executionPackage.id} execution plan revision no longer belongs to the item`);
+      }
+      const executionPlan = this.requireFound(
+        await repository.getExecutionPlan(executionPlanRevision.execution_plan_id),
+        `ExecutionPlan ${executionPlanRevision.execution_plan_id}`,
+      );
+      if (
+        executionPlan.status !== 'approved' ||
+        executionPlan.approved_revision_id !== executionPlanRevision.id ||
+        executionPlan.current_revision_id !== executionPlanRevision.id
+      ) {
+        stale(`ExecutionPackage ${executionPackage.id} execution_plan_revision_id is not the current approved Execution Plan revision`);
+      }
+      const specRevision = this.requireFound(
+        await repository.getSpecRevision(executionPlanRevision.based_on_spec_revision_id),
+        `SpecRevision ${executionPlanRevision.based_on_spec_revision_id}`,
+      );
+      const spec = this.requireFound(await repository.getSpec(specRevision.spec_id), `Spec ${specRevision.spec_id}`);
+      if (
+        spec.id !== executionPackage.spec_id ||
+        specRevision.id !== executionPackage.spec_revision_id ||
+        spec.status !== 'approved' ||
+        spec.resolution !== 'approved' ||
+        spec.current_revision_id !== specRevision.id ||
+        spec.approved_revision_id !== specRevision.id
+      ) {
+        stale(`ExecutionPackage ${executionPackage.id} is not based on the item current approved Spec revision`);
+      }
+      return;
     }
     if (workItem.current_plan_id !== executionPackage.plan_id) {
       stale(`ExecutionPackage ${executionPackage.id} plan_id ${executionPackage.plan_id} is not the WorkItem current plan`);
@@ -449,6 +624,7 @@ export class ExecutionPackageService {
         source_mutation_policy: sourceMutationPolicy,
         at: createdAt,
       }),
+      ...(context.item === undefined ? {} : { development_plan_item_id: context.item.id }),
       ...(generation === undefined
         ? {}
         : {

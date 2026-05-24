@@ -34,8 +34,6 @@ import {
 
 import {
   generatePackagesAction,
-  generatePlanDraftAction,
-  generateSpecDraftAction,
   navigateAction,
   objectTarget,
   routeTarget,
@@ -109,7 +107,7 @@ const stageOrder: readonly DeliveryStageId[] = [
 const stageLabels: Record<DeliveryStageId, string> = {
   spec: 'Spec',
   plan: 'Plan',
-  packages: 'Packages',
+  packages: 'Execution Preparation',
   execution: 'Execution',
   review: 'Review',
   integration_readiness: 'Integration Readiness',
@@ -183,21 +181,24 @@ const productObjectHref = (objectType: ProductObjectType, objectId: string): str
       return `/bugs/${objectId}`;
     case 'tech_debt':
       return `/tech-debt/${objectId}`;
-    case 'task':
-      return `/tasks/${objectId}`;
     case 'spec':
-      return `/specs/${objectId}`;
+      return '/specs-plans';
     case 'spec_revision':
       return undefined;
-    case 'plan':
-      return `/plans/${objectId}`;
-    case 'plan_revision':
+    case 'execution_plan':
+      return '/specs-plans';
+    case 'execution_plan_revision':
       return undefined;
-    case 'execution_package':
-      return undefined;
-    case 'run_session':
-      return undefined;
-    case 'review_packet':
+    case 'execution':
+      return `/executions/${objectId}`;
+    case 'development_plan':
+      return `/development-plans/${objectId}`;
+    case 'development_plan_item':
+    case 'brainstorming_session':
+    case 'boundary_summary':
+    case 'code_review_handoff':
+    case 'qa_handoff':
+    case 'attachment':
       return undefined;
     case 'release':
       return `/releases/${objectId}`;
@@ -207,6 +208,20 @@ const productObjectHref = (objectType: ProductObjectType, objectId: string): str
     }
   }
 };
+
+const specPlanArtifactHref = (workItem: WorkItem): string => `/specs-plans?project_id=${encodeURIComponent(workItem.project_id)}`;
+
+const specArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
+  objectRef('spec', objectId, specPlanArtifactHref(input.workItem), title);
+
+const specRevisionArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
+  objectRef('spec_revision', objectId, specPlanArtifactHref(input.workItem), title);
+
+const planArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
+  objectRef('execution_plan', objectId, specPlanArtifactHref(input.workItem), title);
+
+const planRevisionArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
+  objectRef('execution_plan_revision', objectId, specPlanArtifactHref(input.workItem), title);
 
 const blocker = (
   stageId: DeliveryStageId,
@@ -342,31 +357,81 @@ const requiredCheckResult = (
 ): RunSession['check_results'][number] | undefined =>
   run.check_results.find((check) => check.check_id === requiredCheck.check_id);
 
-const taskPackageHref = (executionPackage: ExecutionPackage): string | undefined =>
-  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`;
+const executionPackageProductHref = (executionPackage: ExecutionPackage): string | undefined =>
+  executionPackage.execution_id === undefined
+    ? '/executions'
+    : `/executions/${executionPackage.execution_id}`;
+
+const executionObjectIdForPackage = (executionPackage: ExecutionPackage): string =>
+  executionPackage.execution_id ?? executionPackage.id;
+
+const executionObjectRef = (executionPackage: ExecutionPackage, title?: string): DeliveryObjectRef =>
+  objectRef('execution', executionObjectIdForPackage(executionPackage), executionPackageProductHref(executionPackage), title);
 
 const taskRunHref = (executionPackage: ExecutionPackage, run: RunSession): string | undefined =>
-  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/runs/${run.id}`;
+  executionPackageProductHref(executionPackage);
 
 const taskReviewHref = (executionPackage: ExecutionPackage, review: ReviewPacket): string | undefined =>
-  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/reviews/${review.id}`;
+  executionPackageProductHref(executionPackage);
 
 const taskPackageTarget = (executionPackage: ExecutionPackage) => {
-  const href = taskPackageHref(executionPackage);
-  return href === undefined ? undefined : objectTarget('execution_package', executionPackage.id, href);
+  const href = executionPackageProductHref(executionPackage);
+  return href === undefined ? undefined : objectTarget('execution', executionObjectIdForPackage(executionPackage), href);
 };
 
 const taskReviewTarget = (executionPackage: ExecutionPackage, review: ReviewPacket) => {
   const href = taskReviewHref(executionPackage, review);
-  return href === undefined ? undefined : objectTarget('review_packet', review.id, href);
+  return href === undefined ? undefined : objectTarget('code_review_handoff', review.id, href);
 };
 
 const sourceWorkItemTarget = (workItem: WorkItem) =>
   objectTarget(workItemProductObjectType(workItem), workItem.id, workItemProductHref(workItem));
 
+const releaseBlockerObjectRef = (
+  workItem: WorkItem,
+  objectType: string | undefined,
+  objectId: string | undefined,
+): DeliveryObjectRef | undefined => {
+  if (objectType === undefined || objectId === undefined) {
+    return undefined;
+  }
+  switch (objectType) {
+    case 'work_item':
+      return objectRef(workItemProductObjectType(workItem), objectId, workItemProductHref(workItem));
+    case 'initiative':
+    case 'requirement':
+    case 'bug':
+    case 'tech_debt':
+    case 'spec':
+    case 'spec_revision':
+    case 'development_plan':
+    case 'development_plan_item':
+    case 'brainstorming_session':
+    case 'boundary_summary':
+    case 'execution_plan':
+    case 'execution_plan_revision':
+    case 'execution':
+    case 'code_review_handoff':
+    case 'qa_handoff':
+    case 'release':
+    case 'attachment':
+      return objectRef(objectType, objectId, productObjectHref(objectType, objectId));
+    case 'plan':
+      return objectRef('execution_plan', objectId, specPlanArtifactHref(workItem));
+    case 'plan_revision':
+      return objectRef('execution_plan_revision', objectId, specPlanArtifactHref(workItem));
+    case 'execution_package':
+      return objectRef('execution', objectId, '/executions');
+    case 'review_packet':
+      return objectRef('code_review_handoff', objectId);
+    default:
+      return undefined;
+  }
+};
+
 const requiredCheckBlockers = (executionPackage: ExecutionPackage, run: RunSession | undefined): DeliveryBlocker[] => {
   if (run === undefined) {
-    return [blocker('execution', 'missing_selected_run', 'Selected run evidence is missing.', 'execution-owner', objectRef('execution_package', executionPackage.id, taskPackageHref(executionPackage)))];
+    return [blocker('execution', 'missing_selected_run', 'Selected run evidence is missing.', 'execution-owner', executionObjectRef(executionPackage))];
   }
 
   const blockers: DeliveryBlocker[] = [];
@@ -379,7 +444,7 @@ const requiredCheckBlockers = (executionPackage: ExecutionPackage, run: RunSessi
           'missing_required_check',
           `Required check ${requiredCheck.display_name} is missing from the selected run.`,
           'execution-owner',
-          objectRef('run_session', run.id, taskRunHref(executionPackage, run)),
+          executionObjectRef(executionPackage),
         ),
       );
       continue;
@@ -391,7 +456,7 @@ const requiredCheckBlockers = (executionPackage: ExecutionPackage, run: RunSessi
           'failed_required_check',
           `Required check ${requiredCheck.display_name} did not pass on the selected run.`,
           'execution-owner',
-          objectRef('run_session', run.id, taskRunHref(executionPackage, run)),
+          executionObjectRef(executionPackage),
         ),
       );
     }
@@ -455,23 +520,23 @@ const evaluateSpecStage = (input: WorkItemDeliveryReadinessInput): DeliveryStage
 
   const blockers: DeliveryBlocker[] = [];
   if (!hasApprovedCurrentRevision(input.currentSpec)) {
-    blockers.push(blocker('spec', 'spec_not_current_approved_revision', 'Current Spec is not on its approved revision.', 'spec-approver', objectRef('spec', input.currentSpec.id, `/specs/${input.currentSpec.id}`)));
+    blockers.push(blocker('spec', 'spec_not_current_approved_revision', 'Current Spec is not on its approved revision.', 'spec-approver', specArtifactObjectRef(input, input.currentSpec.id)));
   }
   if (input.approvedSpecRevision === null || input.approvedSpecRevision.id !== input.currentSpec.approved_revision_id) {
-    blockers.push(blocker('spec', 'missing_approved_spec_revision', 'Approved Spec revision record is missing or stale.', 'spec-approver', objectRef('spec', input.currentSpec.id, `/specs/${input.currentSpec.id}`)));
+    blockers.push(blocker('spec', 'missing_approved_spec_revision', 'Approved Spec revision record is missing or stale.', 'spec-approver', specArtifactObjectRef(input, input.currentSpec.id)));
   } else {
     if (input.approvedSpecRevision.acceptance_criteria.length === 0) {
-      blockers.push(blocker('spec', 'missing_acceptance_criteria', 'Approved Spec revision is missing acceptance criteria.', 'spec-approver', objectRef('spec_revision', input.approvedSpecRevision.id, `/specs/${input.currentSpec.id}`)));
+      blockers.push(blocker('spec', 'missing_acceptance_criteria', 'Approved Spec revision is missing acceptance criteria.', 'spec-approver', specRevisionArtifactObjectRef(input, input.approvedSpecRevision.id)));
     }
     if (!hasText(input.approvedSpecRevision.test_strategy_summary)) {
-      blockers.push(blocker('spec', 'missing_test_strategy', 'Approved Spec revision is missing a test strategy summary.', 'spec-approver', objectRef('spec_revision', input.approvedSpecRevision.id, `/specs/${input.currentSpec.id}`)));
+      blockers.push(blocker('spec', 'missing_test_strategy', 'Approved Spec revision is missing a test strategy summary.', 'spec-approver', specRevisionArtifactObjectRef(input, input.approvedSpecRevision.id)));
     }
   }
 
   return stage({
     id: 'spec',
     state: blockers.length === 0 ? 'passed' : 'blocked',
-    object_refs: [objectRef('spec', input.currentSpec.id, `/specs/${input.currentSpec.id}`)],
+    object_refs: [specArtifactObjectRef(input, input.currentSpec.id)],
     blockers,
   });
 };
@@ -487,26 +552,26 @@ const evaluatePlanStage = (input: WorkItemDeliveryReadinessInput, specStage: Del
 
   const blockers: DeliveryBlocker[] = [];
   if (!hasApprovedCurrentRevision(input.currentPlan)) {
-    blockers.push(blocker('plan', 'plan_not_current_approved_revision', 'Current Plan is not on its approved revision.', 'spec-approver', objectRef('plan', input.currentPlan.id, `/plans/${input.currentPlan.id}`)));
+    blockers.push(blocker('plan', 'plan_not_current_approved_revision', 'Current Plan is not on its approved revision.', 'spec-approver', planArtifactObjectRef(input, input.currentPlan.id)));
   }
   if (input.approvedPlanRevision === null || input.approvedPlanRevision.id !== input.currentPlan.approved_revision_id) {
-    blockers.push(blocker('plan', 'missing_approved_plan_revision', 'Approved Plan revision record is missing or stale.', 'spec-approver', objectRef('plan', input.currentPlan.id, `/plans/${input.currentPlan.id}`)));
+    blockers.push(blocker('plan', 'missing_approved_plan_revision', 'Approved Plan revision record is missing or stale.', 'spec-approver', planArtifactObjectRef(input, input.currentPlan.id)));
   } else {
     if (input.approvedSpecRevision === null || input.approvedPlanRevision.based_on_spec_revision_id !== input.approvedSpecRevision.id) {
-      blockers.push(blocker('plan', 'stale_plan_spec_revision', 'Approved Plan revision is not based on the approved Spec revision.', 'spec-approver', objectRef('plan_revision', input.approvedPlanRevision.id, `/plans/${input.currentPlan.id}`)));
+      blockers.push(blocker('plan', 'stale_plan_spec_revision', 'Approved Plan revision is not based on the approved Spec revision.', 'spec-approver', planRevisionArtifactObjectRef(input, input.approvedPlanRevision.id)));
     }
     if (input.approvedPlanRevision.test_matrix.length === 0) {
-      blockers.push(blocker('plan', 'missing_test_matrix', 'Approved Plan revision is missing a test matrix.', 'spec-approver', objectRef('plan_revision', input.approvedPlanRevision.id, `/plans/${input.currentPlan.id}`)));
+      blockers.push(blocker('plan', 'missing_test_matrix', 'Approved Plan revision is missing a test matrix.', 'spec-approver', planRevisionArtifactObjectRef(input, input.approvedPlanRevision.id)));
     }
     if (!hasText(input.approvedPlanRevision.rollback_notes)) {
-      blockers.push(blocker('plan', 'missing_rollback_notes', 'Approved Plan revision is missing rollback notes.', 'spec-approver', objectRef('plan_revision', input.approvedPlanRevision.id, `/plans/${input.currentPlan.id}`)));
+      blockers.push(blocker('plan', 'missing_rollback_notes', 'Approved Plan revision is missing rollback notes.', 'spec-approver', planRevisionArtifactObjectRef(input, input.approvedPlanRevision.id)));
     }
   }
 
   return stage({
     id: 'plan',
     state: blockers.length === 0 && isStagePassing(specStage) ? 'passed' : 'blocked',
-    object_refs: [objectRef('plan', input.currentPlan.id, `/plans/${input.currentPlan.id}`)],
+    object_refs: [planArtifactObjectRef(input, input.currentPlan.id)],
     blockers,
   });
 };
@@ -551,7 +616,7 @@ const buildQualityBlockers = (
             'missing_required_artifact',
             `Selected run is missing required ${artifactKind} evidence.`,
             'qa-test-owner',
-            objectRef('run_session', run.id, taskRunHref(executionPackage, run)),
+            executionObjectRef(executionPackage),
           ),
         );
       }
@@ -572,7 +637,7 @@ const buildQualityBlockers = (
               ? 'Required test gate cannot be evaluated because its id is missing.'
               : `Required test gate ${result.gate_id} is missing selected-run evidence.`,
             'qa-test-owner',
-            objectRef('execution_package', executionPackage.id, taskPackageHref(executionPackage)),
+            executionObjectRef(executionPackage),
           ),
         );
       }
@@ -588,9 +653,9 @@ const packageReadinessBlockers = (currentPackages: readonly ExecutionPackage[]):
         blocker(
           'packages',
           'package_blocked',
-          executionPackage.blocked_reason ?? 'Execution package is blocked or has requested changes.',
+          executionPackage.blocked_reason ?? 'Execution is blocked or has requested changes.',
           'execution-owner',
-          objectRef('execution_package', executionPackage.id, taskPackageHref(executionPackage)),
+          executionObjectRef(executionPackage),
         ),
       ];
     }
@@ -693,7 +758,7 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
           : stage({
               id: 'packages',
               state: !isStagePassing(planStage) || packageBlockers.length > 0 ? 'blocked' : hasDraftPackage ? 'ready' : 'passed',
-              object_refs: currentPackages.map((item) => objectRef('execution_package', item.id, taskPackageHref(item))),
+              object_refs: currentPackages.map((item) => executionObjectRef(item)),
               blockers: isStagePassing(planStage) ? packageBlockers : [...specStage.blockers, ...planStage.blockers],
             });
 
@@ -724,7 +789,7 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
         executionState = executionState === 'blocked' ? executionState : 'running';
       } else if (run.status !== 'succeeded') {
         executionState = 'blocked';
-        executionBlockers.push(blocker('execution', 'selected_run_failed', 'Selected run did not succeed.', 'execution-owner', objectRef('run_session', run.id, taskRunHref(executionPackage, run))));
+        executionBlockers.push(blocker('execution', 'selected_run_failed', 'Selected run did not succeed.', 'execution-owner', executionObjectRef(executionPackage)));
       }
       const checkBlockers = requiredCheckBlockers(executionPackage, run);
       if (checkBlockers.length > 0) {
@@ -738,7 +803,7 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
     state: executionState,
     object_refs: currentPackages.flatMap((executionPackage) => {
       const run = selectedRuns.get(executionPackage.id);
-      return run === undefined ? [] : [objectRef('run_session', run.id, taskRunHref(executionPackage, run))];
+      return run === undefined ? [] : [executionObjectRef(executionPackage)];
     }),
     blockers: executionBlockers,
   });
@@ -756,12 +821,12 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
       const review = selectedReviews.get(executionPackage.id);
       if (run === undefined) {
         reviewState = 'blocked';
-        reviewBlockers.push(blocker('review', 'missing_selected_run', 'Review cannot be evaluated without a selected run.', 'reviewer', objectRef('execution_package', executionPackage.id, taskPackageHref(executionPackage))));
+        reviewBlockers.push(blocker('review', 'missing_selected_run', 'Review cannot be evaluated without a selected run.', 'reviewer', executionObjectRef(executionPackage)));
         continue;
       }
       if (review === undefined) {
         reviewState = 'missing';
-        reviewBlockers.push(blocker('review', 'missing_review_packet', 'Selected package is missing a Review Packet.', 'reviewer', objectRef('execution_package', executionPackage.id, taskPackageHref(executionPackage))));
+        reviewBlockers.push(blocker('review', 'missing_review_packet', 'Selected execution is missing a code review handoff.', 'reviewer', executionObjectRef(executionPackage)));
         continue;
       }
       const complete = hasCompleteReviewEvidence(review, {
@@ -774,7 +839,7 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
         reviewState = 'blocked';
         reviewBlockers.push(
           ...complete.blockers.map((code) =>
-            blocker('review', code, `Review evidence is incomplete: ${code}.`, 'reviewer', objectRef('review_packet', review.id, taskReviewHref(executionPackage, review))),
+            blocker('review', code, `Review evidence is incomplete: ${code}.`, 'reviewer', objectRef('code_review_handoff', review.id, taskReviewHref(executionPackage, review))),
           ),
         );
       }
@@ -785,7 +850,7 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
     state: reviewState,
     object_refs: currentPackages.flatMap((executionPackage) => {
       const review = selectedReviews.get(executionPackage.id);
-      return review === undefined ? [] : [objectRef('review_packet', review.id, taskReviewHref(executionPackage, review))];
+      return review === undefined ? [] : [objectRef('code_review_handoff', review.id, taskReviewHref(executionPackage, review))];
     }),
     blockers: reviewBlockers,
   });
@@ -805,7 +870,7 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
     for (const executionPackage of currentPackages) {
       if (!packageHasIntegrationReadiness(executionPackage)) {
         hasMissingReadiness = true;
-        integrationBlockers.push(blocker('integration_readiness', 'missing_integration_readiness', 'Required Integration Readiness evidence is missing.', 'execution-owner', objectRef('execution_package', executionPackage.id, taskPackageHref(executionPackage))));
+        integrationBlockers.push(blocker('integration_readiness', 'missing_integration_readiness', 'Required Integration Readiness evidence is missing.', 'execution-owner', executionObjectRef(executionPackage)));
         continue;
       }
       const normalized = integrationReadinessBlockerCodes(executionPackage.integration_readiness);
@@ -815,7 +880,7 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
       if (normalized.state === 'blocked' || normalized.state === 'failed') {
         integrationBlockers.push(
           ...normalized.codes.map((code) =>
-            blocker('integration_readiness', code, `Integration Readiness is incomplete: ${code}.`, 'execution-owner', objectRef('execution_package', executionPackage.id, taskPackageHref(executionPackage))),
+            blocker('integration_readiness', code, `Integration Readiness is incomplete: ${code}.`, 'execution-owner', executionObjectRef(executionPackage)),
           ),
         );
       }
@@ -823,7 +888,7 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
     integrationStage = stage({
       id: 'integration_readiness',
       state: hasMissingReadiness ? 'missing' : integrationBlockers.length > 0 ? 'blocked' : hasRunning ? 'running' : 'passed',
-      object_refs: currentPackages.map((item) => objectRef('execution_package', item.id, taskPackageHref(item))),
+      object_refs: currentPackages.map((item) => executionObjectRef(item)),
       blockers: dedupeBlockers(integrationBlockers),
     });
   }
@@ -882,15 +947,7 @@ const evaluateStages = (input: WorkItemDeliveryReadinessInput): StageEvaluation 
               item.code,
               item.message,
               'release-owner',
-              item.object_type !== undefined && item.object_id !== undefined
-                ? objectRef(
-                    item.object_type === 'work_item' ? workItemProductObjectType(input.workItem) : (item.object_type as ProductObjectType),
-                    item.object_id,
-                    item.object_type === 'work_item'
-                      ? workItemProductHref(input.workItem)
-                      : productObjectHref(item.object_type as ProductObjectType, item.object_id),
-                  )
-                : undefined,
+              releaseBlockerObjectRef(input.workItem, item.object_type, item.object_id),
             ),
           ).concat(
             qualityStage.state === 'blocked'
@@ -1036,7 +1093,7 @@ const actionForLane = (
   if (laneId === 'spec-approver') {
     const target = input.currentSpec === null
       ? objectTarget(workItemProductObjectType(input.workItem), input.workItem.id, workItemProductHref(input.workItem))
-      : objectTarget('spec', input.currentSpec.id, `/specs/${input.currentSpec.id}`);
+      : objectTarget('spec', input.currentSpec.id, specPlanArtifactHref(input.workItem));
     return [
       navigateAction({
         id: `open-spec-plan-readiness-${input.workItem.id}`,
@@ -1057,7 +1114,7 @@ const actionForLane = (
           id: `run-package-${firstPackage.id}`,
           laneId,
           priority: 'primary',
-          label: 'Run package',
+          label: 'Start execution',
           enabled: disabledReason === undefined,
           ...(disabledReason === undefined ? {} : { disabledReason, blockedReason: disabledReason }),
           scopeRef: workItemScopeRef(input.workItem),
@@ -1072,7 +1129,7 @@ const actionForLane = (
         id: `open-package-readiness-${firstPackage?.id ?? input.workItem.id}`,
         laneId,
         priority: 'primary',
-        label: firstRun === undefined ? 'Open Package' : 'Open package run console',
+        label: firstRun === undefined ? 'Open Execution' : 'Open execution console',
         target: packageTarget ?? sourceWorkItemTarget(input.workItem),
       }),
     ];
@@ -1086,8 +1143,8 @@ const actionForLane = (
           id: `open-review-evidence-prerequisite-${firstPackage?.id ?? input.workItem.id}`,
           laneId,
           priority: 'primary',
-          label: 'Generate Review Packet evidence first',
-          description: 'Review evidence must be generated before the reviewer can decide to approve or request changes.',
+          label: 'Prepare code review handoff first',
+          description: 'Code review evidence must be generated before the reviewer can decide to approve or request changes.',
           target: target ?? sourceWorkItemTarget(input.workItem),
         }),
       ];
@@ -1096,11 +1153,11 @@ const actionForLane = (
     const reviewTarget = firstPackage === undefined ? undefined : taskReviewTarget(firstPackage, firstReview);
     return [
       navigateAction({
-        id: `decide-review-packet-${firstReview.id}`,
+        id: `decide-code-review-handoff-${firstReview.id}`,
         laneId,
         priority: 'primary',
-        label: 'Decide Review Packet',
-        description: 'Approve the Review Packet or request changes based on the selected run evidence.',
+        label: 'Decide code review handoff',
+        description: 'Approve the code review handoff or request changes based on the selected execution evidence.',
         target: reviewTarget ?? sourceWorkItemTarget(input.workItem),
       }),
     ];
@@ -1128,7 +1185,7 @@ const actionForLane = (
           laneId,
           priority: 'primary',
           label: 'Acknowledge Release Test Acceptance',
-          description: 'Acknowledge the Release test acceptance decision for the current package scope.',
+          description: 'Acknowledge the Release test acceptance decision for the current execution scope.',
           target: objectTarget('release', linkedRelease.id, `/releases/${linkedRelease.id}#release-test-acceptance`),
         }),
       ];
@@ -1164,34 +1221,14 @@ const actionForLane = (
   }
 
   const actions: ProductAction[] = [];
-  if (input.currentSpec === null) {
+  if (input.currentSpec === null || input.currentSpec.current_revision_id === undefined) {
     actions.push(openWorkItemAction(laneId, input.workItem));
-  } else if (input.currentSpec.current_revision_id === undefined) {
-    actions.push(
-      generateSpecDraftAction({
-        id: `generate-spec-draft-${input.currentSpec.id}`,
-        laneId,
-        priority: 'primary',
-        label: 'Generate Spec draft',
-        scopeRef: workItemScopeRef(input.workItem),
-        specId: input.currentSpec.id,
-        target: objectTarget('spec', input.currentSpec.id, `/specs/${input.currentSpec.id}`),
-      }),
-    );
   }
 
   if (specIsStrictlyReady(input) && input.currentPlan !== null && input.currentPlan.current_revision_id === undefined) {
-    actions.push(
-      generatePlanDraftAction({
-        id: `generate-plan-draft-${input.currentPlan.id}`,
-        laneId,
-        priority: actions.length === 0 ? 'primary' : 'secondary',
-        label: 'Generate Plan draft',
-        scopeRef: workItemScopeRef(input.workItem),
-        planId: input.currentPlan.id,
-        target: objectTarget('plan', input.currentPlan.id, `/plans/${input.currentPlan.id}`),
-      }),
-    );
+    if (actions.length === 0) {
+      actions.push(openWorkItemAction(laneId, input.workItem));
+    }
   }
 
   if (
@@ -1206,10 +1243,10 @@ const actionForLane = (
         id: `generate-packages-${input.approvedPlanRevision.id}`,
         laneId,
         priority: actions.length === 0 ? 'primary' : 'secondary',
-        label: 'Generate packages',
+        label: 'Start execution',
         scopeRef: workItemScopeRef(input.workItem),
         planRevisionId: input.approvedPlanRevision.id,
-        target: objectTarget('plan_revision', input.approvedPlanRevision.id, `/plans/${input.currentPlan.id}`),
+        target: objectTarget('execution_plan_revision', input.approvedPlanRevision.id, specPlanArtifactHref(input.workItem)),
       }),
     );
   }
@@ -1221,7 +1258,7 @@ const actionForLane = (
         id: `open-package-${firstPackage.id}`,
         laneId,
         priority: actions.length === 0 ? 'primary' : 'secondary',
-        label: 'Open Package',
+        label: 'Open Execution',
         target: packageTarget ?? sourceWorkItemTarget(input.workItem),
       }),
     );

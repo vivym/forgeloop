@@ -514,29 +514,36 @@ function productRouteSegmentsAllowed(segments: string[]): boolean {
     case 'specs-plans':
       return segments.length === 1;
     case 'requirements':
-      return segmentedObjectRouteAllowed(segments, { allowNew: true, childRoutes: ['spec', 'plan', 'evidence'] });
+      return segmentedObjectRouteAllowed(segments, { allowNew: true, childRoutes: ['evidence'] });
     case 'initiatives':
     case 'tech-debt':
     case 'bugs':
       return segmentedObjectRouteAllowed(segments, { allowNew: true, childRoutes: ['evidence'] });
-    case 'tasks':
+    case 'development-plans':
       if (segments.length === 1) {
         return true;
       }
       if (segments.length === 2) {
         return second === 'new' || isDynamicIdSegment(second);
       }
-      return segments.length === 4 && isDynamicIdSegment(second) && ['packages', 'runs', 'reviews'].includes(third ?? '') && isDynamicIdSegment(fourth);
+      return (
+        segments.length === 4 &&
+        isDynamicIdSegment(second) &&
+        third === 'items' &&
+        isDynamicIdSegment(fourth)
+      ) || (
+        segments.length === 5 &&
+        isDynamicIdSegment(second) &&
+        third === 'items' &&
+        isDynamicIdSegment(fourth) &&
+        ['brainstorming', 'spec', 'execution-plan', 'execution'].includes(segments[4] ?? '')
+      );
+    case 'executions':
+      return segments.length === 1 || (segments.length === 2 && isDynamicIdSegment(second));
     case 'releases':
       return segments.length === 1 || (isDynamicIdSegment(second) && (segments.length === 2 || (segments.length === 3 && third === 'evidence')));
-    case 'specs':
-    case 'plans':
-      return (
-        (segments.length === 2 && isDynamicIdSegment(second)) ||
-        (segments.length === 4 && isDynamicIdSegment(second) && third === 'revisions' && isDynamicIdSegment(fourth))
-      );
     case 'reports':
-      return segments.length === 1 || (segments.length === 2 && ['delivery', 'quality', 'release-readiness', 'observation', 'replay'].includes(second ?? ''));
+      return segments.length === 1 || (segments.length === 2 && ['delivery', 'quality', 'release-readiness', 'observation'].includes(second ?? ''));
     default:
       return false;
   }

@@ -1,9 +1,7 @@
 import {
+  defaultGenerationPlanningConfig,
   executeActionRun,
   planNextActions,
-  specDraftOutputSchemaVersion,
-  specDraftPromptVersion,
-  type AutomationGenerationMode,
   type AutomationGenerationPlanningConfig,
   type AutomationExecutorClient,
   type AutomationExecutorResult,
@@ -38,7 +36,6 @@ export interface AutomationDaemonOptions {
   loopIntervalMs: number;
   noClaimBackoffMs: number;
   generationPlanning?: AutomationGenerationPlanningConfig;
-  specDraftGenerationMode?: AutomationGenerationMode;
   generationRuntime?: CodexGenerationRuntime;
   claimToken?: string;
   sleep?: (ms: number) => Promise<void>;
@@ -63,32 +60,6 @@ const policyProjectionFor = (
   ...('reasonCode' in digest && digest.reasonCode !== undefined ? { reasonCode: digest.reasonCode } : {}),
   ...(digest.observedAt === undefined ? {} : { observedAt: digest.observedAt }),
 });
-
-const legacyGenerationPlanningFor = (
-  mode: AutomationGenerationMode | undefined,
-): AutomationGenerationPlanningConfig => {
-  const effectiveMode = mode === 'app_server' ? 'app_server' : mode === 'fake' ? 'fake' : 'disabled';
-  return {
-    mode: effectiveMode,
-    tasks: {
-      spec_draft: {
-        enabled: mode !== undefined && mode !== 'disabled',
-        promptVersion: specDraftPromptVersion,
-        outputSchemaVersion: specDraftOutputSchemaVersion,
-      },
-      plan_draft: {
-        enabled: false,
-        promptVersion: 'plan-draft.fake.v1',
-        outputSchemaVersion: 'plan_draft.v1',
-      },
-      package_drafts: {
-        enabled: false,
-        promptVersion: 'package-drafts.fake.v1',
-        outputSchemaVersion: 'package_drafts.v1',
-      },
-    },
-  };
-};
 
 const openProjectionStatuses = new Set(['pending', 'running']);
 
@@ -135,8 +106,7 @@ export class AutomationDaemon {
 
   async runOnce(): Promise<AutomationDaemonRunOnceResult> {
     const snapshot = await this.snapshotWithPolicyDigests(await this.options.client.runtimeSnapshot());
-    const generationPlanning =
-      this.options.generationPlanning ?? legacyGenerationPlanningFor(this.options.specDraftGenerationMode);
+    const generationPlanning = this.options.generationPlanning ?? defaultGenerationPlanningConfig;
     const actions = planNextActions(snapshot, { generation: generationPlanning });
     const shouldClaimProjectionFirst =
       generationPlanning.mode === 'app_server' &&

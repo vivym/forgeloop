@@ -557,7 +557,7 @@ describe('Work Item delivery readiness', () => {
     });
   });
 
-  it('blocks review when selected Review Packet is stale or incomplete', () => {
+  it('blocks review when selected code review handoff is stale or incomplete', () => {
     const readiness = deriveWorkItemDeliveryReadiness(
       readyInput({
         packages: [packageFixture({ current_review_packet_id: 'review-1' })],
@@ -646,8 +646,8 @@ describe('Work Item delivery readiness', () => {
   it('returns responsibility-aware next actions for delivery lanes', () => {
     const cases = [
       { lane: 'spec-approver', label: /spec|plan|test strategy/i, objectType: 'spec' },
-      { lane: 'execution-owner', label: /package|run/i, objectType: 'execution_package' },
-      { lane: 'reviewer', label: /review/i, objectType: 'review_packet' },
+      { lane: 'execution-owner', label: /execution/i, objectType: 'execution' },
+      { lane: 'reviewer', label: /review/i, objectType: 'code_review_handoff' },
       { lane: 'qa-test-owner', label: /quality|gate|acceptance/i, objectType: 'release' },
       { lane: 'release-owner', label: /release/i, objectType: 'release' },
     ] as const;
@@ -706,5 +706,34 @@ describe('Work Item delivery readiness', () => {
         expect.objectContaining({ command: expect.objectContaining({ type: 'generate_packages' }) }),
       ]),
     );
+  });
+
+  it('does not emit direct document draft commands from Work Item readiness', () => {
+    const retiredCommandTypes = [
+      ['generate', 'spec', 'draft'].join('_'),
+      ['generate', 'plan', 'draft'].join('_'),
+    ];
+    const missingSpecDraft = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        currentSpec: specFixture({ current_revision_id: undefined, approved_revision_id: undefined }),
+        currentSpecRevision: undefined,
+        activeLane: 'requirements',
+      }),
+    );
+    const missingPlanDraft = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        currentPlan: planFixture({ current_revision_id: undefined, approved_revision_id: undefined }),
+        currentPlanRevision: undefined,
+        activeLane: 'requirements',
+      }),
+    );
+
+    for (const readiness of [missingSpecDraft, missingPlanDraft]) {
+      expect(
+        readiness.next_actions.some(
+          (action) => action.kind === 'command' && retiredCommandTypes.includes(action.command.type),
+        ),
+      ).toBe(false);
+    }
   });
 });

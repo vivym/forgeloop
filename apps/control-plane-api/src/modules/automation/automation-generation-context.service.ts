@@ -5,12 +5,8 @@ import { DomainError } from '@forgeloop/domain';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type {
   AutomationGenerationPackageContextV1,
-  AutomationGenerationPlanContextV1,
   AutomationGenerationRepoContextV1,
-  AutomationGenerationWorkItemContextV1,
-  GenerationContextQueryDto,
   PackageGenerationContextQueryDto,
-  PlanGenerationContextQueryDto,
 } from './automation.dto';
 import { assertNoActiveHolds } from './automation-command-helpers';
 import { policyProjectionsByRepoScopeFor } from './policy-projection';
@@ -57,144 +53,6 @@ const isTerminalWorkItem = (workItem: { phase: string; resolution: string; archi
 @Injectable()
 export class AutomationGenerationContextService {
   constructor(@Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository) {}
-
-  async getSpecDraftContext(
-    workItemId: string,
-    query: GenerationContextQueryDto,
-  ): Promise<AutomationGenerationWorkItemContextV1> {
-    const action = await this.getActiveClaim(query.action_run_id, query.claim_token);
-    const mismatched =
-      action.action_type !== 'ensure_spec_draft' ||
-      action.target_object_type !== 'work_item' ||
-      action.target_object_id !== workItemId ||
-      action.action_input_json.work_item_id !== workItemId;
-    if (mismatched) {
-      throw new ConflictException(claimConflictBody);
-    }
-
-    const workItem = await this.repository.getWorkItem(workItemId);
-    if (workItem === undefined) {
-      throw new NotFoundException(`WorkItem ${workItemId}`);
-    }
-
-    const scopedRepoId = repoIdFromAutomationScope(action.automation_scope);
-    const repos = await this.repoContextsFor(workItem.project_id, scopedRepoId);
-    if (scopedRepoId !== undefined && repos.length === 0) {
-      throw new ConflictException(claimConflictBody);
-    }
-
-    return {
-      context_version: 'generation_context.work_item.v1',
-      action_run_id: action.id,
-      work_item: {
-        id: workItem.id,
-        project_id: workItem.project_id,
-        title: workItem.title,
-        goal: workItem.goal,
-        success_criteria: workItem.success_criteria,
-        risk: workItem.risk,
-        priority: workItem.priority,
-        kind: workItem.kind,
-      },
-      repos,
-    };
-  }
-
-  async getPlanDraftContext(
-    workItemId: string,
-    query: PlanGenerationContextQueryDto,
-  ): Promise<AutomationGenerationPlanContextV1> {
-    const action = await this.getActiveClaim(query.action_run_id, query.claim_token);
-    const mismatched =
-      action.action_type !== 'ensure_plan_draft' ||
-      action.target_object_type !== 'work_item' ||
-      action.target_object_id !== workItemId ||
-      action.target_revision_id !== query.spec_revision_id ||
-      action.action_input_json.work_item_id !== workItemId ||
-      action.action_input_json.spec_revision_id !== query.spec_revision_id;
-    if (mismatched) {
-      throw new ConflictException(claimConflictBody);
-    }
-
-    const workItem = await this.repository.getWorkItem(workItemId);
-    if (workItem === undefined) {
-      throw new NotFoundException(`WorkItem ${workItemId}`);
-    }
-    const scopedProjectId = projectIdFromAutomationScope(action.automation_scope);
-    if (scopedProjectId !== undefined && workItem.project_id !== scopedProjectId) {
-      throw new ConflictException(claimConflictBody);
-    }
-    if (isTerminalWorkItem(workItem)) {
-      throw new ConflictException(claimConflictBody);
-    }
-    if (workItem.current_spec_id === undefined) {
-      throw new ConflictException(claimConflictBody);
-    }
-
-    const spec = await this.repository.getSpec(workItem.current_spec_id);
-    if (
-      spec === undefined ||
-      spec.work_item_id !== workItem.id ||
-      spec.status !== 'approved' ||
-      spec.resolution !== 'approved' ||
-      spec.approved_revision_id === undefined ||
-      spec.current_revision_id !== spec.approved_revision_id ||
-      query.spec_revision_id !== spec.approved_revision_id
-    ) {
-      throw new ConflictException(claimConflictBody);
-    }
-
-    const specRevision = await this.repository.getSpecRevision(query.spec_revision_id);
-    if (specRevision === undefined) {
-      throw new NotFoundException(`SpecRevision ${query.spec_revision_id}`);
-    }
-    if (specRevision.spec_id !== spec.id || specRevision.work_item_id !== workItem.id) {
-      throw new ConflictException(claimConflictBody);
-    }
-
-    const scopedRepoId = repoIdFromAutomationScope(action.automation_scope);
-    const repos = await this.repoContextsFor(workItem.project_id, scopedRepoId);
-    if (scopedRepoId !== undefined && repos.length === 0) {
-      throw new ConflictException(claimConflictBody);
-    }
-
-    await assertNoActiveHolds(this.repository, [
-      { object_type: 'work_item', object_id: workItem.id },
-      { object_type: 'spec_revision', object_id: specRevision.id },
-    ]);
-
-    return {
-      context_version: 'generation_context.plan.v1',
-      action_run_id: action.id,
-      work_item: {
-        id: workItem.id,
-        project_id: workItem.project_id,
-        title: workItem.title,
-        goal: workItem.goal,
-        success_criteria: workItem.success_criteria,
-        risk: workItem.risk,
-        priority: workItem.priority,
-        kind: workItem.kind,
-      },
-      spec_revision: {
-        id: specRevision.id,
-        spec_id: specRevision.spec_id,
-        summary: specRevision.summary,
-        content: specRevision.content,
-        background: specRevision.background,
-        goals: specRevision.goals,
-        scope_in: specRevision.scope_in,
-        scope_out: specRevision.scope_out,
-        acceptance_criteria: specRevision.acceptance_criteria,
-        risk_notes: specRevision.risk_notes,
-        test_strategy_summary: specRevision.test_strategy_summary,
-        ...(specRevision.structured_document === undefined
-          ? {}
-          : { structured_document: specRevision.structured_document }),
-      },
-      repos,
-    };
-  }
 
   async getPackageDraftsContext(
     planRevisionId: string,

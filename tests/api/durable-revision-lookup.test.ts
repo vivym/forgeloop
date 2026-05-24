@@ -12,6 +12,8 @@ import {
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { createDbClient, DrizzleDeliveryRepository, type ForgeloopDb, plan_revisions, plans, specs } from '../../packages/db/src';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
+import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const connectionString =
   process.env.FORGELOOP_TEST_DATABASE_URL?.trim() || process.env.FORGELOOP_DATABASE_URL?.trim() || undefined;
@@ -44,8 +46,13 @@ describeIfDb('durable revision lookup', () => {
   const apps: INestApplication[] = [];
   const pools: Pool[] = [];
 
-  const actorOwner = 'actor-owner';
-  const actorReviewer = 'actor-reviewer';
+  const organizationId = '11111111-1111-4111-8111-111111111111';
+  const actorOwner = '11111111-1111-4111-8111-111111111112';
+  const actorReviewer = '11111111-1111-4111-8111-111111111113';
+  const actorItemReviewer = '11111111-1111-4111-8111-111111111114';
+  const missingSpecRevisionId = '00000000-0000-4000-8000-00000000dead';
+  const stalePlanRevisionId = '00000000-0000-4000-8000-00000000cafe';
+  const missingPlanRevisionId = '00000000-0000-4000-8000-00000000beef';
 
   const createTrackedClient = () => {
     const client = createDbClient({ connectionString: connectionString! });
@@ -107,10 +114,22 @@ describeIfDb('durable revision lookup', () => {
           run_sessions,
           execution_package_dependencies,
           execution_packages,
+          executions,
+          execution_plan_revisions,
+          execution_plans,
           plan_revisions,
           plans,
           spec_revisions,
           specs,
+          boundary_summary_revisions,
+          boundary_summaries,
+          brainstorming_sessions,
+          context_manifests,
+          development_plan_item_revisions,
+          development_plan_items,
+          development_plan_source_links,
+          development_plan_revisions,
+          development_plans,
           work_items,
           project_repos,
           projects
@@ -120,6 +139,42 @@ describeIfDb('durable revision lookup', () => {
 
   const createProjectRepoWorkItem = async (app: INestApplication) => {
     const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DrizzleDeliveryRepository;
+    const now = '2026-05-24T00:00:00.000Z';
+    await repository.saveOrganization({
+      id: organizationId,
+      name: 'ForgeLoop Durable Revision Test Org',
+      created_at: now,
+      updated_at: now,
+    });
+    await repository.saveActor({
+      id: actorOwner,
+      org_id: organizationId,
+      display_name: 'Durable Revision Owner',
+      actor_type: 'human',
+      email: 'owner@example.test',
+      created_at: now,
+      updated_at: now,
+    });
+    await repository.saveActor({
+      id: actorReviewer,
+      org_id: organizationId,
+      display_name: 'Durable Revision Reviewer',
+      actor_type: 'human',
+      email: 'reviewer@example.test',
+      created_at: now,
+      updated_at: now,
+    });
+    await repository.saveActor({
+      id: actorItemReviewer,
+      org_id: organizationId,
+      display_name: 'Durable Revision Item Reviewer',
+      actor_type: 'human',
+      email: 'item-reviewer@example.test',
+      created_at: now,
+      updated_at: now,
+    });
+
     const project = (
       await request(server).post('/projects').send({ name: 'Forgeloop', owner_actor_id: actorOwner }).expect(201)
     ).body;
@@ -129,7 +184,7 @@ describeIfDb('durable revision lookup', () => {
         .send({
           repo_id: 'repo-1',
           name: 'forgeloop',
-          local_path: '/workspace/forgeloop',
+          local_path: await createWorkflowPolicyRepoRoot(),
           default_branch: 'main',
           base_commit_sha: 'abc123',
         })
@@ -157,73 +212,35 @@ describeIfDb('durable revision lookup', () => {
 
   const approveSpec = async (app: INestApplication, workItemId: string) => {
     const server = app.getHttpServer();
-    const spec = (await request(server).post(`/work-items/${workItemId}/specs`).send({}).expect(201)).body;
-    const manualRevision = (
-      await request(server)
-        .post(`/specs/${spec.id}/revisions`)
-        .send({
-          summary: 'Manual API spec',
-          content: 'Manual control plane API spec.',
-          background: 'Delivery needs command coverage.',
-          goals: ['Expose delivery commands'],
-          scope_in: ['Control plane API'],
-          scope_out: ['Web UI'],
-          acceptance_criteria: ['API tests cover the delivery flow'],
-          risk_notes: ['Keep delivery durable for restart tests'],
-          test_strategy_summary: 'Nest + Supertest API tests',
-          author_actor_id: actorOwner,
-        })
-        .expect(201)
-    ).body;
-    const generatedRevision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body;
+    const { spec, specRevision } = await seedItemScopedSpecPlan(app, workItemId, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      includePlan: false,
+    });
+    const generatedRevisionResponse = await request(server).get(`/spec-revisions/${specRevision.id}`).expect(200);
+    expect(generatedRevisionResponse.body.id).toBe(specRevision.id);
 
-    expect(generatedRevision.id).not.toBe(manualRevision.id);
-    expect(generatedRevision.acceptance_criteria).toContain('Spec, plan, package, run, and review commands are available.');
-    await request(server).get(`/specs/${spec.id}`).expect(200);
-    await request(server).get(`/specs/${spec.id}/revisions`).expect(200);
-    const generatedRevisionResponse = await request(server).get(`/spec-revisions/${generatedRevision.id}`).expect(200);
-    expect(generatedRevisionResponse.body.id).toBe(generatedRevision.id);
-    await request(server).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-    await request(server).post(`/specs/${spec.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
-
-    return { specId: spec.id, specRevisionId: generatedRevision.id, manualSpecRevisionId: manualRevision.id };
+    return { specId: spec.id, specRevisionId: specRevision.id };
   };
 
-  const createDraftPlan = async (app: INestApplication, workItemId: string) => {
-    return (await request(app.getHttpServer()).post(`/work-items/${workItemId}/plans`).send({}).expect(201)).body;
-  };
+  const seedApprovedSpecItem = async (app: INestApplication, workItemId: string) =>
+    seedItemScopedSpecPlan(app, workItemId, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      includePlan: false,
+    });
 
   const approvePlan = async (app: INestApplication, workItemId: string) => {
     const server = app.getHttpServer();
-    const plan = await createDraftPlan(app, workItemId);
-    const manualRevision = (
-      await request(server)
-        .post(`/plans/${plan.id}/revisions`)
-        .send({
-          summary: 'Manual API plan',
-          content: 'Manual control plane API plan.',
-          implementation_summary: 'Add Nest controller and service.',
-          split_strategy: 'One API package.',
-          dependency_order: ['api-package'],
-          test_matrix: ['pnpm test tests/api'],
-          risk_mitigations: ['Use durable repository in restart tests'],
-          rollback_notes: 'Revert API app changes.',
-          author_actor_id: actorOwner,
-        })
-        .expect(201)
-    ).body;
-    const generatedRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
+    const { plan, planRevision } = await seedItemScopedSpecPlan(app, workItemId, {
+      actorId: actorOwner,
+      reviewerActorId: actorReviewer,
+      itemReviewerActorId: actorItemReviewer,
+    });
+    const generatedRevisionResponse = await request(server).get(`/plan-revisions/${planRevision!.id}`).expect(200);
+    expect(generatedRevisionResponse.body.id).toBe(planRevision!.id);
 
-    expect(generatedRevision.id).not.toBe(manualRevision.id);
-    expect(generatedRevision.test_matrix).toContain('pnpm test tests/api');
-    await request(server).get(`/plans/${plan.id}`).expect(200);
-    await request(server).get(`/plans/${plan.id}/revisions`).expect(200);
-    const generatedRevisionResponse = await request(server).get(`/plan-revisions/${generatedRevision.id}`).expect(200);
-    expect(generatedRevisionResponse.body.id).toBe(generatedRevision.id);
-    await request(server).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: actorOwner }).expect(201);
-    await request(server).post(`/plans/${plan.id}/approve`).send({ actor_id: actorReviewer }).expect(201);
-
-    return { planId: plan.id, planRevisionId: generatedRevision.id, manualPlanRevisionId: manualRevision.id };
+    return { planId: plan.id, planRevisionId: planRevision!.id, manualPlanRevisionId: planRevision!.id };
   };
 
   beforeEach(async () => {
@@ -250,16 +267,18 @@ describeIfDb('durable revision lookup', () => {
     expect(planRevisionResponse.body.id).toBe(planRevisionId);
   });
 
-  it('generates plan drafts after restart', async () => {
+  it('generates item-scoped execution plan drafts after restart', async () => {
     const firstApp = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(firstApp);
-    await approveSpec(firstApp, workItem.id);
-    const plan = await createDraftPlan(firstApp, workItem.id);
+    const seed = await seedApprovedSpecItem(firstApp, workItem.id);
 
     await closeApp(firstApp);
 
     const secondApp = await createDurableApp();
-    await request(secondApp.getHttpServer()).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201);
+    await request(secondApp.getHttpServer())
+      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/execution-plan/generate-draft`)
+      .send({ actor_id: actorOwner })
+      .expect(201);
   });
 
   it('generates packages after restart', async () => {
@@ -271,7 +290,11 @@ describeIfDb('durable revision lookup', () => {
     await closeApp(firstApp);
 
     const secondApp = await createDurableApp();
-    await request(secondApp.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(201);
+    const response = await request(secondApp.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(201);
+    expect(response.body[0]).toMatchObject({
+      reviewer_actor_id: actorItemReviewer,
+      qa_owner_actor_id: actorOwner,
+    });
   });
 
   it('resolves direct spec revision lookup when parent current_revision_id is missing', async () => {
@@ -302,27 +325,34 @@ describeIfDb('durable revision lookup', () => {
   it('returns 400 when approved spec current_revision_id is missing', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
-    const { specId } = await approveSpec(app, workItem.id);
-    const plan = await createDraftPlan(app, workItem.id);
+    const seed = await seedApprovedSpecItem(app, workItem.id);
     await withDb(async (db) => {
-      await db.update(specs).set({ currentRevisionId: null }).where(eq(specs.id, specId));
+      await db.update(specs).set({ currentRevisionId: null }).where(eq(specs.id, seed.spec.id));
     });
 
-    const response = await request(app.getHttpServer()).post(`/plans/${plan.id}/generate-draft`).send({}).expect(400);
-    expect(response.body.message).toContain(`Spec ${specId} is not approved`);
+    const response = await request(app.getHttpServer())
+      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/execution-plan/generate-draft`)
+      .send({ actor_id: actorOwner })
+      .expect(400);
+    expect(response.body.message).toContain('approved_spec_not_current');
   });
 
-  it('returns 404 when approved spec current_revision_id points to a missing revision', async () => {
+  it('returns 400 when the approved spec revision row is missing for item-scoped execution plan generation', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
-    const { specId } = await approveSpec(app, workItem.id);
-    const plan = await createDraftPlan(app, workItem.id);
+    const seed = await seedApprovedSpecItem(app, workItem.id);
     await withDb(async (db) => {
-      await db.update(specs).set({ currentRevisionId: 'missing-spec-revision' }).where(eq(specs.id, specId));
+      await db
+        .update(specs)
+        .set({ approvedRevisionId: missingSpecRevisionId, currentRevisionId: missingSpecRevisionId })
+        .where(eq(specs.id, seed.spec.id));
     });
 
-    const response = await request(app.getHttpServer()).post(`/plans/${plan.id}/generate-draft`).send({}).expect(404);
-    expect(response.body.message).toContain('SpecRevision missing-spec-revision not found');
+    const response = await request(app.getHttpServer())
+      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/execution-plan/generate-draft`)
+      .send({ actor_id: actorOwner })
+      .expect(400);
+    expect(response.body.message).toContain('approved_spec_revision_not_loaded');
   });
 
   it('returns 400 when approved plan current_revision_id is missing', async () => {
@@ -342,26 +372,26 @@ describeIfDb('durable revision lookup', () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
-    const { planId, manualPlanRevisionId, planRevisionId } = await approvePlan(app, workItem.id);
+    const { planId, planRevisionId } = await approvePlan(app, workItem.id);
     await withDb(async (db) => {
-      await db.update(plans).set({ currentRevisionId: manualPlanRevisionId }).where(eq(plans.id, planId));
+      await db.update(plans).set({ currentRevisionId: stalePlanRevisionId }).where(eq(plans.id, planId));
     });
 
     const response = await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(400);
     expect(response.body.message).toContain(`PlanRevision ${planRevisionId} is not current approved revision`);
   });
 
-  it('returns 404 when approved plan current_revision_id points to a missing revision', async () => {
+  it('returns 400 when approved plan current_revision_id points to a missing revision id', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
     const { planId, planRevisionId } = await approvePlan(app, workItem.id);
     await withDb(async (db) => {
-      await db.update(plans).set({ currentRevisionId: 'missing-plan-revision' }).where(eq(plans.id, planId));
+      await db.update(plans).set({ currentRevisionId: missingPlanRevisionId }).where(eq(plans.id, planId));
     });
 
-    const response = await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(404);
-    expect(response.body.message).toContain('PlanRevision missing-plan-revision not found');
+    const response = await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/generate-packages`).send({}).expect(400);
+    expect(response.body.message).toContain(`PlanRevision ${planRevisionId} is not current approved revision`);
   });
 
   it('returns 404 when the approved plan revision row is missing', async () => {

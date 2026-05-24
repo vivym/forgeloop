@@ -38,14 +38,27 @@ const requiredRemoteWorkerEnvKeys = [
 ] as const;
 
 describe('automation daemon generation config', () => {
+  it('does not expose retired WorkItem Spec or Plan draft task knobs', () => {
+    const config = loadAutomationDaemonConfig({
+      ...baseEnv,
+      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'fake',
+    });
+
+    expect(config.generationPlanning.tasks).toEqual({
+      package_drafts: {
+        enabled: false,
+        promptVersion: 'package-drafts.fake.v1',
+        outputSchemaVersion: 'package_drafts.v1',
+      },
+    });
+  });
+
   it('defaults package_drafts to disabled for 2A', () => {
     const config = loadAutomationDaemonConfig({
       ...baseEnv,
       FORGELOOP_CODEX_AUTOMATION_GENERATION: 'fake',
     });
 
-    expect(config.generationPlanning.tasks.spec_draft.enabled).toBe(true);
-    expect(config.generationPlanning.tasks.plan_draft.enabled).toBe(true);
     expect(config.generationPlanning.tasks.package_drafts.enabled).toBe(false);
   });
 
@@ -267,17 +280,13 @@ describe('automation daemon generation config', () => {
     ).toThrow(/FORGELOOP_CODEX_GENERATION_DRIVER/);
   });
 
-  it('allows task flags to override driver defaults', () => {
+  it('allows the package draft task flag to override driver defaults', () => {
     const config = loadAutomationDaemonConfig({
       ...baseEnv,
       FORGELOOP_CODEX_GENERATION_DRIVER: 'fake',
-      FORGELOOP_CODEX_GENERATION_SPEC_DRAFT_ENABLED: 'false',
-      FORGELOOP_CODEX_GENERATION_PLAN_DRAFT_ENABLED: 'false',
       FORGELOOP_CODEX_GENERATION_PACKAGE_DRAFTS_ENABLED: 'true',
     });
 
-    expect(config.generationPlanning.tasks.spec_draft.enabled).toBe(false);
-    expect(config.generationPlanning.tasks.plan_draft.enabled).toBe(false);
     expect(config.generationPlanning.tasks.package_drafts.enabled).toBe(true);
   });
 

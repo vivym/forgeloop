@@ -118,15 +118,19 @@ export const productObjectTypeSchema = z.enum([
   'requirement',
   'bug',
   'tech_debt',
-  'task',
+  'development_plan',
+  'development_plan_item',
+  'brainstorming_session',
+  'boundary_summary',
   'spec',
   'spec_revision',
-  'plan',
-  'plan_revision',
-  'execution_package',
-  'run_session',
-  'review_packet',
+  'execution_plan',
+  'execution_plan_revision',
+  'execution',
+  'code_review_handoff',
+  'qa_handoff',
   'release',
+  'attachment',
 ]);
 export type ProductObjectType = z.infer<typeof productObjectTypeSchema>;
 
@@ -137,10 +141,11 @@ const productHrefPrefixes = [
   '/requirements',
   '/bugs',
   '/tech-debt',
-  '/tasks',
-  '/specs',
   '/specs-plans',
-  '/plans',
+  '/development-plans',
+  '/executions',
+  '/code-review-handoffs',
+  '/qa-handoffs',
   '/board',
   '/releases',
   '/reports',
@@ -148,17 +153,24 @@ const productHrefPrefixes = [
 
 const mutatingRouteSegments = new Set([
   'approve',
+  'accept',
+  'block',
   'cancel',
+  'continue',
   'create',
   'delete',
   'force-rerun',
   'generate-draft',
+  'interrupt',
   'mark-ready',
   'patch',
+  'qa-handoff',
   'request-changes',
+  'ready-for-code-review',
   'rerun',
   'resume',
   'run',
+  'start',
   'submit',
   'update',
 ]);
@@ -234,7 +246,7 @@ export const productHrefSchema = nonEmptyTrimmedStringSchema.refine(
       return false;
     }
 
-    if (pathname === '/specs' || pathname === '/plans') {
+    if (pathname === '/specs' || pathname === '/plans' || pathname === '/reports/replay' || pathname.startsWith('/reports/replay/')) {
       return false;
     }
 
@@ -271,42 +283,6 @@ const commandBaseSchema = {
   object_id: nonEmptyTrimmedStringSchema,
   scope_ref: objectRefSchema,
 } as const;
-
-const generateSpecDraftCommandSchema = z
-  .object({
-    type: z.literal('generate_spec_draft'),
-    object_type: z.literal('spec'),
-    ...commandBaseSchema,
-    spec_id: nonEmptyTrimmedStringSchema,
-  })
-  .strict()
-  .superRefine((command, ctx) => {
-    if (command.object_id !== command.spec_id) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['object_id'],
-        message: 'object_id must match spec_id',
-      });
-    }
-  });
-
-const generatePlanDraftCommandSchema = z
-  .object({
-    type: z.literal('generate_plan_draft'),
-    object_type: z.literal('plan'),
-    ...commandBaseSchema,
-    plan_id: nonEmptyTrimmedStringSchema,
-  })
-  .strict()
-  .superRefine((command, ctx) => {
-    if (command.object_id !== command.plan_id) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['object_id'],
-        message: 'object_id must match plan_id',
-      });
-    }
-  });
 
 const generatePackagesCommandSchema = z
   .object({
@@ -364,8 +340,6 @@ const runPackageCommandSchema = z
   });
 
 export const productCommandSchema = z.discriminatedUnion('type', [
-  generateSpecDraftCommandSchema,
-  generatePlanDraftCommandSchema,
   generatePackagesCommandSchema,
   markPackageReadyCommandSchema,
   runPackageCommandSchema,

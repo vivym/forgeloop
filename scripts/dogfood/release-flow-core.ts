@@ -37,6 +37,7 @@ import {
   startDisposablePostgres,
 } from './durable-postgres.js';
 import type { CommandRunner, DockerPostgresCandidate, DurableDogfoodPlan, Env } from './durable-postgres.js';
+import { seedItemScopedSpecPlan } from '../../tests/helpers/item-scoped-artifact-fixtures';
 import {
   buildSourceGuardInjectionPlan,
   evaluateLocalCodexDogfoodEnablement,
@@ -179,7 +180,7 @@ export const requiredReleaseFlowReportMarkers = [
   'Release approval or override approval',
   'Release observing/close',
   'Release cockpit query',
-  'Release replay redaction',
+  'Release public evidence redaction',
   'Release observation backlink projection',
   'Durable local reset',
   'Strict local_codex run',
@@ -818,35 +819,14 @@ const createDeliveryPath = async (
       .expect(201)
   ).body as { id: string };
 
-  const spec = (await request(server).post(`/work-items/${createdWorkItem.id}/specs`).send({}).expect(201)).body as { id: string };
-  await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201);
-  await request(server)
-    .post(`/specs/${spec.id}/submit-for-approval`)
-    .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
-    .send({ actor_id: actorOwner })
-    .expect(201);
-  await request(server)
-    .post(`/specs/${spec.id}/approve`)
-    .set({ [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' })
-    .send({ actor_id: actorReviewer })
-    .expect(201);
-
-  const plan = (await request(server).post(`/work-items/${createdWorkItem.id}/plans`).send({}).expect(201)).body as { id: string };
-  const planRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body as { id: string };
-  await request(server)
-    .post(`/plans/${plan.id}/submit-for-approval`)
-    .set({ [actorHeaderName]: actorOwner, [actorClassHeaderName]: 'human_admin' })
-    .send({ actor_id: actorOwner })
-    .expect(201);
-  await request(server)
-    .post(`/plans/${plan.id}/approve`)
-    .set({ [actorHeaderName]: actorReviewer, [actorClassHeaderName]: 'human' })
-    .send({ actor_id: actorReviewer })
-    .expect(201);
+  const { planRevision } = await seedItemScopedSpecPlan(app, createdWorkItem.id, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+  });
 
   const createdExecutionPackage = (
     await request(server)
-      .post(`/plan-revisions/${planRevision.id}/execution-packages`)
+      .post(`/plan-revisions/${planRevision!.id}/execution-packages`)
       .send({
         repo_id: 'repo-1',
         objective: 'Implement and verify Release Risk Radar.',
@@ -944,7 +924,6 @@ const publicPayloadHasObservationLink = (
 
 const assertStrictLocalCodexPublicProjection = (
   cockpit: unknown,
-  replay: unknown,
   strictLocalCodex: NonNullable<StrictLifecycleResult['strictLocalCodex']>,
 ): void => {
   const packageLink = {
@@ -960,33 +939,15 @@ const assertStrictLocalCodexPublicProjection = (
   if (!publicPayloadHasObservationLink(cockpit, packageLink) || !publicPayloadHasObservationLink(cockpit, runLink)) {
     throw new Error('strict local Codex public cockpit projection missing supports/generated_by links');
   }
-  if (!publicPayloadHasObservationLink(replay, packageLink) || !publicPayloadHasObservationLink(replay, runLink)) {
-    throw new Error('strict local Codex public replay projection missing supports/generated_by links');
-  }
 };
 
-const assertOverrideBlockerFactsProjected = (cockpit: JsonRecord, replay: unknown): void => {
+const assertOverrideBlockerFactsProjected = (cockpit: JsonRecord): void => {
   const overriddenBlockers = cockpit.overridden_blockers;
   if (
     !Array.isArray(overriddenBlockers) ||
     !overriddenBlockers.some((blocker) => (blocker as { code?: unknown }).code === 'missing_rollout_strategy')
   ) {
     throw new Error('Release cockpit did not preserve overridden missing_rollout_strategy blocker facts');
-  }
-
-  if (!Array.isArray(replay)) {
-    throw new Error('Release replay response was not an array');
-  }
-  const hasOverrideSnapshot = replay.some((entry) => {
-    const payload = (entry as { payload?: { decision_type?: unknown; blocker_snapshot?: { blockers?: unknown[] } } }).payload;
-    return (
-      payload?.decision_type === 'manual_override' &&
-      Array.isArray(payload.blocker_snapshot?.blockers) &&
-      payload.blocker_snapshot.blockers.some((blocker) => (blocker as { code?: unknown }).code === 'missing_rollout_strategy')
-    );
-  });
-  if (!hasOverrideSnapshot) {
-    throw new Error('Release replay did not preserve override blocker snapshot facts');
   }
 };
 
@@ -1588,45 +1549,13 @@ export const runDurableReleaseLifecycle = async (input: {
       })
       .expect(201)
   ).body as WorkItem;
-  const spec = (await strictRequest(server, owner.id).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body as { id: string };
-  await strictRequest(server, owner.id)
-    .post(`/specs/${spec.id}/revisions`)
-    .send({
-      summary: 'Strict durable release spec',
-      content: 'Validate durable release ownership and evidence.',
-      background: 'Strict dogfood needs durable UUID actors.',
-      goals: ['Approve and close release after durable writes'],
-      scope_in: ['Release public APIs'],
-      scope_out: ['Real local_codex execution'],
-      acceptance_criteria: ['Fresh app can query cockpit and replay'],
-      test_strategy_summary: 'Run strict dogfood against durable storage.',
-      author_actor_id: owner.id,
-    })
-    .expect(201);
-  await strictRequest(server, owner.id).post(`/specs/${spec.id}/submit-for-approval`).send({ actor_id: owner.id }).expect(201);
-  await strictRequest(server, reviewer.id, 'human').post(`/specs/${spec.id}/approve`).send({ actor_id: reviewer.id }).expect(201);
-
-  const plan = (await strictRequest(server, owner.id).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body as { id: string };
-  const planRevision = (
-    await strictRequest(server, owner.id)
-      .post(`/plans/${plan.id}/revisions`)
-      .send({
-        summary: 'Strict durable release plan',
-        content: 'Create one package and seed release-ready evidence.',
-        implementation_summary: 'Use public APIs and seeded UUID actors.',
-        split_strategy: 'One package',
-        dependency_order: [],
-        test_matrix: ['pnpm dogfood:release-flow:strict'],
-        rollback_notes: 'Drop the disposable dogfood database.',
-        author_actor_id: owner.id,
-      })
-      .expect(201)
-  ).body as { id: string };
-  await strictRequest(server, owner.id).post(`/plans/${plan.id}/submit-for-approval`).send({ actor_id: owner.id }).expect(201);
-  await strictRequest(server, reviewer.id, 'human').post(`/plans/${plan.id}/approve`).send({ actor_id: reviewer.id }).expect(201);
+  const { planRevision } = await seedItemScopedSpecPlan(app, workItem.id, {
+    actorId: owner.id,
+    reviewerActorId: reviewer.id,
+  });
   const createdExecutionPackage = (
     await strictRequest(server, owner.id)
-      .post(`/plan-revisions/${planRevision.id}/execution-packages`)
+      .post(`/plan-revisions/${planRevision!.id}/execution-packages`)
       .send({
         repo_id: 'forgeloop-source',
         objective: 'Strict durable release package.',
@@ -1687,7 +1616,7 @@ export const runDurableReleaseLifecycle = async (input: {
         const strictResult = await (deps.runStrictLocalCodexPackage ?? runReleaseStrictLocalCodexPackage)({
           server,
           repository,
-          planRevisionId: planRevision.id,
+          planRevisionId: planRevision!.id,
           releaseId,
           projectId: identity.project.id,
           repoPath,
@@ -1926,12 +1855,10 @@ export const verifyDurableReleaseAfterReopen = async (input: {
 
   const server = input.app.getHttpServer();
   const cockpit = (await request(server).get(`/query/release-cockpit/${input.releaseId}`).expect(200)).body as JsonRecord;
-  const replay = (await request(server).get(`/query/replay/release/${input.releaseId}`).expect(200)).body;
   assertNoUnsafeReleaseDogfoodStrings('Strict release cockpit query', cockpit);
   assertObservationBacklinkProjected(cockpit, input.releaseId);
-  assertNoUnsafeReleaseDogfoodStrings('Strict release replay', replay);
   if (input.lifecycle.strictLocalCodex !== undefined) {
-    assertStrictLocalCodexPublicProjection(cockpit, replay, input.lifecycle.strictLocalCodex);
+    assertStrictLocalCodexPublicProjection(cockpit, input.lifecycle.strictLocalCodex);
   }
 };
 
@@ -2095,9 +2022,9 @@ export const runStrictReleaseFlowDogfood = async (input: StrictReleaseFlowDogfoo
         details: ['Fetched strict durable cockpit through a fresh app and repository after reopen.'],
       },
       {
-        marker: 'Release replay redaction',
+        marker: 'Release public evidence redaction',
         status: 'PASSED',
-        details: ['Fetched strict durable replay through a fresh app and verified public redaction.'],
+        details: ['Verified strict durable public release evidence through a fresh app after reopen.'],
       },
       {
         marker: 'Release observation backlink projection',
@@ -2169,7 +2096,7 @@ export const runDeterministicReleaseFlowDogfood = async (): Promise<Verification
           title: 'P1 Release Risk Radar dogfood',
           scope_summary: 'Dogfood the Release command surface, cockpit, and replay.',
           rollback_plan: 'Disable the Release Owner workbench entry point and revert the release module changes.',
-          observation_plan: 'Check release cockpit observations and replay redaction after rollout.',
+          observation_plan: 'Check release cockpit observations and public evidence redaction after rollout.',
         })
         .expect(201)
     ).body as { release: { id: string } };
@@ -2246,13 +2173,11 @@ export const runDeterministicReleaseFlowDogfood = async (): Promise<Verification
       details: ['Fetched /query/release-cockpit/:releaseId and verified unsafe internals are absent.'],
     });
 
-    const replay = (await request(server).get(`/query/replay/release/${releaseId}`).expect(200)).body;
-    assertNoUnsafeReleaseDogfoodStrings('Release replay', replay);
-    assertOverrideBlockerFactsProjected(cockpit, replay);
+    assertOverrideBlockerFactsProjected(cockpit);
     markers.push({
-      marker: 'Release replay redaction',
+      marker: 'Release public evidence redaction',
       status: 'PASSED',
-      details: ['Fetched /query/replay/release/:releaseId and verified unsafe internals are absent.'],
+      details: ['Verified release public evidence surfaces keep unsafe internals absent without raw replay routes.'],
     });
 
     assertObservationBacklinkProjected(cockpit, releaseId);

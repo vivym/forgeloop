@@ -33,7 +33,7 @@ import {
   release_work_items,
   releases,
 } from '../../packages/db/src/index';
-import { runDeliveryRepositoryContract } from './repository-contract';
+import { itPersistsAiNativePlanningGraph, runDeliveryRepositoryContract } from './repository-contract';
 
 const now = '2026-05-05T00:00:00.000Z';
 
@@ -589,6 +589,8 @@ describe('DeliveryRepository in-memory adapter', () => {
     await runDeliveryRepositoryContract(new InMemoryDeliveryRepository());
   });
 
+  itPersistsAiNativePlanningGraph(() => new InMemoryDeliveryRepository());
+
   it('persists and queries a minimal delivery flow', async () => {
     const repository: DeliveryRepository = new InMemoryDeliveryRepository();
 
@@ -870,6 +872,12 @@ describe('DeliveryRepository Drizzle adapter contract', () => {
       } finally {
         await pool.end();
       }
+    });
+
+    itPersistsAiNativePlanningGraph(async () => {
+      await resetForgeloopDatabase(databaseUrl);
+      const { db } = createDbClient({ connectionString: databaseUrl });
+      return new DrizzleDeliveryRepository(db);
     });
   }
 });

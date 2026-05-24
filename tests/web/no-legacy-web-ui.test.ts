@@ -27,7 +27,10 @@ const productSourceText = () =>
     .filter((file) => !file.includes('/features/dev-tools/') && !file.includes('/routes/dev-tools/'))
     .concat(
       textFiles('tests/web').filter(
-        (file) => !file.endsWith('no-legacy-web-ui.test.ts') && !file.endsWith('dev-tools-gating.test.tsx'),
+        (file) =>
+          !file.endsWith('no-legacy-web-ui.test.ts') &&
+          !file.endsWith('dev-tools-gating.test.tsx') &&
+          !file.endsWith('project-management-routes.test.tsx'),
       ),
     )
     .map((file) => readFileSync(file, 'utf8'))

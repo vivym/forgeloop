@@ -1,10 +1,21 @@
-import { expect } from 'vitest';
+import { expect, it } from 'vitest';
 import type {
   Actor,
   AutomationActionRun,
   Artifact,
+  BoundarySummary,
+  BoundarySummaryRevision,
+  BrainstormingSession,
   CommandIdempotencyRecord,
+  ContextManifest,
   Decision,
+  DevelopmentPlan,
+  DevelopmentPlanItem,
+  DevelopmentPlanItemRevision,
+  DevelopmentPlanRevision,
+  Execution,
+  ExecutionPlanDocument,
+  ExecutionPlanRevision,
   ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
@@ -35,6 +46,8 @@ import type {
   TraceEventRecord,
   TraceLinkRecord,
 } from '../../packages/db/src/index';
+
+type RepositoryFactory = () => DeliveryRepository | Promise<DeliveryRepository>;
 
 const at = '2026-05-05T00:00:00.000Z';
 const later = '2026-05-05T00:01:00.000Z';
@@ -83,6 +96,23 @@ const ids = {
   releaseEvidenceReview: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1',
   releaseEvidenceTest: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2',
   releaseEvidenceObservation: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc3',
+  contextManifest: 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1',
+  contextManifestRevision: 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2',
+  developmentPlan: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1',
+  developmentPlanRevision: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2',
+  developmentPlanSourceLink1: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3',
+  developmentPlanSourceLink2: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee4',
+  developmentPlanRevision2: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5',
+  developmentPlanItem: 'ffffffff-ffff-4fff-8fff-fffffffffff1',
+  developmentPlanItemRevision1: 'ffffffff-ffff-4fff-8fff-fffffffffff2',
+  developmentPlanItemRevision2: 'ffffffff-ffff-4fff-8fff-fffffffffff3',
+  brainstormingSession: '12121212-1212-4212-8212-121212121211',
+  brainstormingSessionRevision: '12121212-1212-4212-8212-121212121212',
+  boundarySummary: '13131313-1313-4313-8313-131313131311',
+  boundarySummaryRevision: '13131313-1313-4313-8313-131313131312',
+  executionPlan: '14141414-1414-4414-8414-141414141411',
+  executionPlanRevision: '14141414-1414-4414-8414-141414141412',
+  execution: '15151515-1515-4515-8515-151515151511',
 };
 
 const requiredCheck = {
@@ -643,6 +673,396 @@ export async function runDeliveryRepositoryContract(repository: DeliveryReposito
   await expectAutomationRepositoryContract(repository);
 }
 
+export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): void {
+  it('persists Development Plan, Item, brainstorming, boundary, execution plan, and execution linkage', async () => {
+    const repository = await factory();
+
+    await repository.saveOrganization({
+      id: ids.org,
+      name: 'ForgeLoop Test Org',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveActor({
+      id: ids.human,
+      org_id: ids.org,
+      display_name: 'Human Driver',
+      actor_type: 'human',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveProject({
+      id: ids.project,
+      org_id: ids.org,
+      key: 'FORGE',
+      name: 'ForgeLoop',
+      repo_ids: ['repo-1'],
+      owner_actor_id: ids.human,
+      created_at: at,
+      updated_at: at,
+    });
+
+    await repository.saveContextManifest(contextManifestFixture());
+    await repository.saveDevelopmentPlan(developmentPlanFixture());
+    await repository.saveDevelopmentPlanRevision(developmentPlanRevisionFixture());
+    await repository.saveDevelopmentPlanSourceLink({
+      id: ids.developmentPlanSourceLink1,
+      development_plan_id: ids.developmentPlan,
+      source_ref: { type: 'requirement', id: ids.workItem, revision_id: ids.specRevision1 },
+      link_type: 'primary',
+      created_by_actor_id: ids.human,
+      created_at: '2026-05-24T00:00:00.000Z',
+    });
+    await repository.saveDevelopmentPlanSourceLink({
+      id: ids.developmentPlanSourceLink2,
+      development_plan_id: ids.developmentPlan,
+      source_ref: { type: 'bug', id: ids.workItem2, revision_id: ids.specRevision2 },
+      link_type: 'related',
+      created_by_actor_id: ids.human,
+      created_at: '2026-05-24T00:01:00.000Z',
+    });
+    await repository.saveDevelopmentPlanItem(developmentPlanItemFixture());
+    await repository.saveDevelopmentPlanItemRevision(
+      developmentPlanItemRevisionFixture({
+        id: ids.developmentPlanItemRevision1,
+        revision_number: 1,
+        snapshot: developmentPlanItemFixture({
+          boundary_status: 'not_started',
+          next_action: 'Start boundary brainstorming.',
+        }),
+        change_reason: 'Initial generated row',
+        created_at: '2026-05-24T00:02:00.000Z',
+      }),
+    );
+    await repository.saveDevelopmentPlanItemRevision(
+      developmentPlanItemRevisionFixture({
+        id: ids.developmentPlanItemRevision2,
+        revision_number: 2,
+        snapshot: developmentPlanItemFixture({
+          revision_id: ids.developmentPlanItemRevision2,
+          boundary_status: 'approved',
+          next_action: 'Generate Spec from approved boundary.',
+          updated_at: '2026-05-24T00:03:00.000Z',
+        }),
+        change_reason: 'Boundary refinement',
+        created_at: '2026-05-24T00:03:00.000Z',
+      }),
+    );
+    await repository.saveDevelopmentPlanRevision(
+      developmentPlanRevisionFixture({
+        id: ids.developmentPlanRevision2,
+        revision_number: 2,
+        generation_state: 'draft_generated',
+        change_reason: 'development_plan_draft_generated',
+        item_refs: [
+          {
+            id: ids.developmentPlanItem,
+            revision_id: ids.developmentPlanItemRevision2,
+            title: 'Persist planning graph',
+            boundary_status: 'approved',
+            spec_status: 'approved',
+            execution_plan_status: 'approved',
+            execution_status: 'ready',
+          },
+        ],
+        created_at: '2026-05-24T00:03:30.000Z',
+      }),
+    );
+    await repository.saveBrainstormingSession(brainstormingSessionFixture());
+    await repository.saveBoundarySummary(boundarySummaryFixture());
+    await repository.saveBoundarySummaryRevision(boundarySummaryRevisionFixture());
+    await repository.saveSpec(
+      specFixture({
+        id: ids.spec,
+        development_plan_item_id: ids.developmentPlanItem,
+        boundary_summary_id: ids.boundarySummary,
+        context_manifest_id: ids.contextManifest,
+      }),
+    );
+    await repository.saveSpecRevision(
+      specRevisionFixture({
+        id: ids.specRevision1,
+        spec_id: ids.spec,
+        development_plan_item_id: ids.developmentPlanItem,
+        boundary_summary_id: ids.boundarySummary,
+        context_manifest_id: ids.contextManifest,
+      }),
+    );
+    await repository.saveExecutionPlan(executionPlanFixture());
+    await repository.saveExecutionPlanRevision(executionPlanRevisionFixture());
+    await repository.saveExecution(executionFixture());
+    await repository.saveExecutionPackage(executionPackageFixture());
+
+    expect(await repository.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
+    expect(await repository.getDevelopmentPlan(ids.developmentPlan)).toEqual(
+      developmentPlanFixture({ items: [developmentPlanItemFixture()] }),
+    );
+    expect(await repository.listDevelopmentPlans(ids.project)).toEqual([
+      developmentPlanFixture({ items: [developmentPlanItemFixture()] }),
+    ]);
+    expect(await repository.getDevelopmentPlanItem(ids.developmentPlanItem)).toMatchObject({
+      id: ids.developmentPlanItem,
+      development_plan_id: ids.developmentPlan,
+    });
+    expect(await repository.listDevelopmentPlanItems(ids.developmentPlan)).toEqual([developmentPlanItemFixture()]);
+    expect(await repository.listDevelopmentPlanSourceLinksForSource({ type: 'bug', id: ids.workItem2 })).toEqual([
+      expect.objectContaining({ development_plan_id: ids.developmentPlan, link_type: 'related' }),
+    ]);
+    expect(await repository.listDevelopmentPlanSourceLinks(ids.developmentPlan)).toHaveLength(2);
+    expect(await repository.listDevelopmentPlanRevisions(ids.developmentPlan)).toEqual([
+      developmentPlanRevisionFixture(),
+      developmentPlanRevisionFixture({
+        id: ids.developmentPlanRevision2,
+        revision_number: 2,
+        generation_state: 'draft_generated',
+        change_reason: 'development_plan_draft_generated',
+        item_refs: [
+          {
+            id: ids.developmentPlanItem,
+            revision_id: ids.developmentPlanItemRevision2,
+            title: 'Persist planning graph',
+            boundary_status: 'approved',
+            spec_status: 'approved',
+            execution_plan_status: 'approved',
+            execution_status: 'ready',
+          },
+        ],
+        created_at: '2026-05-24T00:03:30.000Z',
+      }),
+    ]);
+    expect(await repository.listDevelopmentPlanItemRevisions(ids.developmentPlanItem)).toEqual([
+      expect.objectContaining({ id: ids.developmentPlanItemRevision1, revision_number: 1 }),
+      expect.objectContaining({ id: ids.developmentPlanItemRevision2, revision_number: 2 }),
+    ]);
+    expect(
+      await repository.compareDevelopmentPlanItemRevisions({
+        base_revision_id: ids.developmentPlanItemRevision1,
+        compare_revision_id: ids.developmentPlanItemRevision2,
+      }),
+    ).toMatchObject({
+      base_revision_id: ids.developmentPlanItemRevision1,
+      compare_revision_id: ids.developmentPlanItemRevision2,
+      changed_fields: expect.arrayContaining(['boundary_status', 'next_action', 'revision_id', 'updated_at']),
+    });
+    expect(await repository.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
+    expect(await repository.getBoundarySummary(ids.boundarySummary)).toMatchObject({
+      development_plan_item_id: ids.developmentPlanItem,
+    });
+    expect(await repository.listBoundarySummaryRevisions(ids.boundarySummary)).toEqual([
+      expect.objectContaining({
+        id: ids.boundarySummaryRevision,
+        revision_number: 1,
+        development_plan_item_revision_id: ids.developmentPlanItemRevision2,
+      }),
+    ]);
+    expect(
+      await repository.compareBoundarySummaryRevisions({
+        base_revision_id: ids.boundarySummaryRevision,
+        compare_revision_id: ids.boundarySummaryRevision,
+      }),
+    ).toMatchObject({
+      base_revision_id: ids.boundarySummaryRevision,
+      compare_revision_id: ids.boundarySummaryRevision,
+      changed_fields: [],
+    });
+
+    await repository.saveBoundarySummaryRevision(
+      boundarySummaryRevisionFixture({
+        id: '15151515-1515-4515-8515-151515151515',
+        revision_number: 2,
+        development_plan_item_revision_id: ids.developmentPlanItemRevision2,
+        summary_markdown: 'Task 2 scope is approved after narrowed validation.',
+        decision_count: 2,
+        created_at: '2026-05-24T00:05:00.000Z',
+      }),
+    );
+    expect(
+      await repository.compareBoundarySummaryRevisions({
+        base_revision_id: ids.boundarySummaryRevision,
+        compare_revision_id: '15151515-1515-4515-8515-151515151515',
+      }),
+    ).toMatchObject({
+      base_revision_id: ids.boundarySummaryRevision,
+      compare_revision_id: '15151515-1515-4515-8515-151515151515',
+      changed_fields: expect.arrayContaining(['summary_markdown', 'decision_count', 'revision_number', 'created_at']),
+    });
+    expect(await repository.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
+    expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
+    expect(await repository.listExecutionPlanRevisions(ids.executionPlan)).toEqual([executionPlanRevisionFixture()]);
+    expect(await repository.getExecution(ids.execution)).toMatchObject({
+      execution_plan_revision_id: ids.executionPlanRevision,
+    });
+    expect(await repository.getExecutionPackage(ids.package)).toMatchObject({
+      development_plan_item_id: ids.developmentPlanItem,
+      execution_plan_id: ids.executionPlan,
+      execution_plan_revision_id: ids.executionPlanRevision,
+    });
+  });
+
+  it('commits AI-native planning graph writes made inside delivery transactions', async () => {
+    const repository = await factory();
+
+    await repository.withDeliveryTransaction(async (transaction) => {
+      await transaction.saveOrganization({
+        id: ids.org,
+        name: 'ForgeLoop Test Org',
+        created_at: at,
+        updated_at: at,
+      });
+      await transaction.saveActor({
+        id: ids.human,
+        org_id: ids.org,
+        display_name: 'Human Driver',
+        actor_type: 'human',
+        created_at: at,
+        updated_at: at,
+      });
+      await transaction.saveProject({
+        id: ids.project,
+        org_id: ids.org,
+        key: 'FORGE',
+        name: 'ForgeLoop',
+        repo_ids: ['repo-1'],
+        owner_actor_id: ids.human,
+        created_at: at,
+        updated_at: at,
+      });
+      await transaction.saveContextManifest(contextManifestFixture());
+      await transaction.saveDevelopmentPlan(developmentPlanFixture());
+      await transaction.saveDevelopmentPlanItem(developmentPlanItemFixture());
+      await transaction.saveBrainstormingSession(brainstormingSessionFixture());
+      await transaction.saveBoundarySummary(boundarySummaryFixture());
+      await transaction.saveSpec(specFixture());
+      await transaction.saveSpecRevision(specRevisionFixture());
+      await transaction.saveExecutionPlan(executionPlanFixture());
+      await transaction.saveExecutionPlanRevision(executionPlanRevisionFixture());
+      await transaction.saveExecution(executionFixture());
+
+      expect(await transaction.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
+      expect(await transaction.getDevelopmentPlan(ids.developmentPlan)).toEqual(
+        developmentPlanFixture({ items: [developmentPlanItemFixture()] }),
+      );
+      expect(await transaction.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
+      expect(await transaction.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
+      expect(await transaction.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
+      expect(await transaction.getExecution(ids.execution)).toEqual(executionFixture());
+    });
+
+    expect(await repository.getContextManifest(ids.contextManifest)).toEqual(contextManifestFixture());
+    expect(await repository.getDevelopmentPlan(ids.developmentPlan)).toEqual(
+      developmentPlanFixture({ items: [developmentPlanItemFixture()] }),
+    );
+    expect(await repository.getDevelopmentPlanItem(ids.developmentPlanItem)).toEqual(developmentPlanItemFixture());
+    expect(await repository.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
+    expect(await repository.getBoundarySummary(ids.boundarySummary)).toEqual(boundarySummaryFixture());
+    expect(await repository.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
+    expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
+    expect(await repository.getExecution(ids.execution)).toEqual(executionFixture());
+  });
+
+  it('keeps AI-native revision histories immutable', async () => {
+    const repository = await factory();
+
+    await repository.saveOrganization({
+      id: ids.org,
+      name: 'ForgeLoop Test Org',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveActor({
+      id: ids.human,
+      org_id: ids.org,
+      display_name: 'Human Driver',
+      actor_type: 'human',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveProject({
+      id: ids.project,
+      org_id: ids.org,
+      key: 'FORGE',
+      name: 'ForgeLoop',
+      repo_ids: ['repo-1'],
+      owner_actor_id: ids.human,
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveDevelopmentPlan(developmentPlanFixture());
+    await repository.saveDevelopmentPlanRevision(developmentPlanRevisionFixture());
+    await repository.saveDevelopmentPlanItem(developmentPlanItemFixture());
+    await repository.saveBrainstormingSession(brainstormingSessionFixture());
+    await repository.saveBoundarySummary(boundarySummaryFixture());
+    await repository.saveSpec(specFixture());
+    await repository.saveSpecRevision(specRevisionFixture());
+    await repository.saveExecutionPlan(executionPlanFixture());
+
+    const developmentPlanRevision = developmentPlanItemRevisionFixture();
+    const parentPlanRevision = developmentPlanRevisionFixture({
+      id: ids.developmentPlanRevision2,
+      revision_number: 2,
+      change_reason: 'Current plan state',
+    });
+    const boundaryRevision = boundarySummaryRevisionFixture();
+    const executionRevision = executionPlanRevisionFixture();
+
+    await repository.saveDevelopmentPlanItemRevision(developmentPlanRevision);
+    await repository.saveDevelopmentPlanRevision(parentPlanRevision);
+    await repository.saveBoundarySummaryRevision(boundaryRevision);
+    await repository.saveExecutionPlanRevision(executionRevision);
+
+    await repository.saveDevelopmentPlanItemRevision({
+      ...developmentPlanRevision,
+      revision_number: 99,
+      change_reason: 'Conflicting rewrite',
+    });
+    await repository.saveDevelopmentPlanRevision({
+      ...parentPlanRevision,
+      revision_number: 99,
+      change_reason: 'Conflicting rewrite',
+    });
+    await repository.saveBoundarySummaryRevision({
+      ...boundaryRevision,
+      revision_number: 99,
+      summary_markdown: 'Conflicting rewrite',
+    });
+    await repository.saveExecutionPlanRevision({
+      ...executionRevision,
+      revision_number: 99,
+      content: 'Conflicting rewrite',
+    });
+
+    await repository.saveDevelopmentPlanItemRevision({
+      ...developmentPlanRevision,
+      id: 'ffffffff-ffff-4fff-8fff-fffffffffff4',
+      change_reason: 'Duplicate logical revision',
+    });
+    await repository.saveDevelopmentPlanRevision({
+      ...parentPlanRevision,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee6',
+      change_reason: 'Duplicate logical revision',
+    });
+    await repository.saveBoundarySummaryRevision({
+      ...boundaryRevision,
+      id: '13131313-1313-4313-8313-131313131313',
+      summary_markdown: 'Duplicate logical revision',
+    });
+    await repository.saveExecutionPlanRevision({
+      ...executionRevision,
+      id: '14141414-1414-4414-8414-141414141413',
+      content: 'Duplicate logical revision',
+    });
+
+    expect(await repository.listDevelopmentPlanItemRevisions(ids.developmentPlanItem)).toEqual([developmentPlanRevision]);
+    expect(await repository.listDevelopmentPlanRevisions(ids.developmentPlan)).toEqual([
+      developmentPlanRevisionFixture(),
+      parentPlanRevision,
+    ]);
+    expect(await repository.listBoundarySummaryRevisions(ids.boundarySummary)).toEqual([boundaryRevision]);
+    expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionRevision);
+    expect(await repository.listExecutionPlanRevisions(ids.executionPlan)).toEqual([executionRevision]);
+  });
+}
+
 async function expectAutomationRepositoryContract(repository: DeliveryRepository): Promise<void> {
   const defaultSettings = await repository.resolveAutomationProjectSettings({
     project_id: ids.project,
@@ -656,8 +1076,6 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     version: 0,
     capabilities_json: {
       canProjectRuntimeState: false,
-      canGenerateSpecDraft: false,
-      canGeneratePlanDraft: false,
       canGeneratePackageDrafts: false,
       canEnqueueRuns: false,
     },
@@ -676,8 +1094,6 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     now: at,
   });
   expect(settings.version).toBe(1);
-  expect(settings.capabilities_json.canGenerateSpecDraft).toBe(true);
-  expect(settings.capabilities_json.canGeneratePlanDraft).toBe(true);
 
   const specDrift = {
     workItemId: '33333333-3333-4333-8333-333333333341',
@@ -901,27 +1317,6 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   });
 
   const driftSnapshot = await repository.getRuntimeSnapshotData();
-  expect(driftSnapshot.work_items_requiring_plan).toContainEqual(
-    expect.objectContaining({
-      target_object_id: legacySpecPointerMissing.workItemId,
-      target_revision_id: legacySpecPointerMissing.approvedRevisionId,
-    }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specDrift.workItemId }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specPointerDrift.workItemId }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specOwnerDrift.workItemId }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specRevisionSpecDrift.workItemId }),
-  );
-  expect(driftSnapshot.work_items_requiring_plan).not.toContainEqual(
-    expect.objectContaining({ target_object_id: specRevisionWorkItemDrift.workItemId }),
-  );
   expect(driftSnapshot.plan_revisions_requiring_packages).not.toContainEqual(
     expect.objectContaining({ target_object_id: planDrift.approvedPlanRevisionId }),
   );
@@ -950,60 +1345,6 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     expect.objectContaining({
       target_object_id: legacyPackagePointersMissing.approvedPlanRevisionId,
       target_revision_id: `default:${legacyPackagePointersMissing.approvedPlanRevisionId}`,
-    }),
-  );
-
-  const specNeededWorkItem: WorkItem = {
-    id: 'work-item-needs-spec-draft',
-    project_id: ids.project,
-    kind: 'requirement',
-    title: 'Draft a new Spec',
-    goal: 'Create the first Spec draft from a WorkItem.',
-    success_criteria: ['Spec draft exists.'],
-    priority: 'p1',
-    risk: 'low',
-    driver_actor_id: ids.human,
-    intake_context: requirementIntakeContext,
-    phase: 'triage',
-    activity_state: 'idle',
-    gate_state: 'none',
-    resolution: 'none',
-    created_at: at,
-    updated_at: at,
-  };
-  await repository.saveWorkItem(specNeededWorkItem);
-
-  let snapshot = await repository.getRuntimeSnapshotData();
-  expect(snapshot.work_items_requiring_spec).toContainEqual(
-    expect.objectContaining({
-      target_object_type: 'work_item',
-      target_object_id: specNeededWorkItem.id,
-      target_status: specNeededWorkItem.phase,
-      project_id: specNeededWorkItem.project_id,
-      repo_id: 'repo-1',
-      automation_scope: `repo:${specNeededWorkItem.project_id}:repo-1`,
-    }),
-  );
-
-  await repository.createOrReplayAutomationActionRun({
-    id: 'automation-action-contract-spec-suppression',
-    action_type: 'ensure_spec_draft',
-    target_object_type: 'work_item',
-    target_object_id: specNeededWorkItem.id,
-    target_status: specNeededWorkItem.phase,
-    idempotency_key: 'action-key-contract-spec-suppression',
-    automation_scope: `repo:${ids.project}:repo-1`,
-    automation_settings_version: settings.version,
-    capability_fingerprint: settings.capability_fingerprint,
-    precondition_fingerprint: 'precondition-contract-spec',
-    action_input_json: { work_item_id: specNeededWorkItem.id },
-    now: at,
-  });
-  snapshot = await repository.getRuntimeSnapshotData();
-  expect(snapshot.work_items_requiring_spec).not.toContainEqual(
-    expect.objectContaining({
-      target_object_type: 'work_item',
-      target_object_id: specNeededWorkItem.id,
     }),
   );
 
@@ -1175,11 +1516,11 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   const claimedCommand = await repository.claimCommandIdempotency({
     id: 'command-idem-1',
-    command_name: 'ensure_plan',
+    command_name: 'ensure_package_drafts',
     idempotency_key: 'command-key-1',
-    target_object_type: 'work_item',
-    target_object_id: ids.workItem,
-    target_revision_id: ids.specRevision2,
+    target_object_type: 'plan_revision',
+    target_object_id: ids.planRevision1,
+    target_revision_id: ids.planRevision1,
     target_version: 2,
     precondition_fingerprint: 'fingerprint-a',
     precondition_json: { automation_settings_version: 2 },
@@ -1555,17 +1896,20 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   const actionRun = await repository.claimAutomationActionRun({
     id: 'automation-action-contract',
-    action_type: 'generate_plan_draft',
-    target_object_type: 'work_item',
-    target_object_id: ids.workItem,
-    target_revision_id: ids.specRevision2,
+    action_type: 'ensure_package_drafts',
+    target_object_type: 'plan_revision',
+    target_object_id: ids.planRevision1,
+    target_revision_id: ids.planRevision1,
     target_status: 'approved',
     idempotency_key: 'action-key-contract',
     automation_scope: `repo:${ids.project}:repo-1`,
     automation_settings_version: 2,
     capability_fingerprint: disabled.capability_fingerprint,
     precondition_fingerprint: 'precondition-contract-active',
-    action_input_json: { work_item_id: ids.workItem, spec_revision_id: ids.specRevision2 },
+    action_input_json: {
+      plan_revision_id: ids.planRevision1,
+      generation_key: `default:${ids.planRevision1}`,
+    },
     claim_token: 'automation-claim-1',
     locked_until: '2026-05-05T00:05:00.000Z',
     now: at,
@@ -1741,10 +2085,10 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   const pendingActionInput = {
     id: 'automation-action-contract-pending',
-    action_type: 'ensure_plan_draft',
-    target_object_type: 'work_item',
-    target_object_id: ids.workItem,
-    target_revision_id: ids.specRevision2,
+    action_type: 'ensure_package_drafts',
+    target_object_type: 'plan_revision',
+    target_object_id: ids.planRevision1,
+    target_revision_id: ids.planRevision1,
     target_status: 'approved',
     target_version: 1,
     idempotency_key: 'action-key-contract-pending',
@@ -1752,7 +2096,10 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     automation_settings_version: 2,
     capability_fingerprint: disabled.capability_fingerprint,
     precondition_fingerprint: 'precondition-contract-a',
-    action_input_json: { work_item_id: ids.workItem, spec_revision_id: ids.specRevision2 },
+    action_input_json: {
+      plan_revision_id: ids.planRevision1,
+      generation_key: `default:${ids.planRevision1}`,
+    },
     now: '2026-05-05T00:30:00.000Z',
   };
   const pendingNewAction = await repository.createOrReplayAutomationActionRun(pendingActionInput);
@@ -1767,8 +2114,8 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
     repository.createOrReplayAutomationActionRun({
       ...pendingActionInput,
       action_input_json: {
-        spec_revision_id: ids.specRevision2,
-        work_item_id: ids.workItem,
+        generation_key: `default:${ids.planRevision1}`,
+        plan_revision_id: ids.planRevision1,
       },
     }),
   ).resolves.toMatchObject({ id: pendingActionInput.id, status: 'pending' });
@@ -1781,7 +2128,10 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   await expect(
     repository.createOrReplayAutomationActionRun({
       ...pendingActionInput,
-      action_input_json: { work_item_id: ids.workItem2, spec_revision_id: ids.specRevision2 },
+      action_input_json: {
+        plan_revision_id: ids.planRevision2,
+        generation_key: `default:${ids.planRevision2}`,
+      },
     }),
   ).rejects.toThrow(/idempotency|identity|action/i);
   await expect(
@@ -1923,6 +2273,306 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   );
   expect(concurrentResults.filter((result) => result?.id === concurrentPending.id)).toHaveLength(1);
 }
+
+const contextManifestFixture = (overrides: Partial<ContextManifest> = {}): ContextManifest => ({
+  id: ids.contextManifest,
+  revision_id: ids.contextManifestRevision,
+  source_ref: { type: 'requirement', id: ids.workItem, revision_id: ids.specRevision1 },
+  development_plan_id: ids.developmentPlan,
+  development_plan_revision_id: ids.developmentPlanRevision,
+  development_plan_item_id: ids.developmentPlanItem,
+  development_plan_item_revision_id: ids.developmentPlanItemRevision1,
+  boundary_approver_actor_id: ids.human,
+  boundary_approved_at: '2026-05-24T00:04:00.000Z',
+  sources: [{ type: 'repo', ref: 'packages/db/src' }],
+  generated_at: '2026-05-24T00:00:00.000Z',
+  created_at: '2026-05-24T00:00:00.000Z',
+  updated_at: '2026-05-24T00:00:00.000Z',
+  ...overrides,
+});
+
+const developmentPlanFixture = (overrides: Partial<DevelopmentPlan> = {}): DevelopmentPlan => ({
+  id: ids.developmentPlan,
+  project_id: ids.project,
+  revision_id: ids.developmentPlanRevision,
+  title: 'AI-native project management UX redesign',
+  status: 'active',
+  source_refs: [{ type: 'requirement', id: ids.workItem, revision_id: ids.specRevision1 }],
+  items: [],
+  created_at: '2026-05-24T00:00:00.000Z',
+  updated_at: '2026-05-24T00:00:00.000Z',
+  ...overrides,
+});
+
+const developmentPlanRevisionFixture = (
+  overrides: Partial<DevelopmentPlanRevision> = {},
+): DevelopmentPlanRevision => ({
+  id: ids.developmentPlanRevision,
+  development_plan_id: ids.developmentPlan,
+  revision_number: 1,
+  title: 'AI-native project management UX redesign',
+  status: 'active',
+  source_refs: [{ type: 'requirement', id: ids.workItem, revision_id: ids.specRevision1 }],
+  item_refs: [],
+  change_reason: 'development_plan_created',
+  actor_id: ids.human,
+  created_at: '2026-05-24T00:00:00.000Z',
+  ...overrides,
+});
+
+const developmentPlanItemFixture = (overrides: Partial<DevelopmentPlanItem> = {}): DevelopmentPlanItem => ({
+  id: ids.developmentPlanItem,
+  development_plan_id: ids.developmentPlan,
+  revision_id: ids.developmentPlanItemRevision1,
+  source_ref: { type: 'requirement', id: ids.workItem, revision_id: ids.specRevision1 },
+  title: 'Persist planning graph',
+  summary: 'Persist context, planning, brainstorming, and execution planning records.',
+  driver_actor_id: ids.human,
+  responsible_role: 'developer',
+  reviewer_actor_id: ids.human,
+  risk: 'medium',
+  dependency_hints: ['Task 1 contract refs'],
+  affected_surfaces: ['packages/db', 'packages/domain'],
+  boundary_status: 'approved',
+  spec_status: 'approved',
+  execution_plan_status: 'approved',
+  execution_status: 'ready',
+  review_status: 'missing',
+  qa_handoff_status: 'missing',
+  release_impact: 'release_scoped',
+  next_action: 'Start execution from approved execution plan.',
+  created_at: '2026-05-24T00:01:00.000Z',
+  updated_at: '2026-05-24T00:01:00.000Z',
+  ...overrides,
+});
+
+const developmentPlanItemRevisionFixture = (
+  overrides: Partial<DevelopmentPlanItemRevision> = {},
+): DevelopmentPlanItemRevision => ({
+  id: ids.developmentPlanItemRevision1,
+  development_plan_item_id: ids.developmentPlanItem,
+  development_plan_id: ids.developmentPlan,
+  revision_number: 1,
+  snapshot: developmentPlanItemFixture(),
+  change_reason: 'Initial generated row',
+  edited_by_actor_id: ids.human,
+  created_at: '2026-05-24T00:02:00.000Z',
+  ...overrides,
+});
+
+const brainstormingSessionFixture = (overrides: Partial<BrainstormingSession> = {}): BrainstormingSession => ({
+  id: ids.brainstormingSession,
+  revision_id: ids.brainstormingSessionRevision,
+  source_ref: { type: 'requirement', id: ids.workItem, revision_id: ids.specRevision1 },
+  development_plan_id: ids.developmentPlan,
+  development_plan_item_id: ids.developmentPlanItem,
+  development_plan_item_revision_id: ids.developmentPlanItemRevision2,
+  context_manifest_id: ids.contextManifest,
+  context_manifest_revision_id: ids.contextManifestRevision,
+  questions: [
+    {
+      id: 'question-1',
+      text: 'What DB shape is needed?',
+      author_id: ids.human,
+      created_at: '2026-05-24T00:02:00.000Z',
+      status: 'resolved',
+    },
+  ],
+  answers: [
+    {
+      id: 'answer-1',
+      question_id: 'question-1',
+      text: 'Use Drizzle schema plus repository contracts.',
+      actor_id: ids.human,
+      created_at: '2026-05-24T00:03:00.000Z',
+    },
+  ],
+  decisions: [
+    {
+      id: 'decision-1',
+      text: 'Persist the planning graph in first-class tables.',
+      actor_id: ids.human,
+      rationale: 'The AI-native UX needs durable planning handoffs.',
+      created_at: '2026-05-24T00:03:30.000Z',
+    },
+  ],
+  approval_state: 'approved',
+  boundary_summary_id: ids.boundarySummary,
+  approver_actor_id: ids.human,
+  approved_at: '2026-05-24T00:04:00.000Z',
+  created_at: '2026-05-24T00:02:00.000Z',
+  updated_at: '2026-05-24T00:04:00.000Z',
+  ...overrides,
+});
+
+const boundarySummaryFixture = (overrides: Partial<BoundarySummary> = {}): BoundarySummary => ({
+  id: ids.boundarySummary,
+  revision_id: ids.boundarySummaryRevision,
+  brainstorming_session_id: ids.brainstormingSession,
+  brainstorming_session_revision_id: ids.brainstormingSessionRevision,
+  development_plan_id: ids.developmentPlan,
+  development_plan_item_id: ids.developmentPlanItem,
+  development_plan_item_revision_id: ids.developmentPlanItemRevision2,
+  source_ref: { type: 'requirement', id: ids.workItem, revision_id: ids.specRevision1 },
+  summary: 'Task 2 owns domain, schema, and repository persistence only.',
+  approved_by_actor_id: ids.human,
+  approved_at: '2026-05-24T00:04:00.000Z',
+  created_at: '2026-05-24T00:04:00.000Z',
+  updated_at: '2026-05-24T00:04:00.000Z',
+  ...overrides,
+});
+
+const boundarySummaryRevisionFixture = (overrides: Partial<BoundarySummaryRevision> = {}): BoundarySummaryRevision => ({
+  id: ids.boundarySummaryRevision,
+  boundary_summary_id: ids.boundarySummary,
+  brainstorming_session_id: ids.brainstormingSession,
+  brainstorming_session_revision_id: ids.brainstormingSessionRevision,
+  development_plan_item_id: ids.developmentPlanItem,
+  development_plan_item_revision_id: ids.developmentPlanItemRevision2,
+  revision_number: 1,
+  summary_markdown: 'Task 2 scope is approved.',
+  decision_snapshot: brainstormingSessionFixture().decisions,
+  decision_count: 1,
+  approved_by_actor_id: ids.human,
+  approved_at: '2026-05-24T00:04:00.000Z',
+  created_at: '2026-05-24T00:04:00.000Z',
+  ...overrides,
+});
+
+const specFixture = (overrides: Partial<Spec> = {}): Spec => ({
+  id: ids.spec,
+  work_item_id: ids.workItem,
+  entity_type: 'spec',
+  status: 'approved',
+  editing_state: 'idle',
+  gate_state: 'approved',
+  resolution: 'approved',
+  current_revision_id: ids.specRevision1,
+  approved_revision_id: ids.specRevision1,
+  approved_at: '2026-05-24T00:05:00.000Z',
+  approved_by_actor_id: ids.human,
+  development_plan_item_id: ids.developmentPlanItem,
+  boundary_summary_id: ids.boundarySummary,
+  context_manifest_id: ids.contextManifest,
+  created_at: '2026-05-24T00:05:00.000Z',
+  updated_at: '2026-05-24T00:05:00.000Z',
+  ...overrides,
+});
+
+const specRevisionFixture = (overrides: Partial<SpecRevision> = {}): SpecRevision => ({
+  id: ids.specRevision1,
+  spec_id: ids.spec,
+  work_item_id: ids.workItem,
+  revision_number: 1,
+  summary: 'Approved persistence spec',
+  content: 'Persist the AI-native planning graph.',
+  background: 'Task 1 added contract refs.',
+  goals: ['Persist planning graph objects'],
+  scope_in: ['Domain', 'DB schema', 'Repository adapters'],
+  scope_out: ['Public UX changes'],
+  acceptance_criteria: ['Repository contract passes'],
+  risk_notes: ['Keep legacy Work Item Owner semantics out of product refs'],
+  test_strategy_summary: 'Repository contract tests',
+  structured_document: { sections: ['goal', 'scope'] },
+  author_actor_id: ids.human,
+  artifact_refs: [artifactRef('spec', 'approved persistence spec')],
+  development_plan_item_id: ids.developmentPlanItem,
+  boundary_summary_id: ids.boundarySummary,
+  context_manifest_id: ids.contextManifest,
+  created_at: '2026-05-24T00:05:00.000Z',
+  ...overrides,
+});
+
+const executionPlanFixture = (overrides: Partial<ExecutionPlanDocument> = {}): ExecutionPlanDocument => ({
+  id: ids.executionPlan,
+  development_plan_item_id: ids.developmentPlanItem,
+  status: 'approved',
+  current_revision_id: ids.executionPlanRevision,
+  approved_revision_id: ids.executionPlanRevision,
+  approved_by_actor_id: ids.human,
+  approved_at: '2026-05-24T00:06:00.000Z',
+  created_at: '2026-05-24T00:06:00.000Z',
+  updated_at: '2026-05-24T00:06:00.000Z',
+  ...overrides,
+});
+
+const executionPlanRevisionFixture = (overrides: Partial<ExecutionPlanRevision> = {}): ExecutionPlanRevision => ({
+  id: ids.executionPlanRevision,
+  execution_plan_id: ids.executionPlan,
+  development_plan_item_id: ids.developmentPlanItem,
+  based_on_spec_revision_id: ids.specRevision1,
+  revision_number: 1,
+  summary: 'Approved execution plan',
+  content: 'Implement the planning graph persistence task.',
+  structured_document: { steps: ['schema', 'repository', 'verification'] },
+  author_actor_id: ids.human,
+  created_at: '2026-05-24T00:06:00.000Z',
+  ...overrides,
+});
+
+const executionFixture = (overrides: Partial<Execution> = {}): Execution => ({
+  id: ids.execution,
+  ref: { type: 'execution', id: ids.execution, title: 'Task 2 execution' },
+  development_plan_item_id: ids.developmentPlanItem,
+  development_plan_item_ref: {
+    type: 'development_plan_item',
+    id: ids.developmentPlanItem,
+    development_plan_id: ids.developmentPlan,
+    revision_id: ids.developmentPlanItemRevision2,
+    title: 'Persist planning graph',
+  },
+  execution_plan_revision_id: ids.executionPlanRevision,
+  execution_plan_revision_ref: {
+    type: 'execution_plan_revision',
+    id: ids.executionPlanRevision,
+    execution_plan_id: ids.executionPlan,
+    title: 'Approved execution plan',
+  },
+  status: 'ready',
+  evidence_refs: [],
+  runtime_evidence_refs: [],
+  interrupt_history: [{ at: '2026-05-24T00:07:30.000Z', reason: 'Paused for repository contract verification.' }],
+  continuation_history: [{ at: '2026-05-24T00:08:00.000Z', summary: 'Resumed for repository contract verification.' }],
+  pr_refs: [{ id: 'pr-repository-contract', title: 'Repository contract PR' }],
+  diff_refs: [{ id: 'diff-repository-contract', title: 'Repository contract diff' }],
+  test_evidence_refs: [{ id: 'test-repository-contract', title: 'Repository contract tests' }],
+  created_at: '2026-05-24T00:07:00.000Z',
+  updated_at: '2026-05-24T00:07:00.000Z',
+  ...overrides,
+});
+
+const executionPackageFixture = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
+  id: ids.package,
+  work_item_id: ids.workItem,
+  development_plan_item_id: ids.developmentPlanItem,
+  execution_id: ids.execution,
+  spec_id: ids.spec,
+  spec_revision_id: ids.specRevision1,
+  execution_plan_id: ids.executionPlan,
+  execution_plan_revision_id: ids.executionPlanRevision,
+  plan_id: ids.plan,
+  plan_revision_id: ids.planRevision1,
+  project_id: ids.project,
+  repo_id: 'repo-1',
+  objective: 'Persist the AI-native planning graph.',
+  owner_actor_id: ids.human,
+  reviewer_actor_id: ids.human,
+  qa_owner_actor_id: ids.human,
+  phase: 'ready',
+  activity_state: 'idle',
+  gate_state: 'not_submitted',
+  resolution: 'none',
+  required_checks: [requiredCheck],
+  required_test_gates: [],
+  required_artifact_kinds: ['execution_summary'],
+  allowed_paths: ['packages/domain/**', 'packages/db/**', 'tests/db/**'],
+  forbidden_paths: ['apps/**'],
+  source_mutation_policy: 'path_policy_scoped',
+  version: 0,
+  created_at: '2026-05-24T00:08:00.000Z',
+  updated_at: '2026-05-24T00:08:00.000Z',
+  ...overrides,
+});
 
 const artifactRef = (kind: string, name: string) => ({
   kind,

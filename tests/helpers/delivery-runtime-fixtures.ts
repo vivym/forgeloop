@@ -33,6 +33,7 @@ import {
   RUN_DURABILITY_MODE,
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { seedItemScopedSpecPlan } from './item-scoped-artifact-fixtures';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src';
 import { createWorkflowPolicyRepoRoot } from './runtime-policy-repo';
 
@@ -826,25 +827,20 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
 };
 
 const approveSpec = async (app: INestApplication, workItemId: string): Promise<string> => {
-  const server = app.getHttpServer();
-  const spec = (await request(server).post(`/work-items/${workItemId}/specs`).send({}).expect(201)).body;
-
-  await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201);
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
-
-  return spec.id as string;
+  const { spec } = await seedItemScopedSpecPlan(app, workItemId, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+    includePlan: false,
+  });
+  return spec.id;
 };
 
 const approvePlan = async (app: INestApplication, workItemId: string): Promise<string> => {
-  const server = app.getHttpServer();
-  const plan = (await request(server).post(`/work-items/${workItemId}/plans`).send({}).expect(201)).body;
-  const planRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
-
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
-
-  return planRevision.id as string;
+  const { planRevision } = await seedItemScopedSpecPlan(app, workItemId, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+  });
+  return planRevision!.id;
 };
 
 export const seedReadyExecutionPackageThroughApi = async (app: INestApplication): Promise<ExecutionPackage> => {

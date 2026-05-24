@@ -14,6 +14,7 @@ import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/ru
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const actorOwner = 'actor-owner';
@@ -188,21 +189,16 @@ const createApprovedSpecAndPlan = async (
       .expect(201)
   ).body;
 
-  const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-  const specRevision = (await request(server).post(`/specs/${spec.id}/generate-draft`).send({}).expect(201)).body;
-  await request(server).post(`/specs/${spec.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/specs/${spec.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
-
-  const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
-  const planRevision = (await request(server).post(`/plans/${plan.id}/generate-draft`).send({}).expect(201)).body;
-  await request(server).post(`/plans/${plan.id}/submit-for-approval`).set(ownerHeaders).send({ actor_id: actorOwner }).expect(201);
-  await request(server).post(`/plans/${plan.id}/approve`).set(reviewerHeaders).send({ actor_id: actorReviewer }).expect(201);
+  const { specRevision, planRevision } = await seedItemScopedSpecPlan(app, workItem.id, {
+    actorId: actorOwner,
+    reviewerActorId: actorReviewer,
+  });
 
   return {
     project,
     workItem,
     specRevisionId: specRevision.id,
-    planRevisionId: planRevision.id,
+    planRevisionId: planRevision!.id,
   };
 };
 
@@ -367,19 +363,17 @@ describe('Delivery smoke delivery loop', () => {
 
     await approveReviewPacket(app, reviewPacket.id);
 
-    const cockpit = (await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(200)).body;
-    expect(cockpit.packages[0]).toMatchObject({
+    const updatedPackage = (await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200)).body;
+    expect(updatedPackage).toMatchObject({
       id: executionPackage.id,
       phase: 'release',
       gate_state: 'release_ready',
       resolution: 'completed',
     });
-    expect(cockpit.review_packets[0]).toMatchObject({ id: reviewPacket.id, status: 'completed', decision: 'approved' });
-
-    const timeline = (await request(server).get(`/query/replay/work_item/${workItem.id}`).expect(200)).body;
-    const timelineSources = timeline.map((entry: { source: string }) => entry.source);
-    expect(timelineSources).toEqual(expect.arrayContaining(['object_event', 'status_history', 'decision']));
-    expect(timelineSources).not.toContain('artifact');
+    const updatedReview = (await request(server).get(`/review-packets/${reviewPacket.id}`).expect(200)).body;
+    expect(updatedReview).toMatchObject({ id: reviewPacket.id, status: 'completed', decision: 'approved' });
+    await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(404);
+    await request(server).get(`/query/replay/work_item/${workItem.id}`).expect(404);
   });
 
   it('records changes_requested, reruns with a new run session and review packet, then approves the rerun', async () => {
@@ -429,17 +423,22 @@ describe('Delivery smoke delivery loop', () => {
 
     await approveReviewPacket(app, rerunReviewPacketId, '2026-05-05T03:00:00.000Z');
 
-    const cockpit = (await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(200)).body;
-    expect(cockpit.run_sessions.map((item: { id: string }) => item.id)).toEqual(
-      expect.arrayContaining([firstAcceptedRun.run_session_id, acceptedRerun.run_session_id]),
-    );
-    expect(cockpit.review_packets).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: firstReviewPacketId, decision: 'changes_requested' }),
-        expect.objectContaining({ id: rerunReviewPacketId, decision: 'approved' }),
-      ]),
-    );
-    expect(cockpit.packages[0]).toMatchObject({ phase: 'release', gate_state: 'release_ready', resolution: 'completed' });
+    await request(server).get(`/run-sessions/${firstAcceptedRun.run_session_id}`).expect(200);
+    await request(server).get(`/run-sessions/${acceptedRerun.run_session_id}`).expect(200);
+    expect((await request(server).get(`/review-packets/${firstReviewPacketId}`).expect(200)).body).toMatchObject({
+      id: firstReviewPacketId,
+      decision: 'changes_requested',
+    });
+    expect((await request(server).get(`/review-packets/${rerunReviewPacketId}`).expect(200)).body).toMatchObject({
+      id: rerunReviewPacketId,
+      decision: 'approved',
+    });
+    expect((await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200)).body).toMatchObject({
+      phase: 'release',
+      gate_state: 'release_ready',
+      resolution: 'completed',
+    });
+    await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(404);
   });
 
   it('archives the open review packet when force-rerun creates replacement run evidence before a decision', async () => {

@@ -31,10 +31,10 @@ const createActionInput = (
   overrides: ActionInputOverrides = {},
 ): CreateOrReplayAutomationActionRunInput => ({
   id,
-  action_type: 'ensure_plan_draft',
-  target_object_type: 'work_item',
-  target_object_id: 'work-item-automation',
-  target_revision_id: 'spec-revision-automation',
+  action_type: 'ensure_package_drafts',
+  target_object_type: 'plan_revision',
+  target_object_id: 'plan-revision-automation',
+  target_revision_id: 'plan-revision-automation',
   target_status: 'approved',
   target_version: 1,
   idempotency_key: `${id}-idem`,
@@ -42,7 +42,10 @@ const createActionInput = (
   automation_settings_version: 1,
   capability_fingerprint: 'capability-a',
   precondition_fingerprint: 'precondition-a',
-  action_input_json: { work_item_id: 'work-item-automation', spec_revision_id: 'spec-revision-automation' },
+  action_input_json: {
+    plan_revision_id: 'plan-revision-automation',
+    generation_key: 'default:plan-revision-automation',
+  },
   now,
   ...overrides,
 });
@@ -66,8 +69,6 @@ const expectDefaultOff = async (repository: DeliveryRepository) => {
     version: 0,
     capabilities_json: {
       canProjectRuntimeState: false,
-      canGenerateSpecDraft: false,
-      canGeneratePlanDraft: false,
       canGeneratePackageDrafts: false,
       canEnqueueRuns: false,
     },
@@ -214,129 +215,16 @@ describe('automation repository primitives', () => {
     });
   });
 
-  it('projects only eligible work items requiring Spec drafts', async () => {
-    const repository = new InMemoryDeliveryRepository();
-    await seedSpecEligibilityGraph(repository);
-
-    await expect(repository.getRuntimeSnapshotData()).resolves.toMatchObject({
-      work_items_requiring_spec: [
-        expect.objectContaining({
-          target_object_type: 'work_item',
-          target_object_id: 'work-item-needs-spec',
-          target_status: 'triage',
-          project_id: 'project-automation',
-          repo_id: 'repo-1',
-          automation_scope: 'repo:project-automation:repo-1',
-        }),
-      ],
-    });
-
-    await repository.saveWorkItem(
-      specWorkItem('work-item-terminal', {
-        phase: 'done',
-        resolution: 'completed',
-      }),
-    );
-    await repository.saveSpec({
-      id: 'spec-existing',
-      work_item_id: 'work-item-with-spec',
-      entity_type: 'spec',
-      status: 'draft',
-      editing_state: 'idle',
-      gate_state: 'not_submitted',
-      resolution: 'none',
-      current_revision_id: 'spec-revision-existing',
-      created_at: now,
-      updated_at: now,
-    });
-    await repository.saveWorkItem(
-      specWorkItem('work-item-with-spec', {
-        current_spec_id: 'spec-existing',
-        current_spec_revision_id: 'spec-revision-existing',
-      }),
-    );
-    await repository.requestManualPathHold({
-      id: 'hold-work-item-spec',
-      object_type: 'work_item',
-      object_id: 'work-item-held',
-      scope_key: buildManualScopeKey({ object_type: 'work_item', object_id: 'work-item-held' }),
-      reason_code: 'needs_human_spec_review',
-      reason: 'Human must choose the first Spec draft path.',
-      evidence_refs: [],
-      requested_by: 'daemon-1',
-      requested_at: now,
-      idempotency_key: 'hold-work-item-spec-idem',
-    });
-    await repository.saveWorkItem(specWorkItem('work-item-held'));
-    await repository.saveProject({
-      id: 'project-no-spec-capability',
-      name: 'No Spec Capability',
-      repo_ids: ['repo-no-spec'],
-      owner_actor_id: 'actor-admin',
-      created_at: now,
-      updated_at: now,
-    });
-    await repository.saveProjectRepo({
-      id: 'project-repo-no-spec-capability',
-      repo_id: 'repo-no-spec',
-      project_id: 'project-no-spec-capability',
-      name: 'repo-no-spec',
-      status: 'active',
-      local_path: '/workspace/repo-no-spec',
-      default_branch: 'main',
-      base_commit_sha: 'abc123',
-      created_at: now,
-      updated_at: now,
-    });
-    await repository.setAutomationProjectSettings({
-      id: 'automation-settings-no-spec-capability',
-      project_id: 'project-no-spec-capability',
-      repo_id: 'repo-no-spec',
-      scope_type: 'repo',
-      preset: 'ready_projection',
-      expected_version: 0,
-      reason: 'projection only',
-      evidence_refs: [],
-      actor: { actor_id: 'actor-admin', actor_class: 'human_admin' },
-      now,
-    });
-    await repository.saveWorkItem(
-      specWorkItem('work-item-no-spec-capability', {
-        project_id: 'project-no-spec-capability',
-      }),
-    );
-    await repository.createOrReplayAutomationActionRun({
-      id: 'automation-action-spec-suppressed',
-      action_type: 'ensure_spec_draft',
-      target_object_type: 'work_item',
-      target_object_id: 'work-item-suppressed',
-      target_status: 'triage',
-      idempotency_key: 'automation-action-spec-suppressed-idem',
-      automation_scope: 'repo:project-automation:repo-1',
-      automation_settings_version: 1,
-      capability_fingerprint: 'capability-a',
-      precondition_fingerprint: 'precondition-spec-suppressed',
-      action_input_json: { work_item_id: 'work-item-suppressed' },
-      now,
-    });
-    await repository.saveWorkItem(specWorkItem('work-item-suppressed'));
-
-    const targetIds = (await repository.getRuntimeSnapshotData()).work_items_requiring_spec.map(
-      (target) => target.target_object_id,
-    );
-    expect(targetIds).toEqual(['work-item-needs-spec']);
-  });
-
   it('replays terminal idempotency records and rejects precondition drift', async () => {
     const repository = new InMemoryDeliveryRepository();
 
     const claim = await repository.claimCommandIdempotency({
       id: 'command-record',
-      command_name: 'ensure_plan',
+      command_name: 'ensure_package_drafts',
       idempotency_key: 'command-key',
-      target_object_type: 'work_item',
-      target_object_id: 'work-item-automation',
-      target_revision_id: 'spec-revision-automation',
+      target_object_type: 'plan_revision',
+      target_object_id: 'plan-revision-automation',
+      target_revision_id: 'plan-revision-automation',
       target_version: 1,
       precondition_fingerprint: 'fingerprint-a',
       precondition_json: { automation_settings_version: 1 },
@@ -452,7 +340,10 @@ describe('automation repository primitives', () => {
       status: 'pending',
       attempt: 0,
       precondition_fingerprint: 'precondition-a',
-      action_input_json: { work_item_id: 'work-item-automation', spec_revision_id: 'spec-revision-automation' },
+      action_input_json: {
+        plan_revision_id: 'plan-revision-automation',
+        generation_key: 'default:plan-revision-automation',
+      },
     });
     expect(pending.claim_token).toBeUndefined();
 
@@ -487,7 +378,7 @@ describe('automation repository primitives', () => {
     await expect(
       repository.createOrReplayAutomationActionRun({
         ...input,
-        action_input_json: { work_item_id: 'work-item-automation', spec_revision_id: 'changed' },
+        action_input_json: { plan_revision_id: 'changed', generation_key: 'default:changed' },
       }),
     ).rejects.toThrow(/idempotency|identity|action/i);
   });
@@ -496,8 +387,8 @@ describe('automation repository primitives', () => {
     const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const input = createActionInput('action-canonical-json', {
       action_input_json: {
-        work_item_id: 'work-item-automation',
-        spec_revision_id: 'spec-revision-automation',
+        plan_revision_id: 'plan-revision-automation',
+        generation_key: 'default:plan-revision-automation',
         nested: { beta: 2, alpha: 1 },
         list: [{ zeta: true, alpha: false }],
       },
@@ -508,10 +399,10 @@ describe('automation repository primitives', () => {
       repository.createOrReplayAutomationActionRun({
         ...input,
         action_input_json: {
+          generation_key: 'default:plan-revision-automation',
           list: [{ alpha: false, zeta: true }],
           nested: { alpha: 1, beta: 2 },
-          spec_revision_id: 'spec-revision-automation',
-          work_item_id: 'work-item-automation',
+          plan_revision_id: 'plan-revision-automation',
         },
       }),
     ).resolves.toMatchObject({ id: created.id, status: 'pending' });
@@ -863,7 +754,7 @@ describe('automation repository primitives', () => {
       expect.arrayContaining([
         expect.stringMatching(/orderBy\([\s\S]*automation_action_runs\.finishedAt[\s\S]*automation_action_runs\.updatedAt[\s\S]*automation_action_runs\.createdAt[\s\S]*automation_action_runs\.id[\s\S]*\)\s*\.limit\((50|RUNTIME_SNAPSHOT_RECENT_ACTION_RUN_LIMIT)\)/),
         expect.stringMatching(/where\([\s\S]*automation_action_runs\.actionType[\s\S]*project_runtime_snapshot[\s\S]*automation_action_runs\.status[\s\S]*succeeded[\s\S]*\)[\s\S]*\.limit\(/),
-        expect.stringMatching(/where\([\s\S]*automation_action_runs\.actionType[\s\S]*ensure_plan_draft[\s\S]*ensure_package_drafts[\s\S]*\)[\s\S]*\.limit\(/),
+        expect.stringMatching(/where\([\s\S]*automation_action_runs\.actionType[\s\S]*ensure_package_drafts[\s\S]*\)[\s\S]*\.limit\(/),
       ]),
     );
     for (const query of actionRunQueries) {
@@ -1005,62 +896,6 @@ async function seedPackageGraph(repository: DeliveryRepository): Promise<void> {
     created_at: now,
     updated_at: now,
   });
-}
-
-const specWorkItem = (id: string, overrides: Partial<WorkItem> = {}): WorkItem => ({
-  id,
-  project_id: 'project-automation',
-  kind: 'requirement',
-  title: `Spec draft target ${id}`,
-  goal: 'Create a Spec draft.',
-  success_criteria: ['Spec draft exists.'],
-  priority: 'p1',
-  risk: 'low',
-  driver_actor_id: 'actor-admin',
-  intake_context: requirementIntakeContext,
-  phase: 'triage',
-  activity_state: 'idle',
-  gate_state: 'none',
-  resolution: 'none',
-  created_at: now,
-  updated_at: now,
-  ...overrides,
-});
-
-async function seedSpecEligibilityGraph(repository: DeliveryRepository): Promise<void> {
-  await repository.saveProject({
-    id: 'project-automation',
-    name: 'Automation project',
-    repo_ids: ['repo-1'],
-    owner_actor_id: 'actor-admin',
-    created_at: now,
-    updated_at: now,
-  });
-  await repository.saveProjectRepo({
-    id: 'project-repo-automation',
-    repo_id: 'repo-1',
-    project_id: 'project-automation',
-    name: 'repo-1',
-    status: 'active',
-    local_path: '/workspace/repo-1',
-    default_branch: 'main',
-    base_commit_sha: 'abc123',
-    created_at: now,
-    updated_at: now,
-  });
-  await repository.setAutomationProjectSettings({
-    id: 'automation-settings-spec-eligibility',
-    project_id: 'project-automation',
-    repo_id: 'repo-1',
-    scope_type: 'repo',
-    preset: 'draft_only',
-    expected_version: 0,
-    reason: 'enable Spec draft eligibility',
-    evidence_refs: [],
-    actor: { actor_id: 'actor-admin', actor_class: 'human_admin' },
-    now,
-  });
-  await repository.saveWorkItem(specWorkItem('work-item-needs-spec'));
 }
 
 async function seedPackageEligibilityGraph(repository: DeliveryRepository): Promise<void> {

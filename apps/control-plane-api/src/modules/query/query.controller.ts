@@ -2,17 +2,11 @@ import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
 import { productListQuerySchema, type ProductListQuery } from '@forgeloop/contracts';
 
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
-import { parseWorkItemCockpitQuery } from './product-lane-query-parser';
 import { QueryService } from './query.service';
 
 @Controller('query')
 export class QueryController {
   constructor(@Inject(QueryService) private readonly service: QueryService) {}
-
-  @Get('work-item-cockpit/:workItemId')
-  getWorkItemCockpit(@Param('workItemId') workItemId: string, @Query() query: Record<string, string | string[] | undefined>) {
-    return this.service.getWorkItemCockpit(workItemId, parseWorkItemCockpitQuery(query));
-  }
 
   @Get('release-cockpit/:releaseId')
   getReleaseCockpit(@Param('releaseId') releaseId: string) {
@@ -27,6 +21,51 @@ export class QueryController {
   @Get('my-work')
   listMyWork(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
     return this.service.listMyWork(query);
+  }
+
+  @Get('dashboard')
+  getDashboard(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.getDashboard(query);
+  }
+
+  @Get('development-plans')
+  listDevelopmentPlans(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listDevelopmentPlans(query);
+  }
+
+  @Get('development-plans/:developmentPlanId/items/:itemId')
+  getDevelopmentPlanItem(@Param('developmentPlanId') developmentPlanId: string, @Param('itemId') itemId: string) {
+    return this.service.getDevelopmentPlanItem(developmentPlanId, itemId);
+  }
+
+  @Get('development-plans/:developmentPlanId')
+  getDevelopmentPlan(@Param('developmentPlanId') developmentPlanId: string) {
+    return this.service.getDevelopmentPlan(developmentPlanId);
+  }
+
+  @Get('specs-execution-plans')
+  listSpecsExecutionPlans(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listSpecsExecutionPlans(query);
+  }
+
+  @Get('executions')
+  listExecutions(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listExecutions(query);
+  }
+
+  @Get('executions/:executionId')
+  getExecution(@Param('executionId') executionId: string) {
+    return this.service.getExecution(executionId);
+  }
+
+  @Get('code-review-handoffs')
+  listCodeReviewHandoffs(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listCodeReviewHandoffs(query);
+  }
+
+  @Get('qa-handoffs')
+  listQaHandoffs(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listQaHandoffs(query);
   }
 
   @Get('requirements')
@@ -69,31 +108,6 @@ export class QueryController {
     return this.service.getBugDetail(bugId);
   }
 
-  @Get('tasks')
-  listTasks(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listTasks(query);
-  }
-
-  @Get('tasks/:taskId/packages/:packageId')
-  getTaskPackageEvidence(@Param('taskId') taskId: string, @Param('packageId') packageId: string) {
-    return this.service.getTaskPackageEvidence(taskId, packageId);
-  }
-
-  @Get('tasks/:taskId/runs/:runSessionId')
-  getTaskRunEvidence(@Param('taskId') taskId: string, @Param('runSessionId') runSessionId: string) {
-    return this.service.getTaskRunEvidence(taskId, runSessionId);
-  }
-
-  @Get('tasks/:taskId/reviews/:reviewPacketId')
-  getTaskReviewEvidence(@Param('taskId') taskId: string, @Param('reviewPacketId') reviewPacketId: string) {
-    return this.service.getTaskReviewEvidence(taskId, reviewPacketId);
-  }
-
-  @Get('tasks/:taskId')
-  getTaskDetail(@Param('taskId') taskId: string) {
-    return this.service.getTaskDetail(taskId);
-  }
-
   @Get('board')
   listBoardCards(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
     return this.service.listBoardCards(query);
@@ -109,63 +123,9 @@ export class QueryController {
     return this.service.getReleaseReadinessDetail(releaseId, projectId === undefined ? {} : { project_id: projectId });
   }
 
-  @Get('work-items')
-  listWorkItems(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listWorkItems(query);
-  }
-
-  @Get('specs')
-  listSpecs(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listSpecs(query);
-  }
-
-  @Get('plans')
-  listPlans(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listPlans(query);
-  }
-
-  @Get('execution-packages')
-  listExecutionPackages(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listExecutionPackages(query);
-  }
-
-  @Get('execution-packages/:packageId/runtime-readiness')
-  getExecutionPackageRuntimeReadiness(@Param('packageId') packageId: string) {
-    return this.service.getExecutionPackageRuntimeReadiness(packageId);
-  }
-
-  @Get('runs')
-  listRuns(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listRuns(query);
-  }
-
-  @Get('review-packets')
-  listReviewPackets(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listReviewPackets(query);
-  }
-
-  @Get('reviews/:reviewPacketId')
-  getReview(@Param('reviewPacketId') reviewPacketId: string) {
-    return this.service.getReview(reviewPacketId);
-  }
-
   @Get('product-lanes/:laneId')
   getProductLane(@Param('laneId') laneId: string, @Query() query: Record<string, string | string[] | undefined>) {
     return this.service.getProductLane(laneId, query);
   }
 
-  @Get('replay/spec/:specId')
-  getSpecReplay(@Param('specId') specId: string) {
-    return this.service.getSpecReplay(specId);
-  }
-
-  @Get('replay/plan/:planId')
-  getPlanReplay(@Param('planId') planId: string) {
-    return this.service.getPlanReplay(planId);
-  }
-
-  @Get('replay/:objectType/:objectId')
-  getReplay(@Param('objectType') objectType: string, @Param('objectId') objectId: string) {
-    return this.service.getReplay(objectType, objectId);
-  }
 }

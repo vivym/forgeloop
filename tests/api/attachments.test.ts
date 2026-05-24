@@ -4,13 +4,14 @@ import { join } from 'node:path';
 
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
-import type { Attachment, Task, WorkItem } from '@forgeloop/domain';
+import type { Attachment, WorkItem } from '@forgeloop/domain';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
+import { seedApprovedExecutionPlan } from '../helpers/execution-supervision-fixtures';
 
 const now = '2026-05-23T00:00:00.000Z';
 
@@ -36,20 +37,6 @@ const requirementFixture = (id = 'req-1'): WorkItem => ({
   activity_state: 'idle',
   gate_state: 'none',
   resolution: 'none',
-  created_at: now,
-  updated_at: now,
-});
-
-const taskFixture = (id = 'task-1'): Task => ({
-  id,
-  project_id: 'project-1',
-  title: 'Verify checkout evidence',
-  narrative_markdown: '',
-  execution_brief: 'Review checkout evidence.',
-  acceptance_checklist: ['Evidence is linked to the task.'],
-  status: 'draft',
-  parent_ref: { type: 'requirement', id: 'req-1' },
-  stale_state: 'current',
   created_at: now,
   updated_at: now,
 });
@@ -148,6 +135,50 @@ describe('Attachment API safety', () => {
     expect(response.body).not.toHaveProperty('storage_uri');
   });
 
+  it('validates AI-native Execution Plan attachment owners against execution-plan storage', async () => {
+    const { executionPlan, executionPlanRevision } = await seedApprovedExecutionPlan(app);
+
+    const planUpload = await request(app.getHttpServer())
+      .post('/attachments')
+      .field(
+        'metadata',
+        JSON.stringify({
+          object_type: 'execution_plan',
+          object_id: executionPlan.id,
+          evidence_category: 'document',
+          caption: 'Execution Plan evidence',
+          visibility: 'object',
+        }),
+      )
+      .attach('file', Buffer.from('plan-bytes'), { filename: 'execution-plan.md', contentType: 'text/markdown' })
+      .expect(201);
+    expect(planUpload.body).toMatchObject({
+      owner_object_type: 'execution_plan',
+      owner_object_id: executionPlan.id,
+      filename: 'execution-plan.md',
+    });
+
+    const revisionUpload = await request(app.getHttpServer())
+      .post('/attachments')
+      .field(
+        'metadata',
+        JSON.stringify({
+          object_type: 'execution_plan_revision',
+          object_id: executionPlanRevision.id,
+          evidence_category: 'document',
+          caption: 'Execution Plan revision evidence',
+          visibility: 'object',
+        }),
+      )
+      .attach('file', Buffer.from('revision-bytes'), { filename: 'execution-plan-revision.md', contentType: 'text/markdown' })
+      .expect(201);
+    expect(revisionUpload.body).toMatchObject({
+      owner_object_type: 'execution_plan_revision',
+      owner_object_id: executionPlanRevision.id,
+      filename: 'execution-plan-revision.md',
+    });
+  });
+
   it('returns only opaque same-origin render urls', async () => {
     const upload = await uploadImage();
     const response = await request(app.getHttpServer())
@@ -244,7 +275,6 @@ describe('Attachment API safety', () => {
 
   it('links reused evidence only through typed object refs', async () => {
     await seedAttachment();
-    await repository.saveTask(taskFixture());
 
     await request(app.getHttpServer())
       .post('/attachments/att-1/links')
@@ -253,10 +283,10 @@ describe('Attachment API safety', () => {
 
     const response = await request(app.getHttpServer())
       .post('/attachments/att-1/links')
-      .send({ object_ref: { type: 'task', id: 'task-1' } })
+      .send({ object_ref: { type: 'requirement', id: 'req-1' } })
       .expect(201);
 
-    expect(response.body.linked_object_refs).toEqual(expect.arrayContaining([{ type: 'task', id: 'task-1' }]));
+    expect(response.body.linked_object_refs).toEqual(expect.arrayContaining([{ type: 'requirement', id: 'req-1' }]));
     expect(response.body).not.toHaveProperty('storage_uri');
   });
 

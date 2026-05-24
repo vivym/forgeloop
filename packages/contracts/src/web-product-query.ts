@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { objectRefSchema } from './product-object-ref.js';
+import { productQueryObjectRefSchema } from './product-object-ref.js';
 
 const isoDateTimeSchema = z.string().datetime();
 const queryBooleanSchema = z.preprocess((value) => {
@@ -21,9 +21,6 @@ const queryBooleanSchema = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
-export const productObjectRefSchema = objectRefSchema;
-export type ProductObjectRef = z.infer<typeof productObjectRefSchema>;
-
 export const productListQuerySchema = z
   .object({
     project_id: z.string().min(1),
@@ -42,9 +39,7 @@ export const productListQuerySchema = z
     plan_id: z.string().min(1).optional(),
     spec_revision_id: z.string().min(1).optional(),
     plan_revision_id: z.string().min(1).optional(),
-    execution_package_id: z.string().min(1).optional(),
-    run_session_id: z.string().min(1).optional(),
-    review_packet_id: z.string().min(1).optional(),
+    execution_id: z.string().min(1).optional(),
     release_id: z.string().min(1).optional(),
     surface_type: z.string().min(1).optional(),
     executor_type: z.string().min(1).optional(),
@@ -67,7 +62,7 @@ export type InternalProductListQuery = z.infer<typeof internalProductListQuerySc
 export const productListItemSchema = z
   .object({
     id: z.string().min(1),
-    object: productObjectRefSchema,
+    object: productQueryObjectRefSchema,
     title: z.string().min(1),
     status: z.string().min(1).optional(),
     phase: z.string().min(1).optional(),
@@ -79,8 +74,8 @@ export const productListItemSchema = z
     reviewer_actor_id: z.string().min(1).optional(),
     qa_owner_actor_id: z.string().min(1).optional(),
     release_owner_actor_id: z.string().min(1).optional(),
-    parent: productObjectRefSchema.optional(),
-    related: z.array(productObjectRefSchema).default([]),
+    parent: productQueryObjectRefSchema.optional(),
+    related: z.array(productQueryObjectRefSchema).default([]),
     revision_state: z
       .object({
         current_revision_id: z.string().min(1).optional(),
@@ -89,43 +84,10 @@ export const productListItemSchema = z
       })
       .strict()
       .optional(),
-    package_state: z
-      .object({
-        scope_ref: productObjectRefSchema,
-        spec_revision_id: z.string().min(1).optional(),
-        plan_revision_id: z.string().min(1).optional(),
-        surface_type: z.string().min(1).optional(),
-        blocked_reason: z.string().min(1).optional(),
-        last_run_session_id: z.string().min(1).optional(),
-        current_run_session_id: z.string().min(1).optional(),
-        current_review_packet_id: z.string().min(1).optional(),
-        integration_readiness: z.record(z.string(), z.unknown()).optional(),
-        required_test_gates: z.array(z.record(z.string(), z.unknown())).default([]),
-      })
-      .strict()
-      .optional(),
-    run_state: z
-      .object({
-        execution_package_id: z.string().min(1),
-        executor_type: z.string().min(1).optional(),
-        started_at: isoDateTimeSchema.optional(),
-        finished_at: isoDateTimeSchema.optional(),
-      })
-      .strict()
-      .optional(),
-    review_state: z
-      .object({
-        execution_package_id: z.string().min(1),
-        run_session_id: z.string().min(1),
-        decision: z.string().min(1).optional(),
-        changed_file_count: z.number().int().nonnegative().default(0),
-      })
-      .strict()
-      .optional(),
     release_state: z
       .object({
-        work_item_count: z.number().int().nonnegative().default(0),
-        execution_package_count: z.number().int().nonnegative().default(0),
+        source_object_count: z.number().int().nonnegative().default(0),
+        delivery_evidence_count: z.number().int().nonnegative().default(0),
         rollout_complete: z.boolean().default(false),
         rollback_complete: z.boolean().default(false),
         observation_complete: z.boolean().default(false),
@@ -165,7 +127,7 @@ export const pipelineIntegrationReadinessSchema = z
     dependency_blockers: z.array(z.string().min(1)).default([]),
     contract_mock_readiness: z.array(z.string().min(1)).default([]),
     environment_requirements: z.array(z.string().min(1)).default([]),
-    waiting_package_refs: z.array(productObjectRefSchema).default([]),
+    waiting_package_refs: z.array(productQueryObjectRefSchema).default([]),
   })
   .strict();
 export type PipelineIntegrationReadiness = z.infer<typeof pipelineIntegrationReadinessSchema>;

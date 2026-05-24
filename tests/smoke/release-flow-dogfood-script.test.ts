@@ -67,7 +67,7 @@ describe('release flow dogfood script helpers', () => {
       'Release approval or override approval',
       'Release observing/close',
       'Release cockpit query',
-      'Release replay redaction',
+      'Release public evidence redaction',
       'Release observation backlink projection',
       'Durable local reset',
       'Strict local_codex run',

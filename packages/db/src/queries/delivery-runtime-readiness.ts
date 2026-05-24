@@ -73,7 +73,7 @@ const blockerMessages: Record<DeliveryRunReadinessBlockerCode, { message: string
 };
 
 const packageHref = (executionPackage: ExecutionPackage): string | undefined =>
-  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`;
+  executionPackage.execution_id === undefined ? undefined : `/executions/${executionPackage.execution_id}`;
 
 const blocker = (code: DeliveryRunReadinessBlockerCode, executionPackage: ExecutionPackage): DeliveryRunReadinessBlocker => {
   const href = packageHref(executionPackage);

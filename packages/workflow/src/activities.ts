@@ -101,11 +101,33 @@ export interface PlanRevisionRecord {
   summary: string;
 }
 
+export interface ExecutionPlanRecord {
+  id: string;
+  development_plan_item_id: string;
+  status: 'draft' | 'in_review' | 'approved' | 'changes_requested' | 'stale' | 'blocked';
+  current_revision_id?: string;
+  approved_revision_id?: string;
+  approved_by_actor_id?: string;
+}
+
+export interface ExecutionPlanRevisionRecord {
+  id: string;
+  execution_plan_id: string;
+  development_plan_item_id: string;
+  based_on_spec_revision_id: string;
+  revision_number: number;
+  summary: string;
+}
+
 export interface ExecutionPackageRecord {
   id: string;
   work_item_id: string;
+  development_plan_item_id?: string;
+  execution_id?: string;
   spec_id: string;
   spec_revision_id: string;
+  execution_plan_id?: string;
+  execution_plan_revision_id?: string;
   plan_id: string;
   plan_revision_id: string;
   project_id: string;
@@ -241,6 +263,8 @@ export interface PackageExecutionRepository {
   listSpecRevisions(specId: string): Promise<SpecRevisionRecord[]>;
   getPlan(planId: string): Promise<PlanRecord | undefined>;
   listPlanRevisions(planId: string): Promise<PlanRevisionRecord[]>;
+  getExecutionPlan(executionPlanId: string): Promise<ExecutionPlanRecord | undefined>;
+  getExecutionPlanRevision(executionPlanRevisionId: string): Promise<ExecutionPlanRevisionRecord | undefined>;
   listProjectRepos(projectId: string): Promise<ProjectRepoRecord[]>;
 
   saveExecutionPackage(executionPackage: ExecutionPackageRecord): Promise<void>;
@@ -391,6 +415,12 @@ const assertApproved = (record: SpecRecord | PlanRecord, description: string): v
   }
 };
 
+const assertApprovedExecutionPlan = (record: ExecutionPlanRecord, description: string): void => {
+  if (record.status !== 'approved' || record.approved_revision_id === undefined || record.approved_by_actor_id === undefined) {
+    throw new Error(`${description} is not approved`);
+  }
+};
+
 const assertCurrentRevision = (input: {
   objectType: 'spec' | 'plan';
   executionPackageId: string;
@@ -402,6 +432,84 @@ const assertCurrentRevision = (input: {
       `ExecutionPackage ${input.executionPackageId} ${input.objectType}_revision_id ${input.packageRevisionId} is not current approved revision ${input.currentRevisionId ?? 'none'}`,
     );
   }
+};
+
+const itemScopedPlanRevisionForPackage = async (
+  repository: PackageExecutionRepository,
+  executionPackage: ExecutionPackageRecord,
+): Promise<PlanRevisionRecord> => {
+  const executionPlanRevisionId = assertFound(
+    executionPackage.execution_plan_revision_id,
+    `ExecutionPackage ${executionPackage.id} execution_plan_revision_id`,
+  );
+  const executionPlanRevision = assertFound(
+    await repository.getExecutionPlanRevision(executionPlanRevisionId),
+    `ExecutionPlanRevision ${executionPlanRevisionId}`,
+  );
+  const executionPlan = assertFound(
+    await repository.getExecutionPlan(executionPlanRevision.execution_plan_id),
+    `ExecutionPlan ${executionPlanRevision.execution_plan_id}`,
+  );
+
+  assertApprovedExecutionPlan(executionPlan, `ExecutionPlan ${executionPlan.id}`);
+  if (executionPackage.execution_plan_id !== undefined && executionPackage.execution_plan_id !== executionPlan.id) {
+    throw new Error(
+      `ExecutionPackage ${executionPackage.id} execution_plan_id ${executionPackage.execution_plan_id} does not match ExecutionPlan ${executionPlan.id}`,
+    );
+  }
+  if (
+    executionPackage.development_plan_item_id !== undefined &&
+    executionPlanRevision.development_plan_item_id !== executionPackage.development_plan_item_id
+  ) {
+    throw new Error(
+      `ExecutionPackage ${executionPackage.id} execution_plan_revision_id ${executionPlanRevision.id} does not belong to DevelopmentPlanItem ${executionPackage.development_plan_item_id}`,
+    );
+  }
+  if (executionPlan.development_plan_item_id !== executionPlanRevision.development_plan_item_id) {
+    throw new Error(
+      `ExecutionPlanRevision ${executionPlanRevision.id} does not belong to ExecutionPlan ${executionPlan.id} item ${executionPlan.development_plan_item_id}`,
+    );
+  }
+  if (
+    executionPlan.current_revision_id !== executionPlanRevision.id ||
+    executionPlan.approved_revision_id !== executionPlanRevision.id
+  ) {
+    throw new Error(
+      `ExecutionPackage ${executionPackage.id} execution_plan_revision_id ${executionPlanRevision.id} is not current approved ExecutionPlan revision ${executionPlan.current_revision_id ?? 'none'}`,
+    );
+  }
+  if (executionPlanRevision.based_on_spec_revision_id !== executionPackage.spec_revision_id) {
+    throw new Error(
+      `ExecutionPackage ${executionPackage.id} execution_plan_revision_id ${executionPlanRevision.id} is not based on package SpecRevision ${executionPackage.spec_revision_id}`,
+    );
+  }
+
+  return {
+    id: executionPlanRevision.id,
+    plan_id: executionPlan.id,
+    work_item_id: executionPackage.work_item_id,
+    revision_number: executionPlanRevision.revision_number,
+    summary: executionPlanRevision.summary,
+  };
+};
+
+const legacyPlanRevisionForPackage = async (
+  repository: PackageExecutionRepository,
+  executionPackage: ExecutionPackageRecord,
+): Promise<PlanRevisionRecord> => {
+  const plan = assertFound(await repository.getPlan(executionPackage.plan_id), `Plan ${executionPackage.plan_id}`);
+  assertApproved(plan, `Plan ${plan.id}`);
+  assertCurrentRevision({
+    objectType: 'plan',
+    executionPackageId: executionPackage.id,
+    packageRevisionId: executionPackage.plan_revision_id,
+    currentRevisionId: plan.current_revision_id,
+  });
+
+  return assertFound(
+    (await repository.listPlanRevisions(plan.id)).find((revision) => revision.id === executionPackage.plan_revision_id),
+    `PlanRevision ${executionPackage.plan_revision_id}`,
+  );
 };
 
 const latestRequestedChanges = (reviewPackets: ReviewPacketRecord[]): RunSpec['review_context'] => {
@@ -435,31 +543,23 @@ export const loadRunContext = async (
   );
   const workItem = assertFound(await repository.getWorkItem(executionPackage.work_item_id), `WorkItem ${executionPackage.work_item_id}`);
   const spec = assertFound(await repository.getSpec(executionPackage.spec_id), `Spec ${executionPackage.spec_id}`);
-  const plan = assertFound(await repository.getPlan(executionPackage.plan_id), `Plan ${executionPackage.plan_id}`);
 
   assertApproved(spec, `Spec ${spec.id}`);
-  assertApproved(plan, `Plan ${plan.id}`);
   assertCurrentRevision({
     objectType: 'spec',
     executionPackageId: executionPackage.id,
     packageRevisionId: executionPackage.spec_revision_id,
     currentRevisionId: spec.current_revision_id,
   });
-  assertCurrentRevision({
-    objectType: 'plan',
-    executionPackageId: executionPackage.id,
-    packageRevisionId: executionPackage.plan_revision_id,
-    currentRevisionId: plan.current_revision_id,
-  });
 
   const specRevision = assertFound(
     (await repository.listSpecRevisions(spec.id)).find((revision) => revision.id === executionPackage.spec_revision_id),
     `SpecRevision ${executionPackage.spec_revision_id}`,
   );
-  const planRevision = assertFound(
-    (await repository.listPlanRevisions(plan.id)).find((revision) => revision.id === executionPackage.plan_revision_id),
-    `PlanRevision ${executionPackage.plan_revision_id}`,
-  );
+  const planRevision =
+    executionPackage.execution_plan_revision_id === undefined
+      ? await legacyPlanRevisionForPackage(repository, executionPackage)
+      : await itemScopedPlanRevisionForPackage(repository, executionPackage);
   const projectRepo = assertFound(
     (await repository.listProjectRepos(executionPackage.project_id)).find(
       (repo) => repo.repo_id === executionPackage.repo_id && repo.status === 'active',

@@ -22,8 +22,6 @@ import {
 } from './delivery-runtime-readiness';
 import {
   generatePackagesAction,
-  generatePlanDraftAction,
-  generateSpecDraftAction,
   laneTarget,
   markPackageReadyAction,
   navigateAction,
@@ -217,19 +215,20 @@ const specPlanItem = async (
   item: SpecPlan,
   workItem: WorkItem,
 ): Promise<ProductLaneProjectionItem> => {
-  const objectType = item.entity_type;
+  const objectType: ProductObjectType = item.entity_type === 'spec' ? 'spec' : 'execution_plan';
   const [revision, decisions] = await Promise.all([
     item.current_revision_id === undefined
       ? undefined
       : item.entity_type === 'spec'
         ? repository.getSpecRevision(item.current_revision_id)
         : repository.getPlanRevision(item.current_revision_id),
-    repository.listDecisionsForObject(objectType, item.id),
+    repository.listDecisionsForObject(item.entity_type, item.id),
   ]);
   const approvalActorIds = uniqueStrings([
     item.approved_by_actor_id,
     ...decisions.flatMap((decision) => [decision.actor_id, decision.decided_by_actor_id]),
   ]);
+  const artifactHref = await specPlanProductHref(repository, item, workItem);
 
   return itemBase(
     {
@@ -241,7 +240,7 @@ const specPlanItem = async (
       projectId: workItem.project_id,
       updatedAt: item.updated_at,
       workItem,
-      surfaceType: objectType,
+      surfaceType: item.entity_type === 'spec' ? 'spec' : 'execution_plan',
       phase: item.entity_type,
       status: item.gate_state,
       gateState: item.gate_state,
@@ -249,17 +248,21 @@ const specPlanItem = async (
       actorIdValues: approvalActorIds,
       blocked: item.gate_state === 'changes_requested',
     },
-    [openObjectAction(laneId, objectType, item.id, `Open ${objectType === 'spec' ? 'Spec' : 'Plan'}`, `/${objectType}s/${item.id}`)],
+    [openObjectAction(laneId, objectType, item.id, `Open ${objectType === 'spec' ? 'Spec' : 'Execution Plan'}`, artifactHref)],
   );
 };
+
+const executionObjectIdForPackage = (executionPackage: ExecutionPackage): string =>
+  executionPackage.execution_id ?? executionPackage.id;
 
 const packageItem = (
   laneId: ProductLaneId,
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
 ): ProductLaneProjectionItem => {
-  const packageHref = taskPackageHref(executionPackage);
-  const actions = packageHref === undefined ? [] : [openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', packageHref)];
+  const packageHref = executionPackageProductHref(executionPackage);
+  const executionObjectId = executionObjectIdForPackage(executionPackage);
+  const actions = packageHref === undefined ? [] : [openObjectAction(laneId, 'execution', executionObjectId, 'Open Execution', packageHref)];
 
   if (executionPackage.phase === 'draft' || executionPackage.gate_state === 'changes_requested') {
     actions.unshift(
@@ -271,7 +274,7 @@ const packageItem = (
         scopeRef: workItemScopeRef(workItem),
         packageId: executionPackage.id,
         expectedPackageVersion: executionPackage.version,
-        ...(packageHref === undefined ? {} : { target: objectTarget('execution_package', executionPackage.id, packageHref) }),
+        ...(packageHref === undefined ? {} : { target: objectTarget('execution', executionObjectId, packageHref) }),
       }),
     );
   }
@@ -285,7 +288,7 @@ const packageItem = (
         label: 'Run package',
         scopeRef: workItemScopeRef(workItem),
         packageId: executionPackage.id,
-        ...(packageHref === undefined ? {} : { target: objectTarget('execution_package', executionPackage.id, packageHref) }),
+        ...(packageHref === undefined ? {} : { target: objectTarget('execution', executionObjectId, packageHref) }),
       }),
     );
   }
@@ -295,12 +298,12 @@ const packageItem = (
       id: executionPackage.id,
       laneId,
       title: executionPackage.objective,
-      object: { type: 'execution_package', id: executionPackage.id },
+      object: { type: 'execution', id: executionObjectId },
       parent: workItemRef(workItem),
       projectId: executionPackage.project_id,
       updatedAt: executionPackage.updated_at,
       workItem,
-      surfaceType: 'execution_package',
+      surfaceType: 'execution',
       phase: executionPackage.phase,
       status: executionPackage.gate_state,
       gateState: executionPackage.gate_state,
@@ -319,18 +322,19 @@ const packageReadOnlyItem = (
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
 ): ProductLaneProjectionItem => {
-  const packageHref = taskPackageHref(executionPackage);
+  const packageHref = executionPackageProductHref(executionPackage);
+  const executionObjectId = executionObjectIdForPackage(executionPackage);
   return itemBase(
     {
       id: executionPackage.id,
       laneId,
       title: executionPackage.objective,
-      object: { type: 'execution_package', id: executionPackage.id },
+      object: { type: 'execution', id: executionObjectId },
       parent: workItemRef(workItem),
       projectId: executionPackage.project_id,
       updatedAt: executionPackage.updated_at,
       workItem,
-      surfaceType: 'execution_package',
+      surfaceType: 'execution',
       phase: executionPackage.phase,
       status: executionPackage.gate_state,
       gateState: executionPackage.gate_state,
@@ -340,7 +344,7 @@ const packageReadOnlyItem = (
       qaOwnerActorId: executionPackage.qa_owner_actor_id,
       blocked: executionPackage.activity_state === 'blocked' || executionPackage.blocked_reason !== undefined,
     },
-    packageHref === undefined ? [] : [openObjectAction(laneId, 'execution_package', executionPackage.id, 'Open Package', packageHref)],
+    packageHref === undefined ? [] : [openObjectAction(laneId, 'execution', executionObjectId, 'Open Execution', packageHref)],
   );
 };
 
@@ -350,33 +354,44 @@ const reviewPacketItem = (
   executionPackage: ExecutionPackage,
   workItem: WorkItem,
 ): ProductLaneProjectionItem => {
-  const reviewHref = taskReviewHref(executionPackage, reviewPacket.id);
+  const reviewHref = reviewPacketProductHref(executionPackage);
+  const executionObjectId = executionObjectIdForPackage(executionPackage);
   return itemBase(
     {
       id: reviewPacket.id,
       laneId,
       title: reviewPacket.summary ?? executionPackage.objective,
-      object: { type: 'review_packet', id: reviewPacket.id },
-      parent: { type: 'execution_package', id: executionPackage.id, title: executionPackage.objective },
+      object: { type: 'code_review_handoff', id: reviewPacket.id },
+      parent: { type: 'execution', id: executionObjectId, title: executionPackage.objective },
       projectId: executionPackage.project_id,
       updatedAt: reviewPacket.updated_at,
       workItem,
-      surfaceType: 'review_packet',
+      surfaceType: 'code_review_handoff',
       phase: executionPackage.phase,
       status: reviewPacket.status,
       resolution: reviewPacket.decision,
       reviewerActorId: reviewPacket.reviewer_actor_id,
       blocked: reviewPacket.requested_changes.length > 0,
     },
-    reviewHref === undefined ? [] : [openObjectAction(laneId, 'review_packet', reviewPacket.id, 'Open Review', reviewHref)],
+    reviewHref === undefined ? [] : [openObjectAction(laneId, 'code_review_handoff', reviewPacket.id, 'Open Review', reviewHref)],
   );
 };
 
-const taskPackageHref = (executionPackage: ExecutionPackage) =>
-  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/packages/${executionPackage.id}`;
+const executionPackageProductHref = (executionPackage: ExecutionPackage) =>
+  executionPackage.execution_id === undefined ? undefined : `/executions/${executionPackage.execution_id}`;
 
-const taskReviewHref = (executionPackage: ExecutionPackage, reviewPacketId: string) =>
-  executionPackage.task_id === undefined ? undefined : `/tasks/${executionPackage.task_id}/reviews/${reviewPacketId}`;
+const reviewPacketProductHref = (executionPackage: ExecutionPackage) =>
+  executionPackage.execution_id === undefined ? undefined : `/executions/${executionPackage.execution_id}`;
+
+const specPlanProductHref = async (repository: DeliveryRepository, item: SpecPlan, workItem: WorkItem): Promise<string> => {
+  if (item.development_plan_item_id === undefined) {
+    return workItemHref(workItem);
+  }
+  const developmentPlanItem = await repository.getDevelopmentPlanItem(item.development_plan_item_id);
+  return developmentPlanItem === undefined
+    ? workItemHref(workItem)
+    : `/development-plans/${developmentPlanItem.development_plan_id}/items/${developmentPlanItem.id}`;
+};
 
 const releaseItem = async (
   repository: DeliveryRepository,

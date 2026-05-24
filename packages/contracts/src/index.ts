@@ -1,4 +1,5 @@
 export * from './api.js';
+export * from './ai-project-management.js';
 export * from './attachments.js';
 export * from './executor.js';
 export * from './markdown-document.js';

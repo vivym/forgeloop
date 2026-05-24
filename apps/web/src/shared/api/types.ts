@@ -27,7 +27,6 @@ import type {
   releaseListQuerySchema,
   RequirementDetail,
   RequestReleaseChangesRequest,
-  TaskDetail,
   TechDebtDetail,
   WorkItemCockpitResponse,
   CreateWorkItemRequest,
@@ -50,10 +49,15 @@ export type {
   AttachmentVisibility,
   BugDetail,
   BugListItem,
+  BoundarySummary,
+  BrainstormingSession,
   BoardCard,
+  CodeReviewHandoff,
   CloseReleaseRequest,
   CreateReleaseEvidenceRequest,
   CreateReleaseRequest,
+  DevelopmentPlan,
+  DevelopmentPlanItem,
   EvidenceChainItem,
   EvidenceChainObjectRef,
   EvidenceChainRedactionReason,
@@ -72,6 +76,7 @@ export type {
   OverrideApproveReleaseRequest,
   PatchReleaseRequest,
   PublicReleaseSummary as ReleaseSummary,
+  ProductObjectRef,
   ReleaseActorCommandRequest,
   ReleaseReadinessDetail,
   ReleaseBlocker,
@@ -87,10 +92,11 @@ export type {
   RequestReleaseChangesRequest,
   RequirementDetail,
   RequirementListItem,
-  TaskDetail,
-  TaskListItem,
+  SourceObjectRef,
   TechDebtDetail,
   TechDebtListItem,
+  Execution,
+  QaHandoff,
   MyWorkQueueItem,
   ProductAction,
   ProductActionTarget,
@@ -334,29 +340,6 @@ export interface RunOperatorCommandResponse {
 
 export type RequestedChange = NonNullable<WorkItemCockpitResponse['review_packets'][number]['requested_changes']>[number];
 export type ReviewPacket = WorkItemCockpitResponse['review_packets'][number];
-
-export interface TaskPackageEvidence {
-  object_ref: ObjectRef;
-  task_ref: ObjectRef;
-  href: string;
-  package: ExecutionPackage;
-}
-
-export interface TaskRunEvidence {
-  object_ref: ObjectRef;
-  task_ref: ObjectRef;
-  package_ref: ObjectRef;
-  href: string;
-  run_session: RunSession;
-}
-
-export interface TaskReviewEvidence {
-  object_ref: ObjectRef;
-  task_ref: ObjectRef;
-  package_ref: ObjectRef;
-  href: string;
-  review_packet: ReviewPacket;
-}
 
 export interface TimelineEntry {
   id: string;

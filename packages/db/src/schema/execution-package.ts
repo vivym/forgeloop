@@ -9,6 +9,7 @@ import {
   timestampColumn,
 } from './_shared';
 import { actors } from './actor';
+import { executions } from './execution-supervision';
 
 export type RequiredTestGateSpec = Record<string, unknown>;
 
@@ -16,8 +17,12 @@ export const execution_packages = pgTable('execution_packages', {
   id: uuid('id').primaryKey().defaultRandom(),
   taskId: uuid('task_id'),
   workItemId: uuid('work_item_id').notNull(),
+  developmentPlanItemId: uuid('development_plan_item_id'),
+  executionId: uuid('execution_id').references(() => executions.id),
   specId: uuid('spec_id').notNull(),
   specRevisionId: uuid('spec_revision_id').notNull(),
+  executionPlanId: uuid('execution_plan_id'),
+  executionPlanRevisionId: uuid('execution_plan_revision_id'),
   planId: uuid('plan_id').notNull(),
   planRevisionId: uuid('plan_revision_id').notNull(),
   projectId: uuid('project_id').notNull(),

@@ -3,7 +3,7 @@
 import { cleanup } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { boardCards, projectId, reviewPacket, runSession, taskListItem } from './fixtures/product-data';
+import { developmentPlan, developmentPlanItem, reviewPacket } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('board, reports, and release readiness routes', () => {
@@ -11,47 +11,32 @@ describe('board, reports, and release readiness routes', () => {
     const screen = await renderRoute('/board');
 
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
-    for (const label of ['Requirement', 'Initiative', 'Tech Debt', 'Task', 'Bug', 'Spec', 'Plan', 'Release']) {
+    for (const label of ['Requirement', 'Initiative', 'Tech Debt', 'Development Plan Item', 'Bug', 'Release']) {
       expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
     }
-  });
-
-  it('does not render runtime evidence objects as board cards', async () => {
-    const screen = await renderRoute('/board', {
-      apiOverrides: {
-        [`GET /query/board?project_id=${projectId}&limit=100`]: {
-          items: [
-            ...boardCards,
-            {
-              id: 'board:runtime-package',
-              object_ref: { type: 'execution_package', id: 'pkg-runtime', title: 'Runtime package card' },
-              title: 'Runtime package card',
-              column_id: 'active',
-              status: 'ready',
-              blocked: false,
-              href: '/tasks/task-1/packages/pkg-runtime',
-            },
-          ],
-        },
-      },
-    });
-
-    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
-    expect(screen.queryByText('Runtime package card')).toBeNull();
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toContain(
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+    );
   });
 
   it('shows release readiness by typed object and scoped evidence', async () => {
     const screen = await renderRoute('/releases/release-web-product');
 
     expect(await screen.findByRole('heading', { name: /release readiness/i })).toBeTruthy();
-    for (const label of ['Initiative', 'Requirement', 'Tech Debt', 'Task', 'Bug']) {
+    for (const label of ['Initiative', 'Requirement', 'Tech Debt', 'Development Plan Item', 'Bug']) {
       expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
     }
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toContain(
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+    );
     const evidenceHrefs = screen
-      .getAllByRole('link', { name: 'Open task-scoped evidence' })
+      .getAllByRole('link', { name: 'Open execution evidence' })
       .map((link) => link.getAttribute('href'));
-    expect(evidenceHrefs).toContain(`/tasks/${taskListItem.id}/reviews/${reviewPacket.id}`);
-    expect(evidenceHrefs).toContain(`/tasks/${taskListItem.id}/runs/${runSession.id}`);
+    expect(evidenceHrefs).toContain(
+      `/reports?development_plan_item_id=${developmentPlanItem.id}&code_review_handoff_id=${reviewPacket.id}`,
+    );
+    expect(evidenceHrefs).toContain(`/board?development_plan_item_id=${developmentPlanItem.id}`);
+    expect(document.body.textContent).not.toContain('/tasks/');
     expect(document.body.textContent).not.toContain('/packages/');
   });
 
@@ -62,11 +47,15 @@ describe('board, reports, and release readiness routes', () => {
       ['/reports/quality', 'Quality'],
       ['/reports/release-readiness', 'Release Readiness'],
       ['/reports/observation', 'Observation'],
-      ['/reports/replay', 'Replay'],
+      ['/reports?report=replay', 'Reports'],
     ] as const) {
       const screen = await renderRoute(route);
 
       expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
+      if (route.includes('report=replay')) {
+        expect(screen.getByText(/lifecycle replay evidence context/i)).toBeTruthy();
+        expect(document.body.innerHTML).not.toContain('/reports/replay');
+      }
       cleanup();
     }
   });

@@ -18,6 +18,7 @@ import {
   project_repo_status_values,
   project_repos,
   projects,
+  qa_handoffs,
   release_evidences,
   release_execution_packages,
   release_work_items,
@@ -57,6 +58,19 @@ import {
   codex_worker_registrations,
   codex_worker_session_nonces,
   command_idempotency_records,
+  boundary_summaries,
+  boundary_summary_revisions,
+  brainstorming_sessions,
+  code_review_handoffs,
+  context_manifests,
+  development_plan_revisions,
+  development_plan_item_revisions,
+  development_plan_items,
+  development_plan_source_links,
+  development_plans,
+  executions,
+  execution_plan_revisions,
+  execution_plans,
   execution_package_generation_packages,
   execution_package_generation_runs,
   manual_path_hold_idempotency_records,
@@ -97,6 +111,20 @@ const requiredTables = {
   manual_path_holds,
   manual_path_hold_idempotency_records,
   command_idempotency_records,
+  context_manifests,
+  development_plans,
+  development_plan_revisions,
+  development_plan_source_links,
+  development_plan_items,
+  development_plan_item_revisions,
+  brainstorming_sessions,
+  boundary_summaries,
+  boundary_summary_revisions,
+  execution_plans,
+  execution_plan_revisions,
+  executions,
+  code_review_handoffs,
+  qa_handoffs,
   execution_package_generation_runs,
   execution_package_generation_packages,
   automation_action_runs,
@@ -188,7 +216,11 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'actors',
         'attachments',
         'artifacts',
+        'code_review_handoffs',
         'command_idempotency_records',
+        'boundary_summaries',
+        'boundary_summary_revisions',
+        'brainstorming_sessions',
         'codex_credential_bindings',
         'codex_credential_binding_versions',
         'codex_launch_leases',
@@ -202,11 +234,20 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'codex_worker_bootstrap_tokens',
         'codex_worker_registrations',
         'codex_worker_session_nonces',
+        'context_manifests',
         'decisions',
+        'development_plan_item_revisions',
+        'development_plan_items',
+        'development_plan_revisions',
+        'development_plan_source_links',
+        'development_plans',
+        'execution_plan_revisions',
+        'execution_plans',
         'execution_package_dependencies',
         'execution_package_generation_packages',
         'execution_package_generation_runs',
         'execution_packages',
+        'executions',
         'object_events',
         'manual_path_holds',
         'manual_path_hold_idempotency_records',
@@ -215,6 +256,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'plans',
         'project_repos',
         'projects',
+        'qa_handoffs',
         'release_evidences',
         'release_execution_packages',
         'release_work_items',
@@ -425,6 +467,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(plans, 'id')).toBe('PgUUID');
     expect(columnType(plan_revisions, 'id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'id')).toBe('PgUUID');
+    expect(columnType(execution_packages, 'executionId')).toBe('PgUUID');
     expect(columnType(run_sessions, 'id')).toBe('PgUUID');
     expect(columnType(review_packets, 'id')).toBe('PgUUID');
     expect(columnType(artifacts, 'id')).toBe('PgUUID');
@@ -481,6 +524,22 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(work_items, 'intake_context')).toBe('PgJsonb');
     expect(columnType(work_items, 'narrative_markdown')).toBe('PgText');
     expect(Object.keys(getTableColumns(work_items))).not.toContain('ownerActorId');
+    expect(columnType(development_plan_revisions, 'id')).toBe('PgUUID');
+    expect(columnType(development_plan_revisions, 'development_plan_id')).toBe('PgUUID');
+    expect(columnType(development_plan_revisions, 'source_refs')).toBe('PgJsonb');
+    expect(columnType(development_plan_revisions, 'item_refs')).toBe('PgJsonb');
+    expect(columnType(development_plan_revisions, 'generation_state')).toBe('PgText');
+    expect(columnNotNull(development_plan_revisions, 'revisionNumber')).toBe(true);
+    expect(
+      hasUniqueIndex(development_plan_revisions, 'development_plan_revisions_plan_revision_unique', [
+        'development_plan_id',
+        'revision_number',
+      ]),
+    ).toBe(true);
+    expect(columnType(boundary_summary_revisions, 'brainstorming_session_revision_id')).toBe('PgUUID');
+    expect(columnNotNull(boundary_summary_revisions, 'brainstormingSessionRevisionId')).toBe(true);
+    expect(columnType(boundary_summary_revisions, 'development_plan_item_revision_id')).toBe('PgUUID');
+    expect(columnNotNull(boundary_summary_revisions, 'developmentPlanItemRevisionId')).toBe(true);
     expect(columnType(execution_packages, 'task_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'owner_actor_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'reviewer_actor_id')).toBe('PgUUID');
@@ -612,6 +671,52 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(review_packets, 'reviewed_by_actor_id', column(actors, 'id'))).toBe(true);
     expect(hasForeignKey(spec_revisions, 'author_actor_id', column(actors, 'id'))).toBe(true);
     expect(hasForeignKey(plan_revisions, 'author_actor_id', column(actors, 'id'))).toBe(true);
+  });
+
+  it('defines AI-native planning graph foreign keys and immutable revision indexes', () => {
+    expect(hasForeignKey(development_plans, 'project_id', column(projects, 'id'))).toBe(true);
+    expect(hasForeignKey(development_plan_items, 'development_plan_id', column(development_plans, 'id'))).toBe(true);
+    expect(hasForeignKey(development_plan_source_links, 'development_plan_id', column(development_plans, 'id'))).toBe(true);
+    expect(hasForeignKey(brainstorming_sessions, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
+    expect(hasForeignKey(boundary_summaries, 'brainstorming_session_id', column(brainstorming_sessions, 'id'))).toBe(true);
+    expect(hasForeignKey(boundary_summary_revisions, 'boundary_summary_id', column(boundary_summaries, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_plans, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_plan_revisions, 'execution_plan_id', column(execution_plans, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_plan_revisions, 'based_on_spec_revision_id', column(spec_revisions, 'id'))).toBe(true);
+    expect(hasForeignKey(executions, 'execution_plan_revision_id', column(execution_plan_revisions, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_packages, 'execution_id', column(executions, 'id'))).toBe(true);
+    expect(hasForeignKey(code_review_handoffs, 'execution_id', column(executions, 'id'))).toBe(true);
+    expect(hasForeignKey(code_review_handoffs, 'execution_plan_revision_id', column(execution_plan_revisions, 'id'))).toBe(true);
+    expect(hasForeignKey(qa_handoffs, 'code_review_handoff_id', column(code_review_handoffs, 'id'))).toBe(true);
+    expect(hasForeignKey(qa_handoffs, 'execution_id', column(executions, 'id'))).toBe(true);
+    for (const columnName of [
+      'interrupt_history',
+      'continuation_history',
+      'pr_refs',
+      'diff_refs',
+      'test_evidence_refs',
+    ]) {
+      expect(columnType(executions, columnName)).toBe('PgJsonb');
+      expect(columnNotNull(executions, columnName)).toBe(true);
+    }
+    expect(
+      hasUniqueIndex(development_plan_item_revisions, 'dpi_revisions_item_revision_unique', [
+        'development_plan_item_id',
+        'revision_number',
+      ]),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(boundary_summary_revisions, 'boundary_revisions_summary_revision_unique', [
+        'boundary_summary_id',
+        'revision_number',
+      ]),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(execution_plan_revisions, 'execution_plan_revisions_plan_revision_unique', [
+        'execution_plan_id',
+        'revision_number',
+      ]),
+    ).toBe(true);
   });
 
   it('defines release link composite primary keys and durable foreign keys', () => {

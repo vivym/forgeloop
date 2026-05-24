@@ -16,6 +16,7 @@ import {
   type MDXEditorMethods,
 } from '@mdxeditor/editor';
 import '@mdxeditor/editor/style.css';
+import { Code2, FileImage, History, Paperclip, Save } from 'lucide-react';
 import type {
   AttachmentRef,
   EditableObjectRef,
@@ -252,17 +253,21 @@ export function ForgeMarkdownEditor({
     >
       <div aria-label="Editor toolbar" className="flex min-w-0 flex-wrap items-center gap-2">
         <button
-          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-secondary hover:bg-surface-muted"
+          aria-label={sourceMode ? 'Rich mode' : 'Source mode'}
+          className={toolbarButtonClass}
           onClick={() => setSourceMode((current) => !current)}
           type="button"
         >
+          <Code2 aria-hidden="true" className="size-4" />
           {sourceMode ? 'Rich text' : 'Source'}
         </button>
         <button
-          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-secondary hover:bg-surface-muted"
+          aria-label="Insert image"
+          className={toolbarButtonClass}
           onClick={() => imageInputRef.current?.click()}
           type="button"
         >
+          <FileImage aria-hidden="true" className="size-4" />
           Insert image
         </button>
         <label className="sr-only">
@@ -276,33 +281,46 @@ export function ForgeMarkdownEditor({
           />
         </label>
         <button
+          aria-controls="forge-markdown-editor-attachments"
           aria-expanded={showAttachments}
-          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-secondary hover:bg-surface-muted"
+          aria-label="Attachments"
+          className={toolbarButtonClass}
           onClick={() => setShowAttachments((current) => !current)}
           type="button"
         >
+          <Paperclip aria-hidden="true" className="size-4" />
           Attachments
         </button>
         <button
+          aria-controls="forge-markdown-editor-revisions"
           aria-expanded={showRevisions}
-          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-secondary hover:bg-surface-muted"
+          aria-label="Revisions - revision history"
+          className={toolbarButtonClass}
           onClick={() => setShowRevisions((current) => !current)}
           type="button"
         >
-          Revision history
+          <History aria-hidden="true" className="size-4" />
+          Revisions
         </button>
         <button
-          className="ml-auto rounded-md border border-primary bg-primary px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="Save"
+          className={`${toolbarButtonClass} ml-auto border-primary bg-primary font-semibold text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50`}
           disabled={onSave === undefined}
           onClick={() => void handleSave()}
           type="button"
         >
+          <Save aria-hidden="true" className="size-4" />
           Save
         </button>
       </div>
 
       {showAttachments ? (
-        <div className="rounded-md border border-border bg-surface-muted p-2" role="menu">
+        <div
+          aria-label="Attachments"
+          className="rounded-md border border-border bg-surface-muted p-2"
+          id="forge-markdown-editor-attachments"
+          role="menu"
+        >
           {attachments.length === 0 ? <p className="text-sm text-text-muted">No attachments</p> : null}
           {attachments.map((attachment) => (
             <button
@@ -345,6 +363,7 @@ export function ForgeMarkdownEditor({
 
       {showRevisions ? (
         <RevisionHistory
+          id="forge-markdown-editor-revisions"
           revisions={revisions}
           selected={diffSelection}
           onSelectDiff={(before, after) => setDiffSelection({ before, after })}
@@ -355,6 +374,9 @@ export function ForgeMarkdownEditor({
     </section>
   );
 }
+
+const toolbarButtonClass =
+  'inline-flex min-h-9 items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-secondary hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface';
 
 function RouteTransitionGuard({ enabled }: { enabled: boolean }) {
   const inRouterContext = useInRouterContext();
@@ -392,16 +414,18 @@ function EditorFeedback({ issues, uploadError }: { issues: MarkdownValidationIss
 }
 
 function RevisionHistory({
+  id,
   onSelectDiff,
   revisions,
   selected,
 }: {
+  id: string;
   revisions: MarkdownRevision[];
   selected: { before: MarkdownRevision; after: MarkdownRevision } | undefined;
   onSelectDiff: (before: MarkdownRevision, after: MarkdownRevision) => void;
 }) {
   return (
-    <aside className="rounded-md border border-border bg-surface-muted p-3">
+    <aside aria-label="Revisions" className="rounded-md border border-border bg-surface-muted p-3" id={id}>
       <div className="flex flex-col gap-2">
         {revisions.slice(1).map((revision, index) => {
           const before = revisions[index];

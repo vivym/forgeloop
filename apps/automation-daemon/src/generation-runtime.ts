@@ -5,14 +5,10 @@ import {
   CodexGenerationError,
   createCodexGenerationRuntime,
   validateGeneratedPackageDraftSet,
-  validateGeneratedPlanDraft,
-  validateGeneratedSpecDraft,
   type CodexGenerationResult,
   type CodexGenerationRuntime,
   type CodexGenerationRuntimeTaskInput,
   type GeneratedPackageDraftSetV1,
-  type GeneratedPlanDraftV1,
-  type GeneratedSpecDraftV1,
 } from '@forgeloop/codex-runtime';
 import {
   codexCanonicalDigest,
@@ -25,13 +21,9 @@ import {
 
 import type { AutomationDaemonConfig } from './config.js';
 
-type GenerationTaskKind = 'spec_draft' | 'plan_draft' | 'package_drafts';
-type GenerationInput = Parameters<CodexGenerationRuntime['generateSpecDraft']>[0];
-type GeneratedForTask<TTaskKind extends GenerationTaskKind> = TTaskKind extends 'spec_draft'
-  ? GeneratedSpecDraftV1
-  : TTaskKind extends 'plan_draft'
-    ? GeneratedPlanDraftV1
-    : GeneratedPackageDraftSetV1;
+type GenerationTaskKind = 'package_drafts';
+type GenerationInput = Parameters<CodexGenerationRuntime['generatePackageDrafts']>[0];
+type GeneratedForTask<TTaskKind extends GenerationTaskKind> = GeneratedPackageDraftSetV1;
 
 type RemoteRuntimeJobProjection = {
   id?: unknown;
@@ -129,7 +121,7 @@ export interface CreateLeasedDockerCodexGenerationRuntimeOptions {
     taskKind: GenerationTaskKind;
     workerId: string;
     sessionToken: string;
-    generationInput: Parameters<CodexGenerationRuntime['generateSpecDraft']>[0];
+    generationInput: GenerationInput;
   }): Promise<{ leaseId: string; launchToken: string }>;
   innerRuntimeFactory?: (config: Parameters<typeof createCodexGenerationRuntime>[0]) => CodexGenerationRuntime;
   runtimeConfig?: Partial<Parameters<typeof createCodexGenerationRuntime>[0]>;
@@ -143,8 +135,8 @@ export const createLeasedDockerCodexGenerationRuntime = (
 
   const generateWithLease = async <T>(
     taskKind: GenerationTaskKind,
-    input: Parameters<CodexGenerationRuntime['generateSpecDraft']>[0],
-    call: (runtime: CodexGenerationRuntime, input: Parameters<CodexGenerationRuntime['generateSpecDraft']>[0]) => Promise<T>,
+    input: GenerationInput,
+    call: (runtime: CodexGenerationRuntime, input: GenerationInput) => Promise<T>,
   ): Promise<T> => {
     if (input.orchestration === undefined) {
       throw new Error('codex_launch_lease_denied');
@@ -186,8 +178,12 @@ export const createLeasedDockerCodexGenerationRuntime = (
   };
 
   return {
-    generateSpecDraft: (input) => generateWithLease('spec_draft', input, (runtime, taskInput) => runtime.generateSpecDraft(taskInput)),
-    generatePlanDraft: (input) => generateWithLease('plan_draft', input, (runtime, taskInput) => runtime.generatePlanDraft(taskInput)),
+    async generateSpecDraft() {
+      throw new Error('unsupported_generation_task');
+    },
+    async generatePlanDraft() {
+      throw new Error('unsupported_generation_task');
+    },
     generatePackageDrafts: (input) =>
       generateWithLease('package_drafts', input, (runtime, taskInput) => runtime.generatePackageDrafts(taskInput)),
   };
@@ -306,12 +302,7 @@ const validateRemoteTerminalResult = <TTaskKind extends GenerationTaskKind>(
     throw new CodexGenerationError('generated_output_schema_invalid', { retryable: false });
   }
 
-  const generated =
-    taskKind === 'spec_draft'
-      ? validateGeneratedSpecDraft(result.generated_payload)
-      : taskKind === 'plan_draft'
-        ? validateGeneratedPlanDraft(result.generated_payload)
-        : validateGeneratedPackageDraftSet(result.generated_payload);
+  const generated = validateGeneratedPackageDraftSet(result.generated_payload);
 
   return {
     taskKind,
@@ -641,8 +632,12 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
   };
 
   return {
-    generateSpecDraft: (input) => generateWithRemoteJob('spec_draft', input),
-    generatePlanDraft: (input) => generateWithRemoteJob('plan_draft', input),
+    async generateSpecDraft() {
+      throw new Error('unsupported_generation_task');
+    },
+    async generatePlanDraft() {
+      throw new Error('unsupported_generation_task');
+    },
     generatePackageDrafts: (input) => generateWithRemoteJob('package_drafts', input),
   };
 };

@@ -1,41 +1,28 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
-import { normalizeProductWorkItemRegistryQuery } from './query-keys';
 import { z } from 'zod';
 import {
   boardCardSchema,
   bugDetailSchema,
   bugListItemSchema,
+  executionSchema,
   initiativeDetailSchema,
   initiativeListItemSchema,
   myWorkQueueItemSchema,
   pipelineResponseSchema,
   productLaneResponseSchema,
-  productListResponseSchema,
-  deliveryRunReadinessResponseSchema,
   releaseReadinessDetailSchema,
   requirementDetailSchema,
   requirementListItemSchema,
-  taskDetailSchema,
-  taskListItemSchema,
   techDebtDetailSchema,
   techDebtListItemSchema,
-  workItemCockpitResponseSchema,
 } from '@forgeloop/contracts';
 import type {
-  CockpitResponse,
-  DeliveryRunReadiness,
   ListProductQuery,
   PipelineResponse,
   ProductLaneId,
   ProductLaneQuery,
   ProductLaneResponse,
-  ProductListResponse,
   ReleaseCockpitResponse,
-  ReviewPacket,
-  TaskPackageEvidence,
-  TaskReviewEvidence,
-  TaskRunEvidence,
-  TimelineEntry,
 } from './types';
 
 export interface ProjectQuery {
@@ -45,10 +32,6 @@ export interface ProjectQuery {
 export type ProductRegistryQuery = ListProductQuery;
 export type MyWorkQuery = Pick<ListProductQuery, 'project_id' | 'actor_id' | 'cursor' | 'limit'>;
 export type ProjectManagementListQuery = Pick<ListProductQuery, 'project_id' | 'status' | 'risk' | 'driver_actor_id' | 'cursor' | 'limit'>;
-export type ProductWorkItemRegistryQuery = Pick<
-  ListProductQuery,
-  'project_id' | 'actor_id' | 'status' | 'phase' | 'gate_state' | 'resolution' | 'risk' | 'driver_actor_id' | 'blocked' | 'stale' | 'cursor' | 'limit'
->;
 
 const queryString = (params: object = {}) => {
   const searchParams = new URLSearchParams();
@@ -61,6 +44,16 @@ const queryString = (params: object = {}) => {
   return encoded ? `?${encoded}` : '';
 };
 
+const projectManagementListQueryString = (query: ProjectManagementListQuery) =>
+  queryString({
+    project_id: query.project_id,
+    status: query.status,
+    risk: query.risk,
+    driver_actor_id: query.driver_actor_id,
+    cursor: query.cursor,
+    limit: query.limit,
+  });
+
 const projectManagementQueueResponseSchema = z
   .object({
     items: z.array(myWorkQueueItemSchema),
@@ -71,9 +64,56 @@ const projectManagementQueueResponseSchema = z
 const requirementListResponseSchema = z.object({ items: z.array(requirementListItemSchema) }).passthrough();
 const initiativeListResponseSchema = z.object({ items: z.array(initiativeListItemSchema) }).passthrough();
 const techDebtListResponseSchema = z.object({ items: z.array(techDebtListItemSchema) }).passthrough();
-const taskListResponseSchema = z.object({ items: z.array(taskListItemSchema) }).passthrough();
 const bugListResponseSchema = z.object({ items: z.array(bugListItemSchema) }).passthrough();
-const boardResponseSchema = z.object({ items: z.array(boardCardSchema) }).passthrough();
+const boardResponseSchema = z
+  .object({
+    items: z.array(boardCardSchema),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
+const dashboardResponseSchema = z
+  .object({
+    project_id: z.string(),
+    sections: z.array(z.record(z.string(), z.unknown())).default([]),
+    next_actions: z.array(z.record(z.string(), z.unknown())).default([]),
+    report_links: z.array(z.record(z.string(), z.unknown())).default([]),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
+const developmentPlanListResponseSchema = z
+  .object({
+    items: z.array(z.record(z.string(), z.unknown())),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
+const developmentPlanProjectionSchema = z.record(z.string(), z.unknown());
+const developmentPlanItemProjectionSchema = z.record(z.string(), z.unknown());
+const developmentPlanItemRevisionListSchema = z.array(
+  z
+    .object({
+      id: z.string(),
+      development_plan_item_id: z.string(),
+      revision_number: z.number().int().positive(),
+    })
+    .passthrough(),
+);
+const boundarySummaryRevisionListSchema = z.array(
+  z
+    .object({
+      id: z.string(),
+      boundary_summary_id: z.string(),
+      revision_number: z.number().int().positive(),
+    })
+    .passthrough(),
+);
+const specExecutionPlanQueueResponseSchema = z.object({ items: z.array(z.record(z.string(), z.unknown())) }).passthrough();
+const executionDetailResponseSchema = z.union([executionSchema, z.object({}).strict()]);
+const aiNativeQueueResponseSchema = z
+  .object({
+    items: z.array(z.record(z.string(), z.unknown())),
+    degraded_sources: z.array(z.string()).default([]),
+  })
+  .passthrough();
 const reportResponseSchema = z
   .object({
     id: z.string(),
@@ -87,13 +127,45 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
   const { request } = createApiContext(options);
 
   const productMethods = {
+    getDashboard: async (query: ProductRegistryQuery) =>
+      dashboardResponseSchema.parse(await request<unknown>(`/query/dashboard${queryString(query)}`)),
+    listDevelopmentPlans: async (query: ProductRegistryQuery) =>
+      developmentPlanListResponseSchema.parse(await request<unknown>(`/query/development-plans${queryString(query)}`)),
+    getDevelopmentPlan: async (developmentPlanId: string) =>
+      developmentPlanProjectionSchema.parse(await request<unknown>(`/query/development-plans/${encodeURIComponent(developmentPlanId)}`)),
+    getDevelopmentPlanItem: async (developmentPlanId: string, itemId: string) =>
+      developmentPlanItemProjectionSchema.parse(
+        await request<unknown>(
+          `/query/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}`,
+        ),
+      ),
+    listDevelopmentPlanItemRevisions: async (developmentPlanId: string, itemId: string) =>
+      developmentPlanItemRevisionListSchema.parse(
+        await request<unknown>(
+          `/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}/revisions`,
+        ),
+      ),
+    compareDevelopmentPlanItemRevisions: async (developmentPlanId: string, itemId: string, query: { base_revision_id: string; compare_revision_id: string }) =>
+      developmentPlanItemProjectionSchema.parse(
+        await request<unknown>(
+          `/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}/revisions/compare${queryString(query)}`,
+        ),
+      ),
+    listBoundarySummaryRevisions: async (boundarySummaryId: string) =>
+      boundarySummaryRevisionListSchema.parse(
+        await request<unknown>(`/boundary-summaries/${encodeURIComponent(boundarySummaryId)}/revisions`),
+      ),
+    compareBoundarySummaryRevisions: async (boundarySummaryId: string, query: { base_revision_id: string; compare_revision_id: string }) =>
+      developmentPlanItemProjectionSchema.parse(
+        await request<unknown>(`/boundary-summaries/${encodeURIComponent(boundarySummaryId)}/revisions/compare${queryString(query)}`),
+      ),
     listMyWork: async (query: MyWorkQuery) =>
       projectManagementQueueResponseSchema.parse(
         await request<unknown>(`/query/my-work${queryString(query)}`),
       ),
     listRequirements: async (query: ProjectManagementListQuery) =>
       requirementListResponseSchema.parse(
-        await request<unknown>(`/query/requirements${queryString(query)}`),
+        await request<unknown>(`/query/requirements${projectManagementListQueryString(query)}`),
       ),
     getRequirement: async (requirementId: string) =>
       requirementDetailSchema.parse(
@@ -101,7 +173,7 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       ),
     listInitiatives: async (query: ProjectManagementListQuery) =>
       initiativeListResponseSchema.parse(
-        await request<unknown>(`/query/initiatives${queryString(query)}`),
+        await request<unknown>(`/query/initiatives${projectManagementListQueryString(query)}`),
       ),
     getInitiative: async (initiativeId: string) =>
       initiativeDetailSchema.parse(
@@ -109,30 +181,14 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       ),
     listTechDebt: async (query: ProjectManagementListQuery) =>
       techDebtListResponseSchema.parse(
-        await request<unknown>(`/query/tech-debt${queryString(query)}`),
+        await request<unknown>(`/query/tech-debt${projectManagementListQueryString(query)}`),
       ),
     getTechDebt: async (techDebtId: string) =>
       techDebtDetailSchema.parse(
         await request<unknown>(`/query/tech-debt/${encodeURIComponent(techDebtId)}`),
       ),
-    listTasks: async (query: ProjectManagementListQuery) =>
-      taskListResponseSchema.parse(await request<unknown>(`/query/tasks${queryString(query)}`)),
-    getTask: async (taskId: string) =>
-      taskDetailSchema.parse(await request<unknown>(`/query/tasks/${encodeURIComponent(taskId)}`)),
-    getTaskPackageEvidence: (taskId: string, packageId: string) =>
-      request<TaskPackageEvidence>(
-        `/query/tasks/${encodeURIComponent(taskId)}/packages/${encodeURIComponent(packageId)}`,
-      ),
-    getTaskRunEvidence: (taskId: string, runSessionId: string) =>
-      request<TaskRunEvidence>(
-        `/query/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runSessionId)}`,
-      ),
-    getTaskReviewEvidence: (taskId: string, reviewPacketId: string) =>
-      request<TaskReviewEvidence>(
-        `/query/tasks/${encodeURIComponent(taskId)}/reviews/${encodeURIComponent(reviewPacketId)}`,
-      ),
     listBugs: async (query: ProjectManagementListQuery) =>
-      bugListResponseSchema.parse(await request<unknown>(`/query/bugs${queryString(query)}`)),
+      bugListResponseSchema.parse(await request<unknown>(`/query/bugs${projectManagementListQueryString(query)}`)),
     getBug: async (bugId: string) =>
       bugDetailSchema.parse(await request<unknown>(`/query/bugs/${encodeURIComponent(bugId)}`)),
     listBoardCards: async (query: ProductRegistryQuery) =>
@@ -145,24 +201,16 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       ),
     getPipeline: async (query: ProjectQuery) =>
       pipelineResponseSchema.parse(await request<unknown>(`/query/pipeline${queryString(query)}`)) as PipelineResponse,
-    listWorkItems: async (query: ProductWorkItemRegistryQuery) =>
-      productListResponseSchema.parse(
-        await request<unknown>(`/query/work-items${queryString(normalizeProductWorkItemRegistryQuery(query))}`),
-      ) as ProductListResponse,
-    listSpecs: async (query: ProductRegistryQuery) =>
-      productListResponseSchema.parse(await request<unknown>(`/query/specs${queryString(query)}`)) as ProductListResponse,
-    listPlans: async (query: ProductRegistryQuery) =>
-      productListResponseSchema.parse(await request<unknown>(`/query/plans${queryString(query)}`)) as ProductListResponse,
-    listPackages: async (query: ProductRegistryQuery) =>
-      productListResponseSchema.parse(
-        await request<unknown>(`/query/execution-packages${queryString(query)}`),
-      ) as ProductListResponse,
-    listRuns: async (query: ProductRegistryQuery) =>
-      productListResponseSchema.parse(await request<unknown>(`/query/runs${queryString(query)}`)) as ProductListResponse,
-    listReviewPackets: async (query: ProductRegistryQuery) =>
-      productListResponseSchema.parse(await request<unknown>(`/query/review-packets${queryString(query)}`)) as ProductListResponse,
-    listReviews: (query: ProjectQuery) => request<ReviewPacket[]>(`/query/reviews${queryString(query)}`),
-    getReview: (reviewPacketId: string) => request<ReviewPacket>(`/query/reviews/${encodeURIComponent(reviewPacketId)}`),
+    listSpecExecutionPlanQueue: async (query: ProductRegistryQuery) =>
+      specExecutionPlanQueueResponseSchema.parse(await request<unknown>(`/query/specs-execution-plans${queryString(query)}`)),
+    listExecutions: async (query: ProductRegistryQuery) =>
+      aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/executions${queryString(query)}`)),
+    getExecution: async (executionId: string) =>
+      executionDetailResponseSchema.parse(await request<unknown>(`/query/executions/${encodeURIComponent(executionId)}`)),
+    listCodeReviewHandoffs: async (query: ProductRegistryQuery) =>
+      aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/code-review-handoffs${queryString(query)}`)),
+    listQaHandoffs: async (query: ProductRegistryQuery) =>
+      aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/qa-handoffs${queryString(query)}`)),
   };
 
   const api = {
@@ -172,28 +220,8 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
           await request<unknown>(`/query/product-lanes/${encodeURIComponent(laneId)}${queryString(query)}`),
         ),
       ) as ProductLaneResponse,
-    getWorkItemCockpit: async (workItemId: string, options: { lane?: ProductLaneId } = {}) =>
-      workItemCockpitResponseSchema.parse(
-        hardenManagerCockpitActions(
-          await request<unknown>(`/query/work-item-cockpit/${encodeURIComponent(workItemId)}${queryString(options)}`),
-        ),
-      ) as CockpitResponse,
-    getWorkItemReplay: (workItemId: string) =>
-      request<TimelineEntry[]>(`/query/replay/work_item/${encodeURIComponent(workItemId)}`),
-    getSpecReplay: (specId: string) => request<TimelineEntry[]>(`/query/replay/spec/${encodeURIComponent(specId)}`),
-    getPlanReplay: (planId: string) => request<TimelineEntry[]>(`/query/replay/plan/${encodeURIComponent(planId)}`),
-    getExecutionPackageReplay: (executionPackageId: string) =>
-      request<TimelineEntry[]>(`/query/replay/execution_package/${encodeURIComponent(executionPackageId)}`),
-    getExecutionPackageRuntimeReadiness: async (executionPackageId: string) =>
-      deliveryRunReadinessResponseSchema.parse(
-        await request<unknown>(`/query/execution-packages/${encodeURIComponent(executionPackageId)}/runtime-readiness`),
-      ) as DeliveryRunReadiness,
-    getReviewPacketReplay: (reviewPacketId: string) =>
-      request<TimelineEntry[]>(`/query/replay/review_packet/${encodeURIComponent(reviewPacketId)}`),
     getReleaseCockpit: (releaseId: string) =>
       request<ReleaseCockpitResponse>(`/query/release-cockpit/${encodeURIComponent(releaseId)}`),
-    getReleaseReplay: (releaseId: string) =>
-      request<TimelineEntry[]>(`/query/replay/release/${encodeURIComponent(releaseId)}`),
   };
 
   return Object.defineProperties(
@@ -203,23 +231,6 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
 }
 
 export type ForgeloopQueryApi = ReturnType<typeof createForgeloopQueryApi>;
-
-function hardenManagerCockpitActions(response: unknown): unknown {
-  if (!isRecord(response) || !isRecord(response.delivery_readiness) || response.delivery_readiness.active_lane !== 'manager') {
-    return response;
-  }
-
-  const rawActions = response.delivery_readiness.next_actions;
-  if (!Array.isArray(rawActions)) return response;
-
-  return {
-    ...response,
-    delivery_readiness: {
-      ...response.delivery_readiness,
-      next_actions: rawActions.flatMap((action) => hardenManagerAction(action)),
-    },
-  };
-}
 
 function hardenManagerProductLaneActions(response: unknown): unknown {
   if (!isRecord(response) || response.lane_id !== 'manager' || !Array.isArray(response.items)) {
@@ -266,17 +277,14 @@ function hardenManagerAction(action: unknown): unknown[] {
 
 function managerObjectActionLabel(objectType: unknown) {
   switch (objectType) {
-    case 'execution_package':
-      return 'Open package';
-    case 'run_session':
-      return 'Open run';
-    case 'review_packet':
-      return 'Open review';
+    case 'execution':
+      return 'Open execution';
+    case 'code_review_handoff':
+      return 'Open code review';
     case 'initiative':
     case 'requirement':
     case 'bug':
     case 'tech_debt':
-    case 'task':
       return 'Open item';
     default:
       return 'Open detail';

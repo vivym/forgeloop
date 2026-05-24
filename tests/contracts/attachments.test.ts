@@ -12,7 +12,7 @@ describe('attachment contracts', () => {
       id: 'att-1',
       owner_object_type: 'requirement',
       owner_object_id: 'req-1',
-      linked_object_refs: [{ type: 'task', id: 'task-1' }],
+      linked_object_refs: [{ type: 'development_plan_item', id: 'dpi-1', development_plan_id: 'dp-1' }],
       filename: 'checkout.png',
       content_type: 'image/png',
       size_bytes: 1200,

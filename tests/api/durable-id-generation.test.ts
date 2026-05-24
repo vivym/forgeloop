@@ -11,6 +11,7 @@ import {
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { actorClassHeaderName, actorHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
 import { InMemoryDeliveryRepository } from '../../packages/db/src';
+import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -105,62 +106,13 @@ describe('durable delivery object IDs', () => {
         })
         .expect(201)
     ).body;
-    const spec = (await request(server).post(`/work-items/${workItem.id}/specs`).send({}).expect(201)).body;
-    const specRevision = (
-      await request(server)
-        .post(`/specs/${spec.id}/revisions`)
-        .send({
-          summary: 'Durable spec',
-          content: 'Spec content',
-          background: 'Background',
-          goals: ['Goal'],
-          scope_in: ['In'],
-          scope_out: ['Out'],
-          acceptance_criteria: ['Accept'],
-          test_strategy_summary: 'Test',
-          author_actor_id: ownerActorId,
-        })
-        .expect(201)
-    ).body;
-    await request(server)
-      .post(`/specs/${spec.id}/submit-for-approval`)
-      .set(ownerHeaders)
-      .send({ actor_id: ownerActorId })
-      .expect(201);
-    await request(server)
-      .post(`/specs/${spec.id}/approve`)
-      .set(reviewerHeaders)
-      .send({ actor_id: reviewerActorId })
-      .expect(201);
-    const plan = (await request(server).post(`/work-items/${workItem.id}/plans`).send({}).expect(201)).body;
-    const planRevision = (
-      await request(server)
-        .post(`/plans/${plan.id}/revisions`)
-        .send({
-          summary: 'Durable plan',
-          content: 'Plan content',
-          implementation_summary: 'Implement',
-          split_strategy: 'One package',
-          dependency_order: [],
-          test_matrix: ['pnpm test'],
-          rollback_notes: 'Revert',
-          author_actor_id: ownerActorId,
-        })
-        .expect(201)
-    ).body;
-    await request(server)
-      .post(`/plans/${plan.id}/submit-for-approval`)
-      .set(ownerHeaders)
-      .send({ actor_id: ownerActorId })
-      .expect(201);
-    await request(server)
-      .post(`/plans/${plan.id}/approve`)
-      .set(reviewerHeaders)
-      .send({ actor_id: reviewerActorId })
-      .expect(201);
+    const { spec, specRevision, plan, planRevision } = await seedItemScopedSpecPlan(app, workItem.id, {
+      actorId: ownerActorId,
+      reviewerActorId,
+    });
     const executionPackage = (
       await request(server)
-        .post(`/plan-revisions/${planRevision.id}/execution-packages`)
+        .post(`/plan-revisions/${planRevision!.id}/execution-packages`)
         .send({
           repo_id: 'forgeloop-source',
           objective: 'Durable package',
@@ -203,8 +155,8 @@ describe('durable delivery object IDs', () => {
       workItem.id,
       spec.id,
       specRevision.id,
-      plan.id,
-      planRevision.id,
+      plan!.id,
+      planRevision!.id,
       executionPackage.id,
       run.run_session_id,
     ]) {

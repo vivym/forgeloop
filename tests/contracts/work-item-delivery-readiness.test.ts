@@ -11,25 +11,25 @@ const action = {
   id: 'open-package',
   lane_id: 'execution-owner',
   priority: 'primary',
-  label: 'Open Package',
+  label: 'Open Execution',
   enabled: true,
   kind: 'navigate',
-  target: { kind: 'object', object_type: 'execution_package', object_id: 'pkg-1', href: '/tasks/task-1/packages/pkg-1' },
+  target: { kind: 'object', object_type: 'execution', object_id: 'exec-1', href: '/executions/exec-1' },
 } as const;
 
 const commandAction = {
-  id: 'generate-spec-draft',
+  id: 'generate-packages',
   lane_id: 'execution-owner',
   priority: 'primary',
-  label: 'Generate Spec Draft',
+  label: 'Start execution',
   enabled: true,
   kind: 'command',
   command: {
-    type: 'generate_spec_draft',
-    object_type: 'spec',
-    object_id: 'spec-1',
+    type: 'generate_packages',
+    object_type: 'plan_revision',
+    object_id: 'plan-r1',
     scope_ref: { type: 'requirement', id: 'wi-1' },
-    spec_id: 'spec-1',
+    plan_revision_id: 'plan-r1',
   },
 } as const;
 
@@ -38,7 +38,7 @@ const stage = {
   label: 'Execution',
   state: 'passed',
   owner_lane: 'execution-owner',
-  object_refs: [{ object_type: 'execution_package', object_id: 'pkg-1', href: '/tasks/task-1/packages/pkg-1' }],
+  object_refs: [{ object_type: 'execution', object_id: 'exec-1', href: '/executions/exec-1' }],
   blockers: [],
   evidence_refs: [],
   primary_action: action,
@@ -554,12 +554,12 @@ describe('Work Item delivery readiness contracts', () => {
     );
   });
 
-  it('parses product package list state needed by delivery cockpit fixtures', () => {
+  it('rejects raw package list state from public product list items', () => {
     expect(
-      productListItemSchema.parse({
+      productListItemSchema.safeParse({
         id: 'pkg-1',
-        object: { type: 'execution_package', id: 'pkg-1', title: 'Package 1' },
-        title: 'Package 1',
+        object: { type: 'execution', id: 'exec-1', title: 'Execution 1' },
+        title: 'Execution 1',
         package_state: {
           scope_ref: { type: 'requirement', id: 'wi-1' },
           spec_revision_id: 'spec-r1',
@@ -571,7 +571,7 @@ describe('Work Item delivery readiness contracts', () => {
         },
         counts: {},
         updated_at: '2026-05-20T00:00:00.000Z',
-      }),
-    ).toMatchObject({ package_state: { current_run_session_id: 'run-1', current_review_packet_id: 'review-1' } });
+      }).success,
+    ).toBe(false);
   });
 });

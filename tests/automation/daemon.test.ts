@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { codexCanonicalDigest } from '../../packages/domain/src/index';
-import { createCodexGenerationRuntime } from '../../packages/codex-runtime/src/index';
+import { createCodexGenerationRuntime, createFakePackageDraftSet } from '../../packages/codex-runtime/src/index';
 import { generationPlanningForDaemon, loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
 import {
@@ -11,8 +11,7 @@ import {
 } from '../../apps/automation-daemon/src/generation-runtime';
 import {
   projectRuntimeSnapshotIdempotencyKey,
-  type AutomationGenerationWorkItemContextV1,
-  type AutomationGenerationPlanContextV1,
+  type AutomationGenerationPackageContextV1,
   AutomationHttpError,
   AutomationActionResponse,
   AutomationActionRunRecord,
@@ -21,7 +20,6 @@ import {
   CompleteActionInput,
   FailActionInput,
   GatePendingActionInput,
-  type EnsureSpecDraftCommandInput,
   NextAction,
   RuntimeSnapshot,
   WorkflowPolicyDigestStatus,
@@ -50,8 +48,6 @@ const baseSnapshot = (overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot
       daemonInternalLocalPath: '/workspace/repo-1',
     },
   ],
-  workItemsRequiringSpec: [],
-  workItemsRequiringPlan: [],
   planRevisionsRequiringPackages: [],
   runEnqueueDisabledPackages: [],
   activeHolds: [],
@@ -68,40 +64,22 @@ const validEnv = () => ({
   FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS: ['/workspace'].join(':'),
 });
 
-const claimedPlanAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord => ({
-  id: 'action-run-1',
-  actionType: 'ensure_plan_draft',
-  targetObjectType: 'work_item',
-  targetObjectId: 'work-item-1',
-  targetRevisionId: 'spec-revision-1',
+const claimedPackageAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord => ({
+  id: 'package-action-run-1',
+  actionType: 'ensure_package_drafts',
+  targetObjectType: 'plan_revision',
+  targetObjectId: 'plan-revision-1',
+  targetRevisionId: 'default:plan-revision-1',
   targetStatus: 'approved',
-  idempotencyKey: 'action-run-1-idempotency',
+  idempotencyKey: 'package-action-run-1-idempotency',
   automationScope: repoScope,
   automationSettingsVersion: 3,
   capabilityFingerprint: 'capability-fingerprint-1',
   preconditionFingerprint: 'precondition-fingerprint-1',
   actionInputJson: {
-    work_item_id: 'work-item-1',
-    spec_revision_id: 'spec-revision-1',
+    plan_revision_id: 'plan-revision-1',
+    generation_key: 'default:plan-revision-1',
   },
-  status: 'running',
-  attempt: 1,
-  claimToken: 'claim-token-1',
-  ...overrides,
-});
-
-const claimedSpecAction = (overrides: Partial<AutomationActionRunRecord> = {}): AutomationActionRunRecord => ({
-  id: 'spec-action-run-1',
-  actionType: 'ensure_spec_draft',
-  targetObjectType: 'work_item',
-  targetObjectId: 'work-item-1',
-  targetStatus: 'triage',
-  idempotencyKey: 'spec-action-run-1-idempotency',
-  automationScope: repoScope,
-  automationSettingsVersion: 3,
-  capabilityFingerprint: 'capability-fingerprint-1',
-  preconditionFingerprint: 'precondition-fingerprint-1',
-  actionInputJson: { work_item_id: 'work-item-1' },
   status: 'running',
   attempt: 1,
   claimToken: 'claim-token-1',
@@ -145,7 +123,7 @@ const packageTarget = () => ({
 class FakeDaemonClient implements AutomationDaemonClient {
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
   snapshot: RuntimeSnapshot = baseSnapshot();
-  actionToClaim: AutomationActionRunRecord | null = claimedPlanAction();
+  actionToClaim: AutomationActionRunRecord | null = claimedPackageAction();
 
   async runtimeSnapshot(): Promise<RuntimeSnapshot> {
     this.calls.push({ method: 'runtimeSnapshot', args: [] });
@@ -154,7 +132,7 @@ class FakeDaemonClient implements AutomationDaemonClient {
 
   async createOrReplayAction(action: NextAction): Promise<AutomationActionResponse> {
     this.calls.push({ method: 'createOrReplayAction', args: [action] });
-    return { action: { ...claimedPlanAction(), status: 'pending' } };
+    return { action: { ...claimedPackageAction(), status: 'pending' } };
   }
 
   async claimNextAction(input: ClaimNextActionInput): Promise<AutomationActionResponse> {
@@ -182,59 +160,26 @@ class FakeDaemonClient implements AutomationDaemonClient {
     return { action: this.actionToClaim === null ? null : { ...this.actionToClaim, status: 'failed' } };
   }
 
-  async ensurePlanDraft(workItemId: string, input: Record<string, unknown>): Promise<unknown> {
-    this.calls.push({ method: 'ensurePlanDraft', args: [workItemId, input] });
-    return { status: 'created' };
-  }
-
   async ensurePackageDrafts(planRevisionId: string, input: Record<string, unknown>): Promise<unknown> {
     this.calls.push({ method: 'ensurePackageDrafts', args: [planRevisionId, input] });
     return { status: 'created' };
   }
 
-  async specDraftGenerationContext(
-    workItemId: string,
-    input: Record<string, unknown>,
-  ): Promise<AutomationGenerationWorkItemContextV1> {
-    this.calls.push({ method: 'specDraftGenerationContext', args: [workItemId, input] });
+  async packageDraftsGenerationContext(
+    planRevisionId: string,
+    input: { generationKey: string; actionRunId: string; claimToken: string },
+  ): Promise<AutomationGenerationPackageContextV1> {
+    this.calls.push({ method: 'packageDraftsGenerationContext', args: [planRevisionId, input] });
     return {
-      context_version: 'generation_context.work_item.v1',
-      action_run_id: 'spec-action-run-1',
-      work_item: {
-        id: workItemId,
-        project_id: 'project-1',
-        title: 'Spec draft work item',
-        goal: 'Ship the spec draft path',
-        success_criteria: ['Draft spec exists'],
-        risk: 'low',
-        priority: 'high',
-        kind: 'initiative',
-      },
-      repos: [
-        {
-          project_id: 'project-1',
-          repo_id: 'repo-1',
-          default_branch: 'main',
-          policy_status: 'missing',
-        },
-      ],
-    };
-  }
-
-  async planDraftGenerationContext(
-    workItemId: string,
-    input: { specRevisionId: string; actionRunId: string; claimToken: string },
-  ): Promise<AutomationGenerationPlanContextV1> {
-    this.calls.push({ method: 'planDraftGenerationContext', args: [workItemId, input] });
-    return {
-      context_version: 'generation_context.plan.v1',
+      context_version: 'generation_context.package.v1',
       action_run_id: input.actionRunId,
+      generation_key: input.generationKey,
       work_item: {
-        id: workItemId,
+        id: 'work-item-1',
         project_id: 'project-1',
-        title: 'Plan draft work item',
-        goal: 'Ship the plan draft path',
-        success_criteria: ['Draft plan exists'],
+        title: 'Package draft work item',
+        goal: 'Ship the package draft path',
+        success_criteria: ['Draft packages exist'],
         risk: 'low',
         priority: 'high',
         kind: 'initiative',
@@ -253,6 +198,19 @@ class FakeDaemonClient implements AutomationDaemonClient {
         test_strategy_summary: 'Run daemon and API command tests.',
         structured_document: { source: 'daemon-test' },
       },
+      plan_revision: {
+        id: planRevisionId,
+        plan_id: 'plan-1',
+        summary: 'Approved plan',
+        content: 'Approved plan content',
+        implementation_summary: 'Implement packages',
+        split_strategy: 'Split into API and tests',
+        dependency_order: ['api', 'tests'],
+        test_matrix: ['pnpm test'],
+        risk_mitigations: ['Keep command boundary narrow.'],
+        rollback_notes: 'Revert generated packages.',
+        structured_document: { source: 'daemon-test' },
+      },
       repos: [
         {
           project_id: 'project-1',
@@ -263,12 +221,13 @@ class FakeDaemonClient implements AutomationDaemonClient {
           parser_version: parserVersion,
         },
       ],
+      package_policy: {
+        allowed_repo_ids: ['repo-1'],
+        path_policy_summary: 'apps/control-plane-api/** and tests/** only',
+        required_check_policy_summary: 'pnpm test',
+        source_mutation_policy_default: 'path_policy_scoped',
+      },
     };
-  }
-
-  async ensureSpecDraft(workItemId: string, input: EnsureSpecDraftCommandInput): Promise<unknown> {
-    this.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
-    return { status: 'created', spec_id: 'spec-1', spec_revision_id: 'spec-revision-1' };
   }
 
   async requestManualPathHold(input: Record<string, unknown>): Promise<unknown> {
@@ -299,24 +258,23 @@ const daemonOptions = (client: AutomationDaemonClient) => ({
 const generationPlanning = {
   mode: 'fake',
   tasks: {
-    spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-    plan_draft: { enabled: true, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
-    package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+    package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
   },
 } as const;
 
-const generatedRemoteSpec = () => ({
-  schema_version: 'spec_draft.v1' as const,
-  summary: 'Remote spec summary',
-  content: 'Remote spec content',
-  background: 'Remote background',
-  goals: ['Use remote runtime jobs'],
-  scope_in: ['remote worker execution'],
-  scope_out: ['direct CLI execution'],
-  acceptance_criteria: ['runtime job terminal result is consumed'],
-  risk_notes: ['none'],
-  test_strategy_summary: 'unit tests',
-});
+const generatedRemotePackageDrafts = () =>
+  ({
+    ...createFakePackageDraftSet({
+    generation_key: 'default:plan-revision-1',
+    plan_revision: { id: 'plan-revision-1', dependency_order: ['api'] },
+    repos: [{ repo_id: 'repo-1' }],
+    }).generated,
+    packages: createFakePackageDraftSet({
+      generation_key: 'default:plan-revision-1',
+      plan_revision: { id: 'plan-revision-1', dependency_order: ['api'] },
+      repos: [{ repo_id: 'repo-1' }],
+    }).generated.packages.map((pkg) => ({ ...pkg, allowed_paths: [], forbidden_paths: [] })),
+  });
 
 describe('automation daemon loop', () => {
   it('loads required config and path-list roots from the environment', () => {
@@ -373,6 +331,7 @@ describe('automation daemon loop', () => {
     const config = loadAutomationDaemonConfig({
       ...validEnv(),
       FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
+      FORGELOOP_CODEX_GENERATION_PACKAGE_DRAFTS_ENABLED: 'true',
       FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'unix:/tmp/forgeloop-codex.sock',
       FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
     });
@@ -401,30 +360,30 @@ describe('automation daemon loop', () => {
       },
       innerRuntimeFactory: () => ({
         generateSpecDraft: async () => {
-          throw new Error('generation failed');
+          throw new Error('unexpected');
         },
         generatePlanDraft: async () => {
           throw new Error('unexpected');
         },
         generatePackageDrafts: async () => {
-          throw new Error('unexpected');
+          throw new Error('generation failed');
         },
       }),
     });
 
     await expect(
-      runtime.generateSpecDraft({
+      runtime.generatePackageDrafts({
         actionRunId: 'action-run-1',
         projectId: 'project-1',
         repoIds: ['repo-1'],
         context: {},
-        promptVersion: 'spec.v1',
-        outputSchemaVersion: 'spec_draft.v1',
+        promptVersion: 'package-drafts.v1',
+        outputSchemaVersion: 'package_drafts.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_package_drafts',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-1',
@@ -463,47 +422,36 @@ describe('automation daemon loop', () => {
       innerRuntimeFactory: (config) => {
         seenConfigs.push(config);
         return {
-          generateSpecDraft: async () => ({
-            taskKind: 'spec_draft',
-            promptVersion: 'spec.v1',
-            outputSchemaVersion: 'spec_draft.v1',
-            generated: {
-              schema_version: 'spec_draft.v1',
-              summary: 'summary',
-              content: 'content',
-              background: 'background',
-              goals: [],
-              scope_in: [],
-              scope_out: [],
-              acceptance_criteria: [],
-              risk_notes: [],
-              test_strategy_summary: 'tests',
-            },
-            generationArtifacts: [],
-            publicSummary: 'generated',
-          }),
+          generateSpecDraft: async () => {
+            throw new Error('unexpected');
+          },
           generatePlanDraft: async () => {
             throw new Error('unexpected');
           },
-          generatePackageDrafts: async () => {
-            throw new Error('unexpected');
-          },
+          generatePackageDrafts: async () => ({
+            taskKind: 'package_drafts',
+            promptVersion: 'package-drafts.v1',
+            outputSchemaVersion: 'package_drafts.v1',
+            generated: generatedRemotePackageDrafts(),
+            generationArtifacts: [],
+            publicSummary: 'generated',
+          }),
         };
       },
     });
 
-    await runtime.generateSpecDraft({
+    await runtime.generatePackageDrafts({
       actionRunId: 'action-run-1',
       projectId: 'project-1',
       repoIds: ['repo-1'],
       context: {},
-      promptVersion: 'spec.v1',
-      outputSchemaVersion: 'spec_draft.v1',
+      promptVersion: 'package-drafts.v1',
+      outputSchemaVersion: 'package_drafts.v1',
       policyDigests: {},
       orchestration: {
         targetType: 'automation_action_run',
         actionRunId: 'action-run-1',
-        actionType: 'ensure_spec_draft',
+        actionType: 'ensure_package_drafts',
         actionAttempt: 1,
         claimToken: 'claim-token-1',
         preconditionFingerprint: 'precondition-1',
@@ -521,23 +469,14 @@ describe('automation daemon loop', () => {
     expect(closed).toEqual([{ status: 'succeeded', summary: 'generation complete' }]);
   });
 
-  it('executes Spec draft generation through a remote runtime job and writes through the command boundary', async () => {
+  it('executes Package draft generation through a remote runtime job and writes through the command boundary', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
-      workItemsRequiringSpec: [
-        {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetStatus: 'triage',
-          projectId: 'project-1',
-          repoId: 'repo-1',
-          automationScope: repoScope,
-        },
-      ],
+      planRevisionsRequiringPackages: [packageTarget()],
     });
-    client.actionToClaim = claimedSpecAction();
+    client.actionToClaim = claimedPackageAction();
     const remoteCalls: Array<{ method: string; args: unknown[] }> = [];
-    const spec = generatedRemoteSpec();
+    const spec = generatedRemotePackageDrafts();
     const specDigest = codexCanonicalDigest(spec);
     const runtime = createRemoteCodexGenerationRuntime({
       runtimeProfileId: 'profile-1',
@@ -580,13 +519,13 @@ describe('automation daemon loop', () => {
               terminal_status: 'succeeded',
               terminal_reason_code: 'codex_runtime_job_succeeded',
               terminal_result_json: {
-                task_kind: 'spec_draft',
-                prompt_version: 'spec-draft.remote.v1',
-                output_schema_version: 'spec_draft.v1',
+                task_kind: 'package_drafts',
+                prompt_version: 'package-drafts.remote.v1',
+                output_schema_version: 'package_drafts.v1',
                 generated_payload: spec,
                 generated_payload_digest: specDigest,
                 generation_artifacts: [],
-                public_summary: 'Remote runtime generated a spec.',
+                public_summary: 'Remote runtime generated package drafts.',
               },
             },
           };
@@ -602,9 +541,7 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
-          package_drafts: { enabled: false, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
+          package_drafts: { enabled: true, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
       generationRuntime: runtime,
@@ -622,12 +559,12 @@ describe('automation daemon loop', () => {
     expect(remoteCalls.find((call) => call.method === 'createRuntimeJob')?.args[0]).toMatchObject({
       target: {
         target_type: 'automation_action_run',
-        target_id: 'spec-action-run-1',
+        target_id: 'package-action-run-1',
         target_kind: 'generation',
         project_id: 'project-1',
         repo_id: 'repo-1',
       },
-      action_type: 'ensure_spec_draft',
+      action_type: 'ensure_package_drafts',
       action_attempt: 1,
       action_claim_token: 'claim-token-1',
       precondition_fingerprint: 'precondition-fingerprint-1',
@@ -638,10 +575,10 @@ describe('automation daemon loop', () => {
       },
       workspace_acquisition_json: {
         schema_version: 'codex_generation_workspace_acquisition.v1',
-        signed_context_json: expect.objectContaining({ context_version: 'generation_context.work_item.v1' }),
+        signed_context_json: expect.objectContaining({ context_version: 'generation_context.package.v1' }),
       },
     });
-    expect(client.calls.map((call) => call.method)).toContain('ensureSpecDraft');
+    expect(client.calls.map((call) => call.method)).toContain('ensurePackageDrafts');
     expect(client.calls.map((call) => call.method)).toContain('completeAction');
   });
 
@@ -678,18 +615,18 @@ describe('automation daemon loop', () => {
     });
 
     await expect(
-      runtime.generateSpecDraft({
+      runtime.generatePackageDrafts({
         actionRunId: 'spec-action-run-1',
         projectId: 'project-1',
         repoIds: ['repo-1'],
-        context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
-        outputSchemaVersion: 'spec_draft.v1',
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_package_drafts',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -741,14 +678,14 @@ describe('automation daemon loop', () => {
       actionRunId: 'spec-action-run-1',
       projectId: 'project-1',
       repoIds: ['repo-1'],
-      context: { context_version: 'generation_context.work_item.v1' },
-      promptVersion: 'spec-draft.remote.v1',
-      outputSchemaVersion: 'spec_draft.v1',
+      context: { context_version: 'generation_context.package.v1' },
+      promptVersion: 'package-drafts.remote.v1',
+      outputSchemaVersion: 'package_drafts.v1',
       policyDigests: {},
       orchestration: {
         targetType: 'automation_action_run' as const,
         actionRunId: 'spec-action-run-1',
-        actionType: 'ensure_spec_draft' as const,
+        actionType: 'ensure_package_drafts' as const,
         actionAttempt: 1,
         claimToken: 'claim-token-1',
         preconditionFingerprint: 'precondition-fingerprint-1',
@@ -757,9 +694,9 @@ describe('automation daemon loop', () => {
       },
     };
 
-    await expect(runtime.generateSpecDraft(input)).rejects.toMatchObject({ code: 'codex_app_server_unavailable' });
+    await expect(runtime.generatePackageDrafts(input)).rejects.toMatchObject({ code: 'codex_app_server_unavailable' });
     nowValue = '2026-05-23T00:01:00.000Z';
-    await expect(runtime.generateSpecDraft(input)).rejects.toMatchObject({ code: 'codex_app_server_unavailable' });
+    await expect(runtime.generatePackageDrafts(input)).rejects.toMatchObject({ code: 'codex_app_server_unavailable' });
 
     expect(createInputs).toHaveLength(2);
     expect(createInputs[1]).toMatchObject({
@@ -803,18 +740,18 @@ describe('automation daemon loop', () => {
     });
 
     await expect(
-      runtime.generateSpecDraft({
+      runtime.generatePackageDrafts({
         actionRunId: 'spec-action-run-1',
         projectId: 'project-1',
         repoIds: ['repo-1'],
-        context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
-        outputSchemaVersion: 'spec_draft.v1',
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_package_drafts',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -828,7 +765,7 @@ describe('automation daemon loop', () => {
   });
 
   it('rejects remote terminal generation artifact refs that were not issued for the runtime job', async () => {
-    const spec = generatedRemoteSpec();
+    const spec = generatedRemotePackageDrafts();
     const runtime = createRemoteCodexGenerationRuntime({
       runtimeProfileId: 'profile-1',
       credentialBindingId: 'credential-binding-1',
@@ -855,9 +792,9 @@ describe('automation daemon loop', () => {
             status: 'terminal',
             terminal_status: 'succeeded',
             terminal_result_json: {
-              task_kind: 'spec_draft',
-              prompt_version: 'spec-draft.remote.v1',
-              output_schema_version: 'spec_draft.v1',
+              task_kind: 'package_drafts',
+              prompt_version: 'package-drafts.remote.v1',
+              output_schema_version: 'package_drafts.v1',
               generated_payload: spec,
               generated_payload_digest: codexCanonicalDigest(spec),
               generation_artifacts: [
@@ -869,7 +806,7 @@ describe('automation daemon loop', () => {
                   internal_ref: 'artifact://codex-runtime-jobs/other-job/artifacts/invented',
                 },
               ],
-              public_summary: 'Remote runtime generated a spec.',
+              public_summary: 'Remote runtime generated package drafts.',
             },
           },
         }),
@@ -878,18 +815,18 @@ describe('automation daemon loop', () => {
     });
 
     await expect(
-      runtime.generateSpecDraft({
+      runtime.generatePackageDrafts({
         actionRunId: 'spec-action-run-1',
         projectId: 'project-1',
         repoIds: ['repo-1'],
-        context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
-        outputSchemaVersion: 'spec_draft.v1',
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_package_drafts',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -927,9 +864,9 @@ describe('automation daemon loop', () => {
             status: 'terminal',
             terminal_status: 'succeeded',
             terminal_result_json: {
-              task_kind: 'spec_draft',
-              prompt_version: 'spec-draft.remote.v1',
-              output_schema_version: 'spec_draft.v1',
+              task_kind: 'package_drafts',
+              prompt_version: 'package-drafts.remote.v1',
+              output_schema_version: 'package_drafts.v1',
               generated_payload: {
                 schema_version: 'generated_payload_ref.v1',
                 artifact: {
@@ -959,18 +896,18 @@ describe('automation daemon loop', () => {
     });
 
     await expect(
-      runtime.generateSpecDraft({
+      runtime.generatePackageDrafts({
         actionRunId: 'spec-action-run-1',
         projectId: 'project-1',
         repoIds: ['repo-1'],
-        context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
-        outputSchemaVersion: 'spec_draft.v1',
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_package_drafts',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1015,18 +952,18 @@ describe('automation daemon loop', () => {
     });
 
     await expect(
-      runtime.generateSpecDraft({
+      runtime.generatePackageDrafts({
         actionRunId: 'spec-action-run-1',
         projectId: 'project-1',
         repoIds: ['repo-1'],
-        context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
-        outputSchemaVersion: 'spec_draft.v1',
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_package_drafts',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1078,18 +1015,18 @@ describe('automation daemon loop', () => {
     });
 
     await expect(
-      runtime.generateSpecDraft({
+      runtime.generatePackageDrafts({
         actionRunId: 'spec-action-run-1',
         projectId: 'project-1',
         repoIds: ['repo-1'],
-        context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
-        outputSchemaVersion: 'spec_draft.v1',
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_package_drafts',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1144,18 +1081,18 @@ describe('automation daemon loop', () => {
     });
 
     await expect(
-      runtime.generateSpecDraft({
+      runtime.generatePackageDrafts({
         actionRunId: 'spec-action-run-1',
         projectId: 'project-1',
         repoIds: ['repo-1'],
-        context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
-        outputSchemaVersion: 'spec_draft.v1',
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_package_drafts',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1207,18 +1144,18 @@ describe('automation daemon loop', () => {
     });
 
     await expect(
-      runtime.generateSpecDraft({
+      runtime.generatePackageDrafts({
         actionRunId: 'spec-action-run-1',
         projectId: 'project-1',
         repoIds: ['repo-1'],
-        context: { context_version: 'generation_context.work_item.v1' },
-        promptVersion: 'spec-draft.remote.v1',
-        outputSchemaVersion: 'spec_draft.v1',
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
         policyDigests: {},
         orchestration: {
           targetType: 'automation_action_run',
           actionRunId: 'spec-action-run-1',
-          actionType: 'ensure_spec_draft',
+          actionType: 'ensure_package_drafts',
           actionAttempt: 1,
           claimToken: 'claim-token-1',
           preconditionFingerprint: 'precondition-fingerprint-1',
@@ -1233,26 +1170,17 @@ describe('automation daemon loop', () => {
     expect(cancelled[0]?.input).toMatchObject({ reason_code: 'codex_runtime_job_expired' });
   });
 
-  it('does not write a remote Spec draft when the command boundary rejects a stale action claim', async () => {
+  it('does not write a remote Package draft when the command boundary rejects a stale action claim', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
-      workItemsRequiringSpec: [
-        {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetStatus: 'triage',
-          projectId: 'project-1',
-          repoId: 'repo-1',
-          automationScope: repoScope,
-        },
-      ],
+      planRevisionsRequiringPackages: [packageTarget()],
     });
-    client.actionToClaim = claimedSpecAction();
-    client.ensureSpecDraft = async (workItemId, input) => {
-      client.calls.push({ method: 'ensureSpecDraft', args: [workItemId, input] });
+    client.actionToClaim = claimedPackageAction();
+    client.ensurePackageDrafts = async (workItemId, input) => {
+      client.calls.push({ method: 'ensurePackageDrafts', args: [workItemId, input] });
       throw new AutomationHttpError(409, { code: 'automation_action_claim_conflict' }, 'automation_action_claim_conflict');
     };
-    const spec = generatedRemoteSpec();
+    const spec = generatedRemotePackageDrafts();
     const runtime = createRemoteCodexGenerationRuntime({
       runtimeProfileId: 'profile-1',
       credentialBindingId: 'credential-binding-1',
@@ -1279,13 +1207,13 @@ describe('automation daemon loop', () => {
             status: 'terminal',
             terminal_status: 'succeeded',
             terminal_result_json: {
-              task_kind: 'spec_draft',
-              prompt_version: 'spec-draft.remote.v1',
-              output_schema_version: 'spec_draft.v1',
+              task_kind: 'package_drafts',
+              prompt_version: 'package-drafts.remote.v1',
+              output_schema_version: 'package_drafts.v1',
               generated_payload: spec,
               generated_payload_digest: codexCanonicalDigest(spec),
               generation_artifacts: [],
-              public_summary: 'Remote runtime generated a spec.',
+              public_summary: 'Remote runtime generated package drafts.',
             },
           },
         }),
@@ -1297,9 +1225,7 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
-          package_drafts: { enabled: false, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
+          package_drafts: { enabled: true, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
       generationRuntime: runtime,
@@ -1310,7 +1236,7 @@ describe('automation daemon loop', () => {
     expect(result).toMatchObject({
       executed: { status: 'failed', retryable: false, reasonCode: 'automation_action_claim_conflict' },
     });
-    expect(client.calls.map((call) => call.method)).toContain('ensureSpecDraft');
+    expect(client.calls.map((call) => call.method)).toContain('ensurePackageDrafts');
     expect(client.calls.map((call) => call.method)).toContain('failAction');
     expect(client.calls.map((call) => call.method)).not.toContain('completeAction');
   });
@@ -1318,18 +1244,9 @@ describe('automation daemon loop', () => {
   it('cancels a timed-out remote runtime job and blocks with public-safe runtime evidence', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
-      workItemsRequiringSpec: [
-        {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetStatus: 'triage',
-          projectId: 'project-1',
-          repoId: 'repo-1',
-          automationScope: repoScope,
-        },
-      ],
+      planRevisionsRequiringPackages: [packageTarget()],
     });
-    client.actionToClaim = claimedSpecAction();
+    client.actionToClaim = claimedPackageAction();
     const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
     const runtime = createRemoteCodexGenerationRuntime({
       runtimeProfileId: 'profile-1',
@@ -1363,9 +1280,7 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.remote.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.remote.v1', outputSchemaVersion: 'plan_draft.v1' },
-          package_drafts: { enabled: false, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
+          package_drafts: { enabled: true, promptVersion: 'package-drafts.remote.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
       generationRuntime: runtime,
@@ -1389,17 +1304,7 @@ describe('automation daemon loop', () => {
   it('fetches snapshot, loads policy digest, plans actions, creates/replays actions, claims and executes one action', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
-      workItemsRequiringPlan: [
-        {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetRevisionId: 'spec-revision-1',
-          targetStatus: 'approved',
-          projectId: 'project-1',
-          repoId: 'repo-1',
-          automationScope: repoScope,
-        },
-      ],
+      planRevisionsRequiringPackages: [packageTarget()],
     });
     const policyLoads: Array<{ repoRoot: string; allowedRepoRoots: string[]; parserVersion: string }> = [];
     const daemon = new AutomationDaemon({
@@ -1428,31 +1333,21 @@ describe('automation daemon loop', () => {
       'createOrReplayAction',
       'createOrReplayAction',
       'claimNextAction',
-      'planDraftGenerationContext',
-      'ensurePlanDraft',
+      'packageDraftsGenerationContext',
+      'ensurePackageDrafts',
       'completeAction',
     ]);
     const createdActions = client.calls
       .filter((call) => call.method === 'createOrReplayAction')
       .map((call) => (call.args[0] as NextAction).actionType);
-    expect(createdActions).toEqual(['ensure_plan_draft', 'project_runtime_snapshot']);
+    expect(createdActions).toEqual(['ensure_package_drafts', 'project_runtime_snapshot']);
     expect(JSON.stringify(client.calls)).not.toContain('enqueue');
   });
 
   it('suppresses Plan and Package draft planning when no generation config is provided', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
-      workItemsRequiringPlan: [
-        {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetRevisionId: 'spec-revision-1',
-          targetStatus: 'approved',
-          projectId: 'project-1',
-          repoId: 'repo-1',
-          automationScope: repoScope,
-        },
-      ],
+      planRevisionsRequiringPackages: [packageTarget()],
       planRevisionsRequiringPackages: [packageTarget()],
     });
     client.actionToClaim = null;
@@ -1469,17 +1364,7 @@ describe('automation daemon loop', () => {
   it('suppresses Plan and Package draft planning for minimal environment config', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
-      workItemsRequiringPlan: [
-        {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetRevisionId: 'spec-revision-1',
-          targetStatus: 'approved',
-          projectId: 'project-1',
-          repoId: 'repo-1',
-          automationScope: repoScope,
-        },
-      ],
+      planRevisionsRequiringPackages: [packageTarget()],
       planRevisionsRequiringPackages: [packageTarget()],
     });
     client.actionToClaim = null;
@@ -1518,16 +1403,7 @@ describe('automation daemon loop', () => {
           },
         },
       ],
-      workItemsRequiringSpec: [
-        {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetStatus: 'triage',
-          projectId: 'project-1',
-          repoId: 'repo-1',
-          automationScope: repoScope,
-        },
-      ],
+      planRevisionsRequiringPackages: [packageTarget()],
     });
     client.actionToClaim = claimedProjectionAction();
     const daemon = new AutomationDaemon({
@@ -1535,9 +1411,7 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
-          package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+          package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
     });
@@ -1551,7 +1425,7 @@ describe('automation daemon loop', () => {
     expect(client.calls.find((call) => call.method === 'claimNextAction')?.args[0]).toMatchObject({
       actionType: 'project_runtime_snapshot',
     });
-    expect(client.calls.map((call) => call.method)).not.toContain('specDraftGenerationContext');
+    expect(client.calls.map((call) => call.method)).not.toContain('packageDraftsGenerationContext');
   });
 
   it('claims existing pending policy projection before app_server generation actions', async () => {
@@ -1575,16 +1449,7 @@ describe('automation daemon loop', () => {
           automationScope: repoScope,
         },
       ],
-      workItemsRequiringSpec: [
-        {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetStatus: 'triage',
-          projectId: 'project-1',
-          repoId: 'repo-1',
-          automationScope: repoScope,
-        },
-      ],
+      planRevisionsRequiringPackages: [packageTarget()],
     });
     client.actionToClaim = claimedProjectionAction({ id: 'pending-projection-action', idempotencyKey: projectionIdempotencyKey });
     const daemon = new AutomationDaemon({
@@ -1592,9 +1457,7 @@ describe('automation daemon loop', () => {
       generationPlanning: {
         mode: 'app_server',
         tasks: {
-          spec_draft: { enabled: true, promptVersion: 'spec-draft.fake.v1', outputSchemaVersion: 'spec_draft.v1' },
-          plan_draft: { enabled: false, promptVersion: 'plan-draft.fake.v1', outputSchemaVersion: 'plan_draft.v1' },
-          package_drafts: { enabled: false, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
+          package_drafts: { enabled: true, promptVersion: 'package-drafts.fake.v1', outputSchemaVersion: 'package_drafts.v1' },
         },
       },
     });
@@ -1606,57 +1469,15 @@ describe('automation daemon loop', () => {
     expect(client.calls.find((call) => call.method === 'claimNextAction')?.args[0]).toMatchObject({
       actionType: 'project_runtime_snapshot',
     });
-    expect(client.calls.map((call) => call.method)).not.toContain('specDraftGenerationContext');
+    expect(client.calls.map((call) => call.method)).not.toContain('packageDraftsGenerationContext');
   });
 
-  it.each(['fake', 'disabled'] as const)(
-    'keeps legacy specDraftGenerationMode=%s scoped to Spec draft planning only',
-    async (specDraftGenerationMode) => {
-      const client = new FakeDaemonClient();
-      client.snapshot = baseSnapshot({
-        workItemsRequiringPlan: [
-          {
-            targetObjectType: 'work_item',
-            targetObjectId: 'work-item-1',
-            targetRevisionId: 'spec-revision-1',
-            targetStatus: 'approved',
-            projectId: 'project-1',
-            repoId: 'repo-1',
-            automationScope: repoScope,
-          },
-        ],
-        planRevisionsRequiringPackages: [packageTarget()],
-      });
-      client.actionToClaim = null;
-      const daemon = new AutomationDaemon({
-        ...daemonOptions(client),
-        specDraftGenerationMode,
-      });
-
-      const result = await daemon.runOnce();
-
-      expect(result).toMatchObject({ plannedActionCount: 1, executed: { status: 'skipped' } });
-      expect(
-        client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
-      ).toEqual(['project_runtime_snapshot']);
-    },
-  );
-
-  it('plans and executes Spec draft actions when fake generation is enabled', async () => {
+  it('plans and executes Package draft actions when fake generation is enabled', async () => {
     const client = new FakeDaemonClient();
     client.snapshot = baseSnapshot({
-      workItemsRequiringSpec: [
-        {
-          targetObjectType: 'work_item',
-          targetObjectId: 'work-item-1',
-          targetStatus: 'triage',
-          projectId: 'project-1',
-          repoId: 'repo-1',
-          automationScope: repoScope,
-        },
-      ],
+      planRevisionsRequiringPackages: [packageTarget()],
     });
-    client.actionToClaim = claimedSpecAction();
+    client.actionToClaim = claimedPackageAction();
     const daemon = new AutomationDaemon({
       ...daemonOptions(client),
       generationPlanning,
@@ -1671,13 +1492,13 @@ describe('automation daemon loop', () => {
       'createOrReplayAction',
       'createOrReplayAction',
       'claimNextAction',
-      'specDraftGenerationContext',
-      'ensureSpecDraft',
+      'packageDraftsGenerationContext',
+      'ensurePackageDrafts',
       'completeAction',
     ]);
     expect(
       client.calls.filter((call) => call.method === 'createOrReplayAction').map((call) => (call.args[0] as NextAction).actionType),
-    ).toEqual(['ensure_spec_draft', 'project_runtime_snapshot']);
+    ).toEqual(['ensure_package_drafts', 'project_runtime_snapshot']);
   });
 
   it('returns no-claim backoff when nothing is claimable', async () => {

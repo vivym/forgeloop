@@ -31,14 +31,6 @@ interface WorkItemCommandInput extends CommandActionInput {
   scopeRef: WorkItemScopeRef;
 }
 
-export interface GenerateSpecDraftActionInput extends WorkItemCommandInput {
-  specId: string;
-}
-
-export interface GeneratePlanDraftActionInput extends WorkItemCommandInput {
-  planId: string;
-}
-
 export interface GeneratePackagesActionInput extends WorkItemCommandInput {
   planRevisionId: string;
 }
@@ -82,8 +74,8 @@ const productLaneRouteHref: Record<ProductLaneId, string> = {
   'tech-debt': '/tech-debt',
   initiatives: '/initiatives',
   'spec-approver': '/specs-plans',
-  'execution-owner': '/tasks',
-  reviewer: '/tasks',
+  'execution-owner': '/executions',
+  reviewer: '/executions',
   'qa-test-owner': '/reports/quality',
   'release-owner': '/releases',
   manager: '/dashboard',
@@ -110,34 +102,6 @@ export const navigateAction = (input: NavigateActionInput): ProductAction =>
     ...actionBase(input),
     kind: 'navigate',
     target: input.target,
-  });
-
-export const generateSpecDraftAction = (input: GenerateSpecDraftActionInput): ProductAction =>
-  productActionSchema.parse({
-    ...actionBase(input),
-    kind: 'command',
-    ...(input.target === undefined ? {} : { target: input.target }),
-    command: {
-      type: 'generate_spec_draft',
-      object_type: 'spec',
-      object_id: input.specId,
-      scope_ref: input.scopeRef,
-      spec_id: input.specId,
-    },
-  });
-
-export const generatePlanDraftAction = (input: GeneratePlanDraftActionInput): ProductAction =>
-  productActionSchema.parse({
-    ...actionBase(input),
-    kind: 'command',
-    ...(input.target === undefined ? {} : { target: input.target }),
-    command: {
-      type: 'generate_plan_draft',
-      object_type: 'plan',
-      object_id: input.planId,
-      scope_ref: input.scopeRef,
-      plan_id: input.planId,
-    },
   });
 
 export const generatePackagesAction = (input: GeneratePackagesActionInput): ProductAction =>

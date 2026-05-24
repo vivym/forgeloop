@@ -34,17 +34,16 @@ type ProductObjectActionTarget = Extract<ProductNavigateAction['target'], { kind
 
 function objectTypeActionLabel(objectType: ProductObjectActionTarget['object_type']) {
   switch (objectType) {
-    case 'execution_package':
-      return 'Open package';
-    case 'run_session':
-      return 'Open run';
-    case 'review_packet':
+    case 'execution':
+      return 'Open execution';
+    case 'code_review_handoff':
       return 'Open review';
+    case 'qa_handoff':
+      return 'Open QA handoff';
     case 'initiative':
     case 'requirement':
     case 'bug':
     case 'tech_debt':
-    case 'task':
       return 'Open item';
     default:
       return `Open ${objectType.replace(/[_-]+/g, ' ')}`;

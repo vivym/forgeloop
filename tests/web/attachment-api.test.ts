@@ -96,7 +96,7 @@ describe('attachment Web API client', () => {
 
     await api.getAttachment('att-1');
     await api.updateAttachment('att-1', { caption: 'Checkout failure', visibility: 'project' });
-    await api.linkAttachment('att-1', { type: 'task', id: 'task-1' });
+    await api.linkAttachment('att-1', { type: 'requirement', id: 'req-1' });
     await api.deleteAttachment('att-1');
 
     expect(fetch.mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${String(url)}`)).toEqual([

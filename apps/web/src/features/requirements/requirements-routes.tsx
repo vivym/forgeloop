@@ -44,9 +44,9 @@ export function RequirementDetailRoute() {
       renderSections={(detail) => (
         <Section title="Planning links">
           <ul className="grid gap-2 text-sm text-text-secondary">
-            {detail.spec_ref ? <li>{`Spec ${detail.spec_ref.id}`}</li> : null}
-            {detail.plan_ref ? <li>{`Plan ${detail.plan_ref.id}`}</li> : null}
-            {detail.task_refs.map((task) => <li key={task.id}>{`Task ${task.id}`}</li>)}
+            {detail.relationship_refs.map((ref) => (
+              <li key={`${ref.type}:${ref.id}`}>{`${formatRelationshipType(ref.type)} ${ref.id}`}</li>
+            ))}
             {detail.bug_refs.map((bug) => <li key={bug.id}>{`Bug ${bug.id}`}</li>)}
           </ul>
         </Section>
@@ -120,4 +120,8 @@ function splitOptionalLines(value: string | undefined): string[] | undefined {
 
 function firstLine(value: string | undefined, fallback: string): string {
   return splitLines(value)[0] ?? fallback;
+}
+
+function formatRelationshipType(type: string): string {
+  return type.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }

@@ -559,7 +559,7 @@ describe.skipIf(!runRemoteDogfoodSmoke)('same-host remote Codex generation dogfo
       );
       const actionRun = await repository.createOrReplayAutomationActionRun({
         id: 'remote-dogfood-action-run',
-        action_type: 'ensure_spec_draft',
+        action_type: 'ensure_package_drafts',
         target_object_type: 'work_item',
         target_object_id: 'remote-dogfood-work-item',
         target_status: 'triage',
@@ -665,13 +665,13 @@ describe.skipIf(!runRemoteDogfoodSmoke)('same-host remote Codex generation dogfo
               success_criteria: ['Spec draft JSON validates.'],
             },
           },
-          promptVersion: 'spec-draft.remote-dogfood.v1',
+          promptVersion: 'SPEC-draft.remote-dogfood.v1',
           outputSchemaVersion: 'spec_draft.v1',
           policyDigests: { [repoId]: codexRuntimeNetworkPolicyDigest(bootstrapConfig.networkPolicy) },
           orchestration: {
             targetType: 'automation_action_run',
             actionRunId: actionRun.id,
-            actionType: 'ensure_spec_draft',
+            actionType: 'ensure_package_drafts',
             actionAttempt: actionRun.attempt,
             claimToken: 'remote-dogfood-claim-token',
             preconditionFingerprint: 'remote-dogfood-precondition',

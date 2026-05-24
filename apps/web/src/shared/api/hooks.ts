@@ -1,7 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 
-import { createForgeloopCommandApi } from './commands';
+import {
+  createForgeloopCommandApi,
+  type AnswerBrainstormingQuestionBody,
+  type ApproveBoundaryBody,
+  type RecordBrainstormingDecisionBody,
+  type RegenerateArtifactDraftBody,
+  type RevisionCompareQuery,
+  type StartBrainstormingSessionBody,
+} from './commands';
 import { createForgeloopQueryApi, type MyWorkQuery, type ProjectManagementListQuery } from './query';
 import {
   normalizeMyWorkQuery,
@@ -11,7 +19,6 @@ import {
   queryKeys,
 } from './query-keys';
 import type {
-  CockpitResponse,
   AcknowledgeReleaseTestAcceptanceBody,
   ApproveArtifactBody,
   ApproveReleaseBody,
@@ -31,18 +38,12 @@ import type {
   ProductCommandAction,
   ProductLaneId,
   ProductLaneQuery,
-  PlanRevision,
   ReleaseCommandBody,
   RequestArtifactChangesBody,
   RequestReleaseChangesBody,
   ReviewDecisionBody,
-  SpecPlan,
-  SpecRevision,
   StartReleaseObservingBody,
   SubmitForApprovalBody,
-  TaskPackageEvidence,
-  TaskReviewEvidence,
-  TaskRunEvidence,
   UnlinkReleaseScopeBody,
 } from './types';
 
@@ -66,27 +67,105 @@ export function usePipelineQuery(projectId: string) {
   });
 }
 
-export function useWorkItemsQuery(projectId: string) {
+export function useDashboardQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
   return useQuery({
-    queryKey: queryKeys.workItems(projectId),
-    queryFn: () => createCommandApi().listWorkItems(projectId),
+    queryKey: queryKeys.dashboard(normalizedQuery),
+    queryFn: () => createQueryApi().getDashboard(normalizedQuery),
   });
 }
 
-export function useProductWorkItemsQuery(query: Pick<ListProductQuery, 'project_id' | 'phase' | 'status' | 'risk' | 'driver_actor_id' | 'cursor' | 'limit'>) {
-  const normalizedQuery = {
-    project_id: query.project_id,
-    ...(query.phase === undefined ? {} : { phase: query.phase }),
-    ...(query.status === undefined ? {} : { status: query.status }),
-    ...(query.risk === undefined ? {} : { risk: query.risk }),
-    ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
-    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-  };
+export function useDevelopmentPlansQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
 
   return useQuery({
-    queryKey: queryKeys.productWorkItems(normalizedQuery),
-    queryFn: () => createQueryApi().listWorkItems(normalizedQuery),
+    queryKey: queryKeys.developmentPlans(normalizedQuery),
+    queryFn: () => createQueryApi().listDevelopmentPlans(normalizedQuery),
+  });
+}
+
+export function useDevelopmentPlanQuery(developmentPlanId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.developmentPlan(developmentPlanId),
+    queryFn: () => createQueryApi().getDevelopmentPlan(requiredId(developmentPlanId, 'developmentPlanId')),
+    enabled: developmentPlanId !== undefined,
+  });
+}
+
+export function useDevelopmentPlanItemQuery(developmentPlanId: string | undefined, itemId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.developmentPlanItem(developmentPlanId, itemId),
+    queryFn: () =>
+      createQueryApi().getDevelopmentPlanItem(
+        requiredId(developmentPlanId, 'developmentPlanId'),
+        requiredId(itemId, 'itemId'),
+      ),
+    enabled: developmentPlanId !== undefined && itemId !== undefined,
+  });
+}
+
+export function useDevelopmentPlanItemRevisionsQuery(developmentPlanId: string | undefined, itemId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId),
+    queryFn: () =>
+      createQueryApi().listDevelopmentPlanItemRevisions(
+        requiredId(developmentPlanId, 'developmentPlanId'),
+        requiredId(itemId, 'itemId'),
+      ),
+    enabled: developmentPlanId !== undefined && itemId !== undefined,
+  });
+}
+
+export function useStartBrainstormingSessionMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: StartBrainstormingSessionBody) =>
+      createCommandApi().startBrainstormingSession(
+        requiredId(input.developmentPlanId, 'developmentPlanId'),
+        requiredId(input.itemId, 'itemId'),
+        body,
+      ),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useAnswerBrainstormingQuestionMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; sessionId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: AnswerBrainstormingQuestionBody) =>
+      createCommandApi().answerBrainstormingQuestion(requiredId(input.sessionId, 'sessionId'), body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useRecordBrainstormingDecisionMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; sessionId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: RecordBrainstormingDecisionBody) =>
+      createCommandApi().recordBrainstormingDecision(requiredId(input.sessionId, 'sessionId'), body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useApproveBoundaryMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; sessionId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: ApproveBoundaryBody) =>
+      createCommandApi().approveBoundary(requiredId(input.sessionId, 'sessionId'), body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useBoundarySummaryRevisionsQuery(boundarySummaryId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.boundarySummaryRevisions(boundarySummaryId),
+    queryFn: () => createQueryApi().listBoundarySummaryRevisions(requiredId(boundarySummaryId, 'boundarySummaryId')),
+    enabled: boundarySummaryId !== undefined,
   });
 }
 
@@ -147,23 +226,6 @@ export function useTechDebtDetailQuery(techDebtId: string | undefined) {
     queryKey: queryKeys.techDebtDetail(techDebtId),
     queryFn: () => createQueryApi().getTechDebt(requiredId(techDebtId, 'techDebtId')),
     enabled: techDebtId !== undefined,
-  });
-}
-
-export function useTasksQuery(query: ProjectManagementListQuery) {
-  const normalizedQuery = normalizeProjectManagementListQuery(query);
-
-  return useQuery({
-    queryKey: queryKeys.tasks(normalizedQuery),
-    queryFn: () => createQueryApi().listTasks(normalizedQuery),
-  });
-}
-
-export function useTaskQuery(taskId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.task(taskId),
-    queryFn: () => createQueryApi().getTask(requiredId(taskId, 'taskId')),
-    enabled: taskId !== undefined,
   });
 }
 
@@ -238,18 +300,6 @@ export function useUpdateTechDebtNarrativeMutation(techDebtId: string | undefine
   });
 }
 
-export function useUpdateTaskNarrativeMutation(taskId: string | undefined) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: MarkdownDocument) => createCommandApi().updateTaskNarrative(requiredId(taskId, 'taskId'), body),
-    onSuccess: () => Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.task(taskId) }),
-      queryClient.invalidateQueries({ queryKey: ['tasks'] }),
-    ]),
-  });
-}
-
 export function useUpdateBugNarrativeMutation(bugId: string | undefined) {
   const queryClient = useQueryClient();
 
@@ -279,106 +329,56 @@ export function useProductActionCommandMutation(input: { projectId: string; acti
     onSettled: () =>
       invalidateProductActionTargets(queryClient, {
         projectId: input.projectId,
-        workItemId: workItemIdFromCommandScope(input.action.command.scope_ref),
         action: input.action,
       }),
   });
 }
 
-export function useSpecsQuery(query: Pick<ListProductQuery, 'project_id' | 'status' | 'cursor' | 'limit'>) {
+export function useSpecExecutionPlanQueueQuery(query: Pick<ListProductQuery, 'project_id' | 'cursor' | 'limit'>) {
   const normalizedQuery = {
     project_id: query.project_id,
-    ...(query.status === undefined ? {} : { status: query.status }),
     ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
     ...(query.limit === undefined ? {} : { limit: query.limit }),
   };
 
   return useQuery({
-    queryKey: queryKeys.specs(normalizedQuery),
-    queryFn: () => createQueryApi().listSpecs(normalizedQuery),
+    queryKey: queryKeys.specExecutionPlanQueue(normalizedQuery),
+    queryFn: () => createQueryApi().listSpecExecutionPlanQueue(normalizedQuery),
   });
 }
 
-export function useSpecQuery(specId: string) {
+export function useExecutionsQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
   return useQuery({
-    queryKey: queryKeys.spec(specId),
-    queryFn: () => createCommandApi().getSpec(specId),
+    queryKey: queryKeys.executions(normalizedQuery),
+    queryFn: () => createQueryApi().listExecutions(normalizedQuery),
   });
 }
 
-export function useSpecRevisionsQuery(specId: string) {
+export function useExecutionQuery(executionId: string | undefined) {
   return useQuery({
-    queryKey: queryKeys.specRevisions(specId),
-    queryFn: () => createCommandApi().listSpecRevisions(specId),
+    queryKey: queryKeys.execution(executionId),
+    queryFn: () => createQueryApi().getExecution(requiredId(executionId, 'executionId')),
+    enabled: executionId !== undefined,
   });
 }
 
-export function useSpecReplayQuery(specId: string | undefined) {
+export function useCodeReviewHandoffsQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
+
   return useQuery({
-    queryKey: queryKeys.specReplay(specId),
-    queryFn: () => createQueryApi().getSpecReplay(requiredId(specId, 'specId')),
-    enabled: specId !== undefined,
+    queryKey: queryKeys.codeReviewHandoffs(normalizedQuery),
+    queryFn: () => createQueryApi().listCodeReviewHandoffs(normalizedQuery),
   });
 }
 
-export function useSpecRevisionQuery(revisionId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.specRevision(revisionId),
-    queryFn: () => createCommandApi().getSpecRevision(requiredId(revisionId, 'revisionId')),
-    enabled: revisionId !== undefined,
-  });
-}
-
-export function usePlansQuery(query: Pick<ListProductQuery, 'project_id' | 'status' | 'cursor' | 'limit'>) {
-  const normalizedQuery = {
-    project_id: query.project_id,
-    ...(query.status === undefined ? {} : { status: query.status }),
-    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-  };
+export function useQaHandoffsQuery(query: ListProductQuery) {
+  const normalizedQuery = normalizeProductRegistryQuery(query);
 
   return useQuery({
-    queryKey: queryKeys.plans(normalizedQuery),
-    queryFn: () => createQueryApi().listPlans(normalizedQuery),
-  });
-}
-
-export function usePlanQuery(planId: string) {
-  return useQuery({
-    queryKey: queryKeys.plan(planId),
-    queryFn: () => createCommandApi().getPlan(planId),
-  });
-}
-
-export function usePlanRevisionsQuery(planId: string) {
-  return useQuery({
-    queryKey: queryKeys.planRevisions(planId),
-    queryFn: () => createCommandApi().listPlanRevisions(planId),
-  });
-}
-
-export function usePlanReplayQuery(planId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.planReplay(planId),
-    queryFn: () => createQueryApi().getPlanReplay(requiredId(planId, 'planId')),
-    enabled: planId !== undefined,
-  });
-}
-
-export function usePlanRevisionQuery(revisionId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.planRevision(revisionId),
-    queryFn: () => createCommandApi().getPlanRevision(requiredId(revisionId, 'revisionId')),
-    enabled: revisionId !== undefined,
-  });
-}
-
-export function usePackagesQuery(query: ListProductQuery) {
-  const normalizedQuery = normalizePackageRunQuery(query);
-
-  return useQuery({
-    queryKey: queryKeys.packages(normalizedQuery),
-    queryFn: () => createQueryApi().listPackages(normalizedQuery),
+    queryKey: queryKeys.qaHandoffs(normalizedQuery),
+    queryFn: () => createQueryApi().listQaHandoffs(normalizedQuery),
   });
 }
 
@@ -389,31 +389,6 @@ export function usePackageQuery(packageId: string) {
   });
 }
 
-export function usePackageRuntimeReadinessQuery(packageId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.packageRuntimeReadiness(packageId),
-    queryFn: () => createQueryApi().getExecutionPackageRuntimeReadiness(requiredId(packageId, 'packageId')),
-    enabled: packageId !== undefined,
-  });
-}
-
-export function useTaskPackageEvidenceQuery(taskId: string | undefined, packageId: string | undefined) {
-  return useQuery<TaskPackageEvidence>({
-    queryKey: queryKeys.taskPackageEvidence(taskId, packageId),
-    queryFn: () => createQueryApi().getTaskPackageEvidence(requiredId(taskId, 'taskId'), requiredId(packageId, 'packageId')),
-    enabled: taskId !== undefined && packageId !== undefined,
-  });
-}
-
-export function useRunsQuery(query: ListProductQuery) {
-  const normalizedQuery = normalizePackageRunQuery(query);
-
-  return useQuery({
-    queryKey: queryKeys.runs(normalizedQuery),
-    queryFn: () => createQueryApi().listRuns(normalizedQuery),
-  });
-}
-
 export function useRunQuery(runSessionId: string) {
   return useQuery({
     queryKey: queryKeys.run(runSessionId),
@@ -421,50 +396,10 @@ export function useRunQuery(runSessionId: string) {
   });
 }
 
-export function useTaskRunEvidenceQuery(taskId: string | undefined, runSessionId: string | undefined) {
-  return useQuery<TaskRunEvidence>({
-    queryKey: queryKeys.taskRunEvidence(taskId, runSessionId),
-    queryFn: () => createQueryApi().getTaskRunEvidence(requiredId(taskId, 'taskId'), requiredId(runSessionId, 'runSessionId')),
-    enabled: taskId !== undefined && runSessionId !== undefined,
-  });
-}
-
 export function useRunEventsQuery(input: { runSessionId: string; actorId: string }) {
   return useQuery({
     queryKey: queryKeys.runEvents(input.runSessionId, input.actorId),
     queryFn: () => createCommandApi().listRunEvents(input.runSessionId, { actorId: input.actorId }),
-  });
-}
-
-export function useReviewsQuery(projectId: string) {
-  return useQuery({
-    queryKey: queryKeys.reviews(projectId),
-    queryFn: () => createQueryApi().listReviews({ project_id: projectId }),
-  });
-}
-
-export function useReviewPacketsQuery(query: ListProductQuery) {
-  const normalizedQuery = normalizeReviewPacketQuery(query);
-
-  return useQuery({
-    queryKey: queryKeys.reviewPackets(normalizedQuery),
-    queryFn: () => createQueryApi().listReviewPackets(normalizedQuery),
-  });
-}
-
-export function useReviewQuery(reviewPacketId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.review(reviewPacketId),
-    queryFn: () => createQueryApi().getReview(requiredId(reviewPacketId, 'reviewPacketId')),
-    enabled: reviewPacketId !== undefined,
-  });
-}
-
-export function useTaskReviewEvidenceQuery(taskId: string | undefined, reviewPacketId: string | undefined) {
-  return useQuery<TaskReviewEvidence>({
-    queryKey: queryKeys.taskReviewEvidence(taskId, reviewPacketId),
-    queryFn: () => createQueryApi().getTaskReviewEvidence(requiredId(taskId, 'taskId'), requiredId(reviewPacketId, 'reviewPacketId')),
-    enabled: taskId !== undefined && reviewPacketId !== undefined,
   });
 }
 
@@ -589,29 +524,6 @@ export function useReleaseReadinessQuery(releaseId: string | undefined, projectI
   });
 }
 
-export function useWorkItemCockpitQuery(workItemId: string | undefined, lane?: ProductLaneId) {
-  return useQuery({
-    queryKey: queryKeys.workItemCockpit(workItemId, lane),
-    queryFn: () => createQueryApi().getWorkItemCockpit(requiredId(workItemId, 'workItemId'), lane === undefined ? {} : { lane }),
-    enabled: workItemId !== undefined,
-  });
-}
-
-export function useWorkItemReplayQuery(workItemId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.workItemReplay(workItemId),
-    queryFn: () => createQueryApi().getWorkItemReplay(requiredId(workItemId, 'workItemId')),
-    enabled: workItemId !== undefined,
-  });
-}
-
-export function useExecutionPackageReplayQuery(executionPackageId: string) {
-  return useQuery({
-    queryKey: queryKeys.executionPackageReplay(executionPackageId),
-    queryFn: () => createQueryApi().getExecutionPackageReplay(executionPackageId),
-  });
-}
-
 export function useGeneratePackagesMutation(planRevisionId: string | undefined) {
   const queryClient = useQueryClient();
 
@@ -646,24 +558,10 @@ export function usePatchExecutionPackageMutation(packageId: string) {
   });
 }
 
-export function useReviewPacketReplayQuery(reviewPacketId: string) {
-  return useQuery({
-    queryKey: queryKeys.reviewPacketReplay(reviewPacketId),
-    queryFn: () => createQueryApi().getReviewPacketReplay(reviewPacketId),
-  });
-}
-
 export function useReleaseCockpitQuery(releaseId: string) {
   return useQuery({
     queryKey: queryKeys.releaseCockpit(releaseId),
     queryFn: () => createQueryApi().getReleaseCockpit(releaseId),
-  });
-}
-
-export function useReleaseReplayQuery(releaseId: string) {
-  return useQuery({
-    queryKey: queryKeys.releaseReplay(releaseId),
-    queryFn: () => createQueryApi().getReleaseReplay(releaseId),
   });
 }
 
@@ -754,119 +652,157 @@ export function useCreateReleaseEvidenceMutation(releaseId: string) {
   return useReleaseCommandMutation(releaseId, (body: CreateReleaseEvidenceBody) => createCommandApi().createReleaseEvidence(releaseId, body));
 }
 
-export function useCreateSpecMutation(workItemId: string | undefined) {
+export function useGenerateItemSpecDraftMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () => createCommandApi().createSpec(requiredId(workItemId, 'workItemId')),
-    onSuccess: (spec) => {
-      setCockpitSpec(queryClient, workItemId, spec);
-      return invalidateWorkItemCockpit(queryClient, workItemId);
-    },
+    mutationFn: () =>
+      createCommandApi().generateItemSpecDraft(
+        requiredId(input.developmentPlanId, 'developmentPlanId'),
+        requiredId(input.itemId, 'itemId'),
+      ),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useCreatePlanMutation(workItemId: string | undefined) {
+export function useGenerateItemExecutionPlanDraftMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () => createCommandApi().createPlan(requiredId(workItemId, 'workItemId')),
-    onSuccess: (plan) => {
-      setCockpitPlan(queryClient, workItemId, plan);
-      return invalidateWorkItemCockpit(queryClient, workItemId);
-    },
+    mutationFn: () =>
+      createCommandApi().generateItemExecutionPlanDraft(
+        requiredId(input.developmentPlanId, 'developmentPlanId'),
+        requiredId(input.itemId, 'itemId'),
+      ),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useGenerateSpecDraftMutation(input: { workItemId: string | undefined; specId: string | undefined }) {
+export function useSubmitItemSpecForApprovalMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () => createCommandApi().generateSpecDraft(requiredId(input.specId, 'specId')),
-    onSuccess: (revision) => {
-      setCockpitSpecRevision(queryClient, input.workItemId, revision);
-      return Promise.all([
-        invalidateWorkItemCockpit(queryClient, input.workItemId),
-        input.specId === undefined
-          ? Promise.resolve()
-          : queryClient.invalidateQueries({ queryKey: queryKeys.specRevisions(input.specId) }),
-      ]);
-    },
+    mutationFn: (body: SubmitForApprovalBody) => createCommandApi().submitItemSpecForApproval(input.developmentPlanId, input.itemId, body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useGeneratePlanDraftMutation(input: { workItemId: string | undefined; planId: string | undefined }) {
+export function useApproveItemSpecMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () => createCommandApi().generatePlanDraft(requiredId(input.planId, 'planId')),
-    onSuccess: (revision) => {
-      setCockpitPlanRevision(queryClient, input.workItemId, revision);
-      return Promise.all([
-        invalidateWorkItemCockpit(queryClient, input.workItemId),
-        input.planId === undefined
-          ? Promise.resolve()
-          : queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(input.planId) }),
-      ]);
-    },
+    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approveItemSpec(input.developmentPlanId, input.itemId, body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useSubmitSpecForApprovalMutation(input: { specId: string; workItemId?: string }) {
+export function useRequestItemSpecChangesMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (body: SubmitForApprovalBody) => createCommandApi().submitSpecForApproval(input.specId, body),
-    onSuccess: () => invalidateSpecLifecycleResources(queryClient, input.specId, input.workItemId),
+    mutationFn: (body: RequestArtifactChangesBody) => createCommandApi().requestItemSpecChanges(input.developmentPlanId, input.itemId, body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useApproveSpecMutation(input: { specId: string; workItemId?: string }) {
+export function useRejectItemSpecMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approveSpec(input.specId, body),
-    onSuccess: () => invalidateSpecLifecycleResources(queryClient, input.specId, input.workItemId),
+    mutationFn: (body: RequestArtifactChangesBody) => createCommandApi().rejectItemSpec(input.developmentPlanId, input.itemId, body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useRequestSpecChangesMutation(input: { specId: string; workItemId?: string }) {
+export function useRegenerateItemSpecDraftMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (body: RequestArtifactChangesBody) => createCommandApi().requestSpecChanges(input.specId, body),
-    onSuccess: () => invalidateSpecLifecycleResources(queryClient, input.specId, input.workItemId),
+    mutationFn: (body: RegenerateArtifactDraftBody) => createCommandApi().regenerateItemSpecDraft(input.developmentPlanId, input.itemId, body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useSubmitPlanForApprovalMutation(input: { planId: string; workItemId?: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: SubmitForApprovalBody) => createCommandApi().submitPlanForApproval(input.planId, body),
-    onSuccess: () => invalidatePlanLifecycleResources(queryClient, input.planId, input.workItemId),
+export function useCompareItemSpecRevisionsQuery(
+  input: { developmentPlanId: string | undefined; itemId: string | undefined; query: RevisionCompareQuery | undefined },
+) {
+  return useQuery({
+    queryKey: ['item-spec-revision-compare', input.developmentPlanId, input.itemId, input.query],
+    queryFn: () =>
+      createCommandApi().compareItemSpecRevisions(
+        requiredId(input.developmentPlanId, 'developmentPlanId'),
+        requiredId(input.itemId, 'itemId'),
+        requiredValue(input.query, 'query'),
+      ),
+    enabled: input.developmentPlanId !== undefined && input.itemId !== undefined && input.query !== undefined,
   });
 }
 
-export function useApprovePlanMutation(input: { planId: string; workItemId?: string }) {
+export function useSubmitItemExecutionPlanForApprovalMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approvePlan(input.planId, body),
-    onSuccess: (plan) =>
+    mutationFn: (body: SubmitForApprovalBody) =>
+      createCommandApi().submitItemExecutionPlanForApproval(input.developmentPlanId, input.itemId, body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useApproveItemExecutionPlanMutation(input: { developmentPlanId: string; itemId: string }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approveItemExecutionPlan(input.developmentPlanId, input.itemId, body),
+    onSuccess: () =>
       Promise.all([
-        invalidatePlanLifecycleResources(queryClient, input.planId, input.workItemId),
-        plan.approved_revision_id === undefined ? Promise.resolve() : invalidatePackageDeliveryCollections(queryClient),
+        invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+        invalidatePackageDeliveryCollections(queryClient),
       ]),
   });
 }
 
-export function useRequestPlanChangesMutation(input: { planId: string; workItemId?: string }) {
+export function useRequestItemExecutionPlanChangesMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (body: RequestArtifactChangesBody) => createCommandApi().requestPlanChanges(input.planId, body),
-    onSuccess: () => invalidatePlanLifecycleResources(queryClient, input.planId, input.workItemId),
+    mutationFn: (body: RequestArtifactChangesBody) =>
+      createCommandApi().requestItemExecutionPlanChanges(input.developmentPlanId, input.itemId, body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useRejectItemExecutionPlanMutation(input: { developmentPlanId: string; itemId: string }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: RequestArtifactChangesBody) =>
+      createCommandApi().rejectItemExecutionPlan(input.developmentPlanId, input.itemId, body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useRegenerateItemExecutionPlanDraftMutation(input: { developmentPlanId: string; itemId: string }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: RegenerateArtifactDraftBody) =>
+      createCommandApi().regenerateItemExecutionPlanDraft(input.developmentPlanId, input.itemId, body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useCompareItemExecutionPlanRevisionsQuery(
+  input: { developmentPlanId: string | undefined; itemId: string | undefined; query: RevisionCompareQuery | undefined },
+) {
+  return useQuery({
+    queryKey: ['item-execution-plan-revision-compare', input.developmentPlanId, input.itemId, input.query],
+    queryFn: () =>
+      createCommandApi().compareItemExecutionPlanRevisions(
+        requiredId(input.developmentPlanId, 'developmentPlanId'),
+        requiredId(input.itemId, 'itemId'),
+        requiredValue(input.query, 'query'),
+      ),
+    enabled: input.developmentPlanId !== undefined && input.itemId !== undefined && input.query !== undefined,
   });
 }
 
@@ -876,7 +812,6 @@ type ProductActionCommandInput = {
 
 type ProductActionInvalidationInput = {
   projectId: string;
-  workItemId: string | undefined;
   action: ProductCommandAction;
 };
 
@@ -887,10 +822,6 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
   const command = action.command;
 
   switch (command.type) {
-    case 'generate_spec_draft':
-      return commandApi.generateSpecDraft(command.spec_id);
-    case 'generate_plan_draft':
-      return commandApi.generatePlanDraft(command.plan_id);
     case 'generate_packages':
       return commandApi.generatePackages(command.plan_revision_id);
     case 'mark_package_ready':
@@ -913,37 +844,18 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
 export function invalidateProductActionTargets(queryClient: QueryClient, input: ProductActionInvalidationInput) {
   return Promise.all([
     invalidateProductLaneProjectQueries(queryClient, input.projectId),
-    input.workItemId === undefined ? Promise.resolve() : invalidateWorkItemCockpit(queryClient, input.workItemId),
-    invalidateObjectQuery(queryClient, input.action.command.object_type, input.action.command.object_id),
     invalidateCommandDerivedResources(queryClient, input.action.command),
     input.action.target === undefined ? Promise.resolve() : invalidateTargetQuery(queryClient, input.action.target),
   ]);
 }
 
-function workItemIdFromCommandScope(scopeRef: ProductCommandAction['command']['scope_ref']): string | undefined {
-  switch (scopeRef.type) {
-    case 'initiative':
-    case 'requirement':
-    case 'bug':
-    case 'tech_debt':
-    case 'task':
-      return scopeRef.id;
-    default:
-      return undefined;
-  }
-}
-
 function invalidateCommandDerivedResources(queryClient: QueryClient, command: ProductCommandAction['command']) {
   switch (command.type) {
-    case 'generate_spec_draft':
-      return queryClient.invalidateQueries({ queryKey: queryKeys.specRevisions(command.spec_id) });
-    case 'generate_plan_draft':
-      return queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(command.plan_id) });
     case 'generate_packages':
       return invalidatePackageDeliveryCollections(queryClient);
     case 'mark_package_ready':
     case 'run_package':
-      return Promise.resolve();
+      return invalidatePackageResources(queryClient, command.package_id);
     default: {
       const exhaustive: never = command;
       throw new Error(`Unsupported ProductAction command for invalidation: ${JSON.stringify(exhaustive)}`);
@@ -983,27 +895,32 @@ function invalidateObjectQuery(queryClient: QueryClient, objectType: ProductObje
     case 'requirement':
     case 'bug':
     case 'tech_debt':
-    case 'task':
-      return Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.workItem(objectId) }),
-        invalidateWorkItemCockpit(queryClient, objectId),
-      ]);
+      return queryClient.invalidateQueries({ queryKey: queryKeys.workItem(objectId) });
+    case 'development_plan':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlan(objectId) });
+    case 'development_plan_item':
+      return queryClient.invalidateQueries({ queryKey: ['development-plan-item'] });
+    case 'brainstorming_session':
+    case 'boundary_summary':
+      return queryClient.invalidateQueries({ queryKey: ['development-plans'] });
     case 'spec':
       return queryClient.invalidateQueries({ queryKey: queryKeys.spec(objectId) });
     case 'spec_revision':
       return queryClient.invalidateQueries({ queryKey: queryKeys.specRevision(objectId) });
-    case 'plan':
+    case 'execution_plan':
       return queryClient.invalidateQueries({ queryKey: queryKeys.plan(objectId) });
-    case 'plan_revision':
+    case 'execution_plan_revision':
       return queryClient.invalidateQueries({ queryKey: queryKeys.planRevision(objectId) });
-    case 'execution_package':
-      return invalidatePackageResources(queryClient, objectId);
-    case 'run_session':
-      return invalidateRunDetail(queryClient, objectId);
-    case 'review_packet':
-      return invalidateReviewPacketResources(queryClient, objectId);
+    case 'execution':
+      return queryClient.invalidateQueries({ queryKey: queryKeys.execution(objectId) });
+    case 'code_review_handoff':
+      return queryClient.invalidateQueries({ queryKey: ['code-review-handoffs'] });
+    case 'qa_handoff':
+      return queryClient.invalidateQueries({ queryKey: ['qa-handoffs'] });
     case 'release':
       return invalidateReleaseCockpit(queryClient, objectId);
+    case 'attachment':
+      return Promise.resolve();
     default: {
       const exhaustive: never = objectType;
       throw new Error(`Unsupported ProductAction target object type: ${exhaustive}`);
@@ -1011,33 +928,19 @@ function invalidateObjectQuery(queryClient: QueryClient, objectType: ProductObje
   }
 }
 
-function invalidateWorkItemCockpit(queryClient: QueryClient, workItemId: string | undefined) {
-  if (workItemId === undefined) {
-    return Promise.resolve();
-  }
-
-  return queryClient.invalidateQueries({
-    predicate: ({ queryKey }) => queryKey[0] === 'work-item-cockpit' && queryKey[1] === workItemId,
-  });
-}
-
-function invalidateSpecLifecycleResources(queryClient: QueryClient, specId: string, workItemId: string | undefined) {
+function invalidateItemScopedArtifactResources(
+  queryClient: QueryClient,
+  developmentPlanId: string | undefined,
+  itemId: string | undefined,
+) {
   return Promise.all([
-    queryClient.invalidateQueries({ queryKey: queryKeys.spec(specId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.specRevisions(specId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.specReplay(specId) }),
-    queryClient.invalidateQueries({ queryKey: ['specs'] }),
-    invalidateWorkItemCockpit(queryClient, workItemId),
-  ]);
-}
-
-function invalidatePlanLifecycleResources(queryClient: QueryClient, planId: string, workItemId: string | undefined) {
-  return Promise.all([
-    queryClient.invalidateQueries({ queryKey: queryKeys.plan(planId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.planRevisions(planId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.planReplay(planId) }),
-    queryClient.invalidateQueries({ queryKey: ['plans'] }),
-    invalidateWorkItemCockpit(queryClient, workItemId),
+    queryClient.invalidateQueries({ queryKey: ['development-plans'] }),
+    queryClient.invalidateQueries({ queryKey: ['development-plan', developmentPlanId] }),
+    queryClient.invalidateQueries({ queryKey: ['development-plan-item', developmentPlanId, itemId] }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId) }),
+    queryClient.invalidateQueries({ queryKey: ['item-spec-revision-compare', developmentPlanId, itemId] }),
+    queryClient.invalidateQueries({ queryKey: ['item-execution-plan-revision-compare', developmentPlanId, itemId] }),
+    queryClient.invalidateQueries({ queryKey: ['spec-execution-plan-queue'] }),
   ]);
 }
 
@@ -1048,8 +951,6 @@ function invalidatePackageDetail(queryClient: QueryClient, packageId: string) {
 function invalidatePackageResources(queryClient: QueryClient, packageId: string) {
   return Promise.all([
     invalidatePackageDetail(queryClient, packageId),
-    queryClient.invalidateQueries({ queryKey: queryKeys.packageRuntimeReadiness(packageId) }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.executionPackageReplay(packageId) }),
     invalidatePackageDeliveryCollections(queryClient),
   ]);
 }
@@ -1061,7 +962,6 @@ function invalidatePackages(queryClient: QueryClient) {
 function invalidateDeliverySurfaces(queryClient: QueryClient) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
-    queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
     queryClient.invalidateQueries({ queryKey: ['runs'] }),
     queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
   ]);
@@ -1074,13 +974,9 @@ function invalidatePackageDeliveryCollections(queryClient: QueryClient) {
 function invalidateReviewPacketResources(queryClient: QueryClient, reviewPacketId: string) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: ['review'] }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.review(reviewPacketId) }),
-    queryClient.invalidateQueries({ queryKey: ['review-packet-replay'] }),
-    queryClient.invalidateQueries({ queryKey: ['replay'] }),
     queryClient.invalidateQueries({ queryKey: ['review-packets'] }),
     queryClient.invalidateQueries({ queryKey: ['packages'] }),
     queryClient.invalidateQueries({ queryKey: ['product-lanes'] }),
-    queryClient.invalidateQueries({ queryKey: ['work-item-cockpit'] }),
   ]);
 }
 
@@ -1095,7 +991,6 @@ function invalidateReleaseCockpit(queryClient: QueryClient, releaseId: string) {
 function invalidateReleaseDeliveryResources(queryClient: QueryClient, releaseId: string) {
   return Promise.all([
     invalidateReleaseCockpit(queryClient, releaseId),
-    queryClient.invalidateQueries({ queryKey: queryKeys.releaseReplay(releaseId) }),
     queryClient.invalidateQueries({ queryKey: ['releases'] }),
     invalidatePackageDeliveryCollections(queryClient),
   ]);
@@ -1121,42 +1016,6 @@ function invalidateRunDetail(queryClient: QueryClient, runSessionId: string) {
   ]);
 }
 
-function normalizePackageRunQuery(query: ListProductQuery): ListProductQuery {
-  return {
-    project_id: query.project_id,
-    ...(query.plan_revision_id === undefined ? {} : { plan_revision_id: query.plan_revision_id }),
-    ...(query.execution_owner_actor_id === undefined ? {} : { execution_owner_actor_id: query.execution_owner_actor_id }),
-    ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
-    ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
-    ...(query.surface_type === undefined ? {} : { surface_type: query.surface_type }),
-    ...(query.phase === undefined ? {} : { phase: query.phase }),
-    ...(query.status === undefined ? {} : { status: query.status }),
-    ...(query.gate_state === undefined ? {} : { gate_state: query.gate_state }),
-    ...(query.resolution === undefined ? {} : { resolution: query.resolution }),
-    ...(query.risk === undefined ? {} : { risk: query.risk }),
-    ...(query.blocked === undefined ? {} : { blocked: query.blocked }),
-    ...(query.executor_type === undefined ? {} : { executor_type: query.executor_type }),
-    ...(query.execution_package_id === undefined ? {} : { execution_package_id: query.execution_package_id }),
-    ...(query.run_session_id === undefined ? {} : { run_session_id: query.run_session_id }),
-    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-  };
-}
-
-function normalizeReviewPacketQuery(query: ListProductQuery): ListProductQuery {
-  return {
-    project_id: query.project_id,
-    ...(query.status === undefined ? {} : { status: query.status }),
-    ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
-    ...(query.execution_package_id === undefined ? {} : { execution_package_id: query.execution_package_id }),
-    ...(query.run_session_id === undefined ? {} : { run_session_id: query.run_session_id }),
-    ...(query.review_packet_id === undefined ? {} : { review_packet_id: query.review_packet_id }),
-    ...(query.decision === undefined ? {} : { decision: query.decision }),
-    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-  };
-}
-
 function normalizeReleaseQuery(query: ReleaseProductQuery): ReleaseProductQuery {
   return {
     project_id: query.project_id,
@@ -1169,93 +1028,18 @@ function normalizeReleaseQuery(query: ReleaseProductQuery): ReleaseProductQuery 
   };
 }
 
-function updateWorkItemCockpit(
-  queryClient: QueryClient,
-  workItemId: string | undefined,
-  updater: (current: CockpitResponse) => CockpitResponse,
-) {
-  if (workItemId === undefined) {
-    return;
-  }
-
-  queryClient.setQueriesData<CockpitResponse>({ queryKey: queryKeys.workItemCockpit(workItemId) }, (current) =>
-    current === undefined ? current : updater(current),
-  );
-}
-
-function setCockpitSpec(queryClient: QueryClient, workItemId: string | undefined, spec: SpecPlan) {
-  updateWorkItemCockpit(queryClient, workItemId, (current) =>
-    current.item === undefined
-      ? {
-          ...current,
-          current_spec: spec,
-        }
-      : {
-          ...current,
-          current_spec: spec,
-          item: {
-            ...current.item,
-            current_spec_id: spec.id,
-          },
-        },
-  );
-}
-
-function setCockpitPlan(queryClient: QueryClient, workItemId: string | undefined, plan: SpecPlan) {
-  updateWorkItemCockpit(queryClient, workItemId, (current) =>
-    current.item === undefined
-      ? {
-          ...current,
-          current_plan: plan,
-        }
-      : {
-          ...current,
-          current_plan: plan,
-          item: {
-            ...current.item,
-            current_plan_id: plan.id,
-          },
-        },
-  );
-}
-
-function setCockpitSpecRevision(queryClient: QueryClient, workItemId: string | undefined, revision: SpecRevision) {
-  updateWorkItemCockpit(queryClient, workItemId, (current) => {
-    if (current.current_spec === undefined || current.current_spec === null || current.current_spec.id !== revision.spec_id) {
-      return current;
-    }
-
-    return {
-      ...current,
-      current_spec: {
-        ...current.current_spec,
-        current_revision_id: revision.id,
-      },
-    };
-  });
-}
-
-function setCockpitPlanRevision(queryClient: QueryClient, workItemId: string | undefined, revision: PlanRevision) {
-  updateWorkItemCockpit(queryClient, workItemId, (current) => {
-    if (current.current_plan === undefined || current.current_plan === null || current.current_plan.id !== revision.plan_id) {
-      return current;
-    }
-
-    return {
-      ...current,
-      current_plan: {
-        ...current.current_plan,
-        current_revision_id: revision.id,
-      },
-    };
-  });
-}
-
 function requiredId(id: string | undefined, label: string) {
   if (id === undefined) {
     throw new Error(`${label} is required`);
   }
   return id;
+}
+
+function requiredValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`${label} is required`);
+  }
+  return value;
 }
 
 function requiredActorId(actorId: string | undefined, label: string) {

@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
+import type { INestApplication } from '@nestjs/common';
 import type { RunSpec } from '@forgeloop/contracts';
 import {
   buildSourceGuardInjectionPlan,
@@ -22,6 +23,7 @@ import {
   type PreflightResult,
   type TerminalEvidenceReport,
 } from './dogfood/strict-local-codex';
+import { seedItemScopedSpecPlan } from '../tests/helpers/item-scoped-artifact-fixtures';
 
 export {
   buildCodexExecFallbackCommand,
@@ -213,7 +215,7 @@ const actorHeaders = (actorId: string): Record<string, string> => ({
   'X-Forgeloop-Actor-Class': 'human_admin',
 });
 
-export const startApi = async (): Promise<{ apiUrl: string; close: () => Promise<void> }> => {
+export const startApi = async (): Promise<{ app: INestApplication; apiUrl: string; close: () => Promise<void> }> => {
   const [{ Test }, { AppModule }, { RunWorkerLifecycleService }] = await Promise.all([
     import('@nestjs/testing'),
     import('../apps/control-plane-api/src/app.module.js'),
@@ -230,12 +232,18 @@ export const startApi = async (): Promise<{ apiUrl: string; close: () => Promise
     throw new Error('Unable to determine local API port.');
   }
   return {
+    app,
     apiUrl: `http://127.0.0.1:${address.port}`,
     close: () => app.close(),
   };
 };
 
-const createPackageThroughApi = async (apiUrl: string, repoPath: string, baseCommitSha: string): Promise<string> => {
+const createPackageThroughApi = async (
+  app: INestApplication,
+  apiUrl: string,
+  repoPath: string,
+  baseCommitSha: string,
+): Promise<string> => {
   const actor = 'local-codex-dogfood-actor';
   const project = await requestJson<{ id: string }>(apiUrl, '/projects', {
     method: 'POST',
@@ -265,63 +273,15 @@ const createPackageThroughApi = async (apiUrl: string, repoPath: string, baseCom
       intake_context: techDebtIntakeContext,
     },
   });
-  const spec = await requestJson<{ id: string }>(apiUrl, `/work-items/${encodeURIComponent(workItem.id)}/specs`, { method: 'POST' });
-  const specRevision = await requestJson<{ id: string }>(apiUrl, `/specs/${encodeURIComponent(spec.id)}/revisions`, {
-    method: 'POST',
-    body: {
-      summary: 'Real local Codex dogfood spec',
-      content: 'Validate opt-in real local_codex execution.',
-      background: 'Task 5 requires a production-shaped local Codex run.',
-      goals: ['Run local_codex through the public API.'],
-      scope_in: ['README.md marker change'],
-      scope_out: ['Source checkout mutation by Codex'],
-      acceptance_criteria: ['Terminal evidence and Review Packet artifact are present.'],
-      risk_notes: ['Requires local Codex runtime.'],
-      test_strategy_summary: 'Run harmless node check.',
-      author_actor_id: actor,
-    },
-  });
-  await requestJson(apiUrl, `/specs/${encodeURIComponent(spec.id)}/submit-for-approval`, {
-    method: 'POST',
-    headers: actorHeaders(actor),
-    body: { actor_id: actor },
-  });
-  await requestJson(apiUrl, `/specs/${encodeURIComponent(spec.id)}/approve`, {
-    method: 'POST',
-    headers: actorHeaders(actor),
-    body: { actor_id: actor },
-  });
-
-  const plan = await requestJson<{ id: string }>(apiUrl, `/work-items/${encodeURIComponent(workItem.id)}/plans`, { method: 'POST' });
-  const planRevision = await requestJson<{ id: string }>(apiUrl, `/plans/${encodeURIComponent(plan.id)}/revisions`, {
-    method: 'POST',
-    body: {
-      summary: 'Real local Codex dogfood plan',
-      content: 'Create one bounded package and run it through local_codex.',
-      implementation_summary: 'Bound writes to README.md and collect evidence.',
-      split_strategy: 'Single package.',
-      dependency_order: [],
-      test_matrix: ['node --version'],
-      risk_mitigations: ['Run in persistent worktree, not source checkout.'],
-      rollback_notes: 'Remove the marker from the worktree if needed.',
-      author_actor_id: actor,
-    },
-  });
-  await requestJson(apiUrl, `/plans/${encodeURIComponent(plan.id)}/submit-for-approval`, {
-    method: 'POST',
-    headers: actorHeaders(actor),
-    body: { actor_id: actor },
-  });
-  await requestJson(apiUrl, `/plans/${encodeURIComponent(plan.id)}/approve`, {
-    method: 'POST',
-    headers: actorHeaders(actor),
-    body: { actor_id: actor },
+  const { planRevision } = await seedItemScopedSpecPlan(app, workItem.id, {
+    actorId: actor,
+    reviewerActorId: actor,
   });
 
   const packageShape = buildBoundedLocalCodexRunPackage({ repoPath, baseCommitSha });
   const executionPackage = await requestJson<{ id: string; version: number }>(
     apiUrl,
-    `/plan-revisions/${encodeURIComponent(planRevision.id)}/execution-packages`,
+    `/plan-revisions/${encodeURIComponent(planRevision!.id)}/execution-packages`,
     {
       method: 'POST',
       body: {
@@ -525,7 +485,7 @@ export const main = async (env: Env = process.env, runCommand: CommandRunner = d
     const baseCommitSha = baseStdout.trim();
     const sourceGuardInjection = await runSourceGuardInjection({ repoPath, baseCommitSha, runCommand });
     api = await startApi();
-    const executionPackageId = await createPackageThroughApi(api.apiUrl, repoPath, baseCommitSha);
+    const executionPackageId = await createPackageThroughApi(api.app, api.apiUrl, repoPath, baseCommitSha);
     const run = await requestJson<{ run_session_id: string }>(api.apiUrl, `/execution-packages/${encodeURIComponent(executionPackageId)}/run`, {
       method: 'POST',
       body: {

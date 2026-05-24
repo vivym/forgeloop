@@ -708,10 +708,7 @@ describe('delivery local Codex dogfood script helpers', () => {
       expect(missingRelease.status).toBe(404);
 
       const unsupported = await fetch(`${api.apiUrl}/query/replay/unsupported/missing`);
-      expect(unsupported.status).toBe(400);
-      await expect(unsupported.json()).resolves.toMatchObject({
-        message: expect.stringContaining('Unsupported replay object type'),
-      });
+      expect(unsupported.status).toBe(404);
     } finally {
       await api.close();
     }

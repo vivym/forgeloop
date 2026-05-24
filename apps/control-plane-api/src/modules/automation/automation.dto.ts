@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { generatedPackageDraftSetSchema, generatedPlanDraftSchema } from '@forgeloop/codex-runtime';
+import { generatedPackageDraftSetSchema } from '@forgeloop/codex-runtime';
 import { artifactRefSchema } from '@forgeloop/contracts';
 import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
 import type {
@@ -31,23 +31,6 @@ const manualPathHoldObjectTypeSchema = z.enum([
   'review_packet',
   'release_gate',
 ]);
-
-const ensurePlanDraftActionInputSchema = z
-  .object({
-    work_item_id: nonBlankString,
-    spec_revision_id: nonBlankString,
-    prompt_version: nonBlankString.optional(),
-    output_schema_version: z.literal('plan_draft.v1').optional(),
-  })
-  .strict();
-
-const ensureSpecDraftActionInputSchema = z
-  .object({
-    work_item_id: nonBlankString,
-    prompt_version: nonBlankString.optional(),
-    output_schema_version: z.literal('spec_draft.v1').optional(),
-  })
-  .strict();
 
 const ensurePackageDraftsActionInputSchema = z
   .object({
@@ -107,20 +90,6 @@ export const createAutomationActionRunSchema = z.discriminatedUnion('action_type
   z
     .object({
       ...createAutomationActionRunBaseShape,
-      action_type: z.literal('ensure_spec_draft'),
-      action_input_json: ensureSpecDraftActionInputSchema,
-    })
-    .strict(),
-  z
-    .object({
-      ...createAutomationActionRunBaseShape,
-      action_type: z.literal('ensure_plan_draft'),
-      action_input_json: ensurePlanDraftActionInputSchema,
-    })
-    .strict(),
-  z
-    .object({
-      ...createAutomationActionRunBaseShape,
       action_type: z.literal('ensure_package_drafts'),
       action_input_json: ensurePackageDraftsActionInputSchema,
     })
@@ -146,9 +115,7 @@ export const claimNextAutomationActionRunSchema = z
     claim_token: nonBlankString,
     lease_ms: z.number().int().positive().max(60 * 60 * 1000).optional(),
     limit: z.number().int().min(1).max(100).default(1),
-    action_type: z
-      .enum(['ensure_spec_draft', 'ensure_plan_draft', 'ensure_package_drafts', 'request_manual_path', 'project_runtime_snapshot'])
-      .optional(),
+    action_type: z.enum(['ensure_package_drafts', 'request_manual_path', 'project_runtime_snapshot']).optional(),
     project_id: nonBlankString.optional(),
     repo_id: nonBlankString.optional(),
     automation_scope: automationScopeSchema.optional(),
@@ -208,8 +175,6 @@ const automationPreconditionSchema = z
     active_hold_fingerprint: nonBlankString.optional(),
     required_capability: z.enum([
       'canProjectRuntimeState',
-      'canGenerateSpecDraft',
-      'canGeneratePlanDraft',
       'canGeneratePackageDrafts',
       'canEnqueueRuns',
     ]),
@@ -234,39 +199,6 @@ const internalCommandBaseShape = {
   idempotency_key: nonBlankString,
   automation_precondition: automationPreconditionSchema,
 } satisfies z.ZodRawShape;
-
-export const ensurePlanDraftCommandSchema = z
-  .object({
-    ...internalCommandBaseShape,
-    spec_revision_id: nonBlankString,
-    generated_plan_draft: generatedPlanDraftSchema,
-    generation_artifacts: z.array(artifactRefSchema).default([]),
-  })
-  .strict();
-
-export const generatedSpecDraftSchema = z
-  .object({
-    schema_version: z.literal('spec_draft.v1'),
-    summary: nonBlankString,
-    content: nonBlankString,
-    background: nonBlankString,
-    goals: z.array(nonBlankString),
-    scope_in: z.array(nonBlankString),
-    scope_out: z.array(nonBlankString),
-    acceptance_criteria: z.array(nonBlankString),
-    risk_notes: z.array(nonBlankString).default([]),
-    test_strategy_summary: nonBlankString,
-    structured_document: z.record(z.string(), z.unknown()).optional(),
-  })
-  .strict();
-
-export const ensureSpecDraftCommandSchema = z
-  .object({
-    ...internalCommandBaseShape,
-    generated_spec_draft: generatedSpecDraftSchema,
-    generation_artifacts: z.array(artifactRefSchema).default([]),
-  })
-  .strict();
 
 export const ensurePackageDraftsCommandSchema = z
   .object({
@@ -330,8 +262,6 @@ export type GatePendingAutomationActionRunDto = z.infer<typeof gatePendingAutoma
 export type BlockAutomationActionRunDto = z.infer<typeof blockAutomationActionRunSchema>;
 export type FailAutomationActionRunDto = z.infer<typeof failAutomationActionRunSchema>;
 export type AutomationActionType = CreateAutomationActionRunDto['action_type'];
-export type EnsurePlanDraftCommandDto = z.infer<typeof ensurePlanDraftCommandSchema>;
-export type EnsureSpecDraftCommandDto = z.infer<typeof ensureSpecDraftCommandSchema>;
 export type EnsurePackageDraftsCommandDto = z.infer<typeof ensurePackageDraftsCommandSchema>;
 export type GenerationContextQueryDto = z.infer<typeof generationContextQuerySchema>;
 export type PlanGenerationContextQueryDto = z.infer<typeof planGenerationContextQuerySchema>;
@@ -427,8 +357,6 @@ export interface AutomationRuntimeSnapshotDto {
   generated_at: string;
   projects: AutomationRuntimeSnapshotProjectDto[];
   repos: AutomationRuntimeSnapshotRepoDto[];
-  work_items_requiring_spec: AutomationRuntimeSnapshotTargetDto[];
-  work_items_requiring_plan: AutomationRuntimeSnapshotTargetDto[];
   plan_revisions_requiring_packages: AutomationRuntimeSnapshotTargetDto[];
   run_enqueue_disabled_packages: AutomationRuntimeSnapshotTargetDto[];
   active_holds: AutomationRuntimeSnapshotManualHoldDto[];
@@ -552,11 +480,7 @@ export interface AutomationActionResponseDto {
 
 const safeActionInputJson = (actionRun: AutomationActionRun): Record<string, unknown> => {
   const schema =
-    actionRun.action_type === 'ensure_spec_draft'
-      ? ensureSpecDraftActionInputSchema
-      : actionRun.action_type === 'ensure_plan_draft'
-      ? ensurePlanDraftActionInputSchema
-      : actionRun.action_type === 'ensure_package_drafts'
+    actionRun.action_type === 'ensure_package_drafts'
         ? ensurePackageDraftsActionInputSchema
         : actionRun.action_type === 'request_manual_path'
           ? requestManualPathActionInputSchema
@@ -606,8 +530,6 @@ export const toRuntimeSnapshotDto = (input: {
   generated_at: input.generatedAt,
   projects: input.data.projects.map(toRuntimeSnapshotProjectDto),
   repos: input.data.repos.map((repo) => toRuntimeSnapshotRepoDto(repo, input.policyProjectionsByRepoScope.get(repo.automation_scope))),
-  work_items_requiring_spec: input.data.work_items_requiring_spec.map(toRuntimeSnapshotTargetDto),
-  work_items_requiring_plan: input.data.work_items_requiring_plan.map(toRuntimeSnapshotTargetDto),
   plan_revisions_requiring_packages: input.data.plan_revisions_requiring_packages.map(toRuntimeSnapshotTargetDto),
   run_enqueue_disabled_packages: input.data.run_enqueue_disabled_packages.map(toRuntimeSnapshotTargetDto),
   active_holds: input.data.active_holds.map(toRuntimeSnapshotManualHoldDto),

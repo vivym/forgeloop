@@ -167,9 +167,11 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^packages\/db\/src\/schema\/project\.ts$/,
   ];
   const projectOwnerTestPaths = [
-    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|delivery-flow|durable-id-generation|durable-revision-lookup|execution-package-service|local-codex-routing|product-lanes|query-module|spec-plan-service|tasks)\.test\.ts$/,
+    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|brainstorming|delivery-flow|development-plans|durable-id-generation|durable-revision-lookup|execution-package-service|local-codex-routing|product-lanes|query-module|spec-plan-service|tasks)\.test\.ts$/,
     /^tests\/db\/(?:schema|task-repository)\.test\.ts$/,
+    /^tests\/e2e\/helpers\/capture-route-screenshots\.ts$/,
     /^tests\/helpers\/delivery-runtime-fixtures\.ts$/,
+    /^tests\/helpers\/execution-supervision-fixtures\.ts$/,
     /^tests\/smoke\/(?:delivery-dogfood-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
   ];
   const executionPackageOwnerPaths = [
@@ -234,7 +236,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
       context,
     );
   const negativeWorkItemOwnerContext =
-    /rejects owner_actor_id|rejects public product list items that expose work_item refs or owner_actor_id|rejects public product query filters with legacy owner or work item fields|rejects Spec and Plan read models with legacy work_item refs or owner fields|owner_actor_id is not supported|owner_actor_id is not accepted|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|queryByLabelText\('owner_actor_id'\)|required_fields.*owner_actor_id|unsupported_filters.*owner_actor_id|strips stale kind and owner filters|omits owner filters|direct Work Item lane filter resolution|filters Work Item type lanes by driver_actor_id|without translating execution owner filters|rejects Work Item create bodies with execution owner fields before POSTing|whitelists product Work Item query filters before sending requests|editableObjectRefSchema\.parse[\s\S]*owner_actor_id|productListItemSchema\.parse[\s\S]*owner_actor_id|productListQuerySchema\.parse[\s\S]*owner_actor_id|specDetailSchema\.parse[\s\S]*owner_actor_id|productActionSchema\.safeParse[\s\S]*owner_actor_id[\s\S]*toBe\(false\)|productLaneResponseSchema\.safeParse[\s\S]*owner_actor_id[\s\S]*toBe\(false\)|createWorkItemRequestSchema[\s\S]*owner_actor_id|patchWorkItemRequestSchema[\s\S]*owner_actor_id|publicWorkItemSchema[\s\S]*owner_actor_id|api\.createWorkItem\([\s\S]*owner_actor_id|\.patch\(`\/work-items\/[\s\S]*owner_actor_id/.test(
+    /rejects owner_actor_id|rejects public product list items that expose work_item refs or owner_actor_id|rejects public product query filters with legacy owner or work item fields|rejects Spec and Plan read models with legacy work_item refs or owner fields|owner_actor_id is not supported|owner_actor_id is not accepted|does not expose owner_actor_id|not\.toHaveProperty\('owner_actor_id'\)|not\.toContain\('owner_actor_id'\)|not\.toMatch\([\s\S]*owner_actor_id|queryByLabelText\('owner_actor_id'\)|required_fields.*owner_actor_id|unsupported_filters.*owner_actor_id|strips stale kind and owner filters|omits owner filters|direct Work Item lane filter resolution|filters Work Item type lanes by driver_actor_id|without translating execution owner filters|rejects Work Item create bodies with execution owner fields before POSTing|whitelists source-object query filters before sending requests|editableObjectRefSchema\.parse[\s\S]*owner_actor_id|productListItemSchema\.parse[\s\S]*owner_actor_id|productListQuerySchema\.parse[\s\S]*owner_actor_id|specDetailSchema\.parse[\s\S]*owner_actor_id|productActionSchema\.safeParse[\s\S]*owner_actor_id[\s\S]*toBe\(false\)|productLaneResponseSchema\.safeParse[\s\S]*owner_actor_id[\s\S]*toBe\(false\)|createWorkItemRequestSchema[\s\S]*owner_actor_id|patchWorkItemRequestSchema[\s\S]*owner_actor_id|publicWorkItemSchema[\s\S]*owner_actor_id|api\.createWorkItem\([\s\S]*owner_actor_id|\.patch\(`\/work-items\/[\s\S]*owner_actor_id/.test(
       context,
     );
   const runRequesterContext = /requested_by_actor_id|runSession\.requested_by_actor_id/.test(context);
@@ -253,13 +255,17 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
 };
 
 const allowedWorkItemDriverReference = (rel: string, target: string, context: string): boolean => {
+  const negativeLegacyNameContext =
+    /Keep legacy Work Item Owner semantics out of product refs|forbiddenProductStrings|not\.toMatch\([\s\S]*Work Item Owner|not\.toContain\([\s\S]*Work Item Owner/.test(
+      context,
+    );
   if (target !== 'owner_actor_id') {
-    return false;
+    return negativeLegacyNameContext;
   }
   if (rel === 'docs/superpowers/plans/2026-05-20-typed-work-item-intake.md') {
     return true;
   }
-  return allowedWorkItemOwnerActorIdReference(rel, context);
+  return negativeLegacyNameContext || allowedWorkItemOwnerActorIdReference(rel, context);
 };
 
 const workItemDriverNamingMatches = () =>

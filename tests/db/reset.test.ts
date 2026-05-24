@@ -49,4 +49,41 @@ describe('database reset guard', () => {
     expect(resettableTables.indexOf('codex_runtime_jobs')).toBeLessThan(launchLeaseIndex);
     expect(resettableTables.indexOf('codex_pending_workspace_bundles')).toBeLessThan(launchLeaseIndex);
   });
+
+  it('truncates execution supervision tables before their parent planning graph', () => {
+    expect(resettableTables).toEqual(
+      expect.arrayContaining([
+        'qa_handoffs',
+        'code_review_handoffs',
+        'executions',
+        'execution_plan_revisions',
+        'execution_plans',
+        'boundary_summary_revisions',
+        'boundary_summaries',
+        'brainstorming_sessions',
+        'development_plan_item_revisions',
+        'development_plan_items',
+        'development_plan_source_links',
+        'development_plan_revisions',
+        'development_plans',
+        'context_manifests',
+      ]),
+    );
+
+    expect(resettableTables.indexOf('qa_handoffs')).toBeLessThan(resettableTables.indexOf('code_review_handoffs'));
+    expect(resettableTables.indexOf('code_review_handoffs')).toBeLessThan(resettableTables.indexOf('executions'));
+    expect(resettableTables.indexOf('execution_packages')).toBeLessThan(resettableTables.indexOf('executions'));
+    expect(resettableTables.indexOf('executions')).toBeLessThan(resettableTables.indexOf('execution_plan_revisions'));
+    expect(resettableTables.indexOf('executions')).toBeLessThan(resettableTables.indexOf('development_plan_items'));
+    expect(resettableTables.indexOf('execution_plan_revisions')).toBeLessThan(resettableTables.indexOf('execution_plans'));
+    expect(resettableTables.indexOf('execution_plans')).toBeLessThan(resettableTables.indexOf('development_plan_items'));
+    expect(resettableTables.indexOf('boundary_summary_revisions')).toBeLessThan(resettableTables.indexOf('boundary_summaries'));
+    expect(resettableTables.indexOf('boundary_summaries')).toBeLessThan(resettableTables.indexOf('brainstorming_sessions'));
+    expect(resettableTables.indexOf('development_plan_item_revisions')).toBeLessThan(
+      resettableTables.indexOf('development_plan_items'),
+    );
+    expect(resettableTables.indexOf('development_plan_source_links')).toBeLessThan(resettableTables.indexOf('development_plans'));
+    expect(resettableTables.indexOf('development_plan_revisions')).toBeLessThan(resettableTables.indexOf('development_plans'));
+    expect(resettableTables.indexOf('development_plan_items')).toBeLessThan(resettableTables.indexOf('development_plans'));
+  });
 });

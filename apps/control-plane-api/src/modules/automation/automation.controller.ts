@@ -14,14 +14,10 @@ import {
   claimNextAutomationActionRunSchema,
   completeAutomationActionRunSchema,
   createAutomationActionRunSchema,
-  ensureSpecDraftCommandSchema,
   ensurePackageDraftsCommandSchema,
-  ensurePlanDraftCommandSchema,
   failAutomationActionRunSchema,
-  generationContextQuerySchema,
   gatePendingAutomationActionRunSchema,
   packageGenerationContextQuerySchema,
-  planGenerationContextQuerySchema,
   requestManualPathCommandSchema,
   type AutomationActionResponseDto,
   type AutomationRuntimeSnapshotDto,
@@ -29,14 +25,10 @@ import {
   type ClaimNextAutomationActionRunDto,
   type CompleteAutomationActionRunDto,
   type CreateAutomationActionRunDto,
-  type EnsureSpecDraftCommandDto,
   type EnsurePackageDraftsCommandDto,
-  type EnsurePlanDraftCommandDto,
   type FailAutomationActionRunDto,
-  type GenerationContextQueryDto,
   type GatePendingAutomationActionRunDto,
   type PackageGenerationContextQueryDto,
-  type PlanGenerationContextQueryDto,
   type RequestManualPathCommandDto,
 } from './automation.dto';
 import { AutomationGenerationContextService } from './automation-generation-context.service';
@@ -81,22 +73,6 @@ export class AutomationController {
   @Get('runtime-snapshot')
   getRuntimeSnapshot(): Promise<AutomationRuntimeSnapshotDto> {
     return this.runtimeSnapshotService.getRuntimeSnapshot();
-  }
-
-  @Get('generation-context/work-items/:workItemId/spec-draft')
-  specDraftGenerationContext(
-    @Param('workItemId') workItemId: string,
-    @Query(new ZodValidationPipe(generationContextQuerySchema)) query: GenerationContextQueryDto,
-  ) {
-    return this.automationGenerationContextService.getSpecDraftContext(workItemId, query);
-  }
-
-  @Get('generation-context/work-items/:workItemId/plan-draft')
-  planDraftGenerationContext(
-    @Param('workItemId') workItemId: string,
-    @Query(new ZodValidationPipe(planGenerationContextQuerySchema)) query: PlanGenerationContextQueryDto,
-  ) {
-    return this.automationGenerationContextService.getPlanDraftContext(workItemId, query);
   }
 
   @Get('generation-context/plan-revisions/:planRevisionId/package-drafts')
@@ -156,22 +132,6 @@ export class AutomationController {
     @Body(new ZodValidationPipe(failAutomationActionRunSchema)) body: FailAutomationActionRunDto,
   ): Promise<AutomationActionResponseDto> {
     return this.automationActionService.failAction(id, body);
-  }
-
-  @Post('work-items/:workItemId/ensure-plan-draft')
-  ensurePlanDraft(
-    @Param('workItemId') workItemId: string,
-    @Body(new ZodValidationPipe(ensurePlanDraftCommandSchema)) body: EnsurePlanDraftCommandDto,
-  ) {
-    return this.automationCommandService.ensurePlanDraftForClaimedAction(workItemId, body);
-  }
-
-  @Post('work-items/:workItemId/ensure-spec-draft')
-  ensureSpecDraft(
-    @Param('workItemId') workItemId: string,
-    @Body(new ZodValidationPipe(ensureSpecDraftCommandSchema)) body: EnsureSpecDraftCommandDto,
-  ) {
-    return this.automationCommandService.ensureSpecDraftForClaimedAction(workItemId, body);
   }
 
   @Post('plan-revisions/:planRevisionId/ensure-package-drafts')
