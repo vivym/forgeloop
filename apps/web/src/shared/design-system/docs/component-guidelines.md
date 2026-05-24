@@ -4,10 +4,14 @@ This design system layer is shared infrastructure. Keep primitives business-agno
 
 ## Composition Rules
 
-- Do not build card-in-card page composition. `Section` is a page or layout section, not a nested card container.
+- Page sections are not cards. Keep section scaffolding unframed by default and use `Section variant="panel"` only for bounded summaries, previews, drawers, repeated item groups, and modals.
+- Cards are for repeated items, previews, drawers, and bounded summaries. Do not build card-in-card page composition (`data-card-in-card="true"` is an anti-pattern marker).
 - Keep route shell navigation out of UI primitives. `AppShell`, `SidebarNav`, and `Topbar` provide structure only.
 - Use Tailwind theme utilities inside layout primitives and shared UI. Do not add new global visual class APIs.
 - Use `Section`, `DetailLayout`, `SplitPane`, `ActionRail`, `Table`, `DataTable`, and `Drawer` according to page intent instead of route-local container patterns.
+- First viewport regions must expose `current-state`, `next-action`, `role-responsibility`, and `blocker-risk` affordances so route helpers can anchor product context.
+- Metadata must use `CompactMetadata` or equivalent compact `dl` structures; avoid large card grids (`data-metadata-card-sprawl="true"` is an anti-pattern marker).
+- Avoid raw runtime-dominant headings that hide operational context (`data-runtime-dominant-title="true"` is an anti-pattern marker).
 - Keep developer payload inspection in the gated Dev Tools route.
 - Keep global CSS limited to Tailwind import, theme variables, base reset, focus, motion, and unavoidable portal constraints.
 

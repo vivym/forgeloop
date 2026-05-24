@@ -2,17 +2,25 @@ import type { HTMLAttributes, ReactNode } from 'react';
 
 import { cn } from '../../utils/cn';
 
+const sectionVariantClasses = {
+  plain: 'grid gap-4',
+  panel: 'grid gap-4 rounded-card border border-border bg-surface p-4',
+  subtle: 'grid gap-4 rounded-card border border-border bg-surface-muted/70 p-4',
+} as const;
+
 export interface SectionProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
   actions?: ReactNode;
   description?: ReactNode;
   title?: ReactNode;
+  variant?: 'plain' | 'panel' | 'subtle';
 }
 
-export function Section({ actions, children, className, description, title, ...props }: SectionProps) {
+export function Section({ actions, children, className, description, title, variant = 'plain', ...props }: SectionProps) {
   return (
     <section
-      className={cn('grid gap-4 rounded-card border border-border bg-surface p-4 shadow-sm', className)}
+      className={cn(sectionVariantClasses[variant], className)}
       data-layout-section=""
+      data-section-variant={variant}
       {...props}
     >
       {title || description || actions ? (
