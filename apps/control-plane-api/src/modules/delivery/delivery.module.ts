@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AttachmentsModule } from '../attachments/attachments.module';
 import { BrainstormingModule } from '../brainstorming/brainstorming.module';
 import { ExecutionPackagesModule } from '../execution-packages/execution-packages.module';
+import { ExecutionsModule } from '../executions/executions.module';
 import { DevelopmentPlansModule } from '../development-plans/development-plans.module';
 import { MarkdownModule } from '../markdown/markdown.module';
 import { ProjectsModule } from '../projects/projects.module';
@@ -20,6 +21,7 @@ import { WorkItemsModule } from '../work-items/work-items.module';
     BrainstormingModule,
     SpecPlanModule,
     ExecutionPackagesModule,
+    ExecutionsModule,
     RunControlModule,
     ReviewEvidenceModule,
     AttachmentsModule,

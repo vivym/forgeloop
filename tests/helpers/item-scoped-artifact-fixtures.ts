@@ -35,6 +35,7 @@ export type ItemScopedArtifactSeed = {
 };
 
 type SeedOptions = {
+  repository?: DeliveryRepository;
   actorId?: string;
   reviewerActorId?: string;
   itemReviewerActorId?: string;
@@ -57,7 +58,7 @@ export async function seedItemScopedSpecPlan(
   workItemId: string,
   options: SeedOptions = {},
 ): Promise<ItemScopedArtifactSeed> {
-  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const repository = options.repository ?? (app.get(DELIVERY_REPOSITORY) as DeliveryRepository);
   const runtime = app.get(ControlPlaneRuntimeService);
   const actorId = options.actorId ?? defaultActorId;
   const reviewerActorId = options.reviewerActorId ?? defaultReviewerActorId;

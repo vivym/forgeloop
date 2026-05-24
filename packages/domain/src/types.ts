@@ -277,6 +277,7 @@ export interface ExecutionPackage {
   task_id?: string;
   work_item_id: string;
   development_plan_item_id?: string;
+  execution_id?: string;
   spec_id: string;
   spec_revision_id: string;
   execution_plan_id?: string;

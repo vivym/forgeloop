@@ -31,6 +31,7 @@ import type {
   CodexWorkerRegistration,
   CommandIdempotencyRecord,
   ContextManifest,
+  CodeReviewHandoff,
   Decision,
   DomainError as DomainErrorType,
   DevelopmentPlan,
@@ -55,6 +56,7 @@ import type {
   ReleaseEvidence,
   ReleaseExecutionPackage,
   ReleaseWorkItem,
+  QaHandoff,
   ReviewPacket,
   RunCommand,
   RunEvent,
@@ -113,6 +115,7 @@ import {
   codex_worker_bootstrap_tokens,
   codex_worker_registrations,
   codex_worker_session_nonces,
+  code_review_handoffs,
   command_idempotency_records,
   actors,
   boundary_summaries,
@@ -140,6 +143,7 @@ import {
   plans,
   project_repos,
   projects,
+  qa_handoffs,
   release_evidences,
   release_execution_packages,
   release_work_items,
@@ -4196,12 +4200,40 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
   }
 
+  async listExecutionPlansForDevelopmentPlanItem(itemId: string): Promise<ExecutionPlanDocument[]> {
+    return this.listWhere<ExecutionPlanDocument>(
+      execution_plans,
+      eq(execution_plans.developmentPlanItemId, itemId),
+      [execution_plans.createdAt, execution_plans.id],
+    );
+  }
+
   async saveExecution(execution: Execution): Promise<void> {
     await this.upsert(executions, executions.id, execution);
   }
 
   async getExecution(id: string): Promise<Execution | undefined> {
     return this.getById(executions, executions.id, id);
+  }
+
+  async saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void> {
+    await this.upsert(code_review_handoffs, code_review_handoffs.id, handoff);
+  }
+
+  async getCodeReviewHandoff(id: string): Promise<CodeReviewHandoff | undefined> {
+    return this.getById(code_review_handoffs, code_review_handoffs.id, id);
+  }
+
+  async saveQaHandoff(handoff: QaHandoff): Promise<void> {
+    await this.upsert(qa_handoffs, qa_handoffs.id, handoff);
+  }
+
+  async getQaHandoff(id: string): Promise<QaHandoff | undefined> {
+    return this.getById(qa_handoffs, qa_handoffs.id, id);
+  }
+
+  async listQaHandoffsForCodeReview(handoffId: string): Promise<QaHandoff[]> {
+    return this.listWhere<QaHandoff>(qa_handoffs, eq(qa_handoffs.codeReviewHandoffId, handoffId), qa_handoffs.createdAt);
   }
 
   async savePlan(plan: Plan): Promise<void> {

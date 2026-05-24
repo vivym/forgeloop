@@ -38,6 +38,7 @@ import type {
   DevelopmentPlanItemRevision,
   DevelopmentPlanRevision,
   DevelopmentPlanSourceLink,
+  CodeReviewHandoff,
   Execution,
   ExecutionPlanDocument,
   ExecutionPlanRevision,
@@ -56,6 +57,7 @@ import type {
   ReleaseExecutionPackage,
   ReleaseWorkItem,
   ReviewPacket,
+  QaHandoff,
   RunCommand,
   RunEvent,
   RunSession,
@@ -1371,8 +1373,14 @@ export interface DeliveryRepository {
   saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void>;
   getExecutionPlanRevision(id: string): Promise<ExecutionPlanRevision | undefined>;
   listExecutionPlanRevisions(executionPlanId: string): Promise<ExecutionPlanRevision[]>;
+  listExecutionPlansForDevelopmentPlanItem(itemId: string): Promise<ExecutionPlanDocument[]>;
   saveExecution(execution: Execution): Promise<void>;
   getExecution(id: string): Promise<Execution | undefined>;
+  saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void>;
+  getCodeReviewHandoff(id: string): Promise<CodeReviewHandoff | undefined>;
+  saveQaHandoff(handoff: QaHandoff): Promise<void>;
+  getQaHandoff(id: string): Promise<QaHandoff | undefined>;
+  listQaHandoffsForCodeReview(handoffId: string): Promise<QaHandoff[]>;
 
   savePlan(plan: Plan): Promise<void>;
   getPlan(planId: string): Promise<Plan | undefined>;

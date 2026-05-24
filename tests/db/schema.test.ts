@@ -18,6 +18,7 @@ import {
   project_repo_status_values,
   project_repos,
   projects,
+  qa_handoffs,
   release_evidences,
   release_execution_packages,
   release_work_items,
@@ -60,6 +61,7 @@ import {
   boundary_summaries,
   boundary_summary_revisions,
   brainstorming_sessions,
+  code_review_handoffs,
   context_manifests,
   development_plan_revisions,
   development_plan_item_revisions,
@@ -121,6 +123,8 @@ const requiredTables = {
   execution_plans,
   execution_plan_revisions,
   executions,
+  code_review_handoffs,
+  qa_handoffs,
   execution_package_generation_runs,
   execution_package_generation_packages,
   automation_action_runs,
@@ -212,6 +216,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'actors',
         'attachments',
         'artifacts',
+        'code_review_handoffs',
         'command_idempotency_records',
         'boundary_summaries',
         'boundary_summary_revisions',
@@ -251,6 +256,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'plans',
         'project_repos',
         'projects',
+        'qa_handoffs',
         'release_evidences',
         'release_execution_packages',
         'release_work_items',
@@ -461,6 +467,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(plans, 'id')).toBe('PgUUID');
     expect(columnType(plan_revisions, 'id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'id')).toBe('PgUUID');
+    expect(columnType(execution_packages, 'executionId')).toBe('PgUUID');
     expect(columnType(run_sessions, 'id')).toBe('PgUUID');
     expect(columnType(review_packets, 'id')).toBe('PgUUID');
     expect(columnType(artifacts, 'id')).toBe('PgUUID');
@@ -677,6 +684,11 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(execution_plan_revisions, 'execution_plan_id', column(execution_plans, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plan_revisions, 'based_on_spec_revision_id', column(spec_revisions, 'id'))).toBe(true);
     expect(hasForeignKey(executions, 'execution_plan_revision_id', column(execution_plan_revisions, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_packages, 'execution_id', column(executions, 'id'))).toBe(true);
+    expect(hasForeignKey(code_review_handoffs, 'execution_id', column(executions, 'id'))).toBe(true);
+    expect(hasForeignKey(code_review_handoffs, 'execution_plan_revision_id', column(execution_plan_revisions, 'id'))).toBe(true);
+    expect(hasForeignKey(qa_handoffs, 'code_review_handoff_id', column(code_review_handoffs, 'id'))).toBe(true);
+    expect(hasForeignKey(qa_handoffs, 'execution_id', column(executions, 'id'))).toBe(true);
     expect(
       hasUniqueIndex(development_plan_item_revisions, 'dpi_revisions_item_revision_unique', [
         'development_plan_item_id',

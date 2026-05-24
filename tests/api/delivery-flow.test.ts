@@ -174,9 +174,9 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
 const approveSpec = async (app: INestApplication, workItemId: string) => {
   const server = app.getHttpServer();
   const { spec, specRevision } = await seedItemScopedSpecPlan(app, workItemId, {
+    repository: repositoryFor(app),
     actorId: actorOwner,
     reviewerActorId: actorReviewer,
-    includePlan: false,
   });
   const specResponse = (await request(server).get(`/specs/${spec.id}`).expect(200)).body;
   expect(specResponse).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
@@ -193,10 +193,16 @@ const approveSpec = async (app: INestApplication, workItemId: string) => {
 
 const approvePlan = async (app: INestApplication, workItemId: string) => {
   const server = app.getHttpServer();
-  const { plan, planRevision } = await seedItemScopedSpecPlan(app, workItemId, {
-    actorId: actorOwner,
-    reviewerActorId: actorReviewer,
-  });
+  const repository = repositoryFor(app);
+  const workItem = await repository.getWorkItem(workItemId);
+  if (workItem === undefined || workItem.current_plan_id === undefined || workItem.current_plan_revision_id === undefined) {
+    throw new Error(`WorkItem ${workItemId} has no approved current plan`);
+  }
+  const plan = await repository.getPlan(workItem.current_plan_id);
+  const planRevision = await repository.getPlanRevision(workItem.current_plan_revision_id);
+  if (plan === undefined || planRevision === undefined) {
+    throw new Error(`WorkItem ${workItemId} current plan graph is incomplete`);
+  }
   const planResponse = (await request(server).get(`/plans/${plan!.id}`).expect(200)).body;
   expect(planResponse).toMatchObject({ scope_ref: { type: 'requirement', id: workItemId } });
   expect(planResponse).not.toHaveProperty('work_item_id');

@@ -143,6 +143,7 @@ describe('ExecutionPackageService delivery API', () => {
     expect(generated).toHaveLength(1);
     expect(generated[0].execution_package_set_id).toBe(`generation:${planRevision.id}:default`);
     expect(generated[0].generation_key).toBe('default');
+    expect(generated[0].development_plan_item_id).toEqual(expect.any(String));
     expect(generated[0].package_policy_snapshot.policy_digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(generated[0].package_policy_snapshot.policy_source_path).toBe('WORKFLOW.md');
 

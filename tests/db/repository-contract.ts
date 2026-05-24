@@ -2539,6 +2539,7 @@ const executionPackageFixture = (overrides: Partial<ExecutionPackage> = {}): Exe
   id: ids.package,
   work_item_id: ids.workItem,
   development_plan_item_id: ids.developmentPlanItem,
+  execution_id: ids.execution,
   spec_id: ids.spec,
   spec_revision_id: ids.specRevision1,
   execution_plan_id: ids.executionPlan,

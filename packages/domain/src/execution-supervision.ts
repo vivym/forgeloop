@@ -1,4 +1,10 @@
-import type { Execution as ContractExecution } from '@forgeloop/contracts';
+import type {
+  CodeReviewAuditedException,
+  CodeReviewHandoff as ContractCodeReviewHandoff,
+  Execution as ContractExecution,
+  QaHandoff as ContractQaHandoff,
+  ProductObjectRef,
+} from '@forgeloop/contracts';
 import type { GateResult } from './development-plan.js';
 import type { IsoDateTime } from './types.js';
 
@@ -32,6 +38,55 @@ export interface Execution extends ContractExecution {
   execution_plan_revision_id: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
+}
+
+export interface CodeReviewHandoff extends ContractCodeReviewHandoff {
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export interface QaHandoff extends ContractQaHandoff {
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export type TrustedHumanReviewActorClass = 'human' | 'human_admin';
+
+export function isTrustedHumanReviewActorClass(actorClass: string | undefined): actorClass is TrustedHumanReviewActorClass {
+  return actorClass === 'human' || actorClass === 'human_admin';
+}
+
+export function codeReviewReadyGate(input: {
+  execution: Execution;
+  changedSurfaces: string[];
+  verificationEvidenceRefs: ProductObjectRef[];
+}): GateResult<'execution_not_completed' | 'changed_surfaces_missing' | 'verification_evidence_missing'> {
+  if (input.execution.status !== 'completed') {
+    return { ok: false, reason: 'execution_not_completed' };
+  }
+  if (input.changedSurfaces.length === 0) {
+    return { ok: false, reason: 'changed_surfaces_missing' };
+  }
+  if (input.verificationEvidenceRefs.length === 0) {
+    return { ok: false, reason: 'verification_evidence_missing' };
+  }
+  return { ok: true };
+}
+
+export function canCreateQaHandoff(input: {
+  codeReviewHandoff: CodeReviewHandoff;
+}): GateResult<'code_review_not_approved'> {
+  if (input.codeReviewHandoff.status === 'approved' || input.codeReviewHandoff.audited_exception !== undefined) {
+    return { ok: true };
+  }
+  return { ok: false, reason: 'code_review_not_approved' };
+}
+
+export function auditedExceptionAllowsQaPreparation(input: {
+  auditedException?: CodeReviewAuditedException;
+  qaStatus?: QaHandoff['status'];
+}): boolean {
+  return input.auditedException !== undefined && input.qaStatus !== 'accepted';
 }
 
 export type ExecutionStartGateReason =

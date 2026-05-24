@@ -7,6 +7,7 @@ import {
   brainstormingSessionSchema,
   contextManifestSchema,
   editableObjectRefSchema,
+  executionSchema,
   initiativeDetailSchema,
   initiativeListItemSchema,
   legacyWorkItemStorageRefSchema,
@@ -152,6 +153,44 @@ describe('project management typed object contracts', () => {
       approved_spec_revision_id: 'spec-rev-1',
     });
     expect(JSON.stringify(manifest)).not.toContain('"type":"work_item"');
+  });
+
+  it('models product Executions with item and Execution Plan revision identity', () => {
+    const execution = executionSchema.parse({
+      id: 'exec-1',
+      development_plan_item_id: 'dpi-1',
+      execution_plan_revision_id: 'epr-1',
+      ref: { type: 'execution', id: 'exec-1', title: 'Execution for item' },
+      development_plan_item_ref: {
+        type: 'development_plan_item',
+        id: 'dpi-1',
+        development_plan_id: 'dp-1',
+        revision_id: 'dpi-rev-1',
+        title: 'Plan item',
+      },
+      execution_plan_revision_ref: {
+        type: 'execution_plan_revision',
+        id: 'epr-1',
+        execution_plan_id: 'ep-1',
+        title: 'Approved Execution Plan',
+      },
+      status: 'running',
+      evidence_refs: [{ type: 'execution_plan_revision', id: 'epr-1', execution_plan_id: 'ep-1' }],
+      runtime_evidence_refs: [{ type: 'execution_package', id: 'pkg-1' }],
+      created_at: '2026-05-24T00:04:00.000Z',
+      updated_at: '2026-05-24T00:05:00.000Z',
+    });
+
+    expect(execution).toMatchObject({
+      development_plan_item_id: 'dpi-1',
+      execution_plan_revision_id: 'epr-1',
+    });
+    expect(() =>
+      executionSchema.parse({
+        ...execution,
+        execution_plan_revision_id: undefined,
+      }),
+    ).toThrow();
   });
 
   it.each([

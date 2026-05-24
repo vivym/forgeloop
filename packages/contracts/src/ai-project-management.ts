@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { productObjectRefSchema, sourceObjectRefSchema } from './product-object-ref.js';
+import { productObjectRefSchema, runtimeEvidenceObjectRefSchema, sourceObjectRefSchema } from './product-object-ref.js';
 
 const nonEmpty = z.string().trim().min(1);
 const isoDateTimeSchema = z.string().datetime();
@@ -226,6 +226,8 @@ export type BoundarySummary = z.infer<typeof boundarySummarySchema>;
 export const executionSchema = z
   .object({
     id: nonEmpty,
+    development_plan_item_id: nonEmpty,
+    execution_plan_revision_id: nonEmpty,
     ref: z.object({ type: z.literal('execution'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
     development_plan_item_ref: z
       .object({
@@ -246,7 +248,90 @@ export const executionSchema = z
       .strict(),
     status: executionStatusSchema,
     evidence_refs: z.array(productObjectRefSchema).default([]),
+    runtime_evidence_refs: z.array(runtimeEvidenceObjectRefSchema).default([]),
+    created_at: isoDateTimeSchema,
     updated_at: isoDateTimeSchema,
   })
   .strict();
 export type Execution = z.infer<typeof executionSchema>;
+
+export const codeReviewHandoffStatusSchema = z.enum(['in_review', 'approved', 'changes_requested']);
+export type CodeReviewHandoffStatus = z.infer<typeof codeReviewHandoffStatusSchema>;
+
+export const codeReviewAuditedExceptionSchema = z
+  .object({
+    actor_id: nonEmpty,
+    reason: nonEmpty,
+    risk: z.enum(['low', 'medium', 'high', 'critical']),
+    rollback_plan: nonEmpty,
+    created_at: isoDateTimeSchema,
+  })
+  .strict();
+export type CodeReviewAuditedException = z.infer<typeof codeReviewAuditedExceptionSchema>;
+
+export const codeReviewHandoffSchema = z
+  .object({
+    id: nonEmpty,
+    ref: z.object({ type: z.literal('code_review_handoff'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
+    execution_id: nonEmpty,
+    development_plan_item_id: nonEmpty,
+    execution_plan_revision_id: nonEmpty,
+    reviewer_actor_id: nonEmpty,
+    status: codeReviewHandoffStatusSchema,
+    summary: nonEmpty,
+    changed_surfaces: z.array(nonEmpty).default([]),
+    verification_evidence_refs: z.array(productObjectRefSchema).default([]),
+    approved_by_actor_id: nonEmpty.optional(),
+    approved_at: isoDateTimeSchema.optional(),
+    decision_rationale: nonEmpty.optional(),
+    audited_exception: codeReviewAuditedExceptionSchema.optional(),
+    created_at: isoDateTimeSchema,
+    updated_at: isoDateTimeSchema,
+  })
+  .strict();
+export type CodeReviewHandoff = z.infer<typeof codeReviewHandoffSchema>;
+
+export const qaHandoffStatusSchema = z.enum(['pending', 'blocked', 'accepted']);
+export type QaHandoffStatus = z.infer<typeof qaHandoffStatusSchema>;
+
+export const qaHandoffSchema = z
+  .object({
+    id: nonEmpty,
+    ref: z.object({ type: z.literal('qa_handoff'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
+    code_review_handoff_id: nonEmpty,
+    execution_id: nonEmpty,
+    source_ref: sourceObjectRefSchema,
+    development_plan_item_id: nonEmpty,
+    development_plan_item_ref: z
+      .object({
+        type: z.literal('development_plan_item'),
+        id: nonEmpty,
+        development_plan_id: nonEmpty,
+        revision_id: nonEmpty.optional(),
+        title: nonEmpty.optional(),
+      })
+      .strict(),
+    approved_spec_revision_ref: z.object({ type: z.literal('spec_revision'), id: nonEmpty, spec_id: nonEmpty, title: nonEmpty.optional() }).strict(),
+    approved_execution_plan_revision_ref: z
+      .object({
+        type: z.literal('execution_plan_revision'),
+        id: nonEmpty,
+        execution_plan_id: nonEmpty,
+        title: nonEmpty.optional(),
+      })
+      .strict(),
+    status: qaHandoffStatusSchema,
+    acceptance_criteria: z.array(nonEmpty).default([]),
+    test_strategy: nonEmpty,
+    verification_evidence_refs: z.array(productObjectRefSchema).default([]),
+    known_risks: z.array(nonEmpty).default([]),
+    changed_surfaces: z.array(nonEmpty).default([]),
+    release_impact: z.enum(['none', 'release_scoped', 'release_blocking']),
+    blocked_by_actor_id: nonEmpty.optional(),
+    accepted_by_actor_id: nonEmpty.optional(),
+    rationale: nonEmpty.optional(),
+    created_at: isoDateTimeSchema,
+    updated_at: isoDateTimeSchema,
+  })
+  .strict();
+export type QaHandoff = z.infer<typeof qaHandoffSchema>;

@@ -30,6 +30,7 @@ import type {
   CodexWorkerRegistration,
   CommandIdempotencyRecord,
   ContextManifest,
+  CodeReviewHandoff,
   Decision,
   DomainError as DomainErrorType,
   DevelopmentPlan,
@@ -54,6 +55,7 @@ import type {
   ReleaseEvidence,
   ReleaseExecutionPackage,
   ReleaseWorkItem,
+  QaHandoff,
   ReviewPacket,
   RunCommand,
   RunEvent,
@@ -534,6 +536,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly executionPlans = new Map<string, ExecutionPlanDocument>();
   private readonly executionPlanRevisions = new Map<string, ExecutionPlanRevision>();
   private readonly executions = new Map<string, Execution>();
+  private readonly codeReviewHandoffs = new Map<string, CodeReviewHandoff>();
+  private readonly qaHandoffs = new Map<string, QaHandoff>();
   private readonly plans = new Map<string, Plan>();
   private readonly planRevisions = new Map<string, PlanRevision>();
   private readonly executionPackages = new Map<string, ExecutionPackage>();
@@ -2948,12 +2952,40 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       .sort((left, right) => left.revision_number - right.revision_number);
   }
 
+  async listExecutionPlansForDevelopmentPlanItem(itemId: string): Promise<ExecutionPlanDocument[]> {
+    return valuesFor(this.executionPlans)
+      .filter((plan) => plan.development_plan_item_id === itemId)
+      .sort(byCreatedAtThenId);
+  }
+
   async saveExecution(execution: Execution): Promise<void> {
     this.executions.set(execution.id, clone(execution));
   }
 
   async getExecution(id: string): Promise<Execution | undefined> {
     return this.cloneMaybe(this.executions.get(id));
+  }
+
+  async saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void> {
+    this.codeReviewHandoffs.set(handoff.id, clone(handoff));
+  }
+
+  async getCodeReviewHandoff(id: string): Promise<CodeReviewHandoff | undefined> {
+    return this.cloneMaybe(this.codeReviewHandoffs.get(id));
+  }
+
+  async saveQaHandoff(handoff: QaHandoff): Promise<void> {
+    this.qaHandoffs.set(handoff.id, clone(handoff));
+  }
+
+  async getQaHandoff(id: string): Promise<QaHandoff | undefined> {
+    return this.cloneMaybe(this.qaHandoffs.get(id));
+  }
+
+  async listQaHandoffsForCodeReview(handoffId: string): Promise<QaHandoff[]> {
+    return valuesFor(this.qaHandoffs)
+      .filter((handoff) => handoff.code_review_handoff_id === handoffId)
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
   }
 
   async savePlan(plan: Plan): Promise<void> {
@@ -5640,6 +5672,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.executionPlans,
       this.executionPlanRevisions,
       this.executions,
+      this.codeReviewHandoffs,
+      this.qaHandoffs,
       this.plans,
       this.planRevisions,
       this.executionPackages,
