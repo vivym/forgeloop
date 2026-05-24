@@ -133,13 +133,13 @@ function boardOverrides(state: SurfaceState): ProductApiResponseMap {
 }
 
 function reportOverrides(state: SurfaceState): ProductApiResponseMap {
-  const key = `GET /query/reports/delivery?project_id=${projectId}&limit=100`;
+  const key = `GET /query/reports/development-plan-throughput?project_id=${projectId}&limit=100`;
   if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
   if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
-  if (state === 'empty') return { [key]: { id: 'delivery', project_id: projectId, degraded_sources: [] } };
+  if (state === 'empty') return { [key]: { id: 'development-plan-throughput', project_id: projectId, degraded_sources: [] } };
   return {
     [key]: {
-      id: 'delivery',
+      id: 'development-plan-throughput',
       project_id: projectId,
       generated_at: '2026-05-18T01:05:00.000Z',
       degraded_sources: state === 'stale' ? ['stale_report_projection'] : [],

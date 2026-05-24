@@ -190,5 +190,11 @@ describe('Executions API', () => {
         .expect(201)
     ).body;
     expect(continued.status).toBe('running');
+
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({
+      execution_status: 'running',
+      next_action: 'monitor_execution',
+    });
   });
 });

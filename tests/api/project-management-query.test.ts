@@ -195,6 +195,8 @@ describe('project management query API', () => {
         expect.objectContaining({
           object_ref: expect.objectContaining({ type: 'execution', id: execution.id }),
           development_plan_item_ref: expect.objectContaining({ id: item.id }),
+          execution_plan_revision_ref: expect.objectContaining({ id: execution.execution_plan_revision_id }),
+          last_event_at: expect.any(String),
           actions: expect.arrayContaining([expect.objectContaining({ id: 'inspect' })]),
         }),
       ]),
@@ -229,8 +231,16 @@ describe('project management query API', () => {
         }),
       ]),
     );
-    expect(projectedQaHandoff.actions).toEqual([{ id: 'inspect', href: `/executions/${execution.id}`, label: 'Inspect' }]);
-    expect(JSON.stringify(projectedQaHandoff.actions)).not.toMatch(/accept_qa_handoff|block_qa_handoff/);
+    expect(projectedQaHandoff.actions).toEqual([
+      {
+        id: 'accept',
+        href: `/executions/${execution.id}`,
+        label: 'Accept',
+        command: { type: 'accept_qa_handoff', qa_handoff_id: qa.id },
+      },
+      { id: 'inspect', href: `/executions/${execution.id}`, label: 'Inspect' },
+    ]);
+    expect(JSON.stringify(projectedQaHandoff.actions)).not.toMatch(/block_qa_handoff/);
     const executionScopedQaHandoffs = await request(server).get('/query/qa-handoffs').query({ ...query, execution_id: execution.id }).expect(200);
     expect(executionScopedQaHandoffs.body.items).toEqual([
       expect.objectContaining({ id: qa.id, href: `/executions/${execution.id}` }),

@@ -410,13 +410,13 @@ export class AttachmentsService {
       return;
     }
     if (objectType === 'execution_plan') {
-      if ((await this.repository.getPlan(objectId)) === undefined) {
+      if ((await this.repository.getExecutionPlan(objectId)) === undefined) {
         throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
       }
       return;
     }
     if (objectType === 'execution_plan_revision') {
-      if ((await this.repository.getPlanRevision(objectId)) === undefined) {
+      if ((await this.repository.getExecutionPlanRevision(objectId)) === undefined) {
         throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
       }
       return;

@@ -133,6 +133,17 @@ export class ExecutionsService {
         updated_at: this.now(),
       };
       await repository.saveExecution(updated);
+      const item = this.requireFound(
+        await repository.getDevelopmentPlanItem(execution.development_plan_item_id),
+        `DevelopmentPlanItem ${execution.development_plan_item_id}`,
+      );
+      const plan = this.requireFound(await repository.getDevelopmentPlan(item.development_plan_id), `DevelopmentPlan ${item.development_plan_id}`);
+      await this.updateDevelopmentPlanItem(repository, plan, item, {
+        execution_status: 'running',
+        next_action: 'monitor_execution',
+        changeReason: 'execution_continued',
+        actorId: dto.actor_id,
+      });
       await this.eventWithRepository(repository, 'execution', execution.id, 'execution_continued', dto.actor_id, {});
       return updated;
     });
@@ -283,9 +294,21 @@ export class ExecutionsService {
         `DevelopmentPlanItem ${handoff.development_plan_item_id}`,
       );
       const plan = this.requireFound(await repository.getDevelopmentPlan(item.development_plan_id), `DevelopmentPlan ${item.development_plan_id}`);
+      const execution = this.requireFound(await repository.getExecution(handoff.execution_id), `Execution ${handoff.execution_id}`);
+      const at = this.now();
+      await repository.saveExecution({
+        ...execution,
+        status: 'interrupted',
+        interrupt_history: [
+          ...execution.interrupt_history,
+          { at, reason: `Code review changes requested: ${dto.rationale}` },
+        ],
+        updated_at: at,
+      });
       await this.updateDevelopmentPlanItem(repository, plan, item, {
+        execution_status: 'interrupted',
         review_status: 'changes_requested',
-        next_action: 'address_code_review',
+        next_action: 'continue_execution',
         changeReason: 'code_review_changes_requested',
         actorId,
       });
@@ -438,25 +461,29 @@ export class ExecutionsService {
       if (codeReview.status !== 'approved') {
         throw new BadRequestException('QA acceptance requires approved code review');
       }
-      if (qa.status !== 'pending') {
+      if (qa.status !== 'pending' && qa.status !== 'blocked') {
         throw new BadRequestException(`QaHandoff ${qa.id} cannot be accepted from ${qa.status}`);
       }
       const actorId = this.requireActorId(dto.actor_id);
+      const at = this.now();
       const updated: QaHandoff = {
         ...qa,
         status: 'accepted',
         accepted_by_actor_id: actorId,
         rationale: dto.rationale,
         verification_evidence_refs: dto.verification_evidence_refs!,
-        updated_at: this.now(),
+        updated_at: at,
       };
       await repository.saveQaHandoff(updated);
+      const execution = this.requireFound(await repository.getExecution(qa.execution_id), `Execution ${qa.execution_id}`);
+      await repository.saveExecution({ ...execution, status: 'completed', updated_at: at });
       const item = this.requireFound(
         await repository.getDevelopmentPlanItem(qa.development_plan_item_id),
         `DevelopmentPlanItem ${qa.development_plan_item_id}`,
       );
       const plan = this.requireFound(await repository.getDevelopmentPlan(item.development_plan_id), `DevelopmentPlan ${item.development_plan_id}`);
       await this.updateDevelopmentPlanItem(repository, plan, item, {
+        execution_status: 'completed',
         qa_handoff_status: 'approved',
         next_action: 'prepare_release',
         changeReason: 'qa_handoff_accepted',

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
+import { seedApprovedExecutionPlan } from '../helpers/execution-supervision-fixtures';
 
 const now = '2026-05-23T00:00:00.000Z';
 
@@ -132,6 +133,50 @@ describe('Attachment API safety', () => {
       visibility: 'object',
     });
     expect(response.body).not.toHaveProperty('storage_uri');
+  });
+
+  it('validates AI-native Execution Plan attachment owners against execution-plan storage', async () => {
+    const { executionPlan, executionPlanRevision } = await seedApprovedExecutionPlan(app);
+
+    const planUpload = await request(app.getHttpServer())
+      .post('/attachments')
+      .field(
+        'metadata',
+        JSON.stringify({
+          object_type: 'execution_plan',
+          object_id: executionPlan.id,
+          evidence_category: 'document',
+          caption: 'Execution Plan evidence',
+          visibility: 'object',
+        }),
+      )
+      .attach('file', Buffer.from('plan-bytes'), { filename: 'execution-plan.md', contentType: 'text/markdown' })
+      .expect(201);
+    expect(planUpload.body).toMatchObject({
+      owner_object_type: 'execution_plan',
+      owner_object_id: executionPlan.id,
+      filename: 'execution-plan.md',
+    });
+
+    const revisionUpload = await request(app.getHttpServer())
+      .post('/attachments')
+      .field(
+        'metadata',
+        JSON.stringify({
+          object_type: 'execution_plan_revision',
+          object_id: executionPlanRevision.id,
+          evidence_category: 'document',
+          caption: 'Execution Plan revision evidence',
+          visibility: 'object',
+        }),
+      )
+      .attach('file', Buffer.from('revision-bytes'), { filename: 'execution-plan-revision.md', contentType: 'text/markdown' })
+      .expect(201);
+    expect(revisionUpload.body).toMatchObject({
+      owner_object_type: 'execution_plan_revision',
+      owner_object_id: executionPlanRevision.id,
+      filename: 'execution-plan-revision.md',
+    });
   });
 
   it('returns only opaque same-origin render urls', async () => {

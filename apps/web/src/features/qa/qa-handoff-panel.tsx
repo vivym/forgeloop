@@ -56,7 +56,7 @@ export function QaHandoffPanel({
   const earlyQa = codeReview?.audited_exception !== undefined && codeReview.status !== 'approved';
   const canCreateHandoff = handoff === undefined && codeReview !== undefined && (codeReview.status === 'approved' || codeReview.audited_exception !== undefined);
   const canBlockHandoff = handoff?.status === 'pending';
-  const canAcceptHandoff = codeReview?.status === 'approved' && handoff?.status === 'pending';
+  const canAcceptHandoff = codeReview?.status === 'approved' && (handoff?.status === 'pending' || handoff?.status === 'blocked');
 
   async function refresh() {
     await Promise.all([

@@ -578,14 +578,14 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/bugs?project_id=${projectId}&limit=100`]: bugListResponse,
   'GET /query/bugs/bug-1': bugDetail,
   [`GET /query/board?project_id=${projectId}&limit=100`]: { items: boardCards },
-  [`GET /query/reports/delivery?project_id=${projectId}&limit=100`]: {
-    id: 'delivery',
+  [`GET /query/reports/development-plan-throughput?project_id=${projectId}&limit=100`]: {
+    id: 'development-plan-throughput',
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
     degraded_sources: [],
   },
-  [`GET /query/reports/quality?project_id=${projectId}&limit=100`]: {
-    id: 'quality',
+  [`GET /query/reports/quality-bug-escape?project_id=${projectId}&limit=100`]: {
+    id: 'quality-bug-escape',
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
     degraded_sources: [],
@@ -596,14 +596,14 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     generated_at: '2026-05-18T01:05:00.000Z',
     degraded_sources: [],
   },
-  [`GET /query/reports/observation?project_id=${projectId}&limit=100`]: {
-    id: 'observation',
+  [`GET /query/reports/execution-outcomes?project_id=${projectId}&limit=100`]: {
+    id: 'execution-outcomes',
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
     degraded_sources: [],
   },
-  [`GET /query/reports/replay?project_id=${projectId}&limit=100`]: {
-    id: 'replay',
+  [`GET /query/reports/execution-continuation?project_id=${projectId}&limit=100`]: {
+    id: 'execution-continuation',
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
     degraded_sources: [],

@@ -670,11 +670,11 @@ function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, exe
     object_ref: execution.ref,
     source_ref: item.source_ref,
     development_plan_item_ref: developmentPlanItemRef(item),
-    approved_execution_plan_revision_ref: execution.execution_plan_revision_ref,
+    execution_plan_revision_ref: execution.execution_plan_revision_ref,
     status: execution.status,
     worker_state: execution.status,
     current_step: execution.status === 'completed' ? 'code_review_handoff' : 'implementation',
-    last_event: execution.status,
+    last_event_at: execution.updated_at,
     evidence_refs: execution.evidence_refs,
     pr_refs: execution.pr_refs,
     diff_refs: execution.diff_refs,
@@ -755,27 +755,37 @@ function qaHandoffQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, han
     changed_surfaces: handoff.changed_surfaces,
     release_impact: handoff.release_impact,
     status: handoff.status,
-    actions:
-      handoff.status === 'pending'
-        ? [
-            {
-              id: 'accept',
-              href: `/executions/${handoff.execution_id}`,
-              label: 'Accept',
-              command: { type: 'accept_qa_handoff', qa_handoff_id: handoff.id },
-            },
-            {
-              id: 'block',
-              href: `/executions/${handoff.execution_id}`,
-              label: 'Block',
-              command: { type: 'block_qa_handoff', qa_handoff_id: handoff.id },
-            },
-          ]
-        : [{ id: 'inspect', href: `/executions/${handoff.execution_id}`, label: 'Inspect' }],
+    actions: qaHandoffActions(handoff),
     href: `/executions/${handoff.execution_id}`,
     plan_item_href: `/development-plans/${plan.id}/items/${item.id}`,
     updated_at: handoff.updated_at,
   };
+}
+
+function qaHandoffActions(handoff: QaHandoff): Array<Record<string, unknown>> {
+  const inspect = { id: 'inspect', href: `/executions/${handoff.execution_id}`, label: 'Inspect' };
+  if (handoff.status !== 'pending' && handoff.status !== 'blocked') {
+    return [inspect];
+  }
+  return [
+    {
+      id: 'accept',
+      href: `/executions/${handoff.execution_id}`,
+      label: 'Accept',
+      command: { type: 'accept_qa_handoff', qa_handoff_id: handoff.id },
+    },
+    ...(handoff.status === 'pending'
+      ? [
+          {
+            id: 'block',
+            href: `/executions/${handoff.execution_id}`,
+            label: 'Block',
+            command: { type: 'block_qa_handoff', qa_handoff_id: handoff.id },
+          },
+        ]
+      : []),
+    inspect,
+  ];
 }
 
 function developmentPlanItemToMyWorkQueueItem(plan: DevelopmentPlan, item: DevelopmentPlanItem): MyWorkQueueItem {

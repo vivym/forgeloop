@@ -1,9 +1,11 @@
 import { INestApplication } from '@nestjs/common';
+import type { DeliveryRepository } from '@forgeloop/db';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import {
   executionActorDeveloper,
   executionActorQa,
@@ -87,6 +89,14 @@ describe('Code review and QA handoff API', () => {
         verification_evidence_refs: [{ type: 'execution', id: execution.id }],
       })
       .expect(201);
+
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.getExecution(execution.id)).resolves.toMatchObject({ status: 'completed' });
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({
+      execution_status: 'completed',
+      qa_handoff_status: 'approved',
+      next_action: 'prepare_release',
+    });
   });
 
   it('supports code review changes requested, QA block, QA accept, and audited exception paths', async () => {
@@ -109,6 +119,21 @@ describe('Code review and QA handoff API', () => {
       .set(reviewerHeaders)
       .send({ actor_id: executionActorReviewer, rationale: 'Test evidence is missing.' })
       .expect(201);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.getExecution(execution.id)).resolves.toMatchObject({ status: 'interrupted' });
+    await expect(repository.getDevelopmentPlanItem(execution.development_plan_item_id)).resolves.toMatchObject({
+      execution_status: 'interrupted',
+      review_status: 'changes_requested',
+      next_action: 'continue_execution',
+    });
+    await request(server)
+      .post(`/executions/${execution.id}/continue`)
+      .send({ actor_id: executionActorDeveloper })
+      .expect(201);
+    await expect(repository.getDevelopmentPlanItem(execution.development_plan_item_id)).resolves.toMatchObject({
+      execution_status: 'running',
+      next_action: 'monitor_execution',
+    });
 
     const exception = (
       await request(server)
@@ -191,10 +216,14 @@ describe('Code review and QA handoff API', () => {
       .expect(409);
 
     await request(server)
+      .post(`/qa-handoffs/${qa.id}/block`)
+      .send({ actor_id: executionActorQa, rationale: 'Acceptance evidence is incomplete.' })
+      .expect(201);
+    await request(server)
       .post(`/qa-handoffs/${qa.id}/accept`)
       .send({
         actor_id: executionActorQa,
-        rationale: 'Regression evidence accepted.',
+        rationale: 'Regression evidence accepted after block resolution.',
         verification_evidence_refs: [{ type: 'execution', id: execution.id }],
       })
       .expect(201);

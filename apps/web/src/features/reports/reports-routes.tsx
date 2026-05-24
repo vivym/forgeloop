@@ -7,9 +7,16 @@ import { InlineNotice, StatusPill } from '../../shared/ui';
 import { stateFromStatus, SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 
 type ReportId = 'delivery' | 'quality' | 'release-readiness' | 'observation' | 'replay';
+type BackendReportId =
+  | 'development-plan-throughput'
+  | 'execution-continuation'
+  | 'execution-outcomes'
+  | 'quality-bug-escape'
+  | 'release-readiness';
 
 const reportCatalog: Array<{
   id: ReportId;
+  backendReportId: BackendReportId;
   title: string;
   href: string;
   summary: string;
@@ -17,6 +24,7 @@ const reportCatalog: Array<{
 }> = [
   {
     id: 'delivery',
+    backendReportId: 'development-plan-throughput',
     title: 'Delivery Flow',
     href: '/reports/delivery',
     summary: 'Flow, bottlenecks, and Development Plan Item movement across product lifecycle objects.',
@@ -27,6 +35,7 @@ const reportCatalog: Array<{
   },
   {
     id: 'quality',
+    backendReportId: 'quality-bug-escape',
     title: 'Quality',
     href: '/reports/quality',
     summary: 'Bug escape, validation coverage, and QA acceptance risk.',
@@ -37,6 +46,7 @@ const reportCatalog: Array<{
   },
   {
     id: 'release-readiness',
+    backendReportId: 'release-readiness',
     title: 'Release Readiness',
     href: '/reports/release-readiness',
     summary: 'Readiness evidence, release risk, disabled reasons, and scope gates.',
@@ -47,6 +57,7 @@ const reportCatalog: Array<{
   },
   {
     id: 'observation',
+    backendReportId: 'execution-outcomes',
     title: 'Observation',
     href: '/reports/observation',
     summary: 'Post-release signals, observation evidence, and regression follow-up.',
@@ -57,6 +68,7 @@ const reportCatalog: Array<{
   },
   {
     id: 'replay',
+    backendReportId: 'execution-continuation',
     title: 'Replay',
     href: '/reports?report=replay',
     summary: 'Retrospective evidence and lifecycle replay for project management objects.',
@@ -71,7 +83,7 @@ export function ReportsIndexRoute() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const scopedReportId = scopedReportFromSearchParams(searchParams);
-  const query = useReportQuery(scopedReportId ?? 'delivery', { project_id: projectId, limit: 100 });
+  const query = useReportQuery(backendReportIdFor(scopedReportId ?? 'delivery'), { project_id: projectId, limit: 100 });
   const context = reportContextFromSearchParams(searchParams);
 
   return (
@@ -155,10 +167,14 @@ function scopedReportFromSearchParams(searchParams: URLSearchParams): ReportId |
   return searchParams.get('report') === 'replay' ? 'replay' : undefined;
 }
 
+function backendReportIdFor(reportId: ReportId): BackendReportId {
+  return reportCatalog.find((candidate) => candidate.id === reportId)?.backendReportId ?? reportCatalog[0]!.backendReportId;
+}
+
 export function ReportFamilyRoute({ reportId }: { reportId: ReportId }) {
   const { projectId } = useProjectContext();
   const report = reportCatalog.find((candidate) => candidate.id === reportId) ?? reportCatalog[0]!;
-  const query = useReportQuery(report.id, { project_id: projectId, limit: 100 });
+  const query = useReportQuery(report.backendReportId, { project_id: projectId, limit: 100 });
 
   return (
     <>

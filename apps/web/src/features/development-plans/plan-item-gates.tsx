@@ -153,7 +153,7 @@ function PlanItemLifecycleActions({ item }: { item: DevelopmentPlanItemProjectio
     readyForCodeReview: execution !== undefined && item.execution_status === 'completed' && hasExecutionEvidence && !isReviewOpen(item.review_status),
     createQaHandoff: codeReview !== undefined && codeReviewApprovedOrException && qaHandoff === undefined,
     blockQaHandoff: qaHandoff?.status === 'pending',
-    acceptQaHandoff: qaHandoff?.status === 'pending' && (item.review_status === 'approved' || codeReview?.status === 'approved') && hasExecutionEvidence,
+    acceptQaHandoff: (qaHandoff?.status === 'pending' || qaHandoff?.status === 'blocked') && (item.review_status === 'approved' || codeReview?.status === 'approved') && hasExecutionEvidence,
   };
 
   async function run(label: string, operation: () => Promise<unknown>) {
@@ -433,7 +433,7 @@ function isApproved(status: string | undefined): boolean {
 }
 
 function isReviewOpen(status: string | undefined): boolean {
-  return status === 'in_review' || status === 'changes_requested' || status === 'approved';
+  return status === 'in_review' || status === 'approved';
 }
 
 function isQaOpen(status: string | undefined): boolean {

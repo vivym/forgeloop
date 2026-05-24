@@ -47,7 +47,8 @@ export function CodeReviewHandoffPanel({
   const executionEvidenceRefs = execution.evidence_refs ?? [];
   const evidenceRefs: ProductObjectRef[] = handoff?.verification_evidence_refs ?? execution.evidence_refs ?? [{ type: 'execution', id: execution.id, title: `Execution ${execution.id}` }];
   const changedSurfaces = handoff?.changed_surfaces ?? ['Implementation diff'];
-  const canReadyForCodeReview = execution.status === 'completed' && executionEvidenceRefs.length > 0 && handoff === undefined;
+  const hasOpenHandoff = handoff?.status === 'in_review' || handoff?.status === 'approved';
+  const canReadyForCodeReview = execution.status === 'completed' && executionEvidenceRefs.length > 0 && !hasOpenHandoff;
   const canResolveCodeReview = handoff?.status === 'in_review';
 
   async function refresh() {
@@ -120,7 +121,7 @@ export function CodeReviewHandoffPanel({
         ) : null}
         {!canReadyForCodeReview ? (
           <InlineNotice
-            title="Ready for code review requires a completed execution, verification evidence, and no existing handoff."
+            title="Ready for code review requires a completed execution, verification evidence, and no open handoff."
             tone="warning"
           />
         ) : null}
