@@ -65,6 +65,19 @@ The product must preserve the process, not only the final text. A `BoundarySumma
 
 The Leader is the accountable human approver for this boundary. In v0 this can be the Tech Lead or another explicitly assigned reviewer on the Development Plan Item. Product and runtime services must store `leader_actor_id` and must reject approval attempts from an actor who is not the assigned Leader or an explicitly authorized delegate.
 
+Leader assignment is a product contract, not an implementation guess:
+
+- add `leader_actor_id?: string` and `leader_delegate_actor_ids: string[]` to the Development Plan Item contract;
+- when starting Boundary Brainstorming, the request may set `leader_actor_id` and `leader_delegate_actor_ids`;
+- if the item already has `leader_actor_id`, the start request must either omit Leader fields or match the existing Leader unless the caller has item-admin authority;
+- if the item already has `leader_delegate_actor_ids`, the start request must either omit delegate fields or exactly match the existing delegate set unless the caller is the assigned Leader or has item-admin authority;
+- delegate additions must be persisted on the Development Plan Item before the session snapshot is created; a caller must not gain delegate authority by adding themselves only in the start-session payload;
+- if the item lacks `leader_actor_id`, the service may default to `reviewer_actor_id`, then `driver_actor_id`; if both are absent it must reject the start request until a Leader is explicitly assigned;
+- the Boundary Brainstorming session stores a snapshot of `leader_actor_id` and `leader_delegate_actor_ids`;
+- answer, decision, continue, approve, and request-change APIs must reject actors outside the stored Leader/delegate set unless an explicit product admin override is recorded as an audit event.
+
+Required negative tests: non-Leader approval is rejected, non-delegate answer is rejected, non-Leader self-add as delegate at session start is rejected, stale item Leader/delegate changes do not silently rewrite an active session, and migration defaults use `reviewer_actor_id ?? driver_actor_id` only when present.
+
 ### Product Naming
 
 User-facing naming:
@@ -86,7 +99,7 @@ Internal naming may use:
 - `boundary_decision`;
 - `boundary_summary_revision`.
 
-Avoid `task`, `work_item`, `plan`, `execution_package`, `run_session`, and `review_packet` in public product copy, URLs, DTOs, dogfood reports, and readiness payloads unless the context is explicitly dev-only or internal runtime evidence.
+Avoid `task`, `work_item`, old generic `plan` surfaces, `execution_package`, `run_session`, and `review_packet` in public product copy, URLs, DTOs, dogfood reports, and readiness payloads unless the context is explicitly dev-only or internal runtime evidence. `Development Plan` and `Execution Plan` remain approved product terms.
 
 ## Goals
 
@@ -201,6 +214,7 @@ type BoundaryBrainstormingSession = {
   development_plan_item_id: string;
   development_plan_item_revision_id: string;
   leader_actor_id: string;
+  leader_delegate_actor_ids: string[];
   context_manifest_id: string;
   context_manifest_revision_id: string;
   status:
@@ -222,7 +236,7 @@ type BoundaryBrainstormingSession = {
 };
 ```
 
-The existing `approval_state` can be kept during migration, but new product and runtime code should use the explicit session `status`.
+The existing `approval_state` can be kept during migration, but new product and runtime code should use the explicit session `status`. The old JSON-array `questions`, `answers`, and `decisions` fields are read-only compatibility projections after migration; new writes go through row-level round/question/answer/decision tables.
 
 ### Boundary Rounds
 
@@ -260,6 +274,16 @@ Store digests for app-server thread and turn identifiers if needed. Do not expos
 
 If the Development Plan Item revision changes after a session starts, the session becomes stale until the Leader explicitly rebases it onto the new item revision or starts a new session. Rebase must create a new round that shows the item diff and asks AI to identify whether previous answers and decisions still apply.
 
+Persistence requirements:
+
+- add DB tables for `boundary_rounds`, `boundary_questions`, `boundary_answers`, and `boundary_decisions`;
+- each table carries `session_id`, `session_revision_id`, and `round_id`, with foreign keys or repository-level integrity checks when the local DB driver cannot enforce the whole graph;
+- add repository methods for saving/listing rounds, questions, answers, and decisions by session and by round;
+- product contracts expose `round_id`, question `required`, question `rationale`, question `waived_by_decision_id`, and decision `state`;
+- API serializers rebuild the old session-level arrays only as compatibility views while product callers migrate.
+
+Migration must create a synthetic round 1 per existing session and attach every existing question, answer, and decision to it. Required flags default to `true` for unanswered open questions and `false` for historical resolved questions. Existing approved sessions must fail the new invariant unless the migration can attach each required question to an answer or accepted waiver decision.
+
 ### Questions, Answers, And Decisions
 
 Move away from a flat session-only list by adding `round_id` to questions, answers, and decisions.
@@ -286,7 +310,7 @@ Answer fields:
 - round id;
 - question id;
 - answer text;
-- Leader actor id;
+- actor id, which must be the Leader or an authorized delegate;
 - created at.
 
 Decision fields:
@@ -297,6 +321,7 @@ Decision fields:
 - text;
 - source: `leader | ai_proposed | leader_confirmed`;
 - state: `proposed | accepted | rejected | superseded`;
+- actor id for Leader-authored or Leader-confirmed decisions;
 - rationale;
 - created at.
 
@@ -358,7 +383,7 @@ The API must support:
 - operator CLI reading explicit file paths and posting content to the API;
 - optional local default source through an explicit `--from-local-codex-home` flag.
 
-The API must not require a host `~/.codex`. Local `~/.codex/config.toml` and `~/.codex/auth.json` are only import sources when explicitly selected by the operator.
+The API must not require a host `~/.codex`. Local `~/.codex/config.toml` and `~/.codex/auth.json` are only import sources when explicitly selected by the operator. The bootstrap path must import both config and auth; it must not synthesize `config.toml` such as a hardcoded `approval_policy = "never"` profile unless that exact TOML was supplied by the operator or by a named fixture in a non-strict test.
 
 Imported config creates a runtime profile revision with:
 
@@ -379,6 +404,14 @@ Imported auth creates or updates a credential binding version with:
 - project and optional repo scope;
 - active version pointer.
 
+Unsafe DB credential storage is fail-closed:
+
+- `POST /internal/codex-runtime/import-credential` must reject raw credential payloads unless `FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE=1` is enabled on the control plane;
+- the request must include an explicit `unsafe_db_acknowledgement: true`;
+- production environments must reject `provider: 'unsafe_db'` unless a separate production-breakglass flag is explicitly set by an operator; this slice does not add that breakglass path;
+- worker materialization must also reject unsafe DB credentials when the server-side unsafe store flag is disabled, even if stale rows exist;
+- tests must cover disabled flag, missing acknowledgement, production rejection, and enabled local-dogfood success.
+
 Public projections must never return raw config or raw auth. Internal materialization may return config/auth only to an authenticated worker holding the accepted launch lease and runtime job envelope.
 
 ### Generation Workload And Result Schemas
@@ -396,6 +429,16 @@ type CodexGenerationTaskKind =
 ```
 
 The worker must dispatch the three new task kinds to `packages/codex-runtime` methods instead of the old draft generators.
+
+Schema and dispatch ownership is part of this slice:
+
+- `apps/control-plane-api/src/modules/automation/automation.dto.ts` must extend `CreateAutomationActionRun` with the three action types and action input schemas;
+- `packages/domain/src/codex-runtime.ts` must extend `CodexGenerationWorkloadV1.task_kind`, workload validation, terminal result validation, and typed error messages for the three new task kinds;
+- `packages/codex-runtime/src/types.ts`, `packages/codex-runtime/src/runtime.ts`, and `packages/codex-runtime/src/payloads.ts` must add dedicated methods/payload validators for boundary round, Spec revision, and Execution Plan revision generation;
+- `packages/codex-worker-runtime/src/remote-worker-client.ts` must use an exhaustive task-kind switch; falling through to `generatePackageDrafts` is forbidden and unknown task kinds must terminalize as unsupported workload errors;
+- the control-plane terminal result writer must route each new task kind to a product-state writer that re-checks the action run, preconditions, and product revision chain before mutation.
+
+Implementation sequencing: land DTO/domain schema support before worker dispatch, then runtime method wiring, then result writers and API command handlers. Tests must prove a new task kind never enters the old `spec_draft`, `plan_draft`, or `package_drafts` handlers.
 
 #### Boundary Round Input
 
@@ -532,6 +575,7 @@ pnpm codex:runtime:import \
   --target-kind generation \
   --config-path /path/to/config.toml \
   --auth-path /path/to/auth.json \
+  --unsafe-db-acknowledgement \
   --project-id project-1 \
   --repo-id repo-1 \
   --docker-image ghcr.io/... \
@@ -546,14 +590,30 @@ pnpm codex:runtime:import --from-local-codex-home --project-id project-1 --repo-
 
 The convenience flag may resolve `~/.codex/config.toml` and `~/.codex/auth.json` on the operator machine. It must still post content into centralized storage. It must not configure workers to read those paths.
 
+Strict import success requires:
+
+- both config and auth were imported from explicit content, explicit file paths, or the explicit local import flag;
+- the imported config digest is the digest later materialized into each runtime job's per-task `CODEX_HOME`;
+- no strict path can fall back to a generated default config profile;
+- public output prints profile, revision, credential binding, and digest ids only.
+
 Required `package.json` aliases:
 
 - `codex:runtime:import`;
 - `codex:runtime:bootstrap`;
 - `codex:remote-worker`;
-- `dogfood:codex-runtime:superpowers`.
+- `dogfood:codex-runtime:superpowers`;
+- `check:codex-runtime-superpowers-no-baggage`;
+- `check:runbook-scripts`.
 
-Existing runbooks must use these actual aliases or be updated in the same implementation slice.
+The implementation slice must add these aliases before dogfood can be considered operable. The intended script mapping is:
+
+- `codex:runtime:import` -> a CLI that imports explicit `config.toml` and `auth.json` content into centralized runtime storage;
+- `codex:runtime:bootstrap` -> the dogfood bootstrap path after it delegates to the same import APIs and no longer hardcodes config;
+- `codex:remote-worker` -> the outbound remote worker launcher;
+- `dogfood:codex-runtime:superpowers` -> the strict end-to-end Superpowers product-loop dogfood.
+
+Existing runbooks must use these actual aliases or be updated in the same implementation slice. Any runbook command that is not present in `package.json` is a blocking verification failure.
 
 ### Boundary Brainstorming
 
@@ -572,6 +632,19 @@ The service:
 5. creates and claims an internal `AutomationActionRun` with action type `run_boundary_brainstorming_round`;
 6. creates a generation runtime job for that action run with signed context schema `boundary_brainstorming_round.v1`;
 7. returns the session and current round status.
+
+Request body:
+
+```ts
+type StartBoundaryBrainstormingRequest = {
+  source_ref?: SourceObjectRef;
+  leader_actor_id?: string;
+  leader_delegate_actor_ids?: string[];
+  initial_leader_context_markdown?: string;
+};
+```
+
+Leader resolution follows the product contract in `Product Semantics`. The response must include the resolved `leader_actor_id`, delegate actor ids, session id/revision, and current round id.
 
 AI round output:
 
@@ -721,6 +794,16 @@ Workers must:
 
 For a worker on another machine, run execution must use the existing workspace bundle acquisition path. The control plane or run-worker creates a bounded bundle after holding the correct execution lease, the remote worker downloads it through the accepted runtime job, verifies archive and manifest digests, and mounts only that task workspace. It must not depend on a shared filesystem path from the control-plane host.
 
+Strict dogfood must include a no-shared-filesystem worker mode. If a second physical host is unavailable, this mode can run a worker in a separate container or temp-root sandbox that receives only:
+
+- control-plane URL;
+- worker id/session/bootstrap token;
+- Docker image and network policy digests;
+- project/repo scope;
+- a temp root owned by the worker process.
+
+That worker mode must not receive the control-plane repo path, run-worker workspace path, operator `~/.codex`, imported config path, or imported auth path. Run execution passes only if the worker downloads the workspace bundle over the runtime channel and proves the mounted task workspace digest matches the bundle manifest.
+
 Workers must not:
 
 - read host `~/.codex`;
@@ -740,22 +823,23 @@ pnpm dogfood:codex-runtime:superpowers
 Required dogfood path:
 
 1. Import config/auth into centralized runtime profile and credential storage.
-2. Start a same-host remote worker using the outbound remote protocol.
-3. Create or seed a source object, Development Plan, and Development Plan Item.
-4. Start Boundary Brainstorming.
-5. Run a real Codex app-server AI round that asks boundary questions.
-6. Script Leader answers to those questions.
-7. Run at least one follow-up AI round.
-8. Produce a Boundary Summary proposal.
-9. Approve the Boundary Summary revision as the Leader.
-10. Generate a Spec revision from the approved Boundary Summary revision.
-11. Approve the Spec revision.
-12. Generate an Execution Plan revision from the approved Spec revision.
-13. Approve the Execution Plan revision.
-14. Start Execution from the approved Execution Plan revision.
-15. Run a real Dockerized Codex app-server execution that makes a narrow docs-only change under an allowed path.
-16. Record test/check evidence and terminal runtime evidence.
-17. Produce a report under `docs/superpowers/reports/`.
+2. Start a same-host remote worker using the outbound remote protocol for generation smoke coverage.
+3. Start a no-shared-filesystem remote worker mode for the run-execution leg.
+4. Create or seed a source object, Development Plan, and Development Plan Item.
+5. Start Boundary Brainstorming.
+6. Run a real Codex app-server AI round that asks boundary questions.
+7. Script Leader answers to those questions.
+8. Run at least one follow-up AI round.
+9. Produce a Boundary Summary proposal.
+10. Approve the Boundary Summary revision as the Leader.
+11. Generate a Spec revision from the approved Boundary Summary revision.
+12. Approve the Spec revision.
+13. Generate an Execution Plan revision from the approved Spec revision.
+14. Approve the Execution Plan revision.
+15. Start Execution from the approved Execution Plan revision.
+16. Run a real Dockerized Codex app-server execution through the no-shared-filesystem worker mode that makes a narrow docs-only change under an allowed path.
+17. Record test/check evidence and terminal runtime evidence.
+18. Produce a report under `docs/superpowers/reports/`.
 
 Strict success requires:
 
@@ -764,6 +848,8 @@ Strict success requires:
 - no host `~/.codex` runtime usage;
 - per-task `CODEX_HOME` created and destroyed for each runtime job;
 - centralized profile and credential version ids present in internal evidence;
+- no-shared-filesystem worker evidence for the source-changing execution leg;
+- workspace bundle archive, manifest, and mounted-task-workspace digests match;
 - public report uses only product object names and public-safe digests;
 - Development Plan Item gate chain is complete;
 - Execution links to approved Execution Plan revision;
@@ -775,14 +861,22 @@ If Docker, worker, profile, credential, network policy, or effective config is m
 
 ## No-Baggage Guards
 
-Add focused scans for the new runtime closure path:
+Add a scripted no-baggage gate for the new runtime closure path:
+
+```bash
+pnpm check:codex-runtime-superpowers-no-baggage
+```
+
+The gate should classify matches with an allowlist instead of failing on every historical token. It must scan the new product closure code, strict dogfood script, active runbook, public DTOs, API routes, and product reports. It may ignore unrelated historical specs, superseded dogfood scripts, and legacy local executor files that are not reachable from the strict Superpowers dogfood path.
+
+The gate should include these underlying focused scans:
 
 ```bash
 rg -n "post\\('/work-items|post\\(`/work-items|/query/tasks|/tasks/|createTask\\(|generatePlanDraft\\(|type: z.literal\\('work_item'\\)|type: z.literal\\('task'\\)|type: z.literal\\('plan'\\)" \
   scripts packages/codex-runtime packages/codex-worker-runtime packages/workflow packages/run-worker apps/control-plane-api/src/modules tests
 ```
 
-Add a product route and raw-runtime scan:
+Product route and raw-runtime scan:
 
 ```bash
 rg -n "route\\(['\"]plans|route\\(['\"]specs|path: ['\"]plans['\"]|path: ['\"]specs['\"]|/plans(/|['\"[:space:]]|$)|/specs(/|['\"[:space:]]|$)|requirements/.*/(spec|plan)|bugs/.*/(spec|plan)|tech-debt/.*/(spec|plan)|initiatives/.*/(spec|plan)|Execution Package Browser|Run Session Browser|Review Packet Browser|Raw Replay Browser|/replay|path: 'replay'" \
@@ -796,7 +890,7 @@ Allowed matches:
 - dev-tools-only diagnostics;
 - historical docs outside active runbooks and active specs.
 
-Add host-Codex guard:
+Host-Codex guard:
 
 ```bash
 rg -n "CODEX_HOME|FORGELOOP_CODEX_HOME|host_codex_home|host_config_path|host_auth_path|~/.codex|exec_fallback|codex exec" \
@@ -808,9 +902,10 @@ Allowed matches:
 - import-only bootstrap docs or CLI flags;
 - negative tests proving host-local runtime use is rejected;
 - code that asserts public evidence did not leak host paths;
+- legacy local executor or run-worker fallback code only when it is not reachable from `dogfood:codex-runtime:superpowers` and is listed in the gate allowlist with a comment naming the owning cleanup stream;
 - historical superseded docs outside active runbooks.
 
-The active runbook and strict dogfood path must not present host `~/.codex` as worker setup.
+The active runbook and strict dogfood path must not present host `~/.codex` as worker setup. `exec_fallback` and `codex exec` must be fatal in the strict Superpowers dogfood path even if they remain in legacy local fallback code.
 
 ## Implementation Verification
 
@@ -834,6 +929,8 @@ Verification commands for the implementation plan should include:
 ```bash
 pnpm vitest run tests/contracts/project-management-contracts.test.ts tests/api/brainstorming.test.ts tests/api/spec-plan-service.test.ts tests/api/executions.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 pnpm vitest run tests/api/codex-runtime*.test.ts tests/codex-runtime tests/codex-worker-runtime --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm check:codex-runtime-superpowers-no-baggage
+pnpm check:runbook-scripts
 pnpm dogfood:codex-runtime:superpowers
 pnpm test
 git diff --check
@@ -844,7 +941,15 @@ The implementation plan must also isolate known flaky timing tests. If the full 
 ## Migration Notes
 
 - Existing `BrainstormingSession.questions`, `answers`, and `decisions` arrays can be migrated by assigning all entries to a synthetic round 1.
-- Existing approved `BoundarySummaryRevision` rows can default to `status: 'approved'` when `approved_at` exists; otherwise default to `draft`.
+- Existing `BoundarySummaryRevision` rows must be backfilled before any row can remain eligible for downstream generation:
+  - `source_round_id` comes from the migrated synthetic round 1 unless a later persisted proposal round can be derived;
+  - `development_plan_id` comes from the session, summary, or Development Plan Item parent and must be non-null for active rows;
+  - `status` may be `approved` only when `approved_at` exists and every required new field below is populated; otherwise use `draft` for editable current rows or `superseded` for historical rows that cannot safely be reused;
+  - `confirmed_scope`, `confirmed_out_of_scope`, `accepted_assumptions`, `open_risks`, and `validation_expectations` are derived from existing structured fields when present; otherwise non-approved rows use empty arrays and approved rows are downgraded to `draft` until the Leader re-approves a regenerated summary;
+  - `question_answer_snapshot` is rebuilt from migrated question/answer rows;
+  - `decision_snapshot` reuses the existing revision snapshot plus migrated decision row ids;
+  - `context_manifest_id` and `context_manifest_revision_id` copy from the session; rows without a session context manifest cannot stay `approved`;
+  - migration emits a report of downgraded summary revisions, and Spec generation must reject any downgraded or superseded revision.
 - Existing Spec and Execution Plan generation helpers must migrate to Development Plan Item scoped helpers.
 - Existing strict local Codex dogfood scripts should either be retired or wrapped by the new `dogfood:codex-runtime:superpowers` script so there is one authoritative dogfood entry point.
 - Existing runbook references to missing aliases must be fixed in the implementation slice.
