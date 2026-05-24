@@ -90,6 +90,16 @@ The app uses a Workspace + Object Hybrid information architecture:
 - Requirements, Bugs, Tech Debt, Initiatives, Development Plans, Specs and Execution Plans, Executions, Releases, and Reports are canonical shared object surfaces.
 - Role lenses filter and prioritize information, but must not create separate product silos where the same object has conflicting role-specific pages.
 
+Role lenses may reorder queues, filter lists, highlight role-relevant next actions, choose default visible columns, and change explanatory helper copy.
+
+Role lenses must not:
+
+- change canonical route identity;
+- change object truth, lifecycle state, or gate validity;
+- create role-specific duplicates of the same object;
+- hide blockers or failed gates from roles that need read visibility;
+- make a command available when the underlying gate prerequisites are not satisfied.
+
 ### Surface-Specific Layouts
 
 The app must not force every surface into generic cards. Page families use different layouts from one shared visual system:
@@ -155,6 +165,39 @@ Use the following primary navigation groups:
   - Dev Tools, development or explicit configuration only.
 
 Do not expose raw execution package, run session, review packet, trace, replay, `/tasks`, legacy `/plans`, or legacy `/specs` entries in primary navigation.
+
+### Route-To-Layout Matrix
+
+The implementation plan must treat these route families as required visual surfaces:
+
+| Route family | Layout family | Required notes |
+| --- | --- | --- |
+| `/` | Cockpit route/index | Must render or redirect to `/cockpit`. |
+| `/cockpit` | `WorkspacePage` | Role-aware action cockpit. |
+| `/dashboard` | Retired route | Product-safe retired/not-found state; no old Dashboard UI. |
+| `/my-work` | `QueueWorkspace` | Actor/role attention queue with preview. |
+| `/initiatives`, `/requirements`, `/bugs`, `/tech-debt` | Dense source object list | Typed list rows with next action and linked Development Plan state. |
+| `/initiatives/new`, `/requirements/new`, `/bugs/new`, `/tech-debt/new` | Typed authoring workspace | MDX/editor body, compact properties, clear create action, validation state. |
+| `/initiatives/:id`, `/requirements/:id`, `/bugs/:id`, `/tech-debt/:id` | `ObjectWorkspace` | Document plus properties plus linked Development Plans. |
+| `/initiatives/:id/evidence`, `/requirements/:id/evidence`, `/bugs/:id/evidence`, `/tech-debt/:id/evidence` | Evidence workspace | Evidence summary first, raw artifact details secondary. |
+| `/development-plans` | `PlanningTableWorkspace` index | Plan list/table, create/generate entry, filters, empty state with action. |
+| `/development-plans/new` | Development Plan authoring workspace | Manual create plus AI-assisted generation inputs. |
+| `/development-plans/:id` | `PlanningTableWorkspace` detail | Table plus selected-row preview. |
+| `/development-plans/:id/items/:itemId` | `GateWorkspace` | Gate progress plus current action. |
+| `/development-plans/:id/items/:itemId/brainstorming` | `GateWorkspace` focus view | Boundary brainstorming remains item-scoped. |
+| `/development-plans/:id/items/:itemId/spec` | `GateWorkspace` focus view | Spec document surface remains item-scoped. |
+| `/development-plans/:id/items/:itemId/execution-plan` | `GateWorkspace` focus view | Execution Plan document surface remains item-scoped. |
+| `/development-plans/:id/items/:itemId/execution` | `GateWorkspace` focus view | Execution supervision remains item-scoped. |
+| `/specs-plans` | `QueueWorkspace` | Grouped governance queue with preview. |
+| `/executions` | Execution supervision lanes | Active, resumable, review-pending, failed, completed/recent. |
+| `/executions/:id` | Execution detail workspace | Product supervision detail, not raw runtime browser. |
+| `/board` | Flow board | Development Plan Item/gate flow, not generic task kanban. |
+| `/releases`, `/releases/:id` | Release readiness workspace | Scope, evidence, blockers, rollback, observation. |
+| `/releases/:id/evidence` | Release evidence workspace | Readiness evidence summary first. |
+| `/reports`, `/reports/delivery`, `/reports/quality`, `/reports/release-readiness`, `/reports/observation` | Intelligence workspace | Conclusion, signal, affected objects, suggested action. |
+| `/plans`, `/plans/:id`, `/specs`, `/specs/:id`, `/tasks`, `/tasks/:id`, raw replay/package/run/review browser routes | Retired or Dev Tools-only | Direct URLs must be product-safe 404/410/retired states or explicitly gated behind Dev Tools. |
+
+The route-to-layout matrix is normative. If implementation discovers additional public product routes, the implementation plan must classify them before coding rather than leaving them visually unowned.
 
 ### Topbar
 
@@ -225,6 +268,18 @@ Direct Spec or Execution Plan generation actions are disallowed on source object
 ### Development Plans
 
 Development Plan is a first-class planning workspace, not a card list.
+
+The `/development-plans` index is also in scope. It must not remain a sparse card list or placeholder. It must show:
+
+- active Development Plans as a compact list/table;
+- source object links and plan item counts;
+- highest-risk or blocked gate summary;
+- create Development Plan action;
+- AI-assisted generate plan action when a source object context is selected or supplied;
+- filters for source type, role, gate, risk, and status;
+- empty state with manual create and AI-assisted generate options.
+
+The `/development-plans/new` route must support manual creation and AI-assisted generation setup. It must collect enough context to create or generate a Development Plan without implying direct Spec or Execution Plan generation.
 
 Required desktop layout:
 
@@ -353,6 +408,29 @@ Each row/card shows:
 
 Raw runtime object IDs are secondary metadata only.
 
+### Execution Detail
+
+Execution detail uses a product supervision layout, not a runtime browser.
+
+First viewport must show:
+
+- execution title derived from the Development Plan Item and approved Execution Plan revision, not raw run/package IDs;
+- worker state;
+- current step;
+- last meaningful event;
+- interrupt/continue/retry/inspect actions where allowed;
+- disabled reasons for unavailable actions;
+- PR/diff/test evidence summary;
+- linked Development Plan Item and approved Execution Plan revision.
+
+Lower-priority sections may show:
+
+- event timeline;
+- runtime evidence references;
+- logs/check output summaries;
+- review and QA handoff context;
+- raw IDs only as compact metadata.
+
 ### Board
 
 Board is a delivery flow view over Development Plan Items and active gates, not a generic kanban of tasks.
@@ -394,6 +472,26 @@ Reports become operational intelligence surfaces:
 - scoped replay/evidence context.
 
 Reports should not be empty link panels. Each report section must show a conclusion, supporting signal, affected objects, and suggested action.
+
+### Authoring And Evidence Surfaces
+
+Create, edit, and evidence routes are first-class visual surfaces in this closure. They must use the same product-grade system as list/detail pages.
+
+Authoring requirements:
+
+- typed source object create routes use an authoring workspace, not a plain form stack;
+- MDXEditor remains behind the shared ForgeLoop Markdown editor wrapper;
+- narrative fields receive enough width for serious reading and writing;
+- structured fields remain structured and do not move into Markdown;
+- validation messages appear near fields and in a compact summary;
+- attachment and image insertion use the existing attachment/evidence model;
+- unsaved-change and destructive navigation states are visible.
+
+Evidence requirements:
+
+- evidence pages lead with evidence readiness and relevance, not raw artifact lists;
+- raw package/run/review links remain secondary and scoped;
+- missing, stale, unauthorized, or tombstoned evidence appears as product-safe unavailable evidence blocks.
 
 ## Design System Requirements
 
@@ -466,7 +564,7 @@ Components must encode information priority:
 
 ## Data Flow And Presentation View Models
 
-Do not rewrite backend data ownership. Continue to use the existing Web API clients and TanStack Query hooks.
+This slice is Web-first. Do not rewrite backend data ownership. Continue to use the existing Web API clients and TanStack Query hooks.
 
 Add feature-level presentation view-model adapters where needed. These adapters transform API projections into UI-priority shapes:
 
@@ -487,6 +585,22 @@ Add feature-level presentation view-model adapters where needed. These adapters 
 Page components should render these view models rather than directly spreading raw API fields into visual sections.
 
 Adapters must not hide unavailable data. If data is missing, the UI should render a truthful degraded state and a recovery path where one exists.
+
+Backend/API/query changes are allowed only when a product-grade page cannot truthfully render required state from existing projections. Any such change must be:
+
+- explicitly identified in the implementation plan before coding;
+- limited to the smallest necessary projection/read-model field;
+- covered by contract or API tests;
+- reflected in Web fixture data;
+- rejected if it changes domain lifecycle semantics rather than presentation data.
+
+Expected backend-capable file areas, only if justified by the implementation plan:
+
+- `packages/contracts/**`;
+- `packages/db/src/queries/**`;
+- `apps/control-plane-api/src/modules/**`;
+- `tests/contracts/**`;
+- `tests/api/**`.
 
 ## State Handling
 
@@ -552,35 +666,82 @@ Implementation review fails if screenshots show:
 - internal/dev status using more visual weight than product state;
 - first viewport that does not show current state, next action, responsible role/actor, and blocker/risk where relevant.
 
+### First-Viewport Test Contract
+
+Every route family in the route-to-layout matrix must expose stable test hooks or accessible landmarks so automated checks can assert the first viewport without brittle copy matching.
+
+Required contract per rendered product page:
+
+- one visible `h1` or equivalent page heading;
+- one current-state affordance with accessible text;
+- one next-action region, even when the next action is disabled or unavailable;
+- one owner/role/responsibility affordance where the object has an actionable owner or role;
+- one blocker/risk affordance when blocked, stale, failed, high-risk, or degraded;
+- a route-family marker such as `data-page-family`, `data-workspace-layout`, or equivalent accessible landmark.
+
+The implementation plan must define the exact test hook names or accessible landmarks before implementing broad screenshot checks.
+
 ## Verification Requirements
 
 ### Screenshot Manifest
 
 Capture and review screenshots for:
 
+- `/`;
 - `/cockpit`;
+- `/dashboard`;
 - `/my-work`;
 - `/requirements`;
+- `/requirements/new`;
 - `/requirements/:id`;
+- `/requirements/:id/evidence`;
 - `/initiatives`;
+- `/initiatives/new`;
+- `/initiatives/:id`;
+- `/initiatives/:id/evidence`;
 - `/bugs`;
+- `/bugs/new`;
+- `/bugs/:id`;
+- `/bugs/:id/evidence`;
 - `/tech-debt`;
+- `/tech-debt/new`;
+- `/tech-debt/:id`;
+- `/tech-debt/:id/evidence`;
 - `/development-plans`;
+- `/development-plans/new`;
 - `/development-plans/:id`;
 - `/development-plans/:id/items/:itemId`;
+- `/development-plans/:id/items/:itemId/brainstorming`;
+- `/development-plans/:id/items/:itemId/spec`;
+- `/development-plans/:id/items/:itemId/execution-plan`;
+- `/development-plans/:id/items/:itemId/execution`;
 - `/specs-plans`;
 - `/executions`;
 - `/executions/:id`;
 - `/board`;
 - `/releases`;
 - `/releases/:id`;
+- `/releases/:id/evidence`;
 - `/reports`;
 - `/reports/delivery`;
 - `/reports/quality`;
 - `/reports/release-readiness`;
 - `/reports/observation`.
 
-Each route needs 1440, 1024, 768, and 375px screenshots where route fixtures exist.
+Each required route needs 1440, 1024, 768, and 375px screenshots. Dynamic routes must have deterministic fixture IDs or seeded fixture data; implementation may not skip a required route family only because a fixture does not already exist.
+
+Retired-route screenshots or route smoke assertions are required for:
+
+- `/plans`;
+- `/plans/:id`;
+- `/specs`;
+- `/specs/:id`;
+- `/tasks`;
+- `/tasks/:id`;
+- raw replay routes if still registered;
+- raw execution package, run session, and review packet browser routes if still registered.
+
+Retired routes must not appear in primary navigation, command/search suggestions, product links, or happy-path route fixtures.
 
 Dynamic route fixture IDs must be defined in the implementation plan before coding. The fixture manifest must include at least one populated example for each dynamic route family:
 
@@ -605,6 +766,8 @@ Add mandatory checks:
 
 - screenshot manifest validation that asserts every required route/viewport was captured;
 - rendered first-viewport checks for visible heading, current state, next action/action strip, and non-color-only status;
+- direct URL checks for retired legacy routes and raw runtime browser routes;
+- command/search fixture checks proving retired routes are not suggested;
 - unit tests for presentation view-model adapters.
 
 Add best-effort checks where practical:
@@ -636,6 +799,8 @@ Expected code areas:
 - `tests/e2e/**`;
 - `apps/web/src/shared/design-system/docs/component-guidelines.md`.
 
+Backend-capable code areas are allowed only under the projection exception defined in "Data Flow And Presentation View Models".
+
 Avoid changing:
 
 - backend persistence semantics;
@@ -644,10 +809,58 @@ Avoid changing:
 - unrelated executor/runtime safety work;
 - externally owned parallel worktrees.
 
+## Required Implementation Phases
+
+The implementation plan must decompose this work into phases. A single unstructured "rewrite UI" task is not acceptable.
+
+Required phases:
+
+1. Visual-system foundation:
+   - tokens;
+   - shared layout primitives;
+   - shared UI primitives;
+   - component guidelines;
+   - anti-pattern markers and tests.
+2. Shell and IA:
+   - `/cockpit` route;
+   - `/` index behavior;
+   - `/dashboard` retirement;
+   - navigation;
+   - topbar;
+   - role lens contract.
+3. Presentation view models and fixtures:
+   - page-family view-model adapters;
+   - fixture manifest;
+   - first-viewport test contract.
+4. Source object list/detail/authoring/evidence surfaces:
+   - Initiatives;
+   - Requirements;
+   - Bugs;
+   - Tech Debt.
+5. Planning surfaces:
+   - Development Plans index;
+   - Development Plan creation/generation;
+   - Development Plan detail table and preview;
+   - Development Plan Item gate workspace and focus routes.
+6. Delivery and governance surfaces:
+   - Specs and Execution Plans queue;
+   - Executions list and detail;
+   - Board;
+   - Releases and release evidence.
+7. Intelligence surfaces:
+   - Reports index and report routes.
+8. Final visual closure:
+   - screenshot manifest;
+   - responsive/a11y/no-baggage gates;
+   - manual visual review note;
+   - final fixes from screenshots.
+
+Each phase must have a verification checkpoint. Final screenshot closure cannot be the only verification point.
+
 ## Risks And Mitigations
 
 - Risk: the redesign becomes too broad for one implementation pass.
-  - Mitigation: the implementation plan may split tasks by page family, but all tasks must share this visual system and final screenshot closure.
+  - Mitigation: within the required phases above, the implementation plan may split tasks by page family, but all tasks must share this visual system and final screenshot closure.
 - Risk: page authors reintroduce card sprawl with Tailwind utility classes.
   - Mitigation: add component guidelines and anti-pattern tests/markers; require shared primitives for page shells.
 - Risk: action-first UI hides necessary audit context.
