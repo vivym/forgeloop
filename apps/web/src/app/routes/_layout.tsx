@@ -24,7 +24,10 @@ const navGroups = [
   },
   {
     label: 'Planning',
-    items: [{ label: 'Specs & Execution Plans', to: '/specs-plans' }],
+    items: [
+      { label: 'Development Plans', to: '/development-plans' },
+      { label: 'Specs & Execution Plans', to: '/specs-plans' },
+    ],
   },
   {
     label: 'Delivery',

@@ -39,7 +39,7 @@ const legacyOwnerPattern = new RegExp(`${['Work', 'Item', 'Owner'].join(' ')}|${
 describe('project management route IA', () => {
   it('renders grouped primary navigation without generic Tasks or direct artifact routes', async () => {
     const screen = await renderRoute('/my-work');
-    for (const label of ['Dashboard', 'My Work', 'Requirements', 'Bugs', 'Tech Debt', 'Specs & Execution Plans', 'Board', 'Releases', 'Reports']) {
+    for (const label of ['Dashboard', 'My Work', 'Requirements', 'Bugs', 'Tech Debt', 'Development Plans', 'Specs & Execution Plans', 'Board', 'Releases', 'Reports']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
     for (const label of ['Lanes', 'Pipeline', 'Work Items', 'Tasks', 'Packages', 'Runs', 'Reviews', 'Specs', 'Plans']) {
@@ -59,7 +59,8 @@ describe('project management route IA', () => {
     expect(await screen.findByRole('heading', { name: 'Specs & Execution Plans' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Specs' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Execution Plans' })).toBeTruthy();
-    for (const link of screen.getAllByRole('link')) {
+    const queueLinks = screen.getAllByRole('link').filter((link) => link.closest('nav') === null);
+    for (const link of queueLinks) {
       expect(link.getAttribute('href')).not.toMatch(/^\/development-plans|^\/executions|^\/code-review-handoffs|^\/qa-handoffs/);
     }
     expect(document.body.textContent).not.toMatch(/\/specs\/|\/plans\/|\/tasks\//);

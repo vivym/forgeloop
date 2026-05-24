@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import {
   actorId,
   boardCards,
+  developmentPlan,
+  developmentPlanItem,
   myWorkQueueResponse,
   projectId,
   requirementDetail,
@@ -22,6 +24,8 @@ describe('AI-native surface states', () => {
     ['/my-work', 'My Work'],
     ['/board', 'Board'],
     ['/reports', 'Reports'],
+    [`/development-plans/${developmentPlan.id}`, 'Development Plan Page'],
+    [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, 'Development Plan Item Detail'],
   ] as const)('renders loading, empty, error, stale, blocked, approved, running, and resumable states for %s', async (route) => {
     for (const state of ['loading', 'empty', 'error', 'stale', 'blocked', 'approved', 'running', 'resumable'] as const) {
       const screen = await renderRoute(route, { apiOverrides: overridesFor(route, state) });
@@ -40,6 +44,8 @@ function overridesFor(route: string, state: SurfaceState): ProductApiResponseMap
   if (route === '/dashboard') return dashboardOverrides(state);
   if (route === '/my-work') return myWorkOverrides(state);
   if (route === '/board') return boardOverrides(state);
+  if (route === `/development-plans/${developmentPlan.id}`) return developmentPlanOverrides(state);
+  if (route === `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`) return developmentPlanItemOverrides(state);
   return reportOverrides(state);
 }
 
@@ -131,6 +137,50 @@ function reportOverrides(state: SurfaceState): ProductApiResponseMap {
       generated_at: '2026-05-18T01:05:00.000Z',
       degraded_sources: state === 'stale' ? ['stale_report_projection'] : [],
       groups: [{ id: state === 'resumable' ? 'resumable' : state }],
+    },
+  };
+}
+
+function developmentPlanOverrides(state: SurfaceState): ProductApiResponseMap {
+  const key = `GET /query/development-plans/${developmentPlan.id}`;
+  if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
+  if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
+  if (state === 'empty') return { [key]: { ...developmentPlan, items: [] } };
+  return {
+    [key]: {
+      ...developmentPlan,
+      items: [
+        {
+          ...developmentPlanItem,
+          boundary_status: state === 'blocked' ? 'blocked' : state === 'stale' ? 'stale' : state === 'approved' ? 'approved' : developmentPlanItem.boundary_status,
+          execution_status: state === 'approved' ? 'completed' : state === 'running' ? 'running' : state === 'resumable' ? 'interrupted' : developmentPlanItem.execution_status,
+        },
+      ],
+    },
+  };
+}
+
+function developmentPlanItemOverrides(state: SurfaceState): ProductApiResponseMap {
+  const key = `GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`;
+  if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
+  if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
+  if (state === 'empty') return { [key]: {} };
+  const { development_plan_id: _developmentPlanId, ...itemProjection } = developmentPlanItem;
+  void _developmentPlanId;
+  return {
+    [key]: {
+      ...itemProjection,
+      object_ref: {
+        type: 'development_plan_item',
+        id: developmentPlanItem.id,
+        development_plan_id: developmentPlan.id,
+        title: developmentPlanItem.title,
+      },
+      development_plan_ref: { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
+      source_ref: developmentPlan.source_refs[0],
+      boundary_status: state === 'blocked' ? 'blocked' : state === 'stale' ? 'stale' : state === 'approved' ? 'approved' : developmentPlanItem.boundary_status,
+      execution_status: state === 'approved' ? 'completed' : state === 'running' ? 'running' : state === 'resumable' ? 'interrupted' : developmentPlanItem.execution_status,
+      boundary_summary_revisions: [],
     },
   };
 }

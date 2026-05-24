@@ -25,7 +25,7 @@ describe('React Router product shell', () => {
   it('shows project management nav labels without removed product route families', async () => {
     const screen = await renderRoute('/my-work');
 
-    for (const label of ['Dashboard', 'My Work', 'Initiatives', 'Requirements', 'Specs & Execution Plans', 'Bugs', 'Board', 'Releases', 'Reports']) {
+    for (const label of ['Dashboard', 'My Work', 'Initiatives', 'Requirements', 'Development Plans', 'Specs & Execution Plans', 'Bugs', 'Board', 'Releases', 'Reports']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
 
@@ -74,6 +74,12 @@ describe('React Router product shell', () => {
     const screen = await renderRoute('/specs-plans');
 
     expect(screen.getByRole('link', { name: 'Specs & Execution Plans' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('marks Development Plans active for planning table routes', async () => {
+    const screen = await renderRoute('/development-plans/development-plan-web-product');
+
+    expect(screen.getByRole('link', { name: 'Development Plans' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('respects the requested route path', async () => {

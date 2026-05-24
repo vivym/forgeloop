@@ -12,6 +12,14 @@ import BugEvidenceRoute from '../../apps/web/src/app/routes/bugs/$bugId/evidence
 import BugsRoute from '../../apps/web/src/app/routes/bugs';
 import NewBugRoute from '../../apps/web/src/app/routes/bugs/new';
 import DashboardRoute from '../../apps/web/src/app/routes/dashboard';
+import DevelopmentPlanDetailRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId';
+import DevelopmentPlanItemDetailRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId';
+import DevelopmentPlanItemBrainstormingRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/brainstorming';
+import DevelopmentPlanItemExecutionRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/execution';
+import DevelopmentPlanItemExecutionPlanRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/execution-plan';
+import DevelopmentPlanItemSpecRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/spec';
+import DevelopmentPlansRoute from '../../apps/web/src/app/routes/development-plans';
+import NewDevelopmentPlanRoute from '../../apps/web/src/app/routes/development-plans/new';
 import DevToolsRoute from '../../apps/web/src/app/routes/dev-tools';
 import InitiativeDetailRoute from '../../apps/web/src/app/routes/initiatives/$initiativeId';
 import InitiativeEvidenceRoute from '../../apps/web/src/app/routes/initiatives/$initiativeId/evidence';
@@ -74,6 +82,14 @@ const productRoutes: RouteObject[] = [
       { path: 'tech-debt/new', Component: NewTechDebtRoute },
       { path: 'tech-debt/:techDebtId', Component: TechDebtDetailRoute },
       { path: 'tech-debt/:techDebtId/evidence', Component: TechDebtEvidenceRoute },
+      { path: 'development-plans', Component: DevelopmentPlansRoute },
+      { path: 'development-plans/new', Component: NewDevelopmentPlanRoute },
+      { path: 'development-plans/:developmentPlanId', Component: DevelopmentPlanDetailRoute },
+      { path: 'development-plans/:developmentPlanId/items/:itemId', Component: DevelopmentPlanItemDetailRoute },
+      { path: 'development-plans/:developmentPlanId/items/:itemId/brainstorming', Component: DevelopmentPlanItemBrainstormingRoute },
+      { path: 'development-plans/:developmentPlanId/items/:itemId/spec', Component: DevelopmentPlanItemSpecRoute },
+      { path: 'development-plans/:developmentPlanId/items/:itemId/execution-plan', Component: DevelopmentPlanItemExecutionPlanRoute },
+      { path: 'development-plans/:developmentPlanId/items/:itemId/execution', Component: DevelopmentPlanItemExecutionRoute },
       { path: 'specs-plans', Component: SpecsPlansRoute },
       { path: 'bugs', Component: BugsRoute },
       { path: 'bugs/new', Component: NewBugRoute },

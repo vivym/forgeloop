@@ -584,6 +584,7 @@ function developmentPlanItemQueueRow(plan: DevelopmentPlan, item: DevelopmentPla
     source_ref: item.source_ref,
     title: item.title,
     responsible_role: item.responsible_role,
+    driver_actor_id: item.driver_actor_id,
     reviewer_actor_id: item.reviewer_actor_id,
     risk: item.risk,
     status: item.next_action,

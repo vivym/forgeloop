@@ -1,7 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 
-import { createForgeloopCommandApi, type RegenerateArtifactDraftBody, type RevisionCompareQuery } from './commands';
+import {
+  createForgeloopCommandApi,
+  type AnswerBrainstormingQuestionBody,
+  type ApproveBoundaryBody,
+  type RecordBrainstormingDecisionBody,
+  type RegenerateArtifactDraftBody,
+  type RevisionCompareQuery,
+  type StartBrainstormingSessionBody,
+} from './commands';
 import { createForgeloopQueryApi, type MyWorkQuery, type ProjectManagementListQuery } from './query';
 import {
   normalizeMyWorkQuery,
@@ -110,6 +118,50 @@ export function useDevelopmentPlanItemRevisionsQuery(developmentPlanId: string |
         requiredId(itemId, 'itemId'),
       ),
     enabled: developmentPlanId !== undefined && itemId !== undefined,
+  });
+}
+
+export function useStartBrainstormingSessionMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: StartBrainstormingSessionBody) =>
+      createCommandApi().startBrainstormingSession(
+        requiredId(input.developmentPlanId, 'developmentPlanId'),
+        requiredId(input.itemId, 'itemId'),
+        body,
+      ),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useAnswerBrainstormingQuestionMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; sessionId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: AnswerBrainstormingQuestionBody) =>
+      createCommandApi().answerBrainstormingQuestion(requiredId(input.sessionId, 'sessionId'), body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useRecordBrainstormingDecisionMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; sessionId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: RecordBrainstormingDecisionBody) =>
+      createCommandApi().recordBrainstormingDecision(requiredId(input.sessionId, 'sessionId'), body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+  });
+}
+
+export function useApproveBoundaryMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; sessionId: string | undefined }) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: ApproveBoundaryBody) =>
+      createCommandApi().approveBoundary(requiredId(input.sessionId, 'sessionId'), body),
+    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 

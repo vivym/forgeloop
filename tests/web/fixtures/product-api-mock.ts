@@ -38,6 +38,9 @@ import {
 } from './product-data';
 import type { ProductLaneId, ProductLaneItem, ProductLaneResponse } from '@forgeloop/contracts';
 
+const { development_plan_id: _developmentPlanItemLegacyPlanId, ...developmentPlanItemProjection } = developmentPlanItem;
+void _developmentPlanItemLegacyPlanId;
+
 export type ProductApiMockHandler = (request: { input: RequestInfo | URL; init?: RequestInit; key: string }) => unknown | Promise<unknown>;
 export type ProductApiResponseMap = Record<string, unknown | ProductApiMockHandler>;
 
@@ -413,13 +416,24 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
           title: developmentPlanItem.title,
         },
         title: developmentPlanItem.title,
+        responsible_role: developmentPlanItem.responsible_role,
+        driver_actor_id: developmentPlanItem.driver_actor_id,
+        reviewer_actor_id: developmentPlanItem.reviewer_actor_id,
+        risk: developmentPlanItem.risk,
+        boundary_status: developmentPlanItem.boundary_status,
+        spec_status: developmentPlanItem.spec_status,
+        execution_plan_status: developmentPlanItem.execution_plan_status,
+        execution_status: developmentPlanItem.execution_status,
+        review_status: developmentPlanItem.review_status,
+        qa_handoff_status: developmentPlanItem.qa_handoff_status,
+        next_action: developmentPlanItem.next_action,
         href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
       },
     ],
     href: `/development-plans/${developmentPlan.id}`,
   },
   [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: {
-    ...developmentPlanItem,
+    ...developmentPlanItemProjection,
     object_ref: {
       type: 'development_plan_item',
       id: developmentPlanItem.id,
@@ -429,7 +443,15 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     development_plan_ref: { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
     source_ref: developmentPlan.source_refs[0],
     revisions: [],
-    boundary_summary_revisions: [{ ...boundarySummary, boundary_summary_id: boundarySummary.id, revision_number: 1 }],
+    boundary_summary_revisions: [{
+      ...boundarySummary,
+      id: boundarySummary.revision_id,
+      boundary_summary_id: boundarySummary.id,
+      revision_number: 1,
+      summary_markdown: boundarySummary.summary_markdown,
+      decision_count: brainstormingSession.decisions.length,
+      decision_snapshot: brainstormingSession.decisions,
+    }],
     specs: [{ id: spec.id, artifact_type: 'spec', title: specRevision.summary }],
     execution_plans: [{ id: executionPlanRevision.execution_plan_id, artifact_type: 'execution_plan', title: executionPlanRevision.summary }],
     executions: [{ id: execution.id, title: execution.ref.title, status: execution.status }],
@@ -444,7 +466,15 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     { id: developmentPlanItem.revision_id, development_plan_item_id: developmentPlanItem.id, revision_number: 1, snapshot: developmentPlanItem },
   ],
   [`GET /boundary-summaries/${boundarySummary.id}/revisions`]: [
-    { ...boundarySummary, boundary_summary_id: boundarySummary.id, revision_number: 1 },
+    {
+      ...boundarySummary,
+      id: boundarySummary.revision_id,
+      boundary_summary_id: boundarySummary.id,
+      revision_number: 1,
+      summary_markdown: boundarySummary.summary_markdown,
+      decision_count: brainstormingSession.decisions.length,
+      decision_snapshot: brainstormingSession.decisions,
+    },
   ],
   [`GET /query/specs-execution-plans?project_id=${projectId}`]: {
     items: [
