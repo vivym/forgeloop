@@ -228,7 +228,7 @@ function sourceObjectQueueRow<T extends ProjectObjectListItem>(item: T, href: st
     statusLabel: viewModel.currentState,
     riskLabel: viewModel.riskSignal,
     responsibilityText,
-    developmentPlanState: developmentPlanGate?.state === 'linked' ? 'Development Plan linked' : 'Development Plan missing',
+    developmentPlanState: developmentPlanStateLabel(developmentPlanGate?.state),
     developmentPlanHref: developmentPlanGate?.href,
     nextAction: viewModel.nextAction,
     lastMeaningfulUpdate: viewModel.timelineSummary,
@@ -295,6 +295,12 @@ function SourceObjectPreview({ row }: { row: SourceObjectQueueRow | undefined })
 
 function uniqueValues(values: string[]): string[] {
   return Array.from(new Set(values)).filter(Boolean);
+}
+
+function developmentPlanStateLabel(state: string | undefined): string {
+  if (state === 'linked') return 'Development Plan linked';
+  if (state === 'missing') return 'Development Plan missing';
+  return 'Planning state unknown';
 }
 
 function riskTone(risk: string): 'neutral' | 'warning' | 'danger' {

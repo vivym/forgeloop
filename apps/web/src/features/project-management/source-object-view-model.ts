@@ -22,19 +22,19 @@ interface SourceObjectProjection {
 
 export function sourceObjectListViewModel(source: SourceObjectProjection): ProductPageViewModel {
   const objectType = objectTypeLabel(source.ref?.type);
-  const relationships = source.relationship_refs ?? [];
-  const linkedPlan = relationships.find((ref) => ref.type === 'development_plan' || ref.type === 'development_plan_item');
+  const relationshipsKnown = source.relationship_refs !== undefined;
+  const linkedPlan = source.relationship_refs?.find((ref) => ref.type === 'development_plan' || ref.type === 'development_plan_item');
   const evidence = sourceEvidence(source);
 
   return {
     objectLabel: source.title ?? source.id,
     objectType,
     currentState: source.status ?? 'State unavailable',
-    nextAction: linkedPlan === undefined ? 'Create Development Plan from source object' : 'Review linked Development Plan',
+    nextAction: sourceNextAction(relationshipsKnown, linkedPlan),
     disabledReason: undefined,
     primaryActorOrRole: source.driver_actor_id ?? 'Unassigned',
     riskSignal: riskLabel(source.risk),
-    gateProgress: sourceGateProgress(source, linkedPlan),
+    gateProgress: sourceGateProgress(source, relationshipsKnown, linkedPlan),
     criticalEvidence: [evidence],
     secondaryMetadata: sourceMetadata(source),
     previewSummary: source.narrative_markdown ?? `${objectType} summary unavailable`,
@@ -64,15 +64,28 @@ function uniqueRefCount(refs: readonly SourceRef[]): number {
   return new Set(refs.map((ref) => `${ref.type ?? 'ref'}:${ref.id ?? ref.title ?? 'unknown'}`)).size;
 }
 
-function sourceGateProgress(source: SourceObjectProjection, linkedPlan: SourceRef | undefined): ViewModelGate[] {
+function sourceNextAction(relationshipsKnown: boolean, linkedPlan: SourceRef | undefined): string {
+  if (!relationshipsKnown) return 'Open source object to inspect planning state';
+  return linkedPlan === undefined ? 'Create Development Plan from source object' : 'Review linked Development Plan';
+}
+
+function sourceGateProgress(source: SourceObjectProjection, relationshipsKnown: boolean, linkedPlan: SourceRef | undefined): ViewModelGate[] {
   return [
     { label: 'Source triage', state: source.status ?? 'unavailable', owner: source.driver_actor_id },
     {
       label: 'Development Plan',
-      state: linkedPlan === undefined ? 'missing' : 'linked',
-      href: linkedPlan?.type === 'development_plan' ? `/development-plans/${linkedPlan.id}` : undefined,
+      state: !relationshipsKnown ? 'unknown' : linkedPlan === undefined ? 'missing' : 'linked',
+      href: developmentPlanHref(linkedPlan),
     },
   ];
+}
+
+function developmentPlanHref(linkedPlan: SourceRef | undefined): string | undefined {
+  if (linkedPlan?.type === 'development_plan' && linkedPlan.id !== undefined) return `/development-plans/${linkedPlan.id}`;
+  if (linkedPlan?.type === 'development_plan_item' && linkedPlan.development_plan_id !== undefined && linkedPlan.id !== undefined) {
+    return `/development-plans/${linkedPlan.development_plan_id}/items/${linkedPlan.id}`;
+  }
+  return undefined;
 }
 
 function sourceMetadata(source: SourceObjectProjection): ViewModelMetadata[] {

@@ -169,11 +169,12 @@ describe('project management route IA', () => {
       expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy();
       expect(document.querySelector('[data-page-family="source-object-list"]')).toBeInstanceOf(HTMLElement);
       expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
+      expect(await screen.findByText(itemTitle)).toBeTruthy();
       expect(screen.getByTestId('current-state').textContent).toMatch(/source object/i);
-      expect(screen.getByTestId('next-action').textContent).toMatch(/development plan|review/i);
+      expect(screen.getByTestId('next-action').textContent).toMatch(/open source object to inspect planning state/i);
       expect(screen.getByTestId('role-responsibility').textContent).toMatch(/responsibility|assigned/i);
       expect(screen.getByTestId('blocker-risk').textContent).toMatch(/risk|blocker/i);
-      expect(await screen.findByText(itemTitle)).toBeTruthy();
+      expect(screen.getByText('Planning state unknown')).toBeTruthy();
       expect(screen.getByRole('searchbox', { name: new RegExp(`search ${heading}`, 'i') })).toBeTruthy();
       expect(screen.getByRole('button', { name: /view: dense/i })).toBeTruthy();
       expect(screen.getByRole('link', { name: /create source object/i }).getAttribute('href')).toBe(createHref);
@@ -185,6 +186,8 @@ describe('project management route IA', () => {
       expect(screen.getAllByText(objectType)[0]).toBeTruthy();
       expect(screen.getByRole('link', { name: new RegExp(`open ${objectType}`, 'i') })).toBeTruthy();
       expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
+      expect(document.body.textContent).not.toContain('Development Plan missing');
+      expect(document.body.textContent).not.toContain('Create Development Plan from source object');
       cleanup();
     }
   });
