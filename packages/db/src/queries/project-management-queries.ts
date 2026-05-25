@@ -268,6 +268,9 @@ export async function listDevelopmentPlanProjections(
   const rows = await Promise.all(
     plans.map(async (plan) => {
       const items = await repository.listDevelopmentPlanItems(plan.id);
+      const responsibleRoles = uniqueStrings(items.map((item) => item.responsible_role));
+      const gateStates = uniqueStrings(items.map(currentDevelopmentPlanItemGate));
+      const risks = uniqueStrings(items.map((item) => item.risk));
       return {
         id: plan.id,
         object_ref: developmentPlanRef(plan),
@@ -276,6 +279,12 @@ export async function listDevelopmentPlanProjections(
         source_refs: plan.source_refs,
         item_count: items.length,
         blocked_count: items.filter(isDevelopmentPlanItemBlocked).length,
+        responsible_role: responsibleRoles.length === 1 ? responsibleRoles[0] : 'mixed',
+        responsible_roles: responsibleRoles,
+        gate_state: gateStates.length === 1 ? gateStates[0] : 'mixed',
+        gate_states: gateStates,
+        risk: highestRisk(risks),
+        risks,
         href: `/development-plans/${plan.id}`,
         updated_at: plan.updated_at,
       };
@@ -891,6 +900,28 @@ function isDevelopmentPlanItemBlocked(item: DevelopmentPlanItem): boolean {
     item.qa_handoff_status === 'blocked' ||
     item.qa_handoff_status === 'changes_requested'
   );
+}
+
+function currentDevelopmentPlanItemGate(item: DevelopmentPlanItem): string {
+  if (item.boundary_status !== 'approved') return 'boundary';
+  if (item.spec_status !== 'approved') return 'spec';
+  if (item.execution_plan_status !== 'approved') return 'execution_plan';
+  if (item.execution_status !== 'completed') return 'execution';
+  if (item.review_status !== 'approved') return 'review';
+  if (item.qa_handoff_status !== 'accepted') return 'qa';
+  return 'release';
+}
+
+function highestRisk(risks: string[]): string | undefined {
+  const order = ['low', 'medium', 'high', 'critical'];
+  return risks.reduce<string | undefined>((highest, risk) => {
+    if (highest === undefined) return risk;
+    return order.indexOf(risk) > order.indexOf(highest) ? risk : highest;
+  }, undefined);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
 }
 
 function dashboardSection(id: string, label: string, value: number, metrics: Array<{ label: string; value: number }>) {

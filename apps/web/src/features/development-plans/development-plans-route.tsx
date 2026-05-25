@@ -19,8 +19,11 @@ type DevelopmentPlanListRow = {
   item_count?: number;
   blocked_count?: number;
   responsible_role?: string;
+  responsible_roles?: string[];
   gate_state?: string;
+  gate_states?: string[];
   risk?: string;
+  risks?: string[];
   updated_at?: string;
 };
 
@@ -54,7 +57,7 @@ const roleOptions = [
   { label: 'Tech Lead', value: 'tech_lead' },
   { label: 'Developer', value: 'developer' },
   { label: 'QA', value: 'qa' },
-  { label: 'Release Owner', value: 'release_owner' },
+  { label: 'Release', value: 'release_owner' },
   { label: 'Manager', value: 'manager' },
 ];
 
@@ -66,6 +69,7 @@ const gateOptions = [
   { label: 'Execution', value: 'execution' },
   { label: 'Review', value: 'review' },
   { label: 'QA', value: 'qa' },
+  { label: 'Release', value: 'release' },
 ];
 
 const riskOptions = [
@@ -186,8 +190,7 @@ export function DevelopmentPlanNewRoute() {
         source_ref: sourceRef,
         ...(guidance.length > 0 ? { guidance } : {}),
       });
-      const generatedPlan = generated.development_plan;
-      const planId = isRecord(generatedPlan) && typeof generatedPlan.id === 'string' ? generatedPlan.id : undefined;
+      const planId = typeof generated.id === 'string' ? generated.id : undefined;
       setActionState({
         status: 'success',
         message: 'Development Plan draft generated with source context. Review Plan Items before boundary approval.',
@@ -383,8 +386,8 @@ const columns: DataTableColumn<DevelopmentPlanListRow>[] = [
     header: 'Plan items',
     cell: (row) => `${row.item_count ?? 0} ${pluralize(row.item_count ?? 0, 'Plan Item')}`,
   },
-  { key: 'role', header: 'Role', cell: (row) => formatValue(row.responsible_role ?? 'mixed') },
-  { key: 'gate', header: 'Gate', cell: (row) => formatValue(row.gate_state ?? 'boundary') },
+  { key: 'role', header: 'Role', cell: (row) => formatValues(row.responsible_roles, row.responsible_role, 'mixed') },
+  { key: 'gate', header: 'Gate', cell: (row) => formatValues(row.gate_states, row.gate_state, 'boundary') },
   {
     key: 'risk',
     header: 'Risk',
@@ -398,9 +401,9 @@ const columns: DataTableColumn<DevelopmentPlanListRow>[] = [
 function rowMatchesFilters(row: DevelopmentPlanListRow, filters: DevelopmentPlanFilterState): boolean {
   return (
     (filters.sourceType === 'all' || (row.source_refs?.some((ref) => ref.type === filters.sourceType) ?? false)) &&
-    (filters.role === 'all' || row.responsible_role === filters.role) &&
-    (filters.gate === 'all' || row.gate_state === filters.gate) &&
-    (filters.risk === 'all' || row.risk === filters.risk) &&
+    matchesProjectionFilter(row.responsible_roles, row.responsible_role, filters.role) &&
+    matchesProjectionFilter(row.gate_states, row.gate_state, filters.gate) &&
+    matchesProjectionFilter(row.risks, row.risk, filters.risk) &&
     (filters.status === 'all' || row.status === filters.status)
   );
 }
@@ -460,6 +463,13 @@ function pluralize(count: number, label: string): string {
   return count === 1 ? label : `${label}s`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function matchesProjectionFilter(values: string[] | undefined, value: string | undefined, selected: string): boolean {
+  if (selected === 'all') return true;
+  const candidates = values?.length ? values : value === undefined ? [] : [value];
+  return candidates.includes(selected);
+}
+
+function formatValues(values: string[] | undefined, value: string | undefined, fallback: string): string {
+  const candidates = values?.length ? values : [value ?? fallback];
+  return candidates.map((candidate) => formatValue(candidate)).join(', ');
 }

@@ -131,6 +131,12 @@ describe('project management query API', () => {
         expect.objectContaining({
           object_ref: expect.objectContaining({ type: 'development_plan', id: developmentPlan.id }),
           item_count: 1,
+          responsible_role: item.responsible_role,
+          responsible_roles: [item.responsible_role],
+          gate_state: 'execution',
+          gate_states: ['execution'],
+          risk: item.risk,
+          risks: [item.risk],
           href: `/development-plans/${developmentPlan.id}`,
         }),
       ]),

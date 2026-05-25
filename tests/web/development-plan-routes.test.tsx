@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup } from '@testing-library/react';
+import { cleanup, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
@@ -29,6 +29,21 @@ describe('Development Plan routes', () => {
     expect((await screen.findByRole('link', { name: /checkout requirement/i })).getAttribute('href')).toBe('/requirements/req-1');
     expect(screen.getAllByText(/1 Plan Item/i).length).toBeGreaterThan(0);
     expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b/);
+    expect(document.body.textContent).not.toContain('Release Owner');
+  });
+
+  it('filters the Development Plans index using real list projection fields', async () => {
+    const screen = await renderRoute('/development-plans');
+
+    expect(await screen.findByRole('link', { name: developmentPlan.title })).toBeTruthy();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'developer' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Gate' }), { target: { value: 'execution' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Risk' }), { target: { value: 'medium' } });
+
+    expect(screen.getByRole('link', { name: developmentPlan.title })).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Risk' }), { target: { value: 'critical' } });
+    expect(screen.queryByRole('link', { name: developmentPlan.title })).toBeNull();
   });
 
   it('renders a useful Development Plans empty state without reverting to a source picker placeholder', async () => {
@@ -79,10 +94,7 @@ describe('Development Plan routes', () => {
         },
         'POST /development-plans/generate-draft': ({ init }) => {
           generateBodies.push(parseRequestBody(init));
-          return {
-            development_plan: developmentPlan,
-            revision: { id: developmentPlan.revision_id, development_plan_id: developmentPlan.id, revision_number: 1 },
-          };
+          return { ...developmentPlan, generation_state: 'draft_generated' };
         },
       },
     });
@@ -109,10 +121,7 @@ describe('Development Plan routes', () => {
       apiOverrides: {
         'POST /development-plans/generate-draft': ({ init }) => {
           generateBodies.push(parseRequestBody(init));
-          return {
-            development_plan: developmentPlan,
-            revision: { id: developmentPlan.revision_id, development_plan_id: developmentPlan.id, revision_number: 1 },
-          };
+          return { ...developmentPlan, generation_state: 'draft_generated' };
         },
       },
     });
@@ -123,6 +132,9 @@ describe('Development Plan routes', () => {
     await user.click(generateScreen.getByRole('button', { name: /^generate ai-assisted draft$/i }));
 
     expect(await generateScreen.findByText(/Development Plan draft generated with source context/i)).toBeTruthy();
+    expect(generateScreen.getByRole('link', { name: /open development plan/i }).getAttribute('href')).toBe(
+      `/development-plans/${developmentPlan.id}`,
+    );
     expect(generateBodies).toEqual([
       expect.objectContaining({
         source_ref: { type: 'requirement', id: 'req-1', title: 'Requirement req-1' },
