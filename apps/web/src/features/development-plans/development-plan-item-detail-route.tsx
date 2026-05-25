@@ -66,6 +66,7 @@ function DevelopmentPlanItemSurface({ focus }: { focus: 'overview' | 'brainstorm
 
   return (
     <GateWorkspace
+      as="div"
       blockerRisk={itemWithRoutePlan === undefined ? 'Disabled reasons and evidence side context load with the item.' : blockerRiskSummary(itemWithRoutePlan, gates)}
       family="gate-workspace"
       heading={itemWithRoutePlan?.title ?? 'Development Plan Item'}
