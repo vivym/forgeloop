@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexGenerationTaskKinds,
   type CodexGenerationWorkloadV1,
   type CodexLaunchMaterialization,
   type CodexRunExecutionRuntimeJobResult,
@@ -1128,13 +1129,26 @@ const runGeneration = async (
     },
     signal,
   };
-  if (workload.task_kind === 'spec_draft') {
-    return (await runtime.generateSpecDraft(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
+  switch (workload.task_kind) {
+    case 'spec_draft':
+      return (await runtime.generateSpecDraft(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
+    case 'plan_draft':
+      return (await runtime.generatePlanDraft(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
+    case 'package_drafts':
+      return (await runtime.generatePackageDrafts(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
+    case 'boundary_brainstorming_round':
+      return (await runtime.generateBoundaryBrainstormingRound(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
+    case 'development_plan_item_spec_revision':
+      return (await runtime.generateDevelopmentPlanItemSpecRevision(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
+    case 'development_plan_item_execution_plan_revision':
+      return (await runtime.generateDevelopmentPlanItemExecutionPlanRevision(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
+    default:
+      return assertNeverGenerationTaskKind(workload.task_kind);
   }
-  if (workload.task_kind === 'plan_draft') {
-    return (await runtime.generatePlanDraft(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
-  }
-  return (await runtime.generatePackageDrafts(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
+};
+
+const assertNeverGenerationTaskKind = (taskKind: never): never => {
+  throw new Error(`codex_generation_task_kind_unsupported:${String(taskKind)}`);
 };
 
 type FetchedGenerationWorkload = {
@@ -1168,9 +1182,12 @@ const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkloa
     workload.schema_version !== 'codex_generation_workload.v1' ||
     typeof workload.runtime_job_id !== 'string' ||
     typeof workload.action_run_id !== 'string' ||
-    !['spec_draft', 'plan_draft', 'package_drafts'].includes(String(workload.task_kind))
+    typeof workload.task_kind !== 'string'
   ) {
     throw new Error('codex_runtime_job_unavailable');
+  }
+  if (!codexGenerationTaskKinds.includes(workload.task_kind as (typeof codexGenerationTaskKinds)[number])) {
+    throw new Error('codex_generation_workload_unsupported');
   }
   const typedWorkload = workload as unknown as CodexGenerationWorkloadV1;
   if (!isRecord(response.signed_context) || codexCanonicalDigest(response.signed_context) !== typedWorkload.signed_context_digest) {
@@ -1387,6 +1404,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const publicRuntimeWorkerErrorCodes = new Set([
   'codex_runtime_job_cancelled',
   'codex_runtime_job_success_terminal_unconfirmed',
+  'codex_generation_workload_unsupported',
   'codex_runtime_job_expired',
   'codex_runtime_job_unavailable',
   'codex_workspace_bundle_invalid',

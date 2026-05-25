@@ -1117,7 +1117,7 @@ git commit -m "feat: import codex runtime config and auth"
 - Test: `tests/codex-runtime/runtime.test.ts`
 - Test: `tests/codex-worker-runtime/remote-worker-client.test.ts`
 
-- [ ] **Step 1: Write failing payload and domain tests**
+- [x] **Step 1: Write failing payload and domain tests**
 
 Add tests for:
 
@@ -1127,7 +1127,7 @@ Add tests for:
 - public-safe rejection for raw config/auth/path/endpoints/log fields.
 - unknown worker task kind does not call `generatePackageDrafts`.
 
-- [ ] **Step 2: Run failing runtime tests**
+- [x] **Step 2: Run failing runtime tests**
 
 Run:
 
@@ -1137,7 +1137,7 @@ pnpm vitest run tests/domain/codex-runtime.test.ts tests/codex-runtime/payloads.
 
 Expected: FAIL because task kinds and validators are missing.
 
-- [ ] **Step 3: Extend domain runtime task kinds**
+- [x] **Step 3: Extend domain runtime task kinds**
 
 In `packages/domain/src/codex-runtime.ts`, change:
 
@@ -1153,7 +1153,7 @@ export type CodexGenerationTaskKind =
 
 Update `CodexGenerationWorkloadV1.task_kind`, `CodexGenerationRuntimeJobResult.task_kind`, and `requireCodexGenerationRuntimeJobResult`.
 
-- [ ] **Step 4: Add codex-runtime payload interfaces and schemas**
+- [x] **Step 4: Add codex-runtime payload interfaces and schemas**
 
 In `packages/codex-runtime/src/types.ts`, add:
 
@@ -1180,7 +1180,7 @@ export interface BoundaryRoundRuntimeResultV1 {
 
 Add `GeneratedSpecRevisionV1` and `GeneratedExecutionPlanRevisionV1` exactly as in the spec.
 
-- [ ] **Step 5: Add payload validators**
+- [x] **Step 5: Add payload validators**
 
 In `payloads.ts`, add:
 
@@ -1193,7 +1193,7 @@ In `payloads.ts`, add:
 
 Use existing `assertPublicSafeText` / `assertPlanPublicSafeText` style checks. Reject `~/.codex`, `/tmp/...`, `endpoint`, `container_id`, `auth_json`, and raw logs in public fields.
 
-- [ ] **Step 6: Extend runtime methods**
+- [x] **Step 6: Extend runtime methods**
 
 In `runtime.ts`, add methods:
 
@@ -1208,7 +1208,7 @@ generateDevelopmentPlanItemExecutionPlanRevision: (input) =>
 
 In fake mode, call deterministic fake builders.
 
-- [ ] **Step 7: Make worker dispatch exhaustive**
+- [x] **Step 7: Make worker dispatch exhaustive**
 
 In `remote-worker-client.ts`, replace fallthrough with:
 
@@ -1233,7 +1233,7 @@ switch (workload.task_kind) {
 
 Also update workload validation to allow the three new task kinds.
 
-- [ ] **Step 8: Run runtime tests**
+- [x] **Step 8: Run runtime tests**
 
 Run:
 
@@ -1243,7 +1243,7 @@ pnpm vitest run tests/domain/codex-runtime.test.ts tests/codex-runtime/payloads.
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 5**
+- [x] **Step 9: Commit Task 5**
 
 ```bash
 git add packages/domain/src/codex-runtime.ts packages/codex-runtime/src packages/codex-worker-runtime/src/remote-worker-client.ts tests/domain/codex-runtime.test.ts tests/codex-runtime tests/codex-worker-runtime/remote-worker-client.test.ts

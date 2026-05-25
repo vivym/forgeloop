@@ -1,10 +1,216 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  validateBoundaryRoundRuntimeResult,
+  validateGeneratedExecutionPlanRevision,
   validateGeneratedPackageDraftSet,
   validateGeneratedPlanDraft,
+  validateGeneratedSpecRevision,
   validateGeneratedSpecDraft,
 } from '../../packages/codex-runtime/src/payloads';
+
+const validBoundaryRoundResult = () => ({
+  schema_version: 'boundary_round_result.v1',
+  session_id: 'boundary-session-1',
+  round_id: 'round-1',
+  questions: [{ text: 'Which repo owns the API change?', required: true, rationale: 'Ownership gates scope.' }],
+  proposed_decisions: [{ text: 'Keep execution out of scope.', rationale: 'This round only closes boundary.' }],
+  summary_proposal: {
+    summary_markdown: 'Boundary is ready for Leader review.',
+    confirmed_scope: ['API contract'],
+    confirmed_out_of_scope: ['Deployment'],
+    accepted_assumptions: ['Repository exists'],
+    open_risks: ['Runtime availability'],
+    validation_expectations: ['API tests pass'],
+  },
+  needs_leader_input: true,
+  public_summary: 'Boundary round produced one required question.',
+  artifacts: [],
+});
+
+const validGeneratedSpecRevision = () => ({
+  schema_version: 'spec_revision.v1',
+  development_plan_item_id: 'item-1',
+  boundary_summary_revision_id: 'boundary-summary-rev-1',
+  summary: 'Generate runtime spec',
+  content_markdown: 'Implement the approved runtime boundary.',
+  problem_context: 'The product flow needs a generated Spec revision.',
+  scope_in: ['Spec generation'],
+  scope_out: ['Execution'],
+  acceptance_criteria: ['Draft Spec is created'],
+  test_strategy: ['API writer tests'],
+  risks: ['Stale boundary'],
+  assumptions: ['Leader approved boundary summary'],
+  unresolved_questions: [],
+  public_summary: 'Generated a draft Spec revision.',
+});
+
+const validGeneratedExecutionPlanRevision = () => ({
+  schema_version: 'execution_plan_revision.v1',
+  development_plan_item_id: 'item-1',
+  based_on_spec_revision_id: 'spec-rev-1',
+  summary: 'Generate runtime execution plan',
+  content_markdown: 'Implement in focused runtime slices.',
+  implementation_sequence: ['Add schemas', 'Wire writer tests'],
+  validation_strategy: ['pnpm vitest run tests/api/spec-plan-service.test.ts'],
+  allowed_paths: ['packages/codex-runtime/src/**'],
+  forbidden_paths: ['packages/db/migrations/**'],
+  required_checks: [{ check_id: 'unit', command: 'pnpm test', timeout_seconds: 120, blocks_review: true }],
+  rollback_notes: 'Revert generated runtime slices.',
+  handoff_criteria: ['Tests pass'],
+  public_summary: 'Generated a draft Execution Plan revision.',
+});
+
+describe('Superpowers generation result payloads', () => {
+  it('accepts Boundary round, Spec revision, and Execution Plan revision payloads', () => {
+    expect(validateBoundaryRoundRuntimeResult(validBoundaryRoundResult())).toMatchObject({
+      schema_version: 'boundary_round_result.v1',
+      needs_leader_input: true,
+    });
+    expect(validateGeneratedSpecRevision(validGeneratedSpecRevision())).toMatchObject({
+      schema_version: 'spec_revision.v1',
+      development_plan_item_id: 'item-1',
+    });
+    expect(validateGeneratedExecutionPlanRevision(validGeneratedExecutionPlanRevision())).toMatchObject({
+      schema_version: 'execution_plan_revision.v1',
+      based_on_spec_revision_id: 'spec-rev-1',
+    });
+  });
+
+  it('allows ordinary product endpoint wording while still rejecting raw runtime endpoints', () => {
+    expect(
+      validateGeneratedSpecRevision({
+        ...validGeneratedSpecRevision(),
+        content_markdown: 'Document the API endpoint contract for product callers. Endpoint: /api/items.',
+      }),
+    ).toMatchObject({ schema_version: 'spec_revision.v1' });
+  });
+
+  it('allows UUID product ids and plan commands or paths that contain release/deploy wording', () => {
+    expect(
+      validateGeneratedSpecRevision({
+        ...validGeneratedSpecRevision(),
+        development_plan_item_id: '550e8400-e29b-41d4-a716-446655440000',
+        boundary_summary_revision_id: '550e8400-e29b-41d4-a716-446655440001',
+      }),
+    ).toMatchObject({ development_plan_item_id: '550e8400-e29b-41d4-a716-446655440000' });
+    expect(
+      validateGeneratedExecutionPlanRevision({
+        ...validGeneratedExecutionPlanRevision(),
+        development_plan_item_id: '550e8400-e29b-41d4-a716-446655440000',
+        based_on_spec_revision_id: '550e8400-e29b-41d4-a716-446655440002',
+        allowed_paths: ['apps/deploy/**'],
+        required_checks: [{ check_id: 'release-check', command: 'pnpm run release:check', timeout_seconds: 120, blocks_review: true }],
+      }),
+    ).toMatchObject({ based_on_spec_revision_id: '550e8400-e29b-41d4-a716-446655440002' });
+  });
+
+  it.each([
+    [
+      'boundary raw endpoint',
+      () => validateBoundaryRoundRuntimeResult({ ...validBoundaryRoundResult(), public_summary: 'endpoint unix:/tmp/codex.sock' }),
+    ],
+    [
+      'boundary auth filename',
+      () => validateBoundaryRoundRuntimeResult({ ...validBoundaryRoundResult(), public_summary: 'auth.json content leaked' }),
+    ],
+    [
+      'boundary raw container id',
+      () => validateBoundaryRoundRuntimeResult({ ...validBoundaryRoundResult(), public_summary: 'container abcdef123456' }),
+    ],
+    ['spec raw auth marker', () => validateGeneratedSpecRevision({ ...validGeneratedSpecRevision(), content_markdown: 'auth_json leaked' })],
+    [
+      'spec config filename',
+      () => validateGeneratedSpecRevision({ ...validGeneratedSpecRevision(), content_markdown: 'config.toml content leaked' }),
+    ],
+    [
+      'spec bare local endpoint',
+      () =>
+        validateGeneratedSpecRevision({
+          ...validGeneratedSpecRevision(),
+          content_markdown: 'Local endpoint localhost:3000/internal handled the job.',
+        }),
+    ],
+    [
+      'spec provider endpoint',
+      () =>
+        validateGeneratedSpecRevision({
+          ...validGeneratedSpecRevision(),
+          content_markdown: 'Provider endpoint api.openai.com failed before draft publication.',
+        }),
+    ],
+    [
+      'spec raw container id',
+      () => validateGeneratedSpecRevision({ ...validGeneratedSpecRevision(), content_markdown: 'container abcdef123456' }),
+    ],
+    [
+      'execution-plan raw logs',
+      () =>
+        validateGeneratedExecutionPlanRevision({
+          ...validGeneratedExecutionPlanRevision(),
+          content_markdown: 'container_id abc123 and APP SERVER LOG',
+        }),
+    ],
+    [
+      'execution-plan hyphenated app-server log',
+      () =>
+        validateGeneratedExecutionPlanRevision({
+          ...validGeneratedExecutionPlanRevision(),
+          content_markdown: 'app-server logs leaked',
+        }),
+    ],
+    [
+      'execution-plan underscored app server log',
+      () =>
+        validateGeneratedExecutionPlanRevision({
+          ...validGeneratedExecutionPlanRevision(),
+          content_markdown: 'app_server_log raw',
+        }),
+    ],
+    [
+      'execution-plan auth command',
+      () =>
+        validateGeneratedExecutionPlanRevision({
+          ...validGeneratedExecutionPlanRevision(),
+          required_checks: [{ check_id: 'leak', command: 'cat auth.json', timeout_seconds: 30, blocks_review: true }],
+        }),
+    ],
+    [
+      'execution-plan local endpoint allowed path',
+      () =>
+        validateGeneratedExecutionPlanRevision({
+          ...validGeneratedExecutionPlanRevision(),
+          allowed_paths: ['localhost:3000/internal'],
+        }),
+    ],
+    [
+      'execution-plan backslash allowed path',
+      () =>
+        validateGeneratedExecutionPlanRevision({
+          ...validGeneratedExecutionPlanRevision(),
+          allowed_paths: ['src\\index.ts'],
+        }),
+    ],
+    [
+      'execution-plan provider host allowed path',
+      () =>
+        validateGeneratedExecutionPlanRevision({
+          ...validGeneratedExecutionPlanRevision(),
+          allowed_paths: ['api.openai.com'],
+        }),
+    ],
+    [
+      'execution-plan raw container id',
+      () =>
+        validateGeneratedExecutionPlanRevision({
+          ...validGeneratedExecutionPlanRevision(),
+          rollback_notes: 'container abcdef123456',
+        }),
+    ],
+  ])('rejects unsafe public runtime fields for %s payloads', (_name, validate) => {
+    expect(validate).toThrow(/generated_|boundary_round/);
+  });
+});
 
 describe('GeneratedPlanDraftV1', () => {
   it('accepts a valid generated Plan draft', () => {

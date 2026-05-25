@@ -877,7 +877,7 @@ describe('automation daemon loop', () => {
                   internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/generated_payload`,
                 },
               },
-              generated_payload_digest: `sha256:${'6'.repeat(64)}`,
+              generated_payload_digest: `sha256:${'5'.repeat(64)}`,
               generation_artifacts: [
                 {
                   kind: 'generated_payload',
@@ -921,6 +921,7 @@ describe('automation daemon loop', () => {
   it('caps remote runtime job polling sleep to the configured wait deadline', async () => {
     const sleepDurations: number[] = [];
     const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
+    let monotonicNowMs = 0;
     const runtime = createRemoteCodexGenerationRuntime({
       runtimeProfileId: 'profile-1',
       credentialBindingId: 'credential-binding-1',
@@ -928,8 +929,10 @@ describe('automation daemon loop', () => {
       pollIntervalMs: 5_000,
       actionClaimRenewalMs: 30_000,
       now: () => '2026-05-23T00:00:00.000Z',
+      monotonicNowMs: () => monotonicNowMs,
       sleep: async (durationMs) => {
         sleepDurations.push(durationMs);
+        monotonicNowMs += durationMs;
       },
       controlPlaneClient: {
         getStatus: async () => ({

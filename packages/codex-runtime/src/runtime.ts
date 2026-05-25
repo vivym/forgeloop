@@ -2,23 +2,32 @@ import { AppServerGenerationDriver } from './app-server-generation-driver.js';
 import { CodexAppServerEndpointTransport } from './app-server-endpoint-transport.js';
 import type { CodexAppServerTransport } from './app-server-protocol.js';
 import {
+  createFakeBoundaryRoundRuntimeResult,
+  createFakeGeneratedExecutionPlanRevision,
+  createFakeGeneratedSpecRevision,
   createFakePackageDraftSet,
   createFakePlanDraft,
   createFakeSpecDraft,
 } from './fake-driver.js';
 import { createCodexGenerationRuntimeSafety } from './generation-safety-factory.js';
 import {
+  validateBoundaryRoundRuntimeResult,
+  validateGeneratedExecutionPlanRevision,
   validateGeneratedPackageDraftSet,
   validateGeneratedPlanDraft,
   validateGeneratedSpecDraft,
+  validateGeneratedSpecRevision,
 } from './payloads.js';
 import type {
+  BoundaryRoundRuntimeResultV1,
   CodexGenerationDriverMode,
   CodexGenerationResult,
   CodexGenerationRuntime,
   CodexGenerationRuntimeTaskInput,
   CodexGenerationTaskKind,
+  GeneratedExecutionPlanRevisionV1,
   GeneratedPackageDraftSetV1,
+  GeneratedSpecRevisionV1,
 } from './types.js';
 
 export type CodexGenerationErrorCode =
@@ -252,6 +261,15 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
       async generatePackageDrafts(input) {
         return createFakePackageDraftSet(packageContextOrDefault(input.context)) as CodexGenerationResult<GeneratedPackageDraftSetV1>;
       },
+      async generateBoundaryBrainstormingRound(input) {
+        return createFakeBoundaryRoundRuntimeResult(input.context);
+      },
+      async generateDevelopmentPlanItemSpecRevision(input) {
+        return createFakeGeneratedSpecRevision(input.context);
+      },
+      async generateDevelopmentPlanItemExecutionPlanRevision(input) {
+        return createFakeGeneratedExecutionPlanRevision(input.context);
+      },
     };
   }
 
@@ -260,6 +278,24 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
       generateSpecDraft: (input) => generateWithAppServer('spec_draft', input, validateGeneratedSpecDraft),
       generatePlanDraft: (input) => generateWithAppServer('plan_draft', input, validateGeneratedPlanDraft),
       generatePackageDrafts: (input) => generateWithAppServer('package_drafts', input, validateGeneratedPackageDraftSet),
+      generateBoundaryBrainstormingRound: (input) =>
+        generateWithAppServer<BoundaryRoundRuntimeResultV1>(
+          'boundary_brainstorming_round',
+          input,
+          validateBoundaryRoundRuntimeResult,
+        ),
+      generateDevelopmentPlanItemSpecRevision: (input) =>
+        generateWithAppServer<GeneratedSpecRevisionV1>(
+          'development_plan_item_spec_revision',
+          input,
+          validateGeneratedSpecRevision,
+        ),
+      generateDevelopmentPlanItemExecutionPlanRevision: (input) =>
+        generateWithAppServer<GeneratedExecutionPlanRevisionV1>(
+          'development_plan_item_execution_plan_revision',
+          input,
+          validateGeneratedExecutionPlanRevision,
+        ),
     };
   }
 
@@ -271,6 +307,15 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
       throw new CodexGenerationError('codex_generation_disabled', { retryable: false });
     },
     async generatePackageDrafts() {
+      throw new CodexGenerationError('codex_generation_disabled', { retryable: false });
+    },
+    async generateBoundaryBrainstormingRound() {
+      throw new CodexGenerationError('codex_generation_disabled', { retryable: false });
+    },
+    async generateDevelopmentPlanItemSpecRevision() {
+      throw new CodexGenerationError('codex_generation_disabled', { retryable: false });
+    },
+    async generateDevelopmentPlanItemExecutionPlanRevision() {
       throw new CodexGenerationError('codex_generation_disabled', { retryable: false });
     },
   };

@@ -32,6 +32,28 @@ const validPlanJson = JSON.stringify({
   rollback_notes: 'Revert package commits',
 });
 
+const boundaryInput = {
+  ...planInput,
+  promptVersion: 'boundary-round.app-server.v1',
+  outputSchemaVersion: 'boundary_round_result.v1',
+  context: {
+    session_id: 'boundary-session-1',
+    round_id: 'round-1',
+    transcript: [],
+  },
+};
+
+const validBoundaryJson = JSON.stringify({
+  schema_version: 'boundary_round_result.v1',
+  session_id: 'boundary-session-1',
+  round_id: 'round-1',
+  questions: [{ text: 'Confirm API scope?', required: true }],
+  proposed_decisions: [{ text: 'Keep execution out of scope.' }],
+  needs_leader_input: true,
+  public_summary: 'Generated boundary round.',
+  artifacts: [],
+});
+
 describe('createCodexGenerationRuntime', () => {
   it('uses app-server transport and action-scoped safety for Plan generation', async () => {
     const endpoints: string[] = [];
@@ -74,6 +96,45 @@ describe('createCodexGenerationRuntime', () => {
     expect(endpoints).toEqual(['unix:/tmp/codex-app-server.sock']);
     expect(requests.map((request) => request.method)).toEqual(['thread/start', 'turn/start']);
     expect(requests[0]?.params).toMatchObject({ approvalPolicy: 'never', sandbox: 'read-only' });
+  });
+
+  it('uses app-server transport for Boundary Brainstorming round generation', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: (): CodexAppServerTransport => ({
+        async request(method, params) {
+          requests.push({ method, params });
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          }
+          return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+        },
+        notifications: async function* () {
+          yield { type: 'assistant_message_delta', delta: validBoundaryJson };
+          yield { type: 'turn_completed', status: 'completed' };
+        },
+        async close() {},
+      }),
+    });
+
+    const result = await runtime.generateBoundaryBrainstormingRound(boundaryInput);
+
+    expect(result).toMatchObject({
+      taskKind: 'boundary_brainstorming_round',
+      promptVersion: 'boundary-round.app-server.v1',
+      outputSchemaVersion: 'boundary_round_result.v1',
+      generated: { schema_version: 'boundary_round_result.v1', session_id: 'boundary-session-1' },
+    });
+    const turnInput = requests[1]?.params.input;
+    expect(turnInput).toEqual([expect.objectContaining({ text: expect.any(String) })]);
+    const promptText = Array.isArray(turnInput) && typeof turnInput[0]?.text === 'string' ? turnInput[0].text : '';
+    expect(JSON.parse(promptText)).toMatchObject({ task_kind: 'boundary_brainstorming_round' });
   });
 
   it('maps app-server schema-invalid Plan output to generated_output_schema_invalid', async () => {

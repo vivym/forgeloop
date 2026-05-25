@@ -633,15 +633,18 @@ const materializeRuntimeJob = (
     ...patch,
   });
 
-const validGenerationTerminalResult = (summary = 'completed') => ({
-  task_kind: 'spec_draft' as const,
-  prompt_version: 'prompt-v1',
-  output_schema_version: 'spec-draft.v1',
-  generated_payload: { summary },
-  generated_payload_digest: tokenHash(`generated-payload-${summary}`),
-  generation_artifacts: [],
-  public_summary: summary,
-});
+const validGenerationTerminalResult = (summary = 'completed') => {
+  const generatedPayload = { summary };
+  return {
+    task_kind: 'spec_draft' as const,
+    prompt_version: 'prompt-v1',
+    output_schema_version: 'spec-draft.v1',
+    generated_payload: generatedPayload,
+    generated_payload_digest: codexCanonicalDigest(generatedPayload),
+    generation_artifacts: [],
+    public_summary: summary,
+  };
+};
 
 const startRuntimeJob = (
   repository: DeliveryRepository,
@@ -1887,7 +1890,6 @@ describe('codex runtime repository behavior', () => {
       terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
         terminal_result_json: {
           ...validGenerationTerminalResult(),
-          generated_payload_digest: artifact.digest,
           generation_artifacts: [
             {
               kind: 'generated_payload',
@@ -1900,6 +1902,38 @@ describe('codex runtime repository behavior', () => {
         },
       }),
     ).resolves.toMatchObject({ status: 'terminal', terminal_status: 'succeeded' });
+  });
+
+  it('requires oversized generated payload artifact refs to match stored artifacts', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    const generatedPayloadDigest = tokenHash('oversized-product-generated-payload');
+    await expect(
+      terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        terminal_result_json: {
+          task_kind: 'development_plan_item_spec_revision',
+          prompt_version: 'spec-revision.remote.v1',
+          output_schema_version: 'spec_revision.v1',
+          generated_payload: {
+            schema_version: 'generated_payload_ref.v1',
+            artifact: {
+              kind: 'generated_payload',
+              name: 'generated-payload.json',
+              content_type: 'application/json',
+              digest: generatedPayloadDigest,
+              internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+            },
+          },
+          generated_payload_digest: generatedPayloadDigest,
+          generation_artifacts: [],
+          public_summary: 'Generated an oversized Spec revision.',
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
   });
 
   it('rejects worker-invented, wrong-job, invalid-type, and oversized runtime job artifacts', async () => {

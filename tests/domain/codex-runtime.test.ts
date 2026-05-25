@@ -5,6 +5,7 @@ import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
   codexLaunchTokenEnvelopeDigest,
+  collectCodexRuntimeJobTerminalArtifactRefs,
   codexNetworkPolicyDigestInput,
   codexPublicBlockerCodes,
   codexRuntimeJobInputDigest,
@@ -80,6 +81,75 @@ const digestC = `sha256:${'c'.repeat(64)}`;
 class NonJsonFixture {
   constructor(readonly value: string) {}
 }
+
+const boundaryRoundRuntimeResultPayload = () => ({
+  schema_version: 'boundary_round_result.v1',
+  session_id: 'boundary-session-1',
+  round_id: 'round-1',
+  questions: [{ text: 'Confirm API scope?', required: true, rationale: 'Scope gates the Spec.' }],
+  proposed_decisions: [{ text: 'Keep deployment out of scope.', rationale: 'Boundary only.' }],
+  summary_proposal: {
+    summary_markdown: 'Boundary is ready for Leader review.',
+    confirmed_scope: ['Runtime generation'],
+    confirmed_out_of_scope: ['Deployment'],
+    accepted_assumptions: ['Leader review remains required'],
+    open_risks: ['Runtime unavailable'],
+    validation_expectations: ['Payload validation passes'],
+  },
+  needs_leader_input: true,
+  public_summary: 'Generated a boundary round.',
+  artifacts: [],
+});
+
+const generatedSpecRevisionPayload = () => ({
+  schema_version: 'spec_revision.v1',
+  development_plan_item_id: 'item-1',
+  boundary_summary_revision_id: 'boundary-summary-rev-1',
+  summary: 'Generated Spec revision',
+  content_markdown: 'Implement the approved boundary.',
+  problem_context: 'The Development Plan Item needs a Spec revision.',
+  scope_in: ['Spec generation'],
+  scope_out: ['Execution'],
+  acceptance_criteria: ['Draft Spec revision is created'],
+  test_strategy: ['API writer tests'],
+  risks: ['Stale boundary'],
+  assumptions: ['Leader approved boundary summary'],
+  unresolved_questions: [],
+  public_summary: 'Generated a Spec revision.',
+});
+
+const generatedExecutionPlanRevisionPayload = () => ({
+  schema_version: 'execution_plan_revision.v1',
+  development_plan_item_id: 'item-1',
+  based_on_spec_revision_id: 'spec-rev-1',
+  summary: 'Generated Execution Plan revision',
+  content_markdown: 'Implement the approved Spec in focused slices.',
+  implementation_sequence: ['Add schemas', 'Wire worker dispatch'],
+  validation_strategy: ['Run targeted runtime tests'],
+  allowed_paths: ['packages/codex-runtime/src/**'],
+  forbidden_paths: ['packages/db/migrations/**'],
+  required_checks: [
+    {
+      check_id: 'unit',
+      command: 'pnpm vitest run tests/codex-runtime/payloads.test.ts',
+      timeout_seconds: 120,
+      blocks_review: true,
+    },
+  ],
+  rollback_notes: 'Revert generated runtime changes.',
+  handoff_criteria: ['Targeted tests pass'],
+  public_summary: 'Generated an Execution Plan revision.',
+});
+
+const generationTerminalResult = (taskKind: string, generatedPayload: Record<string, unknown>) => ({
+  task_kind: taskKind,
+  prompt_version: 'generation-prompt-v1',
+  output_schema_version: 'generation-output.v1',
+  generated_payload: generatedPayload,
+  generated_payload_digest: codexCanonicalDigest(generatedPayload),
+  generation_artifacts: [],
+  public_summary: 'Generated public-safe product draft.',
+});
 
 const expectDomainErrorCode = (fn: () => unknown, code: string) => {
   try {
@@ -201,12 +271,20 @@ describe('codex runtime domain contracts', () => {
     expect(codexPublicBlockerCodes).toEqual(
       expect.arrayContaining([
         'codex_runtime_job_unavailable',
+        'codex_generation_workload_unsupported',
         'codex_runtime_job_expired',
         'codex_runtime_job_cancelled',
         'codex_workspace_bundle_invalid',
         'codex_runtime_job_stale',
         'codex_runtime_job_lease_terminal',
       ]),
+    );
+  });
+
+  it('keeps generic public safety strict for public route-looking local paths', () => {
+    expectDomainErrorCode(
+      () => assertCodexRuntimePublicSafeValue({ public_summary: 'Endpoint: /api/items' }, 'generic public value'),
+      'codex_docker_runtime_evidence_unsafe',
     );
   });
 
@@ -318,15 +396,16 @@ describe('codex runtime domain contracts', () => {
   });
 
   it('validates public-safe terminal runtime job results', () => {
+    const generatedPayload = {
+      title: 'Public spec title',
+      artifact_ref: 'artifact://codex-runtime-jobs/runtime-job-1/generated-payload',
+    };
     const generationResult = {
       task_kind: 'spec_draft',
       prompt_version: 'generation-prompt-v1',
       output_schema_version: 'spec-draft-output.v1',
-      generated_payload: {
-        title: 'Public spec title',
-        artifact_ref: 'artifact://codex-runtime-jobs/runtime-job-1/generated-payload',
-      },
-      generated_payload_digest: digestA,
+      generated_payload: generatedPayload,
+      generated_payload_digest: codexCanonicalDigest(generatedPayload),
       generation_artifacts: [
         {
           kind: 'generated_payload',
@@ -396,6 +475,213 @@ describe('codex runtime domain contracts', () => {
               internal_ref: 'http://127.0.0.1:3845/internal/logs/raw',
             },
           ],
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it.each([
+    ['boundary_brainstorming_round', boundaryRoundRuntimeResultPayload],
+    ['development_plan_item_spec_revision', generatedSpecRevisionPayload],
+    ['development_plan_item_execution_plan_revision', generatedExecutionPlanRevisionPayload],
+  ])('validates structured terminal generation results for %s', (taskKind, payloadFactory) => {
+    const result = generationTerminalResult(taskKind, payloadFactory());
+
+    expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
+  });
+
+  it('allows UUID product ids in structured terminal generation payloads', () => {
+    const payload = {
+      ...generatedSpecRevisionPayload(),
+      development_plan_item_id: '550e8400-e29b-41d4-a716-446655440000',
+      boundary_summary_revision_id: '550e8400-e29b-41d4-a716-446655440001',
+    };
+    const result = generationTerminalResult('development_plan_item_spec_revision', payload);
+
+    expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
+  });
+
+  it('allows public API route prose in structured terminal generation payloads', () => {
+    for (const contentMarkdown of [
+      'Endpoint: /api/items is the public product route for callers.',
+      '/api/items is the public product route for callers.',
+    ]) {
+      const payload = {
+        ...generatedSpecRevisionPayload(),
+        content_markdown: contentMarkdown,
+      };
+      const result = generationTerminalResult('development_plan_item_spec_revision', payload);
+
+      expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
+    }
+  });
+
+  it('rejects inline terminal generated payload digest mismatches', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...generationTerminalResult('development_plan_item_spec_revision', generatedSpecRevisionPayload()),
+          generated_payload_digest: digestB,
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it.each([
+    ['boundary_brainstorming_round', boundaryRoundRuntimeResultPayload],
+    ['development_plan_item_spec_revision', generatedSpecRevisionPayload],
+    ['development_plan_item_execution_plan_revision', generatedExecutionPlanRevisionPayload],
+  ])('rejects invalid terminal generated payload structure for %s', (taskKind, payloadFactory) => {
+    const wrongSchema = { ...payloadFactory(), schema_version: `${taskKind}.test.v1` };
+    expectDomainErrorCode(
+      () => validateCodexRuntimeJobTerminalResult(generationTerminalResult(taskKind, wrongSchema)),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+
+    const missingRequiredField = { ...payloadFactory() };
+    delete missingRequiredField.public_summary;
+    expectDomainErrorCode(
+      () => validateCodexRuntimeJobTerminalResult(generationTerminalResult(taskKind, missingRequiredField)),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('allows oversized product generated payloads to terminalize as artifact refs', () => {
+    const oversizedPayload = {
+      ...generatedSpecRevisionPayload(),
+      content_markdown: 'x'.repeat(70_000),
+    };
+    const oversizedPayloadDigest = codexCanonicalDigest(oversizedPayload);
+    const generatedPayloadRef = {
+      schema_version: 'generated_payload_ref.v1',
+      artifact: {
+        kind: 'generated_payload',
+        name: 'generated-payload.json',
+        content_type: 'application/json',
+        digest: oversizedPayloadDigest,
+        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+      },
+    };
+    const result = {
+      ...generationTerminalResult('development_plan_item_spec_revision', generatedPayloadRef),
+      generated_payload_digest: oversizedPayloadDigest,
+      generation_artifacts: [
+        {
+          kind: 'generated_payload',
+          name: 'generated-payload.json',
+          content_type: 'application/json',
+          digest: oversizedPayloadDigest,
+          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        },
+      ],
+    };
+
+    expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
+    expect(collectCodexRuntimeJobTerminalArtifactRefs(result)).toEqual([
+      {
+        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        digest: oversizedPayloadDigest,
+        content_type: 'application/json',
+      },
+    ]);
+  });
+
+  it.each([
+    ['wrong kind', { kind: 'generation_validation_report', content_type: 'application/json' }],
+    ['wrong content type', { kind: 'generated_payload', content_type: 'text/plain' }],
+  ])('rejects invalid generated payload artifact refs for %s', (_name, patch) => {
+    const oversizedPayload = {
+      ...generatedSpecRevisionPayload(),
+      content_markdown: 'x'.repeat(70_000),
+    };
+    const oversizedPayloadDigest = codexCanonicalDigest(oversizedPayload);
+    const generatedPayloadRef = {
+      schema_version: 'generated_payload_ref.v1',
+      artifact: {
+        kind: patch.kind,
+        name: 'generated-payload.json',
+        content_type: patch.content_type,
+        digest: oversizedPayloadDigest,
+        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+      },
+    };
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...generationTerminalResult('development_plan_item_spec_revision', generatedPayloadRef),
+          generated_payload_digest: oversizedPayloadDigest,
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it.each([
+    [
+      'wrong kind',
+      {
+        artifact: {
+          kind: 'generation_validation_report',
+          name: 'generated-payload.json',
+          content_type: 'application/json',
+          digest: digestA,
+          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        },
+        generated_payload_digest: digestA,
+      },
+    ],
+    [
+      'wrong content type',
+      {
+        artifact: {
+          kind: 'generated_payload',
+          name: 'generated-payload.json',
+          content_type: 'text/plain',
+          digest: digestA,
+          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        },
+        generated_payload_digest: digestA,
+      },
+    ],
+    [
+      'digest mismatch',
+      {
+        artifact: {
+          kind: 'generated_payload',
+          name: 'generated-payload.json',
+          content_type: 'application/json',
+          digest: digestB,
+          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        },
+        generated_payload_digest: digestA,
+      },
+    ],
+    [
+      'missing internal ref',
+      {
+        artifact: {
+          kind: 'generated_payload',
+          name: 'generated-payload.json',
+          content_type: 'application/json',
+          digest: digestA,
+        },
+        generated_payload_digest: digestA,
+      },
+    ],
+  ])('rejects invalid legacy generated payload refs for %s', (_name, input) => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'spec_draft',
+          prompt_version: 'generation-prompt-v1',
+          output_schema_version: 'spec-draft-output.v1',
+          generated_payload: {
+            schema_version: 'generated_payload_ref.v1',
+            artifact: input.artifact,
+          },
+          generated_payload_digest: input.generated_payload_digest,
+          generation_artifacts: [],
+          public_summary: 'Generated a spec draft.',
         }),
       'codex_docker_runtime_evidence_unsafe',
     );
@@ -545,6 +831,43 @@ describe('codex runtime domain contracts', () => {
 
     expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
   });
+
+  it('rejects public route-looking paths in run-execution terminal summaries', () => {
+    const runExecutionResult = {
+      task_kind: 'run_execution',
+      execution_package_id: 'package-1',
+      execution_package_version: 3,
+      run_session_id: 'run-session-1',
+      workspace_bundle_digest: digestA,
+      changed_files: [],
+      check_results: [],
+      execution_artifacts: [],
+      public_summary: 'Endpoint: /api/items',
+    } satisfies CodexRunExecutionRuntimeJobResult;
+
+    expectDomainErrorCode(
+      () => validateCodexRuntimeJobTerminalResult(runExecutionResult),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it.each(['app-server log leaked', 'app-server logs leaked', 'app_server_log raw'])(
+    'rejects app-server log markers in structured terminal generation payloads: %s',
+    (contentMarkdown) => {
+      const payload = {
+        ...generatedSpecRevisionPayload(),
+        content_markdown: contentMarkdown,
+      };
+
+      expectDomainErrorCode(
+        () =>
+          validateCodexRuntimeJobTerminalResult(
+            generationTerminalResult('development_plan_item_spec_revision', payload),
+          ),
+        'codex_docker_runtime_evidence_unsafe',
+      );
+    },
+  );
 
   it.each([
     '/var/lib/forgeloop/workspaces/runtime-job-1/src/index.ts',

@@ -13,7 +13,12 @@ import {
   type CodexRuntimeJob,
 } from '@forgeloop/domain';
 import type { CodexDriverStreamItem } from '@forgeloop/executor';
-import type { CodexAppServerTransport, CodexGenerationRuntime, GeneratedSpecDraftV1 } from '@forgeloop/codex-runtime';
+import {
+  type CodexAppServerTransport,
+  type CodexGenerationRuntime,
+  type GeneratedSpecDraftV1,
+} from '../../packages/codex-runtime/src/index';
+import { createCodexGenerationRuntime } from '../../packages/codex-runtime/src/runtime';
 
 import { createRemoteCodexWorkerClient } from '../../packages/codex-worker-runtime/src/remote-worker-client';
 import { sealCodexLaunchTokenEnvelope, type SealedEnvelope } from '../../packages/codex-worker-runtime/src/envelope-crypto';
@@ -40,13 +45,24 @@ const generatedSpec = (patch: Partial<GeneratedSpecDraftV1> = {}): GeneratedSpec
   ...patch,
 });
 
+const generatedBoundaryRound = () => ({
+  schema_version: 'boundary_round_result.v1',
+  session_id: 'boundary-session-1',
+  round_id: 'round-1',
+  questions: [{ text: 'Confirm API scope?', required: true }],
+  proposed_decisions: [{ text: 'Keep execution out of scope.' }],
+  needs_leader_input: true,
+  public_summary: 'Generated a boundary round.',
+  artifacts: [],
+});
+
 const generationSignedContext = () => ({
   context_version: 'generation_context.work_item.v1',
   action_run_id: 'action-run-1',
   work_item_id: 'work-item-1',
 });
 
-const generationWorkload = (): CodexGenerationWorkloadV1 => ({
+const generationWorkload = (overrides: Partial<CodexGenerationWorkloadV1> = {}): CodexGenerationWorkloadV1 => ({
   schema_version: 'codex_generation_workload.v1',
   runtime_job_id: 'runtime-job-1',
   action_run_id: 'action-run-1',
@@ -58,10 +74,11 @@ const generationWorkload = (): CodexGenerationWorkloadV1 => ({
   prompt_template_digest: digest('2'),
   created_at: '2026-05-23T00:00:00.000Z',
   expires_at: '2026-05-23T00:10:00.000Z',
+  ...overrides,
 });
 
-const generationWorkloadResponse = () => ({
-  workload: generationWorkload(),
+const generationWorkloadResponse = (overrides: Partial<CodexGenerationWorkloadV1> = {}) => ({
+  workload: generationWorkload(overrides),
   signed_context: generationSignedContext(),
 });
 
@@ -125,7 +142,7 @@ const runExecutionWorkload = (archiveDigest = digest('c')): CodexRunExecutionWor
   };
 };
 
-const runtimeJob = (): CodexRuntimeJob => ({
+const runtimeJob = (workloadOverrides: Partial<CodexGenerationWorkloadV1> = {}): CodexRuntimeJob => ({
   id: 'runtime-job-1',
   job_request_id: 'job-request-1',
   target_type: 'automation_action_run',
@@ -137,8 +154,8 @@ const runtimeJob = (): CodexRuntimeJob => ({
   launch_lease_id: 'lease-1',
   launch_attempt: 1,
   status: 'queued',
-  input_digest: codexCanonicalDigest(generationWorkload()),
-  input_json: generationWorkload(),
+  input_digest: codexCanonicalDigest(generationWorkload(workloadOverrides)),
+  input_json: generationWorkload(workloadOverrides),
   expires_at: '2026-05-23T00:10:00.000Z',
   created_at: '2026-05-23T00:00:00.000Z',
   updated_at: '2026-05-23T00:00:00.000Z',
@@ -455,6 +472,129 @@ describe('remote codex worker client', () => {
     });
     expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-secret');
     await expect(stat(workerTempRoot)).resolves.toBeDefined();
+  });
+
+  it('dispatches Boundary Brainstorming workloads without falling through to package drafts', async () => {
+    const boundaryWorkload = { task_kind: 'boundary_brainstorming_round' as const, output_schema_version: 'boundary_round_result.v1' };
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const terminalized: Record<string, unknown>[] = [];
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-')),
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      scavenger: async () => undefined,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: '2026-05-23T00:10:00.000Z' };
+        },
+        heartbeatWorker: async () => {
+          return {};
+        },
+        pollRuntimeJobs: async () => {
+          return { runtime_jobs: [{ runtime_job: runtimeJob(boundaryWorkload), envelope: { id: 'envelope-1' } }] };
+        },
+        acceptRuntimeJob: async () => {
+          return { runtime_job: { ...runtimeJob(boundaryWorkload), status: 'accepted' } };
+        },
+        getRuntimeJobControl: async () => {
+          return { control: { cancel_requested: false, drain_requested: false } };
+        },
+        claimLaunchTokenEnvelope: async () => {
+          return { envelope: sealedEnvelope };
+        },
+        fetchRuntimeJobWorkload: async () => {
+          return generationWorkloadResponse(boundaryWorkload);
+        },
+        materializeRuntimeJob: async () => {
+          return materialization();
+        },
+        startRuntimeJob: async () => {
+          return { runtime_job: { ...runtimeJob(boundaryWorkload), status: 'running' } };
+        },
+        appendRuntimeJobEvent: async () => {
+          return {};
+        },
+        uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
+          artifact: {
+            kind: input.kind,
+            name: input.name,
+            content_type: input.content_type,
+            digest: input.digest,
+            internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+          },
+        }),
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: {
+        startFromMaterialization: vi.fn(async () => {
+          return {
+            endpoint: 'docker-exec:' + digest('8'),
+            createTransport: () => appServerTransport(generatedBoundaryRound()),
+            containerWorkspacePath: '/workspace' as const,
+            publicEvidence: {
+              runtime_profile_id: 'profile-1',
+              runtime_profile_revision_id: 'profile-rev-1',
+              runtime_profile_digest: digest('7'),
+              runtime_target_kind: 'generation' as const,
+              source_access_mode: 'artifact_only' as const,
+              environment: 'test' as const,
+              launch_lease_id: 'lease-1',
+              worker_id: 'worker-1',
+              docker_image_digest: digest('4'),
+              container_id_digest: digest('9'),
+              app_server_effective_config_digest: digest('6'),
+              docker_policy_self_check_digest: digest('a'),
+              app_server_attempted: true as const,
+              selected_execution_mode: 'app_server' as const,
+            },
+            close: async () => undefined,
+          };
+        }),
+      },
+      generationRuntimeFactory: (config) => {
+        const runtime = createCodexGenerationRuntime(config);
+        return {
+          ...runtime,
+          generatePackageDrafts: async () => {
+            throw new Error('package_drafts_fallthrough');
+          },
+        };
+      },
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-boundary',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'succeeded',
+      terminal_result_json: {
+        task_kind: 'boundary_brainstorming_round',
+        generated_payload: generatedBoundaryRound(),
+      },
+    });
   });
 
   it('runs one assigned run-execution job by downloading the workspace bundle and terminalizing package evidence', async () => {
@@ -993,6 +1133,92 @@ describe('remote codex worker client', () => {
     expect(terminalized[0]).toMatchObject({
       terminal_status: 'failed',
       reason_code: 'codex_runtime_job_unavailable',
+    });
+    expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-secret');
+  });
+
+  it('terminalizes unknown generation task kinds as unsupported workload without legacy fallback', async () => {
+    const terminalized: Record<string, unknown>[] = [];
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const unsupportedWorkload = {
+      ...generationWorkload(),
+      task_kind: 'future_generation_kind',
+    };
+    const materializeRuntimeJob = vi.fn(async () => materialization());
+    const launcher = { startFromMaterialization: vi.fn() };
+    const generatePackageDrafts = vi.fn(async () => {
+      throw new Error('package_drafts_fallthrough');
+    });
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-')),
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+        },
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({
+          runtime_jobs: [
+            {
+              runtime_job: runtimeJob({ task_kind: 'future_generation_kind' as CodexGenerationWorkloadV1['task_kind'] }),
+              envelope: { id: 'envelope-1' },
+            },
+          ],
+        }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+        fetchRuntimeJobWorkload: async () => ({ workload: unsupportedWorkload, signed_context: generationSignedContext() }),
+        materializeRuntimeJob,
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher,
+      generationRuntimeFactory: () => ({
+        generateSpecDraft: vi.fn(),
+        generatePlanDraft: vi.fn(),
+        generatePackageDrafts,
+        generateBoundaryBrainstormingRound: vi.fn(),
+        generateDevelopmentPlanItemSpecRevision: vi.fn(),
+        generateDevelopmentPlanItemExecutionPlanRevision: vi.fn(),
+      } as unknown as CodexGenerationRuntime),
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-1',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(materializeRuntimeJob).not.toHaveBeenCalled();
+    expect(launcher.startFromMaterialization).not.toHaveBeenCalled();
+    expect(generatePackageDrafts).not.toHaveBeenCalled();
+    expect(terminalized).toHaveLength(1);
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'failed',
+      reason_code: 'codex_generation_workload_unsupported',
     });
     expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-secret');
   });

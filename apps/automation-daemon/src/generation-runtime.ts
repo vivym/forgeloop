@@ -186,6 +186,15 @@ export const createLeasedDockerCodexGenerationRuntime = (
     },
     generatePackageDrafts: (input) =>
       generateWithLease('package_drafts', input, (runtime, taskInput) => runtime.generatePackageDrafts(taskInput)),
+    async generateBoundaryBrainstormingRound() {
+      throw new Error('unsupported_generation_task');
+    },
+    async generateDevelopmentPlanItemSpecRevision() {
+      throw new Error('unsupported_generation_task');
+    },
+    async generateDevelopmentPlanItemExecutionPlanRevision() {
+      throw new Error('unsupported_generation_task');
+    },
   };
 };
 
@@ -639,6 +648,15 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
       throw new Error('unsupported_generation_task');
     },
     generatePackageDrafts: (input) => generateWithRemoteJob('package_drafts', input),
+    async generateBoundaryBrainstormingRound() {
+      throw new Error('unsupported_generation_task');
+    },
+    async generateDevelopmentPlanItemSpecRevision() {
+      throw new Error('unsupported_generation_task');
+    },
+    async generateDevelopmentPlanItemExecutionPlanRevision() {
+      throw new Error('unsupported_generation_task');
+    },
   };
 };
 
