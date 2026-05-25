@@ -7,6 +7,9 @@ import type {
   AutomationScope,
   Artifact,
   Actor,
+  BoundaryAnswer,
+  BoundaryDecision,
+  BoundaryQuestion,
   BoundarySummary,
   BoundarySummaryRevision,
   BrainstormingSession,
@@ -70,9 +73,14 @@ import type {
   Task,
   WorkItem,
 } from '@forgeloop/domain';
-import type { ObjectRef } from '@forgeloop/contracts';
+import type { BoundaryRound, ObjectRef } from '@forgeloop/contracts';
 
 import type { trace_link_relationship_values } from '../schema/_shared';
+
+export type BoundaryRoundRecord = BoundaryRound;
+export type BoundaryQuestionRecord = BoundaryQuestion & { session_id: string; sequence: number };
+export type BoundaryAnswerRecord = BoundaryAnswer & { session_id: string; sequence: number };
+export type BoundaryDecisionRecord = BoundaryDecision & { session_id: string; sequence: number };
 
 export type TraceLinkRelationship = (typeof trace_link_relationship_values)[number];
 
@@ -1363,12 +1371,28 @@ export interface DeliveryRepository {
   compareDevelopmentPlanItemRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
   saveBrainstormingSession(session: BrainstormingSession): Promise<void>;
   getBrainstormingSession(id: string): Promise<BrainstormingSession | undefined>;
+  saveBoundaryRound(round: BoundaryRoundRecord): Promise<void>;
+  listBoundaryRounds(sessionId: string): Promise<BoundaryRoundRecord[]>;
+  saveBoundaryQuestion(question: BoundaryQuestionRecord): Promise<void>;
+  listBoundaryQuestions(sessionId: string): Promise<BoundaryQuestionRecord[]>;
+  saveBoundaryAnswer(answer: BoundaryAnswerRecord): Promise<void>;
+  listBoundaryAnswers(sessionId: string): Promise<BoundaryAnswerRecord[]>;
+  saveBoundaryDecision(decision: BoundaryDecisionRecord): Promise<void>;
+  listBoundaryDecisions(sessionId: string): Promise<BoundaryDecisionRecord[]>;
   saveBoundarySummary(summary: BoundarySummary): Promise<void>;
   getBoundarySummary(id: string): Promise<BoundarySummary | undefined>;
   listBoundarySummaries(): Promise<BoundarySummary[]>;
   saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void>;
   listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]>;
   compareBoundarySummaryRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
+  backfillBoundaryLeaderDefaults(input: {
+    now: string;
+  }): Promise<{ updated_item_ids: string[]; updated_session_ids: string[]; blocked_item_ids: string[] }>;
+  backfillBoundarySummaryRevisionEligibility(input: {
+    session_id: string;
+    boundary_summary_id: string;
+    now: string;
+  }): Promise<{ downgraded_revision_ids: string[]; approved_revision_ids: string[] }>;
   saveExecutionPlan(plan: ExecutionPlanDocument): Promise<void>;
   getExecutionPlan(id: string): Promise<ExecutionPlanDocument | undefined>;
   saveExecutionPlanRevision(revision: ExecutionPlanRevision): Promise<void>;

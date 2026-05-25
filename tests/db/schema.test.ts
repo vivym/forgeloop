@@ -58,6 +58,10 @@ import {
   codex_worker_registrations,
   codex_worker_session_nonces,
   command_idempotency_records,
+  boundary_answers,
+  boundary_decisions,
+  boundary_questions,
+  boundary_rounds,
   boundary_summaries,
   boundary_summary_revisions,
   brainstorming_sessions,
@@ -111,6 +115,10 @@ const requiredTables = {
   manual_path_holds,
   manual_path_hold_idempotency_records,
   command_idempotency_records,
+  boundary_answers,
+  boundary_decisions,
+  boundary_questions,
+  boundary_rounds,
   context_manifests,
   development_plans,
   development_plan_revisions,
@@ -218,6 +226,10 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'artifacts',
         'code_review_handoffs',
         'command_idempotency_records',
+        'boundary_answers',
+        'boundary_decisions',
+        'boundary_questions',
+        'boundary_rounds',
         'boundary_summaries',
         'boundary_summary_revisions',
         'brainstorming_sessions',
@@ -453,6 +465,22 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(run_commands, 'driverAck')).toBe('PgJsonb');
     expect(columnType(trace_events, 'payload')).toBe('PgJsonb');
     expect(columnType(trace_artifact_refs, 'ref')).toBe('PgJsonb');
+    expect(columnType(development_plan_items, 'leaderDelegateActorIds')).toBe('PgJsonb');
+    expect(columnType(brainstorming_sessions, 'leaderDelegateActorIds')).toBe('PgJsonb');
+    expect(columnType(boundary_summary_revisions, 'confirmedScope')).toBe('PgJsonb');
+    expect(columnType(boundary_summary_revisions, 'confirmedOutOfScope')).toBe('PgJsonb');
+    expect(columnType(boundary_summary_revisions, 'acceptedAssumptions')).toBe('PgJsonb');
+    expect(columnType(boundary_summary_revisions, 'openRisks')).toBe('PgJsonb');
+    expect(columnType(boundary_summary_revisions, 'validationExpectations')).toBe('PgJsonb');
+    expect(columnType(boundary_summary_revisions, 'questionAnswerSnapshot')).toBe('PgJsonb');
+  });
+
+  it('keeps migration-phase boundary defaults nullable on existing tables', () => {
+    expect(columnNotNull(development_plan_items, 'leaderDelegateActorIds')).toBe(false);
+    expect(columnNotNull(brainstorming_sessions, 'developmentPlanRevisionId')).toBe(false);
+    expect(columnNotNull(brainstorming_sessions, 'leaderDelegateActorIds')).toBe(false);
+    expect(columnNotNull(brainstorming_sessions, 'status')).toBe(false);
+    expect(columnNotNull(boundary_summary_revisions, 'developmentPlanId')).toBe(false);
   });
 
   it('uses UUID ids for aggregate tables and text ids for runtime protocol tables', () => {
@@ -538,8 +566,22 @@ describe('P1 core schema release flow Drizzle schema', () => {
     ).toBe(true);
     expect(columnType(boundary_summary_revisions, 'brainstorming_session_revision_id')).toBe('PgUUID');
     expect(columnNotNull(boundary_summary_revisions, 'brainstormingSessionRevisionId')).toBe(true);
+    expect(columnType(boundary_summary_revisions, 'source_round_id')).toBe('PgText');
+    expect(columnType(boundary_summary_revisions, 'development_plan_id')).toBe('PgUUID');
+    expect(columnType(boundary_summary_revisions, 'status')).toBe('PgText');
     expect(columnType(boundary_summary_revisions, 'development_plan_item_revision_id')).toBe('PgUUID');
     expect(columnNotNull(boundary_summary_revisions, 'developmentPlanItemRevisionId')).toBe(true);
+    expect(columnType(boundary_rounds, 'id')).toBe('PgText');
+    expect(columnType(boundary_rounds, 'session_id')).toBe('PgUUID');
+    expect(columnType(boundary_rounds, 'round_number')).toBe('PgInteger');
+    expect(columnNotNull(boundary_rounds, 'roundNumber')).toBe(true);
+    expect(columnType(boundary_questions, 'id')).toBe('PgText');
+    expect(columnType(boundary_questions, 'sequence')).toBe('PgInteger');
+    expect(columnNotNull(boundary_questions, 'required')).toBe(true);
+    expect(columnType(boundary_answers, 'id')).toBe('PgText');
+    expect(columnType(boundary_answers, 'sequence')).toBe('PgInteger');
+    expect(columnType(boundary_decisions, 'id')).toBe('PgText');
+    expect(columnType(boundary_decisions, 'sequence')).toBe('PgInteger');
     expect(columnType(execution_packages, 'task_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'owner_actor_id')).toBe('PgUUID');
     expect(columnType(execution_packages, 'reviewer_actor_id')).toBe('PgUUID');

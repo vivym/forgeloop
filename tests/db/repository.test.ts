@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   Artifact,
   AutomationActionRun,
+  BoundarySummaryRevision,
   Decision,
   ExecutionPackage,
   ExecutionPackageDependency,
@@ -883,6 +884,49 @@ describe('DeliveryRepository Drizzle adapter contract', () => {
 });
 
 describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
+  it('maps contract Boundary Summary Revision session fields into the existing Drizzle columns', async () => {
+    const { repository, captures } = createInsertCaptureRepository();
+    const sessionId = '12121212-1212-4212-8212-121212121211';
+    const sessionRevisionId = '12121212-1212-4212-8212-121212121212';
+    const developmentPlanId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const revision: BoundarySummaryRevision = {
+      id: '13131313-1313-4313-8313-131313131312',
+      boundary_summary_id: '13131313-1313-4313-8313-131313131311',
+      session_id: sessionId,
+      session_revision_id: sessionRevisionId,
+      source_round_id: 'boundary-round-1',
+      development_plan_id: developmentPlanId,
+      development_plan_item_id: 'ffffffff-ffff-4fff-8fff-fffffffffff1',
+      development_plan_item_revision_id: 'ffffffff-ffff-4fff-8fff-fffffffffff3',
+      revision_number: 1,
+      status: 'approved',
+      summary_markdown: 'Boundary summary approved.',
+      confirmed_scope: ['DB repository persistence'],
+      confirmed_out_of_scope: ['API orchestration'],
+      accepted_assumptions: [],
+      open_risks: [],
+      validation_expectations: ['Repository tests pass'],
+      question_answer_snapshot: [{ question_id: 'question-1', answer_id: 'answer-1', text: 'Persist it.' }],
+      decision_snapshot: [{ decision_id: 'decision-1', text: 'Use first-class tables.' }],
+      decision_count: 1,
+      context_manifest_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+      context_manifest_revision_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+      approved_by_actor_id: '99999999-9999-4999-8999-999999999999',
+      approved_at: now,
+      created_at: now,
+    } as BoundarySummaryRevision;
+
+    await repository.saveBoundarySummaryRevision(revision);
+
+    expect(captures[0]?.values.brainstormingSessionId).toBe(sessionId);
+    expect(captures[0]?.values.brainstormingSessionRevisionId).toBe(sessionRevisionId);
+    expect(captures[0]?.values.sessionId).toBeUndefined();
+    expect(captures[0]?.values.sessionRevisionId).toBeUndefined();
+    expect(captures[0]?.values.developmentPlanId).toBe(developmentPlanId);
+    expect(captures[0]?.values.decisionCount).toBe(1);
+    expect(captures[0]?.set).toBeUndefined();
+  });
+
   it('writes omitted nullable optional domain fields as null without nulling required JSON fields', async () => {
     const { repository, captures } = createInsertCaptureRepository();
     const executionPackageWithoutLastRun: ExecutionPackage = { ...executionPackage };

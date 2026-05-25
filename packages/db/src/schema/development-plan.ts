@@ -71,6 +71,8 @@ export const development_plan_items = pgTable('development_plan_items', {
   driverActorId: uuid('driver_actor_id').references(() => actors.id),
   responsibleRole: text('responsible_role').$type<DevelopmentPlanItem['responsible_role']>().notNull(),
   reviewerActorId: uuid('reviewer_actor_id').references(() => actors.id),
+  leaderActorId: uuid('leader_actor_id').references(() => actors.id),
+  leaderDelegateActorIds: jsonb('leader_delegate_actor_ids').$type<DevelopmentPlanItem['leader_delegate_actor_ids']>(),
   risk: text('risk').$type<DevelopmentPlanItem['risk']>().notNull(),
   dependencyHints: jsonb('dependency_hints').$type<DevelopmentPlanItem['dependency_hints']>().notNull(),
   affectedSurfaces: jsonb('affected_surfaces').$type<DevelopmentPlanItem['affected_surfaces']>().notNull(),

@@ -58,6 +58,10 @@ describe('database reset guard', () => {
         'executions',
         'execution_plan_revisions',
         'execution_plans',
+        'boundary_decisions',
+        'boundary_answers',
+        'boundary_questions',
+        'boundary_rounds',
         'boundary_summary_revisions',
         'boundary_summaries',
         'brainstorming_sessions',
@@ -77,6 +81,10 @@ describe('database reset guard', () => {
     expect(resettableTables.indexOf('executions')).toBeLessThan(resettableTables.indexOf('development_plan_items'));
     expect(resettableTables.indexOf('execution_plan_revisions')).toBeLessThan(resettableTables.indexOf('execution_plans'));
     expect(resettableTables.indexOf('execution_plans')).toBeLessThan(resettableTables.indexOf('development_plan_items'));
+    expect(resettableTables.indexOf('boundary_decisions')).toBeLessThan(resettableTables.indexOf('boundary_rounds'));
+    expect(resettableTables.indexOf('boundary_answers')).toBeLessThan(resettableTables.indexOf('boundary_rounds'));
+    expect(resettableTables.indexOf('boundary_questions')).toBeLessThan(resettableTables.indexOf('boundary_rounds'));
+    expect(resettableTables.indexOf('boundary_rounds')).toBeLessThan(resettableTables.indexOf('boundary_summary_revisions'));
     expect(resettableTables.indexOf('boundary_summary_revisions')).toBeLessThan(resettableTables.indexOf('boundary_summaries'));
     expect(resettableTables.indexOf('boundary_summaries')).toBeLessThan(resettableTables.indexOf('brainstorming_sessions'));
     expect(resettableTables.indexOf('development_plan_item_revisions')).toBeLessThan(

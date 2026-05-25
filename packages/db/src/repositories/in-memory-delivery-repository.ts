@@ -174,6 +174,10 @@ import type {
   TraceEventRecord,
   TraceLinkRecord,
   UpsertCodexWorkerRegistrationInput,
+  BoundaryAnswerRecord,
+  BoundaryDecisionRecord,
+  BoundaryQuestionRecord,
+  BoundaryRoundRecord,
 } from './delivery-repository';
 import {
   runtimeSnapshotBlockerFieldsFor,
@@ -338,6 +342,8 @@ const changedFields = (base: unknown, compare: unknown): string[] => {
 const byCreatedAt = <T extends { created_at: string }>(left: T, right: T) => left.created_at.localeCompare(right.created_at);
 const byCreatedAtThenId = <T extends { created_at: string; id: string }>(left: T, right: T) =>
   byCreatedAt(left, right) || left.id.localeCompare(right.id);
+const bySequenceThenId = <T extends { sequence: number; id: string }>(left: T, right: T) =>
+  left.sequence - right.sequence || left.id.localeCompare(right.id);
 const byCreatedAtForRequestedAt = <T extends { requested_at: string; id: string }>(left: T, right: T) =>
   left.requested_at.localeCompare(right.requested_at) || left.id.localeCompare(right.id);
 const recoverableRunSessionStatuses = new Set<RunSession['status']>([
@@ -347,6 +353,13 @@ const recoverableRunSessionStatuses = new Set<RunSession['status']>([
   'stalled',
   'resuming',
   'cancel_requested',
+]);
+const activeBoundarySessionStatuses = new Set<BrainstormingSession['status']>([
+  'draft',
+  'ai_turn_running',
+  'waiting_for_leader',
+  'summary_proposed',
+  'changes_requested',
 ]);
 const terminalCommandStatuses = new Set<CommandIdempotencyRecord['status']>(['succeeded', 'skipped', 'blocked']);
 const eventCursor = (sequence: number) => String(sequence).padStart(10, '0');
@@ -385,6 +398,11 @@ interface CodexWorkerRegistrationPrivateRecord {
   session_public_key_expires_at: string;
   session_epoch: number;
 }
+
+type StoredBoundaryRound = BoundaryRoundRecord;
+type StoredBoundaryQuestion = BoundaryQuestionRecord;
+type StoredBoundaryAnswer = BoundaryAnswerRecord;
+type StoredBoundaryDecision = BoundaryDecisionRecord;
 
 interface CodexWorkerSessionProof {
   worker: CodexWorkerRegistrationPrivateRecord;
@@ -531,6 +549,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly developmentPlanItems = new Map<string, DevelopmentPlanItem>();
   private readonly developmentPlanItemRevisions = new Map<string, DevelopmentPlanItemRevision>();
   private readonly brainstormingSessions = new Map<string, BrainstormingSession>();
+  private readonly boundaryRounds = new Map<string, StoredBoundaryRound>();
+  private readonly boundaryQuestions = new Map<string, StoredBoundaryQuestion>();
+  private readonly boundaryAnswers = new Map<string, StoredBoundaryAnswer>();
+  private readonly boundaryDecisions = new Map<string, StoredBoundaryDecision>();
   private readonly boundarySummaries = new Map<string, BoundarySummary>();
   private readonly boundarySummaryRevisions = new Map<string, BoundarySummaryRevision>();
   private readonly executionPlans = new Map<string, ExecutionPlanDocument>();
@@ -2887,6 +2909,40 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.brainstormingSessions.get(id));
   }
 
+  async saveBoundaryRound(round: BoundaryRoundRecord): Promise<void> {
+    this.boundaryRounds.set(round.id, clone(round));
+  }
+
+  async listBoundaryRounds(sessionId: string): Promise<BoundaryRoundRecord[]> {
+    return valuesFor(this.boundaryRounds)
+      .filter((round) => round.session_id === sessionId)
+      .sort((left, right) => left.round_number - right.round_number || left.id.localeCompare(right.id));
+  }
+
+  async saveBoundaryQuestion(question: BoundaryQuestionRecord): Promise<void> {
+    this.boundaryQuestions.set(question.id, clone(question));
+  }
+
+  async listBoundaryQuestions(sessionId: string): Promise<BoundaryQuestionRecord[]> {
+    return valuesFor(this.boundaryQuestions).filter((question) => question.session_id === sessionId).sort(bySequenceThenId);
+  }
+
+  async saveBoundaryAnswer(answer: BoundaryAnswerRecord): Promise<void> {
+    this.boundaryAnswers.set(answer.id, clone(answer));
+  }
+
+  async listBoundaryAnswers(sessionId: string): Promise<BoundaryAnswerRecord[]> {
+    return valuesFor(this.boundaryAnswers).filter((answer) => answer.session_id === sessionId).sort(bySequenceThenId);
+  }
+
+  async saveBoundaryDecision(decision: BoundaryDecisionRecord): Promise<void> {
+    this.boundaryDecisions.set(decision.id, clone(decision));
+  }
+
+  async listBoundaryDecisions(sessionId: string): Promise<BoundaryDecisionRecord[]> {
+    return valuesFor(this.boundaryDecisions).filter((decision) => decision.session_id === sessionId).sort(bySequenceThenId);
+  }
+
   async saveBoundarySummary(summary: BoundarySummary): Promise<void> {
     this.boundarySummaries.set(summary.id, clone(summary));
   }
@@ -2923,6 +2979,400 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       query,
       this.boundarySummaryRevisions.get(query.base_revision_id),
       this.boundarySummaryRevisions.get(query.compare_revision_id),
+    );
+  }
+
+  async backfillBoundaryLeaderDefaults(input: {
+    now: string;
+  }): Promise<{ updated_item_ids: string[]; updated_session_ids: string[]; blocked_item_ids: string[] }> {
+    const updatedItemIds: string[] = [];
+    const blockedItemIds: string[] = [];
+    const updatedSessionIds: string[] = [];
+
+    const items = valuesFor(this.developmentPlanItems).sort((left, right) => left.id.localeCompare(right.id));
+    const leaderDefaults = new Map<string, { leader_actor_id: string | undefined; leader_delegate_actor_ids: string[] }>();
+
+    for (const item of items) {
+      const legacyItem = item as Partial<DevelopmentPlanItem>;
+      const leaderActorId = legacyItem.leader_actor_id ?? item.reviewer_actor_id ?? item.driver_actor_id;
+      const leaderDelegateActorIds = legacyItem.leader_delegate_actor_ids ?? [];
+      leaderDefaults.set(item.id, { leader_actor_id: leaderActorId, leader_delegate_actor_ids: leaderDelegateActorIds });
+
+      if (leaderActorId === undefined) {
+        blockedItemIds.push(item.id);
+        if (legacyItem.leader_delegate_actor_ids === undefined) {
+          this.developmentPlanItems.set(item.id, { ...item, leader_delegate_actor_ids: [], updated_at: input.now });
+        }
+        continue;
+      }
+
+      if (legacyItem.leader_actor_id !== leaderActorId || legacyItem.leader_delegate_actor_ids === undefined) {
+        this.developmentPlanItems.set(item.id, {
+          ...item,
+          leader_actor_id: leaderActorId,
+          leader_delegate_actor_ids: leaderDelegateActorIds,
+          updated_at: input.now,
+        });
+        updatedItemIds.push(item.id);
+      }
+    }
+
+    const sessions = valuesFor(this.brainstormingSessions).sort((left, right) => left.id.localeCompare(right.id));
+    for (const session of sessions) {
+      const effectiveStatus = session.status ?? this.boundarySessionStatusForApprovalState(session.approval_state);
+      if (!activeBoundarySessionStatuses.has(effectiveStatus)) {
+        continue;
+      }
+
+      const defaults = leaderDefaults.get(session.development_plan_item_id);
+      if (defaults?.leader_actor_id === undefined) {
+        continue;
+      }
+
+      const existingRounds = await this.listBoundaryRounds(session.id);
+      const roundId = session.current_round_id ?? existingRounds.at(-1)?.id ?? `${session.id}-round-1`;
+      let nextSession = clone(session);
+      let changed = false;
+
+      if (nextSession.development_plan_revision_id === undefined) {
+        const plan = this.developmentPlans.get(session.development_plan_id);
+        if (plan?.revision_id !== undefined) {
+          nextSession = { ...nextSession, development_plan_revision_id: plan.revision_id };
+          changed = true;
+        }
+      }
+      if (nextSession.leader_actor_id === undefined) {
+        nextSession = { ...nextSession, leader_actor_id: defaults.leader_actor_id };
+        changed = true;
+      }
+      if (nextSession.leader_delegate_actor_ids === undefined) {
+        nextSession = { ...nextSession, leader_delegate_actor_ids: defaults.leader_delegate_actor_ids };
+        changed = true;
+      }
+      if (nextSession.status === undefined) {
+        nextSession = { ...nextSession, status: effectiveStatus };
+        changed = true;
+      }
+      if (existingRounds.length === 0) {
+        this.boundaryRounds.set(roundId, {
+          id: roundId,
+          session_id: session.id,
+          session_revision_id: session.revision_id,
+          round_number: 1,
+          trigger: 'start',
+          status: this.syntheticBoundaryRoundStatusFor(effectiveStatus),
+          created_at: session.created_at,
+          updated_at: input.now,
+        });
+        changed = true;
+      }
+      this.attachLegacyBoundaryEvidenceToRound(session, roundId);
+      if (nextSession.current_round_id === undefined) {
+        nextSession = { ...nextSession, current_round_id: roundId };
+        changed = true;
+      }
+
+      if (changed) {
+        this.brainstormingSessions.set(session.id, { ...nextSession, updated_at: input.now });
+        updatedSessionIds.push(session.id);
+      }
+    }
+
+    return {
+      updated_item_ids: updatedItemIds,
+      updated_session_ids: updatedSessionIds,
+      blocked_item_ids: blockedItemIds,
+    };
+  }
+
+  async backfillBoundarySummaryRevisionEligibility(input: {
+    session_id: string;
+    boundary_summary_id: string;
+    now: string;
+  }): Promise<{ downgraded_revision_ids: string[]; approved_revision_ids: string[] }> {
+    const session = this.brainstormingSessions.get(input.session_id);
+    const summary = this.boundarySummaries.get(input.boundary_summary_id);
+    const revisions = valuesFor(this.boundarySummaryRevisions)
+      .filter(
+        (revision) =>
+          revision.boundary_summary_id === input.boundary_summary_id &&
+          (('session_id' in revision ? revision.session_id : revision.brainstorming_session_id) === input.session_id),
+      )
+      .sort((left, right) => left.revision_number - right.revision_number || left.id.localeCompare(right.id));
+    const approvedCandidates = revisions.filter((revision) => this.boundarySummaryRevisionStatus(revision) === 'approved');
+    const latestApprovedCandidateId = approvedCandidates.at(-1)?.id;
+    const downgradedRevisionIds: string[] = [];
+    const approvedRevisionIds: string[] = [];
+    const eligibleApprovedRevisionIds: string[] = [];
+
+    for (const revision of revisions) {
+      const status = this.boundarySummaryRevisionStatus(revision);
+      const hydrated = await this.hydrateBoundarySummaryRevisionForBackfill(revision, session, summary);
+      let nextRevision: BoundarySummaryRevision;
+
+      if (status !== 'approved') {
+        nextRevision = hydrated;
+      } else if (this.boundarySummaryRevisionHasApprovedEvidence(hydrated)) {
+        nextRevision = { ...hydrated, status: 'approved' };
+        eligibleApprovedRevisionIds.push(revision.id);
+      } else {
+        nextRevision = {
+          ...hydrated,
+          status: revision.id === latestApprovedCandidateId ? 'draft' : 'superseded',
+        };
+      }
+
+      if (
+        valuesEqual(
+          this.boundarySummaryRevisionBackfillComparisonRecord(revision),
+          this.boundarySummaryRevisionBackfillComparisonRecord(nextRevision),
+        )
+      ) {
+        continue;
+      }
+
+      this.boundarySummaryRevisions.set(revision.id, clone(nextRevision));
+      if (status === 'approved' && this.boundarySummaryRevisionStatus(nextRevision) === 'approved') {
+        approvedRevisionIds.push(revision.id);
+      } else if (status === 'approved') {
+        downgradedRevisionIds.push(revision.id);
+      }
+    }
+
+    const latestRevision = revisions.at(-1);
+    const approvedRevisionId = eligibleApprovedRevisionIds.at(-1);
+    if (session !== undefined && latestRevision !== undefined) {
+      const nextSession = {
+        ...session,
+        latest_summary_revision_id: latestRevision.id,
+      };
+      if (approvedRevisionId === undefined) {
+        delete (nextSession as Partial<BrainstormingSession>).approved_summary_revision_id;
+      } else {
+        nextSession.approved_summary_revision_id = approvedRevisionId;
+      }
+      if (!valuesEqual(session, nextSession)) {
+        this.brainstormingSessions.set(session.id, { ...nextSession, updated_at: input.now });
+      }
+    }
+
+    return {
+      downgraded_revision_ids: downgradedRevisionIds,
+      approved_revision_ids: approvedRevisionIds,
+    };
+  }
+
+  private syntheticBoundaryRoundStatusFor(status: BrainstormingSession['status']): BoundaryRoundRecord['status'] {
+    if (status === 'ai_turn_running') {
+      return 'running';
+    }
+    if (status === 'summary_proposed') {
+      return 'summary_proposed';
+    }
+    return 'waiting_for_leader';
+  }
+
+  private boundarySessionStatusForApprovalState(
+    approvalState: BrainstormingSession['approval_state'],
+  ): BrainstormingSession['status'] {
+    if (approvalState === 'approved') {
+      return 'approved';
+    }
+    if (approvalState === 'changes_requested') {
+      return 'changes_requested';
+    }
+    if (approvalState === 'draft') {
+      return 'draft';
+    }
+    return 'waiting_for_leader';
+  }
+
+  private attachLegacyBoundaryEvidenceToRound(session: BrainstormingSession, roundId: string): void {
+    session.questions.forEach((question, index) => {
+      if (this.boundaryQuestions.has(question.id)) {
+        return;
+      }
+      this.boundaryQuestions.set(question.id, {
+        ...question,
+        session_id: session.id,
+        round_id: question.round_id ?? roundId,
+        sequence: index + 1,
+        required:
+          question.required ??
+          (question.status === 'open' &&
+            question.answered_by_answer_id === undefined &&
+            question.waived_by_decision_id === undefined),
+      });
+    });
+    session.answers.forEach((answer, index) => {
+      if (this.boundaryAnswers.has(answer.id)) {
+        return;
+      }
+      this.boundaryAnswers.set(answer.id, {
+        ...answer,
+        session_id: session.id,
+        round_id: answer.round_id ?? roundId,
+        sequence: index + 1,
+      });
+    });
+    session.decisions.forEach((decision, index) => {
+      if (this.boundaryDecisions.has(decision.id)) {
+        return;
+      }
+      this.boundaryDecisions.set(decision.id, {
+        ...decision,
+        session_id: session.id,
+        round_id: decision.round_id ?? roundId,
+        sequence: index + 1,
+      });
+    });
+  }
+
+  private boundarySummaryRevisionStatus(revision: BoundarySummaryRevision): string {
+    if ('status' in revision && revision.status !== undefined) {
+      return revision.status;
+    }
+    return revision.approved_by_actor_id !== undefined && revision.approved_at !== undefined ? 'approved' : 'draft';
+  }
+
+  private async hydrateBoundarySummaryRevisionForBackfill(
+    revision: BoundarySummaryRevision,
+    session: BrainstormingSession | undefined,
+    summary: BoundarySummary | undefined,
+  ): Promise<BoundarySummaryRevision> {
+    const record = revision as Record<string, unknown>;
+    const sessionId =
+      typeof record.session_id === 'string'
+        ? record.session_id
+        : typeof record.brainstorming_session_id === 'string'
+          ? record.brainstorming_session_id
+          : session?.id;
+    const sessionRevisionId =
+      typeof record.session_revision_id === 'string'
+        ? record.session_revision_id
+        : typeof record.brainstorming_session_revision_id === 'string'
+          ? record.brainstorming_session_revision_id
+          : session?.revision_id;
+    const sourceRoundId =
+      typeof record.source_round_id === 'string'
+        ? record.source_round_id
+        : session?.current_round_id ?? (sessionId === undefined ? undefined : (await this.listBoundaryRounds(sessionId)).at(-1)?.id);
+    const developmentPlanId =
+      typeof record.development_plan_id === 'string' ? record.development_plan_id : summary?.development_plan_id ?? session?.development_plan_id;
+    const questionAnswerSnapshot = Array.isArray(record.question_answer_snapshot)
+      ? record.question_answer_snapshot
+      : this.boundaryQuestionAnswerSnapshotFor(sessionId);
+    const existingDecisionSnapshot = this.normalizedBoundaryDecisionSnapshot(record.decision_snapshot);
+    const decisionSnapshot =
+      existingDecisionSnapshot.length > 0 ? existingDecisionSnapshot : this.boundaryDecisionSnapshotFor(sessionId);
+
+    return {
+      ...revision,
+      ...(sessionId === undefined ? {} : { session_id: sessionId }),
+      ...(sessionRevisionId === undefined ? {} : { session_revision_id: sessionRevisionId }),
+      ...(sourceRoundId === undefined ? {} : { source_round_id: sourceRoundId }),
+      ...(developmentPlanId === undefined ? {} : { development_plan_id: developmentPlanId }),
+      status: this.boundarySummaryRevisionStatus(revision),
+      confirmed_scope: Array.isArray(record.confirmed_scope) ? record.confirmed_scope : [],
+      confirmed_out_of_scope: Array.isArray(record.confirmed_out_of_scope) ? record.confirmed_out_of_scope : [],
+      accepted_assumptions: Array.isArray(record.accepted_assumptions) ? record.accepted_assumptions : [],
+      open_risks: Array.isArray(record.open_risks) ? record.open_risks : [],
+      validation_expectations: Array.isArray(record.validation_expectations) ? record.validation_expectations : [],
+      question_answer_snapshot: questionAnswerSnapshot,
+      decision_snapshot: decisionSnapshot,
+      ...(record.context_manifest_id === undefined && session?.context_manifest_id !== undefined
+        ? { context_manifest_id: session.context_manifest_id }
+        : {}),
+      ...(record.context_manifest_revision_id === undefined && session?.context_manifest_revision_id !== undefined
+        ? { context_manifest_revision_id: session.context_manifest_revision_id }
+        : {}),
+    } as BoundarySummaryRevision;
+  }
+
+  private boundaryQuestionAnswerSnapshotFor(sessionId: string | undefined): { question_id: string; answer_id: string; text: string }[] {
+    if (sessionId === undefined) {
+      return [];
+    }
+    const answersById = new Map(
+      valuesFor(this.boundaryAnswers)
+        .filter((answer) => answer.session_id === sessionId)
+        .map((answer) => [answer.id, answer]),
+    );
+    return valuesFor(this.boundaryQuestions)
+      .filter((question) => question.session_id === sessionId && question.answered_by_answer_id !== undefined)
+      .sort(bySequenceThenId)
+      .flatMap((question) => {
+        const answer = answersById.get(question.answered_by_answer_id ?? '');
+        return answer === undefined ? [] : [{ question_id: question.id, answer_id: answer.id, text: answer.text }];
+      });
+  }
+
+  private boundaryDecisionSnapshotFor(sessionId: string | undefined): { decision_id: string; text: string; rationale?: string }[] {
+    if (sessionId === undefined) {
+      return [];
+    }
+    return valuesFor(this.boundaryDecisions)
+      .filter((decision) => decision.session_id === sessionId)
+      .sort(bySequenceThenId)
+      .map((decision) => ({
+        decision_id: decision.id,
+        text: decision.text,
+        ...(decision.rationale === undefined ? {} : { rationale: decision.rationale }),
+      }));
+  }
+
+  private normalizedBoundaryDecisionSnapshot(snapshot: unknown): { decision_id: string; text: string; rationale?: string }[] {
+    if (!Array.isArray(snapshot)) {
+      return [];
+    }
+    return snapshot.flatMap((entry) => {
+      if (entry === null || typeof entry !== 'object') {
+        return [];
+      }
+      const record = entry as Record<string, unknown>;
+      const decisionId =
+        typeof record.decision_id === 'string' ? record.decision_id : typeof record.id === 'string' ? record.id : undefined;
+      if (decisionId === undefined || typeof record.text !== 'string') {
+        return [];
+      }
+      return [
+        {
+          decision_id: decisionId,
+          text: record.text,
+          ...(typeof record.rationale === 'string' ? { rationale: record.rationale } : {}),
+        },
+      ];
+    });
+  }
+
+  private boundarySummaryRevisionBackfillComparisonRecord(revision: BoundarySummaryRevision): Record<string, unknown> {
+    const record = { ...(revision as Record<string, unknown>) };
+    if (record.session_id !== undefined && record.brainstorming_session_id === undefined) {
+      record.brainstorming_session_id = record.session_id;
+    }
+    if (record.session_revision_id !== undefined && record.brainstorming_session_revision_id === undefined) {
+      record.brainstorming_session_revision_id = record.session_revision_id;
+    }
+    delete record.session_id;
+    delete record.session_revision_id;
+    return record;
+  }
+
+  private boundarySummaryRevisionHasApprovedEvidence(revision: BoundarySummaryRevision): boolean {
+    const record = revision as Record<string, unknown>;
+    return (
+      typeof record.session_id === 'string' &&
+      typeof record.session_revision_id === 'string' &&
+      typeof record.source_round_id === 'string' &&
+      typeof record.development_plan_id === 'string' &&
+      typeof record.context_manifest_id === 'string' &&
+      typeof record.context_manifest_revision_id === 'string' &&
+      Array.isArray(record.question_answer_snapshot) &&
+      record.question_answer_snapshot.length > 0 &&
+      Array.isArray(record.decision_snapshot) &&
+      record.decision_snapshot.length > 0 &&
+      revision.approved_by_actor_id !== undefined &&
+      revision.approved_at !== undefined
     );
   }
 
@@ -5683,6 +6133,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.developmentPlanItems,
       this.developmentPlanItemRevisions,
       this.brainstormingSessions,
+      this.boundaryRounds,
+      this.boundaryQuestions,
+      this.boundaryAnswers,
+      this.boundaryDecisions,
       this.boundarySummaries,
       this.boundarySummaryRevisions,
       this.executionPlans,
