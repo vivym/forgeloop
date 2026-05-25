@@ -1,4 +1,4 @@
-import { useEffect, useState, type HTMLAttributes, type ReactNode, type TdHTMLAttributes, type ThHTMLAttributes } from 'react';
+import { useEffect, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode, type TdHTMLAttributes, type ThHTMLAttributes } from 'react';
 
 import { cn } from '../../utils/cn';
 
@@ -64,6 +64,15 @@ export function DataTable<T>({
 }: DataTableProps<T>) {
   const renderResponsiveCards = useResponsiveCards();
   const compact = density === 'compact';
+  const isSelectable = typeof onSelectRow === 'function';
+
+  const activateRow = (row: T) => onSelectRow?.(row);
+  const onActivationKeyDown = (event: KeyboardEvent<HTMLElement>, row: T) => {
+    if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+      event.preventDefault();
+      activateRow(row);
+    }
+  };
 
   return (
     <div
@@ -91,13 +100,17 @@ export function DataTable<T>({
 
               return (
                 <TableRow
-                  aria-selected={isSelected ? 'true' : undefined}
+                  aria-selected={isSelectable ? (isSelected ? 'true' : 'false') : undefined}
                   className={cn(
-                    onSelectRow ? 'cursor-pointer transition-colors duration-fast ease-standard motion-reduce:transition-none hover:bg-surface-muted/70' : undefined,
+                    isSelectable
+                      ? 'cursor-pointer transition-colors duration-fast ease-standard focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none hover:bg-surface-muted/70'
+                      : undefined,
                     isSelected ? 'bg-primary-soft/70' : undefined,
                   )}
                   key={key}
-                  onClick={onSelectRow ? () => onSelectRow(row) : undefined}
+                  onClick={isSelectable ? () => activateRow(row) : undefined}
+                  onKeyDown={isSelectable ? (event) => onActivationKeyDown(event, row) : undefined}
+                  tabIndex={isSelectable ? 0 : undefined}
                 >
                   {columns.map((column) => (
                     <TableCell className={compact ? 'px-3 py-2.5' : undefined} key={column.key}>
@@ -129,16 +142,21 @@ export function DataTable<T>({
 
             return (
               <article
+                aria-current={isSelected ? 'true' : undefined}
                 className={cn(
                   'grid gap-3 rounded-card border border-border bg-surface p-4',
                   compact ? 'gap-2 p-3' : undefined,
-                  onSelectRow ? 'cursor-pointer transition-colors duration-fast ease-standard motion-reduce:transition-none hover:bg-surface-raised' : undefined,
+                  isSelectable
+                    ? 'cursor-pointer transition-colors duration-fast ease-standard focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none hover:bg-surface-raised'
+                    : undefined,
                   isSelected ? 'border-primary/40 bg-primary-soft/50' : undefined,
                 )}
                 data-selected-row={isSelected ? 'true' : undefined}
                 key={key}
-                onClick={onSelectRow ? () => onSelectRow(row) : undefined}
+                onClick={isSelectable ? () => activateRow(row) : undefined}
+                onKeyDown={isSelectable ? (event) => onActivationKeyDown(event, row) : undefined}
                 role="listitem"
+                tabIndex={isSelectable ? 0 : undefined}
               >
                 {columns.map((column) => (
                   <div className="grid min-w-0 gap-1" key={column.key}>

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ActionStrip,
   CompactMetadata,
+  EvidenceDrawer,
   GateProgress,
   GateWorkspace,
   ObjectWorkspace,
@@ -215,11 +216,63 @@ describe('product-grade layout primitives', () => {
     expect(scrollContainer?.className).toContain('overflow-x-auto');
     const row = screen.getByRole('row', { name: /Release 1/ });
     expect(row.getAttribute('aria-selected')).toBe('true');
+    expect(row.getAttribute('tabindex')).toBe('0');
+    row.focus();
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(row, { key: 'Enter' });
+    fireEvent.keyDown(row, { key: ' ' });
     fireEvent.click(row);
-    expect(onSelectRow).toHaveBeenCalledWith(expect.objectContaining({ id: 'release-1' }));
+    expect(onSelectRow).toHaveBeenCalledTimes(3);
+    expect(onSelectRow).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'release-1' }));
 
     const headers = within(screen.getByRole('table', { name: 'Release queue' })).getAllByRole('columnheader');
     expect(headers.map((header) => header.textContent)).toEqual(['Title', 'State', 'Next action', 'Risk', 'Current gate']);
+  });
+
+  it('keeps selectable mobile cards keyboard-operable', () => {
+    const onSelectRow = vi.fn();
+    const previousMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        media: query,
+        matches: query === '(max-width: 767px)',
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+
+    try {
+      render(
+        <DataTable
+          ariaLabel="Queue cards"
+          columns={[
+            { key: 'title', header: 'Title', cell: (row) => row.title },
+            { key: 'state', header: 'State', cell: (row) => row.state },
+          ]}
+          getRowKey={(row) => row.id}
+          onSelectRow={onSelectRow}
+          rows={[{ id: 'item-1', state: 'Waiting', title: 'Release 1' }]}
+          selectedRowKey="item-1"
+        />,
+      );
+
+      const card = screen.getByRole('listitem');
+      expect(card.getAttribute('tabindex')).toBe('0');
+      expect(card.getAttribute('data-selected-row')).toBe('true');
+      card.focus();
+      expect(document.activeElement).toBe(card);
+      fireEvent.keyDown(card, { key: 'Enter' });
+      fireEvent.keyDown(card, { key: ' ' });
+      expect(onSelectRow).toHaveBeenCalledTimes(2);
+      expect(onSelectRow).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'item-1' }));
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: previousMatchMedia });
+    }
   });
 
   it('renders compact metadata and bounded preview or drawer surfaces without nesting cards', () => {
@@ -231,14 +284,15 @@ describe('product-grade layout primitives', () => {
             { label: 'Updated', value: 'Today' },
           ]}
         />
-        <PreviewPane title="Evidence preview" meta="2 files">
+        <PreviewPane title={<span>Evidence preview</span>} meta="2 files">
           Preview
         </PreviewPane>
+        <EvidenceDrawer content="Evidence details" title={<span>Evidence drawer</span>} />
         <RevisionDrawer
           revisions={[
             { id: 'r1', title: 'Draft updated', description: 'Owner changed', meta: 'Today' },
           ]}
-          title="Revision history"
+          title={<span>Revision history</span>}
         />
       </>,
     );
@@ -246,6 +300,7 @@ describe('product-grade layout primitives', () => {
     expect(screen.getByText('Owner').tagName).toBe('DT');
     expect(screen.getByText('Release captain').tagName).toBe('DD');
     expect(screen.getByRole('region', { name: 'Evidence preview' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Evidence drawer' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Revision history' })).toBeTruthy();
     expect(document.querySelector('[data-card-in-card="true"]')).toBeNull();
   });
