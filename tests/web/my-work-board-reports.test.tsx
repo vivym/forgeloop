@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { cleanup } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { codeReviewHandoff, developmentPlan, developmentPlanItem, execution, qaHandoff } from './fixtures/product-data';
@@ -82,7 +83,20 @@ describe('AI-native My Work, Board, and Reports', () => {
   it('renders Board focus context from typed execution links', async () => {
     const screen = await renderRoute(`/board?execution_id=${execution.id}`);
     expect(await screen.findByText(/Focused Execution card/i)).toBeTruthy();
+    expect(await screen.findByText(/Execute AI-native Web API client work/i)).toBeTruthy();
+    expect(screen.queryByText(/Board cards could not be loaded/i)).toBeNull();
     expect(document.querySelector('#main-content')?.textContent ?? '').not.toContain(execution.id);
+  });
+
+  it('keeps full-flow copy when a Board focus does not match a card', async () => {
+    const screen = await renderRoute('/board?execution_id=missing');
+
+    expect(await screen.findByText(/Focus not found/i)).toBeTruthy();
+    const boardContent = document.querySelector('#main-content')?.textContent ?? '';
+    expect(boardContent).toMatch(/No exact board card matched this focus/i);
+    expect(boardContent).toMatch(/full gate flow visible/i);
+    expect(boardContent).not.toMatch(/Inspect the focused gate card|focused gate flow visible/i);
+    expect(screen.queryByText(/Board cards could not be loaded/i)).toBeNull();
   });
 
   it('renders Reports as product metrics, not placeholders', async () => {
@@ -109,6 +123,7 @@ describe('AI-native My Work, Board, and Reports', () => {
     const codeReviewScreen = await renderRoute(`/reports?code_review_handoff_id=${codeReviewHandoff.id}`);
     expect(await codeReviewScreen.findByText(new RegExp(`Focused code review handoff ${codeReviewHandoff.id}`, 'i'))).toBeTruthy();
 
+    cleanup();
     const qaScreen = await renderRoute(`/reports?qa_handoff_id=${qaHandoff.id}`);
     expect(await qaScreen.findByText(new RegExp(`Focused QA handoff ${qaHandoff.id}`, 'i'))).toBeTruthy();
   });

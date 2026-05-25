@@ -442,15 +442,21 @@ export async function listQaHandoffQueue(
 }
 
 export async function listBoardCards(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: BoardCard[] }> {
-  const [workItems, developmentPlanItems, releases] = await Promise.all([
+  const [workItems, developmentPlanItems, executions, codeReviews, qaHandoffs, releases] = await Promise.all([
     repository.listWorkItems(query.project_id),
     listDevelopmentPlanItemsForProject(repository, query.project_id),
+    listExecutionsForProject(repository, query.project_id),
+    listCodeReviewHandoffsForProject(repository, query.project_id),
+    listQaHandoffsForProject(repository, query.project_id),
     repository.listReleases(query.project_id),
   ]);
   return {
     items: [
       ...workItems.map(workItemToBoardCard),
       ...developmentPlanItems.map(({ plan, item }) => developmentPlanItemToBoardCard(plan, item)),
+      ...executions.map(({ execution, item }) => executionToBoardCard(item, execution)),
+      ...codeReviews.map(({ handoff, execution, item }) => codeReviewHandoffToBoardCard(item, execution, handoff)),
+      ...qaHandoffs.map(({ handoff, item }) => qaHandoffToBoardCard(item, handoff)),
       ...releases.map(releaseToBoardCard),
     ],
   };
@@ -914,6 +920,48 @@ function developmentPlanItemToBoardCard(plan: DevelopmentPlan, item: Development
     driver_actor_id: item.driver_actor_id,
     blocked: isDevelopmentPlanItemBlocked(item),
     href: `/development-plans/${plan.id}/items/${item.id}`,
+  };
+}
+
+function executionToBoardCard(item: DevelopmentPlanItem, execution: Execution): BoardCard {
+  return {
+    id: `execution:${execution.id}`,
+    object_ref: execution.ref,
+    title: execution.ref.title ?? `${item.title} execution`,
+    column_id: 'execution',
+    status: execution.status,
+    risk: item.risk,
+    driver_actor_id: item.driver_actor_id,
+    blocked: execution.blocked === true || execution.status === 'failed',
+    href: `/executions/${execution.id}`,
+  };
+}
+
+function codeReviewHandoffToBoardCard(item: DevelopmentPlanItem, execution: Execution, handoff: CodeReviewHandoff): BoardCard {
+  return {
+    id: `code_review_handoff:${handoff.id}`,
+    object_ref: handoff.ref,
+    title: handoff.ref.title ?? `${item.title} code review`,
+    column_id: 'review',
+    status: handoff.status,
+    risk: item.risk,
+    driver_actor_id: handoff.reviewer_actor_id,
+    blocked: handoff.status === 'changes_requested',
+    href: `/executions/${execution.id}`,
+  };
+}
+
+function qaHandoffToBoardCard(item: DevelopmentPlanItem, handoff: QaHandoff): BoardCard {
+  return {
+    id: `qa_handoff:${handoff.id}`,
+    object_ref: handoff.ref,
+    title: handoff.ref.title ?? `${item.title} QA handoff`,
+    column_id: 'qa',
+    status: handoff.status,
+    risk: item.risk,
+    driver_actor_id: item.driver_actor_id,
+    blocked: handoff.status === 'blocked',
+    href: `/executions/${handoff.execution_id}`,
   };
 }
 

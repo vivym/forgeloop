@@ -274,6 +274,20 @@ describe('project management query API', () => {
         expect.objectContaining({
           object_ref: expect.objectContaining({ type: 'development_plan_item', id: item.id, development_plan_id: item.development_plan_id }),
         }),
+        expect.objectContaining({
+          object_ref: expect.objectContaining({ type: 'execution', id: execution.id }),
+          href: `/executions/${execution.id}`,
+        }),
+        expect.objectContaining({
+          object_ref: expect.objectContaining({ type: 'code_review_handoff', id: review.id }),
+          column_id: 'review',
+          href: `/executions/${execution.id}`,
+        }),
+        expect.objectContaining({
+          object_ref: expect.objectContaining({ type: 'qa_handoff', id: qa.id }),
+          column_id: 'qa',
+          href: `/executions/${execution.id}`,
+        }),
       ]),
     );
 

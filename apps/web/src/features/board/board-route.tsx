@@ -29,18 +29,19 @@ export function BoardRoute() {
   const allCards = query.data?.items ?? [];
   const focus = boardFocusFromSearchParams(searchParams);
   const focusedCards = focus === undefined ? allCards : allCards.filter((card) => isFocusedBoardCard(card, focus));
-  const cards = focus === undefined || focusedCards.length > 0 ? focusedCards : allCards;
+  const activeFocus = focus !== undefined && focusedCards.length > 0 ? focus : undefined;
+  const cards = activeFocus === undefined ? allCards : focusedCards;
   const columns = groupByGate(cards);
   const blockedCount = cards.filter((card) => card.blocked).length;
   const highRiskCount = cards.filter((card) => /high|critical/i.test(card.risk ?? '')).length;
 
   return (
     <WorkspacePage
-      blockerRisk={boardBlockerRisk(query.isError, blockedCount, highRiskCount, focus)}
+      blockerRisk={boardBlockerRisk(query.isError, blockedCount, highRiskCount, activeFocus)}
       family="board"
       heading="Board"
       layout="board-flow"
-      nextAction={boardNextAction(query.isError, cards, focus)}
+      nextAction={boardNextAction(query.isError, cards, activeFocus)}
       roleResponsibility="Product drivers, technical leads, developers, reviewers, QA, and release owners share this gate flow."
       state={boardCurrentState(query.isLoading, query.isError, cards, blockedCount)}
       subtitle="Development Plan Item gate flow from intake through release readiness."
@@ -54,7 +55,7 @@ export function BoardRoute() {
               ? `Showing ${focusedCards.length} matching board card${focusedCards.length === 1 ? '' : 's'}.`
               : 'No exact board card matched this focus, so the full gate flow remains visible.'
           }
-          title={boardFocusTitle(focus)}
+          title={activeFocus === undefined ? 'Focus not found' : boardFocusTitle(activeFocus)}
           tone={focusedCards.length > 0 ? 'info' : 'warning'}
         />
       ) : null}
@@ -62,7 +63,7 @@ export function BoardRoute() {
         {columns.map(({ cards: columnCards, column }) => (
             <section
               aria-label={`${column.label} cards`}
-              className="grid content-start gap-3 rounded-card border border-border bg-background p-3"
+              className="grid min-w-0 content-start gap-3 border-t border-border pt-3"
               key={column.id}
             >
               <div className="flex items-center justify-between gap-2">
@@ -75,7 +76,7 @@ export function BoardRoute() {
               {columnCards.map((card) => (
                 <BoardObjectCard card={card} key={card.id} />
               ))}
-              {columnCards.length === 0 ? <div className="rounded-card border border-dashed border-border p-3 text-xs text-text-secondary">No cards in this gate.</div> : null}
+              {columnCards.length === 0 ? <div className="py-2 text-xs text-text-secondary">No cards in this gate.</div> : null}
             </section>
         ))}
       </div>
@@ -132,12 +133,9 @@ function boardBlockerRisk(isError: boolean, blockedCount: number, highRiskCount:
 
 function BoardObjectCard({ card }: { card: BoardProductCard }) {
   const gate = gateColumnFor(card);
-
-  return (
-    <Link
-      className="grid min-w-0 gap-2 rounded-card border border-border bg-surface p-3 text-sm shadow-sm transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none"
-      to={typedObjectHref(card.object_ref)}
-    >
+  const href = boardObjectHref(card);
+  const content = (
+    <>
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill tone={card.blocked ? 'danger' : 'neutral'}>{objectLabel(card.object_ref.type)}</StatusPill>
         <Badge tone={gate.id === 'intake' ? 'info' : 'primary'}>{gate.label}</Badge>
@@ -151,6 +149,19 @@ function BoardObjectCard({ card }: { card: BoardProductCard }) {
         {card.priority !== undefined ? <span>Priority: {card.priority}</span> : null}
       </div>
       <div className="text-xs font-semibold text-text-primary">Next action: {nextActionFor(card)}</div>
+    </>
+  );
+  const className =
+    'grid min-w-0 gap-2 rounded-card border border-border bg-surface p-3 text-sm shadow-sm transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none';
+
+  return href === undefined ? (
+    <article aria-label={`${card.title} board card`} className={className}>
+      {content}
+      <div className="text-xs text-text-secondary">Open from the parent workspace.</div>
+    </article>
+  ) : (
+    <Link className={className} to={href}>
+      {content}
     </Link>
   );
 }
@@ -177,8 +188,18 @@ function gateColumnIdFor(card: BoardProductCard): BoardGateColumnId {
     case 'initiative':
     case 'bug':
     case 'tech_debt':
+    case 'development_plan':
+    case 'attachment':
       return 'intake';
+    case 'brainstorming_session':
+    case 'boundary_summary':
+      return 'boundary';
     case 'execution_plan':
+      return 'execution-plan';
+    case 'spec':
+    case 'spec_revision':
+      return 'spec';
+    case 'execution_plan_revision':
       return 'execution-plan';
     case 'execution':
       return 'execution';
@@ -190,8 +211,6 @@ function gateColumnIdFor(card: BoardProductCard): BoardGateColumnId {
       return 'release';
     case 'development_plan_item':
       return developmentPlanItemGateColumn(card);
-    default:
-      return 'intake';
   }
 }
 
@@ -220,12 +239,26 @@ function objectLabel(type: BoardObjectRef['type']): string {
       return 'Tech Debt';
     case 'development_plan_item':
       return 'Development Plan Item';
+    case 'development_plan':
+      return 'Development Plan';
+    case 'brainstorming_session':
+      return 'Brainstorming';
+    case 'boundary_summary':
+      return 'Boundary Summary';
+    case 'spec':
+      return 'Spec';
     case 'execution_plan':
       return 'Execution Plan';
+    case 'execution_plan_revision':
+      return 'Execution Plan Revision';
+    case 'spec_revision':
+      return 'Spec Revision';
     case 'qa_handoff':
       return 'QA Handoff';
     case 'code_review_handoff':
       return 'Code Review Handoff';
+    case 'attachment':
+      return 'Attachment';
     default:
       return titleCase(type);
   }
@@ -241,6 +274,17 @@ function nextActionFor(card: BoardProductCard): string {
       return 'Add to Development Plan';
     case 'development_plan_item':
       return 'Open item gates';
+    case 'development_plan':
+      return 'Review Development Plan';
+    case 'brainstorming_session':
+    case 'boundary_summary':
+      return 'Review boundary';
+    case 'spec':
+    case 'spec_revision':
+      return 'Review Spec';
+    case 'execution_plan':
+    case 'execution_plan_revision':
+      return 'Review Execution Plan';
     case 'execution':
       return 'Inspect execution';
     case 'code_review_handoff':
@@ -249,6 +293,8 @@ function nextActionFor(card: BoardProductCard): string {
       return 'Accept or block QA handoff';
     case 'release':
       return 'Review readiness';
+    case 'attachment':
+      return 'Open parent workspace';
     default:
       return 'Review';
   }
@@ -263,16 +309,25 @@ function roleFor(card: BoardProductCard): string {
       return 'Product driver';
     case 'development_plan_item':
       return roleForGate(gateColumnFor(card).id);
+    case 'development_plan':
+      return 'Product driver';
+    case 'brainstorming_session':
+    case 'boundary_summary':
+    case 'spec':
+    case 'spec_revision':
+    case 'execution_plan':
+    case 'execution_plan_revision':
+      return 'Technical lead';
     case 'execution':
       return 'Developer';
-    case 'execution_plan':
-      return 'Technical lead';
     case 'code_review_handoff':
       return 'Reviewer';
     case 'qa_handoff':
       return 'QA';
     case 'release':
       return 'Release owner';
+    case 'attachment':
+      return 'Assigned role';
     default:
       return 'Assigned role';
   }
@@ -301,7 +356,11 @@ function riskLabel(risk: string | undefined): string {
   return risk === undefined ? 'Unscored' : titleCase(risk);
 }
 
-function typedObjectHref(ref: BoardObjectRef): string {
+function boardObjectHref(card: BoardProductCard): string | undefined {
+  return isSafeBoardHref(card.href) ? card.href : typedObjectHref(card.object_ref);
+}
+
+function typedObjectHref(ref: BoardObjectRef): string | undefined {
   switch (ref.type) {
     case 'initiative':
       return `/initiatives/${encodeURIComponent(ref.id)}`;
@@ -311,8 +370,18 @@ function typedObjectHref(ref: BoardObjectRef): string {
       return `/tech-debt/${encodeURIComponent(ref.id)}`;
     case 'bug':
       return `/bugs/${encodeURIComponent(ref.id)}`;
+    case 'development_plan':
+      return `/development-plans/${encodeURIComponent(ref.id)}`;
     case 'development_plan_item':
       return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
+    case 'spec':
+      return `/specs-plans?spec_id=${encodeURIComponent(ref.id)}`;
+    case 'spec_revision':
+      return `/specs-plans?spec_revision_id=${encodeURIComponent(ref.id)}`;
+    case 'execution_plan':
+      return `/specs-plans?execution_plan_id=${encodeURIComponent(ref.id)}`;
+    case 'execution_plan_revision':
+      return `/specs-plans?execution_plan_revision_id=${encodeURIComponent(ref.id)}`;
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
     case 'execution':
@@ -321,9 +390,15 @@ function typedObjectHref(ref: BoardObjectRef): string {
       return `/reports?code_review_handoff_id=${encodeURIComponent(ref.id)}`;
     case 'qa_handoff':
       return `/reports?qa_handoff_id=${encodeURIComponent(ref.id)}`;
-    default:
-      return '/my-work';
+    case 'brainstorming_session':
+    case 'boundary_summary':
+    case 'attachment':
+      return undefined;
   }
+}
+
+function isSafeBoardHref(href: string | undefined): href is string {
+  return href !== undefined && href.startsWith('/') && !/^\/(?:tasks|plans|specs|packages)(?:\/|$)/.test(href);
 }
 
 function titleCase(value: string): string {

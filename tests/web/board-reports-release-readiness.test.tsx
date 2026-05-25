@@ -8,9 +8,11 @@ import {
   codeReviewHandoff,
   developmentPlan,
   developmentPlanItem,
+  executionPlan,
   projectId,
   qaHandoff,
   reviewPacket,
+  spec,
 } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
@@ -43,6 +45,24 @@ describe('board, reports, and release readiness routes', () => {
               blocked: false,
               href: `/reports?qa_handoff_id=${qaHandoff.id}`,
             },
+            {
+              id: `board:${spec.id}`,
+              object_ref: { type: 'spec', id: spec.id, title: 'Spec board card' },
+              title: 'Spec board card',
+              column_id: 'spec',
+              status: 'approved',
+              risk: 'medium',
+              blocked: false,
+            },
+            {
+              id: `board:${executionPlan.id}`,
+              object_ref: { type: 'execution_plan', id: executionPlan.id, title: 'Execution Plan board card' },
+              title: 'Execution Plan board card',
+              column_id: 'execution_plan',
+              status: 'approved',
+              risk: 'medium',
+              blocked: false,
+            },
           ],
         },
       },
@@ -60,9 +80,14 @@ describe('board, reports, and release readiness routes', () => {
     expect(screen.getByRole('region', { name: 'Review cards' }).textContent).toMatch(/Code Review Handoff/);
     expect(screen.getByRole('region', { name: 'QA cards' }).textContent).toMatch(/QA Handoff/);
     expect(screen.getByRole('region', { name: 'Release cards' }).textContent).toMatch(/Release/);
-    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toContain(
+    const mainContent = document.querySelector('#main-content') as HTMLElement;
+    const boardHrefs = [...mainContent.querySelectorAll('a')].map((link) => link.getAttribute('href'));
+    expect(boardHrefs).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
+    expect(boardHrefs).toContain(`/specs-plans?spec_id=${spec.id}`);
+    expect(boardHrefs).toContain(`/specs-plans?execution_plan_id=${executionPlan.id}`);
+    expect(boardHrefs).not.toContain('/my-work');
     expect(document.querySelector('#main-content')?.textContent ?? '').not.toMatch(
       /\bPlanning\b|\bReady\b|\bActive\b|\bValidation\b|\bDone\b/,
     );
