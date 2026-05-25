@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttachmentRef, AttachmentRenderRef } from '@forgeloop/contracts';
 
 import { EvidenceAttachments } from '../../apps/web/src/shared/ui/evidence-attachments';
-import { projectId, requirementDetail } from './fixtures/product-data';
+import { requirementDetail } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 const publicAttachmentFixture = (overrides: Partial<AttachmentRef> = {}): AttachmentRef => ({
@@ -123,7 +123,10 @@ describe('EvidenceAttachments', () => {
       apiOverrides: {
         'GET /query/requirements/req-1': {
           ...requirementDetail,
-          evidence_refs: [{ type: 'attachment', id: 'att-relevant', title: 'Relevant checkout evidence' }],
+          evidence_refs: [
+            { type: 'attachment', id: 'att-relevant', title: 'Relevant checkout evidence' },
+            { type: 'attachment', id: 'att-missing', title: 'Missing checkout evidence' },
+          ],
           attachment_refs: [
             publicAttachmentFixture({
               id: 'att-relevant',
@@ -155,17 +158,6 @@ describe('EvidenceAttachments', () => {
               alt_text: 'Unavailable checkout evidence',
             }),
           ],
-        },
-        'GET /query/requirements/req-1/evidence': {
-          object_ref: requirementDetail.ref,
-          evidence_refs: [
-            { type: 'attachment', id: 'att-relevant', title: 'Relevant checkout evidence' },
-            { type: 'attachment', id: 'att-missing', title: 'Missing checkout evidence' },
-          ],
-        },
-        [`GET /query/requirements?project_id=${projectId}&limit=100`]: {
-          items: [],
-          degraded_sources: [],
         },
       },
     });

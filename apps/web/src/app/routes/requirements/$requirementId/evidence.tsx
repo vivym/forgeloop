@@ -12,8 +12,6 @@ export default function RequirementEvidenceRoute() {
       detail={query.data}
       detailError={query.error}
       detailLoading={query.isLoading}
-      evidenceQueryPath={requirementId === undefined ? undefined : `/query/requirements/${encodeURIComponent(requirementId)}/evidence`}
-      objectId={requirementId}
       objectLabel="Requirement"
       sourceHref={requirementId === undefined ? undefined : `/requirements/${encodeURIComponent(requirementId)}`}
     />

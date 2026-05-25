@@ -1,9 +1,7 @@
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import type { AttachmentRef, EditableObjectRef } from '@forgeloop/contracts';
 
-import { createApiContext } from '../../shared/api/common';
 import { CompactMetadata, ObjectWorkspace, Section } from '../../shared/layout';
 import { EvidenceAttachments, InlineNotice, StatusPill } from '../../shared/ui';
 
@@ -30,18 +28,10 @@ export interface SourceEvidenceDetail {
   release_refs?: RelationshipRef[] | undefined;
 }
 
-interface SourceEvidenceResponse {
-  object_ref?: EvidenceRef | undefined;
-  evidence_refs?: EvidenceRef[] | undefined;
-  degraded_sources?: string[] | undefined;
-}
-
 export interface ObjectEvidenceRouteProps<T extends SourceEvidenceDetail> {
   detail: T | undefined;
   detailError?: Error | null;
   detailLoading: boolean;
-  evidenceQueryPath: string | undefined;
-  objectId: string | undefined;
   objectLabel: string;
   sourceHref: string | undefined;
 }
@@ -57,16 +47,10 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
   detail,
   detailError,
   detailLoading,
-  evidenceQueryPath,
-  objectId,
   objectLabel,
   sourceHref,
 }: ObjectEvidenceRouteProps<T>) {
-  const evidenceQuery = useSourceEvidenceQuery(evidenceQueryPath, objectId);
-  const readiness = useMemo(
-    () => evidenceReadiness(detail, evidenceQuery.data, evidenceQuery.error),
-    [detail, evidenceQuery.data, evidenceQuery.error],
-  );
+  const readiness = useMemo(() => evidenceReadiness(detail), [detail]);
   const heading = `${objectLabel} Evidence`;
 
   if (detailLoading) {
@@ -128,7 +112,7 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
     >
       <Section
         aria-label="Evidence readiness summary"
-        description="Readiness is derived from the source object detail, attachment safety metadata, and the scoped evidence query."
+        description="Readiness is derived from the source object detail and attachment safety metadata."
         title="Evidence readiness summary"
         variant="panel"
       >
@@ -168,7 +152,7 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
             <RelationshipLinks refs={[...relationshipRefs, ...releaseRefs]} />
           </Section>
           <Section aria-label="Scoped artifact references" title="Scoped artifact references" variant="subtle">
-            <EvidenceRefList emptyText="No scoped evidence references." label="Evidence references" refs={sourceEvidenceRefs(detail, evidenceQuery.data)} tone="neutral" />
+            <EvidenceRefList emptyText="No scoped evidence references." label="Evidence references" refs={sourceEvidenceRefs(detail)} tone="neutral" />
           </Section>
         </div>
       </div>
@@ -183,19 +167,6 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
       </Section>
     </ObjectWorkspace>
   );
-}
-
-function useSourceEvidenceQuery(evidenceQueryPath: string | undefined, objectId: string | undefined) {
-  return useQuery({
-    queryKey: ['source-object-evidence', evidenceQueryPath],
-    queryFn: async () => createApiContext().request<SourceEvidenceResponse>(requiredEvidencePath(evidenceQueryPath)),
-    enabled: objectId !== undefined && evidenceQueryPath !== undefined,
-  });
-}
-
-function requiredEvidencePath(path: string | undefined) {
-  if (path === undefined) throw new Error('evidenceQueryPath is required');
-  return path;
 }
 
 function EvidenceStateCard({
@@ -275,16 +246,12 @@ function RelationshipLinks({ refs }: { refs: RelationshipRef[] }) {
   );
 }
 
-function evidenceReadiness(
-  detail: SourceEvidenceDetail | undefined,
-  response: SourceEvidenceResponse | undefined,
-  evidenceError: Error | null,
-): EvidenceReadiness {
+function evidenceReadiness(detail: SourceEvidenceDetail | undefined): EvidenceReadiness {
   if (detail === undefined) {
     return emptyReadiness();
   }
 
-  const evidenceRefs = sourceEvidenceRefs(detail, response);
+  const evidenceRefs = sourceEvidenceRefs(detail);
   const attachments = detail.attachment_refs ?? [];
   const attachmentsById = new Map(attachments.map((attachment) => [attachment.id, attachment]));
   const referencedAttachmentIds = new Set(evidenceRefs.filter((ref) => ref.type === 'attachment' && ref.id !== undefined).map((ref) => ref.id as string));
@@ -312,14 +279,6 @@ function evidenceReadiness(
     }
   }
 
-  if (evidenceError !== null || (response?.degraded_sources?.length ?? 0) > 0) {
-    readiness.unavailable.push({
-      type: 'evidence_query',
-      id: detail.id,
-      title: evidenceError?.message ?? 'Evidence query degraded',
-    });
-  }
-
   if (evidenceRefs.length === 0 && attachments.length === 0) {
     readiness.missing.push({ type: detail.ref.type, id: detail.id, title: 'No source evidence recorded' });
   }
@@ -332,8 +291,8 @@ function evidenceReadiness(
   };
 }
 
-function sourceEvidenceRefs(detail: SourceEvidenceDetail, response: SourceEvidenceResponse | undefined): EvidenceRef[] {
-  return uniqueRefs([...(response?.evidence_refs ?? []), ...(detail.evidence_refs ?? [])]);
+function sourceEvidenceRefs(detail: SourceEvidenceDetail): EvidenceRef[] {
+  return uniqueRefs(detail.evidence_refs ?? []);
 }
 
 function attachmentRefFor(attachment: AttachmentRef): EvidenceRef {

@@ -12,8 +12,6 @@ export default function BugEvidenceRoute() {
       detail={query.data}
       detailError={query.error}
       detailLoading={query.isLoading}
-      evidenceQueryPath={bugId === undefined ? undefined : `/query/bugs/${encodeURIComponent(bugId)}/evidence`}
-      objectId={bugId}
       objectLabel="Bug"
       sourceHref={bugId === undefined ? undefined : `/bugs/${encodeURIComponent(bugId)}`}
     />

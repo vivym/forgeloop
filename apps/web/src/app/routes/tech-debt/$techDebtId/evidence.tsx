@@ -12,8 +12,6 @@ export default function TechDebtEvidenceRoute() {
       detail={query.data}
       detailError={query.error}
       detailLoading={query.isLoading}
-      evidenceQueryPath={techDebtId === undefined ? undefined : `/query/tech-debt/${encodeURIComponent(techDebtId)}/evidence`}
-      objectId={techDebtId}
       objectLabel="Tech Debt"
       sourceHref={techDebtId === undefined ? undefined : `/tech-debt/${encodeURIComponent(techDebtId)}`}
     />

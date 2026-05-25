@@ -12,8 +12,6 @@ export default function InitiativeEvidenceRoute() {
       detail={query.data}
       detailError={query.error}
       detailLoading={query.isLoading}
-      evidenceQueryPath={initiativeId === undefined ? undefined : `/query/initiatives/${encodeURIComponent(initiativeId)}/evidence`}
-      objectId={initiativeId}
       objectLabel="Initiative"
       sourceHref={initiativeId === undefined ? undefined : `/initiatives/${encodeURIComponent(initiativeId)}`}
     />
