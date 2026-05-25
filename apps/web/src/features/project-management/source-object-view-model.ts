@@ -91,9 +91,14 @@ function developmentPlanHref(linkedPlan: SourceRef | undefined): string | undefi
 function sourceMetadata(source: SourceObjectProjection): ViewModelMetadata[] {
   return [
     { label: 'Priority', value: source.priority ?? 'Unavailable' },
-    { label: 'Related objects', value: String((source.relationship_refs?.length ?? 0) + (source.child_refs?.length ?? 0) + (source.bug_refs?.length ?? 0)) },
-    { label: 'Release refs', value: String(source.release_refs?.length ?? 0) },
+    { label: 'Related objects', value: relatedObjectCount(source) },
+    { label: 'Release refs', value: source.release_refs === undefined ? 'Unavailable' : String(source.release_refs.length) },
   ];
+}
+
+function relatedObjectCount(source: SourceObjectProjection): string {
+  if (source.relationship_refs === undefined) return 'Unavailable';
+  return String(source.relationship_refs.length + (source.child_refs?.length ?? 0) + (source.bug_refs?.length ?? 0));
 }
 
 function evidenceHref(source: SourceObjectProjection): string | undefined {

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { cleanup } from '@testing-library/react';
+import { cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { developmentPlan, developmentPlanItem } from './fixtures/product-data';
+import { developmentPlan, developmentPlanItem, projectId, requirementListItem } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 const removedRoutes = [
@@ -190,6 +190,70 @@ describe('project management route IA', () => {
       expect(document.body.textContent).not.toContain('Create Development Plan from source object');
       cleanup();
     }
+  });
+
+  it('keeps source object preview tied to the selected row and resets after filtering', async () => {
+    const retryRequirement = {
+      ...requirementListItem,
+      id: 'req-2',
+      ref: { type: 'requirement', id: 'req-2' },
+      title: 'Checkout retry requirement',
+      risk: 'high',
+      updated_at: '2026-05-18T02:00:00.000Z',
+    };
+    const multiRequirementResponse = {
+      items: [requirementListItem, retryRequirement],
+      degraded_sources: [],
+    };
+    const screen = await renderRoute('/requirements', {
+      apiOverrides: {
+        [`GET /query/requirements?project_id=${projectId}`]: multiRequirementResponse,
+        [`GET /query/requirements?project_id=${projectId}&limit=100`]: multiRequirementResponse,
+      },
+    });
+
+    expect(await screen.findByText('Checkout retry requirement')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /view: preview/i }));
+    fireEvent.click(screen.getByText('Checkout retry requirement', { selector: 'span.font-semibold' }));
+
+    const preview = screen.getByRole('region', { name: /source object preview/i });
+    expect(within(preview).getByText('Updated 2026-05-18T02:00:00.000Z')).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('searchbox', { name: /search requirements/i }), {
+      target: { value: 'Checkout requirement' },
+    });
+
+    await waitFor(() => expect(screen.queryByText('Checkout retry requirement', { selector: 'span.font-semibold' })).toBeNull());
+    expect(within(screen.getByRole('region', { name: /source object preview/i })).queryByText('Updated 2026-05-18T02:00:00.000Z')).toBeNull();
+    expect(within(screen.getByRole('region', { name: /source object preview/i })).getByText('Updated 2026-05-18T01:00:00.000Z')).toBeTruthy();
+  });
+
+  it('renders unavailable source list relationship metadata without false zeroes', async () => {
+    const screen = await renderRoute('/requirements');
+
+    expect(await screen.findByText(/checkout requirement/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /view: preview/i }));
+
+    const preview = screen.getByRole('region', { name: /source object preview/i });
+    expect(within(preview).getByText('Related objects')).toBeTruthy();
+    expect(within(preview).getByText('Release refs')).toBeTruthy();
+    expect(within(preview).getAllByText('Unavailable').length).toBeGreaterThanOrEqual(2);
+    expect(within(preview).queryByText('0')).toBeNull();
+  });
+
+  it('renders source list empty actions outside DataTable mobile paragraphs', async () => {
+    const screen = await renderRoute('/requirements', {
+      apiOverrides: {
+        [`GET /query/requirements?project_id=${projectId}&limit=100`]: {
+          items: [],
+          degraded_sources: [],
+        },
+      },
+    });
+
+    expect(await screen.findByText('No requirements source objects.')).toBeTruthy();
+    expect(screen.getByText('No requirements source objects.').closest('td')).toBeNull();
+    expect(document.querySelector('p [data-source-object-empty-state]')).toBeNull();
   });
 
   it('renders typed create forms without Task creation', async () => {

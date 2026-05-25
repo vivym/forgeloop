@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
 import { CompactMetadata, PreviewPane, QueueWorkspace, Section } from '../../shared/layout';
@@ -55,6 +55,7 @@ export function ObjectList<T extends ProjectObjectListItem>({
   const [riskFilter, setRiskFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [viewMode, setViewMode] = useState<'dense' | 'preview'>('dense');
+  const [focusedRowKey, setFocusedRowKey] = useState<string | undefined>(undefined);
   const filteredRows = useMemo(
     () => rows.filter((row) =>
       (riskFilter === 'all' || row.riskLabel === riskFilter) &&
@@ -63,7 +64,18 @@ export function ObjectList<T extends ProjectObjectListItem>({
     ),
     [riskFilter, rows, search, statusFilter],
   );
-  const focusedRow = filteredRows[0];
+  const focusedRow = filteredRows.find((row) => row.id === focusedRowKey) ?? filteredRows[0];
+
+  useEffect(() => {
+    if (filteredRows.length === 0) {
+      setFocusedRowKey(undefined);
+      return;
+    }
+    if (focusedRowKey === undefined || !filteredRows.some((row) => row.id === focusedRowKey)) {
+      setFocusedRowKey(filteredRows[0]?.id);
+    }
+  }, [filteredRows, focusedRowKey]);
+
   const listState = isLoading ? `Loading ${title.toLowerCase()} source objects` : `${filteredRows.length} source object${filteredRows.length === 1 ? '' : 's'} ready for planning`;
   const roleResponsibility = focusedRow === undefined
     ? 'Source object responsibility is assigned when a row enters planning.'
@@ -160,28 +172,18 @@ export function ObjectList<T extends ProjectObjectListItem>({
         {error ? <InlineNotice title={`${title} source objects could not be loaded.`} tone="danger" /> : null}
         <div className={viewMode === 'preview' ? 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]' : 'grid gap-4'}>
           <Section title={`${title} source object queue`} variant="panel">
+            {filteredRows.length === 0 && !isLoading && !error ? (
+              <SourceObjectEmptyState createHref={createHref} description={emptyMessage} planningHref={planningHref} title={title} />
+            ) : null}
             <DataTable
               ariaLabel={`${title} source object queue`}
               columns={columns}
               density="compact"
-              emptyMessage={
-                <EmptyState
-                  actions={
-                    <>
-                      <Link className={primaryLinkClass} to={createHref}>
-                        Create source object
-                      </Link>
-                      <Link className={secondaryButtonClass} to={planningHref}>
-                        Plan source object
-                      </Link>
-                    </>
-                  }
-                  description={emptyMessage}
-                  title={`No ${title.toLowerCase()} source objects.`}
-                />
-              }
+              emptyMessage={emptyMessage}
               getRowKey={(item) => item.id}
+              onSelectRow={(row) => setFocusedRowKey(row.id)}
               rows={filteredRows}
+              {...(focusedRow?.id === undefined ? {} : { selectedRowKey: focusedRow.id })}
               stickyHeader
             />
           </Section>
@@ -189,6 +191,36 @@ export function ObjectList<T extends ProjectObjectListItem>({
         </div>
       </div>
     </QueueWorkspace>
+  );
+}
+
+function SourceObjectEmptyState({
+  createHref,
+  description,
+  planningHref,
+  title,
+}: {
+  createHref: string;
+  description: string;
+  planningHref: string;
+  title: string;
+}) {
+  return (
+    <EmptyState
+      actions={
+        <>
+          <Link className={primaryLinkClass} to={createHref}>
+            Create source object
+          </Link>
+          <Link className={secondaryButtonClass} to={planningHref}>
+            Plan source object
+          </Link>
+        </>
+      }
+      data-source-object-empty-state=""
+      description={description}
+      title={`No ${title.toLowerCase()} source objects.`}
+    />
   );
 }
 
