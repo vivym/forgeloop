@@ -24,7 +24,6 @@ interface MyWorkBulkActionProjection {
   label: string;
   enabled: boolean;
   disabledReason?: string | undefined;
-  href?: string | undefined;
   scope_object_refs?: readonly ScopedBulkActionObjectRef[] | undefined;
   scope_object_types?: readonly MyWorkQueueItem['object_ref']['type'][] | undefined;
   scope_role_ids?: readonly AttentionGroupId[] | undefined;
@@ -364,7 +363,6 @@ function safeBulkActionFor(value: unknown, selectedRows: readonly MyWorkQueueRow
     id: candidate.id,
     label: candidate.label,
     enabled: true,
-    href: candidate.href,
   };
 }
 
@@ -377,7 +375,6 @@ function parseBulkActionCandidate(value: Record<string, unknown>): MyWorkBulkAct
     : typeof value.disabled_reason === 'string' && value.disabled_reason.trim().length > 0
       ? value.disabled_reason
       : undefined;
-  const href = typeof value.href === 'string' && value.href.startsWith('/') && !value.href.startsWith('//') ? value.href : undefined;
   const scope_object_types = Array.isArray(value.scope_object_types) && value.scope_object_types.every(isObjectType)
     ? value.scope_object_types
     : undefined;
@@ -391,7 +388,7 @@ function parseBulkActionCandidate(value: Record<string, unknown>): MyWorkBulkAct
     ? value.scope_object_ids
     : undefined;
 
-  return { id, label, enabled: value.enabled, disabledReason, href, scope_object_refs, scope_object_types, scope_role_ids, scope_object_ids };
+  return { id, label, enabled: value.enabled, disabledReason, scope_object_refs, scope_object_types, scope_role_ids, scope_object_ids };
 }
 
 function hasSharedScopedCommand(rows: readonly MyWorkQueueRow[], candidate: MyWorkBulkActionProjection): boolean {

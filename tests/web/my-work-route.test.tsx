@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
 import { actorId, execution, executionPlan, myWorkQueueResponse, projectId, spec } from './fixtures/product-data';
+import { myWorkQueueViewModel } from '../../apps/web/src/features/my-work/my-work-view-model';
 
 const legacyOwnerPattern = new RegExp(`${['Work', 'Item', 'Owner'].join(' ')}|${['owner', 'actor', 'id'].join('_')}`);
 
@@ -154,6 +155,37 @@ describe('My Work route', () => {
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('button', { name: /Acknowledge selected product risk/i }).getAttribute('disabled')).toBeNull();
+  });
+
+  it('does not expose raw bulk action hrefs even when selected rows share a scoped command', async () => {
+    const response = {
+      ...myWorkQueueResponse,
+      bulk_action: {
+        id: 'bulk-ack-product-risk',
+        label: 'Acknowledge selected product risk',
+        enabled: true,
+        href: '/runtime/secret',
+        scope_role_ids: ['product'],
+        scope_object_types: ['requirement'],
+        scope_object_refs: [{ type: 'requirement', id: 'req-1' }],
+      },
+    };
+    const baseViewModel = myWorkQueueViewModel(response);
+    const viewModel = myWorkQueueViewModel(response, baseViewModel.allRows.filter((row) => row.id === 'product:req-1'));
+
+    expect(viewModel.safeBulkAction?.href).toBeUndefined();
+
+    const screen = await renderRoute('/my-work', {
+      apiOverrides: {
+        [`GET /query/my-work?project_id=${projectId}&actor_id=${actorId}`]: response,
+      },
+    });
+
+    expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
+
+    expect(document.querySelector('[data-safe-bulk-actions]')).toBeInstanceOf(HTMLElement);
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href')).join(' ')).not.toMatch(/\/runtime\/secret/i);
   });
 
   it('shows the disabled reason when selected rows do not share a scoped safe command', async () => {
