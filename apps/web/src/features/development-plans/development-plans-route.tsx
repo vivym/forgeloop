@@ -1,9 +1,13 @@
+import { useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 
+import { createForgeloopCommandApi } from '../../shared/api/commands';
 import { useDevelopmentPlansQuery } from '../../shared/api/hooks';
+import type { SourceObjectRef } from '../../shared/api/types';
+import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { PageHeader, Section } from '../../shared/layout';
-import { Badge, DataTable, EmptyState, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
+import { PlanningTableWorkspace, Section } from '../../shared/layout';
+import { Badge, Button, DataTable, EmptyState, InlineNotice, Select, StatusPill, Textarea, type DataTableColumn } from '../../shared/ui';
 import { SurfaceStateIndicator } from '../project-management/surface-state';
 import { formatValue } from './development-plan-table';
 
@@ -14,51 +18,340 @@ type DevelopmentPlanListRow = {
   source_refs?: Array<{ type: string; id: string; title?: string }>;
   item_count?: number;
   blocked_count?: number;
+  responsible_role?: string;
+  gate_state?: string;
+  risk?: string;
   updated_at?: string;
 };
+
+type DevelopmentPlanFilterState = {
+  sourceType: string;
+  role: string;
+  gate: string;
+  risk: string;
+  status: string;
+};
+
+const defaultFilters: DevelopmentPlanFilterState = {
+  sourceType: 'all',
+  role: 'all',
+  gate: 'all',
+  risk: 'all',
+  status: 'all',
+};
+
+const sourceTypeOptions = [
+  { label: 'All source types', value: 'all' },
+  { label: 'Requirements', value: 'requirement' },
+  { label: 'Initiatives', value: 'initiative' },
+  { label: 'Bugs', value: 'bug' },
+  { label: 'Tech Debt', value: 'tech_debt' },
+];
+
+const roleOptions = [
+  { label: 'All roles', value: 'all' },
+  { label: 'Product', value: 'product' },
+  { label: 'Tech Lead', value: 'tech_lead' },
+  { label: 'Developer', value: 'developer' },
+  { label: 'QA', value: 'qa' },
+  { label: 'Release Owner', value: 'release_owner' },
+  { label: 'Manager', value: 'manager' },
+];
+
+const gateOptions = [
+  { label: 'All gates', value: 'all' },
+  { label: 'Boundary', value: 'boundary' },
+  { label: 'Spec', value: 'spec' },
+  { label: 'Execution Plan', value: 'execution_plan' },
+  { label: 'Execution', value: 'execution' },
+  { label: 'Review', value: 'review' },
+  { label: 'QA', value: 'qa' },
+];
+
+const riskOptions = [
+  { label: 'All risks', value: 'all' },
+  { label: 'Low', value: 'low' },
+  { label: 'Medium', value: 'medium' },
+  { label: 'High', value: 'high' },
+  { label: 'Critical', value: 'critical' },
+];
+
+const statusOptions = [
+  { label: 'All statuses', value: 'all' },
+  { label: 'Active', value: 'active' },
+  { label: 'Draft', value: 'draft' },
+  { label: 'In Review', value: 'in_review' },
+  { label: 'Approved', value: 'approved' },
+  { label: 'Blocked', value: 'blocked' },
+  { label: 'Complete', value: 'complete' },
+];
+
+const sourceAuthoringOptions = sourceTypeOptions.filter((option) => option.value !== 'all');
 
 export function DevelopmentPlansRoute() {
   const { projectId } = useProjectContext();
   const query = useDevelopmentPlansQuery({ project_id: projectId });
   const rows = (query.data?.items ?? []) as DevelopmentPlanListRow[];
+  const [filters, setFilters] = useState(defaultFilters);
+  const filteredRows = useMemo(() => rows.filter((row) => rowMatchesFilters(row, filters)), [filters, rows]);
+  const totalItems = rows.reduce((count, row) => count + (row.item_count ?? 0), 0);
+  const blockedCount = rows.reduce((count, row) => count + (row.blocked_count ?? 0), 0);
+  const activeCount = rows.filter((row) => row.status === 'active').length;
 
   return (
-    <div className="grid gap-6">
-      <PageHeader
-        actions={<Link className="inline-flex min-h-10 items-center rounded-md border border-primary bg-primary px-4 text-sm font-semibold text-white" to="/development-plans/new">New Development Plan</Link>}
-        subtitle="Plan source-object delivery as governed rows before Spec and Execution Plan authoring."
-        title="Development Plans"
+    <PlanningTableWorkspace
+      blockerRisk={`${blockedCount} blocked. ${rows.length === 0 ? 'No source-linked planning risk yet.' : 'Review blocked Plan Items before downstream artifact work.'}`}
+      family="development-plan-index"
+      heading="Development Plans"
+      nextAction={rows.length === 0 ? 'Create or generate a Development Plan from source context.' : 'Open the oldest blocked or high-risk Plan Item.'}
+      roleResponsibility="Product and tech lead roles maintain source-linked Plan Item boundaries."
+      state={query.isLoading ? 'Loading plans' : query.isError ? 'Plan index error' : `${activeCount} active ${pluralize(activeCount, 'plan')}`}
+      subtitle="Create source-linked Development Plans, then govern Spec and Execution Plan work through approved Plan Items."
+      toolbar={<DevelopmentPlanIndexActions />}
+    >
+      <SurfaceStateIndicator
+        label="Development Plans"
+        state={query.isLoading ? 'loading' : query.isError ? 'error' : rows.length === 0 ? 'empty' : undefined}
       />
-      <SurfaceStateIndicator label="Development Plans" state={query.isLoading ? 'loading' : query.isError ? 'error' : rows.length === 0 ? 'empty' : undefined} />
       {query.isError ? <InlineNotice title="Development Plans could not be loaded." tone="danger" /> : null}
-      <Section title="Planning table">
+      <Section
+        actions={<DevelopmentPlanFilters filters={filters} onFiltersChange={setFilters} />}
+        description={`${rows.length} ${pluralize(rows.length, 'plan')} · ${totalItems} ${pluralize(totalItems, 'Plan Item')} · ${blockedCount} blocked`}
+        title="Active Development Plans"
+      >
         <DataTable
-          ariaLabel="Development Plans"
+          ariaLabel="Active Development Plans"
           columns={columns}
-          emptyMessage={<EmptyState title="No Development Plans yet." />}
+          density="compact"
+          emptyMessage={<DevelopmentPlanEmptyState />}
           getRowKey={(row) => row.id}
-          rows={rows}
+          rows={filteredRows}
+          stickyHeader
         />
       </Section>
-    </div>
+    </PlanningTableWorkspace>
   );
 }
 
 export function DevelopmentPlanNewRoute() {
+  const { actorId } = useActorContext();
+  const { projectId } = useProjectContext();
+  const [title, setTitle] = useState('');
+  const [sourceType, setSourceType] = useState('requirement');
+  const [sourceId, setSourceId] = useState('req-1');
+  const [manualGuidance, setManualGuidance] = useState('');
+  const [aiGuidance, setAiGuidance] = useState('Draft a table-first Development Plan with source-linked Plan Items and boundary risks.');
+  const [actionState, setActionState] = useState<{ status: 'idle' | 'running' | 'success' | 'error'; message?: string; planId?: string }>({ status: 'idle' });
+
+  const validation = validateAuthoring({ sourceId, title });
+  const sourceRef = sourceRefFor(sourceType, sourceId, title);
+
+  const createPlan = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (validation.hasBlockingIssue) {
+      setActionState({ status: 'error', message: 'Add a source object id before creating the Development Plan.' });
+      return;
+    }
+
+    setActionState({ status: 'running', message: 'Creating Development Plan from source context.' });
+    try {
+      const created = await createForgeloopCommandApi().createDevelopmentPlan({
+        actor_id: actorId,
+        project_id: projectId,
+        source_ref: sourceRef,
+        title: title.trim() || `${sourceRef.title ?? sourceRef.id} Development Plan`,
+      });
+      setActionState({
+        status: 'success',
+        message: 'Development Plan created with source context. Add Plan Items before downstream artifacts.',
+        ...(typeof created.id === 'string' ? { planId: created.id } : {}),
+      });
+    } catch {
+      setActionState({ status: 'error', message: 'Development Plan could not be created from this source context.' });
+    }
+  };
+
+  const generatePlan = async () => {
+    if (validation.hasBlockingIssue) {
+      setActionState({ status: 'error', message: 'Add a source object id before generating a Development Plan draft.' });
+      return;
+    }
+
+    setActionState({ status: 'running', message: 'Generating Development Plan draft from source context.' });
+    try {
+      const guidance = aiGuidance.trim() || manualGuidance.trim();
+      const generated = await createForgeloopCommandApi().generateDevelopmentPlanDraft({
+        actor_id: actorId,
+        project_id: projectId,
+        source_ref: sourceRef,
+        ...(guidance.length > 0 ? { guidance } : {}),
+      });
+      const generatedPlan = generated.development_plan;
+      const planId = isRecord(generatedPlan) && typeof generatedPlan.id === 'string' ? generatedPlan.id : undefined;
+      setActionState({
+        status: 'success',
+        message: 'Development Plan draft generated with source context. Review Plan Items before boundary approval.',
+        ...(planId === undefined ? {} : { planId }),
+      });
+    } catch {
+      setActionState({ status: 'error', message: 'AI-assisted Development Plan draft could not be generated.' });
+    }
+  };
+
   return (
-    <div className="grid gap-6">
-      <PageHeader
-        subtitle="Create from a source object workspace, or start from an approved product initiative."
-        title="New Development Plan"
-      />
-      <Section title="Create from source context">
-        <EmptyState
-          actions={<Link className="font-semibold text-primary hover:underline" to="/requirements">Choose a Requirement</Link>}
-          description="Manual creation is available from each source object action rail so the plan keeps its source link."
-          title="Pick a source object first."
-        />
+    <PlanningTableWorkspace
+      blockerRisk="Downstream Spec and Execution Plan documents are generated only from Plan Items after boundary approval."
+      family="development-plan-index"
+      heading="New Development Plan"
+      nextAction="Select source context, then create or generate a Plan Item table."
+      roleResponsibility="Product owns source intent; tech lead owns the first boundary review."
+      state="Authoring from source context"
+      subtitle="Author a source-linked planning workspace without directly generating downstream documents."
+      toolbar={<Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:bg-surface-muted" to="/development-plans">Back to Development Plans</Link>}
+    >
+      <form className="grid gap-4" onSubmit={(event) => void createPlan(event)}>
+        <Section
+          description="Manual creation records source context and starts an empty Plan Item table for boundary approval."
+          title="Manual source context"
+          variant="panel"
+        >
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_minmax(10rem,0.8fr)]">
+            <label className="grid gap-1 text-sm font-semibold text-text-primary">
+              Development Plan title
+              <input
+                className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            </label>
+            <label className="grid gap-1 text-sm font-semibold text-text-primary">
+              Source type
+              <Select
+                aria-label="Source type"
+                options={sourceAuthoringOptions}
+                value={sourceType}
+                onChange={(event) => setSourceType(event.target.value)}
+              />
+            </label>
+            <label className="grid gap-1 text-sm font-semibold text-text-primary">
+              Source object id
+              <input
+                className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary"
+                value={sourceId}
+                onChange={(event) => setSourceId(event.target.value)}
+              />
+            </label>
+          </div>
+          <label className="mt-3 grid gap-1 text-sm font-semibold text-text-primary">
+            Manual source guidance
+            <Textarea
+              aria-label="Manual source guidance"
+              placeholder="Capture source constraints, acceptance criteria, dependencies, or known risks for Plan Item authoring."
+              value={manualGuidance}
+              onChange={(event) => setManualGuidance(event.target.value)}
+            />
+          </label>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button disabled={validation.hasBlockingIssue} loading={actionState.status === 'running'} type="submit" variant="primary">
+              Create Development Plan
+            </Button>
+          </div>
+        </Section>
+
+        <Section
+          description="AI assistance proposes Development Plan rows from source context. It does not create Spec or Execution Plan documents."
+          title="AI-assisted plan generation"
+          variant="panel"
+        >
+          <label className="grid gap-1 text-sm font-semibold text-text-primary">
+            AI generation guidance
+            <Textarea
+              aria-label="AI generation guidance"
+              value={aiGuidance}
+              onChange={(event) => setAiGuidance(event.target.value)}
+            />
+          </label>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button disabled={validation.hasBlockingIssue} loading={actionState.status === 'running'} onClick={() => void generatePlan()} variant="secondary">
+              Generate AI-assisted draft
+            </Button>
+          </div>
+        </Section>
+      </form>
+
+      <Section title="Validation summary" variant="subtle">
+        <ul className="m-0 grid gap-2 pl-5 text-sm text-text-secondary">
+          {validation.messages.map((message) => (
+            <li key={message}>{message}</li>
+          ))}
+          <li>Source objects create or generate Development Plans only; downstream artifacts wait for approved Plan Items.</li>
+        </ul>
+        {actionState.status !== 'idle' ? (
+          <InlineNotice
+            description={actionState.planId ? <Link className="font-semibold text-primary hover:underline" to={`/development-plans/${actionState.planId}`}>Open Development Plan</Link> : undefined}
+            title={actionState.message ?? 'Command state updated.'}
+            tone={actionState.status === 'success' ? 'success' : actionState.status === 'error' ? 'danger' : 'info'}
+          />
+        ) : null}
       </Section>
+    </PlanningTableWorkspace>
+  );
+}
+
+function DevelopmentPlanIndexActions() {
+  return (
+    <>
+      <Link className="inline-flex min-h-10 items-center rounded-md border border-primary bg-primary px-4 text-sm font-semibold text-white hover:bg-primary-hover" to="/development-plans/new">
+        Create Development Plan
+      </Link>
+      <Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:bg-surface-muted" to="/development-plans/new">
+        Generate with AI assistance
+      </Link>
+    </>
+  );
+}
+
+function DevelopmentPlanFilters({
+  filters,
+  onFiltersChange,
+}: {
+  filters: DevelopmentPlanFilterState;
+  onFiltersChange: (filters: DevelopmentPlanFilterState) => void;
+}) {
+  const updateFilter = (key: keyof DevelopmentPlanFilterState, value: string) => onFiltersChange({ ...filters, [key]: value });
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
+        Source type
+        <Select aria-label="Source type" options={sourceTypeOptions} value={filters.sourceType} onChange={(event) => updateFilter('sourceType', event.target.value)} />
+      </label>
+      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
+        Role
+        <Select aria-label="Role" options={roleOptions} value={filters.role} onChange={(event) => updateFilter('role', event.target.value)} />
+      </label>
+      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
+        Gate
+        <Select aria-label="Gate" options={gateOptions} value={filters.gate} onChange={(event) => updateFilter('gate', event.target.value)} />
+      </label>
+      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
+        Risk
+        <Select aria-label="Risk" options={riskOptions} value={filters.risk} onChange={(event) => updateFilter('risk', event.target.value)} />
+      </label>
+      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
+        Status
+        <Select aria-label="Status" options={statusOptions} value={filters.status} onChange={(event) => updateFilter('status', event.target.value)} />
+      </label>
     </div>
+  );
+}
+
+function DevelopmentPlanEmptyState() {
+  return (
+    <EmptyState
+      description="Select source context, then create a table of Plan Items for boundary approval before downstream artifact generation."
+      title="No active Development Plans yet."
+    />
   );
 }
 
@@ -72,14 +365,101 @@ const columns: DataTableColumn<DevelopmentPlanListRow>[] = [
       </Link>
     ),
   },
-  { key: 'status', header: 'Status', cell: (row) => <StatusPill tone={row.status === 'active' ? 'info' : 'neutral'}>{formatValue(row.status)}</StatusPill> },
-  { key: 'source', header: 'Source objects', cell: (row) => row.source_refs?.map((ref) => ref.title ?? ref.id).join(', ') || 'Not linked' },
-  { key: 'items', header: 'Rows', cell: (row) => row.item_count ?? 0 },
+  {
+    key: 'source',
+    header: 'Source links',
+    cell: (row) => (
+      <div className="grid gap-1">
+        {row.source_refs?.length ? row.source_refs.map((ref) => (
+          <Link className="font-medium text-primary hover:underline" key={`${ref.type}-${ref.id}`} to={sourceHref(ref)}>
+            {ref.title ?? `${formatValue(ref.type)} ${ref.id}`}
+          </Link>
+        )) : <span className="text-text-muted">Not linked</span>}
+      </div>
+    ),
+  },
+  {
+    key: 'items',
+    header: 'Plan items',
+    cell: (row) => `${row.item_count ?? 0} ${pluralize(row.item_count ?? 0, 'Plan Item')}`,
+  },
+  { key: 'role', header: 'Role', cell: (row) => formatValue(row.responsible_role ?? 'mixed') },
+  { key: 'gate', header: 'Gate', cell: (row) => formatValue(row.gate_state ?? 'boundary') },
+  {
+    key: 'risk',
+    header: 'Risk',
+    cell: (row) => <Badge tone={riskTone(row.risk)}>{formatValue(row.risk ?? 'medium')}</Badge>,
+  },
+  { key: 'status', header: 'Status', cell: (row) => <StatusPill tone={statusTone(row.status)}>{formatValue(row.status)}</StatusPill> },
   { key: 'blocked', header: 'Blocked', cell: (row) => <Badge tone={row.blocked_count ? 'warning' : 'success'}>{row.blocked_count ?? 0}</Badge> },
   { key: 'updated', header: 'Updated', cell: (row) => formatDate(row.updated_at) },
 ];
 
+function rowMatchesFilters(row: DevelopmentPlanListRow, filters: DevelopmentPlanFilterState): boolean {
+  return (
+    (filters.sourceType === 'all' || (row.source_refs?.some((ref) => ref.type === filters.sourceType) ?? false)) &&
+    (filters.role === 'all' || row.responsible_role === filters.role) &&
+    (filters.gate === 'all' || row.gate_state === filters.gate) &&
+    (filters.risk === 'all' || row.risk === filters.risk) &&
+    (filters.status === 'all' || row.status === filters.status)
+  );
+}
+
+function validateAuthoring(input: { sourceId: string; title: string }) {
+  const messages = [
+    input.title.trim().length > 0 ? 'Title is ready.' : 'Title can be added now or inferred from source context.',
+    input.sourceId.trim().length > 0 ? 'Source object id is ready.' : 'Source object id is required.',
+    'Plan Items remain the boundary for Spec, Execution Plan, execution, review, QA, and release readiness.',
+  ];
+
+  return { hasBlockingIssue: input.sourceId.trim().length === 0, messages };
+}
+
+function sourceRefFor(sourceType: string, sourceId: string, title: string): SourceObjectRef {
+  const id = sourceId.trim();
+  const sourceTitle = title.trim().length > 0 ? `${title.trim()} source` : `${formatValue(sourceType)} ${id}`;
+  return { type: sourceType, id, title: sourceTitle } as SourceObjectRef;
+}
+
+function sourceHref(ref: { type: string; id: string }) {
+  switch (ref.type) {
+    case 'requirement':
+      return `/requirements/${encodeURIComponent(ref.id)}`;
+    case 'initiative':
+      return `/initiatives/${encodeURIComponent(ref.id)}`;
+    case 'bug':
+      return `/bugs/${encodeURIComponent(ref.id)}`;
+    case 'tech_debt':
+      return `/tech-debt/${encodeURIComponent(ref.id)}`;
+    default:
+      return '/development-plans';
+  }
+}
+
+function statusTone(status: string | undefined): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
+  if (status === 'active' || status === 'in_review') return 'info';
+  if (status === 'approved' || status === 'complete') return 'success';
+  if (status === 'blocked') return 'danger';
+  if (status === 'draft') return 'warning';
+  return 'neutral';
+}
+
+function riskTone(risk: string | undefined): 'neutral' | 'success' | 'warning' | 'danger' {
+  if (risk === 'low') return 'success';
+  if (risk === 'high' || risk === 'critical') return 'danger';
+  if (risk === 'medium') return 'warning';
+  return 'neutral';
+}
+
 function formatDate(value: string | undefined): string {
   if (value === undefined) return 'Not recorded';
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+}
+
+function pluralize(count: number, label: string): string {
+  return count === 1 ? label : `${label}s`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

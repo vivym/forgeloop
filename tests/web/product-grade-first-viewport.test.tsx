@@ -74,4 +74,22 @@ describe('product-grade first viewport contract', () => {
     expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/evidence ready/i);
     expect(document.querySelector('[data-first-viewport]')?.textContent).not.toMatch(/Evidence attachments|Raw artifact links/i);
   });
+
+  it('requires Development Plan index routes to expose the planning table first-viewport contract', async () => {
+    const rendered = await renderRoute('/development-plans');
+
+    expect(await rendered.findByRole('heading', { name: 'Development Plans' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'development-plan-index', heading: 'Development Plans' });
+    expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
+  });
+
+  it('requires Development Plan authoring to expose source-context planning controls before downstream artifacts', async () => {
+    const rendered = await renderRoute('/development-plans/new');
+
+    expect(await rendered.findByRole('heading', { name: 'New Development Plan' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'development-plan-index', heading: 'New Development Plan' });
+    expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/source context/i);
+    expect(document.body.textContent).toMatch(/generated only from Plan Items after boundary approval/i);
+  });
 });
