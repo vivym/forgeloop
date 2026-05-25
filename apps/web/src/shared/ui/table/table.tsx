@@ -1,4 +1,4 @@
-import { useEffect, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode, type TdHTMLAttributes, type ThHTMLAttributes } from 'react';
+import { useEffect, useState, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type ReactNode, type TdHTMLAttributes, type ThHTMLAttributes } from 'react';
 
 import { cn } from '../../utils/cn';
 
@@ -67,7 +67,12 @@ export function DataTable<T>({
   const isSelectable = typeof onSelectRow === 'function';
 
   const activateRow = (row: T) => onSelectRow?.(row);
+  const onActivationClick = (event: MouseEvent<HTMLElement>, row: T) => {
+    if (startedInInteractiveDescendant(event)) return;
+    activateRow(row);
+  };
   const onActivationKeyDown = (event: KeyboardEvent<HTMLElement>, row: T) => {
+    if (startedInInteractiveDescendant(event)) return;
     if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
       event.preventDefault();
       activateRow(row);
@@ -108,7 +113,7 @@ export function DataTable<T>({
                     isSelected ? 'bg-primary-soft/70' : undefined,
                   )}
                   key={key}
-                  onClick={isSelectable ? () => activateRow(row) : undefined}
+                  onClick={isSelectable ? (event) => onActivationClick(event, row) : undefined}
                   onKeyDown={isSelectable ? (event) => onActivationKeyDown(event, row) : undefined}
                   tabIndex={isSelectable ? 0 : undefined}
                 >
@@ -153,7 +158,7 @@ export function DataTable<T>({
                 )}
                 data-selected-row={isSelected ? 'true' : undefined}
                 key={key}
-                onClick={isSelectable ? () => activateRow(row) : undefined}
+                onClick={isSelectable ? (event) => onActivationClick(event, row) : undefined}
                 onKeyDown={isSelectable ? (event) => onActivationKeyDown(event, row) : undefined}
                 role="listitem"
                 tabIndex={isSelectable ? 0 : undefined}
@@ -173,6 +178,17 @@ export function DataTable<T>({
       </div>
     </div>
   );
+}
+
+function startedInInteractiveDescendant(event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>): boolean {
+  if (!(event.target instanceof Element) || !(event.currentTarget instanceof Element)) return false;
+  if (event.target === event.currentTarget) return false;
+
+  const interactiveTarget = event.target.closest(
+    'a, button, input, select, textarea, summary, [role="button"], [role="link"], [role="menuitem"], [contenteditable="true"]',
+  );
+
+  return interactiveTarget !== null && event.currentTarget.contains(interactiveTarget);
 }
 
 function useResponsiveCards() {

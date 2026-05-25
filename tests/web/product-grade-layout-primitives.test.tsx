@@ -229,6 +229,34 @@ describe('product-grade layout primitives', () => {
     expect(headers.map((header) => header.textContent)).toEqual(['Title', 'State', 'Next action', 'Risk', 'Current gate']);
   });
 
+  it('keeps selectable DataTable rows from stealing keyboard activation from nested links', () => {
+    const onSelectRow = vi.fn();
+    render(
+      <DataTable
+        ariaLabel="Spec queue"
+        columns={[
+          {
+            key: 'title',
+            header: 'Title',
+            cell: () => <a href="/development-plans/dp-1/items/dpi-1/spec" onClick={(event) => event.preventDefault()}>Open plan item</a>,
+          },
+          { key: 'state', header: 'State', cell: (row) => row.state },
+        ]}
+        density="compact"
+        getRowKey={(row) => row.id}
+        onSelectRow={onSelectRow}
+        rows={[{ id: 'spec-1', state: 'Needs review' }]}
+      />,
+    );
+
+    const link = screen.getByRole('link', { name: 'Open plan item' });
+    fireEvent.keyDown(link, { key: 'Enter' });
+    fireEvent.keyDown(link, { key: ' ' });
+    fireEvent.click(link);
+
+    expect(onSelectRow).not.toHaveBeenCalled();
+  });
+
   it('keeps selectable mobile cards keyboard-operable', () => {
     const onSelectRow = vi.fn();
     const previousMatchMedia = window.matchMedia;
@@ -270,6 +298,54 @@ describe('product-grade layout primitives', () => {
       fireEvent.keyDown(card, { key: ' ' });
       expect(onSelectRow).toHaveBeenCalledTimes(2);
       expect(onSelectRow).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'item-1' }));
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: previousMatchMedia });
+    }
+  });
+
+  it('keeps selectable mobile DataTable cards from stealing keyboard activation from nested links', () => {
+    const onSelectRow = vi.fn();
+    const previousMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        media: query,
+        matches: query === '(max-width: 767px)',
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+
+    try {
+      render(
+        <DataTable
+          ariaLabel="Spec queue cards"
+          columns={[
+            {
+              key: 'title',
+              header: 'Title',
+              cell: () => <a href="/development-plans/dp-1/items/dpi-1/spec" onClick={(event) => event.preventDefault()}>Open plan item</a>,
+            },
+            { key: 'state', header: 'State', cell: (row) => row.state },
+          ]}
+          getRowKey={(row) => row.id}
+          onSelectRow={onSelectRow}
+          rows={[{ id: 'spec-1', state: 'Needs review' }]}
+        />,
+      );
+
+      const cardList = document.querySelector('[data-responsive-card-list]');
+      expect(cardList).toBeInstanceOf(HTMLElement);
+      const link = within(cardList as HTMLElement).getByRole('link', { name: 'Open plan item' });
+      fireEvent.keyDown(link, { key: 'Enter' });
+      fireEvent.keyDown(link, { key: ' ' });
+      fireEvent.click(link);
+
+      expect(onSelectRow).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(window, 'matchMedia', { configurable: true, value: previousMatchMedia });
     }
