@@ -4,7 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { firstViewportContract } from '../../apps/web/src/features/product-surfaces/first-viewport-contract';
-import { developmentPlan, developmentPlanItem } from './fixtures/product-data';
+import { developmentPlan, developmentPlanItem, execution } from './fixtures/product-data';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 import { renderRoute } from './router-test-utils';
 
@@ -136,5 +136,25 @@ describe('product-grade first viewport contract', () => {
     expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/governance|reviewer|risk/i);
     expect(rendered.getByRole('region', { name: /selected governance row/i })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/specs\/|\/plans\//);
+  });
+
+  it('requires Executions to expose a supervision queue first viewport', async () => {
+    const rendered = await renderRoute('/executions');
+
+    expect(await rendered.findByRole('heading', { name: 'Executions' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'execution-supervision', heading: 'Executions' });
+    expect(document.querySelector('[data-workspace-layout="supervision-lanes"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/worker state|allowed action|approved Execution Plan/i);
+    expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|run session browser/i);
+  });
+
+  it('requires execution detail to expose product supervision before handoff panels', async () => {
+    const rendered = await renderRoute(`/executions/${execution.id}`);
+
+    expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'execution-supervision-detail', heading: developmentPlanItem.title });
+    expect(document.querySelector('[data-workspace-layout="supervision-detail"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/current step|last meaningful event|PR, diff, and test evidence/i);
+    expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|run session browser/i);
   });
 });
