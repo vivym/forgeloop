@@ -100,6 +100,9 @@ describe('board, reports, and release readiness routes', () => {
     expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
       /scope|readiness|high-risk changes|approvals|launch disabled|rollback/i,
     );
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
+      /Spec|Execution Plan|execution|code review|QA|release blockers|evidence|rollback plan|observation/i,
+    );
     for (const label of ['Initiative', 'Requirement', 'Tech Debt', 'Development Plan Item', 'Bug']) {
       expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
     }
@@ -130,6 +133,10 @@ describe('board, reports, and release readiness routes', () => {
       const screen = await renderRoute(route);
 
       expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
+      for (const label of ['Conclusion', 'Supporting signal', 'Affected objects', 'Suggested action']) {
+        expect(screen.getByText(label)).toBeTruthy();
+      }
+      expect(document.querySelector('[data-page-family="report"][data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
       if (route.includes('report=replay')) {
         expect(screen.getByText(/lifecycle replay evidence context/i)).toBeTruthy();
         expect(document.body.innerHTML).not.toContain('/reports/replay');

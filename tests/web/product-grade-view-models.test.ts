@@ -252,7 +252,7 @@ describe('product-grade presentation view models', () => {
       primaryActorOrRole: expect.any(String),
       riskSignal: expect.any(String),
       conclusion: 'Release readiness signal available',
-      suggestedAction: undefined,
+      suggestedAction: expect.objectContaining({ id: 'review-release-readiness', enabled: true }),
     });
     expect(reportViewModel(reportFixtures.releaseReadiness).suggestedAction?.id).not.toBe('development-plan-throughput');
     expect(reportViewModel(reportFixtures.releaseReadiness).criticalEvidence).toContainEqual(

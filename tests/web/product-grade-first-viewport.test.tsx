@@ -188,6 +188,11 @@ describe('product-grade first viewport contract', () => {
       expectFirstViewportContract(rendered, { pageFamily: 'release', heading });
       expect(document.querySelector(`[data-workspace-layout="${layout}"]`)).toBeInstanceOf(HTMLElement);
       expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/scope|readiness|risk|approval|release owner/i);
+      if (route.includes('release-web-product')) {
+        expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
+          /Spec|Execution Plan|execution|code review|QA|release blockers|evidence|rollback plan|observation/i,
+        );
+      }
       expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/tasks\b|\/packages\b|actor-release-owner/);
       cleanup();
     }
@@ -201,5 +206,25 @@ describe('product-grade first viewport contract', () => {
     expect(document.querySelector('[data-workspace-layout="release-evidence"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/evidence readiness|relevance|QA acceptance/i);
     expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/tasks\b|\/packages\b|actor-release-owner/);
+  });
+
+  it('requires Reports to expose operational intelligence before catalog links', async () => {
+    for (const [route, heading] of [
+      ['/reports', 'Reports'],
+      ['/reports/delivery', 'Delivery Flow'],
+      ['/reports/quality', 'Quality'],
+      ['/reports/release-readiness', 'Release Readiness'],
+      ['/reports/observation', 'Observation'],
+      ['/reports?report=replay', 'Reports'],
+    ] as const) {
+      const rendered = await renderRoute(route);
+
+      expect(await rendered.findByRole('heading', { name: heading })).toBeTruthy();
+      expectFirstViewportContract(rendered, { pageFamily: 'report', heading });
+      expect(document.querySelector('[data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/conclusion|supporting signal|affected objects|suggested action/i);
+      expect(document.body.textContent).not.toMatch(/coming soon|placeholder|raw replay browser|\/reports\/replay/i);
+      cleanup();
+    }
   });
 });

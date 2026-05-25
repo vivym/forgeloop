@@ -116,6 +116,10 @@ describe('AI-native My Work, Board, and Reports', () => {
     ]) {
       expect(screen.getByText(label)).toBeTruthy();
     }
+    for (const label of ['Conclusion', 'Supporting signal', 'Affected objects', 'Suggested action']) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    expect(document.querySelector('[data-page-family="report"][data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
     expect(document.body.textContent).not.toMatch(/coming soon|placeholder/i);
   });
 

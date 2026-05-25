@@ -1,13 +1,13 @@
 import type { ProductPageViewModel } from '../product-surfaces/view-model-types';
 
-type ReportGroup = { id?: string; count?: number; items?: readonly unknown[] };
-type ReportLink = { id?: string; href?: string };
+type ReportGroup = { id?: string | undefined; count?: number | undefined; items?: readonly unknown[] | undefined };
+type ReportLink = { id?: string | undefined; href?: string | undefined };
 
-interface ReportProjection {
+export interface ReportProjection {
   id: string;
-  title?: string;
-  project_id?: string;
-  generated_at?: string;
+  title?: string | undefined;
+  project_id?: string | undefined;
+  generated_at?: string | undefined;
   groups?: readonly ReportGroup[];
   links?: readonly ReportLink[];
   degraded_sources?: readonly string[];
@@ -18,6 +18,9 @@ export function reportViewModel(report: ReportProjection): ProductPageViewModel 
   const links = report.links ?? [];
   const hasSignal = groups.length > 0 && (report.degraded_sources?.length ?? 0) === 0;
   const conclusion = hasSignal ? `${sentenceCase(reportTitle(report.id))} signal available` : 'Insufficient signal';
+  const suggestedAction = hasSignal
+    ? { id: `review-${report.id}`, label: 'Review report findings', enabled: true }
+    : undefined;
 
   return {
     objectLabel: report.title ?? reportTitle(report.id),
@@ -29,7 +32,7 @@ export function reportViewModel(report: ReportProjection): ProductPageViewModel 
     riskSignal: riskSignal(report),
     gateProgress: [
       { label: 'Report signal', state: hasSignal ? 'available' : 'unavailable' },
-      { label: 'Suggested action', state: 'unavailable' },
+      { label: 'Suggested action', state: suggestedAction === undefined ? 'unavailable' : 'available' },
     ],
     criticalEvidence: [
       {
@@ -45,7 +48,7 @@ export function reportViewModel(report: ReportProjection): ProductPageViewModel 
     previewSummary: groups.map((group) => `${group.id ?? 'group'}: ${group.count ?? 0}`).join(', ') || 'Report signal unavailable',
     timelineSummary: report.generated_at === undefined ? 'Timeline unavailable' : `Generated ${report.generated_at}`,
     conclusion,
-    suggestedAction: undefined,
+    suggestedAction,
   };
 }
 
