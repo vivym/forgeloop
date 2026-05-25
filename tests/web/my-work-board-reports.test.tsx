@@ -51,20 +51,38 @@ describe('AI-native My Work, Board, and Reports', () => {
     expect(document.body.textContent).not.toMatch(/Flow health|Blocked work|Trend reports|Risk concentration/i);
   });
 
-  it('renders Board with mixed source objects and Development Plan Items', async () => {
+  it('renders Board as a Development Plan Item gate flow', async () => {
     const screen = await renderRoute('/board');
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    for (const label of [
+      'Intake / Development Plan needed',
+      'Boundary',
+      'Spec',
+      'Execution Plan',
+      'Execution',
+      'Review',
+      'QA',
+      'Release',
+    ]) {
+      expect(screen.getByRole('region', { name: `${label} cards` })).toBeTruthy();
+    }
+    const boardContent = document.querySelector('#main-content')?.textContent ?? '';
+    expect(boardContent).not.toMatch(/\bPlanning\b|\bReady\b|\bActive\b|\bValidation\b|\bDone\b/);
     expect(await screen.findByText(/Requirement/i)).toBeTruthy();
-    expect(await screen.findByText(/Development Plan Item/i)).toBeTruthy();
+    expect((await screen.findAllByText(/Development Plan Item/i)).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
     expect(screen.getAllByText(/Next action/i).length).toBeGreaterThan(0);
+    expect(boardContent).toMatch(/Type|Role|Blocker|Risk|Next action/i);
+    expect(boardContent).toMatch(/Product driver|Developer|Release owner/i);
+    expect(boardContent).not.toMatch(/\bactor-owner\b|\bactor-reviewer\b|owner_actor_id|Work Item Owner|\bTasks\b|\/tasks\b|\/plans\b|\/specs\b/i);
   });
 
   it('renders Board focus context from typed execution links', async () => {
     const screen = await renderRoute(`/board?execution_id=${execution.id}`);
-    expect(await screen.findByText(new RegExp(`Focused execution ${execution.id}`, 'i'))).toBeTruthy();
+    expect(await screen.findByText(/Focused Execution card/i)).toBeTruthy();
+    expect(document.querySelector('#main-content')?.textContent ?? '').not.toContain(execution.id);
   });
 
   it('renders Reports as product metrics, not placeholders', async () => {

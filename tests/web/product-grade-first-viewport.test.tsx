@@ -50,6 +50,19 @@ describe('product-grade first viewport contract', () => {
     expect(document.querySelector('[data-workspace-layout="queue-workspace"]')).toBeInstanceOf(HTMLElement);
   });
 
+  it('requires Board route to expose a compact gate-flow first viewport', async () => {
+    const rendered = await renderRoute('/board');
+
+    expect(await rendered.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'board', heading: 'Board' });
+    expect(document.querySelector('[data-workspace-layout="board-flow"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
+      /Intake \/ Development Plan needed|Boundary|Spec|Execution Plan|Execution|Review|QA|Release/,
+    );
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/next action|role|blocker|risk/i);
+    expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/tasks\b|\/plans\b|\/specs\b/);
+  });
+
   it('requires source object list routes to expose the queue first-viewport contract', async () => {
     const rendered = await renderRoute('/requirements');
 

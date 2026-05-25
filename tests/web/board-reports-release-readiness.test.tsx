@@ -3,19 +3,68 @@
 import { cleanup } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { developmentPlan, developmentPlanItem, reviewPacket } from './fixtures/product-data';
+import {
+  boardCards,
+  codeReviewHandoff,
+  developmentPlan,
+  developmentPlanItem,
+  projectId,
+  qaHandoff,
+  reviewPacket,
+} from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('board, reports, and release readiness routes', () => {
-  it('renders cross-object board cards without assuming one schema', async () => {
-    const screen = await renderRoute('/board');
+  it('groups cross-object board cards by delivery gates instead of generic columns', async () => {
+    const screen = await renderRoute('/board', {
+      apiOverrides: {
+        [`GET /query/board?project_id=${projectId}&limit=100`]: {
+          items: [
+            ...boardCards,
+            {
+              id: `board:${codeReviewHandoff.id}`,
+              object_ref: codeReviewHandoff.ref,
+              title: codeReviewHandoff.ref.title,
+              column_id: 'active',
+              status: codeReviewHandoff.status,
+              risk: 'medium',
+              driver_actor_id: codeReviewHandoff.reviewer_actor_id,
+              blocked: false,
+              href: `/reports?code_review_handoff_id=${codeReviewHandoff.id}`,
+            },
+            {
+              id: `board:${qaHandoff.id}`,
+              object_ref: qaHandoff.ref,
+              title: qaHandoff.ref.title,
+              column_id: 'validation',
+              status: qaHandoff.status,
+              risk: 'medium',
+              driver_actor_id: 'actor-qa',
+              blocked: false,
+              href: `/reports?qa_handoff_id=${qaHandoff.id}`,
+            },
+          ],
+        },
+      },
+    });
 
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
-    for (const label of ['Requirement', 'Initiative', 'Tech Debt', 'Development Plan Item', 'Bug', 'Release']) {
-      expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/Requirement/i)).toBeTruthy();
+    for (const label of ['Intake / Development Plan needed', 'Boundary', 'Spec', 'Execution Plan', 'Execution', 'Review', 'QA', 'Release']) {
+      expect(screen.getByRole('region', { name: `${label} cards` })).toBeTruthy();
     }
+    expect(screen.getByRole('region', { name: 'Intake / Development Plan needed cards' }).textContent).toMatch(
+      /Requirement|Initiative|Tech Debt|Bug/,
+    );
+    expect(screen.getByRole('region', { name: 'Execution cards' }).textContent).toMatch(/Execution|Development Plan Item/);
+    expect(screen.getByRole('region', { name: 'Review cards' }).textContent).toMatch(/Code Review Handoff/);
+    expect(screen.getByRole('region', { name: 'QA cards' }).textContent).toMatch(/QA Handoff/);
+    expect(screen.getByRole('region', { name: 'Release cards' }).textContent).toMatch(/Release/);
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+    );
+    expect(document.querySelector('#main-content')?.textContent ?? '').not.toMatch(
+      /\bPlanning\b|\bReady\b|\bActive\b|\bValidation\b|\bDone\b/,
     );
   });
 

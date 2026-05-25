@@ -3,21 +3,24 @@ import { Link, useSearchParams } from 'react-router';
 import { useBoardQuery } from '../../shared/api/hooks';
 import type { BoardCard } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
-import { PageHeader, Section } from '../../shared/layout';
-import { InlineNotice, StatusPill } from '../../shared/ui';
-import { stateFromStatus, SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
+import { WorkspacePage } from '../../shared/layout';
+import { Badge, InlineNotice, StatusPill } from '../../shared/ui';
 
 type BoardObjectRef = BoardCard['object_ref'];
 type BoardProductCard = BoardCard;
+type BoardGateColumnId = 'intake' | 'boundary' | 'spec' | 'execution-plan' | 'execution' | 'review' | 'qa' | 'release';
 
-const columnLabels: Record<string, string> = {
-  planning: 'Planning',
-  ready: 'Ready',
-  active: 'Active',
-  validation: 'Validation',
-  release: 'Release',
-  done: 'Done',
-};
+const boardGateColumns: readonly { id: BoardGateColumnId; label: string; description: string }[] = [
+  { id: 'intake', label: 'Intake / Development Plan needed', description: 'Source objects waiting for planning scope.' },
+  { id: 'boundary', label: 'Boundary', description: 'Brainstorming and boundary approval.' },
+  { id: 'spec', label: 'Spec', description: 'Spec generation and technical review.' },
+  { id: 'execution-plan', label: 'Execution Plan', description: 'Plan generation and implementation review.' },
+  { id: 'execution', label: 'Execution', description: 'Codex worker supervision.' },
+  { id: 'review', label: 'Review', description: 'Code review and risk handoff.' },
+  { id: 'qa', label: 'QA', description: 'Test handoff and acceptance.' },
+  { id: 'release', label: 'Release', description: 'Release readiness and launch control.' },
+];
+const intakeGateColumn = boardGateColumns[0]!;
 
 export function BoardRoute() {
   const { projectId } = useProjectContext();
@@ -27,12 +30,21 @@ export function BoardRoute() {
   const focus = boardFocusFromSearchParams(searchParams);
   const focusedCards = focus === undefined ? allCards : allCards.filter((card) => isFocusedBoardCard(card, focus));
   const cards = focus === undefined || focusedCards.length > 0 ? focusedCards : allCards;
-  const columns = groupByColumn(cards);
+  const columns = groupByGate(cards);
+  const blockedCount = cards.filter((card) => card.blocked).length;
+  const highRiskCount = cards.filter((card) => /high|critical/i.test(card.risk ?? '')).length;
 
   return (
-    <>
-      <PageHeader subtitle="Typed lifecycle objects arranged by delivery state." title="Board" />
-      <SurfaceStateIndicator label="Board" state={boardSurfaceState(query.isLoading, query.isError, cards, query.data?.degraded_sources ?? [])} />
+    <WorkspacePage
+      blockerRisk={boardBlockerRisk(query.isError, blockedCount, highRiskCount, focus)}
+      family="board"
+      heading="Board"
+      layout="board-flow"
+      nextAction={boardNextAction(query.isError, cards, focus)}
+      roleResponsibility="Product drivers, technical leads, developers, reviewers, QA, and release owners share this gate flow."
+      state={boardCurrentState(query.isLoading, query.isError, cards, blockedCount)}
+      subtitle="Development Plan Item gate flow from intake through release readiness."
+    >
       {query.isLoading ? <InlineNotice title="Loading board cards." tone="info" /> : null}
       {query.isError ? <InlineNotice title="Board cards could not be loaded." tone="danger" /> : null}
       {focus !== undefined ? (
@@ -40,32 +52,34 @@ export function BoardRoute() {
           description={
             focusedCards.length > 0
               ? `Showing ${focusedCards.length} matching board card${focusedCards.length === 1 ? '' : 's'}.`
-              : 'No exact board card matched this focus, so the full board remains visible.'
+              : 'No exact board card matched this focus, so the full gate flow remains visible.'
           }
           title={boardFocusTitle(focus)}
           tone={focusedCards.length > 0 ? 'info' : 'warning'}
         />
       ) : null}
-      <Section title="Delivery board">
-        <div className="grid gap-4 lg:grid-cols-3">
-          {columns.map(([columnId, columnCards]) => (
+      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+        {columns.map(({ cards: columnCards, column }) => (
             <section
-              aria-label={`${columnLabel(columnId)} cards`}
+              aria-label={`${column.label} cards`}
               className="grid content-start gap-3 rounded-card border border-border bg-background p-3"
-              key={columnId}
+              key={column.id}
             >
               <div className="flex items-center justify-between gap-2">
-                <h2 className="text-base font-semibold text-text-primary">{columnLabel(columnId)}</h2>
-                <span className="text-sm text-text-secondary">{columnCards.length}</span>
+                <div className="min-w-0">
+                  <h2 className="m-0 text-sm font-semibold text-text-primary">{column.label}</h2>
+                  <p className="m-0 mt-1 text-xs text-text-secondary">{column.description}</p>
+                </div>
+                <Badge tone={columnCards.length > 0 ? 'primary' : 'neutral'}>{columnCards.length}</Badge>
               </div>
               {columnCards.map((card) => (
                 <BoardObjectCard card={card} key={card.id} />
               ))}
+              {columnCards.length === 0 ? <div className="rounded-card border border-dashed border-border p-3 text-xs text-text-secondary">No cards in this gate.</div> : null}
             </section>
-          ))}
-        </div>
-      </Section>
-    </>
+        ))}
+      </div>
+    </WorkspacePage>
   );
 }
 
@@ -86,56 +100,118 @@ function isFocusedBoardCard(card: BoardProductCard, focus: BoardFocus): boolean 
 }
 
 function boardFocusTitle(focus: BoardFocus): string {
-  return focus.type === 'execution' ? `Focused execution ${focus.id}` : `Focused Development Plan Item ${focus.id}`;
+  return focus.type === 'execution' ? 'Focused Execution card' : 'Focused Development Plan Item card';
 }
 
-function boardSurfaceState(
+function boardCurrentState(
   isLoading: boolean,
   isError: boolean,
   cards: BoardProductCard[],
-  degradedSources: string[],
-): SurfaceState | undefined {
-  if (isLoading) return 'loading';
-  if (isError) return 'error';
-  if (cards.length === 0) return 'empty';
-  if (degradedSources.some((source) => source.includes('stale'))) return 'stale';
-  if (cards.some((card) => card.blocked)) return 'blocked';
-  return cards.map((card) => stateFromStatus(card.status)).find(Boolean);
+  blockedCount: number,
+): string {
+  if (isLoading) return 'Loading gate flow';
+  if (isError) return 'Gate flow unavailable';
+  if (cards.length === 0) return 'No cards in gate flow';
+  if (blockedCount > 0) return `${blockedCount} blocked gate card${blockedCount === 1 ? '' : 's'}`;
+  return `${cards.length} cards across gate flow`;
+}
+
+function boardNextAction(isError: boolean, cards: BoardProductCard[], focus: BoardFocus | undefined): string {
+  if (isError) return 'Reload the board query before changing gate priority.';
+  if (focus !== undefined) return 'Inspect the focused gate card and continue from its canonical route.';
+  const blocked = cards.find((card) => card.blocked);
+  if (blocked !== undefined) return `${nextActionFor(blocked)} for the blocked ${objectLabel(blocked.object_ref.type)}.`;
+  return 'Open the highest-risk gate card or continue the active Development Plan Item.';
+}
+
+function boardBlockerRisk(isError: boolean, blockedCount: number, highRiskCount: number, focus: BoardFocus | undefined): string {
+  if (isError) return 'Board query failed; gate blockers and risk cannot be trusted.';
+  const focusText = focus === undefined ? 'full gate flow visible' : 'focused gate flow visible';
+  return `${blockedCount} blocked / ${highRiskCount} high risk / ${focusText}`;
 }
 
 function BoardObjectCard({ card }: { card: BoardProductCard }) {
+  const gate = gateColumnFor(card);
+
   return (
     <Link
-      className="grid gap-2 rounded-card border border-border bg-surface p-3 text-sm shadow-sm transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none"
+      className="grid min-w-0 gap-2 rounded-card border border-border bg-surface p-3 text-sm shadow-sm transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none"
       to={typedObjectHref(card.object_ref)}
     >
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill tone={card.blocked ? 'danger' : 'neutral'}>{objectLabel(card.object_ref.type)}</StatusPill>
-        <span className="text-text-secondary">{card.status}</span>
+        <Badge tone={gate.id === 'intake' ? 'info' : 'primary'}>{gate.label}</Badge>
       </div>
-      <div className="font-semibold text-text-primary">{card.title}</div>
-      <div className="flex flex-wrap gap-3 text-xs text-text-secondary">
-        <span>Risk {card.risk ?? 'unscored'}</span>
-        <span>Priority {card.priority ?? 'unscored'}</span>
-        <span>Driver {card.driver_actor_id ?? 'unassigned'}</span>
+      <div className="min-w-0 font-semibold text-text-primary [overflow-wrap:anywhere]">{card.title}</div>
+      <div className="grid gap-1 text-xs text-text-secondary">
+        <span>Type: {objectLabel(card.object_ref.type)}</span>
+        <span>Role: {roleFor(card)}</span>
+        <span>Blocker: {card.blocked ? 'Blocked' : 'No blocker'}</span>
+        <span>Risk: {riskLabel(card.risk)}</span>
+        {card.priority !== undefined ? <span>Priority: {card.priority}</span> : null}
       </div>
       <div className="text-xs font-semibold text-text-primary">Next action: {nextActionFor(card)}</div>
     </Link>
   );
 }
 
-function groupByColumn(cards: BoardProductCard[]): [string, BoardProductCard[]][] {
-  const grouped = new Map<string, BoardProductCard[]>();
+function groupByGate(cards: BoardProductCard[]): { column: (typeof boardGateColumns)[number]; cards: BoardProductCard[] }[] {
+  const grouped = new Map<BoardGateColumnId, BoardProductCard[]>();
   for (const card of cards) {
-    const existing = grouped.get(card.column_id) ?? [];
+    const column = gateColumnFor(card).id;
+    const existing = grouped.get(column) ?? [];
     existing.push(card);
-    grouped.set(card.column_id, existing);
+    grouped.set(column, existing);
   }
-  return [...grouped.entries()];
+  return boardGateColumns.map((column) => ({ column, cards: grouped.get(column.id) ?? [] }));
 }
 
-function columnLabel(columnId: string): string {
-  return columnLabels[columnId] ?? titleCase(columnId);
+function gateColumnFor(card: BoardProductCard): (typeof boardGateColumns)[number] {
+  const columnId = gateColumnIdFor(card);
+  return boardGateColumns.find((column) => column.id === columnId) ?? intakeGateColumn;
+}
+
+function gateColumnIdFor(card: BoardProductCard): BoardGateColumnId {
+  switch (card.object_ref.type) {
+    case 'requirement':
+    case 'initiative':
+    case 'bug':
+    case 'tech_debt':
+      return 'intake';
+    case 'execution_plan':
+      return 'execution-plan';
+    case 'execution':
+      return 'execution';
+    case 'code_review_handoff':
+      return 'review';
+    case 'qa_handoff':
+      return 'qa';
+    case 'release':
+      return 'release';
+    case 'development_plan_item':
+      return developmentPlanItemGateColumn(card);
+    default:
+      return 'intake';
+  }
+}
+
+function developmentPlanItemGateColumn(card: BoardProductCard): BoardGateColumnId {
+  const text = normalized(`${card.column_id} ${card.status} ${card.title}`);
+  if (text.includes('release')) return 'release';
+  if (text.includes('qa')) return 'qa';
+  if (text.includes('review')) return 'review';
+  if (text.includes('execution_plan') || text.includes('execution plan')) return 'execution-plan';
+  if (text.includes('spec')) return 'spec';
+  if (text.includes('boundary') || text.includes('brainstorm')) return 'boundary';
+  if (text.includes('running') || text.includes('execute') || text.includes('execution') || text.includes('monitor') || text.includes('continue')) return 'execution';
+
+  const statusParts = card.status.split('/').map(normalized);
+  const [boundary, spec, executionPlan, execution] = statusParts;
+  if (boundary !== undefined && boundary !== 'approved') return 'boundary';
+  if (spec !== undefined && spec !== 'approved') return 'spec';
+  if (executionPlan !== undefined && executionPlan !== 'approved') return 'execution-plan';
+  if (execution !== undefined && execution !== 'completed') return 'execution';
+  return 'release';
 }
 
 function objectLabel(type: BoardObjectRef['type']): string {
@@ -162,16 +238,67 @@ function nextActionFor(card: BoardProductCard): string {
     case 'initiative':
     case 'bug':
     case 'tech_debt':
-      return 'Review source object';
+      return 'Add to Development Plan';
     case 'development_plan_item':
       return 'Open item gates';
     case 'execution':
       return 'Inspect execution';
+    case 'code_review_handoff':
+      return 'Review code handoff';
+    case 'qa_handoff':
+      return 'Accept or block QA handoff';
     case 'release':
       return 'Review readiness';
     default:
       return 'Review';
   }
+}
+
+function roleFor(card: BoardProductCard): string {
+  switch (card.object_ref.type) {
+    case 'requirement':
+    case 'initiative':
+    case 'bug':
+    case 'tech_debt':
+      return 'Product driver';
+    case 'development_plan_item':
+      return roleForGate(gateColumnFor(card).id);
+    case 'execution':
+      return 'Developer';
+    case 'execution_plan':
+      return 'Technical lead';
+    case 'code_review_handoff':
+      return 'Reviewer';
+    case 'qa_handoff':
+      return 'QA';
+    case 'release':
+      return 'Release owner';
+    default:
+      return 'Assigned role';
+  }
+}
+
+function roleForGate(gate: BoardGateColumnId): string {
+  switch (gate) {
+    case 'intake':
+      return 'Product driver';
+    case 'boundary':
+    case 'spec':
+    case 'execution-plan':
+      return 'Technical lead';
+    case 'execution':
+      return 'Developer';
+    case 'review':
+      return 'Reviewer';
+    case 'qa':
+      return 'QA';
+    case 'release':
+      return 'Release owner';
+  }
+}
+
+function riskLabel(risk: string | undefined): string {
+  return risk === undefined ? 'Unscored' : titleCase(risk);
 }
 
 function typedObjectHref(ref: BoardObjectRef): string {
@@ -201,4 +328,8 @@ function typedObjectHref(ref: BoardObjectRef): string {
 
 function titleCase(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function normalized(value: string): string {
+  return value.toLowerCase().replaceAll('-', '_');
 }
