@@ -127,7 +127,7 @@ describe('project management route IA', () => {
 
     expect(await screen.findByRole('heading', { name: /^Requirement$/ })).toBeTruthy();
     expect(await screen.findByText(/checkout validation must block bad payment states/i)).toBeTruthy();
-    expect(document.querySelector('[data-page-family="source-object"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-page-family="source-object-detail"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-document-surface="source-narrative"]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('region', { name: /source narrative document/i })).toBeTruthy();

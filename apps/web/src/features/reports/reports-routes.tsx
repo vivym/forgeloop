@@ -2,6 +2,7 @@ import { Link, useSearchParams } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { useReportQuery } from '../../shared/api/hooks';
+import type { ProductObjectRef } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
 import { CompactMetadata, Section, WorkspacePage } from '../../shared/layout';
 import { DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
@@ -26,6 +27,7 @@ type ReportCatalogItem = {
 };
 
 type ReportGroupRow = {
+  affectedCount: number;
   id: string;
   count: number;
   affected: string;
@@ -152,7 +154,7 @@ export function ReportsIndexRoute() {
           {metricSections.map((section) => (
             <article className="grid gap-2 rounded-card border border-border bg-surface p-3" key={section.title}>
               <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-text-primary">{section.title}</h2>
+                <h3 className="text-sm font-semibold text-text-primary">{section.title}</h3>
                 <StatusPill tone="info">{section.owner}</StatusPill>
               </div>
               <p className="m-0 text-sm text-text-secondary">{section.summary}</p>
@@ -169,7 +171,7 @@ export function ReportsIndexRoute() {
               to={candidate.href}
             >
               <div className="flex items-center justify-between gap-2">
-                <h2 className="text-base font-semibold text-text-primary">{candidate.title}</h2>
+                <h3 className="text-base font-semibold text-text-primary">{candidate.title}</h3>
                 <StatusPill tone="info">{candidate.owner}</StatusPill>
               </div>
               <p className="m-0 text-sm text-text-secondary">{candidate.summary}</p>
@@ -339,21 +341,21 @@ function supportingSignal(data: Record<string, unknown> | undefined): string {
 }
 
 function affectedObjects(data: Record<string, unknown> | undefined): string {
-  const groups = reportGroupRows(data);
-  if (groups.length === 0) return 'Affected objects unavailable';
-  const affected = groups.reduce((sum, group) => sum + Number(group.affected.split(' ')[0] ?? 0), 0);
-  return affected === 0 ? `${groups.length} report group(s)` : `${affected} affected object(s)`;
+  const affected = uniqueReportObjectRefs(reportGroups(data).flatMap((group) => productObjectRefs(group.items)));
+  if (affected.length === 0) return 'No affected objects in current signal';
+  return `${affected.length} affected object(s): ${objectTypeSummary(affected)}`;
 }
 
 function reportGroupRows(data: Record<string, unknown> | undefined): ReportGroupRow[] {
   const groups = reportGroups(data);
   return groups.filter(isRecord).map((group, index) => {
-    const items = Array.isArray(group.items) ? group.items : [];
+    const items = productObjectRefs(group.items);
     const count = typeof group.count === 'number' ? group.count : items.length;
     return {
       id: String(group.id ?? `group-${index + 1}`),
       count,
-      affected: `${items.length} object(s)`,
+      affectedCount: items.length,
+      affected: affectedLabel(items),
     };
   });
 }
@@ -362,7 +364,7 @@ function reportGroups(data: Record<string, unknown> | undefined): NonNullable<Re
   return arrayField(data, 'groups').filter(isRecord).map((group) => ({
     id: typeof group.id === 'string' ? group.id : undefined,
     count: typeof group.count === 'number' ? group.count : undefined,
-    items: Array.isArray(group.items) ? group.items : undefined,
+    items: productObjectRefs(group.items),
   }));
 }
 
@@ -389,6 +391,42 @@ function stringField(data: Record<string, unknown> | undefined, key: string): st
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function productObjectRefs(value: unknown): ProductObjectRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isProductObjectRef);
+}
+
+function isProductObjectRef(value: unknown): value is ProductObjectRef {
+  if (!isRecord(value) || typeof value.type !== 'string' || typeof value.id !== 'string') return false;
+  if (value.type === 'development_plan_item') return typeof value.development_plan_id === 'string';
+  return true;
+}
+
+function uniqueReportObjectRefs(items: ProductObjectRef[]): ProductObjectRef[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.type}:${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function affectedLabel(items: ProductObjectRef[]): string {
+  if (items.length === 0) return 'No affected object refs';
+  return `${items.length} ${items.length === 1 ? 'object' : 'objects'}: ${objectTypeSummary(items)}`;
+}
+
+function objectTypeSummary(items: ProductObjectRef[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    counts.set(item.type, (counts.get(item.type) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([type, count]) => `${count} ${formatValue(type)}${count === 1 ? '' : 's'}`)
+    .join(', ');
 }
 
 function formatValue(value: string): string {

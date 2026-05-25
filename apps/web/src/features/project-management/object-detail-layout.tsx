@@ -96,8 +96,9 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
   if (isLoading) {
     return (
       <ObjectWorkspace
+        as="div"
         blockerRisk="Risk and evidence metadata are loading."
-        family="source-object"
+        family="source-object-detail"
         heading={objectLabel}
         nextAction="Loading source object actions."
         roleResponsibility="Loading role context."
@@ -112,8 +113,9 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
   if (error || detail === undefined) {
     return (
       <ObjectWorkspace
+        as="div"
         blockerRisk="Source object metadata is unavailable."
-        family="source-object"
+        family="source-object-detail"
         heading={objectLabel}
         nextAction="Reload this source object before planning work continues."
         roleResponsibility="Product owner should confirm the source object exists."
@@ -149,8 +151,9 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   return (
     <ObjectWorkspace
+      as="div"
       blockerRisk={`Risk ${detail.risk ?? 'unscored'} · Evidence ${evidenceCount} · Release ${releaseLabel}`}
-      family="source-object"
+      family="source-object-detail"
       heading={objectLabel}
       nextAction={
         <div className="grid gap-3">

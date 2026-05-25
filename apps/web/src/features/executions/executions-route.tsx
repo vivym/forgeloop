@@ -63,7 +63,7 @@ export function ExecutionsRoute() {
     <WorkspacePage
       as="div"
       blockerRisk={executionRisk(rows, query.isError)}
-      family="execution-supervision"
+      family="execution-list"
       heading="Executions"
       layout="supervision-lanes"
       nextAction={focusedRow === undefined ? 'Allowed action: wait for an approved Execution Plan to start' : `Allowed action: ${focusedRow.allowedAction.label}`}

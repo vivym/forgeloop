@@ -72,7 +72,7 @@ describe('Development Plan routes', () => {
     expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('textbox', { name: /development plan title/i })).toBeTruthy();
     expect(screen.getByRole('combobox', { name: /source type/i })).toBeTruthy();
-    expect(screen.getByRole('textbox', { name: /source object id/i })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: /source object/i })).toBeTruthy();
     expect(screen.getByRole('textbox', { name: /manual source guidance/i })).toBeTruthy();
     expect(screen.getByRole('textbox', { name: /ai generation guidance/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^create development plan$/i })).toBeTruthy();
@@ -102,8 +102,7 @@ describe('Development Plan routes', () => {
     await user.clear(await screen.findByRole('textbox', { name: /development plan title/i }));
     await user.type(screen.getByRole('textbox', { name: /development plan title/i }), 'Checkout planning closure');
     await user.selectOptions(screen.getByRole('combobox', { name: /source type/i }), 'requirement');
-    await user.clear(screen.getByRole('textbox', { name: /source object id/i }));
-    await user.type(screen.getByRole('textbox', { name: /source object id/i }), 'req-1');
+    await user.selectOptions(screen.getByRole('combobox', { name: /source object/i }), 'req-1');
     await user.type(screen.getByRole('textbox', { name: /manual source guidance/i }), 'Keep the plan scoped to checkout validation boundaries.');
     await user.type(screen.getByRole('textbox', { name: /ai generation guidance/i }), 'Draft Plan Items from checkout acceptance criteria.');
 
@@ -126,8 +125,7 @@ describe('Development Plan routes', () => {
       },
     });
     await user.selectOptions(await generateScreen.findByRole('combobox', { name: /source type/i }), 'requirement');
-    await user.clear(generateScreen.getByRole('textbox', { name: /source object id/i }));
-    await user.type(generateScreen.getByRole('textbox', { name: /source object id/i }), 'req-1');
+    await user.selectOptions(generateScreen.getByRole('combobox', { name: /source object/i }), 'req-1');
     await user.type(generateScreen.getByRole('textbox', { name: /ai generation guidance/i }), 'Draft Plan Items from checkout acceptance criteria.');
     await user.click(generateScreen.getByRole('button', { name: /^generate ai-assisted draft$/i }));
 

@@ -329,7 +329,7 @@ export async function captureRouteScreenshot(page: Page, baseUrl: string, route:
 }
 
 async function assertVisualRoute(page: Page, route: VisualRoute) {
-  await expectPage(page.locator('h1').filter({ hasText: route.heading }).first()).toBeVisible();
+  await expectPage(page.getByRole('heading', { level: 1, name: route.heading }).first()).toBeVisible();
 
   const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
   expect(horizontalOverflow, `${route.path} must not create horizontal page scroll`).toBe(false);

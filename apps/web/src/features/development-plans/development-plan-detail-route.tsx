@@ -93,6 +93,7 @@ export function DevelopmentPlanDetailRoute() {
 
   return (
     <PlanningTableWorkspace
+      as="div"
       blockerRisk={blockedCount === 0 ? 'No blocked Plan Item gate in this table.' : `${blockedCount} blocked Plan Item gate(s) need review.`}
       family="development-plan-detail"
       heading={plan?.title ?? 'Development Plan'}

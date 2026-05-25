@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent }
 import { Link, useBlocker, useInRouterContext, useNavigate } from 'react-router';
 import type { EditableObjectRef, MarkdownBlockKind, MarkdownDocument } from '@forgeloop/contracts';
 
+import { WorkspacePage } from '../../shared/layout';
 import { Button, Field, ForgeMarkdownEditor, InlineNotice, Input, Textarea } from '../../shared/ui';
+import { SurfaceStateIndicator } from './surface-state';
 
 type SourceAuthoringObjectType = 'bug' | 'initiative' | 'requirement' | 'tech_debt';
 type SourceAuthoringObjectRef =
@@ -103,12 +105,21 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
     void navigate(cancelHref);
   }
 
+  const objectLabel = sourceObjectLabel(objectType);
+
   return (
-    <>
-      <header className="grid gap-2">
-        <h1 className="text-xl font-semibold text-text-primary">{title}</h1>
-        <p className="text-sm text-text-secondary">{subtitle}</p>
-      </header>
+    <WorkspacePage
+      as="div"
+      blockerRisk={validationSummary.length > 0 ? `Blocked by ${validationSummary.length} validation issue(s).` : 'No authoring blockers in the draft.'}
+      family="source-object-authoring"
+      heading={title}
+      layout="source-authoring"
+      nextAction="Complete required fields, attach narrative context, then create the source object."
+      roleResponsibility={`${objectLabel} driver owns source intent; product and technical reviewers consume it through Development Plans.`}
+      state={dirty ? 'Draft changes not saved' : 'Ready to author source context'}
+      subtitle={subtitle}
+    >
+      <SurfaceStateIndicator label={title} state={validationSummary.length > 0 ? 'blocked' : 'approved'} />
       {dirty ? <InlineNotice title="Draft changes" description="Structured fields or narrative edits are not saved yet." tone="info" /> : null}
       {validationSummary.length > 0 ? (
         <InlineNotice
@@ -163,8 +174,13 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
           </Link>
         </div>
       </form>
-    </>
+    </WorkspacePage>
   );
+}
+
+function sourceObjectLabel(objectType: SourceAuthoringObjectType): string {
+  if (objectType === 'tech_debt') return 'Tech Debt';
+  return objectType.replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 const createNarrativeBlocks: MarkdownBlockKind[] = ['paragraph', 'heading', 'list', 'blockquote', 'horizontal_rule', 'table', 'link', 'image'];

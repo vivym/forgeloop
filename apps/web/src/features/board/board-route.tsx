@@ -5,6 +5,7 @@ import type { BoardCard } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
 import { WorkspacePage } from '../../shared/layout';
 import { Badge, InlineNotice, StatusPill } from '../../shared/ui';
+import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 
 type BoardObjectRef = BoardCard['object_ref'];
 type BoardProductCard = BoardCard;
@@ -34,9 +35,11 @@ export function BoardRoute() {
   const columns = groupByGate(cards);
   const blockedCount = cards.filter((card) => card.blocked).length;
   const highRiskCount = cards.filter((card) => /high|critical/i.test(card.risk ?? '')).length;
+  const degradedSources = query.data?.degraded_sources ?? [];
 
   return (
     <WorkspacePage
+      as="div"
       blockerRisk={boardBlockerRisk(query.isError, blockedCount, highRiskCount, activeFocus)}
       family="board"
       heading="Board"
@@ -46,6 +49,7 @@ export function BoardRoute() {
       state={boardCurrentState(query.isLoading, query.isError, cards, blockedCount)}
       subtitle="Development Plan Item gate flow from intake through release readiness."
     >
+      <SurfaceStateIndicator label="Board" state={boardSurfaceState(query.isLoading, query.isError, cards, blockedCount, degradedSources)} />
       {query.isLoading ? <InlineNotice title="Loading board cards." tone="info" /> : null}
       {query.isError ? <InlineNotice title="Board cards could not be loaded." tone="danger" /> : null}
       {focus !== undefined ? (
@@ -82,6 +86,25 @@ export function BoardRoute() {
       </div>
     </WorkspacePage>
   );
+}
+
+function boardSurfaceState(
+  isLoading: boolean,
+  isError: boolean,
+  cards: BoardProductCard[],
+  blockedCount: number,
+  degradedSources: readonly string[],
+): SurfaceState {
+  if (isLoading) return 'loading';
+  if (isError) return 'error';
+  if (degradedSources.length > 0) return 'stale';
+  if (cards.length === 0) return 'empty';
+  const cardText = cards.map((card) => `${card.status} ${card.title} ${card.column_id}`).join(' ');
+  if (blockedCount > 0 || /blocked|failed/i.test(cardText)) return 'blocked';
+  if (/resumable|interrupted|paused/i.test(cardText)) return 'resumable';
+  if (/running|active execution/i.test(cardText)) return 'running';
+  if (/approved|accepted|completed/i.test(cardText)) return 'approved';
+  return 'approved';
 }
 
 type BoardFocus =

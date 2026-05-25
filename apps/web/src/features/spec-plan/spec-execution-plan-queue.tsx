@@ -68,7 +68,7 @@ export function SpecExecutionPlanQueue() {
     <QueueWorkspace
       as="div"
       blockerRisk={blockerRisk}
-      family="spec-plan-queue"
+      family="governance-queue"
       heading="Specs & Execution Plans"
       nextAction={nextAction}
       roleResponsibility={`Reviewer: ${roleResponsibility}`}

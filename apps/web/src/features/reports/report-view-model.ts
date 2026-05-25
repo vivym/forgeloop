@@ -1,6 +1,7 @@
 import type { ProductPageViewModel } from '../product-surfaces/view-model-types';
+import type { ProductObjectRef } from '../../shared/api/types';
 
-type ReportGroup = { id?: string | undefined; count?: number | undefined; items?: readonly unknown[] | undefined };
+type ReportGroup = { id?: string | undefined; count?: number | undefined; items?: readonly ProductObjectRef[] | undefined };
 type ReportLink = { id?: string | undefined; href?: string | undefined };
 
 export interface ReportProjection {

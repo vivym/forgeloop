@@ -12,6 +12,7 @@ import {
   type MyWorkQueueGroup,
   type MyWorkQueueRow,
 } from './my-work-view-model';
+import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 
 type FilterKey = 'all' | string;
 
@@ -77,6 +78,7 @@ export function MyWorkRoute() {
 
   const currentState = query.isLoading ? 'Loading role queue' : query.isError ? 'Queue failed to load' : viewModel.currentState;
   const blockerRisk = query.isError ? 'My Work query failed; review the queue source before acting.' : viewModel.riskSignal;
+  const degradedSources = query.data?.degraded_sources ?? [];
   const nextAction = (
     <div className="grid gap-1">
       <span>{viewModel.safeBulkAction ? viewModel.nextAction : viewModel.disabledReason}</span>
@@ -98,6 +100,7 @@ export function MyWorkRoute() {
         toolbar={<QueueFilterToolbar label="Role" options={baseViewModel.filters.roles} selected={roleFilter} setSelected={setRoleFilter} />}
       >
         <div className="grid gap-4">
+          <SurfaceStateIndicator label="My Work" state={myWorkSurfaceState(query.isLoading, query.isError, filteredRows, degradedSources)} />
           {query.isLoading ? <InlineNotice title="Loading My Work." tone="info" /> : null}
           {query.error ? <InlineNotice title="My Work could not be loaded." tone="danger" /> : null}
           {mode === 'reprioritize' ? (
@@ -145,6 +148,26 @@ export function MyWorkRoute() {
       </QueueWorkspace>
     </div>
   );
+}
+
+function myWorkSurfaceState(
+  isLoading: boolean,
+  isError: boolean,
+  rows: readonly MyWorkQueueRow[],
+  degradedSources: readonly string[],
+): SurfaceState {
+  if (isLoading) return 'loading';
+  if (isError) return 'error';
+  if (degradedSources.length > 0) return 'stale';
+  if (rows.length === 0) return 'empty';
+  const rowText = rows
+    .map((row) => `${row.statusLabel} ${row.attentionReasonLabel} ${row.nextAction} ${row.riskLabel}`)
+    .join(' ');
+  if (/resumable|interrupted|paused/i.test(rowText)) return 'resumable';
+  if (/running|active execution/i.test(rowText)) return 'running';
+  if (/blocked|failed|blocked risk/i.test(rowText)) return 'blocked';
+  if (/approved|accepted/i.test(rowText)) return 'approved';
+  return 'approved';
 }
 
 function QueueFilterToolbar({

@@ -71,7 +71,7 @@ export function ExecutionDetailRoute() {
           ? 'Execution supervision cannot be evaluated until detail data loads.'
           : `${viewModel.riskSignal} Current step: ${viewModel.currentStep}. Last meaningful event: ${viewModel.lastMeaningfulEvent}. PR, diff, and test evidence: ${viewModel.evidenceSummary}.`
       }
-      family="execution-supervision-detail"
+      family="execution-detail"
       heading={viewModel?.title ?? 'Execution supervision'}
       layout="supervision-detail"
       nextAction={viewModel?.nextAction ?? 'Allowed action: load execution supervision'}

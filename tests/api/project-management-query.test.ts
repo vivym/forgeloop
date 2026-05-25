@@ -309,6 +309,16 @@ describe('project management query API', () => {
       expect.arrayContaining([expect.objectContaining({ id: 'interrupted_or_resumable' })]),
     );
 
+    const throughputReport = await request(server).get('/query/reports/development-plan-throughput').query(query).expect(200);
+    expect(throughputReport.body.groups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'draft_or_active',
+          items: expect.arrayContaining([expect.objectContaining({ type: 'development_plan_item' })]),
+        }),
+      ]),
+    );
+
     const executionOutcomesReport = await request(server).get('/query/reports/execution-outcomes').query(query).expect(200);
     expect(executionOutcomesReport.body.groups).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: 'succeeded' }), expect.objectContaining({ id: 'failed' })]),
@@ -317,6 +327,14 @@ describe('project management query API', () => {
     const qualityReport = await request(server).get('/query/reports/quality-bug-escape').query(query).expect(200);
     expect(qualityReport.body.groups).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: 'escaped_bugs' }), expect.objectContaining({ id: 'qa_blockers' })]),
+    );
+    expect(qualityReport.body.groups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'qa_blockers',
+          items: expect.arrayContaining([expect.objectContaining({ type: 'qa_handoff' })]),
+        }),
+      ]),
     );
 
     expect(JSON.stringify({ dashboard: dashboard.body, board: board.body, qa: qaHandoffs.body })).not.toContain('"type":"task"');

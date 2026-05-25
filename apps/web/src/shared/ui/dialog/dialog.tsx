@@ -1,5 +1,5 @@
 import * as RadixDialog from '@radix-ui/react-dialog';
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, KeyboardEvent, ReactNode } from 'react';
 
 import { cn } from '../../utils/cn';
 
@@ -20,7 +20,11 @@ export function Dialog({ children, content, description, open, title, onOpenChan
 
   return (
     <RadixDialog.Root {...rootProps}>
-      {children ? <RadixDialog.Trigger asChild>{children}</RadixDialog.Trigger> : null}
+      {children ? (
+        <RadixDialog.Trigger asChild onKeyDown={openDialogFromKeyboard}>
+          {children}
+        </RadixDialog.Trigger>
+      ) : null}
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 z-overlay bg-text-primary/40" />
         <RadixDialog.Content className="fixed left-1/2 top-1/2 z-modal max-h-[calc(100vh-2rem)] w-[min(36rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-card bg-surface p-6 text-text-primary shadow-overlay">
@@ -31,6 +35,12 @@ export function Dialog({ children, content, description, open, title, onOpenChan
       </RadixDialog.Portal>
     </RadixDialog.Root>
   );
+}
+
+function openDialogFromKeyboard(event: KeyboardEvent<HTMLElement>) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  event.currentTarget.click();
 }
 
 export function DialogPanel({ className, children }: { className?: string; children: ReactNode }) {

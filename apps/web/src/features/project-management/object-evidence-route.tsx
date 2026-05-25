@@ -4,6 +4,7 @@ import type { AttachmentRef, EditableObjectRef } from '@forgeloop/contracts';
 
 import { CompactMetadata, ObjectWorkspace, Section } from '../../shared/layout';
 import { EvidenceAttachments, InlineNotice, StatusPill } from '../../shared/ui';
+import { SurfaceStateIndicator } from './surface-state';
 
 type EvidenceRef = {
   type?: string | undefined;
@@ -56,6 +57,7 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
   if (detailLoading) {
     return (
       <ObjectWorkspace
+        as="div"
         blockerRisk="Evidence metadata is loading."
         family="evidence"
         heading={objectLabel}
@@ -63,6 +65,7 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
         roleResponsibility="Loading source object responsibility."
         state="Evidence loading"
       >
+        <SurfaceStateIndicator label={heading} state="loading" />
         <InlineNotice title={`${heading} is loading.`} tone="info" />
       </ObjectWorkspace>
     );
@@ -71,6 +74,7 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
   if (detailError || detail === undefined) {
     return (
       <ObjectWorkspace
+        as="div"
         blockerRisk="Source object evidence cannot be verified until the object loads."
         family="evidence"
         heading={heading}
@@ -78,6 +82,7 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
         roleResponsibility="Product owner should confirm the source object exists."
         state="Evidence unavailable"
       >
+        <SurfaceStateIndicator label={heading} state={detailError ? 'error' : 'empty'} />
         <InlineNotice title={`${heading} was not found.`} tone="warning" />
       </ObjectWorkspace>
     );
@@ -92,6 +97,7 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
 
   return (
     <ObjectWorkspace
+      as="div"
       blockerRisk={`Risk ${detail.risk ?? 'unscored'} / ${needsAttention ? 'Evidence needs attention' : 'No evidence blocker'}`}
       family="evidence"
       heading={heading}
@@ -110,6 +116,7 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
       state={needsAttention ? 'Evidence needs attention' : 'Evidence ready'}
       subtitle={`${detail.title} / ${statusLabel(detail.status)}`}
     >
+      <SurfaceStateIndicator label={heading} state={needsAttention ? 'blocked' : 'approved'} />
       <Section
         aria-label="Evidence readiness summary"
         description="Readiness is derived from the source object detail and attachment safety metadata."

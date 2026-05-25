@@ -1439,8 +1439,8 @@ export const reportFixtures = {
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
     groups: [
-      { id: 'draft_or_active', count: developmentPlan.items.length, items: [] },
-      { id: 'approved_items', count: developmentPlan.items.filter((item) => item.execution_plan_status === 'approved').length, items: [] },
+      { id: 'draft_or_active', count: developmentPlan.items.length, items: [execution.development_plan_item_ref] },
+      { id: 'approved_items', count: developmentPlan.items.filter((item) => item.execution_plan_status === 'approved').length, items: [execution.development_plan_item_ref] },
     ],
     links: reportLinks,
     degraded_sources: [],
@@ -1451,7 +1451,7 @@ export const reportFixtures = {
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
     groups: [
-      { id: 'escaped_bugs', count: 1, items: [] },
+      { id: 'escaped_bugs', count: 1, items: [{ type: 'bug', id: bugListItem.id, title: bugListItem.title }] },
       { id: 'qa_blockers', count: 0, items: [] },
     ],
     links: reportLinks,
@@ -1463,7 +1463,7 @@ export const reportFixtures = {
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
     groups: [
-      { id: 'planned_releases', count: 1, items: [] },
+      { id: 'planned_releases', count: 1, items: [{ type: 'release', id: release.id, title: release.title }] },
       { id: 'release_blocking_items', count: 0, items: [] },
     ],
     links: reportLinks,
@@ -1475,7 +1475,7 @@ export const reportFixtures = {
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
     groups: [
-      { id: 'succeeded', count: 0, items: [] },
+      { id: 'succeeded', count: 1, items: [{ type: 'execution', id: execution.id, title: execution.ref.title }] },
       { id: 'failed', count: 0, items: [] },
     ],
     links: reportLinks,
@@ -1488,7 +1488,7 @@ export const reportFixtures = {
     generated_at: '2026-05-18T01:05:00.000Z',
     groups: [
       { id: 'interrupted_or_resumable', count: 0, items: [] },
-      { id: 'running', count: execution.status === 'running' ? 1 : 0, items: [] },
+      { id: 'running', count: execution.status === 'running' ? 1 : 0, items: [{ type: 'execution', id: execution.id, title: execution.ref.title }] },
     ],
     links: reportLinks,
     degraded_sources: [],

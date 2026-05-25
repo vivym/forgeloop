@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup } from '@testing-library/react';
+import { cleanup, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { codeReviewHandoff, developmentPlan, developmentPlanItem, execution, qaHandoff } from './fixtures/product-data';
@@ -119,6 +119,14 @@ describe('AI-native My Work, Board, and Reports', () => {
     for (const label of ['Conclusion', 'Supporting signal', 'Affected objects', 'Suggested action']) {
       expect(screen.getByText(label)).toBeTruthy();
     }
+    await waitFor(() => {
+      expect(document.querySelector('[data-first-viewport]')?.textContent ?? '').toMatch(/Suggested action: Review report findings/i);
+    });
+    const firstViewportText = document.querySelector('[data-first-viewport]')?.textContent ?? '';
+    expect(firstViewportText).toMatch(/Development Plan Item/i);
+    expect(firstViewportText).toMatch(/1 affected object\(s\): 1 Development Plan Item/i);
+    expect(firstViewportText).toMatch(/Suggested action: Review report findings/i);
+    expect(document.body.textContent).not.toMatch(/Affected objects unavailable|report group\(s\)/i);
     expect(document.querySelector('[data-page-family="report"][data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
     expect(document.body.textContent).not.toMatch(/coming soon|placeholder/i);
   });

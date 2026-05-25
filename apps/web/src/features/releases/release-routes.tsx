@@ -5,6 +5,7 @@ import type { ObjectRef, ReleaseCockpitResponse, ReleaseReadinessDetail, Release
 import { useProjectContext } from '../../shared/context/project-context';
 import { CompactMetadata, EvidenceDrawer, GateProgress, Section, WorkspacePage } from '../../shared/layout';
 import { Button, DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
+import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import { releaseViewModel } from './release-view-model';
 
 type ReleaseScopeRef = Extract<ObjectRef, { type: 'initiative' | 'requirement' | 'tech_debt' | 'development_plan_item' | 'bug' }>;
@@ -52,6 +53,7 @@ export function ReleasesRoute() {
       state={query.isLoading ? 'Loading release inventory' : `${releases.length} release(s) in inventory`}
       subtitle="Scope, readiness, risk, approval, release owner."
     >
+      <SurfaceStateIndicator label="Release inventory" state={releaseInventorySurfaceState(query.isLoading, query.isError, releases, blockedCount)} />
       <Section
         description="Dense inventory rows keep coverage, gate state, owner role, and next action scannable without opening raw package or Work Item browsers."
         title="Release inventory"
@@ -138,6 +140,7 @@ function ReleaseReadinessWorkspace({
         </>
       }
     >
+      <SurfaceStateIndicator label="Release readiness" state={readiness.ready ? 'approved' : 'blocked'} />
       <Section title={release.title}>
         <CompactMetadata
           items={[
@@ -210,6 +213,7 @@ function ReleaseEvidenceContent({ releaseId }: { releaseId: string }) {
       state={`Evidence readiness ${readiness.ready ? 'ready' : 'blocked'} across ${evidenceCount(readiness)} evidence requirement(s)`}
       subtitle="Evidence readiness and relevance are reviewed before raw evidence lists or replay context."
     >
+      <SurfaceStateIndicator label="Release evidence" state={readiness.ready ? 'approved' : 'blocked'} />
       <Section title="Evidence readiness">
         <CompactMetadata
           items={[
@@ -379,6 +383,7 @@ function ReleaseLoading({
       roleResponsibility="Release owner reviews readiness once data loads."
       state="Loading release readiness"
     >
+      <SurfaceStateIndicator label={heading} state="loading" />
       <InlineNotice title="Release readiness is loading." tone="info" />
     </WorkspacePage>
   );
@@ -404,6 +409,7 @@ function ReleaseUnavailable({
       roleResponsibility="Release owner needs a loaded release before launch or rollback review."
       state="Release unavailable"
     >
+      <SurfaceStateIndicator label={heading} state="error" />
       <InlineNotice title="Release readiness is unavailable." tone="warning" />
     </WorkspacePage>
   );
@@ -453,6 +459,18 @@ function inventoryNextAction(release: ReleaseSummary): string {
   if (release.gate_state === 'approved') return 'Prepare launch';
   if (release.phase === 'approval') return 'Review readiness';
   return 'Check release gate';
+}
+
+function releaseInventorySurfaceState(
+  isLoading: boolean,
+  isError: boolean,
+  releases: ReleaseSummary[],
+  blockedCount: number,
+): SurfaceState {
+  if (isLoading) return 'loading';
+  if (isError) return 'error';
+  if (releases.length === 0) return 'empty';
+  return blockedCount > 0 ? 'blocked' : 'approved';
 }
 
 function highRiskSummary(cockpit: ReleaseCockpitResponse | undefined): string {

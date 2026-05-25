@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { CompactMetadata, PreviewPane, QueueWorkspace, Section } from '../../shared/layout';
 import { Badge, DataTable, EmptyState, InlineNotice, Input, StatusPill, type DataTableColumn } from '../../shared/ui';
 import type { ProductPageViewModel } from '../product-surfaces/view-model-types';
+import { SurfaceStateIndicator, type SurfaceState } from './surface-state';
 import { sourceObjectListViewModel } from './source-object-view-model';
 
 export interface ProjectObjectListItem {
@@ -119,6 +120,7 @@ export function ObjectList<T extends ProjectObjectListItem>({
 
   return (
     <QueueWorkspace
+      as="div"
       blockerRisk={blockerRisk}
       family="source-object-list"
       heading={title}
@@ -138,6 +140,7 @@ export function ObjectList<T extends ProjectObjectListItem>({
       }
     >
       <div className="grid gap-4">
+        <SurfaceStateIndicator label={title} state={sourceObjectListSurfaceState(isLoading, error, filteredRows.length, blockerRisk)} />
         <Section title={`${title} queue controls`} variant="panel">
           <div className="grid gap-3">
             <label className="grid min-w-0 gap-2 sm:max-w-sm">
@@ -192,6 +195,18 @@ export function ObjectList<T extends ProjectObjectListItem>({
       </div>
     </QueueWorkspace>
   );
+}
+
+function sourceObjectListSurfaceState(
+  isLoading: boolean,
+  error: Error | null | undefined,
+  rowCount: number,
+  blockerRisk: string,
+): SurfaceState {
+  if (isLoading) return 'loading';
+  if (error) return 'error';
+  if (rowCount === 0) return 'empty';
+  return /blocked|high|critical|risk/i.test(blockerRisk) ? 'blocked' : 'approved';
 }
 
 function SourceObjectEmptyState({

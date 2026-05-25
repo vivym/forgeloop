@@ -43,6 +43,7 @@ const bugId = 'bug-1';
 const techDebtId = 'td-1';
 const developmentPlanId = 'development-plan-web-product';
 const developmentPlanItemId = 'development-plan-item-web-product';
+const developmentPlanItemHeading = /Development Plan Item|Build AI-native project management API clients/i;
 const executionId = 'execution-web-product';
 const releaseId = 'release-web-product';
 
@@ -90,45 +91,51 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
   productRoute('/tech-debt/:id/evidence', `/tech-debt/${techDebtId}/evidence`, 'Tech Debt Evidence', 'evidence', /Evidence/i),
   productRoute('/development-plans', '/development-plans', 'Development Plans', 'development-plan-index', /^Development Plans$/i),
   productRoute('/development-plans/new', '/development-plans/new', 'New Development Plan', 'development-plan-index', /Development Plan/i),
-  productRoute('/development-plans/:id', `/development-plans/${developmentPlanId}`, 'Development Plan', 'development-plan-detail', /Development Plan/i),
+  productRoute(
+    '/development-plans/:id',
+    `/development-plans/${developmentPlanId}`,
+    'Development Plan',
+    'development-plan-detail',
+    /Development Plan|Web product UI architecture foundation plan/i,
+  ),
   productRoute(
     '/development-plans/:id/items/:itemId',
     `/development-plans/${developmentPlanId}/items/${developmentPlanItemId}`,
     'Development Plan Item',
     'gate-workspace',
-    /Development Plan Item/i,
+    developmentPlanItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/brainstorming',
     `/development-plans/${developmentPlanId}/items/${developmentPlanItemId}/brainstorming`,
     'Boundary Brainstorming',
     'gate-workspace',
-    /Brainstorming|Development Plan Item/i,
+    /Brainstorming|Development Plan Item|Build AI-native project management API clients/i,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/spec',
     `/development-plans/${developmentPlanId}/items/${developmentPlanItemId}/spec`,
     'Spec',
     'gate-workspace',
-    /Spec|Development Plan Item/i,
+    /Spec|Development Plan Item|Build AI-native project management API clients/i,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/execution-plan',
     `/development-plans/${developmentPlanId}/items/${developmentPlanItemId}/execution-plan`,
     'Execution Plan',
     'gate-workspace',
-    /Execution Plan|Development Plan Item/i,
+    /Execution Plan|Development Plan Item|Build AI-native project management API clients/i,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/execution',
     `/development-plans/${developmentPlanId}/items/${developmentPlanItemId}/execution`,
     'Execution',
     'gate-workspace',
-    /Execution|Development Plan Item/i,
+    /Execution|Development Plan Item|Build AI-native project management API clients/i,
   ),
   productRoute('/specs-plans', '/specs-plans', 'Specs and Execution Plans', 'governance-queue', /^Specs & Execution Plans$/i),
   productRoute('/executions', '/executions', 'Executions', 'execution-list', /^Executions$/i),
-  productRoute('/executions/:id', `/executions/${executionId}`, 'Execution', 'execution-detail', /Execution/i),
+  productRoute('/executions/:id', `/executions/${executionId}`, 'Execution', 'execution-detail', /Execution|Build AI-native project management API clients/i),
   productRoute('/board', '/board', 'Board', 'board', /^Board$/i),
   productRoute('/releases', '/releases', 'Releases', 'release', /^Releases$/i),
   productRoute('/releases/:id', `/releases/${releaseId}`, 'Release', 'release', /Release/i),

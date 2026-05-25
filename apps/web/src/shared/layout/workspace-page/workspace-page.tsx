@@ -45,14 +45,14 @@ export function WorkspacePage({
       data-workspace-layout={layout}
     >
       <header className="grid gap-4" data-first-viewport="">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0 lg:flex-1">
             <h1 className="m-0 text-xl font-semibold leading-tight text-text-primary" id={headingId}>
               {heading}
             </h1>
             {subtitle ? <p className="mt-2 text-sm text-text-secondary">{subtitle}</p> : null}
           </div>
-          {toolbar ? <div className="flex shrink-0 flex-wrap items-center gap-2">{toolbar}</div> : null}
+          {toolbar ? <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">{toolbar}</div> : null}
         </div>
         <PrioritySummary blockerRisk={blockerRisk} roleResponsibility={roleResponsibility} state={state} />
         <ActionStrip nextAction={nextAction} />

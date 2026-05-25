@@ -15,7 +15,7 @@ const activeRoutes = [
   ['/tech-debt/td-1', /^Tech Debt$/],
   ['/specs-plans', /^Specs & Execution Plans$/],
   ['/executions', /^Executions$/],
-  ['/executions/execution-web-product', /^Execution$/],
+  ['/executions/execution-web-product', /Build AI-native project management API clients/i],
   ['/bugs', /^Bugs$/],
   ['/bugs/bug-1', /^Bug$/],
   ['/board', /^Board$/],

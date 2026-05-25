@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { firstViewportContract } from '../../apps/web/src/features/product-surfaces/first-viewport-contract';
@@ -75,7 +75,7 @@ describe('product-grade first viewport contract', () => {
     const rendered = await renderRoute('/requirements/req-1');
 
     expect(await rendered.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'source-object', heading: 'Requirement' });
+    expectFirstViewportContract(rendered, { pageFamily: 'source-object-detail', heading: 'Requirement' });
     expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
   });
 
@@ -144,7 +144,7 @@ describe('product-grade first viewport contract', () => {
     const rendered = await renderRoute('/specs-plans');
 
     expect(await rendered.findByRole('heading', { name: 'Specs & Execution Plans' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'spec-plan-queue', heading: 'Specs & Execution Plans' });
+    expectFirstViewportContract(rendered, { pageFamily: 'governance-queue', heading: 'Specs & Execution Plans' });
     expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/governance|reviewer|risk/i);
     expect(rendered.getByRole('region', { name: /selected governance row/i })).toBeTruthy();
@@ -155,7 +155,7 @@ describe('product-grade first viewport contract', () => {
     const rendered = await renderRoute('/executions');
 
     expect(await rendered.findByRole('heading', { name: 'Executions' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'execution-supervision', heading: 'Executions' });
+    expectFirstViewportContract(rendered, { pageFamily: 'execution-list', heading: 'Executions' });
     expect(document.querySelector('[data-workspace-layout="supervision-lanes"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/worker state|allowed action|approved Execution Plan/i);
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|run session browser/i);
@@ -165,7 +165,7 @@ describe('product-grade first viewport contract', () => {
     const rendered = await renderRoute(`/executions/${execution.id}`);
 
     expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'execution-supervision-detail', heading: developmentPlanItem.title });
+    expectFirstViewportContract(rendered, { pageFamily: 'execution-detail', heading: developmentPlanItem.title });
     const firstViewport = document.querySelector('[data-first-viewport]');
     expect(document.querySelector('[data-workspace-layout="supervision-detail"]')).toBeInstanceOf(HTMLElement);
     expect(firstViewport?.textContent).toMatch(/current step|last meaningful event|PR, diff, and test evidence/i);
@@ -220,9 +220,15 @@ describe('product-grade first viewport contract', () => {
       const rendered = await renderRoute(route);
 
       expect(await rendered.findByRole('heading', { name: heading })).toBeTruthy();
+      await waitFor(() => {
+        expect(document.querySelector('[data-first-viewport]')?.textContent ?? '').toMatch(/Suggested action: Review report findings/i);
+      });
       expectFirstViewportContract(rendered, { pageFamily: 'report', heading });
       expect(document.querySelector('[data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
-      expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/conclusion|supporting signal|affected objects|suggested action/i);
+      const firstViewportText = document.querySelector('[data-first-viewport]')?.textContent ?? '';
+      expect(firstViewportText).toMatch(/conclusion|supporting signal|affected objects|suggested action/i);
+      expect(firstViewportText).toMatch(/1 affected object\(s\): 1 (Development Plan Item|Bug|Release|Execution)/i);
+      expect(document.body.textContent).not.toMatch(/Affected objects unavailable|report group\(s\)/i);
       expect(document.body.textContent).not.toMatch(/coming soon|placeholder|raw replay browser|\/reports\/replay/i);
       cleanup();
     }

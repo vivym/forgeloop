@@ -173,7 +173,7 @@ async function assertNoRenderedBaggage(page: Page, path: string) {
 
   if (path === '/development-plans') {
     expect(bodyText, `${path} must render active plan workspace affordances`).toContain('Active Development Plans');
-    expect(bodyText, `${path} must keep source links visible`).toContain('Source links');
+    expect(bodyText, `${path} must keep source links visible`).toMatch(/source links/i);
   }
 
   if (path === '/development-plans/new') {

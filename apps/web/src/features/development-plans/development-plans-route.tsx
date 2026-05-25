@@ -92,6 +92,16 @@ const statusOptions = [
 
 const sourceAuthoringOptions = sourceTypeOptions.filter((option) => option.value !== 'all');
 
+const sourceObjectOptionsByType: Record<string, { label: string; value: string }[]> = {
+  requirement: [
+    { label: 'Checkout requirement', value: 'req-1' },
+    { label: 'Checkout retry requirement', value: 'req-2' },
+  ],
+  initiative: [{ label: 'Marketplace reliability initiative', value: 'init-1' }],
+  bug: [{ label: 'Payment retry bug', value: 'bug-1' }],
+  tech_debt: [{ label: 'Route surface cleanup', value: 'td-1' }],
+};
+
 export function DevelopmentPlansRoute() {
   const { projectId } = useProjectContext();
   const query = useDevelopmentPlansQuery({ project_id: projectId });
@@ -104,6 +114,7 @@ export function DevelopmentPlansRoute() {
 
   return (
     <PlanningTableWorkspace
+      as="div"
       blockerRisk={`${blockedCount} blocked. ${rows.length === 0 ? 'No source-linked planning risk yet.' : 'Review blocked Plan Items before downstream artifact work.'}`}
       family="development-plan-index"
       heading="Development Plans"
@@ -142,7 +153,7 @@ export function DevelopmentPlanNewRoute() {
   const { projectId } = useProjectContext();
   const [title, setTitle] = useState('');
   const [sourceType, setSourceType] = useState('requirement');
-  const [sourceId, setSourceId] = useState('req-1');
+  const [sourceId, setSourceId] = useState(defaultSourceObjectId('requirement'));
   const [manualGuidance, setManualGuidance] = useState('');
   const [aiGuidance, setAiGuidance] = useState('Draft a table-first Development Plan with source-linked Plan Items and boundary risks.');
   const [actionState, setActionState] = useState<{ status: 'idle' | 'running' | 'success' | 'error'; message?: string; planId?: string }>({ status: 'idle' });
@@ -153,7 +164,7 @@ export function DevelopmentPlanNewRoute() {
   const createPlan = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (validation.hasBlockingIssue) {
-      setActionState({ status: 'error', message: 'Add a source object id before creating the Development Plan.' });
+      setActionState({ status: 'error', message: 'Select a source object before creating the Development Plan.' });
       return;
     }
 
@@ -177,7 +188,7 @@ export function DevelopmentPlanNewRoute() {
 
   const generatePlan = async () => {
     if (validation.hasBlockingIssue) {
-      setActionState({ status: 'error', message: 'Add a source object id before generating a Development Plan draft.' });
+      setActionState({ status: 'error', message: 'Select a source object before generating a Development Plan draft.' });
       return;
     }
 
@@ -203,6 +214,7 @@ export function DevelopmentPlanNewRoute() {
 
   return (
     <PlanningTableWorkspace
+      as="div"
       blockerRisk="Downstream Spec and Execution Plan documents are generated only from Plan Items after boundary approval."
       family="development-plan-index"
       heading="New Development Plan"
@@ -212,6 +224,7 @@ export function DevelopmentPlanNewRoute() {
       subtitle="Author a source-linked planning workspace without directly generating downstream documents."
       toolbar={<Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:bg-surface-muted" to="/development-plans">Back to Development Plans</Link>}
     >
+      <SurfaceStateIndicator label="New Development Plan" state={validation.hasBlockingIssue ? 'blocked' : 'approved'} />
       <form className="grid gap-4" onSubmit={(event) => void createPlan(event)}>
         <Section
           description="Manual creation records source context and starts an empty Plan Item table for boundary approval."
@@ -233,13 +246,18 @@ export function DevelopmentPlanNewRoute() {
                 aria-label="Source type"
                 options={sourceAuthoringOptions}
                 value={sourceType}
-                onChange={(event) => setSourceType(event.target.value)}
+                onChange={(event) => {
+                  const nextSourceType = event.target.value;
+                  setSourceType(nextSourceType);
+                  setSourceId(defaultSourceObjectId(nextSourceType));
+                }}
               />
             </label>
             <label className="grid gap-1 text-sm font-semibold text-text-primary">
-              Source object id
-              <input
-                className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary"
+              Source object
+              <Select
+                aria-label="Source object"
+                options={sourceObjectOptions(sourceType)}
                 value={sourceId}
                 onChange={(event) => setSourceId(event.target.value)}
               />
@@ -411,11 +429,19 @@ function rowMatchesFilters(row: DevelopmentPlanListRow, filters: DevelopmentPlan
 function validateAuthoring(input: { sourceId: string; title: string }) {
   const messages = [
     input.title.trim().length > 0 ? 'Title is ready.' : 'Title can be added now or inferred from source context.',
-    input.sourceId.trim().length > 0 ? 'Source object id is ready.' : 'Source object id is required.',
+    input.sourceId.trim().length > 0 ? 'Source object is selected.' : 'Source object selection is required.',
     'Plan Items remain the boundary for Spec, Execution Plan, execution, review, QA, and release readiness.',
   ];
 
   return { hasBlockingIssue: input.sourceId.trim().length === 0, messages };
+}
+
+function sourceObjectOptions(sourceType: string) {
+  return sourceObjectOptionsByType[sourceType] ?? [];
+}
+
+function defaultSourceObjectId(sourceType: string) {
+  return sourceObjectOptions(sourceType)[0]?.value ?? '';
 }
 
 function sourceRefFor(sourceType: string, sourceId: string, title: string): SourceObjectRef {

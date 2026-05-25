@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup } from '@testing-library/react';
+import { cleanup, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -133,8 +133,29 @@ describe('board, reports, and release readiness routes', () => {
       const screen = await renderRoute(route);
 
       expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
+      await waitFor(() => {
+        expect(document.querySelector('[data-first-viewport]')?.textContent ?? '').toMatch(/suggested action: review report findings/i);
+      });
       for (const label of ['Conclusion', 'Supporting signal', 'Affected objects', 'Suggested action']) {
         expect(screen.getByText(label)).toBeTruthy();
+      }
+      const firstViewportText = document.querySelector('[data-first-viewport]')?.textContent ?? '';
+      expect(firstViewportText).toMatch(/signal available/i);
+      expect(firstViewportText).toMatch(/supporting signal/i);
+      expect(firstViewportText).toMatch(/affected object\(s\): 1 /i);
+      expect(firstViewportText).toMatch(/suggested action: review report findings/i);
+      expect(document.body.textContent).not.toMatch(/Affected objects unavailable|report group\(s\)/i);
+      if (route === '/reports' || route === '/reports/delivery') {
+        expect(firstViewportText).toMatch(/Development Plan Item/i);
+      }
+      if (route === '/reports/quality') {
+        expect(firstViewportText).toMatch(/Bug/i);
+      }
+      if (route === '/reports/release-readiness') {
+        expect(firstViewportText).toMatch(/Release/i);
+      }
+      if (route === '/reports/observation' || route.includes('report=replay')) {
+        expect(firstViewportText).toMatch(/Execution/i);
       }
       expect(document.querySelector('[data-page-family="report"][data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
       if (route.includes('report=replay')) {

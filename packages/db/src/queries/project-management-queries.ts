@@ -987,7 +987,7 @@ function currentDevelopmentPlanItemGate(item: DevelopmentPlanItem): string {
   if (item.execution_plan_status !== 'approved') return 'execution_plan';
   if (item.execution_status !== 'completed') return 'execution';
   if (item.review_status !== 'approved') return 'review';
-  if (item.qa_handoff_status !== 'accepted') return 'qa';
+  if (item.qa_handoff_status !== 'approved') return 'qa';
   return 'release';
 }
 
@@ -1063,63 +1063,140 @@ function reportGroupsFor(
   switch (reportId) {
     case 'development-plan-throughput':
       return [
-        group('draft_or_active', context.developmentPlanItems.length),
-        group('approved_items', context.developmentPlanItems.filter(({ item }) => item.execution_plan_status === 'approved').length),
+        group('draft_or_active', context.developmentPlanItems.map(developmentPlanItemReportRef)),
+        group(
+          'approved_items',
+          context.developmentPlanItems
+            .filter(({ item }) => item.execution_plan_status === 'approved')
+            .map(developmentPlanItemReportRef),
+        ),
       ];
     case 'brainstorming-bottlenecks':
       return [
-        group('not_started', context.developmentPlanItems.filter(({ item }) => item.boundary_status === 'not_started').length),
-        group('changes_requested', context.developmentPlanItems.filter(({ item }) => item.boundary_status === 'changes_requested').length),
+        group(
+          'not_started',
+          context.developmentPlanItems
+            .filter(({ item }) => item.boundary_status === 'not_started')
+            .map(developmentPlanItemReportRef),
+        ),
+        group(
+          'changes_requested',
+          context.developmentPlanItems
+            .filter(({ item }) => item.boundary_status === 'changes_requested')
+            .map(developmentPlanItemReportRef),
+        ),
       ];
     case 'spec-review-aging':
       return [
-        group('in_review', context.developmentPlanItems.filter(({ item }) => item.spec_status === 'in_review').length),
-        group('changes_requested', context.developmentPlanItems.filter(({ item }) => item.spec_status === 'changes_requested').length),
+        group(
+          'in_review',
+          context.developmentPlanItems
+            .filter(({ item }) => item.spec_status === 'in_review')
+            .map(developmentPlanItemReportRef),
+        ),
+        group(
+          'changes_requested',
+          context.developmentPlanItems
+            .filter(({ item }) => item.spec_status === 'changes_requested')
+            .map(developmentPlanItemReportRef),
+        ),
       ];
     case 'execution-plan-review-aging':
       return [
-        group('in_review', context.developmentPlanItems.filter(({ item }) => item.execution_plan_status === 'in_review').length),
-        group('changes_requested', context.developmentPlanItems.filter(({ item }) => item.execution_plan_status === 'changes_requested').length),
+        group(
+          'in_review',
+          context.developmentPlanItems
+            .filter(({ item }) => item.execution_plan_status === 'in_review')
+            .map(developmentPlanItemReportRef),
+        ),
+        group(
+          'changes_requested',
+          context.developmentPlanItems
+            .filter(({ item }) => item.execution_plan_status === 'changes_requested')
+            .map(developmentPlanItemReportRef),
+        ),
       ];
     case 'execution-continuation':
       return [
-        group('interrupted_or_resumable', context.executions.filter(({ execution }) => execution.status === 'interrupted' || execution.status === 'paused').length),
-        group('running', context.executions.filter(({ execution }) => execution.status === 'running').length),
+        group(
+          'interrupted_or_resumable',
+          context.executions
+            .filter(({ execution }) => execution.status === 'interrupted' || execution.status === 'paused')
+            .map(executionReportRef),
+        ),
+        group('running', context.executions.filter(({ execution }) => execution.status === 'running').map(executionReportRef)),
       ];
     case 'execution-outcomes':
       return [
-        group('succeeded', context.executions.filter(({ execution }) => execution.status === 'completed').length),
-        group('failed', context.executions.filter(({ execution }) => execution.status === 'failed').length),
+        group('succeeded', context.executions.filter(({ execution }) => execution.status === 'completed').map(executionReportRef)),
+        group('failed', context.executions.filter(({ execution }) => execution.status === 'failed').map(executionReportRef)),
       ];
     case 'code-review':
       return [
-        group('in_review', context.codeReviews.filter(({ handoff }) => handoff.status === 'in_review').length),
-        group('approved', context.codeReviews.filter(({ handoff }) => handoff.status === 'approved').length),
-        group('changes_requested', context.codeReviews.filter(({ handoff }) => handoff.status === 'changes_requested').length),
+        group('in_review', context.codeReviews.filter(({ handoff }) => handoff.status === 'in_review').map(codeReviewReportRef)),
+        group('approved', context.codeReviews.filter(({ handoff }) => handoff.status === 'approved').map(codeReviewReportRef)),
+        group(
+          'changes_requested',
+          context.codeReviews.filter(({ handoff }) => handoff.status === 'changes_requested').map(codeReviewReportRef),
+        ),
       ];
     case 'qa-handoff-readiness':
       return [
-        group('pending', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'pending').length),
-        group('blocked', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'blocked').length),
-        group('accepted', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'accepted').length),
+        group('pending', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'pending').map(qaHandoffReportRef)),
+        group('blocked', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'blocked').map(qaHandoffReportRef)),
+        group('accepted', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'accepted').map(qaHandoffReportRef)),
       ];
     case 'release-readiness':
       return [
-        group('planned_releases', context.releases.length),
-        group('release_blocking_items', context.developmentPlanItems.filter(({ item }) => item.release_impact === 'release_blocking').length),
+        group('planned_releases', context.releases.map(releaseReportRef)),
+        group(
+          'release_blocking_items',
+          context.developmentPlanItems
+            .filter(({ item }) => item.release_impact === 'release_blocking')
+            .map(developmentPlanItemReportRef),
+        ),
       ];
     case 'quality-bug-escape':
       return [
-        group('escaped_bugs', context.workItems.filter((workItem) => workItem.kind === 'bug' && workItem.phase !== 'done').length),
-        group('qa_blockers', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'blocked').length),
+        group('escaped_bugs', context.workItems.filter((workItem) => workItem.kind === 'bug' && workItem.phase !== 'done').map(workItemReportRef)),
+        group('qa_blockers', context.qaHandoffs.filter(({ handoff }) => handoff.status === 'blocked').map(qaHandoffReportRef)),
       ];
     default:
-      return [group('items', context.developmentPlanItems.length)];
+      return [group('items', context.developmentPlanItems.map(developmentPlanItemReportRef))];
   }
 }
 
-function group(id: string, count: number): Record<string, unknown> {
-  return { id, count, items: [] };
+function group(id: string, items: ProductObjectRef[]): Record<string, unknown> {
+  return { id, count: items.length, items };
+}
+
+function developmentPlanItemReportRef({ item }: DevelopmentPlanItemWithPlan): ProductObjectRef {
+  return {
+    type: 'development_plan_item',
+    id: item.id,
+    development_plan_id: item.development_plan_id,
+    title: item.title,
+  };
+}
+
+function executionReportRef({ execution }: ExecutionWithContext): ProductObjectRef {
+  return { type: 'execution', id: execution.id, title: execution.current_step ?? execution.status };
+}
+
+function codeReviewReportRef({ handoff }: CodeReviewWithContext): ProductObjectRef {
+  return { type: 'code_review_handoff', id: handoff.id, title: handoff.summary };
+}
+
+function qaHandoffReportRef({ handoff }: QaWithContext): ProductObjectRef {
+  return { type: 'qa_handoff', id: handoff.id, title: handoff.ref.title ?? handoff.development_plan_item_ref.title ?? handoff.status };
+}
+
+function releaseReportRef(release: Release): ProductObjectRef {
+  return { type: 'release', id: release.id, title: release.title };
+}
+
+function workItemReportRef(workItem: WorkItem): ProductObjectRef {
+  return { type: workItemKindToObjectType(workItem.kind), id: workItem.id, title: workItem.title } as ProductObjectRef;
 }
 
 function latestUpdatedAt(values: string[]): string | undefined {
