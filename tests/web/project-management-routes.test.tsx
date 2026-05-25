@@ -149,6 +149,28 @@ describe('project management route IA', () => {
     expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
   });
 
+  it('renders source object evidence routes as product-grade evidence workspaces', async () => {
+    for (const [route, heading, expectedEvidence] of [
+      ['/requirements/req-1/evidence', 'Requirement Evidence', /checkout validation acceptance evidence/i],
+      ['/initiatives/init-1/evidence', 'Initiative Evidence', /checkout reliability initiative evidence/i],
+      ['/bugs/bug-1/evidence', 'Bug Evidence', /checkout regression reproduction evidence/i],
+      ['/tech-debt/td-1/evidence', 'Tech Debt Evidence', /checkout validation debt evidence/i],
+    ] as const) {
+      const screen = await renderRoute(route);
+
+      expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy();
+      expect(document.querySelector('[data-page-family="evidence"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
+      expect(screen.getByRole('region', { name: /evidence readiness summary/i })).toBeTruthy();
+      expect(screen.getAllByText(/relevant evidence/i).length).toBeGreaterThan(0);
+      expect((await screen.findAllByText(expectedEvidence)).length).toBeGreaterThan(0);
+      expect(screen.getByRole('link', { name: /open source object/i }).getAttribute('href')).toBe(route.replace('/evidence', ''));
+      expect(document.querySelector('[data-first-viewport]')?.textContent).not.toMatch(/Raw artifact links|Evidence attachments/i);
+      expect(document.body.textContent).not.toMatch(/Scaffold|Generate Spec|Generate Execution Plan|Work Item Owner|owner_actor_id|\/tasks/);
+      cleanup();
+    }
+  });
+
   it('renders typed list and detail source object surfaces', async () => {
     for (const [route, heading, expectedText] of [
       ['/requirements', 'Requirements', /checkout requirement/i],

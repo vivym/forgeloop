@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttachmentRef, AttachmentRenderRef } from '@forgeloop/contracts';
 
 import { EvidenceAttachments } from '../../apps/web/src/shared/ui/evidence-attachments';
+import { projectId, requirementDetail } from './fixtures/product-data';
+import { renderRoute } from './router-test-utils';
 
 const publicAttachmentFixture = (overrides: Partial<AttachmentRef> = {}): AttachmentRef => ({
   id: 'att-1',
@@ -114,5 +116,66 @@ describe('EvidenceAttachments', () => {
     await waitFor(() => expect(screen.getByText(/unavailable evidence/i)).toBeTruthy());
     expect(screen.queryByRole('img', { name: 'Checkout flow' })).toBeNull();
     expect(document.body.innerHTML).not.toContain('/api/attachments/att-other/render/render-token');
+  });
+
+  it('renders source evidence readiness states without promoting raw artifact links', async () => {
+    const screen = await renderRoute('/requirements/req-1/evidence', {
+      apiOverrides: {
+        'GET /query/requirements/req-1': {
+          ...requirementDetail,
+          evidence_refs: [{ type: 'attachment', id: 'att-relevant', title: 'Relevant checkout evidence' }],
+          attachment_refs: [
+            publicAttachmentFixture({
+              id: 'att-relevant',
+              filename: 'relevant.md',
+              content_type: 'text/markdown',
+              evidence_category: 'document',
+              owner_object_id: 'req-1',
+              caption: 'Relevant checkout evidence',
+              alt_text: 'Relevant checkout evidence',
+            }),
+            publicAttachmentFixture({
+              id: 'att-stale',
+              filename: 'stale.md',
+              content_type: 'text/markdown',
+              evidence_category: 'document',
+              owner_object_id: 'req-1',
+              reference_status: 'archived',
+              caption: 'Stale checkout evidence',
+              alt_text: 'Stale checkout evidence',
+            }),
+            publicAttachmentFixture({
+              id: 'att-unavailable',
+              filename: 'unsafe.md',
+              content_type: 'text/markdown',
+              evidence_category: 'document',
+              owner_object_id: 'req-1',
+              safety_status: 'unavailable',
+              caption: 'Unavailable checkout evidence',
+              alt_text: 'Unavailable checkout evidence',
+            }),
+          ],
+        },
+        'GET /query/requirements/req-1/evidence': {
+          object_ref: requirementDetail.ref,
+          evidence_refs: [
+            { type: 'attachment', id: 'att-relevant', title: 'Relevant checkout evidence' },
+            { type: 'attachment', id: 'att-missing', title: 'Missing checkout evidence' },
+          ],
+        },
+        [`GET /query/requirements?project_id=${projectId}&limit=100`]: {
+          items: [],
+          degraded_sources: [],
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Requirement Evidence' })).toBeTruthy();
+    expect(screen.getAllByText(/relevant evidence/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/missing evidence/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/stale evidence/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/unavailable evidence/i).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain('bucket.example.com');
+    expect(document.body.textContent).not.toContain('Raw artifact browser');
   });
 });

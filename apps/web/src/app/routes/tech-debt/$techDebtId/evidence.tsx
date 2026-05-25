@@ -1,12 +1,21 @@
-import { ScaffoldRoute } from '../../_scaffold';
+import { useParams } from 'react-router';
+
+import { ObjectEvidenceRoute } from '../../../../features/project-management/object-evidence-route';
+import { useTechDebtDetailQuery } from '../../../../shared/api/hooks';
 
 export default function TechDebtEvidenceRoute() {
+  const { techDebtId } = useParams();
+  const query = useTechDebtDetailQuery(techDebtId);
+
   return (
-    <ScaffoldRoute
-      notice="Tech debt evidence will render safe attachment references."
-      sectionTitle="Tech debt evidence"
-      subtitle="Evidence attached to this tech debt item."
-      title="Tech Debt Evidence"
+    <ObjectEvidenceRoute
+      detail={query.data}
+      detailError={query.error}
+      detailLoading={query.isLoading}
+      evidenceQueryPath={techDebtId === undefined ? undefined : `/query/tech-debt/${encodeURIComponent(techDebtId)}/evidence`}
+      objectId={techDebtId}
+      objectLabel="Tech Debt"
+      sourceHref={techDebtId === undefined ? undefined : `/tech-debt/${encodeURIComponent(techDebtId)}`}
     />
   );
 }

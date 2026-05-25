@@ -64,4 +64,14 @@ describe('product-grade first viewport contract', () => {
     expectFirstViewportContract(rendered, { pageFamily: 'source-object', heading: 'Requirement' });
     expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
   });
+
+  it('requires source object evidence routes to expose evidence readiness before attachment lists', async () => {
+    const rendered = await renderRoute('/requirements/req-1/evidence');
+
+    expect(await rendered.findByRole('heading', { name: 'Requirement Evidence' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'evidence', heading: 'Requirement Evidence' });
+    expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/evidence ready/i);
+    expect(document.querySelector('[data-first-viewport]')?.textContent).not.toMatch(/Evidence attachments|Raw artifact links/i);
+  });
 });
