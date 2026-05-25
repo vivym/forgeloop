@@ -154,7 +154,7 @@ const specPlanColumns: DataTableColumn<SpecPlanQueueRow>[] = [
     key: 'document',
     header: 'Document',
     cell: (row) => (
-      <div className="grid min-h-11 min-w-[14rem] max-w-[24rem] gap-1 md:min-h-12 md:max-h-14" data-desktop-row-height="44-56" data-spec-plan-queue-row="">
+      <div className="flex min-h-6 min-w-[14rem] max-w-[24rem] items-center gap-3" data-desktop-row-height="44-56" data-spec-plan-queue-row="">
         <span className="truncate font-semibold text-text-primary">{row.title}</span>
         <Link className={secondaryLinkClass} onClick={(event) => event.stopPropagation()} to={row.href}>
           Open plan item
