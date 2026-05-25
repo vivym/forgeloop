@@ -71,6 +71,7 @@ export function NewTechDebtRoute() {
         { label: 'Tech Debt Driver', name: 'driver_actor_id', input: 'input', defaultValue: actorId, required: true },
       ]}
       narrativeTemplate={'## Refactor narrative\n\nDescribe constraints, behavior preservation, and evidence needs.'}
+      objectType="tech_debt"
       onSubmit={async (values) => {
         const rollbackNotes = emptyToUndefined(values.release_impact);
         const api = createForgeloopCommandApi();

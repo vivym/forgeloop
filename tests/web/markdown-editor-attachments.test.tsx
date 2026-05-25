@@ -7,6 +7,7 @@ import type { ComponentProps } from 'react';
 import type { AttachmentRef } from '@forgeloop/contracts';
 
 import { ForgeMarkdownEditor } from '../../apps/web/src/shared/ui/markdown-editor';
+import { renderRoute } from './router-test-utils';
 
 const publicAttachmentFixture = (overrides: Partial<AttachmentRef> = {}): AttachmentRef => ({
   id: 'att-1',
@@ -143,5 +144,16 @@ describe('ForgeMarkdownEditor attachments', () => {
     await user.click(screen.getByRole('menuitem', { name: /ci.log/i }));
 
     expect(onChange).toHaveBeenCalledWith(expect.stringContaining('[ci.log](attachment://att-log)'));
+  });
+
+  it('keeps image insertion affordances available on source object authoring routes', async () => {
+    const user = userEvent.setup();
+    const rendered = await renderRoute('/requirements/new');
+
+    await user.click(await rendered.findByRole('button', { name: /insert image/i }));
+
+    expect(rendered.getByLabelText(/image file/i)).toBeTruthy();
+    expect(rendered.getByRole('region', { name: /narrative document/i })).toBeTruthy();
+    expect(rendered.queryByRole('textbox', { name: /narrative markdown/i })).toBeNull();
   });
 });

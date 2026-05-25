@@ -73,6 +73,7 @@ export function NewRequirementRoute() {
         { label: 'Requirement Driver', name: 'driver_actor_id', input: 'input', defaultValue: actorId, required: true },
       ]}
       narrativeTemplate={'## Requirement context\n\nDescribe the product narrative and evidence expectations.'}
+      objectType="requirement"
       onSubmit={async (values) => {
         const acceptanceCriteria = splitLines(values.acceptance_criteria);
         const inScope = splitLines(values.in_scope);

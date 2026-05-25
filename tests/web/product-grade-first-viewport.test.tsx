@@ -56,4 +56,12 @@ describe('product-grade first viewport contract', () => {
     expectFirstViewportContract(rendered, { pageFamily: 'source-object-list', heading: 'Requirements' });
     expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
   });
+
+  it('requires source object detail routes to expose the object first-viewport contract', async () => {
+    const rendered = await renderRoute('/requirements/req-1');
+
+    expect(await rendered.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'source-object', heading: 'Requirement' });
+    expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
+  });
 });

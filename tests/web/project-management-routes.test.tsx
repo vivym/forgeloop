@@ -123,18 +123,29 @@ describe('project management route IA', () => {
     const screen = await renderRoute('/requirements/req-1');
 
     expect(await screen.findByRole('heading', { name: /^Requirement$/ })).toBeTruthy();
+    expect(await screen.findByText(/checkout validation must block bad payment states/i)).toBeTruthy();
+    expect(document.querySelector('[data-page-family="source-object"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-document-surface="source-narrative"]')).toBeInstanceOf(HTMLElement);
+    expect(screen.getByRole('region', { name: /source narrative document/i })).toBeTruthy();
+    expect(screen.getByRole('region', { name: /source metadata/i }).querySelector('[data-compact-metadata]')).toBeInstanceOf(HTMLElement);
     expect(await screen.findByRole('tablist', { name: /source object sections/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /brief/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /development plan/i })).toBeTruthy();
     expect(screen.getByRole('radiogroup', { name: /role lens/i })).toBeTruthy();
-    expect(await screen.findByRole('complementary', { name: /next action/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /create development plan/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /generate development plan/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /link existing development plan/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /add row to existing development plan/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /generate spec/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /generate execution plan/i })).toBeNull();
     expect(screen.getByRole('link', { name: /open development plan item/i }).getAttribute('href')).toBe(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
+    expect(screen.getByText(/evidence 1/i)).toBeTruthy();
+    expect(screen.getByText(/release release-web-product/i)).toBeTruthy();
+    expect(screen.getByText(/risk medium/i)).toBeTruthy();
+    expect(document.querySelector('[data-first-viewport]')?.textContent).not.toMatch(/Evidence attachments|Planning links/i);
     expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
   });
 
@@ -267,9 +278,27 @@ describe('project management route IA', () => {
       for (const field of fields) {
         expect(await screen.findByLabelText(new RegExp(field, 'i'))).toBeTruthy();
       }
-      expect(screen.getByRole('textbox', { name: /narrative markdown/i })).toBeTruthy();
+      expect(screen.queryByRole('textbox', { name: /narrative markdown/i })).toBeNull();
+      expect(screen.getByRole('region', { name: /narrative document/i })).toBeTruthy();
+      expect(screen.getByRole('textbox', { name: /markdown editor/i })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /insert image/i })).toBeTruthy();
       expect(screen.getByRole('link', { name: /cancel/i }).getAttribute('href')).not.toBe('/work-items');
       cleanup();
     }
+  });
+
+  it('shows authoring unsaved-change and validation states', async () => {
+    const screen = await renderRoute('/requirements/new');
+
+    fireEvent.change(await screen.findByLabelText(/stakeholder problem/i), {
+      target: { value: 'Checkout operators need better payment validation.' },
+    });
+
+    expect(await screen.findByRole('status', { name: /draft changes/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
+
+    expect(await screen.findByRole('alert', { name: /validation summary/i })).toBeTruthy();
+    expect(screen.getAllByText(/desired outcome is required/i).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByLabelText(/desired outcome/i).getAttribute('aria-invalid')).toBe('true');
   });
 });
