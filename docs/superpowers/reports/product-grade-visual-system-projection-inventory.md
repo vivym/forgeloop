@@ -8,7 +8,7 @@ Task 3 requires presentation view models to use only existing product projection
 | Source evidence status | Existing attachment, evidence, relationship, and unavailable/degraded source data | Evidence readiness unavailable/stale block | None planned |
 | Execution PR/diff/test evidence | Existing execution evidence refs, changed-file summaries, check-result summaries, and lifecycle events where present | Compact "Evidence unavailable" state with recovery link if available | None planned |
 | Release approvals and rollback disabled reasons | Existing release readiness/cockpit data plus command disabled reasons | Launch/rollback disabled with explicit missing approval or blocker reason | None planned |
-| Report conclusions and suggested actions | Existing report rows, degraded source flags, risk counts, and linked object refs | "Insufficient signal" conclusion and no enabled action | None planned |
+| Report conclusions and suggested actions | Existing report groups, report links, degraded source flags, and generated timestamp | "Insufficient signal" conclusion and no enabled action | None planned |
 
 ## Adapter Ownership
 
@@ -22,4 +22,4 @@ Task 3 requires presentation view models to use only existing product projection
 | `specPlanQueueViewModel` | Governance queue status, review actor, risk, next action | Specs and Execution Plans queue projection | Empty queue renders no pending governance action |
 | `executionViewModel` | PR, diff, test evidence and recovery link | Execution detail/list projection refs plus lifecycle summaries | Missing refs render compact "Evidence unavailable" with item recovery link when present |
 | `releaseViewModel` | Launch/rollback action enablement, approvals, blockers | Release cockpit/readiness projections and disabled reasons | Missing approval disables launch; missing rollback plan disables rollback |
-| `reportViewModel` | Conclusion and suggested action | Report rows, degraded source flags, risk counts, linked refs | Missing rows/signals render "Insufficient signal" and no suggested action |
+| `reportViewModel` | Conclusion and suggested action | Report groups, report links, degraded source flags, generated timestamp | Missing groups/signals render "Insufficient signal" and no suggested action |

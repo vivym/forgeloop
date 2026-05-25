@@ -43,7 +43,7 @@ export function sourceObjectListViewModel(source: SourceObjectProjection): Produ
 }
 
 function sourceEvidence(source: SourceObjectProjection): ViewModelEvidence {
-  const evidenceCount = (source.evidence_refs?.length ?? 0) + (source.attachment_refs?.length ?? 0);
+  const evidenceCount = uniqueRefCount([...(source.evidence_refs ?? []), ...(source.attachment_refs ?? [])]);
   if (evidenceCount === 0) {
     return {
       label: 'Source evidence',
@@ -58,6 +58,10 @@ function sourceEvidence(source: SourceObjectProjection): ViewModelEvidence {
     compactText: `${evidenceCount} evidence reference${evidenceCount === 1 ? '' : 's'}`,
     href: evidenceHref(source),
   };
+}
+
+function uniqueRefCount(refs: readonly SourceRef[]): number {
+  return new Set(refs.map((ref) => `${ref.type ?? 'ref'}:${ref.id ?? ref.title ?? 'unknown'}`)).size;
 }
 
 function sourceGateProgress(source: SourceObjectProjection, linkedPlan: SourceRef | undefined): ViewModelGate[] {

@@ -64,9 +64,22 @@ export function releaseViewModel(input: { release: ReleaseProjection; readiness:
 }
 
 function launchDisabledReasonFor(readiness: ReleaseReadinessProjection): string | undefined {
-  if (readiness.ready) return undefined;
+  const missingEvidenceReason = missingReadinessEvidenceReason(readiness);
+  if (missingEvidenceReason !== undefined) return missingEvidenceReason;
   if ((readiness.required_review_evidence?.length ?? 0) === 0) return 'Release approval evidence unavailable';
+  const blockedEvidenceReason = firstEvidenceDisabledReason(readiness);
+  if (blockedEvidenceReason !== undefined) return blockedEvidenceReason;
+  if (hasBlockedEvidence(readiness)) return 'Release evidence is blocked';
+  if (readiness.ready) return undefined;
   return readiness.disabled_reasons?.[0]?.message ?? firstEvidenceDisabledReason(readiness) ?? 'Release approval is blocked';
+}
+
+function missingReadinessEvidenceReason(readiness: ReleaseReadinessProjection): string | undefined {
+  if ((readiness.required_review_evidence?.length ?? 0) === 0) return 'Release approval evidence unavailable';
+  if ((readiness.required_test_acceptance_evidence?.length ?? 0) === 0) return 'Test acceptance evidence unavailable';
+  if ((readiness.package_run_evidence?.length ?? 0) === 0) return 'Package run evidence unavailable';
+  if ((readiness.observation_evidence?.length ?? 0) === 0) return 'Observation evidence unavailable';
+  return undefined;
 }
 
 function firstEvidenceDisabledReason(readiness: ReleaseReadinessProjection): string | undefined {
@@ -89,7 +102,17 @@ function releaseEvidence(readiness: ReleaseReadinessProjection): ViewModelEviden
 
 function approvalState(readiness: ReleaseReadinessProjection): string {
   if ((readiness.required_review_evidence?.length ?? 0) === 0) return 'unavailable';
-  return readiness.ready ? 'approved' : 'blocked';
+  return readiness.ready && launchDisabledReasonFor(readiness) === undefined ? 'approved' : 'blocked';
+}
+
+function hasBlockedEvidence(readiness: ReleaseReadinessProjection): boolean {
+  const groups = [
+    readiness.required_review_evidence,
+    readiness.required_test_acceptance_evidence,
+    readiness.package_run_evidence,
+    readiness.observation_evidence,
+  ];
+  return groups.flatMap((group) => group ?? []).some((item) => item.status === 'missing' || item.disabled_reason !== undefined);
 }
 
 function evidenceState(items: readonly ReleaseReadinessItem[] | undefined): ViewModelEvidence['state'] {

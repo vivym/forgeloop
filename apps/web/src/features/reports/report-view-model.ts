@@ -1,36 +1,24 @@
 import type { ProductPageViewModel, ViewModelAction } from '../product-surfaces/view-model-types';
 
-interface ReportRow {
-  label?: string;
-  value?: string | number;
-  risk?: string;
-  conclusion?: string;
-  suggested_action?: {
-    id?: string;
-    label?: string;
-    href?: string;
-    enabled?: boolean;
-    disabledReason?: string;
-  };
-}
+type ReportGroup = { id?: string; count?: number; items?: readonly unknown[] };
+type ReportLink = { id?: string; href?: string };
 
 interface ReportProjection {
   id: string;
   title?: string;
   project_id?: string;
   generated_at?: string;
-  rows?: readonly ReportRow[];
+  groups?: readonly ReportGroup[];
+  links?: readonly ReportLink[];
   degraded_sources?: readonly string[];
-  risk_counts?: Record<string, number>;
-  linked_object_refs?: readonly { id?: string; title?: string; type?: string }[];
 }
 
 export function reportViewModel(report: ReportProjection): ProductPageViewModel {
-  const rows = report.rows ?? [];
-  const hasSignal = rows.length > 0 && (report.degraded_sources?.length ?? 0) === 0;
-  const firstSuggestedAction = hasSignal ? rows.find((row) => row.suggested_action !== undefined)?.suggested_action : undefined;
-  const suggestedAction = firstSuggestedAction === undefined ? undefined : toAction(firstSuggestedAction);
-  const conclusion = hasSignal ? rows.find((row) => row.conclusion !== undefined)?.conclusion ?? 'Signal available' : 'Insufficient signal';
+  const groups = report.groups ?? [];
+  const links = report.links ?? [];
+  const hasSignal = groups.length > 0 && (report.degraded_sources?.length ?? 0) === 0;
+  const suggestedAction = hasSignal ? linkAction(links[0]) : undefined;
+  const conclusion = hasSignal ? `${sentenceCase(reportTitle(report.id))} signal available` : 'Insufficient signal';
 
   return {
     objectLabel: report.title ?? reportTitle(report.id),
@@ -46,29 +34,29 @@ export function reportViewModel(report: ReportProjection): ProductPageViewModel 
     ],
     criticalEvidence: [
       {
-        label: 'Report signal',
+        label: 'Report groups',
         state: hasSignal ? 'available' : 'unavailable',
-        compactText: hasSignal ? `${rows.length} row(s)` : 'Insufficient signal',
+        compactText: hasSignal ? `${groups.length} populated group(s)` : 'Insufficient signal',
       },
     ],
     secondaryMetadata: [
-      { label: 'Rows', value: String(rows.length) },
-      { label: 'Linked objects', value: String(report.linked_object_refs?.length ?? 0) },
+      { label: 'Groups', value: String(groups.length) },
+      { label: 'Links', value: String(links.length) },
     ],
-    previewSummary: rows.map((row) => `${row.label ?? 'Metric'}: ${row.value ?? row.conclusion ?? 'Available'}`).join(', ') || 'Report signal unavailable',
+    previewSummary: groups.map((group) => `${group.id ?? 'group'}: ${group.count ?? 0}`).join(', ') || 'Report signal unavailable',
     timelineSummary: report.generated_at === undefined ? 'Timeline unavailable' : `Generated ${report.generated_at}`,
     conclusion,
     suggestedAction,
   };
 }
 
-function toAction(action: NonNullable<ReportRow['suggested_action']>): ViewModelAction {
+function linkAction(link: ReportLink | undefined): ViewModelAction | undefined {
+  if (link?.id === undefined || link.href === undefined) return undefined;
   return {
-    id: action.id ?? 'report-suggested-action',
-    label: action.label ?? 'Review report action',
-    enabled: action.enabled ?? true,
-    disabledReason: action.disabledReason,
-    href: action.href,
+    id: link.id,
+    label: `Open ${reportTitle(link.id)} report`,
+    enabled: true,
+    href: link.href,
   };
 }
 
@@ -84,8 +72,12 @@ function reportTitle(id: string): string {
 }
 
 function riskSignal(report: ReportProjection): string {
-  const counts = report.risk_counts;
-  if (counts === undefined) return (report.degraded_sources?.length ?? 0) === 0 ? 'Risk signal unavailable' : 'Degraded report signal';
-  const highRisk = (counts.high ?? 0) + (counts.critical ?? 0);
-  return highRisk === 0 ? 'No high risk report signal' : `${highRisk} high risk signal(s)`;
+  if ((report.degraded_sources?.length ?? 0) > 0) return 'Degraded report signal';
+  const total = (report.groups ?? []).reduce((sum, group) => sum + (group.count ?? 0), 0);
+  return total === 0 ? 'No report count signal' : `${total} total report signal(s)`;
+}
+
+function sentenceCase(value: string): string {
+  const lower = value.toLowerCase();
+  return lower.length === 0 ? lower : `${lower[0]!.toUpperCase()}${lower.slice(1)}`;
 }

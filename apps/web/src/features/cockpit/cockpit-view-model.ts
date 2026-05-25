@@ -37,14 +37,16 @@ interface CockpitProjection {
 export function cockpitViewModel(cockpit: CockpitProjection): ProductPageViewModel {
   const readiness = cockpit.delivery_readiness;
   const blockers = readiness?.blockers ?? [];
-  const nextAction = readiness?.next_actions?.find((action) => action.enabled !== false)?.label ?? firstBlockingLabel(readiness?.stages) ?? 'Review cockpit readiness';
+  const explicitEnabledAction = readiness?.next_actions?.find((action) => action.enabled === true);
+  const hasActionWithoutEligibility = readiness?.next_actions?.some((action) => action.enabled !== true) ?? false;
+  const nextAction = explicitEnabledAction?.label ?? firstBlockingLabel(readiness?.stages) ?? 'Review cockpit readiness';
 
   return {
     objectLabel: cockpit.item.title ?? cockpit.item.id,
     objectType: objectTypeLabel(cockpit.item.kind),
     currentState: readiness?.overall_state ?? cockpit.item.phase ?? 'State unavailable',
     nextAction,
-    disabledReason: blockers[0]?.label,
+    disabledReason: blockers[0]?.label ?? (hasActionWithoutEligibility ? 'Next action eligibility unavailable' : undefined),
     primaryActorOrRole: cockpit.item.driver_actor_id ?? readiness?.active_lane ?? 'Unassigned',
     riskSignal: riskLabel(cockpit.item.risk, blockers.length),
     gateProgress: gateProgress(readiness?.stages),

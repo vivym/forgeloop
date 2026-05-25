@@ -86,6 +86,19 @@ describe('product-grade presentation view models', () => {
     });
   });
 
+  it('does not surface cockpit next actions without explicit enabled metadata as executable', () => {
+    const viewModel = cockpitViewModel({
+      ...workItemKindCockpitFixtures.requirement,
+      delivery_readiness: {
+        ...workItemKindCockpitFixtures.requirement.delivery_readiness,
+        next_actions: [{ label: 'Run unsafe command without eligibility metadata' }],
+      },
+    });
+
+    expect(viewModel.nextAction).not.toBe('Run unsafe command without eligibility metadata');
+    expect(viewModel.disabledReason).toBe('Next action eligibility unavailable');
+  });
+
   it('projects My Work queues and degrades missing bulk action eligibility', () => {
     const viewModel = myWorkQueueViewModel(myWorkQueueResponse);
 
@@ -206,23 +219,53 @@ describe('product-grade presentation view models', () => {
     );
   });
 
+  it('fails release launch closed when partial readiness claims ready without required evidence groups', () => {
+    const partialReadyRelease = releaseViewModel({
+      release,
+      readiness: { ready: true },
+    });
+
+    expect(partialReadyRelease.gateProgress).toContainEqual(
+      expect.objectContaining({
+        label: 'Approval',
+        state: 'unavailable',
+        disabledReason: 'Release approval evidence unavailable',
+      }),
+    );
+    expect(partialReadyRelease.actions).toContainEqual(
+      expect.objectContaining({
+        id: 'launch',
+        enabled: false,
+        disabledReason: 'Release approval evidence unavailable',
+      }),
+    );
+  });
+
   it('projects Reports and refuses to invent conclusions or suggested actions from insufficient signal', () => {
     expect(reportViewModel(reportFixtures.releaseReadiness)).toMatchObject({
       objectLabel: 'Release Readiness',
       objectType: 'Report',
-      currentState: expect.any(String),
-      nextAction: 'Review release blockers',
+      currentState: 'Signal available',
+      nextAction: 'Open Development Plan Throughput report',
       primaryActorOrRole: expect.any(String),
       riskSignal: expect.any(String),
-      conclusion: 'Release blocked by QA acceptance',
+      conclusion: 'Release readiness signal available',
       suggestedAction: expect.objectContaining({ enabled: true }),
     });
+    expect(reportViewModel(reportFixtures.releaseReadiness).criticalEvidence).toContainEqual(
+      expect.objectContaining({
+        label: 'Report groups',
+        state: 'available',
+        compactText: '2 populated group(s)',
+      }),
+    );
 
     const insufficientSignal = reportViewModel({
       id: 'release-readiness',
       project_id: projectId,
       generated_at: '2026-05-18T01:05:00.000Z',
-      rows: [],
+      groups: [],
+      links: [],
       degraded_sources: ['release-readiness:signal_unavailable'],
     });
 

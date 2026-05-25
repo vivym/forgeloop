@@ -1362,27 +1362,30 @@ export const productLaneFixtureItemsByLane = {
   manager: [functionalLaneItems[5]],
 } satisfies Record<ProductLaneId, ProductLaneItem[]>;
 
+export const reportLinks = [
+  'development-plan-throughput',
+  'brainstorming-bottlenecks',
+  'spec-review-aging',
+  'execution-plan-review-aging',
+  'execution-continuation',
+  'execution-outcomes',
+  'code-review',
+  'qa-handoff-readiness',
+  'release-readiness',
+  'quality-bug-escape',
+].map((id) => ({ id, href: `/reports/${id}` }));
+
 export const reportFixtures = {
   developmentPlanThroughput: {
     id: 'development-plan-throughput',
     title: 'Development Plan Throughput',
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
-    rows: [
-      {
-        label: 'Active Development Plan Items',
-        value: developmentPlan.items.length,
-        conclusion: 'Development Plan throughput signal available',
-        suggested_action: {
-          id: 'open-development-plan',
-          label: 'Review Development Plan Items',
-          href: `/development-plans/${developmentPlan.id}`,
-          enabled: true,
-        },
-      },
+    groups: [
+      { id: 'draft_or_active', count: developmentPlan.items.length, items: [] },
+      { id: 'approved_items', count: developmentPlan.items.filter((item) => item.execution_plan_status === 'approved').length, items: [] },
     ],
-    risk_counts: { medium: 1, high: 0 },
-    linked_object_refs: [{ type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title }],
+    links: reportLinks,
     degraded_sources: [],
   },
   qualityBugEscape: {
@@ -1390,22 +1393,11 @@ export const reportFixtures = {
     title: 'Quality Bug Escape',
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
-    rows: [
-      {
-        label: 'Open checkout regression',
-        value: bugListItem.severity,
-        risk: 'high',
-        conclusion: 'Quality risk requires QA verification',
-        suggested_action: {
-          id: 'open-bug',
-          label: 'Review checkout regression',
-          href: `/bugs/${bugListItem.id}`,
-          enabled: true,
-        },
-      },
+    groups: [
+      { id: 'escaped_bugs', count: 1, items: [] },
+      { id: 'qa_blockers', count: 0, items: [] },
     ],
-    risk_counts: { high: 1 },
-    linked_object_refs: [{ type: 'bug', id: bugListItem.id, title: bugListItem.title }],
+    links: reportLinks,
     degraded_sources: [],
   },
   releaseReadiness: {
@@ -1413,22 +1405,11 @@ export const reportFixtures = {
     title: 'Release Readiness',
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
-    rows: [
-      {
-        label: 'QA acceptance',
-        value: 'missing',
-        risk: 'high',
-        conclusion: 'Release blocked by QA acceptance',
-        suggested_action: {
-          id: 'review-release-blockers',
-          label: 'Review release blockers',
-          href: `/releases/${release.id}`,
-          enabled: true,
-        },
-      },
+    groups: [
+      { id: 'planned_releases', count: 1, items: [] },
+      { id: 'release_blocking_items', count: 0, items: [] },
     ],
-    risk_counts: { high: 1 },
-    linked_object_refs: [{ type: 'release', id: release.id, title: release.title }],
+    links: reportLinks,
     degraded_sources: [],
   },
   executionOutcomes: {
@@ -1436,21 +1417,11 @@ export const reportFixtures = {
     title: 'Execution Outcomes',
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
-    rows: [
-      {
-        label: 'Latest execution',
-        value: execution.status,
-        conclusion: 'Execution is still running',
-        suggested_action: {
-          id: 'inspect-execution',
-          label: 'Inspect execution',
-          href: `/executions/${execution.id}`,
-          enabled: true,
-        },
-      },
+    groups: [
+      { id: 'succeeded', count: 0, items: [] },
+      { id: 'failed', count: 0, items: [] },
     ],
-    risk_counts: { medium: 1, high: 0 },
-    linked_object_refs: [{ type: 'execution', id: execution.id, title: execution.ref.title }],
+    links: reportLinks,
     degraded_sources: [],
   },
   executionContinuation: {
@@ -1458,21 +1429,11 @@ export const reportFixtures = {
     title: 'Execution Continuation',
     project_id: projectId,
     generated_at: '2026-05-18T01:05:00.000Z',
-    rows: [
-      {
-        label: 'Continuation checkpoint',
-        value: execution.continuation_history.length,
-        conclusion: 'Execution continuation evidence is available',
-        suggested_action: {
-          id: 'inspect-continuation',
-          label: 'Inspect execution continuation',
-          href: `/executions/${execution.id}`,
-          enabled: true,
-        },
-      },
+    groups: [
+      { id: 'interrupted_or_resumable', count: 0, items: [] },
+      { id: 'running', count: execution.status === 'running' ? 1 : 0, items: [] },
     ],
-    risk_counts: { medium: 1, high: 0 },
-    linked_object_refs: [{ type: 'execution', id: execution.id, title: execution.ref.title }],
+    links: reportLinks,
     degraded_sources: [],
   },
 } as const;
