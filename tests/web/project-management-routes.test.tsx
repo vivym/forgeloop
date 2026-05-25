@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { developmentPlan, developmentPlanItem, projectId, requirementListItem } from './fixtures/product-data';
+import { actorId, developmentPlan, developmentPlanItem, projectId, requirementListItem } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 const removedRoutes = [
@@ -314,5 +314,49 @@ describe('project management route IA', () => {
     await waitFor(() => expect(confirm).toHaveBeenCalledWith('Discard unsaved source object draft changes?'));
     expect(screen.getByRole('heading', { name: 'New Requirement' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Reports' })).toBeNull();
+    confirm.mockRestore();
+  });
+
+  it('navigates from dirty source drafts after a single confirmed cancel', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const screen = await renderRoute('/requirements/new');
+
+    fireEvent.change(await screen.findByLabelText(/stakeholder problem/i), {
+      target: { value: 'Checkout operators need better payment validation.' },
+    });
+    fireEvent.click(screen.getByRole('link', { name: /cancel/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Requirements' })).toBeTruthy();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith('Discard unsaved source object draft changes?');
+    confirm.mockRestore();
+  });
+
+  it('submits dirty source drafts without discard prompts blocking success navigation', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const screen = await renderRoute('/requirements/new', {
+      apiOverrides: {
+        'POST /work-items': { id: 'req-created', driver_actor_id: actorId },
+        'PATCH /requirements/req-created/narrative': { id: 'req-created' },
+      },
+    });
+
+    fireEvent.change(await screen.findByLabelText(/stakeholder problem/i), {
+      target: { value: 'Checkout operators need better payment validation.' },
+    });
+    fireEvent.change(screen.getByLabelText(/desired outcome/i), {
+      target: { value: 'Invalid payment states are rejected before submission.' },
+    });
+    fireEvent.change(screen.getByLabelText(/acceptance criteria/i), {
+      target: { value: 'Invalid cards cannot be submitted.' },
+    });
+    fireEvent.change(screen.getByLabelText(/^in scope/i), {
+      target: { value: 'Checkout payment validation.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Requirements' })).toBeTruthy();
+    expect(confirm).not.toHaveBeenCalled();
+    confirm.mockRestore();
   });
 });

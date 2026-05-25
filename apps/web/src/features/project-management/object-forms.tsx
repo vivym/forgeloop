@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Link, useBlocker, useInRouterContext } from 'react-router';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react';
+import { Link, useBlocker, useInRouterContext, useNavigate } from 'react-router';
 import type { EditableObjectRef, MarkdownBlockKind, MarkdownDocument } from '@forgeloop/contracts';
 
 import { Button, Field, ForgeMarkdownEditor, InlineNotice, Input, Textarea } from '../../shared/ui';
@@ -30,6 +30,7 @@ export interface ObjectCreateFormProps {
 }
 
 export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, objectType, onSubmit, subtitle, title }: ObjectCreateFormProps) {
+  const navigate = useNavigate();
   const initialFieldValues = useMemo(() => Object.fromEntries(fields.map((field) => [field.name, field.defaultValue ?? ''])), [fields]);
   const initialNarrative = narrativeTemplate;
   const [fieldValues, setFieldValues] = useState<Record<string, string>>(initialFieldValues);
@@ -38,6 +39,7 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
   const [narrativeMarkdown, setNarrativeMarkdown] = useState(initialNarrative);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const initialValuesRef = useRef({ fieldValues: initialFieldValues, narrativeMarkdown: initialNarrative });
+  const intentionalExitRef = useRef(false);
   const dirty = fieldValuesChanged(fieldValues, initialValuesRef.current.fieldValues) || narrativeMarkdown !== initialValuesRef.current.narrativeMarkdown;
 
   useEffect(() => {
@@ -81,10 +83,24 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
     setValidationSummary(nextSummary);
     if (nextSummary.length > 0) return;
 
-    await onSubmit({
-      ...fieldValues,
-      narrative_markdown: narrativeMarkdown,
-    });
+    intentionalExitRef.current = true;
+    try {
+      await onSubmit({
+        ...fieldValues,
+        narrative_markdown: narrativeMarkdown,
+      });
+    } catch (error) {
+      intentionalExitRef.current = false;
+      throw error;
+    }
+  }
+
+  function handleCancelClick(event: MouseEvent<HTMLAnchorElement>) {
+    if (!dirty) return;
+    event.preventDefault();
+    if (!window.confirm('Discard unsaved source object draft changes?')) return;
+    intentionalExitRef.current = true;
+    void navigate(cancelHref);
   }
 
   return (
@@ -102,7 +118,7 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
           tone="danger"
         />
       ) : null}
-      <DiscardChangesPrompt enabled={dirty} />
+      <DiscardChangesPrompt bypassRef={intentionalExitRef} enabled={dirty} />
       <form className="grid gap-6" noValidate onSubmit={(event) => void handleSubmit(event)}>
         <section aria-label="Structured intake" className="grid gap-4">
           <div className="grid gap-4 md:grid-cols-2">
@@ -140,11 +156,7 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
           </Button>
           <Link
             className="inline-flex min-h-10 items-center rounded-md border border-border px-4 text-sm font-semibold text-text-primary"
-            onClick={(event) => {
-              if (!dirty) return;
-              if (window.confirm('Discard unsaved source object draft changes?')) return;
-              event.preventDefault();
-            }}
+            onClick={handleCancelClick}
             to={cancelHref}
           >
             Cancel
@@ -229,17 +241,18 @@ function fieldValuesChanged(current: Record<string, string>, initial: Record<str
   return currentKeys.some((key) => (current[key] ?? '') !== (initial[key] ?? ''));
 }
 
-function DiscardChangesPrompt({ enabled }: { enabled: boolean }) {
+function DiscardChangesPrompt({ bypassRef, enabled }: { bypassRef: { current: boolean }; enabled: boolean }) {
   const inRouterContext = useInRouterContext();
-  return inRouterContext ? <DiscardChangesBlocker enabled={enabled} /> : null;
+  return inRouterContext ? <DiscardChangesBlocker bypassRef={bypassRef} enabled={enabled} /> : null;
 }
 
-function DiscardChangesBlocker({ enabled }: { enabled: boolean }) {
-  const blocker = useBlocker(enabled);
+function DiscardChangesBlocker({ bypassRef, enabled }: { bypassRef: { current: boolean }; enabled: boolean }) {
+  const blocker = useBlocker(() => enabled && !bypassRef.current);
 
   useEffect(() => {
     if (blocker.state !== 'blocked') return;
     if (window.confirm('Discard unsaved source object draft changes?')) {
+      bypassRef.current = true;
       blocker.proceed();
       return;
     }
