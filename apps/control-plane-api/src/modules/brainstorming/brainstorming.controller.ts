@@ -12,6 +12,15 @@ const startBrainstormingSessionSchema = z
   })
   .strict();
 
+const startBoundaryBrainstormingSchema = z
+  .object({
+    actor_id: nonEmptyString,
+    leader_actor_id: nonEmptyString.optional(),
+    leader_delegate_actor_ids: z.array(nonEmptyString).optional(),
+    initial_leader_context_markdown: nonEmptyString.optional(),
+  })
+  .strict();
+
 const answerQuestionSchema = z
   .object({
     question_id: nonEmptyString,
@@ -24,7 +33,30 @@ const recordDecisionSchema = z
   .object({
     text: nonEmptyString,
     rationale: nonEmptyString.optional(),
+    waived_question_id: nonEmptyString.optional(),
     actor_id: nonEmptyString,
+  })
+  .strict();
+
+const continueBoundaryBrainstormingSchema = z
+  .object({
+    actor_id: nonEmptyString,
+    leader_input_markdown: nonEmptyString.optional(),
+  })
+  .strict();
+
+const approveBoundarySummaryRevisionSchema = z
+  .object({
+    actor_id: nonEmptyString,
+    final_decision: nonEmptyString.optional(),
+  })
+  .strict();
+
+const requestBoundarySummaryChangesSchema = z
+  .object({
+    actor_id: nonEmptyString,
+    feedback_markdown: nonEmptyString,
+    rationale: nonEmptyString.optional(),
   })
   .strict();
 
@@ -48,9 +80,13 @@ const revisionCompareQuerySchema = z
   .strict();
 
 type StartBrainstormingSessionDto = z.infer<typeof startBrainstormingSessionSchema>;
+type StartBoundaryBrainstormingDto = z.infer<typeof startBoundaryBrainstormingSchema>;
 type AnswerQuestionDto = z.infer<typeof answerQuestionSchema>;
 type RecordDecisionDto = z.infer<typeof recordDecisionSchema>;
+type ContinueBoundaryBrainstormingDto = z.infer<typeof continueBoundaryBrainstormingSchema>;
 type ApproveBoundaryDto = z.infer<typeof approveBoundarySchema>;
+type ApproveBoundarySummaryRevisionDto = z.infer<typeof approveBoundarySummaryRevisionSchema>;
+type RequestBoundarySummaryChangesDto = z.infer<typeof requestBoundarySummaryChangesSchema>;
 type RevisionCompareQueryDto = z.infer<typeof revisionCompareQuerySchema>;
 
 @Controller()
@@ -66,8 +102,32 @@ export class BrainstormingController {
     return this.service.startSession({ development_plan_id: developmentPlanId, item_id: itemId, actor_id: body.actor_id });
   }
 
+  @Post('development-plans/:developmentPlanId/items/:itemId/boundary-brainstorming')
+  startBoundaryBrainstorming(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('itemId') itemId: string,
+    @Body(new ZodValidationPipe(startBoundaryBrainstormingSchema)) body: StartBoundaryBrainstormingDto,
+  ) {
+    return this.service.startBoundaryBrainstorming({
+      development_plan_id: developmentPlanId,
+      item_id: itemId,
+      actor_id: body.actor_id,
+      leader_actor_id: body.leader_actor_id,
+      leader_delegate_actor_ids: body.leader_delegate_actor_ids,
+      initial_leader_context_markdown: body.initial_leader_context_markdown,
+    });
+  }
+
   @Post('brainstorming-sessions/:sessionId/answers')
   answerQuestion(
+    @Param('sessionId') sessionId: string,
+    @Body(new ZodValidationPipe(answerQuestionSchema)) body: AnswerQuestionDto,
+  ) {
+    return this.service.answerQuestion(sessionId, body);
+  }
+
+  @Post('boundary-brainstorming-sessions/:sessionId/answers')
+  answerBoundaryQuestion(
     @Param('sessionId') sessionId: string,
     @Body(new ZodValidationPipe(answerQuestionSchema)) body: AnswerQuestionDto,
   ) {
@@ -82,12 +142,46 @@ export class BrainstormingController {
     return this.service.recordDecision(sessionId, body);
   }
 
+  @Post('boundary-brainstorming-sessions/:sessionId/decisions')
+  recordBoundaryDecision(
+    @Param('sessionId') sessionId: string,
+    @Body(new ZodValidationPipe(recordDecisionSchema)) body: RecordDecisionDto,
+  ) {
+    return this.service.recordDecision(sessionId, body);
+  }
+
+  @Post('boundary-brainstorming-sessions/:sessionId/continue')
+  continueBoundaryBrainstorming(
+    @Param('sessionId') sessionId: string,
+    @Body(new ZodValidationPipe(continueBoundaryBrainstormingSchema)) body: ContinueBoundaryBrainstormingDto,
+  ) {
+    return this.service.continueBoundaryBrainstorming(sessionId, body);
+  }
+
   @Post('brainstorming-sessions/:sessionId/approve-boundary')
   approveBoundary(
     @Param('sessionId') sessionId: string,
     @Body(new ZodValidationPipe(approveBoundarySchema)) body: ApproveBoundaryDto,
   ) {
     return this.service.approveBoundary(sessionId, body);
+  }
+
+  @Post('boundary-brainstorming-sessions/:sessionId/summary-revisions/:revisionId/approve')
+  approveBoundarySummaryRevision(
+    @Param('sessionId') sessionId: string,
+    @Param('revisionId') revisionId: string,
+    @Body(new ZodValidationPipe(approveBoundarySummaryRevisionSchema)) body: ApproveBoundarySummaryRevisionDto,
+  ) {
+    return this.service.approveBoundarySummaryRevision(sessionId, revisionId, body);
+  }
+
+  @Post('boundary-brainstorming-sessions/:sessionId/summary-revisions/:revisionId/request-changes')
+  requestBoundarySummaryChanges(
+    @Param('sessionId') sessionId: string,
+    @Param('revisionId') revisionId: string,
+    @Body(new ZodValidationPipe(requestBoundarySummaryChangesSchema)) body: RequestBoundarySummaryChangesDto,
+  ) {
+    return this.service.requestBoundarySummaryChanges(sessionId, revisionId, body);
   }
 
   @Get('development-plans/:developmentPlanId/items/:itemId/revisions')

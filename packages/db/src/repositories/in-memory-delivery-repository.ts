@@ -2968,6 +2968,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.boundarySummaryRevisions.set(revision.id, clone(revision));
   }
 
+  async updateBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void> {
+    if (!this.boundarySummaryRevisions.has(revision.id)) {
+      return;
+    }
+    this.boundarySummaryRevisions.set(revision.id, clone(revision));
+  }
+
   async listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]> {
     return valuesFor(this.boundarySummaryRevisions)
       .filter((revision) => revision.boundary_summary_id === boundarySummaryId)

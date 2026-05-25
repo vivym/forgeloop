@@ -1383,6 +1383,7 @@ export interface DeliveryRepository {
   getBoundarySummary(id: string): Promise<BoundarySummary | undefined>;
   listBoundarySummaries(): Promise<BoundarySummary[]>;
   saveBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void>;
+  updateBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void>;
   listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]>;
   compareBoundarySummaryRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
   backfillBoundaryLeaderDefaults(input: {

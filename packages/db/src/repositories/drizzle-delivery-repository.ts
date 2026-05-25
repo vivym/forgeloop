@@ -4223,6 +4223,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     await this.insertImmutable(boundary_summary_revisions, this.boundarySummaryRevisionDbRecord(hydrated));
   }
 
+  async updateBoundarySummaryRevision(revision: BoundarySummaryRevision): Promise<void> {
+    const hydrated = await this.hydrateBoundarySummaryRevisionForSave(revision);
+    await this.db
+      .update(boundary_summary_revisions)
+      .set(this.boundarySummaryRevisionDbRecord(hydrated) as never)
+      .where(eq(boundary_summary_revisions.id, revision.id));
+  }
+
   async listBoundarySummaryRevisions(boundarySummaryId: string): Promise<BoundarySummaryRevision[]> {
     return this.listWhere<BoundarySummaryRevision>(
       boundary_summary_revisions,
