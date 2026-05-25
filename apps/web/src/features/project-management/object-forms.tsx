@@ -195,6 +195,7 @@ function NarrativeDocumentField({
       </div>
       <ForgeMarkdownEditor
         allowedBlocks={createNarrativeBlocks}
+        guardRouteTransitions={false}
         mode="edit"
         objectRef={draftSourceObjectRef(objectType)}
         onChange={onChange}

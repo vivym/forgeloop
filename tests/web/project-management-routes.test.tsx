@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { developmentPlan, developmentPlanItem, projectId, requirementListItem } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
@@ -300,5 +300,19 @@ describe('project management route IA', () => {
     expect(await screen.findByRole('alert', { name: /validation summary/i })).toBeTruthy();
     expect(screen.getAllByText(/desired outcome is required/i).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByLabelText(/desired outcome/i).getAttribute('aria-invalid')).toBe('true');
+  });
+
+  it('blocks route navigation for structured-field-only source drafts', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const screen = await renderRoute('/requirements/new');
+
+    fireEvent.change(await screen.findByLabelText(/stakeholder problem/i), {
+      target: { value: 'Checkout operators need better payment validation.' },
+    });
+    fireEvent.click(screen.getByRole('link', { name: 'Reports' }));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith('Discard unsaved source object draft changes?'));
+    expect(screen.getByRole('heading', { name: 'New Requirement' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Reports' })).toBeNull();
   });
 });
