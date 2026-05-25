@@ -227,6 +227,7 @@ const credentialBody = () => ({
     created_at: now,
   },
   secret_payload_json: credentialSecretPayload,
+  unsafe_db_acknowledgement: true,
   created_by_actor_id: actorId,
 });
 
@@ -685,6 +686,22 @@ describe('codex runtime control-plane APIs', () => {
     await signedSetupPost(app, '/internal/codex-runtime/credentials', credentialBody(), 'nonce-credential-no-flag').expect(403);
 
     vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    const credentialWithoutAck = credentialBody() as Record<string, unknown>;
+    delete credentialWithoutAck.unsafe_db_acknowledgement;
+    await signedSetupPost(
+      app,
+      '/internal/codex-runtime/credentials',
+      credentialWithoutAck,
+      'nonce-credential-no-ack',
+    ).expect(400);
+    vi.stubEnv('NODE_ENV', 'production');
+    await signedSetupPost(
+      app,
+      '/internal/codex-runtime/credentials',
+      credentialBody(),
+      'nonce-credential-production',
+    ).expect(403);
+    vi.stubEnv('NODE_ENV', 'test');
     await signedSetupPost(
       app,
       '/internal/codex-runtime/credentials',

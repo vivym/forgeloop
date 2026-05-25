@@ -1161,9 +1161,11 @@ describe('codex runtime repository behavior', () => {
       id: input.id,
       token_hash: input.bootstrap_token_hash,
     });
-    await expect(repository.createCodexWorkerBootstrapToken(input)).resolves.toMatchObject({
+    await expect(repository.createCodexWorkerBootstrapToken({ ...input, created_at: later, expires_at: later })).resolves.toMatchObject({
       id: input.id,
       token_hash: input.bootstrap_token_hash,
+      created_at: input.created_at,
+      expires_at: input.expires_at,
     });
   });
 

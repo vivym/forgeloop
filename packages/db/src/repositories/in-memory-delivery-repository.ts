@@ -988,7 +988,14 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         created_at: input.created_at,
         ...(input.revoked_at !== undefined ? { revoked_at: input.revoked_at } : {}),
       };
-      if (!valuesEqual(existing, expected)) {
+      const { created_at: _expectedCreatedAt, expires_at: _expectedExpiresAt, ...expectedReplayFields } = expected;
+      const {
+        created_at: _existingCreatedAt,
+        expires_at: _existingExpiresAt,
+        consumed_at: _existingConsumedAt,
+        ...existingReplayFields
+      } = existing;
+      if (!valuesEqual(existingReplayFields, expectedReplayFields)) {
         throw codexDenied('codex_worker_registration_denied', 'Worker bootstrap token already exists with different immutable fields.');
       }
       return {

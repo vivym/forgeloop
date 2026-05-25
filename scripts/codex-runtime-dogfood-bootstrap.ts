@@ -8,7 +8,6 @@ import {
   codexCredentialPayloadDigest,
   codexNetworkPolicyDigestInput,
   codexRuntimeNetworkPolicyDigest,
-  codexRuntimeProfileRevisionDigest,
   type CodexNetworkAllowlistRule,
   type CodexRuntimeProfileRevision,
 } from '../packages/domain/src/index';
@@ -21,6 +20,7 @@ export interface CodexRuntimeDogfoodBootstrapConfig {
   actorId: string;
   actorClass: 'system_bootstrap' | 'human_admin';
   daemonIdentity: string;
+  codexConfigToml: string;
   authJson: unknown;
   dockerImage: string;
   dockerImageDigest: string;
@@ -86,20 +86,33 @@ const parseJson = (value: string, key: string): unknown => {
   }
 };
 
+const readProtectedRegularFile = (path: string, key: string): string => {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`${key}_must_be_protected_regular_file`);
+  }
+  if ((stat.mode & 0o077) !== 0) {
+    throw new Error(`${key}_must_be_protected_regular_file`);
+  }
+  return readFileSync(path, 'utf8');
+};
+
+const parseCodexConfigToml = (env: EnvLike): string => {
+  const configPath = requiredEnv(env, 'FORGELOOP_CODEX_CONFIG_TOML_PATH');
+  const configToml = readProtectedRegularFile(configPath, 'FORGELOOP_CODEX_CONFIG_TOML_PATH');
+  if (configToml.trim().length === 0) {
+    throw new Error('FORGELOOP_CODEX_CONFIG_TOML_PATH_empty');
+  }
+  return configToml;
+};
+
 const parseAuthJson = (env: EnvLike, stdin?: string): unknown => {
   if (optionalEnv(env, 'FORGELOOP_CODEX_AUTH_JSON_INLINE') !== undefined) {
     throw new Error('FORGELOOP_CODEX_AUTH_JSON_INLINE_not_allowed');
   }
   const authPath = optionalEnv(env, 'FORGELOOP_CODEX_AUTH_JSON_PATH');
   if (authPath !== undefined) {
-    const authStat = lstatSync(authPath);
-    if (!authStat.isFile() || authStat.isSymbolicLink()) {
-      throw new Error('FORGELOOP_CODEX_AUTH_JSON_PATH_must_be_protected_regular_file');
-    }
-    if ((authStat.mode & 0o077) !== 0) {
-      throw new Error('FORGELOOP_CODEX_AUTH_JSON_PATH_must_be_protected_regular_file');
-    }
-    return parseJson(readFileSync(authPath, 'utf8'), 'FORGELOOP_CODEX_AUTH_JSON_PATH');
+    return parseJson(readProtectedRegularFile(authPath, 'FORGELOOP_CODEX_AUTH_JSON_PATH'), 'FORGELOOP_CODEX_AUTH_JSON_PATH');
   }
   if (stdin !== undefined && stdin.trim().length > 0) {
     return parseJson(stdin, 'stdin');
@@ -150,6 +163,7 @@ export const loadCodexRuntimeDogfoodBootstrapConfig = (
     actorId: requiredEnv(env, 'FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID'),
     actorClass,
     daemonIdentity: requiredEnv(env, 'FORGELOOP_CODEX_RUNTIME_SETUP_DAEMON_IDENTITY'),
+    codexConfigToml: parseCodexConfigToml(env),
     authJson: parseAuthJson(env, stdin),
     dockerImage: requiredEnv(env, 'FORGELOOP_CODEX_DOCKER_IMAGE'),
     dockerImageDigest: requiredSha256Digest(env, 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST'),
@@ -178,75 +192,6 @@ export const loadCodexRuntimeDogfoodBootstrapConfig = (
     workerBootstrapTokenVersion: positiveIntEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION'),
     hostWorkerUid: nonNegativeIntEnv(env, 'FORGELOOP_WORKER_HOST_UID', process.getuid?.() ?? 0),
     hostWorkerGid: nonNegativeIntEnv(env, 'FORGELOOP_WORKER_HOST_GID', process.getgid?.() ?? 0),
-  };
-};
-
-const buildProfileRevision = (
-  config: CodexRuntimeDogfoodBootstrapConfig,
-  input: {
-    profileId: string;
-    revisionId: string;
-    targetKind: 'generation' | 'run_execution';
-    expectedEffectiveConfigDigest: string;
-  },
-): CodexRuntimeProfileRevision => {
-  const codexConfigToml = 'approval_policy = "never"\n';
-  const revisionWithoutDigest: CodexRuntimeProfileRevision = {
-    id: input.revisionId,
-    profile_id: input.profileId,
-    revision_number: 1,
-    status: 'active',
-    environment: 'local_dogfood',
-    docker_image: config.dockerImage,
-    docker_image_digest: config.dockerImageDigest,
-    target_kind: input.targetKind,
-    source_access_mode: input.targetKind === 'generation' ? 'artifact_only' : 'path_policy_scoped',
-    codex_config_toml: codexConfigToml,
-    codex_config_digest: codexCanonicalDigest(codexConfigToml),
-    expected_effective_config_digest: input.expectedEffectiveConfigDigest,
-    effective_config_assertions:
-      input.targetKind === 'generation'
-        ? {
-            target_kind: 'generation',
-            approval_policy: 'never',
-            source_write_policy: 'artifact_only',
-            forbidden_writable_roots: ['workspace'],
-          }
-        : {
-            target_kind: 'run_execution',
-            approval_policy: 'never',
-            sandbox_type: 'danger-full-access',
-            writable_roots_policy: 'task_workspace_only',
-          },
-    app_server_required: true,
-    allowed_driver_kind: 'app_server',
-    network_policy: config.networkPolicy,
-    resource_limits: {
-      cpu_ms: 600_000,
-      memory_mb: 4096,
-      pids: 512,
-      fds: 1024,
-      workspace_bytes: 2_000_000_000,
-      artifact_bytes: 500_000_000,
-      timeout_ms: 900_000,
-      output_limit_bytes: 2_000_000,
-      run_output_limit_bytes: 2_000_000,
-    },
-    docker_policy: {
-      app_server_only: true,
-      rootless: true,
-      read_only_rootfs: true,
-      no_new_privileges: true,
-      drop_capabilities: ['ALL'],
-    },
-    allowed_scopes: [config.allowedScope],
-    profile_digest: 'sha256:placeholder',
-    created_by_actor_id: config.actorId,
-    created_at: new Date().toISOString(),
-  };
-  return {
-    ...revisionWithoutDigest,
-    profile_digest: codexRuntimeProfileRevisionDigest(revisionWithoutDigest),
   };
 };
 
@@ -282,66 +227,41 @@ const signedSetupPost = async (config: CodexRuntimeDogfoodBootstrapConfig, path:
 export const runCodexRuntimeDogfoodBootstrap = async (
   config: CodexRuntimeDogfoodBootstrapConfig = loadCodexRuntimeDogfoodBootstrapConfig(),
 ): Promise<Record<string, unknown>> => {
-  const generationProfileId = 'codex-runtime-generation-local-dogfood';
-  const runProfileId = 'codex-runtime-run-execution-local-dogfood';
-  const generationRevision = buildProfileRevision(config, {
-    profileId: generationProfileId,
-    revisionId: `${generationProfileId}-rev-1`,
-    targetKind: 'generation',
-    expectedEffectiveConfigDigest: config.generationExpectedEffectiveConfigDigest,
-  });
-  const runRevision = buildProfileRevision(config, {
-    profileId: runProfileId,
-    revisionId: `${runProfileId}-rev-1`,
-    targetKind: 'run_execution',
-    expectedEffectiveConfigDigest: config.runExecutionExpectedEffectiveConfigDigest,
-  });
   const createdAt = new Date().toISOString();
-  const authDigest = codexCredentialPayloadDigest(config.authJson);
-  for (const [profileId, revision] of [
-    [generationProfileId, generationRevision],
-    [runProfileId, runRevision],
-  ] as const) {
-    await signedSetupPost(config, '/internal/codex-runtime/profiles', {
-      profile: {
-        id: profileId,
-        name: profileId,
-        environment: 'local_dogfood',
-        target_kind: revision.target_kind,
-        active_revision_id: revision.id,
-        created_by_actor_id: config.actorId,
-        created_at: createdAt,
-        updated_at: createdAt,
-      },
-      revision,
-      created_by: { actor_id: config.actorId },
-    });
-    await signedSetupPost(config, '/internal/codex-runtime/credentials', {
-      binding: {
-        id: `${profileId}-credential`,
-        profile_id: profileId,
-        project_id: config.allowedScope.project_id,
-        ...(config.allowedScope.repo_id === undefined ? {} : { repo_id: config.allowedScope.repo_id }),
-        provider: 'unsafe_db',
-        purpose: 'model_provider',
-        active_version_id: `${profileId}-credential-v1`,
-        created_by_actor_id: config.actorId,
-        created_at: createdAt,
-        updated_at: createdAt,
-      },
-      version: {
-        id: `${profileId}-credential-v1`,
-        binding_id: `${profileId}-credential`,
-        version_number: 1,
-        status: 'active',
-        payload_digest: authDigest,
-        created_by_actor_id: config.actorId,
-        created_at: createdAt,
-      },
-      secret_payload_json: config.authJson,
-      created_by: { actor_id: config.actorId },
-    });
-  }
+  const generationImport = (await signedSetupPost(config, '/internal/codex-runtime/import-local-codex', {
+    profile_name: 'codex-runtime-generation-local-dogfood',
+    target_kind: 'generation',
+    local_source_label: 'dogfood-bootstrap-generation',
+    codex_config_toml: config.codexConfigToml,
+    auth_json: config.authJson,
+    project_id: config.allowedScope.project_id,
+    ...(config.allowedScope.repo_id === undefined ? {} : { repo_id: config.allowedScope.repo_id }),
+    docker_image: config.dockerImage,
+    docker_image_digest: config.dockerImageDigest,
+    expected_effective_config_digest: config.generationExpectedEffectiveConfigDigest,
+    allowed_scopes: [config.allowedScope],
+    network_policy: config.networkPolicy,
+    provider: 'unsafe_db',
+    unsafe_db_acknowledgement: true,
+    created_by: { actor_id: config.actorId },
+  })) as Record<string, string>;
+  const runExecutionImport = (await signedSetupPost(config, '/internal/codex-runtime/import-local-codex', {
+    profile_name: 'codex-runtime-run-execution-local-dogfood',
+    target_kind: 'run_execution',
+    local_source_label: 'dogfood-bootstrap-run-execution',
+    codex_config_toml: config.codexConfigToml,
+    auth_json: config.authJson,
+    project_id: config.allowedScope.project_id,
+    ...(config.allowedScope.repo_id === undefined ? {} : { repo_id: config.allowedScope.repo_id }),
+    docker_image: config.dockerImage,
+    docker_image_digest: config.dockerImageDigest,
+    expected_effective_config_digest: config.runExecutionExpectedEffectiveConfigDigest,
+    allowed_scopes: [config.allowedScope],
+    network_policy: config.networkPolicy,
+    provider: 'unsafe_db',
+    unsafe_db_acknowledgement: true,
+    created_by: { actor_id: config.actorId },
+  })) as Record<string, string>;
   await signedSetupPost(config, '/internal/codex-runtime/worker-bootstrap-tokens', {
     id: `bootstrap-${createHash('sha256').update(config.workerIdentity).digest('hex').slice(0, 16)}`,
     worker_identity: config.workerIdentity,
@@ -362,11 +282,14 @@ export const runCodexRuntimeDogfoodBootstrap = async (
   });
 
   return {
-    generation_runtime_profile_id: generationProfileId,
-    generation_credential_binding_id: `${generationProfileId}-credential`,
-    run_execution_runtime_profile_id: runProfileId,
-    run_execution_credential_binding_id: `${runProfileId}-credential`,
+    generation_runtime_profile_id: generationImport.profile_id,
+    generation_runtime_profile_revision_id: generationImport.profile_revision_id,
+    generation_credential_binding_id: generationImport.credential_binding_id,
+    run_execution_runtime_profile_id: runExecutionImport.profile_id,
+    run_execution_runtime_profile_revision_id: runExecutionImport.profile_revision_id,
+    run_execution_credential_binding_id: runExecutionImport.credential_binding_id,
     docker_image_digest: config.dockerImageDigest,
+    codex_config_digest: generationImport.codex_config_digest,
     network_policy_digest: codexRuntimeNetworkPolicyDigest(config.networkPolicy),
     network_provider_config_digest: config.networkPolicy.provider_config.provider_config_digest,
   };

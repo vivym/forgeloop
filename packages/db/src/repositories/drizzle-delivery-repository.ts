@@ -1404,7 +1404,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         revoked_at?: string;
       }>(existingRow as Record<string, unknown>);
       const { consumed_at: _consumedAt, ...existingCreationFields } = existing;
-      if (!valuesEqual(existingCreationFields, expected)) {
+      const { created_at: _expectedCreatedAt, expires_at: _expectedExpiresAt, ...expectedReplayFields } = expected;
+      const {
+        created_at: _existingCreatedAt,
+        expires_at: _existingExpiresAt,
+        ...existingReplayFields
+      } = existingCreationFields;
+      if (!valuesEqual(existingReplayFields, expectedReplayFields)) {
         throw codexDenied('codex_worker_registration_denied', 'Worker bootstrap token already exists with different immutable fields.');
       }
       return {
