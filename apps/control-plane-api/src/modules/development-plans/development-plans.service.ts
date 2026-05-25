@@ -353,6 +353,7 @@ export class DevelopmentPlansService {
       responsible_role: input.responsible_role,
       ...(input.driver_actor_id === undefined ? {} : { driver_actor_id: input.driver_actor_id }),
       ...(input.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: input.reviewer_actor_id }),
+      leader_delegate_actor_ids: [],
       risk: input.risk,
       dependency_hints: input.dependency_hints,
       affected_surfaces: input.affected_surfaces,

@@ -1265,7 +1265,7 @@ git commit -m "feat: add superpowers generation runtime tasks"
 - Test: `tests/api/brainstorming.test.ts`
 - Test: `tests/api/codex-runtime-control-plane.test.ts`
 
-- [ ] **Step 1: Write failing product result writer tests**
+- [x] **Step 1: Write failing product result writer tests**
 
 Add tests proving:
 
@@ -1277,7 +1277,7 @@ Add tests proving:
 - Execution Plan generation terminal result with a mismatched `precondition_fingerprint_json.approved_spec_revision_id`, item revision, or approved Boundary Summary revision stores evidence but does not create an Execution Plan revision;
 - generated revisions are not auto-approved.
 
-- [ ] **Step 2: Run failing result writer tests**
+- [x] **Step 2: Run failing result writer tests**
 
 Run:
 
@@ -1287,7 +1287,7 @@ pnpm vitest run tests/api/spec-plan-service.test.ts tests/api/brainstorming.test
 
 Expected: FAIL because result writer orchestration is missing.
 
-- [ ] **Step 3: Create product generation result service**
+- [x] **Step 3: Create product generation result service**
 
 Create `product-generation-result.service.ts` with:
 
@@ -1315,7 +1315,7 @@ export class ProductGenerationResultService {
 
 Inject `DeliveryRepository`, `BrainstormingService`, and `SpecPlanService` or extract writer methods into smaller services if circular dependencies appear.
 
-- [ ] **Step 4: Add writer methods to BrainstormingService**
+- [x] **Step 4: Add writer methods to BrainstormingService**
 
 Add:
 
@@ -1326,7 +1326,7 @@ Add:
 
 Each writer must re-read action run, item, session, and precondition fingerprint before mutation.
 
-- [ ] **Step 5: Add generated revision writers to SpecPlanService**
+- [x] **Step 5: Add generated revision writers to SpecPlanService**
 
 Add:
 
@@ -1366,7 +1366,7 @@ Both methods must:
 - record object events;
 - reject raw runtime evidence in public fields.
 
-- [ ] **Step 6: Wire terminalization to writer**
+- [x] **Step 6: Wire terminalization to writer**
 
 In `codex-runtime.service.ts`, after `repository.terminalizeCodexRuntimeJob`, call result writer only for:
 
@@ -1379,7 +1379,7 @@ input.terminal_result_json !== undefined
 
 Never bypass the worker-authenticated terminal endpoint.
 
-- [ ] **Step 7: Add product generate endpoints**
+- [x] **Step 7: Add product generate endpoints**
 
 In `spec-plan.controller.ts`, ensure endpoints:
 
@@ -1390,7 +1390,7 @@ These should schedule action run + runtime job. If existing endpoints generate s
 
 The Spec generation endpoint must create an `AutomationActionRun` with `action_type: 'generate_development_plan_item_spec_revision'` and `action_input_json` matching `generateDevelopmentPlanItemSpecRevisionActionInputSchema`, including the approved Boundary Summary revision id and full `precondition_fingerprint_json`; the top-level `precondition_fingerprint` must be the digest of that JSON. The Execution Plan generation endpoint must create `action_type: 'generate_development_plan_item_execution_plan_revision'` with `action_input_json` matching `generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema`, including both approved Boundary Summary and approved Spec revision ids. Add controller/service tests that inspect the created action run input before the runtime job is claimed.
 
-- [ ] **Step 8: Run targeted product generation tests**
+- [x] **Step 8: Run targeted product generation tests**
 
 Run:
 
@@ -1400,7 +1400,7 @@ pnpm vitest run tests/api/brainstorming.test.ts tests/api/spec-plan-service.test
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 6**
+- [x] **Step 9: Commit Task 6**
 
 ```bash
 git add apps/control-plane-api/src/modules/automation apps/control-plane-api/src/modules/brainstorming apps/control-plane-api/src/modules/spec-plan apps/control-plane-api/src/modules/codex-runtime tests/api/brainstorming.test.ts tests/api/spec-plan-service.test.ts tests/api/codex-runtime-control-plane.test.ts

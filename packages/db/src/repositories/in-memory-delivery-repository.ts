@@ -126,6 +126,7 @@ import type {
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
   GetClaimedAutomationActionRunInput,
+  GetActiveCodexGenerationActionRunFenceInput,
   GetCodexLaunchLeasePublicStatusInput,
   GetCodexLaunchLeaseStatusInput,
   GetCodexRuntimeJobEnvelopeInput,
@@ -1380,6 +1381,28 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getCodexRuntimeJob(input: GetCodexRuntimeJobInput): Promise<CodexRuntimeJob | undefined> {
     return this.cloneMaybe(this.codexRuntimeJobs.get(input.runtime_job_id)?.job);
+  }
+
+  async getActiveCodexGenerationActionRunFence(input: GetActiveCodexGenerationActionRunFenceInput) {
+    const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
+    if (
+      record === undefined ||
+      leaseRecord === undefined ||
+      record.job.target_type !== 'automation_action_run' ||
+      record.job.target_kind !== 'generation' ||
+      record.job.target_id !== input.action_run_id ||
+      !this.codexGenerationFenceIsActive(leaseRecord, input.now)
+    ) {
+      return undefined;
+    }
+    const actionRun = this.automationActionRuns.get(input.action_run_id);
+    return actionRun === undefined
+      ? undefined
+      : {
+          runtime_job: clone(record.job),
+          action_run: clone(actionRun),
+        };
   }
 
   async getCodexRuntimeJobEnvelope(input: GetCodexRuntimeJobEnvelopeInput): Promise<CodexLaunchTokenEnvelope | undefined> {
@@ -4350,6 +4373,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getClaimedAutomationActionRun(input: GetClaimedAutomationActionRunInput): Promise<AutomationActionRun> {
     return clone(this.getClaimedAutomationActionRunRecord(input.id, input.claim_token));
+  }
+
+  async getAutomationActionRun(id: string): Promise<AutomationActionRun | undefined> {
+    const actionRun = this.automationActionRuns.get(id);
+    return actionRun === undefined ? undefined : clone(actionRun);
   }
 
   async latestCompletedProjectionActionRun(

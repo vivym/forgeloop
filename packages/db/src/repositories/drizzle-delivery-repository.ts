@@ -196,6 +196,7 @@ import type {
   ExecutionPackageGenerationPackageRecord,
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
+  GetActiveCodexGenerationActionRunFenceInput,
   GetClaimedAutomationActionRunInput,
   GetCodexLaunchLeasePublicStatusInput,
   GetCodexLaunchLeaseStatusInput,
@@ -1705,6 +1706,39 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
       .limit(1);
     return row === undefined ? undefined : runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(row as Record<string, unknown>));
+  }
+
+  async getActiveCodexGenerationActionRunFence(input: GetActiveCodexGenerationActionRunFenceInput) {
+    const [jobRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+      .limit(1);
+    const job = jobRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>);
+    if (
+      job === undefined ||
+      job.target_type !== 'automation_action_run' ||
+      job.target_kind !== 'generation' ||
+      job.target_id !== input.action_run_id
+    ) {
+      return undefined;
+    }
+    const [leaseRow] = await this.db
+      .select()
+      .from(codex_launch_leases)
+      .where(eq(codex_launch_leases.id, job.launch_lease_id))
+      .limit(1);
+    const lease = leaseRow === undefined ? undefined : fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>);
+    if (lease === undefined || !(await this.codexGenerationFenceIsActive(lease, input.now))) {
+      return undefined;
+    }
+    const actionRun = await this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, input.action_run_id);
+    return actionRun === undefined
+      ? undefined
+      : {
+          runtime_job: runtimeJobFromDbRecord(job),
+          action_run: actionRun,
+        };
   }
 
   async getCodexRuntimeJobEnvelope(input: GetCodexRuntimeJobEnvelopeInput): Promise<CodexLaunchTokenEnvelope | undefined> {
@@ -5685,6 +5719,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getClaimedAutomationActionRun(input: GetClaimedAutomationActionRunInput): Promise<AutomationActionRun> {
     return this.claimedAutomationActionRun(input.id, input.claim_token);
+  }
+
+  async getAutomationActionRun(id: string): Promise<AutomationActionRun | undefined> {
+    return this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, id);
   }
 
   async latestCompletedProjectionActionRun(

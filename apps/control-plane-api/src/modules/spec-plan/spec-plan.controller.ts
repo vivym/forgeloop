@@ -40,6 +40,15 @@ export class SpecPlanController {
     return this.specPlanService.generateItemSpecDraft(developmentPlanId, itemId, body);
   }
 
+  @Post('development-plans/:developmentPlanId/items/:itemId/spec-revisions/generate')
+  generateItemSpecRevisionRuntime(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('itemId') itemId: string,
+    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
+  ) {
+    return this.specPlanService.generateItemSpecRevisionRuntime(developmentPlanId, itemId, body);
+  }
+
   @Post('development-plans/:developmentPlanId/items/:itemId/spec/submit-for-approval')
   submitItemSpec(
     @Param('developmentPlanId') developmentPlanId: string,
@@ -101,6 +110,15 @@ export class SpecPlanController {
     @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
   ) {
     return this.specPlanService.generateItemExecutionPlanDraft(developmentPlanId, itemId, body);
+  }
+
+  @Post('development-plans/:developmentPlanId/items/:itemId/execution-plan-revisions/generate')
+  generateItemExecutionPlanRevisionRuntime(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('itemId') itemId: string,
+    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
+  ) {
+    return this.specPlanService.generateItemExecutionPlanRevisionRuntime(developmentPlanId, itemId, body);
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/execution-plan/submit-for-approval')

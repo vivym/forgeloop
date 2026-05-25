@@ -24,6 +24,7 @@ import {
   type AutomationActionRun,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
+  type CodexGenerationRuntimeJobResult,
   type CodexLaunchLease,
   type CodexLaunchTarget,
   type CodexLaunchTokenEnvelope,
@@ -37,6 +38,7 @@ import {
 } from '@forgeloop/domain';
 import type { CodexLaunchFenceSnapshot, DeliveryRepository } from '@forgeloop/db';
 
+import { ProductGenerationResultService } from '../automation/product-generation-result.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type {
   CodexRuntimeStatusQuery,
@@ -466,7 +468,11 @@ const publicCredentialVersion = (version: CodexCredentialBindingVersion): CodexC
 
 @Injectable()
 export class CodexRuntimeService {
-  constructor(@Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository) {}
+  constructor(
+    @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
+    @Inject(ProductGenerationResultService)
+    private readonly productGenerationResults: ProductGenerationResultService,
+  ) {}
 
   async createProfile(input: CreateCodexRuntimeProfileDto) {
     const revision = validateCodexRuntimeProfileRevision(input.revision as unknown as CodexRuntimeProfileRevision, {
@@ -1073,8 +1079,9 @@ export class CodexRuntimeService {
     assertWorkerBodyDigest(input);
     const now = nowIso();
     assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    let terminalResult: ReturnType<typeof validateCodexRuntimeJobTerminalResult> | undefined;
     if (input.terminal_result_json !== undefined) {
-      validateCodexRuntimeJobTerminalResult(input.terminal_result_json);
+      terminalResult = validateCodexRuntimeJobTerminalResult(input.terminal_result_json);
       collectCodexRuntimeJobTerminalArtifactRefs(input.terminal_result_json);
     }
     const runtimeJob = await this.repository.terminalizeCodexRuntimeJob({
@@ -1096,6 +1103,19 @@ export class CodexRuntimeService {
       ),
       now,
     });
+    if (
+      runtimeJob.target_type === 'automation_action_run' &&
+      runtimeJob.target_kind === 'generation' &&
+      input.terminal_status === 'succeeded' &&
+      terminalResult !== undefined &&
+      'task_kind' in terminalResult
+    ) {
+      await this.productGenerationResults.handleGenerationRuntimeTerminal({
+        runtimeJobId: runtimeJob.id,
+        actionRunId: runtimeJob.target_id,
+        terminalResult: terminalResult as CodexGenerationRuntimeJobResult,
+      });
+    }
     return { runtime_job: publicRuntimeJob(runtimeJob) };
   }
 

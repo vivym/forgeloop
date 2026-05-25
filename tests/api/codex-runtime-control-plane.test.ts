@@ -6,6 +6,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { ProductGenerationResultService } from '../../apps/control-plane-api/src/modules/automation/product-generation-result.service';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { signAutomationRequest } from '../../packages/automation/src/index';
@@ -415,6 +416,23 @@ const withBodyDigest = <T extends Record<string, unknown>>(body: T): T & { body_
   body_digest: codexCanonicalDigest(body),
 });
 
+const generatedSpecRevisionPayload = () => ({
+  schema_version: 'spec_revision.v1',
+  development_plan_item_id: 'item-runtime',
+  boundary_summary_revision_id: 'boundary-summary-revision-runtime',
+  summary: 'Generated Spec revision',
+  content_markdown: 'Implement the approved boundary.',
+  problem_context: 'The Development Plan Item needs a Spec revision.',
+  scope_in: ['Spec generation'],
+  scope_out: ['Execution'],
+  acceptance_criteria: ['Draft Spec revision is created'],
+  test_strategy: ['API writer tests'],
+  risks: ['Stale boundary'],
+  assumptions: ['Leader approved boundary summary'],
+  unresolved_questions: [],
+  public_summary: 'Generated a Spec revision.',
+});
+
 const forbiddenRuntimeJobProjectionFields = [
   'accept_idempotency_key',
   'accept_request_digest',
@@ -493,6 +511,20 @@ const runtimeJobBody = (claim: { id: string; claim_token: string; attempt: numbe
   };
 };
 
+const productSpecRuntimeJobBody = (claim: { id: string; claim_token: string; attempt: number; precondition_fingerprint: string }) => {
+  const base = runtimeJobBody(claim);
+  const workload = {
+    ...(base.input_json as Record<string, unknown>),
+    task_kind: 'development_plan_item_spec_revision',
+    output_schema_version: 'spec_revision.v1',
+  };
+  return {
+    ...base,
+    action_type: 'generate_development_plan_item_spec_revision',
+    input_json: workload,
+  };
+};
+
 const runtimeWorkerBody = (sessionToken: string, nonce: string, body: Record<string, unknown> = {}) =>
   withBodyDigest({
     worker_session_token: sessionToken,
@@ -547,13 +579,19 @@ const capturingSealer = (capturedLaunchTokens: Map<string, string>): CodexLaunch
   },
 });
 
-const bootApp = async (repository: DeliveryRepository = new InMemoryDeliveryRepository()): Promise<{ app: INestApplication; repository: DeliveryRepository }> => {
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+const bootApp = async (
+  repository: DeliveryRepository = new InMemoryDeliveryRepository(),
+  overrides: { productGenerationResultService?: Pick<ProductGenerationResultService, 'handleGenerationRuntimeTerminal'> } = {},
+): Promise<{ app: INestApplication; repository: DeliveryRepository }> => {
+  const builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repository)
     .overrideProvider(DELIVERY_RUN_WORKER)
-    .useValue({ kick: () => undefined, drainOnce: async () => undefined })
-    .compile();
+    .useValue({ kick: () => undefined, drainOnce: async () => undefined });
+  if (overrides.productGenerationResultService !== undefined) {
+    builder.overrideProvider(ProductGenerationResultService).useValue(overrides.productGenerationResultService);
+  }
+  const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication({ rawBody: true });
   app.useLogger(false);
   await app.init();
@@ -644,6 +682,61 @@ const claimActionRun = async (repository: DeliveryRepository, suffix = '1', lock
   });
   if (claimed === undefined) {
     throw new Error('expected claimed action run');
+  }
+  return claimed;
+};
+
+const claimProductSpecActionRun = async (repository: DeliveryRepository, suffix = 'product-spec') => {
+  const actionId = `action-run-${suffix}`;
+  const precondition = {
+    source_object_ref: { type: 'requirement', id: 'requirement-runtime' },
+    source_object_revision_id: 'requirement-runtime-revision',
+    development_plan_id: 'development-plan-runtime',
+    development_plan_revision_id: 'development-plan-runtime-revision',
+    development_plan_item_id: 'item-runtime',
+    development_plan_item_revision_id: 'item-runtime-revision',
+    boundary_session_id: 'boundary-session-runtime',
+    boundary_session_revision_id: 'boundary-session-runtime-revision',
+    approved_boundary_summary_revision_id: 'boundary-summary-revision-runtime',
+    context_manifest_id: 'context-runtime',
+    context_manifest_revision_id: 'context-runtime-revision',
+    requested_by_actor_id: actorId,
+  };
+  await repository.createOrReplayAutomationActionRun({
+    id: actionId,
+    action_type: 'generate_development_plan_item_spec_revision',
+    target_object_type: 'development_plan_item',
+    target_object_id: 'item-runtime',
+    target_revision_id: 'item-runtime-revision',
+    target_status: 'missing',
+    idempotency_key: `${actionId}-key`,
+    automation_scope: `repo:${projectId}:${repoId}`,
+    automation_settings_version: 1,
+    capability_fingerprint: 'development-plan-item-spec-runtime:v1',
+    precondition_fingerprint: codexCanonicalDigest(precondition),
+    action_input_json: {
+      development_plan_id: 'development-plan-runtime',
+      development_plan_revision_id: 'development-plan-runtime-revision',
+      development_plan_item_id: 'item-runtime',
+      development_plan_item_revision_id: 'item-runtime-revision',
+      boundary_session_id: 'boundary-session-runtime',
+      boundary_session_revision_id: 'boundary-session-runtime-revision',
+      approved_boundary_summary_revision_id: 'boundary-summary-revision-runtime',
+      context_manifest_id: 'context-runtime',
+      context_manifest_revision_id: 'context-runtime-revision',
+      requested_by_actor_id: actorId,
+      precondition_fingerprint_json: precondition,
+    },
+    now,
+  });
+  const claimed = await repository.claimNextAutomationActionRun({
+    now,
+    claim_token: `action-claim-token-${suffix}`,
+    locked_until: expiresAt,
+    limit: 1,
+  });
+  if (claimed === undefined) {
+    throw new Error('expected claimed product action run');
   }
   return claimed;
 };
@@ -1541,6 +1634,103 @@ describe('codex runtime control-plane APIs', () => {
         }),
       )
       .expect(201);
+  });
+
+  it('dispatches successful product generation terminal results to the product writer', async () => {
+    const productWriter = {
+      handleGenerationRuntimeTerminal: vi.fn().mockResolvedValue({ applied: true }),
+    };
+    const capturedLaunchTokens = new Map<string, string>();
+    const { app, repository } = await bootApp(
+      new InMemoryDeliveryRepository({ codexLaunchTokenEnvelopeSealer: capturingSealer(capturedLaunchTokens) }),
+      { productGenerationResultService: productWriter },
+    );
+    await seedRuntime(app, 'runtime-product-terminal');
+    const registration = await registerWorker(app);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/heartbeat`)
+      .send(heartbeatBody(registration.session_token, 'runtime-product-terminal-heartbeat', { nonce_timestamp: now }))
+      .expect(201);
+    const claimed = await claimProductSpecActionRun(repository);
+    await signedPost(app, '/internal/codex-runtime/runtime-jobs', productSpecRuntimeJobBody(claimed)).expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/accepted`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-accept', {
+          accept_idempotency_key: 'runtime-product-terminal-accept-1',
+          accepted_worker_session_digest: codexCredentialPayloadDigest(registration.session_token),
+          accepted_session_public_key_id: 'session-key-1',
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/envelope/claim`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-envelope-claim', {
+          envelope_id: runtimeJobEnvelopeId,
+          claim_request_id: 'runtime-product-terminal-envelope-claim-1',
+          accepted_worker_session_digest: codexCredentialPayloadDigest(registration.session_token),
+          accepted_session_public_key_id: 'session-key-1',
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+    vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/materialize`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-materialize', {
+          launch_lease_id: runtimeJobLaunchLeaseId,
+          launch_token: capturedLaunchTokens.get(runtimeJobId),
+          materialization_request_id: 'runtime-product-terminal-materialize-1',
+          accepted_worker_session_digest: codexCredentialPayloadDigest(registration.session_token),
+          accepted_session_public_key_id: 'session-key-1',
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+    const started = await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/started`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-start', {
+          start_idempotency_key: 'runtime-product-terminal-start-1',
+          runtime_evidence_digest: sha('a'),
+          launch_materialization_digest: sha('b'),
+        }),
+      );
+    expect(started.status, JSON.stringify(started.body)).toBe(201);
+    const generatedPayload = generatedSpecRevisionPayload();
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/terminal`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal', {
+          launch_lease_id: runtimeJobLaunchLeaseId,
+          terminal_status: 'succeeded',
+          reason_code: 'completed',
+          terminal_idempotency_key: 'runtime-product-terminal-1',
+          terminal_result_json: {
+            task_kind: 'development_plan_item_spec_revision',
+            prompt_version: 'prompt-v1',
+            output_schema_version: 'spec_revision.v1',
+            generated_payload: generatedPayload,
+            generated_payload_digest: codexCanonicalDigest(generatedPayload),
+            generation_artifacts: [],
+            public_summary: 'Generated a Spec revision.',
+          },
+        }),
+      )
+      .expect(201);
+
+    expect(productWriter.handleGenerationRuntimeTerminal).toHaveBeenCalledWith({
+      runtimeJobId,
+      actionRunId: claimed.id,
+      terminalResult: expect.objectContaining({
+        task_kind: 'development_plan_item_spec_revision',
+        generated_payload: generatedPayload,
+      }),
+    });
   });
 
   it('drives remote runtime jobs through sealed-envelope worker APIs without exposing launch tokens', async () => {

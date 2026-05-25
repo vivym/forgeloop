@@ -563,6 +563,13 @@ export class ExecutionsService {
         execution_plan_id: context.executionPlan.id,
         title: context.executionPlanRevision.summary,
       },
+      approved_spec_revision_id: context.specRevision.id,
+      approved_spec_revision_ref: {
+        type: 'spec_revision',
+        id: context.specRevision.id,
+        spec_id: context.spec.id,
+        title: context.specRevision.summary,
+      },
       status,
       evidence_refs: [
         {

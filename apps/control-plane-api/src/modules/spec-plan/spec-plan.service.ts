@@ -9,7 +9,12 @@ import { existsSync } from 'node:fs';
 import {
   canGenerateExecutionPlanFromApprovedSpec,
   canGenerateSpecFromPlanItem,
+  codexCanonicalDigest,
+  requiredBoundaryQuestionsClosed,
+  type AutomationActionRun,
+  type AutomationScope,
   type BoundarySummary,
+  type BoundarySummaryRevision,
   type BrainstormingSession,
   type ContextManifest,
   type DevelopmentPlan,
@@ -25,10 +30,15 @@ import {
   type WorkItem,
   transitionSpecPlan,
 } from '@forgeloop/domain';
+import type { GeneratedExecutionPlanRevisionV1, GeneratedSpecRevisionV1 } from '@forgeloop/codex-runtime';
 import type { DeliveryRepository } from '@forgeloop/db';
 import type { ObjectRef } from '@forgeloop/contracts';
 
 import { AuditWriterService } from '../audit/audit-writer.service';
+import {
+  ProductGenerationRuntimeSchedulerService,
+  type ProductGenerationRuntimeScheduleResult,
+} from '../codex-runtime/product-generation-runtime-scheduler.service';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type {
@@ -43,6 +53,23 @@ import type {
 export type PublicSpecPlan = Omit<Spec | Plan, 'work_item_id'> & { scope_ref: ObjectRef };
 export type PublicSpecRevision = Omit<SpecRevision, 'work_item_id' | 'structured_document' | 'artifact_refs'> & { scope_ref: ObjectRef };
 export type PublicPlanRevision = Omit<PlanRevision, 'work_item_id' | 'structured_document' | 'artifact_refs'> & { scope_ref: ObjectRef };
+export type ProductGenerationScheduleResult = ProductGenerationRuntimeScheduleResult;
+export type ProductGenerationApplyResult<T> =
+  | { applied: true; revision: T }
+  | { applied: false; reason: 'invalid_precondition' | 'stale_precondition_fingerprint' | 'public_unsafe_payload' };
+
+type LoadedProductGenerationPrecondition = {
+  plan: DevelopmentPlan;
+  item: DevelopmentPlanItem;
+  workItem: WorkItem;
+  boundary: BoundarySummary;
+  boundaryRevision: BoundarySummaryRevision;
+  brainstormingSession: BrainstormingSession;
+  contextManifest: ContextManifest;
+};
+
+const runtimeSensitiveTextPattern =
+  /~\/\.codex(?:\/(?:config\.toml|auth\.json))?|\b(?:config\.toml|auth\.json)\b|https?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?)(?::\d{1,5})?(?:\/\S*)?|unix:\/\/\S+|\/(?:Users|home|tmp|var|private|workspace|workspaces|app|mnt|Volumes)\/\S+|[\w.-]+\.sock\b|\b(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0)(?::\d{1,5})?\b|\b[0-9a-f]{64}\b/gi;
 
 @Injectable()
 export class SpecPlanService {
@@ -51,7 +78,197 @@ export class SpecPlanService {
     @Inject(ControlPlaneRuntimeService)
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
+    @Inject(ProductGenerationRuntimeSchedulerService)
+    private readonly productRuntimeScheduler: ProductGenerationRuntimeSchedulerService,
   ) {}
+
+  async generateItemSpecRevisionRuntime(
+    developmentPlanId: string,
+    itemId: string,
+    dto: SubmitForApprovalCommandDto,
+  ): Promise<ProductGenerationScheduleResult> {
+    return this.withPlanItemMutation(developmentPlanId, async (repository) => {
+      const actorId = this.requireActorId(dto.actor_id);
+      const replayed = await this.replayAppliedProductGenerationSchedule(
+        repository,
+        itemId,
+        'item_spec_runtime_draft_generated',
+        'generate_development_plan_item_spec_revision',
+        actorId,
+      );
+      if (replayed !== undefined) {
+        return replayed;
+      }
+      const { plan, item, workItem, boundary, boundaryRevision, brainstormingSession } =
+        await this.requireApprovedBoundaryRevision(developmentPlanId, itemId, repository, { requireCurrentItemRevision: true });
+      if ((await this.findItemSpec(item.id, repository)) !== undefined) {
+        throw new ConflictException(`Development Plan Item ${item.id} already has a Spec`);
+      }
+      const contextManifest = this.stableProductGenerationContextManifest(
+        await this.buildItemContextManifest(
+          { plan, item, workItem, boundary, brainstormingSession, actorGuidance: actorId },
+          repository,
+        ),
+        {
+          task_kind: 'development_plan_item_spec_revision',
+          development_plan_item_id: item.id,
+          development_plan_item_revision_id: item.revision_id,
+          boundary_summary_revision_id: boundaryRevision.id,
+          requested_by_actor_id: actorId,
+        },
+      );
+      await repository.saveContextManifest(contextManifest);
+      const actionInput = this.specGenerationActionInput({
+        plan,
+        item,
+        workItem,
+        boundaryRevision,
+        brainstormingSession,
+        contextManifest,
+        actorId,
+      });
+      const precondition = actionInput.precondition_fingerprint_json;
+      const repoIds = await this.productGenerationRepoIds(repository, plan.project_id);
+      const automationScope = this.productGenerationAutomationScope(plan.project_id, repoIds);
+      return this.productRuntimeScheduler.schedule({
+        repository,
+        action_run: {
+          id: this.id('automation-action-run'),
+          action_type: 'generate_development_plan_item_spec_revision',
+          target_object_type: 'development_plan_item',
+          target_object_id: item.id,
+          target_revision_id: item.revision_id,
+          target_status: item.spec_status,
+          idempotency_key: `development-plan-item-spec-generation:${item.id}:${item.revision_id}:${boundaryRevision.id}:${actorId}`,
+          automation_scope: automationScope,
+          automation_settings_version: 1,
+          capability_fingerprint: 'development-plan-item-spec-runtime:v1',
+          precondition_fingerprint: codexCanonicalDigest(precondition),
+          action_input_json: actionInput,
+          created_by: actorId,
+          now: this.now(),
+        },
+        task_kind: 'development_plan_item_spec_revision',
+        prompt_version: 'development-plan-item-spec-revision:v1',
+        output_schema_version: 'spec_revision.v1',
+        context_manifest: contextManifest,
+        signed_context_json: this.productGenerationSignedContext({
+          task_kind: 'development_plan_item_spec_revision',
+          plan,
+          item,
+          workItem,
+          boundary,
+          boundaryRevision,
+          brainstormingSession,
+          contextManifest,
+          actorId,
+        }),
+        project_id: plan.project_id,
+        repo_ids: repoIds,
+      });
+    });
+  }
+
+  async generateItemExecutionPlanRevisionRuntime(
+    developmentPlanId: string,
+    itemId: string,
+    dto: SubmitForApprovalCommandDto,
+  ): Promise<ProductGenerationScheduleResult> {
+    return this.withPlanItemMutation(developmentPlanId, async (repository) => {
+      const actorId = this.requireActorId(dto.actor_id);
+      const replayed = await this.replayAppliedProductGenerationSchedule(
+        repository,
+        itemId,
+        'item_execution_plan_runtime_draft_generated',
+        'generate_development_plan_item_execution_plan_revision',
+        actorId,
+      );
+      if (replayed !== undefined) {
+        return replayed;
+      }
+      const { plan, item, workItem, boundary, boundaryRevision, brainstormingSession } =
+        await this.requireApprovedBoundaryRevision(developmentPlanId, itemId, repository, { requireCurrentItemRevision: false });
+      if ((await this.findItemExecutionPlan(item.id, repository)) !== undefined) {
+        throw new ConflictException(`Development Plan Item ${item.id} already has an Execution Plan`);
+      }
+      const { spec, specRevision } = await this.requireApprovedItemSpec(item.id, repository);
+      this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
+      await this.requireCurrentItemRevisionAtApprovedSpecGate(item, repository);
+      const contextManifest = this.stableProductGenerationContextManifest(
+        await this.buildItemContextManifest(
+          {
+            plan,
+            item,
+            workItem,
+            boundary,
+            brainstormingSession,
+            actorGuidance: actorId,
+            approvedSpecRevisionId: specRevision.id,
+          },
+          repository,
+        ),
+        {
+          task_kind: 'development_plan_item_execution_plan_revision',
+          development_plan_item_id: item.id,
+          development_plan_item_revision_id: item.revision_id,
+          boundary_summary_revision_id: boundaryRevision.id,
+          approved_spec_revision_id: specRevision.id,
+          requested_by_actor_id: actorId,
+        },
+      );
+      await repository.saveContextManifest(contextManifest);
+      const actionInput = this.executionPlanGenerationActionInput({
+        plan,
+        item,
+        workItem,
+        boundaryRevision,
+        brainstormingSession,
+        specRevision,
+        contextManifest,
+        actorId,
+      });
+      const precondition = actionInput.precondition_fingerprint_json;
+      const repoIds = await this.productGenerationRepoIds(repository, plan.project_id);
+      const automationScope = this.productGenerationAutomationScope(plan.project_id, repoIds);
+      return this.productRuntimeScheduler.schedule({
+        repository,
+        action_run: {
+          id: this.id('automation-action-run'),
+          action_type: 'generate_development_plan_item_execution_plan_revision',
+          target_object_type: 'development_plan_item',
+          target_object_id: item.id,
+          target_revision_id: item.revision_id,
+          target_status: item.execution_plan_status,
+          idempotency_key: `development-plan-item-execution-plan-generation:${item.id}:${item.revision_id}:${boundaryRevision.id}:${specRevision.id}:${actorId}`,
+          automation_scope: automationScope,
+          automation_settings_version: 1,
+          capability_fingerprint: 'development-plan-item-execution-plan-runtime:v1',
+          precondition_fingerprint: codexCanonicalDigest(precondition),
+          action_input_json: actionInput,
+          now: this.now(),
+          created_by: actorId,
+        },
+        task_kind: 'development_plan_item_execution_plan_revision',
+        prompt_version: 'development-plan-item-execution-plan-revision:v1',
+        output_schema_version: 'execution_plan_revision.v1',
+        context_manifest: contextManifest,
+        signed_context_json: this.productGenerationSignedContext({
+          task_kind: 'development_plan_item_execution_plan_revision',
+          plan,
+          item,
+          workItem,
+          boundary,
+          boundaryRevision,
+          brainstormingSession,
+          specRevision,
+          contextManifest,
+          actorId,
+        }),
+        project_id: plan.project_id,
+        repo_ids: repoIds,
+      });
+    });
+  }
 
   async generateItemSpecDraft(
     developmentPlanId: string,
@@ -130,11 +347,13 @@ export class SpecPlanService {
         developmentPlanId,
         itemId,
         repository,
+        { requireCurrentItemRevision: false },
       );
       const spec = await this.requireItemSpec(item.id, repository);
       if (spec.status === 'approved') {
         throw new ConflictException(`Approved Spec ${spec.id} cannot be regenerated`);
       }
+      await this.requireSpecCurrentRevisionMatchesBoundary(item.id, spec, boundary, repository);
       const contextManifest = await this.buildItemContextManifest(
         {
           plan,
@@ -318,6 +537,110 @@ export class SpecPlanService {
     return this.revisionDiff(query, base, compare);
   }
 
+  async writeGeneratedItemSpecRevision(input: {
+    actionRun: AutomationActionRun;
+    generated: GeneratedSpecRevisionV1;
+    runtime_job_id: string;
+  }): Promise<ProductGenerationApplyResult<SpecRevision>> {
+    const precondition = this.productGenerationPrecondition(input.actionRun);
+    if (
+      precondition === undefined ||
+      input.actionRun.action_type !== 'generate_development_plan_item_spec_revision' ||
+      input.actionRun.target_object_type !== 'development_plan_item' ||
+      input.actionRun.precondition_fingerprint !== codexCanonicalDigest(precondition)
+    ) {
+      return { applied: false, reason: 'invalid_precondition' };
+    }
+    return this.withPlanItemMutation(String(precondition.development_plan_id), async (repository) => {
+      const prior = await this.appliedGeneratedRevisionForAction<SpecRevision>(
+        repository,
+        input.actionRun.id,
+        input.runtime_job_id,
+        'spec_revision',
+      );
+      if (prior !== undefined) {
+        return { applied: true, revision: prior };
+      }
+      const loaded = await this.loadGenerationPrecondition(precondition, repository);
+      if (
+        loaded === undefined ||
+        !(await this.specGenerationPreconditionStillCurrent(input.actionRun, precondition, loaded, repository)) ||
+        input.generated.development_plan_item_id !== loaded.item.id ||
+        input.generated.boundary_summary_revision_id !== loaded.boundaryRevision.id
+      ) {
+        return { applied: false, reason: 'stale_precondition_fingerprint' };
+      }
+
+      const spec = {
+        ...(transitionSpecPlan(undefined, {
+          type: 'create',
+          entity_type: 'spec',
+          id: this.id('spec'),
+          work_item_id: loaded.workItem.id,
+          at: this.now(),
+        }) as Spec),
+        development_plan_item_id: loaded.item.id,
+        boundary_summary_id: loaded.boundary.id,
+        context_manifest_id: loaded.contextManifest.id,
+      };
+      await repository.saveSpec(spec);
+      const revision = await this.saveSpecRevisionWithRepository(repository, spec, {
+        development_plan_item_id: loaded.item.id,
+        boundary_summary_id: loaded.boundary.id,
+        context_manifest_id: loaded.contextManifest.id,
+        summary: input.generated.summary,
+        content: input.generated.content_markdown,
+        background: input.generated.problem_context,
+        goals: [input.generated.summary],
+        scope_in: input.generated.scope_in,
+        scope_out: input.generated.scope_out,
+        acceptance_criteria: input.generated.acceptance_criteria,
+        risk_notes: input.generated.risks,
+        test_strategy_summary: input.generated.test_strategy.join('\n'),
+        structured_document: {
+          generated_by: 'codex_runtime_development_plan_item_spec_revision',
+          runtime_job_id: input.runtime_job_id,
+          action_run_id: input.actionRun.id,
+          public_summary: input.generated.public_summary,
+          assumptions: input.generated.assumptions,
+          unresolved_questions: input.generated.unresolved_questions,
+          boundary_summary_revision_id: loaded.boundaryRevision.id,
+          context_manifest_revision_id: loaded.contextManifest.revision_id,
+        },
+        author_actor_id: String(precondition.requested_by_actor_id),
+      });
+      await repository.saveSpec({ ...spec, current_revision_id: revision.id, updated_at: this.now() });
+      await repository.saveWorkItem({
+        ...loaded.workItem,
+        current_spec_id: spec.id,
+        current_spec_revision_id: revision.id,
+        updated_at: this.now(),
+      });
+      await this.updateDevelopmentPlanItemArtifactStatus(
+        repository,
+        loaded.plan,
+        loaded.item,
+        'spec_status',
+        'draft',
+        'spec_runtime_generation_applied',
+        String(precondition.requested_by_actor_id),
+      );
+      await this.eventWithRepository(repository, 'development_plan_item', loaded.item.id, 'item_spec_runtime_draft_generated', String(precondition.requested_by_actor_id), {
+        spec_id: spec.id,
+        spec_revision_id: revision.id,
+        context_manifest_id: loaded.contextManifest.id,
+        runtime_job_id: input.runtime_job_id,
+        action_run_id: input.actionRun.id,
+      });
+      await this.eventWithRepository(repository, 'automation_action_run', input.actionRun.id, 'product_generation_result_applied', String(precondition.requested_by_actor_id), {
+        runtime_job_id: input.runtime_job_id,
+        generated_object_type: 'spec_revision',
+        generated_revision_id: revision.id,
+      });
+      return { applied: true, revision };
+    });
+  }
+
   async generateItemExecutionPlanDraft(
     developmentPlanId: string,
     itemId: string,
@@ -328,11 +651,14 @@ export class SpecPlanService {
         developmentPlanId,
         itemId,
         repository,
+        { requireCurrentItemRevision: false },
       );
       if ((await this.findItemExecutionPlan(item.id, repository)) !== undefined) {
         throw new ConflictException(`Development Plan Item ${item.id} already has an Execution Plan`);
       }
       const { spec, specRevision } = await this.requireApprovedItemSpec(item.id, repository);
+      this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
+      await this.requireCurrentItemRevisionAtApprovedSpecGate(item, repository);
       const contextManifest = await this.buildItemContextManifest(
         {
           plan,
@@ -397,12 +723,15 @@ export class SpecPlanService {
         developmentPlanId,
         itemId,
         repository,
+        { requireCurrentItemRevision: false },
       );
       const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
       if (executionPlan.status === 'approved') {
         throw new ConflictException(`Approved Execution Plan ${executionPlan.id} cannot be regenerated`);
       }
       const { specRevision } = await this.requireApprovedItemSpec(item.id, repository);
+      const spec = await this.requireItemSpec(item.id, repository);
+      this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
       const contextManifest = await this.buildItemContextManifest(
         {
           plan,
@@ -608,6 +937,112 @@ export class SpecPlanService {
     return this.revisionDiff(query, base, compare);
   }
 
+  async writeGeneratedItemExecutionPlanRevision(input: {
+    actionRun: AutomationActionRun;
+    generated: GeneratedExecutionPlanRevisionV1;
+    runtime_job_id: string;
+  }): Promise<ProductGenerationApplyResult<ExecutionPlanRevision>> {
+    const precondition = this.productGenerationPrecondition(input.actionRun);
+    if (
+      precondition === undefined ||
+      input.actionRun.action_type !== 'generate_development_plan_item_execution_plan_revision' ||
+      input.actionRun.target_object_type !== 'development_plan_item' ||
+      input.actionRun.precondition_fingerprint !== codexCanonicalDigest(precondition)
+    ) {
+      return { applied: false, reason: 'invalid_precondition' };
+    }
+    return this.withPlanItemMutation(String(precondition.development_plan_id), async (repository) => {
+      const prior = await this.appliedGeneratedRevisionForAction<ExecutionPlanRevision>(
+        repository,
+        input.actionRun.id,
+        input.runtime_job_id,
+        'execution_plan_revision',
+      );
+      if (prior !== undefined) {
+        return { applied: true, revision: prior };
+      }
+      const loaded = await this.loadGenerationPrecondition(precondition, repository);
+      const spec = await this.findItemSpec(String(precondition.development_plan_item_id), repository);
+      const approvedSpecRevision =
+        precondition.approved_spec_revision_id === undefined
+          ? undefined
+          : await repository.getSpecRevision(String(precondition.approved_spec_revision_id));
+      if (
+        loaded === undefined ||
+        spec === undefined ||
+        approvedSpecRevision === undefined ||
+        !(await this.executionPlanGenerationPreconditionStillCurrent(input.actionRun, precondition, loaded, spec, approvedSpecRevision, repository)) ||
+        input.generated.development_plan_item_id !== loaded.item.id ||
+        input.generated.based_on_spec_revision_id !== approvedSpecRevision.id
+      ) {
+        return { applied: false, reason: 'stale_precondition_fingerprint' };
+      }
+
+      const at = this.now();
+      const executionPlan: ExecutionPlanDocument = {
+        id: this.id('execution-plan'),
+        development_plan_item_id: loaded.item.id,
+        status: 'draft',
+        created_at: at,
+        updated_at: at,
+      };
+      await repository.saveExecutionPlan(executionPlan);
+      const revision = await this.saveExecutionPlanRevisionWithRepository(repository, executionPlan, {
+        based_on_spec_revision_id: approvedSpecRevision.id,
+        summary: input.generated.summary,
+        content: input.generated.content_markdown,
+        structured_document: {
+          generated_by: 'codex_runtime_development_plan_item_execution_plan_revision',
+          runtime_job_id: input.runtime_job_id,
+          action_run_id: input.actionRun.id,
+          public_summary: input.generated.public_summary,
+          context_manifest_id: loaded.contextManifest.id,
+          context_manifest_revision_id: loaded.contextManifest.revision_id,
+          approved_boundary_summary_revision_id: loaded.boundaryRevision.id,
+          implementation_sequence: input.generated.implementation_sequence,
+          validation_strategy: input.generated.validation_strategy,
+          allowed_paths: input.generated.allowed_paths,
+          forbidden_paths: input.generated.forbidden_paths,
+          required_checks: input.generated.required_checks,
+          rollback_notes: input.generated.rollback_notes,
+          handoff_criteria: input.generated.handoff_criteria,
+        },
+        author_actor_id: String(precondition.requested_by_actor_id),
+      });
+      await repository.saveExecutionPlan({ ...executionPlan, current_revision_id: revision.id, updated_at: this.now() });
+      await this.updateDevelopmentPlanItemArtifactStatus(
+        repository,
+        loaded.plan,
+        loaded.item,
+        'execution_plan_status',
+        'draft',
+        'execution_plan_runtime_generation_applied',
+        String(precondition.requested_by_actor_id),
+      );
+      await this.eventWithRepository(
+        repository,
+        'development_plan_item',
+        loaded.item.id,
+        'item_execution_plan_runtime_draft_generated',
+        String(precondition.requested_by_actor_id),
+        {
+          execution_plan_id: executionPlan.id,
+          execution_plan_revision_id: revision.id,
+          based_on_spec_revision_id: approvedSpecRevision.id,
+          context_manifest_id: loaded.contextManifest.id,
+          runtime_job_id: input.runtime_job_id,
+          action_run_id: input.actionRun.id,
+        },
+      );
+      await this.eventWithRepository(repository, 'automation_action_run', input.actionRun.id, 'product_generation_result_applied', String(precondition.requested_by_actor_id), {
+        runtime_job_id: input.runtime_job_id,
+        generated_object_type: 'execution_plan_revision',
+        generated_revision_id: revision.id,
+      });
+      return { applied: true, revision };
+    });
+  }
+
   async getSpec(specId: string): Promise<Spec> {
     return this.requireFound(await this.repository.getSpec(specId), `Spec ${specId}`);
   }
@@ -683,6 +1118,7 @@ export class SpecPlanService {
     developmentPlanId: string,
     itemId: string,
     repository: DeliveryRepository,
+    options: { requireCurrentItemRevision: boolean } = { requireCurrentItemRevision: true },
   ): Promise<{
     plan: DevelopmentPlan;
     item: DevelopmentPlanItem;
@@ -695,6 +1131,8 @@ export class SpecPlanService {
     const boundary = boundarySummaryId === undefined ? undefined : await repository.getBoundarySummary(boundarySummaryId);
     const brainstormingSession =
       boundary === undefined ? undefined : await repository.getBrainstormingSession(boundary.brainstorming_session_id);
+    const boundaryRevision =
+      boundary === undefined ? undefined : await this.findBoundarySummaryRevision(boundary.revision_id, repository);
     const boundarySummaryForGate =
       boundary === undefined
         ? undefined
@@ -706,11 +1144,91 @@ export class SpecPlanService {
       item,
       ...(brainstormingSession === undefined ? {} : { brainstormingSession }),
       ...(boundarySummaryForGate === undefined ? {} : { boundarySummary: boundarySummaryForGate }),
+      ...(boundaryRevision === undefined ? {} : { boundarySummaryRevision: { status: this.boundarySummaryRevisionApproved(boundaryRevision) ? 'approved' : 'stale' } }),
     });
     if (!gate.ok) {
       throw new BadRequestException(`Development Plan Item ${item.id} cannot generate Spec: ${gate.reason}`);
     }
+    if (options.requireCurrentItemRevision && !this.boundarySummaryRevisionMatchesItem(boundary!, boundaryRevision!, item)) {
+      throw new BadRequestException(`Development Plan Item ${item.id} cannot generate Spec: stale_boundary_summary_revision`);
+    }
     return { plan, item, workItem, boundary: boundary!, brainstormingSession: brainstormingSession! };
+  }
+
+  private async requireApprovedBoundaryRevision(
+    developmentPlanId: string,
+    itemId: string,
+    repository: DeliveryRepository,
+    options: { requireCurrentItemRevision: boolean } = { requireCurrentItemRevision: true },
+  ): Promise<{
+    plan: DevelopmentPlan;
+    item: DevelopmentPlanItem;
+    workItem: WorkItem;
+    boundary: BoundarySummary;
+    boundaryRevision: BoundarySummaryRevision;
+    brainstormingSession: BrainstormingSession;
+  }> {
+    const approved = await this.requireApprovedBoundary(developmentPlanId, itemId, repository, {
+      requireCurrentItemRevision: options.requireCurrentItemRevision,
+    });
+    const boundaryRevision = await this.findBoundarySummaryRevision(approved.boundary.revision_id, repository);
+    if (boundaryRevision === undefined || !this.boundarySummaryRevisionApproved(boundaryRevision)) {
+      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Spec: boundary_summary_missing_approval`);
+    }
+    if (options.requireCurrentItemRevision && !this.boundarySummaryRevisionMatchesItem(approved.boundary, boundaryRevision, approved.item)) {
+      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Spec: stale_boundary_summary_revision`);
+    }
+    const [questions, answers, decisions] = await Promise.all([
+      repository.listBoundaryQuestions(approved.brainstormingSession.id),
+      repository.listBoundaryAnswers(approved.brainstormingSession.id),
+      repository.listBoundaryDecisions(approved.brainstormingSession.id),
+    ]);
+    if (!requiredBoundaryQuestionsClosed({ questions, answers, decisions })) {
+      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Spec: boundary_questions_open`);
+    }
+    return { ...approved, boundaryRevision };
+  }
+
+  private async findBoundarySummaryRevision(
+    boundarySummaryRevisionId: string,
+    repository: DeliveryRepository,
+  ): Promise<BoundarySummaryRevision | undefined> {
+    for (const summary of await repository.listBoundarySummaries()) {
+      const revision = (await repository.listBoundarySummaryRevisions(summary.id)).find((candidate) => candidate.id === boundarySummaryRevisionId);
+      if (revision !== undefined) {
+        return revision;
+      }
+    }
+    return undefined;
+  }
+
+  private boundarySummaryRevisionApproved(revision: BoundarySummaryRevision): boolean {
+    const record = revision as Record<string, unknown>;
+    return (
+      record.status === 'approved' &&
+      typeof record.source_round_id === 'string' &&
+      typeof record.context_manifest_id === 'string' &&
+      typeof record.context_manifest_revision_id === 'string' &&
+      Array.isArray(record.question_answer_snapshot) &&
+      record.question_answer_snapshot.length > 0 &&
+      Array.isArray(record.decision_snapshot) &&
+      record.decision_snapshot.length > 0 &&
+      record.approved_by_actor_id !== undefined &&
+      record.approved_at !== undefined
+    );
+  }
+
+  private boundarySummaryRevisionMatchesItem(
+    boundary: BoundarySummary,
+    revision: BoundarySummaryRevision,
+    item: DevelopmentPlanItem,
+  ): boolean {
+    return (
+      boundary.development_plan_item_id === item.id &&
+      boundary.development_plan_item_revision_id === item.revision_id &&
+      revision.development_plan_item_id === item.id &&
+      revision.development_plan_item_revision_id === item.revision_id
+    );
   }
 
   private async boundarySummaryIdForItem(itemId: string, repository: DeliveryRepository): Promise<string | undefined> {
@@ -756,6 +1274,71 @@ export class SpecPlanService {
     return { spec, specRevision: specRevision! };
   }
 
+  private assertApprovedSpecMatchesBoundary(
+    itemId: string,
+    spec: Spec,
+    specRevision: SpecRevision,
+    boundary: BoundarySummary,
+  ): void {
+    if (
+      spec.development_plan_item_id !== itemId ||
+      spec.status !== 'approved' ||
+      spec.current_revision_id !== specRevision.id ||
+      spec.approved_revision_id !== specRevision.id ||
+      specRevision.development_plan_item_id !== itemId ||
+      specRevision.boundary_summary_id !== boundary.id ||
+      this.revisionStructuredBoundarySummaryRevisionId(specRevision) !== boundary.revision_id
+    ) {
+      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Execution Plan: stale_boundary_summary_revision`);
+    }
+  }
+
+  private async requireCurrentItemRevisionAtApprovedSpecGate(
+    item: DevelopmentPlanItem,
+    repository: DeliveryRepository,
+  ): Promise<void> {
+    if (!(await this.currentItemRevisionAtApprovedSpecGate(item, repository))) {
+      throw new BadRequestException(
+        `Development Plan Item ${item.id} cannot generate Execution Plan: approved_spec_not_current_item_revision`,
+      );
+    }
+  }
+
+  private async currentItemRevisionAtApprovedSpecGate(
+    item: DevelopmentPlanItem,
+    repository: DeliveryRepository,
+  ): Promise<boolean> {
+    const currentRevision = (await repository.listDevelopmentPlanItemRevisions(item.id)).find(
+      (revision) => revision.id === item.revision_id,
+    );
+    return (
+      currentRevision?.change_reason === 'spec_approved' &&
+      currentRevision.snapshot.spec_status === 'approved' &&
+      currentRevision.snapshot.execution_plan_status === 'missing' &&
+      currentRevision.snapshot.next_action === 'generate_execution_plan'
+    );
+  }
+
+  private async requireSpecCurrentRevisionMatchesBoundary(
+    itemId: string,
+    spec: Spec,
+    boundary: BoundarySummary,
+    repository: DeliveryRepository,
+  ): Promise<SpecRevision> {
+    const currentRevisionId = this.requireCurrentRevision(spec);
+    const currentRevision = await repository.getSpecRevision(currentRevisionId);
+    if (
+      currentRevision === undefined ||
+      spec.development_plan_item_id !== itemId ||
+      currentRevision.development_plan_item_id !== itemId ||
+      currentRevision.boundary_summary_id !== boundary.id ||
+      this.revisionStructuredBoundarySummaryRevisionId(currentRevision) !== boundary.revision_id
+    ) {
+      throw new BadRequestException(`Development Plan Item ${itemId} cannot regenerate Spec: stale_boundary_summary_revision`);
+    }
+    return currentRevision;
+  }
+
   private async findItemExecutionPlan(
     itemId: string,
     repository: DeliveryRepository,
@@ -777,6 +1360,85 @@ export class SpecPlanService {
     return executionPlan;
   }
 
+  private specGenerationActionInput(input: {
+    plan: DevelopmentPlan;
+    item: DevelopmentPlanItem;
+    workItem: WorkItem;
+    boundaryRevision: BoundarySummaryRevision;
+    brainstormingSession: BrainstormingSession;
+    contextManifest: ContextManifest;
+    actorId: string;
+  }) {
+    const precondition = {
+      source_object_ref: input.item.source_ref,
+      source_object_revision_id: input.workItem.updated_at,
+      development_plan_id: input.plan.id,
+      development_plan_revision_id: input.plan.revision_id,
+      development_plan_item_id: input.item.id,
+      development_plan_item_revision_id: input.item.revision_id,
+      boundary_session_id: input.brainstormingSession.id,
+      boundary_session_revision_id: input.brainstormingSession.revision_id,
+      approved_boundary_summary_revision_id: input.boundaryRevision.id,
+      context_manifest_id: input.contextManifest.id,
+      context_manifest_revision_id: input.contextManifest.revision_id,
+      requested_by_actor_id: input.actorId,
+    };
+    return {
+      development_plan_id: input.plan.id,
+      development_plan_revision_id: input.plan.revision_id,
+      development_plan_item_id: input.item.id,
+      development_plan_item_revision_id: input.item.revision_id,
+      boundary_session_id: input.brainstormingSession.id,
+      boundary_session_revision_id: input.brainstormingSession.revision_id,
+      approved_boundary_summary_revision_id: input.boundaryRevision.id,
+      context_manifest_id: input.contextManifest.id,
+      context_manifest_revision_id: input.contextManifest.revision_id,
+      requested_by_actor_id: input.actorId,
+      precondition_fingerprint_json: precondition,
+    };
+  }
+
+  private executionPlanGenerationActionInput(input: {
+    plan: DevelopmentPlan;
+    item: DevelopmentPlanItem;
+    workItem: WorkItem;
+    boundaryRevision: BoundarySummaryRevision;
+    brainstormingSession: BrainstormingSession;
+    specRevision: SpecRevision;
+    contextManifest: ContextManifest;
+    actorId: string;
+  }) {
+    const precondition = {
+      source_object_ref: input.item.source_ref,
+      source_object_revision_id: input.workItem.updated_at,
+      development_plan_id: input.plan.id,
+      development_plan_revision_id: input.plan.revision_id,
+      development_plan_item_id: input.item.id,
+      development_plan_item_revision_id: input.item.revision_id,
+      boundary_session_id: input.brainstormingSession.id,
+      boundary_session_revision_id: input.brainstormingSession.revision_id,
+      approved_boundary_summary_revision_id: input.boundaryRevision.id,
+      approved_spec_revision_id: input.specRevision.id,
+      context_manifest_id: input.contextManifest.id,
+      context_manifest_revision_id: input.contextManifest.revision_id,
+      requested_by_actor_id: input.actorId,
+    };
+    return {
+      development_plan_id: input.plan.id,
+      development_plan_revision_id: input.plan.revision_id,
+      development_plan_item_id: input.item.id,
+      development_plan_item_revision_id: input.item.revision_id,
+      boundary_session_id: input.brainstormingSession.id,
+      boundary_session_revision_id: input.brainstormingSession.revision_id,
+      approved_boundary_summary_revision_id: input.boundaryRevision.id,
+      approved_spec_revision_id: input.specRevision.id,
+      context_manifest_id: input.contextManifest.id,
+      context_manifest_revision_id: input.contextManifest.revision_id,
+      requested_by_actor_id: input.actorId,
+      precondition_fingerprint_json: precondition,
+    };
+  }
+
   private async buildItemContextManifest(
     input: {
       plan: DevelopmentPlan;
@@ -790,7 +1452,9 @@ export class SpecPlanService {
     },
     repository: DeliveryRepository,
   ): Promise<ContextManifest> {
-    const projectRepos = await repository.listProjectRepos(input.plan.project_id);
+    const projectRepos = (await repository.listProjectRepos(input.plan.project_id)).sort((left, right) =>
+      left.repo_id < right.repo_id ? -1 : left.repo_id > right.repo_id ? 1 : 0,
+    );
     const at = this.now();
     return {
       id: this.id('context-manifest'),
@@ -838,6 +1502,172 @@ export class SpecPlanService {
     };
   }
 
+  private stableProductGenerationContextManifest(
+    contextManifest: ContextManifest,
+    identity: Record<string, unknown>,
+  ): ContextManifest {
+    const generatedAt = contextManifest.boundary_approved_at ?? contextManifest.generated_at;
+    return {
+      ...contextManifest,
+      id: this.stableUuid({ kind: 'product_generation_context_manifest', ...identity }),
+      revision_id: this.stableUuid({ kind: 'product_generation_context_manifest_revision', ...identity }),
+      generated_at: generatedAt,
+      created_at: generatedAt,
+      updated_at: generatedAt,
+    };
+  }
+
+  private productGenerationSignedContext(input: {
+    task_kind: 'development_plan_item_spec_revision' | 'development_plan_item_execution_plan_revision';
+    plan: DevelopmentPlan;
+    item: DevelopmentPlanItem;
+    workItem: WorkItem;
+    boundary: BoundarySummary;
+    boundaryRevision: BoundarySummaryRevision;
+    brainstormingSession: BrainstormingSession;
+    specRevision?: SpecRevision | undefined;
+    contextManifest: ContextManifest;
+    actorId: string;
+  }): Record<string, unknown> {
+    return {
+      schema_version: `${input.task_kind}.context.v1`,
+      task_kind: input.task_kind,
+      development_plan: {
+        id: input.plan.id,
+        revision_id: input.plan.revision_id,
+        title: this.runtimeSafeText(input.plan.title),
+      },
+      development_plan_item: {
+        id: input.item.id,
+        revision_id: input.item.revision_id,
+        title: this.runtimeSafeText(input.item.title),
+        summary: this.runtimeSafeText(input.item.summary),
+        affected_surface_refs: this.publicSafeRefs('affected-surface', input.item.affected_surfaces),
+        affected_surfaces_digest: codexCanonicalDigest(input.item.affected_surfaces),
+      },
+      source_object: {
+        ref: input.item.source_ref,
+        revision_id: input.workItem.updated_at,
+        title: this.runtimeSafeText(input.workItem.title),
+        goal: this.runtimeSafeText(input.workItem.goal),
+        success_criteria: input.workItem.success_criteria.map((entry) => this.runtimeSafeText(entry)),
+      },
+      boundary_brainstorming: {
+        session_id: input.brainstormingSession.id,
+        session_revision_id: input.brainstormingSession.revision_id,
+        approved_summary_id: input.boundary.id,
+        approved_summary_revision_id: input.boundaryRevision.id,
+        summary: this.runtimeSafeText(input.boundary.summary),
+        question_answer_snapshot: this.boundarySummaryRevisionQuestionAnswerSnapshot(input.boundaryRevision).map((entry) => ({
+          question_id: entry.question_id,
+          answer_id: entry.answer_id,
+          summary: this.runtimeSafeText(entry.text),
+        })),
+        decision_snapshot: this.boundarySummaryRevisionDecisionSnapshot(input.boundaryRevision).map((entry) => ({
+          decision_id: entry.decision_id,
+          summary: this.runtimeSafeText(entry.text),
+          ...(entry.rationale === undefined ? {} : { rationale: { summary: this.runtimeSafeText(entry.rationale) } }),
+        })),
+      },
+      ...(input.specRevision === undefined
+        ? {}
+        : {
+            approved_spec_revision: {
+              id: input.specRevision.id,
+              spec_id: input.specRevision.spec_id,
+              summary: this.runtimeSafeText(input.specRevision.summary),
+              content: this.runtimeSafeText(input.specRevision.content),
+              boundary_summary_id: input.specRevision.boundary_summary_id,
+              structured_document_digest: codexCanonicalDigest(input.specRevision.structured_document ?? {}),
+            },
+          }),
+      context_manifest: {
+        id: input.contextManifest.id,
+        revision_id: input.contextManifest.revision_id,
+        sources: this.publicSafeContextSources(input.contextManifest.sources),
+      },
+      requested_by_actor_id: input.actorId,
+    };
+  }
+
+  private publicSafeContextSources(sources: ContextManifest['sources']): ContextManifest['sources'] {
+    return sources.map((source, index) => ({
+      type: 'context-source',
+      ref: this.publicSafeRef('context-source', index),
+      digest: codexCanonicalDigest(source),
+    }));
+  }
+
+  private runtimeSafeText(value: string): string {
+    return value.replace(runtimeSensitiveTextPattern, '[runtime-redacted]');
+  }
+
+  private publicSafeRefs(prefix: string, values: readonly unknown[]): string[] {
+    return values.map((_value, index) => this.publicSafeRef(prefix, index));
+  }
+
+  private publicSafeRef(prefix: string, index: number): string {
+    const normalizedPrefix = prefix.replace(/[^A-Za-z0-9._~-]+/g, '-').replace(/^-+|-+$/g, '') || 'ref';
+    return `${normalizedPrefix}-${index + 1}`;
+  }
+
+  private productGenerationAutomationScope(projectId: string, repoIds: readonly string[]): AutomationScope {
+    const repoId = this.canonicalRepoIds(repoIds)[0];
+    return repoId === undefined ? `project:${projectId}` : `repo:${projectId}:${repoId}`;
+  }
+
+  private async productGenerationRepoIds(repository: DeliveryRepository, projectId: string): Promise<string[]> {
+    return this.canonicalRepoIds((await repository.listProjectRepos(projectId)).map((repo) => repo.repo_id));
+  }
+
+  private canonicalRepoIds(repoIds: readonly string[]): string[] {
+    return [...new Set(repoIds)].sort();
+  }
+
+  private async replayAppliedProductGenerationSchedule(
+    repository: DeliveryRepository,
+    itemId: string,
+    eventType: string,
+    actionType: AutomationActionRun['action_type'],
+    actorId: string,
+  ): Promise<ProductGenerationScheduleResult | undefined> {
+    const events = (await repository.listObjectEvents(itemId, 'development_plan_item')).slice().reverse();
+    for (const event of events) {
+      if (event.event_type !== eventType) {
+        continue;
+      }
+      const actionRunId = event.metadata.action_run_id;
+      const runtimeJobId = event.metadata.runtime_job_id;
+      if (typeof actionRunId !== 'string' || typeof runtimeJobId !== 'string') {
+        continue;
+      }
+      const actionRun = await repository.getAutomationActionRun(actionRunId);
+      if (
+        actionRun === undefined ||
+        actionRun.action_type !== actionType ||
+        actionRun.status !== 'succeeded' ||
+        actionRun.action_input_json.requested_by_actor_id !== actorId
+      ) {
+        continue;
+      }
+      const replayed = await this.productRuntimeScheduler.replay({
+        repository,
+        action_run_id: actionRunId,
+        runtime_job_id: runtimeJobId,
+      });
+      if (replayed !== undefined) {
+        return replayed;
+      }
+    }
+    return undefined;
+  }
+
+  private stableUuid(input: Record<string, unknown>): string {
+    const hex = codexCanonicalDigest(input).slice('sha256:'.length);
+    const variant = ((Number.parseInt(hex[16] ?? '0', 16) & 0x3) | 0x8).toString(16);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  }
+
   private itemSpecDraftInput(
     workItem: WorkItem,
     item: DevelopmentPlanItem,
@@ -871,6 +1701,7 @@ export class SpecPlanService {
         generated_by: 'mock_item_spec_draft_adapter',
         development_plan_item_id: item.id,
         boundary_summary_id: boundary.id,
+        boundary_summary_revision_id: contextManifest.boundary_summary_revision_id,
         context_manifest_id: contextManifest.id,
       },
       ...(actorId === undefined ? {} : { author_actor_id: actorId }),
@@ -1056,6 +1887,182 @@ export class SpecPlanService {
     };
     await repository.saveExecutionPlanRevision(revision);
     return revision;
+  }
+
+  private productGenerationPrecondition(actionRun: AutomationActionRun): Record<string, unknown> | undefined {
+    const value = actionRun.action_input_json.precondition_fingerprint_json;
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  }
+
+  private async loadGenerationPrecondition(
+    precondition: Record<string, unknown>,
+    repository: DeliveryRepository,
+  ): Promise<LoadedProductGenerationPrecondition | undefined> {
+    const plan = await repository.getDevelopmentPlan(String(precondition.development_plan_id));
+    const item = await repository.getDevelopmentPlanItem(String(precondition.development_plan_item_id));
+    const workItem = item === undefined ? undefined : await repository.getWorkItem(item.source_ref.id);
+    const contextManifest = await repository.getContextManifest(String(precondition.context_manifest_id));
+    const boundaryRevision =
+      precondition.approved_boundary_summary_revision_id === undefined
+        ? undefined
+        : await this.findBoundarySummaryRevision(String(precondition.approved_boundary_summary_revision_id), repository);
+    const boundary =
+      boundaryRevision === undefined ? undefined : await repository.getBoundarySummary(boundaryRevision.boundary_summary_id);
+    const brainstormingSession =
+      precondition.boundary_session_id === undefined
+        ? undefined
+        : await repository.getBrainstormingSession(String(precondition.boundary_session_id));
+    if (
+      plan === undefined ||
+      item === undefined ||
+      workItem === undefined ||
+      contextManifest === undefined ||
+      boundaryRevision === undefined ||
+      boundary === undefined ||
+      brainstormingSession === undefined
+    ) {
+      return undefined;
+    }
+    return { plan, item, workItem, boundary, boundaryRevision, brainstormingSession, contextManifest };
+  }
+
+  private async specGenerationPreconditionStillCurrent(
+    actionRun: AutomationActionRun,
+    precondition: Record<string, unknown>,
+    loaded: LoadedProductGenerationPrecondition,
+    repository: DeliveryRepository,
+    options: { requireCurrentBoundaryRevision: boolean } = { requireCurrentBoundaryRevision: true },
+  ): Promise<boolean> {
+    return (
+      actionRun.target_object_id === loaded.item.id &&
+      actionRun.target_revision_id === loaded.item.revision_id &&
+      JSON.stringify(precondition.source_object_ref) === JSON.stringify(loaded.item.source_ref) &&
+      String(precondition.source_object_revision_id) === loaded.workItem.updated_at &&
+      String(precondition.development_plan_id) === loaded.plan.id &&
+      String(precondition.development_plan_revision_id) === loaded.plan.revision_id &&
+      String(precondition.development_plan_item_id) === loaded.item.id &&
+      String(precondition.development_plan_item_revision_id) === loaded.item.revision_id &&
+      String(precondition.boundary_session_id) === loaded.brainstormingSession.id &&
+      String(precondition.boundary_session_revision_id) === loaded.brainstormingSession.revision_id &&
+      String(precondition.approved_boundary_summary_revision_id) === loaded.boundaryRevision.id &&
+      String(precondition.context_manifest_id) === loaded.contextManifest.id &&
+      String(precondition.context_manifest_revision_id) === loaded.contextManifest.revision_id &&
+      (!options.requireCurrentBoundaryRevision || this.boundarySummaryRevisionMatchesItem(loaded.boundary, loaded.boundaryRevision, loaded.item)) &&
+      loaded.contextManifest.boundary_summary_revision_id === loaded.boundaryRevision.id &&
+      loaded.boundary.revision_id === loaded.boundaryRevision.id &&
+      this.boundarySummaryRevisionApproved(loaded.boundaryRevision) &&
+      this.requiredBoundaryQuestionsStillClosed(loaded, repository)
+    );
+  }
+
+  private async executionPlanGenerationPreconditionStillCurrent(
+    actionRun: AutomationActionRun,
+    precondition: Record<string, unknown>,
+    loaded: LoadedProductGenerationPrecondition,
+    spec: Spec,
+    approvedSpecRevision: SpecRevision,
+    repository: DeliveryRepository,
+  ): Promise<boolean> {
+    return (
+      (await this.specGenerationPreconditionStillCurrent(actionRun, precondition, loaded, repository, { requireCurrentBoundaryRevision: false })) &&
+      String(precondition.approved_spec_revision_id) === approvedSpecRevision.id &&
+      spec.development_plan_item_id === loaded.item.id &&
+      spec.status === 'approved' &&
+      spec.current_revision_id === approvedSpecRevision.id &&
+      spec.approved_revision_id === approvedSpecRevision.id &&
+      approvedSpecRevision.development_plan_item_id === loaded.item.id &&
+      approvedSpecRevision.boundary_summary_id === loaded.boundary.id &&
+      this.revisionStructuredBoundarySummaryRevisionId(approvedSpecRevision) === loaded.boundaryRevision.id &&
+      (await this.currentItemRevisionAtApprovedSpecGate(loaded.item, repository)) &&
+      loaded.contextManifest.approved_spec_revision_id === approvedSpecRevision.id
+    );
+  }
+
+  private async requiredBoundaryQuestionsStillClosed(
+    loaded: LoadedProductGenerationPrecondition,
+    repository: DeliveryRepository,
+  ): Promise<boolean> {
+    const [questions, answers, decisions] = await Promise.all([
+      repository.listBoundaryQuestions(loaded.brainstormingSession.id),
+      repository.listBoundaryAnswers(loaded.brainstormingSession.id),
+      repository.listBoundaryDecisions(loaded.brainstormingSession.id),
+    ]);
+    return requiredBoundaryQuestionsClosed({ questions, answers, decisions });
+  }
+
+  private revisionStructuredBoundarySummaryRevisionId(revision: SpecRevision): string | undefined {
+    const structured = revision.structured_document;
+    if (structured === undefined || structured === null || typeof structured !== 'object' || Array.isArray(structured)) {
+      return undefined;
+    }
+    const value = (structured as Record<string, unknown>).boundary_summary_revision_id;
+    return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+  }
+
+  private boundarySummaryRevisionQuestionAnswerSnapshot(
+    revision: BoundarySummaryRevision,
+  ): Array<{ question_id: string; answer_id: string; text: string }> {
+    const value = (revision as BoundarySummaryRevision & { question_answer_snapshot?: unknown }).question_answer_snapshot;
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value.flatMap((entry) => {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+        return [];
+      }
+      const record = entry as Record<string, unknown>;
+      return typeof record.question_id === 'string' &&
+        typeof record.answer_id === 'string' &&
+        typeof record.text === 'string'
+        ? [{ question_id: record.question_id, answer_id: record.answer_id, text: record.text }]
+        : [];
+    });
+  }
+
+  private boundarySummaryRevisionDecisionSnapshot(
+    revision: BoundarySummaryRevision,
+  ): Array<{ decision_id: string; text: string; rationale?: string }> {
+    const value = (revision as BoundarySummaryRevision & { decision_snapshot?: unknown }).decision_snapshot;
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value.flatMap((entry) => {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+        return [];
+      }
+      const record = entry as Record<string, unknown>;
+      const decisionId = typeof record.decision_id === 'string' ? record.decision_id : record.id;
+      return typeof decisionId === 'string' && typeof record.text === 'string'
+        ? [
+            {
+              decision_id: decisionId,
+              text: record.text,
+              ...(typeof record.rationale === 'string' ? { rationale: record.rationale } : {}),
+            },
+          ]
+        : [];
+    });
+  }
+
+  private async appliedGeneratedRevisionForAction<T extends SpecRevision | ExecutionPlanRevision>(
+    repository: DeliveryRepository,
+    actionRunId: string,
+    runtimeJobId: string,
+    objectType: 'spec_revision' | 'execution_plan_revision',
+  ): Promise<T | undefined> {
+    const applied = (await repository.listObjectEvents(actionRunId, 'automation_action_run')).find(
+      (event) =>
+        event.event_type === 'product_generation_result_applied' &&
+        event.metadata.runtime_job_id === runtimeJobId &&
+        event.metadata.generated_object_type === objectType &&
+        typeof event.metadata.generated_revision_id === 'string',
+    );
+    if (typeof applied?.metadata.generated_revision_id !== 'string') {
+      return undefined;
+    }
+    return (objectType === 'spec_revision'
+      ? await repository.getSpecRevision(applied.metadata.generated_revision_id)
+      : await repository.getExecutionPlanRevision(applied.metadata.generated_revision_id)) as T | undefined;
   }
 
   private async requireItemSpecRevision(itemId: string, revisionId: string): Promise<SpecRevision> {

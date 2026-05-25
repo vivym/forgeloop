@@ -371,6 +371,17 @@ export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult {
   replayed: boolean;
 }
 
+export interface ActiveCodexGenerationActionRunFence {
+  runtime_job: CodexRuntimeJob;
+  action_run: AutomationActionRun;
+}
+
+export interface GetActiveCodexGenerationActionRunFenceInput {
+  runtime_job_id: string;
+  action_run_id: string;
+  now: string;
+}
+
 export interface PollCodexRuntimeJobsInput {
   worker_id: string;
   worker_session_token: string;
@@ -1296,6 +1307,9 @@ export interface DeliveryRepository {
   createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(
     input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult>;
+  getActiveCodexGenerationActionRunFence(
+    input: GetActiveCodexGenerationActionRunFenceInput,
+  ): Promise<ActiveCodexGenerationActionRunFence | undefined>;
   getCodexRuntimeJob(input: GetCodexRuntimeJobInput): Promise<CodexRuntimeJob | undefined>;
   getCodexRuntimeJobEnvelope(input: GetCodexRuntimeJobEnvelopeInput): Promise<CodexLaunchTokenEnvelope | undefined>;
   getCodexRuntimeJobWorkload(input: GetCodexRuntimeJobWorkloadInput): Promise<CodexRuntimeJob>;
@@ -1536,6 +1550,7 @@ export interface DeliveryRepository {
   ): Promise<ExecutionPackageGenerationRun>;
   createOrReplayAutomationActionRun(input: CreateOrReplayAutomationActionRunInput): Promise<AutomationActionRun>;
   claimNextAutomationActionRun(input: ClaimNextAutomationActionRunInput): Promise<AutomationActionRun | undefined>;
+  getAutomationActionRun(id: string): Promise<AutomationActionRun | undefined>;
   getClaimedAutomationActionRun(input: GetClaimedAutomationActionRunInput): Promise<AutomationActionRun>;
   latestCompletedProjectionActionRun(
     input: LatestCompletedProjectionActionRunInput,

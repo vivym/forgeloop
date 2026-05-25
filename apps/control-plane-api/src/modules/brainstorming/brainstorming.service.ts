@@ -1,10 +1,18 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { BrainstormingAnswer, BrainstormingDecision } from '@forgeloop/contracts';
-import type { BoundaryAnswerRecord, BoundaryDecisionRecord, BoundaryQuestionRecord, BoundaryRoundRecord, DeliveryRepository } from '@forgeloop/db';
+import type {
+  BoundaryAnswerRecord,
+  BoundaryDecisionRecord,
+  BoundaryQuestionRecord,
+  BoundaryRoundRecord,
+  CreateOrReplayAutomationActionRunInput,
+  DeliveryRepository,
+} from '@forgeloop/db';
 import {
   actorCanActForBoundaryLeader,
   codexCanonicalDigest,
   requiredBoundaryQuestionsClosed,
+  type AutomationActionRun,
   type BoundaryAnswer,
   type BoundaryDecision,
   type BoundaryQuestion,
@@ -18,9 +26,11 @@ import {
   type DevelopmentPlanRevision,
   type RevisionCompareQuery,
   type StructuredRevisionDiff,
+  type WorkItem,
 } from '@forgeloop/domain';
 
 import { AuditWriterService } from '../audit/audit-writer.service';
+import { ProductGenerationRuntimeSchedulerService } from '../codex-runtime/product-generation-runtime-scheduler.service';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 
@@ -82,6 +92,9 @@ const defaultBoundaryQuestions = [
   'What risks or dependency constraints should block generation?',
 ];
 
+const runtimeSensitiveTextPattern =
+  /~\/\.codex(?:\/(?:config\.toml|auth\.json))?|\b(?:config\.toml|auth\.json)\b|https?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?)(?::\d{1,5})?(?:\/\S*)?|unix:\/\/\S+|\/(?:Users|home|tmp|var|private|workspace|workspaces|app|mnt|Volumes)\/\S+|[\w.-]+\.sock\b|\b(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0)(?::\d{1,5})?\b|\b[0-9a-f]{64}\b/gi;
+
 type BoundaryRoundTerminalResultInput = {
   schema_version: 'boundary_round_result.v1';
   session_id: string;
@@ -108,6 +121,8 @@ export class BrainstormingService {
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(ControlPlaneRuntimeService) private readonly runtime: ControlPlaneRuntimeService,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
+    @Inject(ProductGenerationRuntimeSchedulerService)
+    private readonly productRuntimeScheduler: ProductGenerationRuntimeSchedulerService,
   ) {}
 
   async startSession(input: StartSessionInput): Promise<BrainstormingSession> {
@@ -330,111 +345,8 @@ export class BrainstormingService {
     );
   }
 
-  async approveBoundary(sessionId: string, input: ApproveBoundaryInput): Promise<Record<string, unknown>> {
-    const sessionHint = await this.requireBrainstormingSession(sessionId);
-    return this.repository.withObjectLock(`development-plan:${sessionHint.development_plan_id}`, async (planLockedRepository) =>
-      planLockedRepository.withObjectLock(`brainstorming-session:${sessionId}`, async (sessionLockedRepository) =>
-        sessionLockedRepository.withDeliveryTransaction(async (repository) => {
-          const session = await this.requireBrainstormingSession(sessionId, repository);
-          this.assertSessionMutable(session);
-          if (!this.allQuestionsAnswered(session)) {
-            throw new ConflictException('Boundary approval requires an answer for every brainstorming question');
-          }
-          if (session.decisions.length === 0) {
-            throw new ConflictException('Boundary approval requires at least one recorded prior decision');
-          }
-
-          const plan = await this.requireDevelopmentPlan(session.development_plan_id, repository);
-          const item = await this.requireDevelopmentPlanItem(session.development_plan_id, session.development_plan_item_id, repository);
-          this.assertItemBoundaryNotApproved(item);
-          const approvedAt = this.runtime.now();
-          const boundarySummaryId = this.runtime.id('boundary-summary');
-          const boundarySummaryRevisionId = this.runtime.id('boundary-summary-revision');
-          const approvedSessionRevisionId = this.runtime.id('brainstorming-session-revision');
-          const decisions =
-            input.final_decision === undefined
-              ? session.decisions
-              : [...session.decisions, this.buildDecision({ text: input.final_decision, actor_id: input.actor_id })];
-
-          const updatedItem: DevelopmentPlanItem = {
-            ...item,
-            revision_id: this.runtime.id('development-plan-item-revision'),
-            boundary_status: 'approved',
-            next_action: 'generate_spec',
-            updated_at: approvedAt,
-          };
-          await repository.saveDevelopmentPlanItem(updatedItem);
-          const itemRevision = await this.saveItemRevision(updatedItem, 'boundary_approved', input.actor_id, repository);
-
-          const summary: BoundarySummary = {
-            id: boundarySummaryId,
-            revision_id: boundarySummaryRevisionId,
-            brainstorming_session_id: session.id,
-            brainstorming_session_revision_id: approvedSessionRevisionId,
-            development_plan_id: plan.id,
-            development_plan_item_id: item.id,
-            development_plan_item_revision_id: updatedItem.revision_id,
-            source_ref: item.source_ref,
-            summary: this.boundarySummaryMarkdown(input),
-            approved_by_actor_id: input.actor_id,
-            approved_at: approvedAt,
-            created_at: approvedAt,
-            updated_at: approvedAt,
-          };
-          await repository.saveBoundarySummary(summary);
-
-          const boundaryRevision: BoundarySummaryRevision = {
-            id: summary.revision_id,
-            boundary_summary_id: summary.id,
-            brainstorming_session_id: session.id,
-            brainstorming_session_revision_id: approvedSessionRevisionId,
-            development_plan_item_id: item.id,
-            development_plan_item_revision_id: updatedItem.revision_id,
-            revision_number: 1,
-            summary_markdown: summary.summary,
-            decision_snapshot: decisions,
-            decision_count: decisions.length,
-            approved_by_actor_id: input.actor_id,
-            approved_at: approvedAt,
-            created_at: approvedAt,
-          };
-          await repository.saveBoundarySummaryRevision(boundaryRevision);
-
-          const approvedSession: BrainstormingSession = {
-            ...session,
-            revision_id: approvedSessionRevisionId,
-            decisions,
-            approval_state: 'approved',
-            boundary_summary_id: summary.id,
-            approver_actor_id: input.actor_id,
-            approved_at: approvedAt,
-            updated_at: approvedAt,
-          };
-          await repository.saveBrainstormingSession(approvedSession);
-          const updatedPlan: DevelopmentPlan = {
-            ...plan,
-            revision_id: this.runtime.id('development-plan-revision'),
-            updated_at: approvedAt,
-          };
-          await repository.saveDevelopmentPlan(updatedPlan);
-          await this.saveDevelopmentPlanRevision(
-            updatedPlan,
-            { changeReason: 'development_plan_item_boundary_approved', actorId: input.actor_id },
-            repository,
-          );
-          await this.appendItemEvent(item.id, 'boundary_summary_approved', input.actor_id, {
-            boundary_summary_id: summary.id,
-            development_plan_item_revision_id: itemRevision.id,
-          }, repository);
-
-          return {
-            ...approvedSession,
-            boundary_summary_id: summary.id,
-            development_plan_item_revision_id: updatedItem.revision_id,
-          };
-        }),
-      ),
-    );
+  async approveBoundary(_sessionId: string, _input: ApproveBoundaryInput): Promise<Record<string, unknown>> {
+    throw new ConflictException('Legacy direct Boundary approval is disabled; approve a proposed Boundary Summary revision instead');
   }
 
   async continueBoundaryBrainstorming(
@@ -465,94 +377,177 @@ export class BrainstormingService {
     );
   }
 
-  async applyBoundaryRoundTerminalResult(input: BoundaryRoundTerminalResultInput): Promise<BrainstormingSession> {
-    return this.repository.withObjectLock(`brainstorming-session:${input.session_id}`, async (repository) =>
+  async applyBoundaryRoundRuntimeResult(input: {
+    actionRun: AutomationActionRun;
+    runtime_job_id: string;
+    generated: BoundaryRoundTerminalResultInput;
+  }): Promise<{ applied: true } | { applied: false; reason: 'invalid_precondition' | 'stale_precondition_fingerprint' }> {
+    const precondition = this.productGenerationPrecondition(input.actionRun);
+    if (
+      precondition === undefined ||
+      input.actionRun.action_type !== 'run_boundary_brainstorming_round' ||
+      input.actionRun.target_object_type !== 'boundary_round' ||
+      input.actionRun.precondition_fingerprint !== codexCanonicalDigest(precondition)
+    ) {
+      return { applied: false, reason: 'invalid_precondition' };
+    }
+
+    return this.repository.withObjectLock(`brainstorming-session:${input.generated.session_id}`, async (repository) =>
       repository.withDeliveryTransaction(async (transaction) => {
-        const session = await this.requireBrainstormingSession(input.session_id, transaction);
-        this.assertSessionMutable(session);
-        const round = (await transaction.listBoundaryRounds(session.id)).find((candidate) => candidate.id === input.round_id);
+        const session = await this.requireBrainstormingSession(input.generated.session_id, transaction);
+        const round = (await transaction.listBoundaryRounds(session.id)).find((candidate) => candidate.id === input.generated.round_id);
         if (round === undefined) {
-          throw new NotFoundException(`Boundary Round ${input.round_id} not found`);
+          return { applied: false, reason: 'stale_precondition_fingerprint' };
         }
-
-        const now = this.runtime.now();
-        const existingQuestions = await transaction.listBoundaryQuestions(session.id);
-        const existingDecisions = await transaction.listBoundaryDecisions(session.id);
-        const newQuestions: BoundaryQuestionRecord[] = (input.questions ?? []).map((question, index) => ({
-          id: this.runtime.id('brainstorming-question'),
-          round_id: round.id,
-          text: question.text,
-          author_id: 'ai',
-          created_at: now,
-          status: 'open',
-          required: question.required,
-          ...(question.rationale === undefined ? {} : { rationale: question.rationale }),
-          session_id: session.id,
-          sequence: existingQuestions.length + index + 1,
-        }));
-        const newDecisions: BoundaryDecisionRecord[] = (input.proposed_decisions ?? []).map((decision, index) => ({
-          id: this.runtime.id('brainstorming-decision'),
-          round_id: round.id,
-          text: decision.text,
-          actor_id: 'ai',
-          actor_role: 'ai',
-          source: 'ai_proposed',
-          state: 'proposed',
-          ...(decision.rationale === undefined ? {} : { rationale: decision.rationale }),
-          created_at: now,
-          session_id: session.id,
-          sequence: existingDecisions.length + index + 1,
-        }));
-        for (const question of newQuestions) {
-          await transaction.saveBoundaryQuestion(question);
+        const priorApplied = (await transaction.listObjectEvents(input.actionRun.id, 'automation_action_run')).some(
+          (event) =>
+            event.event_type === 'product_generation_result_applied' &&
+            event.metadata.runtime_job_id === input.runtime_job_id &&
+            event.metadata.generated_object_type === 'boundary_round' &&
+            event.metadata.boundary_round_id === round.id,
+        );
+        if (priorApplied) {
+          return { applied: true };
         }
-        for (const decision of newDecisions) {
-          await transaction.saveBoundaryDecision(decision);
+        const plan = await this.requireDevelopmentPlan(session.development_plan_id, transaction);
+        const item = await this.requireDevelopmentPlanItem(session.development_plan_id, session.development_plan_item_id, transaction);
+        const workItem = await this.requireWorkItem(item.source_ref.id, transaction);
+        const contextManifest = await transaction.getContextManifest(session.context_manifest_id);
+        const stillCurrent =
+          input.actionRun.target_object_id === round.id &&
+          input.actionRun.target_revision_id === String(precondition.development_plan_item_revision_id) &&
+          input.generated.session_id === session.id &&
+          input.generated.round_id === round.id &&
+          session.current_round_id === round.id &&
+          String(precondition.source_object_revision_id) === workItem.updated_at &&
+          JSON.stringify(precondition.source_object_ref) === JSON.stringify(item.source_ref) &&
+          String(precondition.development_plan_id) === plan.id &&
+          String(precondition.development_plan_revision_id) === plan.revision_id &&
+          String(precondition.development_plan_item_id) === item.id &&
+          String(precondition.development_plan_item_revision_id) === item.revision_id &&
+          String(precondition.boundary_session_id) === session.id &&
+          String(precondition.boundary_session_revision_id) === round.session_revision_id &&
+          String(precondition.boundary_round_id) === round.id &&
+          String(precondition.context_manifest_id) === session.context_manifest_id &&
+          String(precondition.context_manifest_revision_id) === session.context_manifest_revision_id &&
+          contextManifest?.revision_id === session.context_manifest_revision_id;
+        if (!stillCurrent) {
+          return { applied: false, reason: 'stale_precondition_fingerprint' };
         }
-
-        const allQuestions = [...session.questions, ...newQuestions.map(({ session_id: _sessionId, sequence: _sequence, ...question }) => question)];
-        const allDecisions = [...session.decisions, ...newDecisions.map(({ session_id: _sessionId, sequence: _sequence, ...decision }) => decision)];
-        const summaryRevision =
-          input.summary_proposal === undefined
-            ? undefined
-            : await this.createProposedBoundarySummaryRevision({
-                session,
-                round,
-                proposal: input.summary_proposal,
-                questions: allQuestions,
-                answers: session.answers,
-                decisions: allDecisions,
-                repository: transaction,
-                now,
-              });
-        const roundStatus = input.summary_proposal === undefined ? 'waiting_for_leader' : 'summary_proposed';
-        const updatedRound: BoundaryRoundRecord = {
-          ...round,
-          ai_output_markdown: input.public_summary,
-          status: roundStatus,
-          updated_at: now,
-        };
-        await transaction.saveBoundaryRound(updatedRound);
-
-        const updated: BrainstormingSession = {
-          ...session,
-          revision_id: this.runtime.id('brainstorming-session-revision'),
-          questions: allQuestions,
-          decisions: allDecisions,
-          status: input.summary_proposal === undefined ? 'waiting_for_leader' : 'summary_proposed',
-          approval_state: input.summary_proposal === undefined ? 'questions_open' : this.nextApprovalState(allQuestions, session.answers, allDecisions),
-          ...(summaryRevision === undefined
-            ? {}
-            : {
-                boundary_summary_id: summaryRevision.boundary_summary_id,
-                latest_summary_revision_id: summaryRevision.id,
-              }),
-          updated_at: now,
-        };
-        await transaction.saveBrainstormingSession(updated);
-        return updated;
+        await this.applyBoundaryRoundTerminalResultWithRepository(input.generated, transaction);
+        await this.audit.objectEvent(
+          {
+            id: this.runtime.id('object-event'),
+            object_type: 'automation_action_run',
+            object_id: input.actionRun.id,
+            event_type: 'product_generation_result_applied',
+            actor_id: String(precondition.requested_by_actor_id),
+            metadata: {
+              runtime_job_id: input.runtime_job_id,
+              generated_object_type: 'boundary_round',
+              boundary_round_id: round.id,
+            },
+            created_at: this.runtime.now(),
+          },
+          transaction,
+        );
+        return { applied: true };
       }),
     );
+  }
+
+  private async applyBoundaryRoundTerminalResultWithRepository(
+    input: BoundaryRoundTerminalResultInput,
+    transaction: DeliveryRepository,
+  ): Promise<BrainstormingSession> {
+    const session = await this.requireBrainstormingSession(input.session_id, transaction);
+    this.assertSessionMutable(session);
+    const round = (await transaction.listBoundaryRounds(session.id)).find((candidate) => candidate.id === input.round_id);
+    if (round === undefined) {
+      throw new NotFoundException(`Boundary Round ${input.round_id} not found`);
+    }
+
+    const now = this.runtime.now();
+    const existingQuestions = await transaction.listBoundaryQuestions(session.id);
+    const existingDecisions = await transaction.listBoundaryDecisions(session.id);
+    const newQuestions: BoundaryQuestionRecord[] = (input.questions ?? []).map((question, index) => ({
+      id: this.runtime.id('brainstorming-question'),
+      round_id: round.id,
+      text: question.text,
+      author_id: 'ai',
+      created_at: now,
+      status: 'open',
+      required: question.required,
+      ...(question.rationale === undefined ? {} : { rationale: question.rationale }),
+      session_id: session.id,
+      sequence: existingQuestions.length + index + 1,
+    }));
+    const newDecisions: BoundaryDecisionRecord[] = (input.proposed_decisions ?? []).map((decision, index) => ({
+      id: this.runtime.id('brainstorming-decision'),
+      round_id: round.id,
+      text: decision.text,
+      actor_id: 'ai',
+      actor_role: 'ai',
+      source: 'ai_proposed',
+      state: 'proposed',
+      ...(decision.rationale === undefined ? {} : { rationale: decision.rationale }),
+      created_at: now,
+      session_id: session.id,
+      sequence: existingDecisions.length + index + 1,
+    }));
+    for (const question of newQuestions) {
+      await transaction.saveBoundaryQuestion(question);
+    }
+    for (const decision of newDecisions) {
+      await transaction.saveBoundaryDecision(decision);
+    }
+
+    const allQuestions = [...session.questions, ...newQuestions.map(({ session_id: _sessionId, sequence: _sequence, ...question }) => question)];
+    const allDecisions = [...session.decisions, ...newDecisions.map(({ session_id: _sessionId, sequence: _sequence, ...decision }) => decision)];
+    const summaryRevision =
+      input.summary_proposal === undefined
+        ? undefined
+        : await this.createProposedBoundarySummaryRevision({
+            session,
+            round,
+            proposal: input.summary_proposal,
+            questions: allQuestions,
+            answers: session.answers,
+            decisions: allDecisions,
+            repository: transaction,
+            now,
+          });
+    const roundStatus = input.summary_proposal === undefined ? 'waiting_for_leader' : 'summary_proposed';
+    const updatedRound: BoundaryRoundRecord = {
+      ...round,
+      ai_output_markdown: input.public_summary,
+      status: roundStatus,
+      updated_at: now,
+    };
+    await transaction.saveBoundaryRound(updatedRound);
+
+    const updated: BrainstormingSession = {
+      ...session,
+      revision_id: this.runtime.id('brainstorming-session-revision'),
+      questions: allQuestions,
+      decisions: allDecisions,
+      status: input.summary_proposal === undefined ? 'waiting_for_leader' : 'summary_proposed',
+      approval_state: input.summary_proposal === undefined ? 'questions_open' : this.nextApprovalState(allQuestions, session.answers, allDecisions),
+      ...(summaryRevision === undefined
+        ? {}
+        : {
+            boundary_summary_id: summaryRevision.boundary_summary_id,
+            latest_summary_revision_id: summaryRevision.id,
+          }),
+      updated_at: now,
+    };
+    await transaction.saveBrainstormingSession(updated);
+    return updated;
+  }
+
+  private productGenerationPrecondition(actionRun: AutomationActionRun): Record<string, unknown> | undefined {
+    const value = actionRun.action_input_json.precondition_fingerprint_json;
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
   }
 
   async requestBoundarySummaryChanges(
@@ -628,10 +623,11 @@ export class BrainstormingService {
           if (this.boundarySummaryRevisionStatus(revision) !== 'proposed') {
             throw new ConflictException('Only proposed Boundary Summary revisions can be approved');
           }
-          const [questions, answers, decisions] = await Promise.all([
+          const [questions, answers, decisions, rounds] = await Promise.all([
             repository.listBoundaryQuestions(session.id),
             repository.listBoundaryAnswers(session.id),
             repository.listBoundaryDecisions(session.id),
+            repository.listBoundaryRounds(session.id),
           ]);
           if (!requiredBoundaryQuestionsClosed({ questions, answers, decisions })) {
             throw new ConflictException('Boundary approval requires every required question to be answered or waived');
@@ -659,15 +655,15 @@ export class BrainstormingService {
             });
           }
           const decisionRows = approvalDecision === undefined ? decisions : [...decisions, { ...approvalDecision, session_id: session.id, sequence: decisions.length + 1 }];
-          const approvedRevision = {
-            ...revision,
-            status: 'approved',
-            question_answer_snapshot: this.questionAnswerSnapshot(questions, answers),
-            decision_snapshot: this.decisionSnapshot(decisionRows),
-            approved_by_actor_id: input.actor_id,
-            approved_at: approvedAt,
-          } as BoundarySummaryRevision;
-          await repository.updateBoundarySummaryRevision(approvedRevision);
+          const questionAnswerSnapshot = this.questionAnswerSnapshot(questions, answers);
+          const decisionSnapshot = this.decisionSnapshot(decisionRows);
+          this.assertBoundarySummaryApprovalEvidence({
+            session,
+            revision,
+            rounds,
+            questionAnswerSnapshot,
+            decisionSnapshot,
+          });
           const summary = await this.requireBoundarySummary(revision.boundary_summary_id, repository);
           const updatedItem: DevelopmentPlanItem = {
             ...item,
@@ -678,6 +674,16 @@ export class BrainstormingService {
           };
           await repository.saveDevelopmentPlanItem(updatedItem);
           const itemRevision = await this.saveItemRevision(updatedItem, 'boundary_approved', input.actor_id, repository);
+          const approvedRevision = {
+            ...revision,
+            status: 'approved',
+            development_plan_item_revision_id: updatedItem.revision_id,
+            question_answer_snapshot: questionAnswerSnapshot,
+            decision_snapshot: decisionSnapshot,
+            approved_by_actor_id: input.actor_id,
+            approved_at: approvedAt,
+          } as BoundarySummaryRevision;
+          await repository.updateBoundarySummaryRevision(approvedRevision);
           const approvedSessionRevisionId = this.runtime.id('brainstorming-session-revision');
           await repository.saveBoundarySummary({
             ...summary,
@@ -785,6 +791,14 @@ export class BrainstormingService {
       throw new NotFoundException(`Development Plan Item ${itemId} not found`);
     }
     return item;
+  }
+
+  private async requireWorkItem(workItemId: string, repository: DeliveryRepository = this.repository): Promise<WorkItem> {
+    const workItem = await repository.getWorkItem(workItemId);
+    if (workItem === undefined) {
+      throw new NotFoundException(`Work Item ${workItemId} not found`);
+    }
+    return workItem;
   }
 
   private async requireBrainstormingSession(
@@ -963,20 +977,59 @@ export class BrainstormingService {
       updated_at: now,
     };
     await input.repository.saveBoundaryRound(round);
-    const actionRun = await this.createBoundaryActionRun({
+    const workItem = await this.requireWorkItem(input.item.source_ref.id, input.repository);
+    const actionRunInput = this.boundaryActionRunInput({
       session: input.session,
       plan: input.plan,
       item: input.item,
+      workItem,
       round,
       operation: input.operation,
       requestedByActorId: input.requestedByActorId,
-      repository: input.repository,
       now,
     });
-    const runtimeJobId = this.createBoundaryRuntimeJob({ actionRunId: actionRun.id, round });
+    const contextManifest = await input.repository.getContextManifest(input.session.context_manifest_id);
+    if (contextManifest === undefined) {
+      throw new NotFoundException(`Context Manifest ${input.session.context_manifest_id} not found`);
+    }
+    const [rounds, questions, answers, decisions, summaryRevisions] = await Promise.all([
+      input.repository.listBoundaryRounds(input.session.id),
+      input.repository.listBoundaryQuestions(input.session.id),
+      input.repository.listBoundaryAnswers(input.session.id),
+      input.repository.listBoundaryDecisions(input.session.id),
+      input.session.boundary_summary_id === undefined
+        ? Promise.resolve([])
+        : input.repository.listBoundarySummaryRevisions(input.session.boundary_summary_id),
+    ]);
+    const scheduled = await this.productRuntimeScheduler.schedule({
+      repository: input.repository,
+      action_run: actionRunInput,
+      task_kind: 'boundary_brainstorming_round',
+      prompt_version: 'boundary-brainstorming-round:v1',
+      output_schema_version: 'boundary_round_result.v1',
+      context_manifest: contextManifest,
+      signed_context_json: this.boundaryRoundSignedContext({
+        session: input.session,
+        plan: input.plan,
+        item: input.item,
+        workItem,
+        round,
+        operation: input.operation,
+        requestedByActorId: input.requestedByActorId,
+        leaderInputMarkdown: input.leaderInputMarkdown,
+        contextManifest,
+        rounds,
+        questions,
+        answers,
+        decisions,
+        summaryRevisions,
+      }),
+      project_id: input.plan.project_id,
+      repo_ids: [],
+    });
     await input.repository.saveBoundaryRound({
       ...round,
-      runtime_job_id: runtimeJobId,
+      runtime_job_id: scheduled.runtime_job.id,
       status: 'queued',
       updated_at: this.runtime.now(),
     });
@@ -992,19 +1045,19 @@ export class BrainstormingService {
     return updatedSession;
   }
 
-  private async createBoundaryActionRun(input: {
+  private boundaryActionRunInput(input: {
     session: BrainstormingSession;
     plan: DevelopmentPlan;
     item: DevelopmentPlanItem;
+    workItem: WorkItem;
     round: BoundaryRoundRecord;
     operation: 'start' | 'continue' | 'revise_summary';
     requestedByActorId: string;
-    repository: DeliveryRepository;
     now: string;
-  }) {
+  }): CreateOrReplayAutomationActionRunInput {
     const preconditionFingerprintJson = {
       source_object_ref: input.item.source_ref,
-      source_object_revision_id: input.item.revision_id,
+      source_object_revision_id: input.workItem.updated_at,
       development_plan_id: input.plan.id,
       development_plan_revision_id: input.plan.revision_id,
       development_plan_item_id: input.item.id,
@@ -1030,8 +1083,8 @@ export class BrainstormingService {
       requested_by_actor_id: input.requestedByActorId,
       precondition_fingerprint_json: preconditionFingerprintJson,
     };
-    const projectId = (input.plan as DevelopmentPlan & { project_id?: string }).project_id ?? input.plan.id;
-    const actionBase = {
+    const projectId = input.plan.project_id;
+    return {
       id: this.runtime.id('automation-action-run'),
       action_type: 'run_boundary_brainstorming_round',
       target_object_type: 'boundary_round',
@@ -1044,23 +1097,124 @@ export class BrainstormingService {
       capability_fingerprint: 'boundary-brainstorming-runtime:v1',
       precondition_fingerprint: codexCanonicalDigest(preconditionFingerprintJson),
       action_input_json: actionInputJson,
-    };
-    return input.repository.createOrReplayAutomationActionRun({
-      ...actionBase,
       now: input.now,
-    });
+    };
   }
 
-  private createBoundaryRuntimeJob(input: { actionRunId: string; round: BoundaryRoundRecord }): string {
-    const inputDigest = codexCanonicalDigest({
-      schema_version: 'boundary_brainstorming_round.v1',
-      target_type: 'automation_action_run',
-      action_run_id: input.actionRunId,
-      boundary_round_id: input.round.id,
-      session_id: input.round.session_id,
-      session_revision_id: input.round.session_revision_id,
-    });
-    return `boundary-runtime-job:${inputDigest.slice('sha256:'.length, 'sha256:'.length + 16)}`;
+  private boundaryRoundSignedContext(input: {
+    session: BrainstormingSession;
+    plan: DevelopmentPlan;
+    item: DevelopmentPlanItem;
+    workItem: WorkItem;
+    round: BoundaryRoundRecord;
+    operation: 'start' | 'continue' | 'revise_summary';
+    requestedByActorId: string;
+    leaderInputMarkdown?: string | undefined;
+    contextManifest: ContextManifest;
+    rounds: readonly BoundaryRoundRecord[];
+    questions: readonly BoundaryQuestionRecord[];
+    answers: readonly BoundaryAnswerRecord[];
+    decisions: readonly BoundaryDecisionRecord[];
+    summaryRevisions: readonly BoundarySummaryRevision[];
+  }): Record<string, unknown> {
+    return {
+      schema_version: 'boundary_brainstorming_round.context.v1',
+      task_kind: 'boundary_brainstorming_round',
+      operation: input.operation,
+      development_plan: {
+        id: input.plan.id,
+        revision_id: input.plan.revision_id,
+        title: this.runtimeSafeText(input.plan.title),
+      },
+      development_plan_item: {
+        id: input.item.id,
+        revision_id: input.item.revision_id,
+        title: this.runtimeSafeText(input.item.title),
+        summary: this.runtimeSafeText(input.item.summary),
+      },
+      source_object: {
+        ref: input.item.source_ref,
+        revision_id: input.workItem.updated_at,
+        title: this.runtimeSafeText(input.workItem.title),
+        goal: this.runtimeSafeText(input.workItem.goal),
+      },
+      boundary_session: {
+        id: input.session.id,
+        revision_id: input.session.revision_id,
+        leader_actor_id: input.session.leader_actor_id,
+        delegate_count: input.session.leader_delegate_actor_ids.length,
+      },
+      boundary_round: {
+        id: input.round.id,
+        session_revision_id: input.round.session_revision_id,
+        round_number: input.round.round_number,
+        trigger: input.round.trigger,
+      },
+      boundary_history: {
+        rounds: input.rounds.map((round) => ({
+          id: round.id,
+          round_number: round.round_number,
+          trigger: round.trigger,
+          status: round.status,
+          session_revision_id: round.session_revision_id,
+          ...(round.leader_input_markdown === undefined ? {} : { leader_input: { summary: this.runtimeSafeText(round.leader_input_markdown) } }),
+        })),
+        questions: input.questions.map((question) => ({
+          id: question.id,
+          ...(question.round_id === undefined ? {} : { round_id: question.round_id }),
+          summary: this.runtimeSafeText(question.text),
+          status: question.status,
+          required: question.required,
+          ...(question.answered_by_answer_id === undefined ? {} : { answered_by_answer_id: question.answered_by_answer_id }),
+          ...(question.waived_by_decision_id === undefined ? {} : { waived_by_decision_id: question.waived_by_decision_id }),
+          ...(question.rationale === undefined ? {} : { rationale: { summary: this.runtimeSafeText(question.rationale) } }),
+        })),
+        answers: input.answers.map((answer) => ({
+          id: answer.id,
+          question_id: answer.question_id,
+          ...(answer.round_id === undefined ? {} : { round_id: answer.round_id }),
+          summary: this.runtimeSafeText(answer.text),
+          actor_role: answer.actor_role,
+        })),
+        decisions: input.decisions.map((decision) => ({
+          id: decision.id,
+          ...(decision.round_id === undefined ? {} : { round_id: decision.round_id }),
+          summary: this.runtimeSafeText(decision.text),
+          ...(decision.actor_role === undefined ? {} : { actor_role: decision.actor_role }),
+          ...(decision.source === undefined ? {} : { source: decision.source }),
+          ...(decision.state === undefined ? {} : { state: decision.state }),
+          ...(decision.rationale === undefined ? {} : { rationale: { summary: this.runtimeSafeText(decision.rationale) } }),
+        })),
+        summary_revisions: input.summaryRevisions.map((revision) => ({
+          id: revision.id,
+          status: this.boundarySummaryRevisionStatus(revision),
+          summary: this.runtimeSafeText(this.boundarySummaryRevisionMarkdown(revision)),
+          question_answer_snapshot: this.boundarySummaryRevisionQuestionAnswerSnapshot(revision).map((entry) => ({
+            question_id: entry.question_id,
+            answer_id: entry.answer_id,
+            summary: this.runtimeSafeText(entry.text),
+          })),
+          decision_snapshot: this.boundarySummaryRevisionDecisionSnapshot(revision).map((entry) => ({
+            decision_id: entry.decision_id,
+            summary: this.runtimeSafeText(entry.text),
+            ...(entry.rationale === undefined ? {} : { rationale: { summary: this.runtimeSafeText(entry.rationale) } }),
+          })),
+        })),
+      },
+      ...(input.leaderInputMarkdown === undefined
+        ? {}
+        : { leader_input: { summary: this.runtimeSafeText(input.leaderInputMarkdown) } }),
+      context_manifest: {
+        id: input.contextManifest.id,
+        revision_id: input.contextManifest.revision_id,
+        sources: input.contextManifest.sources.map((source, index) => ({
+          type: 'context-source',
+          ref: `context-source-${index + 1}`,
+          digest: codexCanonicalDigest(source),
+        })),
+      },
+      requested_by_actor_id: input.requestedByActorId,
+    };
   }
 
   private async createProposedBoundarySummaryRevision(input: {
@@ -1178,6 +1332,32 @@ export class BrainstormingService {
     }));
   }
 
+  private assertBoundarySummaryApprovalEvidence(input: {
+    session: BrainstormingSession;
+    revision: BoundarySummaryRevision;
+    rounds: BoundaryRoundRecord[];
+    questionAnswerSnapshot: Array<{ question_id: string; answer_id: string; text: string }>;
+    decisionSnapshot: Array<{ decision_id: string; text: string; rationale?: string }>;
+  }): void {
+    const revisionRecord = input.revision as BoundarySummaryRevision & {
+      source_round_id?: unknown;
+      context_manifest_id?: unknown;
+      context_manifest_revision_id?: unknown;
+    };
+    const sourceRoundId = revisionRecord.source_round_id;
+    if (
+      typeof sourceRoundId !== 'string' ||
+      !input.rounds.some((round) => round.id === sourceRoundId) ||
+      revisionRecord.context_manifest_id !== input.session.context_manifest_id ||
+      revisionRecord.context_manifest_revision_id !== input.session.context_manifest_revision_id
+    ) {
+      throw new ConflictException('Boundary Summary approval requires round-backed context evidence');
+    }
+    if (input.questionAnswerSnapshot.length === 0 || input.decisionSnapshot.length === 0) {
+      throw new ConflictException('Boundary Summary approval requires question and decision evidence');
+    }
+  }
+
   private boundarySummaryRevisionStatus(revision: BoundarySummaryRevision): string {
     return 'status' in revision && typeof revision.status === 'string'
       ? revision.status
@@ -1193,6 +1373,55 @@ export class BrainstormingService {
 
   private boundarySummaryRevisionMarkdown(revision: BoundarySummaryRevision): string {
     return 'summary_markdown' in revision ? revision.summary_markdown : '';
+  }
+
+  private boundarySummaryRevisionQuestionAnswerSnapshot(
+    revision: BoundarySummaryRevision,
+  ): Array<{ question_id: string; answer_id: string; text: string }> {
+    const value = (revision as BoundarySummaryRevision & { question_answer_snapshot?: unknown }).question_answer_snapshot;
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value.flatMap((entry) => {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+        return [];
+      }
+      const record = entry as Record<string, unknown>;
+      return typeof record.question_id === 'string' &&
+        typeof record.answer_id === 'string' &&
+        typeof record.text === 'string'
+        ? [{ question_id: record.question_id, answer_id: record.answer_id, text: record.text }]
+        : [];
+    });
+  }
+
+  private boundarySummaryRevisionDecisionSnapshot(
+    revision: BoundarySummaryRevision,
+  ): Array<{ decision_id: string; text: string; rationale?: string }> {
+    const value = (revision as BoundarySummaryRevision & { decision_snapshot?: unknown }).decision_snapshot;
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value.flatMap((entry) => {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+        return [];
+      }
+      const record = entry as Record<string, unknown>;
+      const decisionId = typeof record.decision_id === 'string' ? record.decision_id : record.id;
+      return typeof decisionId === 'string' && typeof record.text === 'string'
+        ? [
+            {
+              decision_id: decisionId,
+              text: record.text,
+              ...(typeof record.rationale === 'string' ? { rationale: record.rationale } : {}),
+            },
+          ]
+        : [];
+    });
+  }
+
+  private runtimeSafeText(value: string): string {
+    return value.replace(runtimeSensitiveTextPattern, '[runtime-redacted]');
   }
 
   private uniqueActorIds(actorIds: string[]): string[] {
@@ -1229,11 +1458,6 @@ export class BrainstormingService {
       decisions.length > 0
       ? 'ready_for_approval'
       : 'questions_open';
-  }
-
-  private allQuestionsAnswered(session: BrainstormingSession): boolean {
-    const answeredQuestionIds = new Set(session.answers.map((answer) => answer.question_id));
-    return session.questions.every((question) => answeredQuestionIds.has(question.id));
   }
 
   private async saveItemRevision(
@@ -1288,27 +1512,6 @@ export class BrainstormingService {
     };
     await repository.saveDevelopmentPlanRevision(revision);
     return revision;
-  }
-
-  private boundarySummaryMarkdown(input: ApproveBoundaryInput): string {
-    return [
-      '# Boundary Summary',
-      '',
-      '## Confirmed Scope',
-      ...input.confirmed_scope.map((entry) => `- ${entry}`),
-      '',
-      '## Confirmed Out Of Scope',
-      ...input.confirmed_out_of_scope.map((entry) => `- ${entry}`),
-      '',
-      '## Accepted Assumptions',
-      ...input.accepted_assumptions.map((entry) => `- ${entry}`),
-      '',
-      '## Open Risks',
-      ...input.open_risks.map((entry) => `- ${entry}`),
-      '',
-      '## Validation Expectations',
-      ...input.validation_expectations.map((entry) => `- ${entry}`),
-    ].join('\n');
   }
 
   private appendItemEvent(
