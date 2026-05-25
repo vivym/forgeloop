@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
+import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import { projectId } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 function containsElement(node: ReactNode, predicate: (element: ReactElement) => boolean): boolean {
@@ -61,14 +63,48 @@ describe('React Router product shell', () => {
     const search = screen.getByRole('searchbox', { name: 'Command search' });
     await user.click(search);
 
-    expect(screen.getByRole('listbox', { name: 'Command suggestions' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Cockpit' })).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'Dashboard' })).toBeNull();
+    const commandSuggestions = screen.getByRole('navigation', { name: 'Command suggestions' });
+    expect(commandSuggestions).toBeTruthy();
+    expect(screen.queryByRole('listbox', { name: 'Command suggestions' })).toBeNull();
+    expect(screen.queryByRole('option')).toBeNull();
+    expect(within(commandSuggestions).getByRole('link', { name: 'Cockpit' })).toBeTruthy();
+    expect(within(commandSuggestions).queryByRole('link', { name: 'Dashboard' })).toBeNull();
 
     await user.type(search, 'release');
 
-    expect(screen.getByRole('link', { name: 'Releases' })).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'Dashboard' })).toBeNull();
+    expect(within(commandSuggestions).getByRole('link', { name: 'Releases' })).toBeTruthy();
+    expect(within(commandSuggestions).queryByRole('link', { name: 'Dashboard' })).toBeNull();
+  });
+
+  it('does not render unsafe Cockpit projection hrefs as links', async () => {
+    const screen = await renderRoute('/cockpit', {
+      apiOverrides: {
+        [`GET /query/dashboard?project_id=${projectId}`]: {
+          project_id: projectId,
+          sections: [{ id: 'flow-health', label: 'Flow Health', value: 1 }],
+          next_actions: [
+            { id: 'bad-dashboard', label: 'Unsafe Dashboard Query', href: '/dashboard?x=1' },
+            { id: 'bad-tasks', label: 'Unsafe Tasks Query', href: '/tasks?x=1' },
+            { id: 'bad-dev-tools', label: 'Unsafe Dev Tools', href: '/dev-tools' },
+            { id: 'bad-unknown', label: 'Unsafe Unknown Path', href: '/foo' },
+          ],
+          report_links: [{ id: 'bad-report', label: 'Unsafe Delivery Report Link', href: '/foo' }],
+          degraded_sources: [],
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Cockpit' })).toBeTruthy();
+    for (const label of [
+      'Unsafe Dashboard Query',
+      'Unsafe Tasks Query',
+      'Unsafe Dev Tools',
+      'Unsafe Unknown Path',
+      'Unsafe Delivery Report Link',
+    ]) {
+      expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
+      expect(screen.queryByRole('link', { name: new RegExp(label, 'i') })).toBeNull();
+    }
   });
 
   it('gates Dev Tools navigation behind runtime flags', async () => {

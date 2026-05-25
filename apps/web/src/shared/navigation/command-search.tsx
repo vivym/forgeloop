@@ -13,7 +13,7 @@ const searchableCommandItems = productCommandItems.filter((item) => item.path !=
 
 export function CommandSearch({ className }: CommandSearchProps) {
   const searchId = useId();
-  const listboxId = useId();
+  const suggestionsId = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const suggestions = useMemo(() => commandSuggestions(query), [query]);
@@ -36,8 +36,7 @@ export function CommandSearch({ className }: CommandSearchProps) {
         strokeWidth={2}
       />
       <input
-        aria-autocomplete="list"
-        aria-controls={open ? listboxId : undefined}
+        aria-controls={open ? suggestionsId : undefined}
         className="h-9 w-full rounded-md border border-border bg-background py-2 pl-9 pr-3 text-sm text-text-primary outline-none placeholder:text-text-muted focus:border-primary focus:ring-2 focus:ring-primary/20"
         id={searchId}
         onChange={(event) => {
@@ -51,33 +50,33 @@ export function CommandSearch({ className }: CommandSearchProps) {
         value={query}
       />
       {open ? (
-        <div
+        <nav
           aria-label="Command suggestions"
           className="absolute left-0 right-0 top-full z-modal mt-2 max-h-80 overflow-auto rounded-card border border-border bg-surface p-1 shadow-elevated"
-          id={listboxId}
-          role="listbox"
+          id={suggestionsId}
         >
           {suggestions.length > 0 ? (
-            suggestions.map((item) => (
-              <Link
-                aria-label={item.label}
-                className="grid gap-0.5 rounded-md px-3 py-2 text-sm text-text-primary hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                key={`${item.path}-${item.id}`}
-                role="option"
-                to={item.path}
-              >
-                <span className="font-semibold">{item.label}</span>
-                <span aria-hidden="true" className="text-xs text-text-secondary">
-                  {item.path}
-                </span>
-              </Link>
-            ))
+            <ul className="m-0 grid list-none gap-1 p-0">
+              {suggestions.map((item) => (
+                <li key={`${item.path}-${item.id}`}>
+                  <Link
+                    className="grid gap-0.5 rounded-md px-3 py-2 text-sm text-text-primary hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    to={item.path}
+                  >
+                    <span className="font-semibold">{item.label}</span>
+                    <span aria-hidden="true" className="text-xs text-text-secondary">
+                      {item.path}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
           ) : (
             <div className="px-3 py-2 text-sm text-text-secondary" role="status">
               No matching destinations
             </div>
           )}
-        </div>
+        </nav>
       ) : null}
     </div>
   );

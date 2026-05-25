@@ -1,3 +1,4 @@
+import { canonicalProductRoutes } from '../product-surfaces/route-contract';
 import type { ProductPageViewModel, ViewModelEvidence, ViewModelGate, ViewModelMetadata } from '../product-surfaces/view-model-types';
 
 type DashboardSection = {
@@ -318,24 +319,51 @@ function asNumber(value: unknown): number {
 }
 
 const registeredReportHrefs = new Set(['/reports', '/reports/delivery', '/reports/quality', '/reports/release-readiness', '/reports/observation']);
+const canonicalCockpitRoutePatterns = canonicalProductRoutes.map((route) => route.path.split('/').filter(Boolean));
 
-function reportHref(link: DashboardAction): string {
-  const href = safeProductHref(link.href);
-  if (href !== undefined && registeredReportHrefs.has(href)) return href;
+function reportHref(link: DashboardAction): string | undefined {
+  if (link.href !== undefined) {
+    const href = safeProductHref(link.href);
+    if (href === undefined) return undefined;
+    const reportPathname = new URL(href, 'https://forgeloop.local').pathname;
+    return registeredReportHrefs.has(reportPathname) ? href : undefined;
+  }
 
+  return inferredReportHref(link) ?? '/reports';
+}
+
+function inferredReportHref(link: DashboardAction): string | undefined {
   const id = `${link.id ?? ''} ${link.label ?? ''}`.toLowerCase();
   if (id.includes('release')) return '/reports/release-readiness';
   if (id.includes('quality') || id.includes('qa') || id.includes('code-review')) return '/reports/quality';
   if (id.includes('observation')) return '/reports/observation';
   if (id.includes('delivery') || id.includes('execution') || id.includes('spec') || id.includes('brainstorming')) return '/reports/delivery';
-  return '/reports';
+  return undefined;
 }
 
 function safeProductHref(href: string | undefined): string | undefined {
   if (href === undefined) return undefined;
-  if (!href.startsWith('/')) return undefined;
-  if (/^\/(tasks|plans|specs|packages|runs|reviews|replay|dashboard)(\/|$)/.test(href)) return undefined;
-  return href;
+  if (!href.startsWith('/') || href.startsWith('//')) return undefined;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(href, 'https://forgeloop.local');
+  } catch {
+    return undefined;
+  }
+  if (parsed.origin !== 'https://forgeloop.local' || parsed.hash.length > 0) return undefined;
+  if (!isCanonicalCockpitProductPath(parsed.pathname)) return undefined;
+  return `${parsed.pathname}${parsed.search}`;
+}
+
+function isCanonicalCockpitProductPath(pathname: string): boolean {
+  const segments = pathname.split('/').filter(Boolean);
+  return canonicalCockpitRoutePatterns.some((pattern) => productPathSegmentsMatch(pattern, segments));
+}
+
+function productPathSegmentsMatch(pattern: string[], segments: string[]): boolean {
+  if (pattern.length !== segments.length) return false;
+  return pattern.every((segment, index) => segment.startsWith(':') || segment === segments[index]);
 }
 
 function firstBlockingLabel(stages: readonly CockpitStage[] | undefined): string | undefined {

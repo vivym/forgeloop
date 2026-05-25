@@ -352,7 +352,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
       { id: 'release-confidence', label: 'Release Confidence', value: 1, metrics: [] },
     ],
     next_actions: [{ id: 'continue-execution', label: 'Continue execution', href: `/executions/${execution.id}` }],
-    report_links: [{ id: 'execution-continuation', label: 'Execution continuation', href: '/reports/execution-continuation' }],
+    report_links: [{ id: 'execution-continuation', label: 'Execution continuation', href: '/reports/delivery' }],
     degraded_sources: [],
   },
   [`GET /query/development-plans?project_id=${projectId}`]: {

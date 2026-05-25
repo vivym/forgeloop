@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { ChevronDown, UserCircle } from 'lucide-react';
 
 import { CommandSearch } from '../../navigation/command-search';
@@ -77,13 +77,14 @@ export function Topbar({ actions, actorId, children, className, devToolsEnabled,
 }
 
 function ActorMenu({ actorId }: { actorId: string }) {
+  const panelId = useId();
   const [open, setOpen] = useState(false);
 
   return (
     <div className="relative">
       <button
+        aria-controls={open ? panelId : undefined}
         aria-expanded={open}
-        aria-haspopup="menu"
         className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-text-primary hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         onClick={() => setOpen((current) => !current)}
         type="button"
@@ -95,7 +96,7 @@ function ActorMenu({ actorId }: { actorId: string }) {
       {open ? (
         <div
           className="absolute right-0 top-full z-modal mt-2 w-56 rounded-card border border-border bg-surface p-3 text-sm shadow-elevated"
-          role="menu"
+          id={panelId}
         >
           <div className="text-xs font-semibold uppercase text-text-secondary">Current actor</div>
           <div className="mt-1 text-sm font-semibold text-text-primary [overflow-wrap:anywhere]">{actorId}</div>
