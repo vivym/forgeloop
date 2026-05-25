@@ -5,7 +5,7 @@ import { useMyWorkQuery } from '../../shared/api/hooks';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { CompactMetadata, PreviewPane, QueueWorkspace, Section } from '../../shared/layout';
-import { Badge, DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
+import { Badge, Checkbox, DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import {
   myWorkQueueViewModel,
   type MyWorkFilterOption,
@@ -21,35 +21,59 @@ export function MyWorkRoute() {
   const [searchParams] = useSearchParams();
   const query = useMyWorkQuery({ project_id: projectId, actor_id: actorId });
   const mode = searchParams.get('mode');
-  const viewModel = useMemo(
-    () => myWorkQueueViewModel({
+  const queueProjection = useMemo(
+    () => ({
       items: query.data?.items,
       degraded_sources: query.data?.degraded_sources,
       bulk_action: query.data?.bulk_action,
     }),
     [query.data?.bulk_action, query.data?.degraded_sources, query.data?.items],
   );
+  const baseViewModel = useMemo(() => myWorkQueueViewModel(queueProjection), [queueProjection]);
   const [roleFilter, setRoleFilter] = useState<FilterKey>('all');
   const [statusFilter, setStatusFilter] = useState<FilterKey>('all');
   const [gateFilter, setGateFilter] = useState<FilterKey>('all');
   const [riskFilter, setRiskFilter] = useState<FilterKey>('all');
   const filteredGroups = useMemo(
-    () => filterGroups(viewModel.groups, { gate: gateFilter, risk: riskFilter, role: roleFilter, status: statusFilter }),
-    [gateFilter, riskFilter, roleFilter, statusFilter, viewModel.groups],
+    () => filterGroups(baseViewModel.groups, { gate: gateFilter, risk: riskFilter, role: roleFilter, status: statusFilter }),
+    [baseViewModel.groups, gateFilter, riskFilter, roleFilter, statusFilter],
   );
-  const filteredRows = filteredGroups.flatMap((group) => group.rows);
-  const [selectedRowKey, setSelectedRowKey] = useState<string | undefined>(filteredRows[0]?.id);
-  const selectedRow = filteredRows.find((row) => row.id === selectedRowKey) ?? filteredRows[0];
+  const filteredRows = useMemo(() => filteredGroups.flatMap((group) => group.rows), [filteredGroups]);
+  const [focusedRowKey, setFocusedRowKey] = useState<string | undefined>(undefined);
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  const selectedRows = useMemo(
+    () => filteredRows.filter((row) => selectedRowIds.includes(row.id)),
+    [filteredRows, selectedRowIds],
+  );
+  const viewModel = useMemo(() => myWorkQueueViewModel(queueProjection, selectedRows), [queueProjection, selectedRows]);
+  const focusedRow = filteredRows.find((row) => row.id === focusedRowKey) ?? filteredRows[0];
 
   useEffect(() => {
     if (filteredRows.length === 0) {
-      setSelectedRowKey(undefined);
+      setFocusedRowKey(undefined);
       return;
     }
-    if (selectedRowKey === undefined || !filteredRows.some((row) => row.id === selectedRowKey)) {
-      setSelectedRowKey(filteredRows[0]?.id);
+    if (focusedRowKey === undefined || !filteredRows.some((row) => row.id === focusedRowKey)) {
+      setFocusedRowKey(filteredRows[0]?.id);
     }
-  }, [filteredRows, selectedRowKey]);
+  }, [filteredRows, focusedRowKey]);
+
+  useEffect(() => {
+    const visibleRowIds = new Set(filteredRows.map((row) => row.id));
+    setSelectedRowIds((current) => {
+      const visibleSelectedIds = current.filter((id) => visibleRowIds.has(id));
+      return visibleSelectedIds.length === current.length ? current : visibleSelectedIds;
+    });
+  }, [filteredRows]);
+
+  const toggleSelectedRow = (row: MyWorkQueueRow) => {
+    setFocusedRowKey(row.id);
+    setSelectedRowIds((current) => (
+      current.includes(row.id)
+        ? current.filter((id) => id !== row.id)
+        : [...current, row.id]
+    ));
+  };
 
   const currentState = query.isLoading ? 'Loading role queue' : query.isError ? 'Queue failed to load' : viewModel.currentState;
   const blockerRisk = query.isError ? 'My Work query failed; review the queue source before acting.' : viewModel.riskSignal;
@@ -71,7 +95,7 @@ export function MyWorkRoute() {
         roleResponsibility={viewModel.primaryActorOrRole}
         state={currentState}
         subtitle="Role-aware product inbox."
-        toolbar={<QueueFilterToolbar label="Role" options={viewModel.filters.roles} selected={roleFilter} setSelected={setRoleFilter} />}
+        toolbar={<QueueFilterToolbar label="Role" options={baseViewModel.filters.roles} selected={roleFilter} setSelected={setRoleFilter} />}
       >
         <div className="grid gap-4">
           {query.isLoading ? <InlineNotice title="Loading My Work." tone="info" /> : null}
@@ -97,23 +121,25 @@ export function MyWorkRoute() {
             variant="panel"
           >
             <div className="grid gap-3">
-              <QueueFilterToolbar label="Status" options={viewModel.filters.statuses} selected={statusFilter} setSelected={setStatusFilter} />
-              <QueueFilterToolbar label="Gate" options={viewModel.filters.gates} selected={gateFilter} setSelected={setGateFilter} />
-              <QueueFilterToolbar label="Risk" options={viewModel.filters.risks} selected={riskFilter} setSelected={setRiskFilter} />
+              <QueueFilterToolbar label="Status" options={baseViewModel.filters.statuses} selected={statusFilter} setSelected={setStatusFilter} />
+              <QueueFilterToolbar label="Gate" options={baseViewModel.filters.gates} selected={gateFilter} setSelected={setGateFilter} />
+              <QueueFilterToolbar label="Risk" options={baseViewModel.filters.risks} selected={riskFilter} setSelected={setRiskFilter} />
             </div>
           </Section>
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
             <div className="grid min-w-0 gap-4">
               {filteredGroups.map((group) => (
                 <MyWorkGroup
+                  focusedRowKey={focusedRow?.id}
                   group={group}
+                  onFocusRow={(row) => setFocusedRowKey(row.id)}
                   key={group.id}
-                  onSelectRow={(row) => setSelectedRowKey(row.id)}
-                  selectedRowKey={selectedRow?.id}
+                  onToggleSelectedRow={toggleSelectedRow}
+                  selectedRowIds={selectedRowIds}
                 />
               ))}
             </div>
-            <SelectedItemPreview disabledReason={viewModel.disabledReason} row={selectedRow} />
+            <SelectedItemPreview disabledReason={viewModel.disabledReason} row={focusedRow} selectedCount={selectedRows.length} />
           </div>
         </div>
       </QueueWorkspace>
@@ -161,32 +187,51 @@ function QueueFilterToolbar({
 }
 
 function MyWorkGroup({
+  focusedRowKey,
   group,
-  onSelectRow,
-  selectedRowKey,
+  onFocusRow,
+  onToggleSelectedRow,
+  selectedRowIds,
 }: {
+  focusedRowKey: string | undefined;
   group: MyWorkQueueGroup;
-  onSelectRow: (row: MyWorkQueueRow) => void;
-  selectedRowKey: string | undefined;
+  onFocusRow: (row: MyWorkQueueRow) => void;
+  onToggleSelectedRow: (row: MyWorkQueueRow) => void;
+  selectedRowIds: string[];
 }) {
   return (
     <Section aria-label={group.label} title={group.label} variant="panel">
       <DataTable
         ariaLabel={group.label}
-        columns={myWorkColumns}
+        columns={myWorkColumns(selectedRowIds, onToggleSelectedRow)}
         density="compact"
         emptyMessage="No attention items."
         getRowKey={(item) => item.id}
-        onSelectRow={onSelectRow}
+        onSelectRow={onFocusRow}
         rows={group.rows}
-        {...(selectedRowKey === undefined ? {} : { selectedRowKey })}
+        {...(focusedRowKey === undefined ? {} : { selectedRowKey: focusedRowKey })}
         stickyHeader
       />
     </Section>
   );
 }
 
-const myWorkColumns: DataTableColumn<MyWorkQueueRow>[] = [
+const myWorkColumns = (
+  selectedRowIds: string[],
+  onToggleSelectedRow: (row: MyWorkQueueRow) => void,
+): DataTableColumn<MyWorkQueueRow>[] => [
+  {
+    key: 'select',
+    header: 'Select',
+    cell: (item) => (
+      <Checkbox
+        checked={selectedRowIds.includes(item.id)}
+        label={<span className="sr-only">Select {item.title}</span>}
+        onChange={() => onToggleSelectedRow(item)}
+        onClick={(event) => event.stopPropagation()}
+      />
+    ),
+  },
   {
     key: 'title',
     header: 'Target',
@@ -211,7 +256,7 @@ const myWorkColumns: DataTableColumn<MyWorkQueueRow>[] = [
   { key: 'action', header: 'Next action', cell: (item) => item.nextAction },
 ];
 
-function SelectedItemPreview({ disabledReason, row }: { disabledReason: string; row: MyWorkQueueRow | undefined }) {
+function SelectedItemPreview({ disabledReason, row, selectedCount }: { disabledReason: string; row: MyWorkQueueRow | undefined; selectedCount: number }) {
   if (row === undefined) {
     return (
       <PreviewPane meta="No row selected" title="Selected queue item">
@@ -234,6 +279,7 @@ function SelectedItemPreview({ disabledReason, row }: { disabledReason: string; 
           items={[
             { label: 'Next action', value: row.nextAction },
             { label: 'Disabled reason', value: disabledReason },
+            { label: 'Selected rows', value: String(selectedCount) },
             { label: 'Risk', value: row.riskLabel },
             { label: 'Status', value: row.statusLabel },
           ]}

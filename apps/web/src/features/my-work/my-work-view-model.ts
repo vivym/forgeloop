@@ -19,6 +19,23 @@ export interface MyWorkQueueProjection {
   bulk_action: unknown | undefined;
 }
 
+interface MyWorkBulkActionProjection {
+  id: string;
+  label: string;
+  enabled: boolean;
+  disabledReason?: string | undefined;
+  href?: string | undefined;
+  scope_object_refs?: readonly ScopedBulkActionObjectRef[] | undefined;
+  scope_object_types?: readonly MyWorkQueueItem['object_ref']['type'][] | undefined;
+  scope_role_ids?: readonly AttentionGroupId[] | undefined;
+  scope_object_ids?: readonly string[] | undefined;
+}
+
+interface ScopedBulkActionObjectRef {
+  id: string;
+  type: MyWorkQueueItem['object_ref']['type'];
+}
+
 export interface MyWorkQueueRow {
   id: string;
   ageLabel: string;
@@ -27,6 +44,8 @@ export interface MyWorkQueueRow {
   gateLabel: string;
   href: string | undefined;
   nextAction: string;
+  objectId: string;
+  objectType: MyWorkQueueItem['object_ref']['type'];
   objectTypeLabel: string;
   openLabel: string;
   riskLabel: string;
@@ -71,9 +90,12 @@ const bulkActionUnavailable: ViewModelAction = {
   disabledReason: 'No shared safe bulk action',
 };
 
-export function myWorkQueueViewModel(queue: MyWorkQueueProjection = { items: undefined, degraded_sources: undefined, bulk_action: undefined }): MyWorkQueueWorkspaceViewModel {
+export function myWorkQueueViewModel(
+  queue: MyWorkQueueProjection = { items: undefined, degraded_sources: undefined, bulk_action: undefined },
+  selectedRows: readonly MyWorkQueueRow[] = [],
+): MyWorkQueueWorkspaceViewModel {
   const rows = (queue.items ?? []).map(queueRowFor);
-  const bulkAction = safeBulkActionFor(queue.bulk_action) ?? bulkActionUnavailable;
+  const bulkAction = safeBulkActionFor(queue.bulk_action, selectedRows) ?? bulkActionUnavailable;
   const safeBulkAction = bulkAction.enabled ? bulkAction : undefined;
   const disabledReason = bulkAction.enabled ? '' : bulkAction.disabledReason ?? bulkActionUnavailable.disabledReason!;
   const degradedSources = queue.degraded_sources ?? [];
@@ -160,6 +182,8 @@ function queueRowFor(item: MyWorkQueueItem): MyWorkQueueRow {
     gateLabel,
     href: typedHrefFor(item.object_ref),
     nextAction,
+    objectId: item.object_ref.id,
+    objectType: item.object_ref.type,
     objectTypeLabel: objectTypeLabel(item.object_ref.type),
     openLabel: openLabelFor(item.object_ref),
     riskLabel: riskLabelFor(item, gateLabel),
@@ -331,8 +355,20 @@ function countOptions(values: string[]): MyWorkFilterOption[] {
   }));
 }
 
-function safeBulkActionFor(value: unknown): ViewModelAction | undefined {
-  if (!isRecord(value)) return undefined;
+function safeBulkActionFor(value: unknown, selectedRows: readonly MyWorkQueueRow[]): ViewModelAction | undefined {
+  if (!isRecord(value) || selectedRows.length === 0) return undefined;
+  const candidate = parseBulkActionCandidate(value);
+  if (candidate === undefined || candidate.enabled !== true) return undefined;
+  if (!hasSharedScopedCommand(selectedRows, candidate)) return undefined;
+  return {
+    id: candidate.id,
+    label: candidate.label,
+    enabled: true,
+    href: candidate.href,
+  };
+}
+
+function parseBulkActionCandidate(value: Record<string, unknown>): MyWorkBulkActionProjection | undefined {
   const id = typeof value.id === 'string' && value.id.trim().length > 0 ? value.id : undefined;
   const label = typeof value.label === 'string' && value.label.trim().length > 0 ? value.label : undefined;
   if (id === undefined || label === undefined || typeof value.enabled !== 'boolean') return undefined;
@@ -342,9 +378,76 @@ function safeBulkActionFor(value: unknown): ViewModelAction | undefined {
       ? value.disabled_reason
       : undefined;
   const href = typeof value.href === 'string' && value.href.startsWith('/') && !value.href.startsWith('//') ? value.href : undefined;
-  return { id, label, enabled: value.enabled, disabledReason, href };
+  const scope_object_types = Array.isArray(value.scope_object_types) && value.scope_object_types.every(isObjectType)
+    ? value.scope_object_types
+    : undefined;
+  const scope_object_refs = Array.isArray(value.scope_object_refs) && value.scope_object_refs.every(isScopedObjectRef)
+    ? value.scope_object_refs
+    : undefined;
+  const scope_role_ids = Array.isArray(value.scope_role_ids) && value.scope_role_ids.every(isAttentionGroupId)
+    ? value.scope_role_ids
+    : undefined;
+  const scope_object_ids = Array.isArray(value.scope_object_ids) && value.scope_object_ids.every((entry) => typeof entry === 'string' && entry.trim().length > 0)
+    ? value.scope_object_ids
+    : undefined;
+
+  return { id, label, enabled: value.enabled, disabledReason, href, scope_object_refs, scope_object_types, scope_role_ids, scope_object_ids };
+}
+
+function hasSharedScopedCommand(rows: readonly MyWorkQueueRow[], candidate: MyWorkBulkActionProjection): boolean {
+  const firstRow = rows[0];
+  if (firstRow === undefined) return false;
+  if (!rows.every((row) => row.roleId === firstRow.roleId && row.objectType === firstRow.objectType)) return false;
+  if (!hasSelectedObjectScope(rows, candidate)) return false;
+  if (candidate.scope_object_types !== undefined && !candidate.scope_object_types.includes(firstRow.objectType)) return false;
+  if (candidate.scope_role_ids !== undefined && !candidate.scope_role_ids.includes(firstRow.roleId)) return false;
+  return candidate.scope_object_types !== undefined || candidate.scope_role_ids !== undefined || candidate.scope_object_refs !== undefined || candidate.scope_object_ids !== undefined;
+}
+
+function hasSelectedObjectScope(rows: readonly MyWorkQueueRow[], candidate: MyWorkBulkActionProjection): boolean {
+  if (candidate.scope_object_refs !== undefined) {
+    return rows.every((row) =>
+      candidate.scope_object_refs?.some((ref) => ref.id === row.objectId && ref.type === row.objectType) ?? false,
+    );
+  }
+  if (candidate.scope_object_ids !== undefined) {
+    return rows.every((row) => candidate.scope_object_ids?.includes(row.objectId) ?? false);
+  }
+  return false;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+function isScopedObjectRef(value: unknown): value is ScopedBulkActionObjectRef {
+  return isRecord(value) && typeof value.id === 'string' && value.id.trim().length > 0 && isObjectType(value.type);
+}
+
+function isObjectType(value: unknown): value is MyWorkQueueItem['object_ref']['type'] {
+  return typeof value === 'string' && objectTypeLabels.has(value as MyWorkQueueItem['object_ref']['type']);
+}
+
+function isAttentionGroupId(value: unknown): value is AttentionGroupId {
+  return typeof value === 'string' && attentionGroups.some((group) => group.id === value);
+}
+
+const objectTypeLabels = new Set<MyWorkQueueItem['object_ref']['type']>([
+  'initiative',
+  'requirement',
+  'tech_debt',
+  'bug',
+  'development_plan',
+  'development_plan_item',
+  'brainstorming_session',
+  'boundary_summary',
+  'spec',
+  'spec_revision',
+  'execution_plan',
+  'execution_plan_revision',
+  'execution',
+  'code_review_handoff',
+  'qa_handoff',
+  'release',
+  'attachment',
+]);

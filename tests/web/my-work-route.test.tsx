@@ -70,7 +70,7 @@ describe('My Work route', () => {
     expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
   });
 
-  it('renders a compact safe bulk action surface for scoped shared commands', async () => {
+  it('fails closed when a bare enabled bulk action has no selected-row scoped command', async () => {
     const screen = await renderRoute('/my-work', {
       apiOverrides: {
         [`GET /query/my-work?project_id=${projectId}&actor_id=${actorId}`]: {
@@ -86,8 +86,99 @@ describe('My Work route', () => {
 
     expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'My Work' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
+
+    expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
+    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+  });
+
+  it('fails closed when scoped command metadata does not include selected-row object refs', async () => {
+    const screen = await renderRoute('/my-work', {
+      apiOverrides: {
+        [`GET /query/my-work?project_id=${projectId}&actor_id=${actorId}`]: {
+          ...myWorkQueueResponse,
+          bulk_action: {
+            id: 'bulk-ack-product-risk',
+            label: 'Acknowledge selected product risk',
+            enabled: true,
+            scope_role_ids: ['product'],
+            scope_object_types: ['requirement'],
+          },
+        },
+      },
+    });
+
+    expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
+
+    expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
+    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+  });
+
+  it('renders a compact safe bulk action surface when selected rows share a scoped safe command', async () => {
+    const screen = await renderRoute('/my-work', {
+      apiOverrides: {
+        [`GET /query/my-work?project_id=${projectId}&actor_id=${actorId}`]: {
+          ...myWorkQueueResponse,
+          items: [
+            myWorkQueueResponse.items[0],
+            {
+              id: 'product:req-2',
+              object_ref: { type: 'requirement', id: 'req-2' },
+              title: 'Checkout retry requirement',
+              attention_reason: 'product_attention',
+              expected_action: 'Clarify retry acceptance criteria',
+              actor_id: actorId,
+              href: '/requirements/req-2',
+            },
+            ...myWorkQueueResponse.items.slice(1),
+          ],
+          bulk_action: {
+            id: 'bulk-ack-product-risk',
+            label: 'Acknowledge selected product risk',
+            enabled: true,
+            scope_role_ids: ['product'],
+            scope_object_types: ['requirement'],
+            scope_object_refs: [
+              { type: 'requirement', id: 'req-1' },
+              { type: 'requirement', id: 'req-2' },
+            ],
+          },
+        },
+      },
+    });
+
+    expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout retry requirement/i }));
+
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeInstanceOf(HTMLElement);
-    expect(screen.getByRole('button', { name: /Acknowledge selected risk/i }).getAttribute('disabled')).toBeNull();
+    expect(screen.getByRole('button', { name: /Acknowledge selected product risk/i }).getAttribute('disabled')).toBeNull();
+  });
+
+  it('shows the disabled reason when selected rows do not share a scoped safe command', async () => {
+    const screen = await renderRoute('/my-work', {
+      apiOverrides: {
+        [`GET /query/my-work?project_id=${projectId}&actor_id=${actorId}`]: {
+          ...myWorkQueueResponse,
+          bulk_action: {
+            id: 'bulk-ack-product-risk',
+            label: 'Acknowledge selected product risk',
+            enabled: true,
+            scope_role_ids: ['product'],
+            scope_object_types: ['requirement'],
+            scope_object_refs: [{ type: 'requirement', id: 'req-1' }],
+          },
+        },
+      },
+    });
+
+    expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout regression/i }));
+
+    expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
+    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
   });
 
   it('links queue rows to typed object routes', async () => {
