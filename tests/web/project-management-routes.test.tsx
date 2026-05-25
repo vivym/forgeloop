@@ -157,6 +157,38 @@ describe('project management route IA', () => {
     }
   });
 
+  it('renders source object lists as dense planning queues', async () => {
+    for (const [route, heading, objectType, itemTitle, createHref] of [
+      ['/requirements', 'Requirements', 'Requirement', /checkout requirement/i, '/requirements/new'],
+      ['/initiatives', 'Initiatives', 'Initiative', /checkout reliability initiative/i, '/initiatives/new'],
+      ['/tech-debt', 'Tech Debt', 'Tech Debt', /checkout validation debt/i, '/tech-debt/new'],
+      ['/bugs', 'Bugs', 'Bug', /checkout regression/i, '/bugs/new'],
+    ] as const) {
+      const screen = await renderRoute(route);
+
+      expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy();
+      expect(document.querySelector('[data-page-family="source-object-list"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
+      expect(screen.getByTestId('current-state').textContent).toMatch(/source object/i);
+      expect(screen.getByTestId('next-action').textContent).toMatch(/development plan|review/i);
+      expect(screen.getByTestId('role-responsibility').textContent).toMatch(/responsibility|assigned/i);
+      expect(screen.getByTestId('blocker-risk').textContent).toMatch(/risk|blocker/i);
+      expect(await screen.findByText(itemTitle)).toBeTruthy();
+      expect(screen.getByRole('searchbox', { name: new RegExp(`search ${heading}`, 'i') })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /view: dense/i })).toBeTruthy();
+      expect(screen.getByRole('link', { name: /create source object/i }).getAttribute('href')).toBe(createHref);
+      expect(screen.getByRole('link', { name: /plan source object/i }).getAttribute('href')).toBe('/development-plans/new');
+      expect(screen.getByRole('table', { name: new RegExp(`${heading} source object queue`, 'i') })).toBeTruthy();
+      for (const column of ['Object', 'Type', 'Gate / status', 'Risk', 'Role / actor', 'Development Plan', 'Next action', 'Last meaningful update']) {
+        expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
+      }
+      expect(screen.getAllByText(objectType)[0]).toBeTruthy();
+      expect(screen.getByRole('link', { name: new RegExp(`open ${objectType}`, 'i') })).toBeTruthy();
+      expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
+      cleanup();
+    }
+  });
+
   it('renders typed create forms without Task creation', async () => {
     for (const [route, fields] of [
       ['/requirements/new', ['Stakeholder problem', 'Desired outcome', 'Acceptance criteria', 'Requirement Driver']],

@@ -21,6 +21,7 @@ export function InitiativesRoute() {
       error={query.error}
       isLoading={query.isLoading}
       items={query.data?.items ?? []}
+      planningHref="/development-plans/new"
       subtitle="Strategic work intake and breakdown readiness."
       title="Initiatives"
     />

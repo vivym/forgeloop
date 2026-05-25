@@ -1,23 +1,23 @@
 import type { ProductPageViewModel, ViewModelEvidence, ViewModelGate, ViewModelMetadata } from '../product-surfaces/view-model-types';
 
-type SourceRef = { type?: string; id?: string; title?: string; development_plan_id?: string };
+type SourceRef = { type?: string | undefined; id?: string | undefined; title?: string | undefined; development_plan_id?: string | undefined };
 
 interface SourceObjectProjection {
   id: string;
-  ref?: SourceRef;
-  title?: string;
-  status?: string;
-  priority?: string;
-  risk?: string;
-  driver_actor_id?: string;
-  updated_at?: string;
-  narrative_markdown?: string;
-  evidence_refs?: readonly SourceRef[];
-  attachment_refs?: readonly SourceRef[];
-  relationship_refs?: readonly SourceRef[];
-  release_refs?: readonly SourceRef[];
-  child_refs?: readonly SourceRef[];
-  bug_refs?: readonly SourceRef[];
+  ref?: SourceRef | undefined;
+  title?: string | undefined;
+  status?: string | undefined;
+  priority?: string | undefined;
+  risk?: string | undefined;
+  driver_actor_id?: string | undefined;
+  updated_at?: string | undefined;
+  narrative_markdown?: string | undefined;
+  evidence_refs?: readonly SourceRef[] | undefined;
+  attachment_refs?: readonly SourceRef[] | undefined;
+  relationship_refs?: readonly SourceRef[] | undefined;
+  release_refs?: readonly SourceRef[] | undefined;
+  child_refs?: readonly SourceRef[] | undefined;
+  bug_refs?: readonly SourceRef[] | undefined;
 }
 
 export function sourceObjectListViewModel(source: SourceObjectProjection): ProductPageViewModel {

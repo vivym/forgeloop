@@ -48,4 +48,12 @@ describe('product-grade first viewport contract', () => {
     expectFirstViewportContract(rendered, { pageFamily: 'queue', heading: 'My Work' });
     expect(document.querySelector('[data-workspace-layout="queue-workspace"]')).toBeInstanceOf(HTMLElement);
   });
+
+  it('requires source object list routes to expose the queue first-viewport contract', async () => {
+    const rendered = await renderRoute('/requirements');
+
+    expect(await rendered.findByRole('heading', { name: 'Requirements' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'source-object-list', heading: 'Requirements' });
+    expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
+  });
 });

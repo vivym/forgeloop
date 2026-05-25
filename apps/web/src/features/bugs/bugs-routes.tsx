@@ -21,6 +21,7 @@ export function BugsRoute() {
       error={query.error}
       isLoading={query.isLoading}
       items={query.data?.items ?? []}
+      planningHref="/development-plans/new"
       subtitle="Bug triage, repair planning, verification, and regression follow-up."
       title="Bugs"
     />

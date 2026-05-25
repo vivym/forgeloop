@@ -21,6 +21,7 @@ export function RequirementsRoute() {
       error={query.error}
       isLoading={query.isLoading}
       items={query.data?.items ?? []}
+      planningHref="/development-plans/new"
       subtitle="Requirement narratives, specs, plans, and evidence."
       title="Requirements"
     />

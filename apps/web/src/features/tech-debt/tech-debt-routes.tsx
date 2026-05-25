@@ -21,6 +21,7 @@ export function TechDebtRoute() {
       error={query.error}
       isLoading={query.isLoading}
       items={query.data?.items ?? []}
+      planningHref="/development-plans/new"
       subtitle="Debt scoping, refactor planning, risk control, and validation."
       title="Tech Debt"
     />
