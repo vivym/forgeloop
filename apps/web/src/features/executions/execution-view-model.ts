@@ -158,9 +158,9 @@ export function executionViewModel(execution: ExecutionProjection): ProductPageV
 
 function executionActions(execution: ExecutionProjection, surface: 'list' | 'detail'): ExecutionSupervisionAction[] {
   const stateText = executionStateText(execution);
-  const interruptEnabled = stateText.includes('running') || stateText.includes('active');
-  const continueEnabled = isResumableExecution(execution);
-  const retryEnabled = isFailedOrBlockedExecution(execution);
+  const failedOrBlocked = isFailedOrBlockedExecution(execution);
+  const interruptEnabled = !failedOrBlocked && (stateText.includes('running') || stateText.includes('active'));
+  const continueEnabled = !failedOrBlocked && isResumableExecution(execution);
 
   return [
     {
@@ -181,8 +181,8 @@ function executionActions(execution: ExecutionProjection, surface: 'list' | 'det
       id: 'retry',
       kind: 'retry',
       label: 'Retry execution',
-      enabled: retryEnabled,
-      disabledReason: retryEnabled ? undefined : 'Retry disabled: retry is only available for failed or blocked executions.',
+      enabled: false,
+      disabledReason: 'Retry unavailable: inspect execution evidence before restarting from the approved Execution Plan path.',
     },
     {
       id: 'inspect',
@@ -217,8 +217,8 @@ function disabledReasons(actions: readonly ExecutionSupervisionAction[]): string
 
 function executionLane(execution: ExecutionProjection): ExecutionLaneId {
   const stateText = executionStateText(execution);
+  if (isFailedOrBlockedExecution(execution)) return 'failed-blocked';
   if (isResumableExecution(execution)) return 'resumable';
-  if (execution.blocked === true || isFailedOrBlockedExecution(execution)) return 'failed-blocked';
   if (stateText.includes('awaiting_code_review') || stateText.includes('awaiting code review') || stateText.includes('review')) return 'review-pending';
   if (stateText.includes('completed') || stateText.includes('accepted') || stateText.includes('qa')) return 'completed-recent';
   return 'active';
@@ -237,11 +237,13 @@ function productTitle(execution: ExecutionProjection): string {
 }
 
 function executionPlanRevisionLabel(execution: ExecutionProjection): string {
-  return execution.execution_plan_revision_ref?.title ?? execution.execution_plan_revision_id ?? 'Not linked';
+  if (isPresent(execution.execution_plan_revision_ref?.title)) return execution.execution_plan_revision_ref.title;
+  return execution.execution_plan_revision_ref?.id !== undefined || execution.execution_plan_revision_id !== undefined ? 'Linked revision' : 'Not linked';
 }
 
 function developmentPlanItemLabel(execution: ExecutionProjection): string {
-  return execution.development_plan_item_ref?.title ?? execution.development_plan_item_ref?.id ?? 'Not linked';
+  if (isPresent(execution.development_plan_item_ref?.title)) return execution.development_plan_item_ref.title;
+  return execution.development_plan_item_ref?.id !== undefined ? 'Linked Plan Item' : 'Not linked';
 }
 
 function developmentPlanItemHref(execution: ExecutionProjection): string | undefined {
@@ -284,7 +286,7 @@ function executionEvidenceSummary(execution: ExecutionProjection): string {
 }
 
 function evidenceTitles(refs: readonly EvidenceRef[] | undefined): string {
-  return refs?.map((ref) => ref.title ?? ref.id).filter(isPresent).join(', ') || 'Evidence unavailable';
+  return refs?.map((ref) => ref.title ?? (ref.id === undefined ? undefined : 'Linked evidence')).filter(isPresent).join(', ') || 'Evidence unavailable';
 }
 
 function lastMeaningfulEvent(execution: ExecutionProjection): string {
@@ -317,7 +319,7 @@ function isResumableExecution(execution: ExecutionProjection): boolean {
 
 function isFailedOrBlockedExecution(execution: ExecutionProjection): boolean {
   const stateText = executionStateText(execution);
-  return stateText.includes('failed') || stateText.includes('blocked');
+  return execution.blocked === true || stateText.includes('failed') || stateText.includes('blocked');
 }
 
 function executionStateText(execution: ExecutionProjection): string {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { firstViewportContract } from '../../apps/web/src/features/product-surfaces/first-viewport-contract';
@@ -153,8 +153,14 @@ describe('product-grade first viewport contract', () => {
 
     expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'execution-supervision-detail', heading: developmentPlanItem.title });
+    const firstViewport = document.querySelector('[data-first-viewport]');
     expect(document.querySelector('[data-workspace-layout="supervision-detail"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/current step|last meaningful event|PR, diff, and test evidence/i);
+    expect(firstViewport?.textContent).toMatch(/current step|last meaningful event|PR, diff, and test evidence/i);
+    expect(within(firstViewport as HTMLElement).getByRole('button', { name: /interrupt execution/i })).toBeTruthy();
+    expect(within(firstViewport as HTMLElement).getByRole('button', { name: /continue execution/i })).toBeTruthy();
+    expect(within(firstViewport as HTMLElement).getByRole('button', { name: /retry execution/i })).toBeTruthy();
+    expect(within(firstViewport as HTMLElement).getByRole('link', { name: /inspect execution/i })).toBeTruthy();
+    expect(firstViewport?.textContent).toMatch(/Continue disabled|Retry unavailable/i);
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|run session browser/i);
   });
 });

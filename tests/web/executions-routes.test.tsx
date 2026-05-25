@@ -51,7 +51,7 @@ describe('Executions routes', () => {
     expect(document.body.textContent).toMatch(/PR, diff, and test evidence/i);
     expect(document.body.textContent).toMatch(/Linked Plan Item/i);
     expect(document.body.textContent).toMatch(/Continue disabled: execution is currently running/i);
-    expect(document.body.textContent).toMatch(/Retry disabled: retry is only available for failed or blocked executions/i);
+    expect(document.body.textContent).toMatch(/Retry unavailable: inspect execution evidence before restarting from the approved Execution Plan path/i);
     expect(await screen.findByRole('button', { name: /interrupt execution/i })).toBeTruthy();
     expect((await screen.findByRole('button', { name: /continue execution/i }) as HTMLButtonElement).disabled).toBe(true);
     expect((await screen.findByRole('button', { name: /retry execution/i }) as HTMLButtonElement).disabled).toBe(true);
@@ -71,6 +71,30 @@ describe('Executions routes', () => {
     expect(await screen.findByRole('button', { name: /continue execution/i })).toBeTruthy();
     expect((await screen.findByRole('button', { name: /interrupt execution/i }) as HTMLButtonElement).disabled).toBe(true);
     expect(document.body.textContent).toMatch(/Interrupt disabled: execution is not actively running/i);
+  });
+
+  it('treats blocked resumable executions as failed or blocked, not continuable', async () => {
+    const screen = await renderRoute('/executions', {
+      apiOverrides: {
+        [`GET /query/executions?project_id=${projectId}&limit=100`]: {
+          degraded_sources: [],
+          items: [
+            executionRow('blocked-resumable', {
+              blocked: true,
+              status: 'paused',
+              worker_state: 'resumable',
+              current_step: 'Blocked by missing review evidence',
+            }),
+          ],
+        },
+      },
+    });
+
+    const failedBlockedLane = await screen.findByRole('heading', { name: 'Failed / blocked' });
+    expect(failedBlockedLane.closest('section')?.textContent).toMatch(/Blocked by missing review evidence/i);
+    expect(failedBlockedLane.closest('section')?.textContent).toMatch(/Inspect execution/i);
+    expect(failedBlockedLane.closest('section')?.textContent).toMatch(/Retry unavailable/i);
+    expect(failedBlockedLane.closest('section')?.textContent).not.toMatch(/Continue execution/i);
   });
 
   it('exposes continue and inspect actions for resumable executions', async () => {

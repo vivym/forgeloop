@@ -78,6 +78,16 @@ export function ExecutionDetailRoute() {
       roleResponsibility={viewModel?.primaryActorOrRole ?? 'Linked Plan Item unavailable'}
       state={viewModel?.currentState ?? (executionQuery.isLoading ? 'Loading execution supervision' : 'Execution supervision unavailable')}
       subtitle="Product supervision for the worker, evidence, and review path attached to an approved Execution Plan revision."
+      toolbar={
+        viewModel === undefined ? undefined : (
+          <FirstViewportActionControls
+            onContinueExecution={continueExecution}
+            onInterruptExecution={interrupt}
+            onRetryExecution={retryExecution}
+            viewModel={viewModel}
+          />
+        )
+      }
     >
       <SurfaceStateIndicator label="Execution Detail" state={executionSurfaceState(executionQuery.isLoading, executionQuery.isError, execution)} />
       {message ? <InlineNotice title={message} tone="success" /> : null}
@@ -86,9 +96,6 @@ export function ExecutionDetailRoute() {
       {execution !== undefined && viewModel !== undefined ? (
         <>
           <ExecutionSupervisionPanel
-            onContinueExecution={continueExecution}
-            onInterruptExecution={interrupt}
-            onRetryExecution={retryExecution}
             viewModel={viewModel}
           />
           <CodeReviewHandoffPanel execution={execution} handoff={codeReview} />
@@ -101,14 +108,8 @@ export function ExecutionDetailRoute() {
 
 function ExecutionSupervisionPanel({
   viewModel,
-  onInterruptExecution,
-  onContinueExecution,
-  onRetryExecution,
 }: {
   viewModel: ExecutionSupervisionDetail;
-  onInterruptExecution: () => Promise<void>;
-  onContinueExecution: () => Promise<void>;
-  onRetryExecution: () => void;
 }) {
   return (
     <Section actions={<StatusPill tone={viewModel.statusTone}>{viewModel.status}</StatusPill>} title="Execution supervision summary" variant="panel">
@@ -123,21 +124,38 @@ function ExecutionSupervisionPanel({
           <Definition label="Interrupt history" value={viewModel.interruptHistory} />
           <Definition label="Continue history" value={viewModel.continueHistory} />
         </dl>
-        <div className="flex flex-wrap gap-2">
-          {viewModel.actions.map((action) => (
-            <DetailAction
-              action={action}
-              key={action.id}
-              onContinueExecution={onContinueExecution}
-              onInterruptExecution={onInterruptExecution}
-              onRetryExecution={onRetryExecution}
-            />
-          ))}
-        </div>
-        <DisabledReasons actions={viewModel.actions} />
         <div className="text-xs text-text-secondary">Compact metadata: {viewModel.compactMetadata}</div>
       </div>
     </Section>
+  );
+}
+
+function FirstViewportActionControls({
+  viewModel,
+  onInterruptExecution,
+  onContinueExecution,
+  onRetryExecution,
+}: {
+  viewModel: ExecutionSupervisionDetail;
+  onInterruptExecution: () => Promise<void>;
+  onContinueExecution: () => Promise<void>;
+  onRetryExecution: () => void;
+}) {
+  return (
+    <div className="grid max-w-xl gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
+        {viewModel.actions.map((action) => (
+          <DetailAction
+            action={action}
+            key={action.id}
+            onContinueExecution={onContinueExecution}
+            onInterruptExecution={onInterruptExecution}
+            onRetryExecution={onRetryExecution}
+          />
+        ))}
+      </div>
+      <DisabledReasons actions={viewModel.actions} />
+    </div>
   );
 }
 
