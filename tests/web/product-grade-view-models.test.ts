@@ -1,0 +1,252 @@
+import { describe, expect, it } from 'vitest';
+
+import { cockpitViewModel } from '../../apps/web/src/features/cockpit/cockpit-view-model';
+import {
+  developmentPlanItemViewModel,
+  developmentPlanViewModel,
+} from '../../apps/web/src/features/development-plans/development-plan-view-model';
+import { executionViewModel } from '../../apps/web/src/features/executions/execution-view-model';
+import { myWorkQueueViewModel } from '../../apps/web/src/features/my-work/my-work-view-model';
+import { sourceObjectListViewModel } from '../../apps/web/src/features/project-management/source-object-view-model';
+import { releaseViewModel } from '../../apps/web/src/features/releases/release-view-model';
+import { reportViewModel } from '../../apps/web/src/features/reports/report-view-model';
+import { specPlanQueueViewModel } from '../../apps/web/src/features/spec-plan/spec-plan-view-model';
+import {
+  developmentPlan,
+  developmentPlanItem,
+  execution,
+  myWorkQueueResponse,
+  productDynamicRouteFixtureManifest,
+  projectId,
+  release,
+  releaseReadinessDetail,
+  reportFixtures,
+  requirementDetail,
+  workItemKindCockpitFixtures,
+} from './fixtures/product-data';
+import { defaultProductApiResponses } from './fixtures/product-api-mock';
+
+const specPlanQueueResponse = defaultProductApiResponses[
+  `GET /query/specs-execution-plans?project_id=${projectId}`
+] as {
+  items: Array<Record<string, unknown>>;
+  degraded_sources: string[];
+};
+
+describe('product-grade presentation view models', () => {
+  it('projects source objects into first-viewport fields without bypassing Development Plan boundaries', () => {
+    expect(sourceObjectListViewModel(requirementDetail)).toMatchObject({
+      objectLabel: 'Checkout requirement',
+      objectType: 'Requirement',
+      currentState: expect.any(String),
+      nextAction: expect.any(String),
+      primaryActorOrRole: expect.any(String),
+      riskSignal: expect.any(String),
+      gateProgress: expect.any(Array),
+      criticalEvidence: expect.any(Array),
+      secondaryMetadata: expect.any(Array),
+      previewSummary: expect.any(String),
+      timelineSummary: expect.any(String),
+    });
+    expect(sourceObjectListViewModel(requirementDetail).nextAction).toContain('Development Plan');
+    expect(sourceObjectListViewModel(requirementDetail).nextAction).not.toContain('Spec');
+    expect(sourceObjectListViewModel(requirementDetail).nextAction).not.toContain('Execution Plan');
+  });
+
+  it('renders unavailable source evidence truthfully instead of inventing a ready state', () => {
+    const viewModel = sourceObjectListViewModel({
+      ...requirementDetail,
+      attachment_refs: [],
+      evidence_refs: [],
+      relationship_refs: [],
+    });
+
+    expect(viewModel.criticalEvidence).toContainEqual(
+      expect.objectContaining({
+        label: 'Source evidence',
+        state: 'unavailable',
+        compactText: 'Evidence readiness unavailable',
+      }),
+    );
+  });
+
+  it('projects cockpit readiness into first-viewport fields', () => {
+    expect(cockpitViewModel(workItemKindCockpitFixtures.requirement)).toMatchObject({
+      objectLabel: 'Clarify release readiness requirements',
+      objectType: 'Requirement',
+      currentState: expect.any(String),
+      nextAction: expect.any(String),
+      primaryActorOrRole: expect.any(String),
+      riskSignal: expect.any(String),
+      gateProgress: expect.any(Array),
+      criticalEvidence: expect.any(Array),
+      secondaryMetadata: expect.any(Array),
+      previewSummary: expect.any(String),
+      timelineSummary: expect.any(String),
+    });
+  });
+
+  it('projects My Work queues and degrades missing bulk action eligibility', () => {
+    const viewModel = myWorkQueueViewModel(myWorkQueueResponse);
+
+    expect(viewModel).toMatchObject({
+      objectLabel: 'My Work',
+      objectType: 'Role Queue',
+      currentState: expect.any(String),
+      nextAction: expect.any(String),
+      primaryActorOrRole: expect.any(String),
+      riskSignal: expect.any(String),
+      bulkAction: {
+        enabled: false,
+        label: 'No shared safe bulk action',
+        disabledReason: 'No shared safe bulk action',
+      },
+    });
+  });
+
+  it('projects Development Plans and Development Plan Items', () => {
+    expect(developmentPlanViewModel(developmentPlan)).toMatchObject({
+      objectLabel: 'Web product UI architecture foundation plan',
+      objectType: 'Development Plan',
+      currentState: expect.any(String),
+      nextAction: expect.any(String),
+      primaryActorOrRole: expect.any(String),
+      riskSignal: expect.any(String),
+    });
+
+    expect(developmentPlanItemViewModel(developmentPlanItem)).toMatchObject({
+      objectLabel: 'Build AI-native project management API clients',
+      objectType: 'Development Plan Item',
+      currentState: expect.any(String),
+      nextAction: expect.any(String),
+      primaryActorOrRole: expect.any(String),
+      riskSignal: expect.any(String),
+    });
+  });
+
+  it('projects Spec and Execution Plan governance queues', () => {
+    expect(specPlanQueueViewModel(specPlanQueueResponse)).toMatchObject({
+      objectLabel: 'Specs & Execution Plans',
+      objectType: 'Governance Queue',
+      currentState: expect.any(String),
+      nextAction: expect.any(String),
+      primaryActorOrRole: expect.any(String),
+      riskSignal: expect.any(String),
+      gateProgress: expect.any(Array),
+    });
+  });
+
+  it('projects Execution evidence and degrades missing PR, diff, and test refs', () => {
+    expect(executionViewModel(execution)).toMatchObject({
+      objectLabel: 'Execute AI-native Web API client work',
+      objectType: 'Execution',
+      currentState: expect.any(String),
+      nextAction: expect.any(String),
+      primaryActorOrRole: expect.any(String),
+      riskSignal: expect.any(String),
+      criticalEvidence: expect.arrayContaining([
+        expect.objectContaining({ label: 'PR evidence', state: 'available' }),
+        expect.objectContaining({ label: 'Diff evidence', state: 'available' }),
+        expect.objectContaining({ label: 'Test evidence', state: 'available' }),
+      ]),
+    });
+
+    const missingEvidence = executionViewModel({
+      ...execution,
+      pr_refs: [],
+      diff_refs: [],
+      test_evidence_refs: [],
+    });
+
+    expect(missingEvidence.criticalEvidence).toContainEqual(
+      expect.objectContaining({
+        label: 'PR, diff, and test evidence',
+        state: 'unavailable',
+        compactText: 'Evidence unavailable',
+      }),
+    );
+  });
+
+  it('projects Release readiness and disables launch or rollback when approvals or rollback details are missing', () => {
+    expect(releaseViewModel({ release, readiness: releaseReadinessDetail })).toMatchObject({
+      objectLabel: 'Web product UI architecture foundation',
+      objectType: 'Release',
+      currentState: expect.any(String),
+      nextAction: expect.any(String),
+      primaryActorOrRole: 'actor-release-owner',
+      riskSignal: expect.any(String),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: 'launch', enabled: false, disabledReason: expect.any(String) }),
+        expect.objectContaining({ id: 'rollback', enabled: true }),
+      ]),
+    });
+
+    const degradedRelease = releaseViewModel({
+      release: { ...release, rollback_plan: undefined },
+      readiness: {
+        ...releaseReadinessDetail,
+        required_review_evidence: [],
+        disabled_reasons: [],
+      },
+    });
+
+    expect(degradedRelease.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'launch',
+          enabled: false,
+          disabledReason: 'Release approval evidence unavailable',
+        }),
+        expect.objectContaining({
+          id: 'rollback',
+          enabled: false,
+          disabledReason: 'Rollback details unavailable',
+        }),
+      ]),
+    );
+  });
+
+  it('projects Reports and refuses to invent conclusions or suggested actions from insufficient signal', () => {
+    expect(reportViewModel(reportFixtures.releaseReadiness)).toMatchObject({
+      objectLabel: 'Release Readiness',
+      objectType: 'Report',
+      currentState: expect.any(String),
+      nextAction: 'Review release blockers',
+      primaryActorOrRole: expect.any(String),
+      riskSignal: expect.any(String),
+      conclusion: 'Release blocked by QA acceptance',
+      suggestedAction: expect.objectContaining({ enabled: true }),
+    });
+
+    const insufficientSignal = reportViewModel({
+      id: 'release-readiness',
+      project_id: projectId,
+      generated_at: '2026-05-18T01:05:00.000Z',
+      rows: [],
+      degraded_sources: ['release-readiness:signal_unavailable'],
+    });
+
+    expect(insufficientSignal).toMatchObject({
+      conclusion: 'Insufficient signal',
+      suggestedAction: undefined,
+      nextAction: 'Collect report signal',
+    });
+  });
+
+  it('keeps the fixture manifest populated for every dynamic product route family', () => {
+    expect(productDynamicRouteFixtureManifest).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ family: 'source-object-detail', objectType: 'requirement', objectId: 'req-1' }),
+        expect.objectContaining({ family: 'evidence', objectType: 'requirement', objectId: 'req-1' }),
+        expect.objectContaining({ family: 'evidence', objectType: 'initiative', objectId: 'init-1' }),
+        expect.objectContaining({ family: 'evidence', objectType: 'bug', objectId: 'bug-1' }),
+        expect.objectContaining({ family: 'evidence', objectType: 'tech_debt', objectId: 'td-1' }),
+        expect.objectContaining({ family: 'development-plan-detail', objectType: 'development_plan' }),
+        expect.objectContaining({ family: 'gate-workspace', objectType: 'development_plan_item' }),
+        expect.objectContaining({ family: 'execution-detail', objectType: 'execution' }),
+        expect.objectContaining({ family: 'release', objectType: 'release' }),
+        expect.objectContaining({ family: 'evidence', objectType: 'release' }),
+      ]),
+    );
+  });
+});

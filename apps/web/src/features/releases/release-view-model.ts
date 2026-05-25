@@ -1,0 +1,105 @@
+import type { ProductPageViewModel, ViewModelAction, ViewModelEvidence } from '../product-surfaces/view-model-types';
+
+type DisabledReason = { message?: string; code?: string };
+type ReleaseReadinessItem = {
+  status?: string;
+  disabled_reason?: DisabledReason;
+  evidence_ref?: unknown;
+};
+
+interface ReleaseProjection {
+  id: string;
+  title?: string;
+  phase?: string;
+  activity_state?: string;
+  gate_state?: string;
+  resolution?: string;
+  release_owner_actor_id?: string;
+  scope_summary?: string;
+  rollback_plan?: string;
+  updated_at?: string;
+}
+
+interface ReleaseReadinessProjection {
+  ready?: boolean;
+  disabled_reasons?: readonly DisabledReason[];
+  scope_refs?: readonly { title?: string; id?: string; type?: string }[];
+  required_review_evidence?: readonly ReleaseReadinessItem[];
+  required_test_acceptance_evidence?: readonly ReleaseReadinessItem[];
+  package_run_evidence?: readonly ReleaseReadinessItem[];
+  observation_evidence?: readonly ReleaseReadinessItem[];
+}
+
+export function releaseViewModel(input: { release: ReleaseProjection; readiness: ReleaseReadinessProjection }): ProductPageViewModel {
+  const { release, readiness } = input;
+  const launchDisabledReason = launchDisabledReasonFor(readiness);
+  const rollbackDisabledReason = release.rollback_plan === undefined || release.rollback_plan.trim() === '' ? 'Rollback details unavailable' : undefined;
+
+  return {
+    objectLabel: release.title ?? release.id,
+    objectType: 'Release',
+    currentState: release.phase ?? release.activity_state ?? 'Status unavailable',
+    nextAction: launchDisabledReason === undefined ? 'Launch release' : 'Resolve release blockers',
+    disabledReason: launchDisabledReason,
+    primaryActorOrRole: release.release_owner_actor_id ?? 'Release owner',
+    riskSignal: readiness.ready ? 'Release ready' : `${readiness.disabled_reasons?.length ?? 1} release blocker(s)`,
+    gateProgress: [
+      { label: 'Approval', state: approvalState(readiness), disabledReason: launchDisabledReason },
+      { label: 'Rollback', state: rollbackDisabledReason === undefined ? 'available' : 'unavailable', disabledReason: rollbackDisabledReason },
+      { label: 'Observation', state: evidenceState(readiness.observation_evidence) },
+    ],
+    criticalEvidence: releaseEvidence(readiness),
+    secondaryMetadata: [
+      { label: 'Scope refs', value: String(readiness.scope_refs?.length ?? 0) },
+      { label: 'Gate', value: release.gate_state ?? 'Unavailable' },
+      { label: 'Resolution', value: release.resolution ?? 'Unavailable' },
+    ],
+    previewSummary: release.scope_summary ?? 'Release scope unavailable',
+    timelineSummary: release.updated_at === undefined ? 'Timeline unavailable' : `Updated ${release.updated_at}`,
+    actions: [
+      { id: 'launch', label: 'Launch release', enabled: launchDisabledReason === undefined, disabledReason: launchDisabledReason },
+      { id: 'rollback', label: 'Rollback release', enabled: rollbackDisabledReason === undefined, disabledReason: rollbackDisabledReason },
+    ],
+  };
+}
+
+function launchDisabledReasonFor(readiness: ReleaseReadinessProjection): string | undefined {
+  if (readiness.ready) return undefined;
+  if ((readiness.required_review_evidence?.length ?? 0) === 0) return 'Release approval evidence unavailable';
+  return readiness.disabled_reasons?.[0]?.message ?? firstEvidenceDisabledReason(readiness) ?? 'Release approval is blocked';
+}
+
+function firstEvidenceDisabledReason(readiness: ReleaseReadinessProjection): string | undefined {
+  const groups = [
+    readiness.required_review_evidence,
+    readiness.required_test_acceptance_evidence,
+    readiness.package_run_evidence,
+    readiness.observation_evidence,
+  ];
+  return groups.flatMap((group) => group ?? []).find((item) => item.disabled_reason !== undefined)?.disabled_reason?.message;
+}
+
+function releaseEvidence(readiness: ReleaseReadinessProjection): ViewModelEvidence[] {
+  return [
+    { label: 'Review approval', state: evidenceState(readiness.required_review_evidence), compactText: evidenceText(readiness.required_review_evidence) },
+    { label: 'Test acceptance', state: evidenceState(readiness.required_test_acceptance_evidence), compactText: evidenceText(readiness.required_test_acceptance_evidence) },
+    { label: 'Execution evidence', state: evidenceState(readiness.package_run_evidence), compactText: evidenceText(readiness.package_run_evidence) },
+  ];
+}
+
+function approvalState(readiness: ReleaseReadinessProjection): string {
+  if ((readiness.required_review_evidence?.length ?? 0) === 0) return 'unavailable';
+  return readiness.ready ? 'approved' : 'blocked';
+}
+
+function evidenceState(items: readonly ReleaseReadinessItem[] | undefined): ViewModelEvidence['state'] {
+  if (items === undefined || items.length === 0) return 'unavailable';
+  if (items.some((item) => item.status === 'missing' || item.disabled_reason !== undefined)) return 'blocked';
+  return 'available';
+}
+
+function evidenceText(items: readonly ReleaseReadinessItem[] | undefined): string {
+  if (items === undefined || items.length === 0) return 'Evidence unavailable';
+  const blocked = items.find((item) => item.disabled_reason !== undefined);
+  return blocked?.disabled_reason?.message ?? `${items.length} evidence requirement(s)`;
+}

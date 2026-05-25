@@ -462,8 +462,8 @@ export const requirementDetail = {
   driver_actor_id: requirementListItem.driver_actor_id,
   updated_at: requirementListItem.updated_at,
   narrative_markdown: 'Checkout validation must block bad payment states before submission.',
-  evidence_refs: [],
-  attachment_refs: [],
+  evidence_refs: [{ type: 'attachment', id: 'attachment-req-checkout-validation', title: 'Checkout validation acceptance evidence' }],
+  attachment_refs: [{ type: 'attachment', id: 'attachment-req-checkout-validation', title: 'Checkout validation acceptance evidence' }],
   relationship_refs: [
     { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
     {
@@ -499,8 +499,8 @@ export const initiativeDetail = {
   driver_actor_id: initiativeListItem.driver_actor_id,
   updated_at: initiativeListItem.updated_at,
   narrative_markdown: 'Coordinate checkout reliability across requirements, bugs, and task execution.',
-  evidence_refs: [],
-  attachment_refs: [],
+  evidence_refs: [{ type: 'attachment', id: 'attachment-init-checkout-reliability', title: 'Checkout reliability initiative evidence' }],
+  attachment_refs: [{ type: 'attachment', id: 'attachment-init-checkout-reliability', title: 'Checkout reliability initiative evidence' }],
   child_refs: [{ type: 'requirement', id: 'req-1' }],
   relationship_refs: [],
   milestone_intent: 'Checkout validation readiness',
@@ -522,8 +522,8 @@ export const techDebtListItem = {
 export const techDebtDetail = {
   ...techDebtListItem,
   narrative_markdown: 'Validation logic is duplicated between form state and command guards.',
-  evidence_refs: [],
-  attachment_refs: [],
+  evidence_refs: [{ type: 'attachment', id: 'attachment-td-checkout-validation', title: 'Checkout validation debt evidence' }],
+  attachment_refs: [{ type: 'attachment', id: 'attachment-td-checkout-validation', title: 'Checkout validation debt evidence' }],
   validation_strategy: 'Focused route tests and API command tests.',
   relationship_refs: [
     {
@@ -557,8 +557,8 @@ export const bugDetail = {
   driver_actor_id: bugListItem.driver_actor_id,
   updated_at: bugListItem.updated_at,
   narrative_markdown: 'Regression notes stay in Markdown while reproduction data remains structured.',
-  evidence_refs: [],
-  attachment_refs: [],
+  evidence_refs: [{ type: 'attachment', id: 'attachment-bug-checkout-regression', title: 'Checkout regression reproduction evidence' }],
+  attachment_refs: [{ type: 'attachment', id: 'attachment-bug-checkout-regression', title: 'Checkout regression reproduction evidence' }],
   observed_behavior: 'Checkout accepts invalid cards.',
   expected_behavior: 'Checkout blocks invalid cards.',
   reproduction_steps: ['Open checkout', 'Submit an invalid card'],
@@ -772,6 +772,26 @@ export const releaseReadinessDetail = {
     },
   ],
 } as const;
+
+export const sourceObjectEvidenceRefs = {
+  requirement: [
+    { type: 'attachment', id: 'attachment-req-checkout-validation', title: 'Checkout validation acceptance evidence' },
+  ],
+  initiative: [
+    { type: 'attachment', id: 'attachment-init-checkout-reliability', title: 'Checkout reliability initiative evidence' },
+  ],
+  techDebt: [
+    { type: 'attachment', id: 'attachment-td-checkout-validation', title: 'Checkout validation debt evidence' },
+  ],
+  bug: [
+    { type: 'attachment', id: 'attachment-bug-checkout-regression', title: 'Checkout regression reproduction evidence' },
+  ],
+} as const;
+
+export const releaseEvidenceRefs = [
+  { type: 'release_evidence', id: 'release-evidence-review', title: 'Code review approval evidence' },
+  { type: 'release_evidence', id: 'release-evidence-package-run', title: 'Package run evidence' },
+] as const;
 
 export const requirementListResponse = { items: [requirementListItem], degraded_sources: [] } as const;
 export const initiativeListResponse = { items: [initiativeListItem], degraded_sources: [] } as const;
@@ -1341,3 +1361,216 @@ export const productLaneFixtureItemsByLane = {
   'release-owner': [functionalLaneItems[4]],
   manager: [functionalLaneItems[5]],
 } satisfies Record<ProductLaneId, ProductLaneItem[]>;
+
+export const reportFixtures = {
+  developmentPlanThroughput: {
+    id: 'development-plan-throughput',
+    title: 'Development Plan Throughput',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    rows: [
+      {
+        label: 'Active Development Plan Items',
+        value: developmentPlan.items.length,
+        conclusion: 'Development Plan throughput signal available',
+        suggested_action: {
+          id: 'open-development-plan',
+          label: 'Review Development Plan Items',
+          href: `/development-plans/${developmentPlan.id}`,
+          enabled: true,
+        },
+      },
+    ],
+    risk_counts: { medium: 1, high: 0 },
+    linked_object_refs: [{ type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title }],
+    degraded_sources: [],
+  },
+  qualityBugEscape: {
+    id: 'quality-bug-escape',
+    title: 'Quality Bug Escape',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    rows: [
+      {
+        label: 'Open checkout regression',
+        value: bugListItem.severity,
+        risk: 'high',
+        conclusion: 'Quality risk requires QA verification',
+        suggested_action: {
+          id: 'open-bug',
+          label: 'Review checkout regression',
+          href: `/bugs/${bugListItem.id}`,
+          enabled: true,
+        },
+      },
+    ],
+    risk_counts: { high: 1 },
+    linked_object_refs: [{ type: 'bug', id: bugListItem.id, title: bugListItem.title }],
+    degraded_sources: [],
+  },
+  releaseReadiness: {
+    id: 'release-readiness',
+    title: 'Release Readiness',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    rows: [
+      {
+        label: 'QA acceptance',
+        value: 'missing',
+        risk: 'high',
+        conclusion: 'Release blocked by QA acceptance',
+        suggested_action: {
+          id: 'review-release-blockers',
+          label: 'Review release blockers',
+          href: `/releases/${release.id}`,
+          enabled: true,
+        },
+      },
+    ],
+    risk_counts: { high: 1 },
+    linked_object_refs: [{ type: 'release', id: release.id, title: release.title }],
+    degraded_sources: [],
+  },
+  executionOutcomes: {
+    id: 'execution-outcomes',
+    title: 'Execution Outcomes',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    rows: [
+      {
+        label: 'Latest execution',
+        value: execution.status,
+        conclusion: 'Execution is still running',
+        suggested_action: {
+          id: 'inspect-execution',
+          label: 'Inspect execution',
+          href: `/executions/${execution.id}`,
+          enabled: true,
+        },
+      },
+    ],
+    risk_counts: { medium: 1, high: 0 },
+    linked_object_refs: [{ type: 'execution', id: execution.id, title: execution.ref.title }],
+    degraded_sources: [],
+  },
+  executionContinuation: {
+    id: 'execution-continuation',
+    title: 'Execution Continuation',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    rows: [
+      {
+        label: 'Continuation checkpoint',
+        value: execution.continuation_history.length,
+        conclusion: 'Execution continuation evidence is available',
+        suggested_action: {
+          id: 'inspect-continuation',
+          label: 'Inspect execution continuation',
+          href: `/executions/${execution.id}`,
+          enabled: true,
+        },
+      },
+    ],
+    risk_counts: { medium: 1, high: 0 },
+    linked_object_refs: [{ type: 'execution', id: execution.id, title: execution.ref.title }],
+    degraded_sources: [],
+  },
+} as const;
+
+export const productDynamicRouteFixtureManifest = [
+  {
+    family: 'source-object-detail',
+    route: `/requirements/${requirementDetail.id}`,
+    objectType: 'requirement',
+    objectId: requirementDetail.id,
+    fixture: 'requirementDetail',
+    evidenceFixture: 'sourceObjectEvidenceRefs.requirement',
+  },
+  {
+    family: 'source-object-detail',
+    route: `/initiatives/${initiativeDetail.id}`,
+    objectType: 'initiative',
+    objectId: initiativeDetail.id,
+    fixture: 'initiativeDetail',
+    evidenceFixture: 'sourceObjectEvidenceRefs.initiative',
+  },
+  {
+    family: 'source-object-detail',
+    route: `/bugs/${bugDetail.id}`,
+    objectType: 'bug',
+    objectId: bugDetail.id,
+    fixture: 'bugDetail',
+    evidenceFixture: 'sourceObjectEvidenceRefs.bug',
+  },
+  {
+    family: 'source-object-detail',
+    route: `/tech-debt/${techDebtDetail.id}`,
+    objectType: 'tech_debt',
+    objectId: techDebtDetail.id,
+    fixture: 'techDebtDetail',
+    evidenceFixture: 'sourceObjectEvidenceRefs.techDebt',
+  },
+  {
+    family: 'evidence',
+    route: `/requirements/${requirementDetail.id}/evidence`,
+    objectType: 'requirement',
+    objectId: requirementDetail.id,
+    fixture: 'requirementDetail.evidence_refs',
+  },
+  {
+    family: 'evidence',
+    route: `/initiatives/${initiativeDetail.id}/evidence`,
+    objectType: 'initiative',
+    objectId: initiativeDetail.id,
+    fixture: 'initiativeDetail.evidence_refs',
+  },
+  {
+    family: 'evidence',
+    route: `/bugs/${bugDetail.id}/evidence`,
+    objectType: 'bug',
+    objectId: bugDetail.id,
+    fixture: 'bugDetail.evidence_refs',
+  },
+  {
+    family: 'evidence',
+    route: `/tech-debt/${techDebtDetail.id}/evidence`,
+    objectType: 'tech_debt',
+    objectId: techDebtDetail.id,
+    fixture: 'techDebtDetail.evidence_refs',
+  },
+  {
+    family: 'development-plan-detail',
+    route: `/development-plans/${developmentPlan.id}`,
+    objectType: 'development_plan',
+    objectId: developmentPlan.id,
+    fixture: 'developmentPlan',
+  },
+  {
+    family: 'gate-workspace',
+    route: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+    objectType: 'development_plan_item',
+    objectId: developmentPlanItem.id,
+    fixture: 'developmentPlanItem',
+  },
+  {
+    family: 'execution-detail',
+    route: `/executions/${execution.id}`,
+    objectType: 'execution',
+    objectId: execution.id,
+    fixture: 'execution',
+  },
+  {
+    family: 'release',
+    route: `/releases/${release.id}`,
+    objectType: 'release',
+    objectId: release.id,
+    fixture: 'release',
+  },
+  {
+    family: 'evidence',
+    route: `/releases/${release.id}/evidence`,
+    objectType: 'release',
+    objectId: release.id,
+    fixture: 'releaseEvidenceRefs',
+  },
+] as const;
