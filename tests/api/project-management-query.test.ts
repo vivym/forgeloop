@@ -329,6 +329,7 @@ describe('project management query API', () => {
       blocked: true,
       stale: true,
       last_event_at: continuedAt,
+      last_event_summary: 'Custom checkpoint recorded by actor-reviewer.',
       interrupt_history: [{ at: interruptedAt, reason: 'Execution interrupted by actor-owner.' }],
       continuation_history: [{ at: continuedAt, summary: 'Execution continued by actor-reviewer.' }],
       updated_at: continuedAt,
@@ -345,7 +346,7 @@ describe('project management query API', () => {
       stale: true,
       blocked: true,
       last_event_at: continuedAt,
-      last_event_summary: 'Execution continued by assigned operator.',
+      last_event_summary: 'Custom checkpoint recorded by assigned operator.',
       actions: [{ id: 'inspect', href: `/executions/${started.id}`, label: 'Inspect' }],
     });
     expect(JSON.stringify(projectedExecution)).not.toMatch(/actor-owner|actor-reviewer/);

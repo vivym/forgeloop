@@ -687,7 +687,7 @@ function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, exe
     stale: execution.stale ?? false,
     blocked,
     last_event_at: execution.last_event_at ?? execution.updated_at,
-    last_event_summary: executionLastEventSummary(execution),
+    last_event_summary: roleSafeActorText(execution.last_event_summary ?? executionLastEventSummary(execution)),
     evidence_refs: execution.evidence_refs,
     pr_refs: execution.pr_refs,
     diff_refs: execution.diff_refs,
