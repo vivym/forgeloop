@@ -226,7 +226,7 @@ describe('Specs & Execution Plans route queue', () => {
         risk: developmentPlanItem.risk,
         next_action: 'Generate Spec from approved boundary.',
         command: 'Generate Spec',
-        href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
+        href: '/specs/spec-needs-generation',
       },
       {
         id: 'spec-needs-review',
@@ -324,7 +324,7 @@ describe('Specs & Execution Plans route queue', () => {
         risk: developmentPlanItem.risk,
         next_action: 'Review Execution Plan before execution.',
         command: 'Approve Execution Plan',
-        href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
+        href: `/plans/${executionPlan.id}`,
       },
     ];
     const apiOverrides = {

@@ -220,9 +220,9 @@ function tabHref(tab: 'specs' | 'plans', developmentPlanId: string | null, devel
 }
 
 function isFocusedQueueRow(row: SpecPlanQueueRow, developmentPlanId: string | null, developmentPlanItemId: string | null): boolean {
-  const hrefDevelopmentPlanMatch = developmentPlanId === null || row.href.includes(`/development-plans/${encodeURIComponent(developmentPlanId)}/`);
-  const hrefDevelopmentPlanItemMatch = developmentPlanItemId === null || row.href.includes(`/items/${encodeURIComponent(developmentPlanItemId)}/`);
-  return hrefDevelopmentPlanMatch && hrefDevelopmentPlanItemMatch;
+  if (developmentPlanId !== null && row.developmentPlanId !== developmentPlanId) return false;
+  if (developmentPlanItemId !== null && row.developmentPlanItemId !== developmentPlanItemId) return false;
+  return true;
 }
 
 function rowToQueueItem(row: SpecPlanQueueRow): SpecPlanQueueItem {
@@ -242,7 +242,11 @@ function rowToQueueItem(row: SpecPlanQueueRow): SpecPlanQueueItem {
     command: row.command,
     href: row.href,
     source_ref: { title: row.sourceObject },
-    development_plan_item_ref: { title: row.developmentPlanItem },
+    development_plan_item_ref: {
+      ...(row.developmentPlanItemId === undefined ? {} : { id: row.developmentPlanItemId }),
+      ...(row.developmentPlanId === undefined ? {} : { development_plan_id: row.developmentPlanId }),
+      title: row.developmentPlanItem,
+    },
   };
 }
 

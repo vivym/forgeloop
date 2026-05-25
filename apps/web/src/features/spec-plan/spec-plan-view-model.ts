@@ -53,6 +53,8 @@ export interface SpecPlanQueueRow {
   blocked: boolean;
   nextAction: string;
   command: string;
+  developmentPlanId?: string;
+  developmentPlanItemId?: string;
   documentSummary: string;
   href: string;
   searchText: string;
@@ -132,6 +134,8 @@ export function specPlanQueueRow(item: SpecPlanQueueItem): SpecPlanQueueRow {
   const gateStatus = formatValue(item.gate_state);
   const sourceObject = refLabel(item.source_ref, 'Source object not linked');
   const developmentPlanItem = refLabel(item.development_plan_item_ref, 'Development Plan Item not linked');
+  const developmentPlanId = item.development_plan_item_ref?.development_plan_id;
+  const developmentPlanItemId = item.development_plan_item_ref?.id;
   const title = item.title ?? `${artifactLabel(artifactType)} governance row`;
   const nextAction = item.next_action ?? defaultNextAction(artifactType, groupId);
   const row: SpecPlanQueueRow = {
@@ -152,8 +156,10 @@ export function specPlanQueueRow(item: SpecPlanQueueItem): SpecPlanQueueRow {
     blocked: item.blocked === true || normalized(item.status) === 'blocked' || normalized(item.gate_state) === 'blocked',
     nextAction,
     command: item.command ?? defaultCommand(artifactType, groupId),
+    ...(developmentPlanId === undefined ? {} : { developmentPlanId }),
+    ...(developmentPlanItemId === undefined ? {} : { developmentPlanItemId }),
     documentSummary: item.summary ?? `${title} for ${developmentPlanItem} from ${sourceObject}.`,
-    href: item.href ?? queueItemHref(item, artifactType),
+    href: queueItemHref(item, artifactType),
     searchText: '',
   };
   return {
@@ -204,6 +210,7 @@ function queueItemHref(item: SpecPlanQueueItem, artifactType: QueueArtifactType)
   if (planId !== undefined && itemId !== undefined) {
     return `/development-plans/${encodeURIComponent(planId)}/items/${encodeURIComponent(itemId)}/${suffix}`;
   }
+  if (item.href?.startsWith('/development-plans/') === true) return item.href;
   return `/specs-plans?tab=${artifactType === 'spec' ? 'specs' : 'plans'}`;
 }
 
