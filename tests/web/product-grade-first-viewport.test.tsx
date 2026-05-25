@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { firstViewportContract } from '../../apps/web/src/features/product-surfaces/first-viewport-contract';
-import { developmentPlan } from './fixtures/product-data';
+import { developmentPlan, developmentPlanItem } from './fixtures/product-data';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 import { renderRoute } from './router-test-utils';
 
@@ -106,5 +106,24 @@ describe('product-grade first viewport contract', () => {
     expect(rendered.getAllByTestId(firstViewportContract.roleResponsibilityTestId)[0]?.textContent).toMatch(/Product and technical roles/i);
     expect(rendered.getAllByTestId(firstViewportContract.blockerRiskTestId)[0]?.textContent).toMatch(/blocked Plan Item/i);
     expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b/);
+  });
+
+  it('requires Development Plan Item gate routes to expose gate workspace first viewports', async () => {
+    for (const route of [
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`,
+    ]) {
+      const rendered = await renderRoute(route);
+
+      expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+      expectFirstViewportContract(rendered, { pageFamily: 'gate-workspace', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-workspace-layout="gate"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/Gate progress|Current enabled action|Evidence side context/i);
+      expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/specs\/|\/plans\//);
+      cleanup();
+    }
   });
 });

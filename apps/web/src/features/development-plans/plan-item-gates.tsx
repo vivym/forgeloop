@@ -31,13 +31,18 @@ export type DevelopmentPlanItemProjection = {
   summary?: string;
   responsible_role?: string;
   driver_actor_id?: string;
+  reviewer_actor_id?: string;
+  priority?: string;
   risk?: string;
+  dependency_hints?: string[];
+  affected_surfaces?: string[];
   boundary_status?: string;
   spec_status?: string;
   execution_plan_status?: string;
   execution_status?: string;
   review_status?: string;
   qa_handoff_status?: string;
+  release_impact?: string;
   next_action?: string;
   source_ref?: { type: string; id: string; title?: string };
   development_plan_ref?: { id: string; title?: string };
@@ -54,6 +59,16 @@ export type DevelopmentPlanItemProjection = {
   }>;
   code_review_handoffs?: Array<{ id: string; title?: string; status?: string; audited_exception?: { reason?: string } }>;
   qa_handoffs?: Array<{ id: string; title?: string; status?: string }>;
+};
+
+export type PlanItemGateModel = {
+  enabled: boolean;
+  href: string;
+  id: 'boundary' | 'spec' | 'execution-plan' | 'execution' | 'code-review' | 'qa-handoff';
+  label: string;
+  reason: string;
+  reasonId: string;
+  status: string | undefined;
 };
 
 export type DevelopmentPlanItemRevision = {
@@ -82,15 +97,7 @@ export type BoundarySummaryRevision = {
 
 export function PlanItemGateSummary({ item }: { item: DevelopmentPlanItemProjection }) {
   const navigate = useNavigate();
-  const href = (suffix: string) => `${itemHref(item)}${suffix}`;
-  const gates = [
-    gateConfig('Boundary', item.boundary_status, href('/brainstorming'), true),
-    gateConfig('Spec document', item.spec_status, href('/spec'), isApproved(item.boundary_status)),
-    gateConfig('Execution Plan document', item.execution_plan_status, href('/execution-plan'), isApproved(item.spec_status)),
-    gateConfig('Execution', item.execution_status, href('/execution'), isApproved(item.execution_plan_status)),
-    gateConfig('Code review', item.review_status, `/reports?development_plan_item_id=${item.id}`, item.execution_status === 'completed' || isReviewOpen(item.review_status)),
-    gateConfig('QA handoff', item.qa_handoff_status, `/reports?development_plan_item_id=${item.id}`, item.review_status === 'approved' || isQaOpen(item.qa_handoff_status)),
-  ] as const;
+  const gates = planItemGateModels(item);
 
   return (
     <Section title="Gate summary">
@@ -117,6 +124,18 @@ export function PlanItemGateSummary({ item }: { item: DevelopmentPlanItemProject
       <PlanItemLifecycleActions item={item} />
     </Section>
   );
+}
+
+export function planItemGateModels(item: DevelopmentPlanItemProjection): PlanItemGateModel[] {
+  const href = (suffix: string) => `${itemHref(item)}${suffix}`;
+  return [
+    gateConfig('boundary', 'Boundary', item.boundary_status, href('/brainstorming'), true),
+    gateConfig('spec', 'Spec document', item.spec_status, href('/spec'), isApproved(item.boundary_status)),
+    gateConfig('execution-plan', 'Execution Plan document', item.execution_plan_status, href('/execution-plan'), isApproved(item.spec_status)),
+    gateConfig('execution', 'Execution', item.execution_status, href('/execution'), isApproved(item.execution_plan_status)),
+    gateConfig('code-review', 'Code review', item.review_status, `/reports?development_plan_item_id=${item.id}`, item.execution_status === 'completed' || isReviewOpen(item.review_status)),
+    gateConfig('qa-handoff', 'QA handoff', item.qa_handoff_status, `/reports?development_plan_item_id=${item.id}`, item.review_status === 'approved' || isQaOpen(item.qa_handoff_status)),
+  ];
 }
 
 function PlanItemLifecycleActions({ item }: { item: DevelopmentPlanItemProjection }) {
@@ -395,9 +414,16 @@ export function ItemStructuredFields({ item }: { item: DevelopmentPlanItemProjec
   );
 }
 
-function gateConfig(label: string, status: string | undefined, href: string, prerequisiteMet: boolean) {
+function gateConfig(
+  id: PlanItemGateModel['id'],
+  label: string,
+  status: string | undefined,
+  href: string,
+  prerequisiteMet: boolean,
+): PlanItemGateModel {
   const enabled = prerequisiteMet || status === 'blocked' || status === 'changes_requested' || status === 'in_review';
   return {
+    id,
     label,
     status,
     href,

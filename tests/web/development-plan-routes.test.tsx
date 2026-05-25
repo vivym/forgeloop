@@ -229,6 +229,53 @@ describe('Development Plan routes', () => {
     expect(document.body.textContent).not.toMatch(/\bTask\b|Work Item Owner|owner_actor_id/);
   });
 
+  it('renders Development Plan Item overview and focus routes as GateWorkspace first viewports', async () => {
+    for (const route of [
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`,
+    ]) {
+      const screen = await renderRoute(route);
+
+      expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+      expectFirstViewportContract(screen, { pageFamily: 'gate-workspace', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-workspace-layout="gate"]')).toBeInstanceOf(HTMLElement);
+      const firstViewport = document.querySelector('[data-first-viewport]');
+      expect(firstViewport?.textContent).toContain(developmentPlan.title);
+      expect(firstViewport?.textContent).toContain('Checkout requirement');
+      expect(firstViewport?.textContent).toMatch(/Gate progress/i);
+      expect(firstViewport?.textContent).toMatch(/Current enabled action/i);
+      expect(firstViewport?.textContent).toMatch(/Disabled reasons/i);
+      expect(firstViewport?.textContent).toMatch(/Evidence side context/i);
+      expect(firstViewport?.textContent).toContain(developmentPlanItem.next_action);
+      expect(document.body.textContent).not.toMatch(/\bTask\b|Work Item Owner|owner_actor_id|\/specs\/|\/plans\//);
+      cleanup();
+    }
+  });
+
+  it('prioritizes the active gate body on Development Plan Item focus routes', async () => {
+    for (const [route, title, bodyText] of [
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`, 'Boundary brainstorming', /Which source and code boundaries are in scope/i],
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`, 'Spec document', /Route-backed Product Lane spec/i],
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`, 'Execution Plan document', /Implement AI-native Web API clients/i],
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, 'Execution supervision', /Execute AI-native Web API client work/i],
+    ] as const) {
+      const screen = await renderRoute(route);
+
+      expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+      const activeBody = document.querySelector('[data-active-gate-body]');
+      expect(activeBody).toBeInstanceOf(HTMLElement);
+      expect(activeBody?.textContent).toContain(title);
+      expect(activeBody?.textContent).toMatch(bodyText);
+      const workspaceText = document.querySelector('[data-workspace-content]')?.textContent ?? '';
+      expect(workspaceText.indexOf(title)).toBeGreaterThanOrEqual(0);
+      expect(workspaceText.indexOf(title)).toBeLessThan(workspaceText.indexOf('Development Plan Item revisions'));
+      cleanup();
+    }
+  });
+
   it('supports keyboard navigation in the Development Plan table', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}`);
