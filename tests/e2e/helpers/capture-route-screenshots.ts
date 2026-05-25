@@ -379,6 +379,12 @@ async function assertFirstViewportContract(page: Page, route: VisualRoute) {
     page.locator(`[${firstViewportContract.pageFamilyAttribute}="${route.family}"]`).first(),
     `${route.path} must expose ${firstViewportContract.pageFamilyAttribute}="${route.family}"`,
   ).toBeVisible();
+  if (route.family === 'queue') {
+    await expectPage(
+      page.locator(`[${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"]`).first(),
+      `${route.path} must expose ${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"`,
+    ).toBeVisible();
+  }
 
   for (const testId of [
     firstViewportContract.currentStateTestId,

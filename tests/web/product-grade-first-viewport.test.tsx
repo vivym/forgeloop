@@ -40,4 +40,12 @@ describe('product-grade first viewport contract', () => {
     expect(await rendered.findByRole('heading', { name: 'Cockpit' })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'cockpit', heading: 'Cockpit' });
   });
+
+  it('requires the My Work route to expose the queue first-viewport contract', async () => {
+    const rendered = await renderRoute('/my-work');
+
+    expect(await rendered.findByRole('heading', { name: 'My Work' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'queue', heading: 'My Work' });
+    expect(document.querySelector('[data-workspace-layout="queue-workspace"]')).toBeInstanceOf(HTMLElement);
+  });
 });

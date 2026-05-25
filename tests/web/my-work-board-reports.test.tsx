@@ -9,7 +9,13 @@ describe('AI-native My Work, Board, and Reports', () => {
   it('renders My Work as a role-aware inbox with typed targets and reasons', async () => {
     const screen = await renderRoute('/my-work');
     expect(await screen.findByRole('heading', { name: 'My Work' })).toBeTruthy();
-    expect(await screen.findByText(/Needs boundary approval/i)).toBeTruthy();
+    expect(document.querySelector('[data-page-family="queue"][data-workspace-layout="queue-workspace"]')).toBeInstanceOf(HTMLElement);
+    expect(screen.getByRole('button', { name: /Role: All/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Status: All/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Gate: All/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Risk: All/i })).toBeTruthy();
+    expect(screen.getByRole('region', { name: /Selected queue item/i })).toBeTruthy();
+    expect((await screen.findAllByText(/Needs boundary approval/i))[0]).toBeTruthy();
     expect(screen.getByRole('link', { name: /open development plan item/i }).getAttribute('href')).toBe(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
