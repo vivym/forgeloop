@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { firstViewportContract } from '../../apps/web/src/features/product-surfaces/first-viewport-contract';
+import { developmentPlan } from './fixtures/product-data';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 import { renderRoute } from './router-test-utils';
 
@@ -91,5 +92,19 @@ describe('product-grade first viewport contract', () => {
     expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/source context/i);
     expect(document.body.textContent).toMatch(/generated only from Plan Items after boundary approval/i);
+  });
+
+  it('requires Development Plan detail routes to expose table-first gate progress before row details', async () => {
+    const rendered = await renderRoute(`/development-plans/${developmentPlan.id}`);
+
+    expect(await rendered.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
+    expect(document.querySelector('[data-page-family]')?.getAttribute('data-page-family')).toBe('development-plan-detail');
+    expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/gate|Plan Item/i);
+    expect(rendered.getAllByTestId(firstViewportContract.currentStateTestId)[0]?.textContent).toMatch(/active/i);
+    expect(rendered.getByTestId(firstViewportContract.nextActionTestId).textContent).toMatch(/Supervise execution/i);
+    expect(rendered.getAllByTestId(firstViewportContract.roleResponsibilityTestId)[0]?.textContent).toMatch(/Product and technical roles/i);
+    expect(rendered.getAllByTestId(firstViewportContract.blockerRiskTestId)[0]?.textContent).toMatch(/blocked Plan Item/i);
+    expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b/);
   });
 });

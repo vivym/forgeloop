@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { boundarySummary, developmentPlan, developmentPlanItem } from './fixtures/product-data';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
@@ -144,19 +144,72 @@ describe('Development Plan routes', () => {
     expect(JSON.stringify(generateBodies)).not.toMatch(/spec|execution_plan/i);
   });
 
-  it('renders a table-first Development Plan page with gate columns and next actions', async () => {
+  it('renders a desktop Development Plan table with prioritized planning columns and contained overflow', async () => {
+    vi.stubGlobal('innerWidth', 1440);
+    vi.stubGlobal('matchMedia', createMatchMedia(1440));
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}`);
 
     expect(await screen.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
-    for (const column of ['Plan item', 'Role', 'Driver', 'Boundary', 'Spec', 'Execution Plan', 'Execution', 'Risk', 'Next action']) {
+    for (const column of ['Plan Item', 'Role', 'Risk', 'Boundary', 'Spec', 'Execution Plan', 'Execution', 'Review', 'QA', 'Release impact', 'Next action']) {
       expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
     }
-    expect(screen.getByRole('button', { name: /add row/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /regenerate with ai/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /show context manifest/i })).toBeTruthy();
+    for (const hiddenTabletColumn of ['Current gate', 'Gate progress', 'QA / Review']) {
+      expect(screen.queryByRole('columnheader', { name: hiddenTabletColumn })).toBeNull();
+    }
+    expect(screen.getByRole('region', { name: /development plan items table region/i }).contains(screen.getByRole('table', { name: /development plan items/i }))).toBe(true);
+    expect(document.querySelector('[data-table-scroll-container]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-table-scroll-container]')?.className).toMatch(/overflow-x-auto/);
+    expect(screen.getByRole('link', { name: developmentPlanItem.title }).getAttribute('href')).toBe(
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+    );
     expect(screen.getByRole('link', { name: /open item/i }).getAttribute('href')).toBe(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
+    expect(screen.getByRole('button', { name: /add row/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /regenerate with ai/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /show context manifest/i })).toBeTruthy();
+  });
+
+  it('uses compact gate progress summary columns at 1024px instead of cramming every planning field', async () => {
+    vi.stubGlobal('innerWidth', 1024);
+    vi.stubGlobal('matchMedia', createMatchMedia(1024));
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}`);
+
+    expect(await screen.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
+    for (const column of ['Plan Item', 'Role', 'Risk', 'Current gate', 'Gate progress', 'Execution', 'QA / Review', 'Next action']) {
+      expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
+    }
+    for (const desktopOnlyColumn of ['Driver', 'Reviewer', 'Dependency hints', 'Affected surface', 'Boundary', 'Spec', 'Execution Plan', 'Release impact']) {
+      expect(screen.queryByRole('columnheader', { name: desktopOnlyColumn })).toBeNull();
+    }
+    expect(screen.getAllByText(/Current gate/i).length).toBeGreaterThan(0);
+  });
+
+  it('shows selected-row preview with gate progress, next action, blockers, source, and evidence context', async () => {
+    vi.stubGlobal('innerWidth', 1440);
+    vi.stubGlobal('matchMedia', createMatchMedia(1440));
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}`]: {
+          ...developmentPlan,
+          items: [developmentPlanItem],
+        },
+      },
+    });
+
+    expect((await screen.findAllByText(developmentPlanItem.title)).length).toBeGreaterThan(0);
+    const preview = await screen.findByRole('region', { name: /selected development plan item/i });
+    expect(preview.textContent).toContain(developmentPlanItem.title);
+    expect(preview.textContent).toContain(developmentPlanItem.summary);
+    expect(preview.textContent).toMatch(/Current gate/i);
+    expect(preview.textContent).toContain(developmentPlanItem.next_action);
+    expect(preview.textContent).toMatch(/Blocker \/ risk/i);
+    expect(preview.textContent).toMatch(/Checkout requirement/i);
+    expect(preview.textContent).toMatch(/Gate evidence/i);
+    expect(preview.textContent).toMatch(/Driver/i);
+    expect(preview.textContent).toMatch(/Reviewer/i);
+    expect(preview.textContent).toMatch(/Dependency hints/i);
+    expect(preview.textContent).toMatch(/Affected surface/i);
   });
 
   it('renders Development Plan Item gate detail without calling it a Task', async () => {
@@ -489,4 +542,21 @@ function expectButtonEnabled(element: HTMLElement) {
 
 function parseRequestBody(init: RequestInit | undefined) {
   return JSON.parse(String(init?.body ?? '{}')) as unknown;
+}
+
+function createMatchMedia(width: number) {
+  return (query: string): MediaQueryList => {
+    const maxWidth = Number(query.match(/max-width:\s*(\d+)px/)?.[1] ?? Number.POSITIVE_INFINITY);
+    const minWidth = Number(query.match(/min-width:\s*(\d+)px/)?.[1] ?? 0);
+    return {
+      matches: width >= minWidth && width <= maxWidth,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    };
+  };
 }
