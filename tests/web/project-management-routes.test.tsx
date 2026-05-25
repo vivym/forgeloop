@@ -103,9 +103,12 @@ describe('project management route IA', () => {
   it('renders Specs & Execution Plans as a governance queue instead of direct document browsers', async () => {
     const screen = await renderRoute('/specs-plans');
     expect(await screen.findByRole('heading', { name: 'Specs & Execution Plans' })).toBeTruthy();
+    expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('tab', { name: 'Specs' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Execution Plans' })).toBeTruthy();
     expect((await screen.findAllByRole('link', { name: /open plan item/i }))[0]?.getAttribute('href')).toMatch(/^\/development-plans\//);
+    expect(screen.getByRole('region', { name: /selected governance row/i })).toBeTruthy();
+    expect(document.querySelector('[data-spec-plan-queue-row][data-desktop-row-height="44-56"]')).toBeInstanceOf(HTMLElement);
     expect(document.body.textContent).not.toMatch(/\/specs\/|\/plans\/|\/tasks\//);
   });
 

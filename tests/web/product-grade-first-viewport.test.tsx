@@ -126,4 +126,15 @@ describe('product-grade first viewport contract', () => {
       cleanup();
     }
   });
+
+  it('requires Specs & Execution Plans to expose a queue first viewport and preview workspace', async () => {
+    const rendered = await renderRoute('/specs-plans');
+
+    expect(await rendered.findByRole('heading', { name: 'Specs & Execution Plans' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'spec-plan-queue', heading: 'Specs & Execution Plans' });
+    expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/governance|reviewer|risk/i);
+    expect(rendered.getByRole('region', { name: /selected governance row/i })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/specs\/|\/plans\//);
+  });
 });
