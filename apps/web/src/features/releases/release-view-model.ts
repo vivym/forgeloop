@@ -44,8 +44,15 @@ export function releaseViewModel(input: { release: ReleaseProjection; readiness:
     primaryActorOrRole: 'Release owner',
     riskSignal: readiness.ready ? 'Release ready' : `${readiness.disabled_reasons?.length ?? 1} release blocker(s)`,
     gateProgress: [
+      { label: 'Spec', state: evidenceState(readiness.required_review_evidence) },
+      { label: 'Execution Plan', state: evidenceState(readiness.required_review_evidence) },
+      { label: 'Execution', state: evidenceState(readiness.package_run_evidence) },
+      { label: 'Code review', state: evidenceState(readiness.required_review_evidence), disabledReason: launchDisabledReason },
+      { label: 'QA', state: evidenceState(readiness.required_test_acceptance_evidence), disabledReason: firstEvidenceDisabledReason(readiness) },
       { label: 'Approval', state: approvalState(readiness), disabledReason: launchDisabledReason },
-      { label: 'Rollback', state: rollbackDisabledReason === undefined ? 'available' : 'unavailable', disabledReason: rollbackDisabledReason },
+      { label: 'Release blockers', state: launchDisabledReason === undefined ? 'clear' : 'blocked', disabledReason: launchDisabledReason },
+      { label: 'Evidence', state: combinedEvidenceState(readiness), disabledReason: firstEvidenceDisabledReason(readiness) },
+      { label: 'Rollback plan', state: rollbackDisabledReason === undefined ? 'available' : 'unavailable', disabledReason: rollbackDisabledReason },
       { label: 'Observation', state: evidenceState(readiness.observation_evidence) },
     ],
     criticalEvidence: releaseEvidence(readiness),
@@ -119,6 +126,17 @@ function evidenceState(items: readonly ReleaseReadinessItem[] | undefined): View
   if (items === undefined || items.length === 0) return 'unavailable';
   if (items.some((item) => item.status === 'missing' || item.disabled_reason !== undefined)) return 'blocked';
   return 'available';
+}
+
+function combinedEvidenceState(readiness: ReleaseReadinessProjection): ViewModelEvidence['state'] {
+  const groups = [
+    readiness.required_review_evidence,
+    readiness.required_test_acceptance_evidence,
+    readiness.package_run_evidence,
+    readiness.observation_evidence,
+  ];
+  if (groups.some((group) => group === undefined || group.length === 0)) return 'unavailable';
+  return hasBlockedEvidence(readiness) ? 'blocked' : 'available';
 }
 
 function evidenceText(items: readonly ReleaseReadinessItem[] | undefined): string {

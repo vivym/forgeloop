@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router';
 import { useReleaseCockpitQuery, useReleaseReadinessQuery, useReleasesQuery } from '../../shared/api/hooks';
 import type { ObjectRef, ReleaseCockpitResponse, ReleaseReadinessDetail, ReleaseSummary } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
-import { CompactMetadata, EvidenceDrawer, Section, WorkspacePage } from '../../shared/layout';
+import { CompactMetadata, EvidenceDrawer, GateProgress, Section, WorkspacePage } from '../../shared/layout';
 import { Button, DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import { releaseViewModel } from './release-view-model';
 
@@ -42,6 +42,7 @@ export function ReleasesRoute() {
 
   return (
     <WorkspacePage
+      as="div"
       blockerRisk={query.isError ? 'Release inventory could not be loaded.' : `${blockedCount} release approval gate(s) need review.`}
       family="release"
       heading="Releases"
@@ -89,7 +90,7 @@ function ReleaseDetailContent({ releaseId }: { releaseId: string }) {
   const readiness = readinessQuery.data;
 
   if (cockpitQuery.isLoading || readinessQuery.isLoading) {
-    return <ReleaseLoading heading="Loading Release Readiness" layout="release-readiness" />;
+    return <ReleaseLoading heading="Loading release data" layout="release-readiness" />;
   }
 
   if (cockpitQuery.isError || readinessQuery.isError || release === undefined || readiness === undefined) {
@@ -117,6 +118,7 @@ function ReleaseReadinessWorkspace({
 
   return (
     <WorkspacePage
+      as="div"
       blockerRisk={`High-risk changes: ${highRiskSummary(cockpit)}. Approvals: ${approvalSummary(readiness)}.`}
       family="release"
       heading="Release Readiness"
@@ -124,7 +126,7 @@ function ReleaseReadinessWorkspace({
       nextAction={`${disabledReason === undefined ? 'Launch release is available' : `Launch disabled: ${disabledReason}`}. ${rollbackText}.`}
       roleResponsibility={`${viewModel.primaryActorOrRole} owns approval review, launch decision, rollback readiness, and evidence relevance.`}
       state={`Readiness ${readiness.ready ? 'ready' : 'blocked'} for ${readiness.scope_refs.length} scope object(s)`}
-      subtitle={release.scope_summary ?? 'Scope, readiness, high-risk changes, approvals, launch, and rollback stay visible before evidence details.'}
+      subtitle={`${release.scope_summary ?? 'Release scope unavailable.'} Readiness by Spec, Execution Plan, execution, code review, QA, release blockers, evidence, rollback plan, observation.`}
       toolbar={
         <>
           <Button disabled={launchAction?.enabled !== true} size="sm" variant="primary">
@@ -146,6 +148,16 @@ function ReleaseReadinessWorkspace({
             { label: 'Launch disabled', value: disabledReason ?? 'No launch blocker recorded' },
             { label: 'Rollback', value: rollbackAction?.disabledReason ?? release.rollback_plan ?? 'Rollback plan unavailable' },
           ]}
+        />
+      </Section>
+      <Section title="Readiness breakdown">
+        <GateProgress
+          gates={viewModel.gateProgress.map((gate) => ({
+            id: gate.label.toLowerCase().replaceAll(' ', '-'),
+            label: gate.label,
+            status: gate.disabledReason === undefined ? gate.state : `${gate.state}: ${gate.disabledReason}`,
+          }))}
+          {...(disabledReason === undefined ? {} : { currentGateId: 'release-blockers' })}
         />
       </Section>
       <TypedScopeSection scopeRefs={readiness.scope_refs} />
@@ -177,7 +189,7 @@ function ReleaseEvidenceContent({ releaseId }: { releaseId: string }) {
   const readiness = readinessQuery.data;
 
   if (cockpitQuery.isLoading || readinessQuery.isLoading) {
-    return <ReleaseLoading family="evidence" heading="Loading Release Evidence" layout="release-evidence" />;
+    return <ReleaseLoading family="evidence" heading="Loading evidence data" layout="release-evidence" />;
   }
 
   if (cockpitQuery.isError || readinessQuery.isError || release === undefined || readiness === undefined) {
@@ -188,6 +200,7 @@ function ReleaseEvidenceContent({ releaseId }: { releaseId: string }) {
 
   return (
     <WorkspacePage
+      as="div"
       blockerRisk={disabledReason === undefined ? 'Evidence readiness is clear.' : `Evidence readiness blocked: ${disabledReason}`}
       family="evidence"
       heading="Release Evidence"
@@ -312,10 +325,10 @@ function EvidenceContext({
           { label: 'Observations', value: String(cockpit?.observations.length ?? 0) },
         ]}
       />
-      <div className="grid gap-2">
+      <div className="grid gap-2 divide-y divide-border">
         {evidenceRefs.length > 0 ? (
           evidenceRefs.map((ref) => (
-            <div className="rounded-card border border-border bg-surface-muted/60 p-3" key={ref.id}>
+            <div className="grid gap-1 py-2 first:pt-0 last:pb-0" key={ref.id}>
               <div className="font-semibold text-text-primary">{ref.summary}</div>
               <div className="text-text-secondary">{objectLabel(ref.evidence_type)}</div>
             </div>
@@ -357,6 +370,7 @@ function ReleaseLoading({
 }) {
   return (
     <WorkspacePage
+      as="div"
       blockerRisk="Readiness signal is loading."
       family={family}
       heading={heading}
@@ -381,6 +395,7 @@ function ReleaseUnavailable({
 }) {
   return (
     <WorkspacePage
+      as="div"
       blockerRisk="Release readiness could not be loaded."
       family={family}
       heading={heading}
