@@ -151,8 +151,8 @@ describe('product-grade presentation view models', () => {
 
   it('projects Execution evidence and degrades missing PR, diff, and test refs', () => {
     expect(executionViewModel(execution)).toMatchObject({
-      objectLabel: 'Execute AI-native Web API client work',
-      objectType: 'Execution',
+      objectLabel: 'Build AI-native project management API clients',
+      objectType: 'Execution supervision',
       currentState: expect.any(String),
       nextAction: expect.any(String),
       primaryActorOrRole: expect.any(String),
@@ -171,13 +171,15 @@ describe('product-grade presentation view models', () => {
       test_evidence_refs: [],
     });
 
-    expect(missingEvidence.criticalEvidence).toContainEqual(
-      expect.objectContaining({
-        label: 'PR, diff, and test evidence',
-        state: 'unavailable',
-        compactText: 'Evidence unavailable',
-      }),
-    );
+    for (const label of ['PR evidence', 'Diff evidence', 'Test evidence']) {
+      expect(missingEvidence.criticalEvidence).toContainEqual(
+        expect.objectContaining({
+          label,
+          state: 'unavailable',
+          compactText: 'Evidence unavailable',
+        }),
+      );
+    }
   });
 
   it('projects Release readiness and disables launch or rollback when approvals or rollback details are missing', () => {
