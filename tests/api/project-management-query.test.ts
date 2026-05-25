@@ -1,9 +1,11 @@
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
+import type { DeliveryRepository } from '@forgeloop/db';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import {
   executionActorDeveloper,
   executionActorOwner,
@@ -305,6 +307,48 @@ describe('project management query API', () => {
 
     expect(JSON.stringify({ dashboard: dashboard.body, board: board.body, qa: qaHandoffs.body })).not.toContain('"type":"task"');
     expect(JSON.stringify({ dashboard: dashboard.body, board: board.body, qa: qaHandoffs.body })).not.toContain('"type":"work_item"');
+  });
+
+  it('preserves real execution supervision fields while keeping blocked resumable rows non-continuable', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
+    const server = app.getHttpServer();
+    const started = (
+      await request(server)
+        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+        .send({ actor_id: executionActorDeveloper })
+        .expect(201)
+    ).body;
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const interruptedAt = '2026-05-24T00:00:00.000Z';
+    const continuedAt = '2026-05-24T00:01:00.000Z';
+    await repository.saveExecution({
+      ...started,
+      status: 'paused',
+      worker_state: 'resumable-worker',
+      current_step: 'Waiting for approval evidence',
+      blocked: true,
+      stale: true,
+      last_event_at: continuedAt,
+      interrupt_history: [{ at: interruptedAt, reason: 'Execution interrupted by actor-owner.' }],
+      continuation_history: [{ at: continuedAt, summary: 'Execution continued by actor-reviewer.' }],
+      updated_at: continuedAt,
+    });
+
+    const executions = await request(server).get('/query/executions').query({ project_id: developmentPlan.project_id }).expect(200);
+    const projectedExecution = executions.body.items.find((row: { id: string }) => row.id === started.id);
+
+    expect(projectedExecution).toMatchObject({
+      id: started.id,
+      status: 'paused',
+      worker_state: 'resumable-worker',
+      current_step: 'Waiting for approval evidence',
+      stale: true,
+      blocked: true,
+      last_event_at: continuedAt,
+      last_event_summary: 'Execution continued by assigned operator.',
+      actions: [{ id: 'inspect', href: `/executions/${started.id}`, label: 'Inspect' }],
+    });
+    expect(JSON.stringify(projectedExecution)).not.toMatch(/actor-owner|actor-reviewer/);
   });
 });
 

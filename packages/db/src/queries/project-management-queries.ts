@@ -673,7 +673,8 @@ async function executionPlanQueueRow(
 }
 
 function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, execution: Execution): Record<string, unknown> {
-  const interrupted = execution.status === 'interrupted' || execution.status === 'paused';
+  const blocked = execution.blocked === true || execution.status === 'failed';
+  const interrupted = !blocked && (execution.status === 'interrupted' || execution.status === 'paused');
   return {
     id: execution.id,
     object_ref: execution.ref,
@@ -681,9 +682,12 @@ function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, exe
     development_plan_item_ref: developmentPlanItemRef(item),
     execution_plan_revision_ref: execution.execution_plan_revision_ref,
     status: execution.status,
-    worker_state: execution.status,
-    current_step: execution.status === 'completed' ? 'code_review_handoff' : 'implementation',
-    last_event_at: execution.updated_at,
+    worker_state: execution.worker_state ?? execution.status,
+    current_step: execution.current_step ?? executionCurrentStep(execution),
+    stale: execution.stale ?? false,
+    blocked,
+    last_event_at: execution.last_event_at ?? execution.updated_at,
+    last_event_summary: executionLastEventSummary(execution),
     evidence_refs: execution.evidence_refs,
     pr_refs: execution.pr_refs,
     diff_refs: execution.diff_refs,
@@ -706,6 +710,33 @@ function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, exe
     plan_item_href: `/development-plans/${plan.id}/items/${item.id}`,
     updated_at: execution.updated_at,
   };
+}
+
+function executionCurrentStep(execution: Execution): string {
+  if (execution.status === 'completed') return 'code_review_handoff';
+  if (execution.status === 'awaiting_code_review') return 'code_review_handoff';
+  if (execution.status === 'qa_handoff_pending') return 'qa_handoff';
+  if (execution.status === 'interrupted' || execution.status === 'paused') return 'continuation';
+  if (execution.status === 'failed' || execution.blocked === true) return 'blocked_execution';
+  return 'implementation';
+}
+
+function executionLastEventSummary(execution: Execution): string {
+  const events = [
+    ...execution.interrupt_history.map((entry) => ({ at: entry.at, text: entry.reason ?? 'Execution interrupted.' })),
+    ...execution.continuation_history.map((entry) => ({ at: entry.at, text: entry.summary ?? 'Execution continued.' })),
+  ].sort((left, right) => timestamp(right.at) - timestamp(left.at));
+  return roleSafeActorText(events[0]?.text ?? `Execution ${execution.status}.`);
+}
+
+function timestamp(value: string | undefined): number {
+  if (value === undefined) return 0;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function roleSafeActorText(value: string): string {
+  return value.replace(/\bactor-[a-z0-9-]+\b/gi, 'assigned operator');
 }
 
 function codeReviewHandoffQueueRow(

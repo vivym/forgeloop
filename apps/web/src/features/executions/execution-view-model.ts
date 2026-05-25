@@ -290,18 +290,18 @@ function evidenceTitles(refs: readonly EvidenceRef[] | undefined): string {
 }
 
 function lastMeaningfulEvent(execution: ExecutionProjection): string {
-  if (isPresent(execution.last_event_summary)) return execution.last_event_summary;
+  if (isPresent(execution.last_event_summary)) return roleSafeEventText(execution.last_event_summary);
   const events = [
     ...(execution.interrupt_history ?? []).map((entry) => ({ at: entry.at, text: entry.reason ?? 'Interrupted' })),
     ...(execution.continuation_history ?? []).map((entry) => ({ at: entry.at, text: entry.summary ?? 'Continued' })),
   ].sort((left, right) => timestamp(right.at) - timestamp(left.at));
   const latest = events[0];
-  if (latest !== undefined) return `${latest.text}${latest.at === undefined ? '' : ` at ${formatDate(latest.at)}`}`;
+  if (latest !== undefined) return `${roleSafeEventText(latest.text)}${latest.at === undefined ? '' : ` at ${formatDate(latest.at)}`}`;
   return formatDate(execution.last_event_at ?? execution.updated_at ?? execution.created_at);
 }
 
 function historySummary<T extends { at?: string }>(history: readonly T[] | undefined, textKey: keyof T): string {
-  return history?.map((entry) => `${String(entry[textKey] ?? 'Recorded')}${entry.at === undefined ? '' : ` at ${formatDate(entry.at)}`}`).join(', ') || 'None recorded';
+  return history?.map((entry) => `${roleSafeEventText(String(entry[textKey] ?? 'Recorded'))}${entry.at === undefined ? '' : ` at ${formatDate(entry.at)}`}`).join(', ') || 'None recorded';
 }
 
 function compactMetadata(execution: ExecutionProjection): string {
@@ -352,4 +352,8 @@ function statusTone(status: string | undefined): 'neutral' | 'success' | 'warnin
 
 function isPresent(value: string | undefined): value is string {
   return value !== undefined && value.trim().length > 0;
+}
+
+function roleSafeEventText(value: string): string {
+  return value.replace(/\bactor-[a-z0-9-]+\b/gi, 'assigned operator');
 }

@@ -75,6 +75,23 @@ describe('Executions routes', () => {
     expect(document.body.textContent).toMatch(/Interrupt disabled: execution is not actively running/i);
   });
 
+  it('renders actor-like execution history as role-safe event text', async () => {
+    const screen = await renderRoute(`/executions/${execution.id}`, {
+      apiOverrides: {
+        [`GET /query/executions/${execution.id}`]: {
+          ...execution,
+          last_event_summary: 'Execution continued by actor-reviewer.',
+          interrupt_history: [{ at: execution.updated_at, reason: 'Execution interrupted by actor-owner.' }],
+          continuation_history: [{ at: execution.updated_at, summary: 'Execution continued by actor-reviewer.' }],
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /Build AI-native project management API clients/i })).toBeTruthy();
+    expect(document.body.textContent).toMatch(/assigned operator/i);
+    expect(document.body.textContent).not.toMatch(/actor-owner|actor-reviewer/i);
+  });
+
   it('treats blocked resumable executions as failed or blocked, not continuable', async () => {
     const screen = await renderRoute('/executions', {
       apiOverrides: {
