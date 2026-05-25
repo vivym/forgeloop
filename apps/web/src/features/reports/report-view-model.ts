@@ -1,4 +1,4 @@
-import type { ProductPageViewModel, ViewModelAction } from '../product-surfaces/view-model-types';
+import type { ProductPageViewModel } from '../product-surfaces/view-model-types';
 
 type ReportGroup = { id?: string; count?: number; items?: readonly unknown[] };
 type ReportLink = { id?: string; href?: string };
@@ -17,20 +17,19 @@ export function reportViewModel(report: ReportProjection): ProductPageViewModel 
   const groups = report.groups ?? [];
   const links = report.links ?? [];
   const hasSignal = groups.length > 0 && (report.degraded_sources?.length ?? 0) === 0;
-  const suggestedAction = hasSignal ? linkAction(links[0]) : undefined;
   const conclusion = hasSignal ? `${sentenceCase(reportTitle(report.id))} signal available` : 'Insufficient signal';
 
   return {
     objectLabel: report.title ?? reportTitle(report.id),
     objectType: 'Report',
     currentState: hasSignal ? 'Signal available' : 'Insufficient signal',
-    nextAction: suggestedAction?.label ?? (hasSignal ? 'Review report' : 'Collect report signal'),
+    nextAction: hasSignal ? 'Review report' : 'Collect report signal',
     disabledReason: hasSignal ? undefined : 'Insufficient signal',
     primaryActorOrRole: 'Manager',
     riskSignal: riskSignal(report),
     gateProgress: [
       { label: 'Report signal', state: hasSignal ? 'available' : 'unavailable' },
-      { label: 'Suggested action', state: suggestedAction === undefined ? 'unavailable' : 'available' },
+      { label: 'Suggested action', state: 'unavailable' },
     ],
     criticalEvidence: [
       {
@@ -46,17 +45,7 @@ export function reportViewModel(report: ReportProjection): ProductPageViewModel 
     previewSummary: groups.map((group) => `${group.id ?? 'group'}: ${group.count ?? 0}`).join(', ') || 'Report signal unavailable',
     timelineSummary: report.generated_at === undefined ? 'Timeline unavailable' : `Generated ${report.generated_at}`,
     conclusion,
-    suggestedAction,
-  };
-}
-
-function linkAction(link: ReportLink | undefined): ViewModelAction | undefined {
-  if (link?.id === undefined || link.href === undefined) return undefined;
-  return {
-    id: link.id,
-    label: `Open ${reportTitle(link.id)} report`,
-    enabled: true,
-    href: link.href,
+    suggestedAction: undefined,
   };
 }
 
