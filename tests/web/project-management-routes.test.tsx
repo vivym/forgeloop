@@ -47,6 +47,7 @@ const forbiddenProductStrings = [
 ] as const;
 const forbiddenPrimaryNavLabels = ['Execution Packages', 'Run Sessions', 'Review Packets', 'Replay', 'Traces'] as const;
 const renderedProductRoutes = [
+  '/cockpit',
   '/dashboard',
   '/requirements/req-1',
   `/development-plans/${developmentPlan.id}`,
@@ -60,10 +61,10 @@ const renderedProductRoutes = [
 describe('project management route IA', () => {
   it('renders grouped primary navigation without generic Tasks or direct artifact routes', async () => {
     const screen = await renderRoute('/my-work');
-    for (const label of ['Dashboard', 'My Work', 'Requirements', 'Bugs', 'Tech Debt', 'Development Plans', 'Specs & Execution Plans', 'Board', 'Executions', 'Releases', 'Reports']) {
+    for (const label of ['Cockpit', 'My Work', 'Requirements', 'Bugs', 'Tech Debt', 'Development Plans', 'Specs & Execution Plans', 'Board', 'Executions', 'Releases', 'Reports']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
-    for (const label of ['Lanes', 'Pipeline', 'Work Items', 'Tasks', 'Packages', 'Runs', 'Reviews', 'Specs', 'Plans']) {
+    for (const label of ['Dashboard', 'Lanes', 'Pipeline', 'Work Items', 'Tasks', 'Packages', 'Runs', 'Reviews', 'Specs', 'Plans']) {
       expect(screen.queryByRole('link', { name: label })).toBeNull();
     }
     for (const label of forbiddenPrimaryNavLabels) {

@@ -3,6 +3,7 @@ import { ActionStrip } from '../action-strip/action-strip';
 import { PrioritySummary } from '../priority-summary/priority-summary';
 
 export interface WorkspacePageProps {
+  as?: 'main' | 'div';
   children: ReactNode;
   family: string;
   heading: ReactNode;
@@ -16,6 +17,7 @@ export interface WorkspacePageProps {
 }
 
 export function WorkspacePage({
+  as: Root = 'main',
   blockerRisk,
   children,
   family,
@@ -31,9 +33,13 @@ export function WorkspacePage({
   const headingLabel = typeof heading === 'string' ? heading : undefined;
 
   return (
-    <main
-      aria-label={headingLabel}
-      aria-labelledby={headingLabel ? undefined : headingId}
+    <Root
+      {...(Root === 'main'
+        ? {
+            'aria-label': headingLabel,
+            'aria-labelledby': headingLabel ? undefined : headingId,
+          }
+        : {})}
       className="grid min-w-0 gap-6 px-4 py-4 md:px-6 md:py-5"
       data-page-family={family}
       data-workspace-layout={layout}
@@ -54,6 +60,6 @@ export function WorkspacePage({
       <div className="grid min-w-0 gap-4" data-workspace-content="">
         {children}
       </div>
-    </main>
+    </Root>
   );
 }

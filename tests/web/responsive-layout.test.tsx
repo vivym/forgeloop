@@ -54,7 +54,7 @@ describe('responsive layout contract', () => {
 
     expect(screen.getByRole('button', { name: 'Open navigation' })).toBeTruthy();
     await waitFor(() => {
-      expect(screen.queryByRole('link', { name: 'Dashboard' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Cockpit' })).toBeNull();
     });
   });
 });

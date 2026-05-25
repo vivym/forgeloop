@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
 import { render, screen } from '@testing-library/react';
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { firstViewportContract } from '../../apps/web/src/features/product-surfaces/first-viewport-contract';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
+import { renderRoute } from './router-test-utils';
 
 function FixturePage() {
   return (
@@ -31,5 +32,12 @@ describe('product-grade first viewport contract', () => {
     render(<FixturePage />);
 
     expectFirstViewportContract(screen, { pageFamily: 'cockpit', heading: /Cockpit/ });
+  });
+
+  it('requires the Cockpit route to expose the shared first-viewport contract', async () => {
+    const rendered = await renderRoute('/cockpit');
+
+    expect(await rendered.findByRole('heading', { name: 'Cockpit' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'cockpit', heading: 'Cockpit' });
   });
 });

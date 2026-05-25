@@ -403,7 +403,7 @@ function toVisualRoute(route: ProductRouteContract): VisualRoute {
     path: route.concretePath,
     heading: route.heading,
     kind: route.kind === 'retired' ? 'retired' : route.family === 'source-object-detail' ? 'source-object' : 'active',
-    expectFirstViewportContract: true,
+    expectFirstViewportContract: route.kind !== 'retired',
   };
 }
 

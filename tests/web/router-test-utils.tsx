@@ -6,6 +6,7 @@ import { afterEach, vi } from 'vitest';
 
 import ProductLayoutRoute from '../../apps/web/src/app/routes/_layout';
 import RootIndexRoute from '../../apps/web/src/app/routes/_index';
+import CockpitRoute from '../../apps/web/src/app/routes/cockpit';
 import BoardRoute from '../../apps/web/src/app/routes/board';
 import BugDetailRoute from '../../apps/web/src/app/routes/bugs/$bugId';
 import BugEvidenceRoute from '../../apps/web/src/app/routes/bugs/$bugId/evidence';
@@ -69,6 +70,7 @@ const productRoutes: RouteObject[] = [
     Component: ProductLayoutRoute,
     children: [
       { index: true, Component: RootIndexRoute },
+      { path: 'cockpit', Component: CockpitRoute },
       { path: 'dashboard', Component: DashboardRoute },
       { path: 'my-work', Component: MyWorkRoute },
       { path: 'requirements', Component: RequirementsRoute },

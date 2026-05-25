@@ -21,16 +21,28 @@ describe('AI-native My Work, Board, and Reports', () => {
     expect(await screen.findByText(/Reprioritization mode/i)).toBeTruthy();
   });
 
-  it('renders Dashboard as an operational cockpit, not a placeholder', async () => {
-    const screen = await renderRoute('/dashboard');
-    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeTruthy();
-    for (const label of ['Flow health', 'Blocked work', 'Aging', 'Risk concentration', 'Role load', 'Release confidence', 'Trend reports']) {
-      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+  it('renders Cockpit as the operational cockpit, not a placeholder', async () => {
+    const screen = await renderRoute('/cockpit');
+    expect(await screen.findByRole('heading', { name: 'Cockpit' })).toBeTruthy();
+    for (const label of [
+      'Role-selected next-action queue',
+      'Blockers and stale gates',
+      'Active and resumable executions',
+      'Spec / Execution Plan review queue',
+      'QA and release readiness attention',
+      'Compact health indicators',
+    ]) {
+      expect(screen.getByRole('heading', { name: label })).toBeTruthy();
     }
-    expect(screen.getAllByRole('link', { name: /inspect bottleneck reports/i })[0]?.getAttribute('href')).toBe('/reports');
-    expect((await screen.findByRole('link', { name: /execution continuation/i })).getAttribute('href')).toBe('/reports/delivery');
-    expect(screen.getByRole('link', { name: /reprioritize/i })).toBeTruthy();
+    expect((await screen.findAllByRole('link', { name: /execution continuation/i }))[0]?.getAttribute('href')).toBe('/reports/delivery');
     expect(document.body.textContent).not.toMatch(/\bTasks\b|Work Item Owner|owner_actor_id|coming soon|placeholder/i);
+  });
+
+  it('renders retired Dashboard as a product-safe state', async () => {
+    const screen = await renderRoute('/dashboard');
+    expect(await screen.findByRole('heading', { name: /not found|retired|not available/i })).toBeTruthy();
+    expect(document.body.textContent).toMatch(/not found|retired|not available/i);
+    expect(document.body.textContent).not.toMatch(/Flow health|Blocked work|Trend reports|Risk concentration/i);
   });
 
   it('renders Board with mixed source objects and Development Plan Items', async () => {

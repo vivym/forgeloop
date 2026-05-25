@@ -1,5 +1,7 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { ChevronDown, UserCircle } from 'lucide-react';
 
+import { CommandSearch } from '../../navigation/command-search';
 import { SegmentedControl } from '../../ui';
 import { cn } from '../../utils/cn';
 
@@ -16,17 +18,12 @@ export function Topbar({ actions, actorId, children, className, devToolsEnabled,
   const content =
     children ??
     (projectId || actorId || devToolsEnabled !== undefined ? (
-      <div className="flex min-w-0 flex-wrap items-center gap-3 text-sm">
-        <label className="sr-only" htmlFor="command-search">Command search</label>
-        <input
-          className="hidden h-9 w-64 max-w-full rounded-md border border-border bg-background px-3 text-sm text-text-primary outline-none placeholder:text-text-muted focus:border-primary focus:ring-2 focus:ring-primary/20 lg:block"
-          id="command-search"
-          placeholder="Search commands, objects, or reports"
-          type="search"
-        />
+      <div className="flex min-w-0 flex-1 flex-col gap-2 py-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+          <CommandSearch className="w-full sm:max-w-md" />
         <SegmentedControl
           ariaLabel="Global role selection"
-          className="hidden lg:inline-flex"
+          className="hidden shrink-0 xl:inline-flex"
           defaultValue="product"
           options={[
             { label: 'Product', value: 'product' },
@@ -35,27 +32,30 @@ export function Topbar({ actions, actorId, children, className, devToolsEnabled,
             { label: 'QA', value: 'qa' },
           ]}
         />
-        <dl className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        </div>
+        <dl className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
           {projectId ? (
-            <div className="flex items-center gap-1.5">
-              <dt className="text-text-secondary">Project</dt>
+            <div className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1">
+              <dt className="text-text-muted">Project</dt>
               <dd className="font-medium text-text-primary">Context active</dd>
             </div>
           ) : null}
           {actorId ? (
-            <div className="flex items-center gap-1.5">
-              <dt className="text-text-secondary">Actor</dt>
-              <dd className="font-medium text-text-primary">Authenticated</dd>
+            <div className="relative">
+              <dt className="sr-only">Actor</dt>
+              <dd>
+                <ActorMenu actorId={actorId} />
+              </dd>
             </div>
           ) : null}
-          <div className="flex items-center gap-1.5">
-            <dt className="text-text-secondary">Runtime</dt>
-            <dd className="font-medium text-success">Ready</dd>
+          <div className="flex items-center gap-1.5 px-1.5 py-1 text-text-secondary">
+            <dt>Runtime</dt>
+            <dd className="font-medium text-text-primary">Ready</dd>
           </div>
           {devToolsEnabled ? (
-            <div className="flex items-center gap-1.5">
-              <dt className="text-text-secondary">Dev Tools</dt>
-              <dd className="font-medium text-success">Visible</dd>
+            <div className="flex items-center gap-1.5 px-1.5 py-1 text-text-secondary">
+              <dt>Dev Tools</dt>
+              <dd className="font-medium text-text-primary">Visible</dd>
             </div>
           ) : null}
         </dl>
@@ -72,6 +72,35 @@ export function Topbar({ actions, actorId, children, className, devToolsEnabled,
     >
       <div className="min-w-0">{content}</div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+    </div>
+  );
+}
+
+function ActorMenu({ actorId }: { actorId: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative">
+      <button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-text-primary hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
+      >
+        <UserCircle aria-hidden="true" className="size-4 text-text-secondary" />
+        <span>Authenticated</span>
+        <ChevronDown aria-hidden="true" className="size-3.5 text-text-muted" />
+      </button>
+      {open ? (
+        <div
+          className="absolute right-0 top-full z-modal mt-2 w-56 rounded-card border border-border bg-surface p-3 text-sm shadow-elevated"
+          role="menu"
+        >
+          <div className="text-xs font-semibold uppercase text-text-secondary">Current actor</div>
+          <div className="mt-1 text-sm font-semibold text-text-primary [overflow-wrap:anywhere]">{actorId}</div>
+        </div>
+      ) : null}
     </div>
   );
 }

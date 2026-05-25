@@ -21,7 +21,7 @@ type SurfaceState = 'loading' | 'empty' | 'error' | 'stale' | 'blocked' | 'appro
 describe('AI-native surface states', () => {
   it.each([
     ['/requirements/req-1', 'Source Object Workspace'],
-    ['/dashboard', 'Dashboard'],
+    ['/cockpit', 'Cockpit'],
     ['/my-work', 'My Work'],
     ['/board', 'Board'],
     ['/reports', 'Reports'],
@@ -45,7 +45,7 @@ describe('AI-native surface states', () => {
 
 function overridesFor(route: string, state: SurfaceState): ProductApiResponseMap {
   if (route === '/requirements/req-1') return sourceObjectOverrides(state);
-  if (route === '/dashboard') return dashboardOverrides(state);
+  if (route === '/cockpit') return dashboardOverrides(state);
   if (route === '/my-work') return myWorkOverrides(state);
   if (route === '/board') return boardOverrides(state);
   if (route === `/development-plans/${developmentPlan.id}`) return developmentPlanOverrides(state);

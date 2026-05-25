@@ -452,6 +452,35 @@ export const requirementListItem = {
   updated_at: '2026-05-18T01:00:00.000Z',
 } as const;
 
+const attachmentRef = ({
+  id,
+  owner_object_id,
+  owner_object_type,
+  title,
+}: {
+  id: string;
+  owner_object_id: string;
+  owner_object_type: 'bug' | 'initiative' | 'requirement' | 'tech_debt';
+  title: string;
+}) => ({
+  id,
+  owner_object_type,
+  owner_object_id,
+  linked_object_refs: [],
+  filename: `${id}.md`,
+  content_type: 'text/markdown',
+  size_bytes: 128,
+  checksum_sha256: 'a'.repeat(64),
+  uploaded_by_actor_id: actorId,
+  created_at: '2026-05-18T01:00:00.000Z',
+  evidence_category: 'document',
+  caption: title,
+  alt_text: title,
+  visibility: 'object',
+  safety_status: 'passed',
+  reference_status: 'active',
+}) as const;
+
 export const requirementDetail = {
   id: requirementListItem.id,
   ref: requirementListItem.ref,
@@ -463,7 +492,14 @@ export const requirementDetail = {
   updated_at: requirementListItem.updated_at,
   narrative_markdown: 'Checkout validation must block bad payment states before submission.',
   evidence_refs: [{ type: 'attachment', id: 'attachment-req-checkout-validation', title: 'Checkout validation acceptance evidence' }],
-  attachment_refs: [{ type: 'attachment', id: 'attachment-req-checkout-validation', title: 'Checkout validation acceptance evidence' }],
+  attachment_refs: [
+    attachmentRef({
+      id: 'attachment-req-checkout-validation',
+      owner_object_type: 'requirement',
+      owner_object_id: requirementListItem.id,
+      title: 'Checkout validation acceptance evidence',
+    }),
+  ],
   relationship_refs: [
     { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
     {
@@ -500,7 +536,14 @@ export const initiativeDetail = {
   updated_at: initiativeListItem.updated_at,
   narrative_markdown: 'Coordinate checkout reliability across requirements, bugs, and task execution.',
   evidence_refs: [{ type: 'attachment', id: 'attachment-init-checkout-reliability', title: 'Checkout reliability initiative evidence' }],
-  attachment_refs: [{ type: 'attachment', id: 'attachment-init-checkout-reliability', title: 'Checkout reliability initiative evidence' }],
+  attachment_refs: [
+    attachmentRef({
+      id: 'attachment-init-checkout-reliability',
+      owner_object_type: 'initiative',
+      owner_object_id: initiativeListItem.id,
+      title: 'Checkout reliability initiative evidence',
+    }),
+  ],
   child_refs: [{ type: 'requirement', id: 'req-1' }],
   relationship_refs: [],
   milestone_intent: 'Checkout validation readiness',
@@ -523,7 +566,14 @@ export const techDebtDetail = {
   ...techDebtListItem,
   narrative_markdown: 'Validation logic is duplicated between form state and command guards.',
   evidence_refs: [{ type: 'attachment', id: 'attachment-td-checkout-validation', title: 'Checkout validation debt evidence' }],
-  attachment_refs: [{ type: 'attachment', id: 'attachment-td-checkout-validation', title: 'Checkout validation debt evidence' }],
+  attachment_refs: [
+    attachmentRef({
+      id: 'attachment-td-checkout-validation',
+      owner_object_type: 'tech_debt',
+      owner_object_id: techDebtListItem.id,
+      title: 'Checkout validation debt evidence',
+    }),
+  ],
   validation_strategy: 'Focused route tests and API command tests.',
   relationship_refs: [
     {
@@ -558,7 +608,14 @@ export const bugDetail = {
   updated_at: bugListItem.updated_at,
   narrative_markdown: 'Regression notes stay in Markdown while reproduction data remains structured.',
   evidence_refs: [{ type: 'attachment', id: 'attachment-bug-checkout-regression', title: 'Checkout regression reproduction evidence' }],
-  attachment_refs: [{ type: 'attachment', id: 'attachment-bug-checkout-regression', title: 'Checkout regression reproduction evidence' }],
+  attachment_refs: [
+    attachmentRef({
+      id: 'attachment-bug-checkout-regression',
+      owner_object_type: 'bug',
+      owner_object_id: bugListItem.id,
+      title: 'Checkout regression reproduction evidence',
+    }),
+  ],
   observed_behavior: 'Checkout accepts invalid cards.',
   expected_behavior: 'Checkout blocks invalid cards.',
   reproduction_steps: ['Open checkout', 'Submit an invalid card'],
