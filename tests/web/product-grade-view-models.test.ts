@@ -188,7 +188,7 @@ describe('product-grade presentation view models', () => {
       objectType: 'Release',
       currentState: expect.any(String),
       nextAction: expect.any(String),
-      primaryActorOrRole: 'actor-release-owner',
+      primaryActorOrRole: 'Release owner',
       riskSignal: expect.any(String),
       actions: expect.arrayContaining([
         expect.objectContaining({ id: 'launch', enabled: false, disabledReason: expect.any(String) }),

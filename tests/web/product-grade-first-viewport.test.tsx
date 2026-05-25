@@ -176,4 +176,30 @@ describe('product-grade first viewport contract', () => {
     expect(firstViewport?.textContent).toMatch(/Continue disabled|Retry unavailable/i);
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|run session browser/i);
   });
+
+  it('requires release routes to expose readiness cockpit first viewports', async () => {
+    for (const [route, heading, layout] of [
+      ['/releases', 'Releases', 'release-inventory'],
+      ['/releases/release-web-product', 'Release Readiness', 'release-readiness'],
+    ] as const) {
+      const rendered = await renderRoute(route);
+
+      expect(await rendered.findByRole('heading', { name: heading })).toBeTruthy();
+      expectFirstViewportContract(rendered, { pageFamily: 'release', heading });
+      expect(document.querySelector(`[data-workspace-layout="${layout}"]`)).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/scope|readiness|risk|approval|release owner/i);
+      expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/tasks\b|\/packages\b|actor-release-owner/);
+      cleanup();
+    }
+  });
+
+  it('requires release evidence to lead with evidence readiness and relevance', async () => {
+    const rendered = await renderRoute('/releases/release-web-product/evidence');
+
+    expect(await rendered.findByRole('heading', { name: 'Release Evidence' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'evidence', heading: 'Release Evidence' });
+    expect(document.querySelector('[data-workspace-layout="release-evidence"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/evidence readiness|relevance|QA acceptance/i);
+    expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/tasks\b|\/packages\b|actor-release-owner/);
+  });
 });

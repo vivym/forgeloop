@@ -1,10 +1,10 @@
 import type { ProductPageViewModel, ViewModelAction, ViewModelEvidence } from '../product-surfaces/view-model-types';
 
-type DisabledReason = { message?: string; code?: string };
+type DisabledReason = { message?: string | undefined; code?: string | undefined };
 type ReleaseReadinessItem = {
-  status?: string;
-  disabled_reason?: DisabledReason;
-  evidence_ref?: unknown;
+  status?: string | undefined;
+  disabled_reason?: DisabledReason | undefined;
+  evidence_ref?: unknown | undefined;
 };
 
 interface ReleaseProjection {
@@ -14,16 +14,16 @@ interface ReleaseProjection {
   activity_state?: string;
   gate_state?: string;
   resolution?: string;
-  release_owner_actor_id?: string;
-  scope_summary?: string;
-  rollback_plan?: string;
-  updated_at?: string;
+  release_owner_actor_id?: string | undefined;
+  scope_summary?: string | undefined;
+  rollback_plan?: string | undefined;
+  updated_at?: string | undefined;
 }
 
 interface ReleaseReadinessProjection {
-  ready?: boolean;
+  ready?: boolean | undefined;
   disabled_reasons?: readonly DisabledReason[];
-  scope_refs?: readonly { title?: string; id?: string; type?: string }[];
+  scope_refs?: readonly { title?: string | undefined; id?: string | undefined; type?: string | undefined }[];
   required_review_evidence?: readonly ReleaseReadinessItem[];
   required_test_acceptance_evidence?: readonly ReleaseReadinessItem[];
   package_run_evidence?: readonly ReleaseReadinessItem[];
@@ -41,7 +41,7 @@ export function releaseViewModel(input: { release: ReleaseProjection; readiness:
     currentState: release.phase ?? release.activity_state ?? 'Status unavailable',
     nextAction: launchDisabledReason === undefined ? 'Launch release' : 'Resolve release blockers',
     disabledReason: launchDisabledReason,
-    primaryActorOrRole: release.release_owner_actor_id ?? 'Release owner',
+    primaryActorOrRole: 'Release owner',
     riskSignal: readiness.ready ? 'Release ready' : `${readiness.disabled_reasons?.length ?? 1} release blocker(s)`,
     gateProgress: [
       { label: 'Approval', state: approvalState(readiness), disabledReason: launchDisabledReason },

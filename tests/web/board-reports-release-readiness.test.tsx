@@ -97,6 +97,9 @@ describe('board, reports, and release readiness routes', () => {
     const screen = await renderRoute('/releases/release-web-product');
 
     expect(await screen.findByRole('heading', { name: /release readiness/i })).toBeTruthy();
+    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
+      /scope|readiness|high-risk changes|approvals|launch disabled|rollback/i,
+    );
     for (const label of ['Initiative', 'Requirement', 'Tech Debt', 'Development Plan Item', 'Bug']) {
       expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
     }
@@ -112,6 +115,7 @@ describe('board, reports, and release readiness routes', () => {
     expect(evidenceHrefs).toContain(`/board?development_plan_item_id=${developmentPlanItem.id}`);
     expect(document.body.textContent).not.toContain('/tasks/');
     expect(document.body.textContent).not.toContain('/packages/');
+    expect(document.body.textContent).not.toContain('actor-release-owner');
   });
 
   it('renders report index and report families', async () => {
