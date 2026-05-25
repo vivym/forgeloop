@@ -95,7 +95,7 @@ describe('web accessibility gates', () => {
     const screen = await renderRoute(`/executions/${execution.id}`);
     const main = screen.getByRole('main');
 
-    expect(await screen.findByRole('heading', { name: 'Execution' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
     main.focus();
     expect(document.activeElement).toBe(main);
   });

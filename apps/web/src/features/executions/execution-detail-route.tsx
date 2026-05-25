@@ -65,6 +65,7 @@ export function ExecutionDetailRoute() {
 
   return (
     <WorkspacePage
+      as="div"
       blockerRisk={
         viewModel === undefined
           ? 'Execution supervision cannot be evaluated until detail data loads.'

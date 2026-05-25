@@ -61,6 +61,7 @@ export function ExecutionsRoute() {
 
   return (
     <WorkspacePage
+      as="div"
       blockerRisk={executionRisk(rows, query.isError)}
       family="execution-supervision"
       heading="Executions"
