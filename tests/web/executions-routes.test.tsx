@@ -58,6 +58,8 @@ describe('Executions routes', () => {
     expect(await screen.findByRole('link', { name: /inspect execution/i })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: /Code review handoff/i })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: /QA handoff/i })).toBeTruthy();
+    expect(document.body.textContent).toMatch(/Assigned reviewer/i);
+    expect(document.body.textContent).not.toMatch(/actor-reviewer/i);
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|run session browser|execution package browser|review packet browser/i);
   });
 

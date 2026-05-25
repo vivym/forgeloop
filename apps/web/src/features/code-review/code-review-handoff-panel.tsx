@@ -107,7 +107,7 @@ export function CodeReviewHandoffPanel({
         <dl className="grid gap-3 text-sm md:grid-cols-2">
           <Definition label="Execution" value={execution.development_plan_item_ref?.title ?? 'Linked execution'} />
           <Definition label="Approved Execution Plan revision" value={execution.execution_plan_revision_ref?.title ?? (execution.execution_plan_revision_id === undefined ? 'Not linked' : 'Linked revision')} />
-          <Definition label="Reviewer" value={handoff?.reviewer_actor_id ?? 'Unassigned'} />
+          <Definition label="Reviewer" value={handoff?.reviewer_actor_id === undefined ? 'Unassigned' : 'Assigned reviewer'} />
           <Definition label="Changed surfaces" value={changedSurfaces.join(', ')} />
           <Definition label="Verification evidence" value={evidenceRefs.map(evidenceLabel).join(', ')} />
           <Definition label="Comments or requested changes" value={[...(handoff?.comments ?? []), ...(handoff?.changes_requested ?? [])].join(', ') || 'None recorded'} />
