@@ -4817,6 +4817,48 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.listWhere<Execution>(executions, undefined, [executions.createdAt, executions.id]);
   }
 
+  async backfillExecutionApprovedSpecLinkage(input: { now: string }): Promise<{ updated_execution_ids: string[] }> {
+    const updatedExecutionIds: string[] = [];
+    const executionRecords = await this.listExecutions();
+    for (const execution of executionRecords) {
+      const executionPlanRevision = await this.getExecutionPlanRevision(execution.execution_plan_revision_id);
+      if (executionPlanRevision === undefined) {
+        throw new Error(`execution_approved_spec_linkage_backfill_failed: execution_plan_revision_missing:${execution.id}`);
+      }
+      const specRevision = await this.getSpecRevision(executionPlanRevision.based_on_spec_revision_id);
+      if (specRevision === undefined) {
+        throw new Error(`execution_approved_spec_linkage_backfill_failed: spec_revision_missing:${execution.id}`);
+      }
+      const spec = await this.getSpec(specRevision.spec_id);
+      if (spec === undefined) {
+        throw new Error(`execution_approved_spec_linkage_backfill_failed: spec_missing:${execution.id}`);
+      }
+      if (execution.approved_spec_revision_id !== undefined && execution.approved_spec_revision_id !== specRevision.id) {
+        throw new Error(`execution_approved_spec_linkage_backfill_failed: spec_revision_mismatch:${execution.id}`);
+      }
+      const approvedSpecRevisionRef = {
+        type: 'spec_revision' as const,
+        id: specRevision.id,
+        spec_id: spec.id,
+        title: specRevision.summary,
+      };
+      if (
+        execution.approved_spec_revision_id === specRevision.id &&
+        JSON.stringify(execution.approved_spec_revision_ref) === JSON.stringify(approvedSpecRevisionRef)
+      ) {
+        continue;
+      }
+      await this.saveExecution({
+        ...execution,
+        approved_spec_revision_id: specRevision.id,
+        approved_spec_revision_ref: approvedSpecRevisionRef,
+        updated_at: input.now,
+      });
+      updatedExecutionIds.push(execution.id);
+    }
+    return { updated_execution_ids: updatedExecutionIds };
+  }
+
   async saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void> {
     await this.upsert(code_review_handoffs, code_review_handoffs.id, handoff);
   }

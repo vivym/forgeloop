@@ -726,6 +726,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(execution_plan_revisions, 'execution_plan_id', column(execution_plans, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plan_revisions, 'based_on_spec_revision_id', column(spec_revisions, 'id'))).toBe(true);
     expect(hasForeignKey(executions, 'execution_plan_revision_id', column(execution_plan_revisions, 'id'))).toBe(true);
+    expect(hasForeignKey(executions, 'approved_spec_revision_id', column(spec_revisions, 'id'))).toBe(true);
     expect(hasForeignKey(execution_packages, 'execution_id', column(executions, 'id'))).toBe(true);
     expect(hasForeignKey(code_review_handoffs, 'execution_id', column(executions, 'id'))).toBe(true);
     expect(hasForeignKey(code_review_handoffs, 'execution_plan_revision_id', column(execution_plan_revisions, 'id'))).toBe(true);
@@ -737,10 +738,13 @@ describe('P1 core schema release flow Drizzle schema', () => {
       'pr_refs',
       'diff_refs',
       'test_evidence_refs',
+      'approved_spec_revision_ref',
     ]) {
       expect(columnType(executions, columnName)).toBe('PgJsonb');
       expect(columnNotNull(executions, columnName)).toBe(true);
     }
+    expect(columnType(executions, 'approved_spec_revision_id')).toBe('PgUUID');
+    expect(columnNotNull(executions, 'approved_spec_revision_id')).toBe(true);
     expect(
       hasUniqueIndex(development_plan_item_revisions, 'dpi_revisions_item_revision_unique', [
         'development_plan_item_id',

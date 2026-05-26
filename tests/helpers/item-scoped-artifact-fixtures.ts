@@ -397,6 +397,7 @@ async function saveSpec(
     acceptance_criteria: [...workItem.success_criteria],
     risk_notes: [workItem.risk],
     test_strategy_summary: `Validate ${workItem.title}.`,
+    structured_document: { boundary_summary_revision_id: boundary.revision_id },
     author_actor_id: options.actorId ?? defaultActorId,
     artifact_refs: [],
     created_at: now,

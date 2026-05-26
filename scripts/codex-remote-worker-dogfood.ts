@@ -33,6 +33,7 @@ export interface CodexRemoteWorkerDogfoodConfig {
   workerTempRoot: string;
   dockerBin: string;
   appServerTransport: AppServerTransportMode;
+  noSharedFilesystem: boolean;
   allowedRepoRoots: string[];
   allowedScopes: CodexRuntimeScope[];
   capabilities: CodexRuntimeTargetKind[];
@@ -169,9 +170,32 @@ const pathListEnv = (env: EnvLike, key: string): string[] => {
     .filter((entry) => entry.length > 0);
 };
 
+const booleanEnv = (env: EnvLike, key: string): boolean => {
+  const raw = optionalEnv(env, key);
+  return raw === '1' || raw === 'true' || raw === 'yes';
+};
+
+const assertNoSharedFilesystemInputs = (env: EnvLike): void => {
+  for (const key of [
+    'FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS',
+    'FORGELOOP_CODEX_CONFIG_TOML_PATH',
+    'FORGELOOP_CODEX_AUTH_JSON_PATH',
+    'FORGELOOP_CODEX_HOME',
+    'CODEX_HOME',
+  ]) {
+    if (optionalEnv(env, key) !== undefined) {
+      throw new Error(`${key}_not_allowed_in_no_shared_filesystem_mode`);
+    }
+  }
+};
+
 export const loadCodexRemoteWorkerDogfoodConfig = (env: EnvLike = process.env): CodexRemoteWorkerDogfoodConfig => {
   const workerIdentity = requiredEnv(env, 'FORGELOOP_WORKER_IDENTITY');
   const workerId = optionalEnv(env, 'FORGELOOP_CODEX_WORKER_ID') ?? workerIdentity;
+  const noSharedFilesystem = booleanEnv(env, 'FORGELOOP_CODEX_NO_SHARED_FILESYSTEM');
+  if (noSharedFilesystem) {
+    assertNoSharedFilesystemInputs(env);
+  }
   return {
     controlPlaneUrl: requiredEnv(env, 'FORGELOOP_CONTROL_PLANE_URL').replace(/\/$/, ''),
     trustedActorHeaderSecret: requiredEnv(env, 'FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET'),
@@ -184,7 +208,8 @@ export const loadCodexRemoteWorkerDogfoodConfig = (env: EnvLike = process.env): 
     workerTempRoot: requiredEnv(env, 'FORGELOOP_WORKER_TEMP_ROOT'),
     dockerBin: optionalEnv(env, 'FORGELOOP_DOCKER_BIN') ?? 'docker',
     appServerTransport: appServerTransportEnv(env),
-    allowedRepoRoots: pathListEnv(env, 'FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS'),
+    noSharedFilesystem,
+    allowedRepoRoots: noSharedFilesystem ? [] : pathListEnv(env, 'FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS'),
     allowedScopes: allowedScopesEnv(env),
     capabilities: capabilitiesEnv(env),
     dockerImageDigests: singleDigestListEnv(env, 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS', 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST'),
@@ -211,6 +236,7 @@ export const renderCodexRemoteWorkerDogfoodStartSummary = (config: CodexRemoteWo
     `Control plane digest: ${codexCanonicalDigest(config.controlPlaneUrl)}`,
     `Worker digest: ${codexCanonicalDigest(config.workerId)}`,
     `Run mode: ${config.runMode}`,
+    `No shared filesystem: ${config.noSharedFilesystem ? 'enabled' : 'disabled'}`,
     `Capabilities: ${config.capabilities.join(',')}`,
     `Docker image digests: ${config.dockerImageDigests.join(',')}`,
     `Network policy digests: ${config.networkPolicyDigests.join(',')}`,

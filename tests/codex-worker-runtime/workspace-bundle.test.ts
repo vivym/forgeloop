@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   collectWorkspaceBundleChangedFiles,
+  computeMountedWorkspaceDigest,
   createWorkspaceBundleArchive,
   createWorkspaceBundleManifest,
   createWorkspaceBundlePatchArtifact,
@@ -100,6 +101,34 @@ describe('workspace bundle validation and safe unpack', () => {
     await expect(readFile(join(unpacked.workspacePath, 'src/app.ts'), 'utf8')).resolves.toBe('export const value = 1;\n');
     expect(unpacked.manifest_digest).toBe(manifestDigest);
     expect(unpacked.archive_digest).toBe(archiveDigest);
+    expect(unpacked.mounted_workspace_digest).toBe(manifestDigest);
+    expect(unpacked.mounted_workspace_digest).not.toContain(tempRoot);
+  });
+
+  it('computes mounted workspace digest from actual unpacked file contents', async () => {
+    const tempRoot = await makeTempDir();
+    const manifest = createWorkspaceBundleManifest({
+      bundleId: 'bundle-mounted-digest',
+      createdAt: now,
+      allowedPaths: ['src/**'],
+      forbiddenPaths: [],
+      files: [{ path: 'src/app.ts', content: 'export const value = 1;\n' }],
+    });
+    const archive = createWorkspaceBundleArchive({
+      manifest,
+      files: [{ path: 'src/app.ts', content: 'export const value = 1;\n' }],
+    });
+    const unpacked = await safeUnpackWorkspaceBundle({
+      archiveBytes: archive,
+      expectedArchiveDigest: workspaceBundleArchiveDigest(archive),
+      expectedManifestDigest: workspaceBundleManifestDigest(manifest),
+      tempRoot,
+      runtimeJobId: 'runtime-job-mounted-digest',
+    });
+
+    await writeFile(join(unpacked.workspacePath, 'src/app.ts'), 'export const value = 2;\n');
+
+    await expect(computeMountedWorkspaceDigest(unpacked.workspacePath, unpacked.manifest)).resolves.not.toBe(unpacked.manifest_digest);
   });
 
   it('rejects digest mismatch, path traversal, absolute paths, symlinks, special files, and unsafe .git indirection', async () => {

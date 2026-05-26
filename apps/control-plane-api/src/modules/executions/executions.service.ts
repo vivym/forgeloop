@@ -12,6 +12,10 @@ import {
   canStartExecutionFromApprovedExecutionPlan,
   codeReviewReadyGate,
   isTrustedHumanReviewActorClass,
+  requiredBoundaryQuestionsClosed,
+  type BoundarySummary,
+  type BoundarySummaryRevision,
+  type BrainstormingSession,
   type CodeReviewHandoff,
   type DevelopmentPlan,
   type DevelopmentPlanItem,
@@ -33,6 +37,7 @@ import type { ActorContext } from '../auth/actor-context';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import { ExecutionPackageService } from '../execution-packages/execution-package.service';
+import { RunControlService } from '../run-control/run-control.service';
 
 type ActorCommand = { actor_id?: string | undefined };
 type ReadyForCodeReviewCommand = ActorCommand & {
@@ -74,12 +79,21 @@ export class ExecutionsService {
     @Inject(ControlPlaneRuntimeService) private readonly runtime: ControlPlaneRuntimeService,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
     @Inject(ExecutionPackageService) private readonly executionPackageService: ExecutionPackageService,
+    @Inject(RunControlService) private readonly runControlService: RunControlService,
   ) {}
 
   async startExecution(developmentPlanId: string, itemId: string, dto: ActorCommand): Promise<Execution> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
+      const replayedExecution = await this.findReplayableItemExecution(repository, developmentPlanId, itemId);
+      if (replayedExecution !== undefined) {
+        return replayedExecution;
+      }
       const context = await this.requireApprovedExecutionPlanContext(developmentPlanId, itemId, repository);
       if (context.item.execution_status !== 'not_started' && context.item.execution_status !== 'ready') {
+        const existingExecution = await this.findItemExecution(repository, context.item.id, context.executionPlanRevision.id);
+        if (existingExecution !== undefined) {
+          return existingExecution;
+        }
         throw new ConflictException(`DevelopmentPlanItem ${context.item.id} already has an active execution`);
       }
       const execution = this.buildExecution(context, 'running');
@@ -96,9 +110,18 @@ export class ExecutionsService {
         execution,
       });
 
+      const run = await this.runControlService.enqueueRunWithRepository(repository, executionPackage, {
+        actorContext: this.actorContextFromExecutionCommand(dto, context),
+        automationPrecondition: {},
+        executorType: 'local_codex',
+        workflowOnly: false,
+      });
       const linkedExecution: Execution = {
         ...execution,
-        runtime_evidence_refs: [{ type: 'execution_package', id: executionPackage.id, title: executionPackage.objective }],
+        runtime_evidence_refs: [
+          { type: 'execution_package', id: executionPackage.id, title: executionPackage.objective },
+          { type: 'run_session', id: run.run_session_id, title: `Run session for ${context.item.title}` },
+        ],
         updated_at: this.now(),
       };
       await repository.saveExecution(linkedExecution);
@@ -112,6 +135,7 @@ export class ExecutionsService {
         development_plan_item_id: context.item.id,
         execution_plan_revision_id: context.executionPlanRevision.id,
         execution_package_id: executionPackage.id,
+        run_session_id: run.run_session_id,
       });
       return linkedExecution;
     });
@@ -522,12 +546,15 @@ export class ExecutionsService {
         `DevelopmentPlanItem ${item.id} cannot start execution: ${gate.ok ? 'approved_execution_plan_revision_not_current' : gate.reason}`,
       );
     }
-    if (revision!.development_plan_item_id !== item.id || revision!.execution_plan_id !== executionPlan.id) {
+    if (revision === undefined) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_execution_plan_revision_missing`);
+    }
+    if (revision.development_plan_item_id !== item.id || revision.execution_plan_id !== executionPlan.id) {
       throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: execution_plan_revision_mismatch`);
     }
     const specRevision = this.requireFound(
-      await repository.getSpecRevision(revision!.based_on_spec_revision_id),
-      `SpecRevision ${revision!.based_on_spec_revision_id}`,
+      await repository.getSpecRevision(revision.based_on_spec_revision_id),
+      `SpecRevision ${revision.based_on_spec_revision_id}`,
     );
     const spec = this.requireFound(await repository.getSpec(specRevision.spec_id), `Spec ${specRevision.spec_id}`);
     if (
@@ -538,8 +565,111 @@ export class ExecutionsService {
     ) {
       throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_spec_not_current`);
     }
+    await this.requireApprovedSpecBoundaryChain(item, spec, specRevision, repository);
     const workItem = this.requireFound(await repository.getWorkItem(item.source_ref.id), `${item.source_ref.type} ${item.source_ref.id}`);
-    return { plan, item, workItem, spec, specRevision, executionPlan, executionPlanRevision: revision! };
+    return { plan, item, workItem, spec, specRevision, executionPlan, executionPlanRevision: revision };
+  }
+
+  private async requireApprovedSpecBoundaryChain(
+    item: DevelopmentPlanItem,
+    spec: Spec,
+    specRevision: SpecRevision,
+    repository: DeliveryRepository,
+  ): Promise<void> {
+    if (
+      spec.development_plan_item_id !== item.id ||
+      specRevision.development_plan_item_id !== item.id ||
+      specRevision.spec_id !== spec.id
+    ) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_spec_item_mismatch`);
+    }
+
+    const boundarySummaryId = specRevision.boundary_summary_id;
+    if (boundarySummaryId === undefined || spec.boundary_summary_id !== boundarySummaryId) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_spec_boundary_missing`);
+    }
+    const boundary = this.requireFound(await repository.getBoundarySummary(boundarySummaryId), `BoundarySummary ${boundarySummaryId}`);
+    const boundaryRevisionId = this.revisionStructuredBoundarySummaryRevisionId(specRevision);
+    if (boundaryRevisionId === undefined) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_spec_boundary_revision_missing`);
+    }
+    const boundaryRevision = (await repository.listBoundarySummaryRevisions(boundary.id)).find(
+      (candidate) => candidate.id === boundaryRevisionId,
+    );
+    if (boundaryRevision === undefined) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_spec_boundary_revision_missing`);
+    }
+    const session = this.requireFound(
+      await repository.getBrainstormingSession(boundary.brainstorming_session_id),
+      `BrainstormingSession ${boundary.brainstorming_session_id}`,
+    );
+    if (!this.approvedBoundaryChainMatchesItem(item, boundary, boundaryRevision, session)) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_spec_boundary_not_current`);
+    }
+    if (!this.boundarySummaryRevisionApproved(boundaryRevision)) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: boundary_summary_missing_approval`);
+    }
+    const [questions, answers, decisions] = await Promise.all([
+      repository.listBoundaryQuestions(session.id),
+      repository.listBoundaryAnswers(session.id),
+      repository.listBoundaryDecisions(session.id),
+    ]);
+    if (!requiredBoundaryQuestionsClosed({ questions, answers, decisions })) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: boundary_questions_open`);
+    }
+  }
+
+  private approvedBoundaryChainMatchesItem(
+    item: DevelopmentPlanItem,
+    boundary: BoundarySummary,
+    revision: BoundarySummaryRevision,
+    session: BrainstormingSession,
+  ): boolean {
+    return (
+      boundary.development_plan_item_id === item.id &&
+      boundary.development_plan_item_revision_id === item.revision_id &&
+      boundary.revision_id === revision.id &&
+      revision.boundary_summary_id === boundary.id &&
+      revision.development_plan_item_id === item.id &&
+      revision.development_plan_item_revision_id === item.revision_id &&
+      this.boundarySummaryRevisionSessionId(revision) === session.id &&
+      session.development_plan_item_id === item.id &&
+      session.development_plan_item_revision_id === item.revision_id &&
+      session.status === 'approved' &&
+      session.boundary_summary_id === boundary.id &&
+      session.approved_summary_revision_id === revision.id
+    );
+  }
+
+  private boundarySummaryRevisionApproved(revision: BoundarySummaryRevision): boolean {
+    const record = revision as Record<string, unknown>;
+    return (
+      record.status === 'approved' &&
+      typeof record.source_round_id === 'string' &&
+      typeof record.context_manifest_id === 'string' &&
+      typeof record.context_manifest_revision_id === 'string' &&
+      Array.isArray(record.question_answer_snapshot) &&
+      record.question_answer_snapshot.length > 0 &&
+      Array.isArray(record.decision_snapshot) &&
+      record.decision_snapshot.length > 0 &&
+      record.approved_by_actor_id !== undefined &&
+      record.approved_at !== undefined
+    );
+  }
+
+  private boundarySummaryRevisionSessionId(revision: BoundarySummaryRevision): string | undefined {
+    const record = revision as Record<string, unknown>;
+    const sessionId = record.session_id ?? record.brainstorming_session_id;
+    return typeof sessionId === 'string' ? sessionId : undefined;
+  }
+
+  private revisionStructuredBoundarySummaryRevisionId(revision: SpecRevision): string | undefined {
+    const structured = revision.structured_document;
+    if (structured === undefined || structured === null || typeof structured !== 'object' || Array.isArray(structured)) {
+      return undefined;
+    }
+    const value = (structured as Record<string, unknown>).boundary_summary_revision_id;
+    return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
   }
 
   private buildExecution(context: ApprovedExecutionPlanContext, status: Execution['status']): Execution {
@@ -580,6 +710,12 @@ export class ExecutionsService {
           title: context.item.title,
         },
         {
+          type: 'spec_revision',
+          id: context.specRevision.id,
+          spec_id: context.spec.id,
+          title: context.specRevision.summary,
+        },
+        {
           type: 'execution_plan_revision',
           id: context.executionPlanRevision.id,
           execution_plan_id: context.executionPlan.id,
@@ -594,6 +730,49 @@ export class ExecutionsService {
       test_evidence_refs: [],
       created_at: at,
       updated_at: at,
+    };
+  }
+
+  private async findItemExecution(
+    repository: DeliveryRepository,
+    itemId: string,
+    executionPlanRevisionId: string,
+  ): Promise<Execution | undefined> {
+    return (await repository.listExecutions()).find(
+      (execution) =>
+        execution.development_plan_item_id === itemId &&
+        execution.execution_plan_revision_id === executionPlanRevisionId &&
+        execution.status !== 'completed' &&
+        execution.status !== 'failed',
+    );
+  }
+
+  private async findReplayableItemExecution(
+    repository: DeliveryRepository,
+    developmentPlanId: string,
+    itemId: string,
+  ): Promise<Execution | undefined> {
+    const item = await repository.getDevelopmentPlanItem(itemId);
+    if (
+      item === undefined ||
+      item.development_plan_id !== developmentPlanId ||
+      item.execution_status === 'not_started' ||
+      item.execution_status === 'ready'
+    ) {
+      return undefined;
+    }
+    return (await repository.listExecutions()).find(
+      (execution) =>
+        execution.development_plan_item_id === item.id &&
+        execution.status !== 'completed' &&
+        execution.status !== 'failed',
+    );
+  }
+
+  private actorContextFromExecutionCommand(dto: ActorCommand, context: ApprovedExecutionPlanContext): ActorContext {
+    return {
+      authenticatedActorId: dto.actor_id ?? context.item.driver_actor_id ?? context.workItem.driver_actor_id,
+      actorClass: 'human',
     };
   }
 

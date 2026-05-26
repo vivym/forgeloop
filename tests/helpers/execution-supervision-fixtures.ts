@@ -41,7 +41,14 @@ export type ApprovedExecutionPlanSeed = {
   executionPlanRevision: ExecutionPlanRevision;
 };
 
-export async function seedApprovedExecutionPlan(app: INestApplication): Promise<ApprovedExecutionPlanSeed> {
+export async function seedApprovedExecutionPlan(
+  app: INestApplication,
+  options: {
+    executionPlanRevisionSummary?: string;
+    executionPlanRevisionContent?: string;
+    executionPlanStructuredDocument?: Record<string, unknown>;
+  } = {},
+): Promise<ApprovedExecutionPlanSeed> {
   const server = app.getHttpServer();
   const project = (
     await request(server)
@@ -107,8 +114,9 @@ export async function seedApprovedExecutionPlan(app: INestApplication): Promise<
     development_plan_item_id: seeded.item.id,
     based_on_spec_revision_id: seeded.specRevision.id,
     revision_number: 1,
-    summary: 'Execute item-scoped supervision work',
-    content: 'Implement the approved item supervision plan.',
+    summary: options.executionPlanRevisionSummary ?? 'Execute item-scoped supervision work',
+    content: options.executionPlanRevisionContent ?? 'Implement the approved item supervision plan.',
+    ...(options.executionPlanStructuredDocument === undefined ? {} : { structured_document: options.executionPlanStructuredDocument }),
     author_actor_id: executionActorOwner,
     created_at: now,
   };

@@ -792,6 +792,8 @@ describe('remote codex worker client', () => {
         execution_package_version: 7,
         run_session_id: 'run-session-1',
         workspace_bundle_digest: archiveDigest,
+        workspace_bundle_manifest_digest: manifestDigest,
+        mounted_task_workspace_digest: manifestDigest,
         changed_files: ['.forgeloop/repo-owned.toml', 'README.md'],
         patch_artifact: {
           content_type: 'text/x-diff',
@@ -803,6 +805,7 @@ describe('remote codex worker client', () => {
       },
     });
     expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-run-secret');
+    expect(JSON.stringify(terminalized[0])).not.toContain(workerTempRoot);
   });
 
   it('rejects forbidden symlink changes from the default run-execution collector', async () => {

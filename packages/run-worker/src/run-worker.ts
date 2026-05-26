@@ -101,6 +101,8 @@ interface RemoteRunExecutionFence {
   runSessionUpdatedAt: string;
   executionPackageVersion: number;
   workspaceBundleDigest: string;
+  workspaceBundleManifestDigest: string;
+  mountedTaskWorkspaceDigest: string;
   pathPolicyDigest: string;
 }
 
@@ -563,6 +565,8 @@ const executorResultFromRemoteRunExecution = (input: {
     raw_metadata: {
       remote_runtime_job_id: input.terminal.runtimeJobId,
       workspace_bundle_digest: result.workspace_bundle_digest,
+      workspace_bundle_manifest_digest: result.workspace_bundle_manifest_digest,
+      mounted_task_workspace_digest: result.mounted_task_workspace_digest,
     },
   };
 };
@@ -1076,6 +1080,8 @@ export class RunWorker {
       runSessionUpdatedAt: activeRunSession.updated_at,
       executionPackageVersion: executionPackage.version,
       workspaceBundleDigest,
+      workspaceBundleManifestDigest: pendingBundle.manifest_digest,
+      mountedTaskWorkspaceDigest: pendingBundle.manifest_digest,
       pathPolicyDigest: codexCanonicalDigest({
         allowed_paths: activeRunSession.run_spec?.allowed_paths ?? [],
         forbidden_paths: activeRunSession.run_spec?.forbidden_paths ?? [],
@@ -1334,7 +1340,9 @@ export class RunWorker {
         terminal.terminalResult.execution_package_id !== latest.execution_package_id ||
         terminal.terminalResult.execution_package_version !== latest.run_spec?.expected_package_version ||
         terminal.terminalResult.execution_package_version !== latestExecutionPackage?.version ||
-        terminal.terminalResult.workspace_bundle_digest !== fence.workspaceBundleDigest
+        terminal.terminalResult.workspace_bundle_digest !== fence.workspaceBundleDigest ||
+        terminal.terminalResult.workspace_bundle_manifest_digest !== fence.workspaceBundleManifestDigest ||
+        terminal.terminalResult.mounted_task_workspace_digest !== fence.mountedTaskWorkspaceDigest
       ) {
         await this.recordStaleRemoteTerminal(latest, terminal, lease);
         return;

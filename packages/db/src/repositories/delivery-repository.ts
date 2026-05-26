@@ -1417,6 +1417,7 @@ export interface DeliveryRepository {
   saveExecution(execution: Execution): Promise<void>;
   getExecution(id: string): Promise<Execution | undefined>;
   listExecutions(): Promise<Execution[]>;
+  backfillExecutionApprovedSpecLinkage(input: { now: string }): Promise<{ updated_execution_ids: string[] }>;
   saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void>;
   getCodeReviewHandoff(id: string): Promise<CodeReviewHandoff | undefined>;
   listCodeReviewHandoffs(): Promise<CodeReviewHandoff[]>;

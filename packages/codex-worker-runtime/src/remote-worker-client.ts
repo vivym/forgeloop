@@ -466,6 +466,8 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         workerSessionToken: workerSession.token,
         terminalizeLaunchLeaseOnClose: false,
         originalWorkspacePath: workspace.workspacePath,
+        taskWorkspaceDigest: workspace.mounted_workspace_digest,
+        taskWorkspaceRoot: workspace.jobRoot,
       });
       await throwIfCancelled(workerSession, job);
       if (options.controlPlaneClient.startRuntimeJob === undefined) {
@@ -717,6 +719,8 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       execution_package_version: workload.execution_package_version,
       run_session_id: workload.run_session_id,
       workspace_bundle_digest: workload.workspace_bundle_digest,
+      workspace_bundle_manifest_digest: workspace.manifest_digest,
+      mounted_task_workspace_digest: workspace.mounted_workspace_digest,
       changed_files: changedFiles,
       ...(patchArtifact === undefined ? {} : { patch_artifact: patchArtifact }),
       check_results: draft.check_results,

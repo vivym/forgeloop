@@ -1428,7 +1428,7 @@ git commit -m "feat: apply product generation runtime results"
 - Test: `tests/codex-worker-runtime/workspace-bundle.test.ts`
 - Test: `tests/codex-worker-runtime/workspace-isolation.test.ts`
 
-- [ ] **Step 1: Write failing execution bridge tests**
+- [x] **Step 1: Write failing execution bridge tests**
 
 Add tests proving:
 
@@ -1440,7 +1440,7 @@ Add tests proving:
 - with remote run runtime enabled, the queued run path creates a `run_execution` Codex runtime job for the run session.
 - docs-only dogfood plan without `docs/**` allowlist fails before launch.
 
-- [ ] **Step 2: Write failing no-shared-filesystem worker tests**
+- [x] **Step 2: Write failing no-shared-filesystem worker tests**
 
 Add tests proving:
 
@@ -1449,7 +1449,7 @@ Add tests proving:
 - mounted task workspace digest matches bundle manifest digest;
 - report includes archive/manifest/mounted workspace digests and no local repo path.
 
-- [ ] **Step 3: Run failing execution tests**
+- [x] **Step 3: Run failing execution tests**
 
 Run:
 
@@ -1459,7 +1459,7 @@ pnpm vitest run tests/api/executions.test.ts tests/api/execution-package-service
 
 Expected: FAIL until bridge and worker evidence are tightened.
 
-- [ ] **Step 4: Tighten product Execution linkage**
+- [x] **Step 4: Tighten product Execution linkage**
 
 Using the required `Execution` fields added in Task 1, update `executions.service.ts` to make the approved Spec revision chain explicit:
 
@@ -1471,7 +1471,7 @@ Using the required `Execution` fields added in Task 1, update `executions.servic
 
 Do not make `approved_spec_revision_id` optional, and do not hide the approved Spec chain only in generic evidence refs. Public DTOs must keep `Execution` as identity while exposing the approved Spec/Execution Plan chain as product fields.
 
-- [ ] **Step 5: Persist Execution linkage in DB schema and repository fixtures**
+- [x] **Step 5: Persist Execution linkage in DB schema and repository fixtures**
 
 In `packages/db/src/schema/execution-supervision.ts`, add columns:
 
@@ -1486,7 +1486,7 @@ Update Drizzle/in-memory repository fixtures and `tests/db/repository-contract.t
 
 For existing execution rows, add a migration/backfill that loads each execution's `execution_plan_revision_id`, reads `ExecutionPlanRevision.based_on_spec_revision_id`, and writes `approved_spec_revision_id` / `approved_spec_revision_ref` before enforcing non-null constraints. If the chain cannot be reconstructed, the migration must fail loudly rather than inventing a Spec revision.
 
-- [ ] **Step 6: Bridge Start Execution into run runtime**
+- [x] **Step 6: Bridge Start Execution into run runtime**
 
 In `executions.module.ts`, import `RunControlModule` so `ExecutionsService` can inject `RunControlService`.
 
@@ -1509,7 +1509,7 @@ Then:
 - keep duplicate start idempotent by returning the existing Execution and not enqueueing a second active run session;
 - when remote run runtime is enabled, preserve the existing run worker path that turns the queued run session into a `target_type: 'run_session'`, `target_kind: 'run_execution'` runtime job.
 
-- [ ] **Step 7: Derive package policy from approved Execution Plan revision**
+- [x] **Step 7: Derive package policy from approved Execution Plan revision**
 
 In `execution-package.service.ts`, parse `executionPlanRevision.structured_document` for:
 
@@ -1524,7 +1524,7 @@ In `execution-package.service.ts`, parse `executionPlanRevision.structured_docum
 
 If structured fields are absent, derive conservative defaults from `content`, but strict dogfood must require structured fields and fail closed.
 
-- [ ] **Step 8: Add no-shared-filesystem worker mode**
+- [x] **Step 8: Add no-shared-filesystem worker mode**
 
 In `scripts/codex-remote-worker-dogfood.ts`, add env:
 
@@ -1539,7 +1539,7 @@ When enabled:
 - the worker must depend on workspace bundle acquisition for run execution;
 - public start summary prints only digests.
 
-- [ ] **Step 9: Add mounted workspace digest evidence**
+- [x] **Step 9: Add mounted workspace digest evidence**
 
 In `remote-worker-client.ts` or workspace isolation helpers, compute digest over the mounted task workspace manifest and include it in run-execution terminal result public evidence:
 
@@ -1551,7 +1551,7 @@ mounted_task_workspace_digest: workspace.mountedWorkspaceDigest,
 
 Only include digests, never absolute paths.
 
-- [ ] **Step 10: Run targeted execution tests**
+- [x] **Step 10: Run targeted execution tests**
 
 Run:
 
@@ -1561,7 +1561,7 @@ pnpm vitest run tests/api/executions.test.ts tests/api/execution-package-service
 
 Expected: PASS.
 
-- [ ] **Step 11: Commit Task 7**
+- [x] **Step 11: Commit Task 7**
 
 ```bash
 git add apps/control-plane-api/src/modules/executions apps/control-plane-api/src/modules/execution-packages apps/control-plane-api/src/modules/run-control packages/db/src/schema/execution-supervision.ts packages/codex-worker-runtime/src scripts/codex-remote-worker-dogfood.ts tests/api/executions.test.ts tests/api/execution-package-service.test.ts tests/db/repository-contract.ts tests/db/repository.test.ts tests/db/schema.test.ts tests/codex-worker-runtime

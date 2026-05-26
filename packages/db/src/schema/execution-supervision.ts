@@ -5,6 +5,7 @@ import { timestampColumn } from './_shared';
 import { actors } from './actor';
 import { development_plan_items } from './development-plan';
 import { execution_plan_revisions } from './execution-plan';
+import { spec_revisions } from './spec';
 
 export const executions = pgTable('executions', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -19,6 +20,10 @@ export const executions = pgTable('executions', {
   executionPlanRevisionRef: jsonb('execution_plan_revision_ref')
     .$type<Execution['execution_plan_revision_ref']>()
     .notNull(),
+  approvedSpecRevisionId: uuid('approved_spec_revision_id')
+    .notNull()
+    .references(() => spec_revisions.id),
+  approvedSpecRevisionRef: jsonb('approved_spec_revision_ref').$type<Execution['approved_spec_revision_ref']>().notNull(),
   status: text('status').$type<Execution['status']>().notNull(),
   evidenceRefs: jsonb('evidence_refs').$type<Execution['evidence_refs']>().notNull(),
   runtimeEvidenceRefs: jsonb('runtime_evidence_refs').$type<Execution['runtime_evidence_refs']>().notNull(),

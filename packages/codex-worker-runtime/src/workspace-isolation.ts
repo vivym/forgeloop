@@ -3,7 +3,7 @@ import { basename, join, relative, resolve } from 'node:path';
 
 import { codexCanonicalDigest } from '@forgeloop/domain';
 
-export type ContainerWorkspaceMode = 'artifact_only' | 'direct_mount' | 'self_contained_clone';
+export type ContainerWorkspaceMode = 'artifact_only' | 'direct_mount' | 'self_contained_clone' | 'task_workspace_bundle';
 
 export interface PreparedContainerWorkspace {
   mode: ContainerWorkspaceMode;
@@ -30,6 +30,8 @@ const assertAllowedRoot = async (path: string, allowedRepoRoots: readonly string
 export const prepareContainerWorkspace = async (input: {
   sourceAccessMode: 'artifact_only' | 'path_policy_scoped';
   originalWorkspacePath?: string;
+  taskWorkspaceDigest?: string;
+  taskWorkspaceRoot?: string;
   leaseTempRoot: string;
   allowedRepoRoots: readonly string[];
   runCommand?: (command: string, args: readonly string[], options: { cwd?: string }) => Promise<{ stdout: string; stderr: string }>;
@@ -44,6 +46,27 @@ export const prepareContainerWorkspace = async (input: {
   }
   if (input.originalWorkspacePath === undefined) {
     throw new Error('codex_runtime_workspace_isolation_unavailable: workspace path is required');
+  }
+  if (input.taskWorkspaceDigest !== undefined) {
+    if (!/^sha256:[a-f0-9]{64}$/.test(input.taskWorkspaceDigest)) {
+      throw new Error('codex_runtime_workspace_isolation_unavailable: task workspace digest is invalid');
+    }
+    if (input.taskWorkspaceRoot === undefined) {
+      throw new Error('codex_runtime_workspace_isolation_unavailable: task workspace root is required');
+    }
+    const resolvedTaskWorkspaceRoot = await realpath(input.taskWorkspaceRoot);
+    const resolvedWorkspace = await realpath(input.originalWorkspacePath);
+    if (!isInside(resolvedTaskWorkspaceRoot, resolvedWorkspace)) {
+      throw new Error('codex_runtime_workspace_isolation_unavailable: task workspace path is outside bundle root');
+    }
+    return {
+      mode: 'task_workspace_bundle',
+      hostWorkspacePath: resolvedWorkspace,
+      containerWorkspacePath: '/workspace',
+      publicWorkspaceDigest: input.taskWorkspaceDigest,
+      publicSummary: { mode: 'task_workspace_bundle' },
+      cleanup: async () => undefined,
+    };
   }
 
   await assertAllowedRoot(input.originalWorkspacePath, input.allowedRepoRoots);

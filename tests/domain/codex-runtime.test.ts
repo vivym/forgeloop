@@ -778,6 +778,8 @@ describe('codex runtime domain contracts', () => {
       execution_package_version: 3,
       run_session_id: 'run-session-1',
       workspace_bundle_digest: digestA,
+      workspace_bundle_manifest_digest: digestB,
+      mounted_task_workspace_digest: digestC,
       changed_files: [
         'index.html',
         'logo.svg',
@@ -839,6 +841,8 @@ describe('codex runtime domain contracts', () => {
       execution_package_version: 3,
       run_session_id: 'run-session-1',
       workspace_bundle_digest: digestA,
+      workspace_bundle_manifest_digest: digestB,
+      mounted_task_workspace_digest: digestC,
       changed_files: [],
       check_results: [],
       execution_artifacts: [],

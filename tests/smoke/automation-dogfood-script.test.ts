@@ -374,6 +374,44 @@ describe('automation dogfood script', () => {
     expect(summary).not.toContain('/tmp/forgeloop-remote-worker');
   });
 
+  it('enforces no-shared-filesystem remote worker mode without repo roots or host config paths', () => {
+    const config = loadCodexRemoteWorkerDogfoodConfig({
+      ...remoteWorkerEnv(),
+      FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+      FORGELOOP_CODEX_WORKER_CAPABILITIES: 'run_execution',
+    });
+    const summary = renderCodexRemoteWorkerDogfoodStartSummary(config);
+
+    expect(config.noSharedFilesystem).toBe(true);
+    expect(config.allowedRepoRoots).toEqual([]);
+    expect(summary).toContain('No shared filesystem: enabled');
+    expect(summary).not.toContain('/tmp/forgeloop-remote-worker');
+    expect(summary).not.toContain('config.toml');
+    expect(summary).not.toContain('auth.json');
+
+    expect(() =>
+      loadCodexRemoteWorkerDogfoodConfig({
+        ...remoteWorkerEnv(),
+        FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+        FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS: '/repo',
+      }),
+    ).toThrow(/FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS_not_allowed/);
+    expect(() =>
+      loadCodexRemoteWorkerDogfoodConfig({
+        ...remoteWorkerEnv(),
+        FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+        FORGELOOP_CODEX_CONFIG_TOML_PATH: '/tmp/config.toml',
+      }),
+    ).toThrow(/FORGELOOP_CODEX_CONFIG_TOML_PATH_not_allowed/);
+    expect(() =>
+      loadCodexRemoteWorkerDogfoodConfig({
+        ...remoteWorkerEnv(),
+        FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+        FORGELOOP_CODEX_AUTH_JSON_PATH: '/tmp/auth.json',
+      }),
+    ).toThrow(/FORGELOOP_CODEX_AUTH_JSON_PATH_not_allowed/);
+  });
+
   it('redacts remote worker dogfood failures to public-safe codes', () => {
     const message = renderCodexRemoteWorkerDogfoodFailure(
       new Error('docker failed for /tmp/forgeloop-remote-worker at http://127.0.0.1:31337 with worker-bootstrap-token'),

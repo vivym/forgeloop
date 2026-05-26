@@ -415,6 +415,8 @@ export interface CodexRunExecutionRuntimeJobResult {
   execution_package_version: number;
   run_session_id: string;
   workspace_bundle_digest: string;
+  workspace_bundle_manifest_digest: string;
+  mounted_task_workspace_digest: string;
   changed_files: string[];
   patch_artifact?: {
     content_type: 'text/x-diff';
@@ -1527,6 +1529,8 @@ const codexRunExecutionRuntimeJobResultKeys = new Set([
   'execution_package_version',
   'run_session_id',
   'workspace_bundle_digest',
+  'workspace_bundle_manifest_digest',
+  'mounted_task_workspace_digest',
   'changed_files',
   'patch_artifact',
   'check_results',
@@ -1849,6 +1853,8 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
   requireCodexRuntimeResultInteger(input, 'execution_package_version');
   requireCodexRuntimeResultString(input, 'run_session_id');
   requireCodexRuntimeResultDigest(input, 'workspace_bundle_digest');
+  requireCodexRuntimeResultDigest(input, 'workspace_bundle_manifest_digest');
+  requireCodexRuntimeResultDigest(input, 'mounted_task_workspace_digest');
   const changedFiles = requireCodexRuntimeResultArray(input, 'changed_files');
   if (changedFiles.some((entry) => typeof entry !== 'string' || !isSafeCodexRuntimeRepoRelativePath(entry))) {
     throw unsafeCodexRuntimePublicValue('Codex run-execution changed_files must be safe repository-relative paths.');

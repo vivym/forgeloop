@@ -4,6 +4,9 @@ import type {
   AutomationActionRun,
   BoundarySummaryRevision,
   Decision,
+  Execution,
+  ExecutionPlanDocument,
+  ExecutionPlanRevision,
   ExecutionPackage,
   ExecutionPackageDependency,
   ObjectEvent,
@@ -591,6 +594,130 @@ describe('DeliveryRepository in-memory adapter', () => {
   });
 
   itPersistsAiNativePlanningGraph(() => new InMemoryDeliveryRepository());
+
+  it('backfills approved Spec linkage for legacy Executions from their Execution Plan revision ancestry', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
+    const executionPlan: ExecutionPlanDocument = {
+      id: 'execution-plan-legacy',
+      development_plan_item_id: 'development-plan-item-legacy',
+      status: 'approved',
+      current_revision_id: 'execution-plan-revision-legacy',
+      approved_revision_id: 'execution-plan-revision-legacy',
+      approved_by_actor_id: 'actor-reviewer',
+      approved_at: now,
+      created_at: now,
+      updated_at: now,
+    };
+    const executionPlanRevision: ExecutionPlanRevision = {
+      id: 'execution-plan-revision-legacy',
+      execution_plan_id: executionPlan.id,
+      development_plan_item_id: executionPlan.development_plan_item_id,
+      based_on_spec_revision_id: specRevision.id,
+      revision_number: 1,
+      summary: 'Legacy execution plan',
+      content: 'Backfill the approved Spec linkage.',
+      author_actor_id: 'actor-owner',
+      created_at: now,
+    };
+    const legacyExecution = {
+      id: 'execution-legacy',
+      ref: { type: 'execution', id: 'execution-legacy', title: 'Legacy execution' },
+      development_plan_item_id: executionPlan.development_plan_item_id,
+      development_plan_item_ref: {
+        type: 'development_plan_item',
+        id: executionPlan.development_plan_item_id,
+        development_plan_id: 'development-plan-legacy',
+        revision_id: 'development-plan-item-revision-legacy',
+        title: 'Legacy item',
+      },
+      execution_plan_revision_id: executionPlanRevision.id,
+      execution_plan_revision_ref: {
+        type: 'execution_plan_revision',
+        id: executionPlanRevision.id,
+        execution_plan_id: executionPlan.id,
+        title: executionPlanRevision.summary,
+      },
+      status: 'running',
+      evidence_refs: [],
+      runtime_evidence_refs: [],
+      interrupt_history: [],
+      continuation_history: [],
+      pr_refs: [],
+      diff_refs: [],
+      test_evidence_refs: [],
+      created_at: now,
+      updated_at: now,
+    } as Execution;
+
+    await repository.saveSpec(spec);
+    await repository.saveSpecRevision(specRevision);
+    await repository.saveExecutionPlan(executionPlan);
+    await repository.saveExecutionPlanRevision(executionPlanRevision);
+    await repository.saveExecution(legacyExecution);
+
+    await expect(repository.backfillExecutionApprovedSpecLinkage({ now })).resolves.toEqual({
+      updated_execution_ids: [legacyExecution.id],
+    });
+    await expect(repository.getExecution(legacyExecution.id)).resolves.toMatchObject({
+      approved_spec_revision_id: specRevision.id,
+      approved_spec_revision_ref: {
+        type: 'spec_revision',
+        id: specRevision.id,
+        spec_id: spec.id,
+        title: specRevision.summary,
+      },
+      updated_at: now,
+    });
+  });
+
+  it('fails loudly when legacy Execution approved Spec linkage cannot be reconstructed', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
+    const executionPlanRevision: ExecutionPlanRevision = {
+      id: 'execution-plan-revision-broken',
+      execution_plan_id: 'execution-plan-broken',
+      development_plan_item_id: 'development-plan-item-broken',
+      based_on_spec_revision_id: 'missing-spec-revision',
+      revision_number: 1,
+      summary: 'Broken execution plan',
+      content: 'This legacy execution cannot be backfilled.',
+      author_actor_id: 'actor-owner',
+      created_at: now,
+    };
+    await repository.saveExecutionPlanRevision(executionPlanRevision);
+    await repository.saveExecution({
+      id: 'execution-broken',
+      ref: { type: 'execution', id: 'execution-broken', title: 'Broken execution' },
+      development_plan_item_id: executionPlanRevision.development_plan_item_id,
+      development_plan_item_ref: {
+        type: 'development_plan_item',
+        id: executionPlanRevision.development_plan_item_id,
+        development_plan_id: 'development-plan-broken',
+        revision_id: 'development-plan-item-revision-broken',
+        title: 'Broken item',
+      },
+      execution_plan_revision_id: executionPlanRevision.id,
+      execution_plan_revision_ref: {
+        type: 'execution_plan_revision',
+        id: executionPlanRevision.id,
+        execution_plan_id: executionPlanRevision.execution_plan_id,
+        title: executionPlanRevision.summary,
+      },
+      status: 'running',
+      evidence_refs: [],
+      runtime_evidence_refs: [],
+      interrupt_history: [],
+      continuation_history: [],
+      pr_refs: [],
+      diff_refs: [],
+      test_evidence_refs: [],
+      created_at: now,
+      updated_at: now,
+    } as Execution);
+
+    await expect(repository.backfillExecutionApprovedSpecLinkage({ now })).rejects.toThrow(
+      /execution_approved_spec_linkage_backfill_failed: spec_revision_missing:execution-broken/,
+    );
+  });
 
   it('persists and queries a minimal delivery flow', async () => {
     const repository: DeliveryRepository = new InMemoryDeliveryRepository();

@@ -3461,6 +3461,51 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return valuesFor(this.executions).sort(byCreatedAtThenId);
   }
 
+  async backfillExecutionApprovedSpecLinkage(input: { now: string }): Promise<{ updated_execution_ids: string[] }> {
+    const updatedExecutionIds: string[] = [];
+    const executions = valuesFor(this.executions).sort(byCreatedAtThenId);
+    for (const execution of executions) {
+      const executionPlanRevision = this.executionPlanRevisions.get(execution.execution_plan_revision_id);
+      if (executionPlanRevision === undefined) {
+        throw new Error(`execution_approved_spec_linkage_backfill_failed: execution_plan_revision_missing:${execution.id}`);
+      }
+      const specRevision = this.specRevisions.get(executionPlanRevision.based_on_spec_revision_id);
+      if (specRevision === undefined) {
+        throw new Error(`execution_approved_spec_linkage_backfill_failed: spec_revision_missing:${execution.id}`);
+      }
+      const spec = this.specs.get(specRevision.spec_id);
+      if (spec === undefined) {
+        throw new Error(`execution_approved_spec_linkage_backfill_failed: spec_missing:${execution.id}`);
+      }
+      if (execution.approved_spec_revision_id !== undefined && execution.approved_spec_revision_id !== specRevision.id) {
+        throw new Error(`execution_approved_spec_linkage_backfill_failed: spec_revision_mismatch:${execution.id}`);
+      }
+      const approvedSpecRevisionRef = {
+        type: 'spec_revision' as const,
+        id: specRevision.id,
+        spec_id: spec.id,
+        title: specRevision.summary,
+      };
+      if (
+        execution.approved_spec_revision_id === specRevision.id &&
+        JSON.stringify(execution.approved_spec_revision_ref) === JSON.stringify(approvedSpecRevisionRef)
+      ) {
+        continue;
+      }
+      this.executions.set(
+        execution.id,
+        clone({
+          ...execution,
+          approved_spec_revision_id: specRevision.id,
+          approved_spec_revision_ref: approvedSpecRevisionRef,
+          updated_at: input.now,
+        }),
+      );
+      updatedExecutionIds.push(execution.id);
+    }
+    return { updated_execution_ids: updatedExecutionIds };
+  }
+
   async saveCodeReviewHandoff(handoff: CodeReviewHandoff): Promise<void> {
     this.codeReviewHandoffs.set(handoff.id, clone(handoff));
   }
