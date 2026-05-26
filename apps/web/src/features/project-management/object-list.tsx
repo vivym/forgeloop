@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
-import { CompactMetadata, PreviewPane, QueueWorkspace, Section } from '../../shared/layout';
+import { CompactMetadata, DatabaseViewLayout, PreviewPane, ProductPage, Section } from '../../shared/layout';
 import { Badge, DataTable, EmptyState, InlineNotice, Input, StatusPill, type DataTableColumn } from '../../shared/ui';
 import type { ProductPageViewModel } from '../product-surfaces/view-model-types';
 import { SurfaceStateIndicator, type SurfaceState } from './surface-state';
@@ -119,15 +119,10 @@ export function ObjectList<T extends ProjectObjectListItem>({
   ];
 
   return (
-    <QueueWorkspace
-      as="div"
-      blockerRisk={blockerRisk}
-      family="source-object-list"
+    <ProductPage
+      className="source-object-database"
+      family="source-database"
       heading={title}
-      nextAction={nextAction}
-      roleResponsibility={roleResponsibility}
-      state={listState}
-      subtitle={subtitle}
       toolbar={
         <>
           <Link className={primaryLinkClass} to={createHref}>
@@ -140,46 +135,65 @@ export function ObjectList<T extends ProjectObjectListItem>({
       }
     >
       <div className="grid gap-4">
-        <SurfaceStateIndicator label={title} state={sourceObjectListSurfaceState(isLoading, error, filteredRows.length, blockerRisk)} />
-        <Section title={`${title} queue controls`} variant="panel">
-          <div className="grid gap-3">
-            <label className="grid min-w-0 gap-2 sm:max-w-sm">
-              <span className="text-sm font-semibold text-text-secondary">Search {title}</span>
-              <Input
-                aria-label={`Search ${title}`}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={`Search ${title.toLowerCase()}`}
-                role="searchbox"
-                value={search}
-              />
-            </label>
-            <div className="flex flex-wrap items-center gap-2" data-filter-chip-group="risk">
-              <FilterChip label="Risk: All" onClick={() => setRiskFilter('all')} selected={riskFilter === 'all'} />
-              {uniqueValues(rows.map((row) => row.riskLabel)).map((risk) => (
-                <FilterChip key={risk} label={risk} onClick={() => setRiskFilter(risk)} selected={riskFilter === risk} />
-              ))}
+        <Section description={subtitle} title={`${title} planning state`} variant="subtle">
+          <div className="grid gap-3 text-sm text-text-secondary md:grid-cols-3">
+            <div>
+              <div className="font-semibold text-text-primary">Current state</div>
+              <p className="m-0">{listState}</p>
             </div>
-            <div className="flex flex-wrap items-center gap-2" data-filter-chip-group="status">
-              <FilterChip label="Status: All" onClick={() => setStatusFilter('all')} selected={statusFilter === 'all'} />
-              {uniqueValues(rows.map((row) => row.statusLabel)).map((status) => (
-                <FilterChip key={status} label={status} onClick={() => setStatusFilter(status)} selected={statusFilter === status} />
-              ))}
+            <div>
+              <div className="font-semibold text-text-primary">Next action</div>
+              <p className="m-0">{nextAction}</p>
             </div>
-            <div className="flex flex-wrap items-center gap-2" data-view-options="">
-              <FilterChip label="View: Dense" onClick={() => setViewMode('dense')} selected={viewMode === 'dense'} />
-              <FilterChip label="View: Preview" onClick={() => setViewMode('preview')} selected={viewMode === 'preview'} />
+            <div>
+              <div className="font-semibold text-text-primary">Role and risk</div>
+              <p className="m-0">{roleResponsibility}</p>
+              <p className="m-0">{blockerRisk}</p>
             </div>
           </div>
         </Section>
+        <SurfaceStateIndicator label={title} state={sourceObjectListSurfaceState(isLoading, error, filteredRows.length, blockerRisk)} />
         {isLoading ? <InlineNotice title={`Loading ${title.toLowerCase()} source objects.`} tone="info" /> : null}
         {error ? <InlineNotice title={`${title} source objects could not be loaded.`} tone="danger" /> : null}
-        <div className={viewMode === 'preview' ? 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]' : 'grid gap-4'}>
-          <Section title={`${title} source object queue`} variant="panel">
+        <DatabaseViewLayout
+          toolbar={
+            <div className="flex min-w-0 flex-wrap items-end gap-2">
+              <label className="grid min-w-[14rem] flex-1 gap-1 sm:max-w-sm">
+                <span className="text-sm font-semibold text-text-secondary">Search {title}</span>
+                <Input
+                  aria-label={`Search ${title}`}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={`Search ${title.toLowerCase()}`}
+                  role="searchbox"
+                  value={search}
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-2" data-filter-chip-group="risk">
+                <FilterChip label="Risk: All" onClick={() => setRiskFilter('all')} selected={riskFilter === 'all'} />
+                {uniqueValues(rows.map((row) => row.riskLabel)).map((risk) => (
+                  <FilterChip key={risk} label={risk} onClick={() => setRiskFilter(risk)} selected={riskFilter === risk} />
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2" data-filter-chip-group="status">
+                <FilterChip label="Status: All" onClick={() => setStatusFilter('all')} selected={statusFilter === 'all'} />
+                {uniqueValues(rows.map((row) => row.statusLabel)).map((status) => (
+                  <FilterChip key={status} label={status} onClick={() => setStatusFilter(status)} selected={statusFilter === status} />
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2" data-view-options="">
+                <FilterChip label="View: Dense" onClick={() => setViewMode('dense')} selected={viewMode === 'dense'} />
+                <FilterChip label="View: Preview" onClick={() => setViewMode('preview')} selected={viewMode === 'preview'} />
+              </div>
+            </div>
+          }
+          table={
+            <div className="grid gap-3">
+              <h2 className="m-0 text-base font-semibold text-text-primary">{title} source object database</h2>
             {filteredRows.length === 0 && !isLoading && !error ? (
               <SourceObjectEmptyState createHref={createHref} description={emptyMessage} planningHref={planningHref} title={title} />
             ) : null}
             <DataTable
-              ariaLabel={`${title} source object queue`}
+              ariaLabel={`${title} source object database`}
               columns={columns}
               density="compact"
               emptyMessage={emptyMessage}
@@ -189,11 +203,12 @@ export function ObjectList<T extends ProjectObjectListItem>({
               {...(focusedRow?.id === undefined ? {} : { selectedRowKey: focusedRow.id })}
               stickyHeader
             />
-          </Section>
-          {viewMode === 'preview' ? <SourceObjectPreview row={focusedRow} /> : null}
-        </div>
+            </div>
+          }
+          inspector={viewMode === 'preview' ? <SourceObjectPreview row={focusedRow} /> : undefined}
+        />
       </div>
-    </QueueWorkspace>
+    </ProductPage>
   );
 }
 

@@ -61,34 +61,37 @@ describe('product-grade first viewport contract', () => {
   });
 });
 
-describe.skip('product-grade first viewport contracts owned by later route-migration tasks', () => {
-
-  it('requires source object list routes to expose the queue first-viewport contract', async () => {
+describe('Task 5 source object first viewport contracts', () => {
+  it('requires source object list routes to expose the database first-viewport contract', async () => {
     const rendered = await renderRoute('/requirements');
 
     expect(await rendered.findByRole('heading', { name: 'Requirements' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'source-object-list', heading: 'Requirements' });
-    expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
+    expectFirstViewportContract(rendered, { pageFamily: 'source-database', heading: 'Requirements' });
+    expect(document.querySelector('[data-database-toolbar]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-data-table][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
   });
 
-  it('requires source object detail routes to expose the object first-viewport contract', async () => {
+  it('requires source object detail routes to expose the document first-viewport contract', async () => {
     const rendered = await renderRoute(`/requirements/${requirementListItem.id}`);
 
     expect(await rendered.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'source-object-detail', heading: 'Requirement' });
-    expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
+    expectFirstViewportContract(rendered, { pageFamily: 'source-document', heading: 'Requirement' });
+    expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
   });
 
   it('requires source object evidence routes to expose evidence readiness before attachment lists', async () => {
     const rendered = await renderRoute(`/requirements/${requirementListItem.id}/evidence`);
 
     expect(await rendered.findByRole('heading', { name: 'Requirement Evidence' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'evidence', heading: 'Requirement Evidence' });
-    expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/evidence ready/i);
-    expect(document.querySelector('[data-first-viewport]')?.textContent).not.toMatch(/Evidence attachments|Raw artifact links/i);
+    await waitFor(() => expect(document.querySelector('[data-evidence-summary]')?.textContent ?? '').toMatch(/evidence ready/i));
+    expectFirstViewportContract(rendered, { pageFamily: 'source-evidence', heading: 'Requirement Evidence' });
+    expect(document.querySelector('[data-evidence-summary][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-evidence-summary]')?.textContent).toMatch(/evidence ready/i);
+    expect(document.querySelector('[data-evidence-summary]')?.textContent).not.toMatch(/Evidence attachments|Raw artifact links/i);
   });
+});
 
+describe.skip('Task 6 owner: Development Plan and Plan Item route first-viewport contracts', () => {
   it('requires Development Plan index routes to expose the planning table first-viewport contract', async () => {
     const rendered = await renderRoute('/development-plans');
 
@@ -139,7 +142,9 @@ describe.skip('product-grade first viewport contracts owned by later route-migra
       cleanup();
     }
   });
+});
 
+describe.skip('Task 7 owner: Document Review, execution, release, and report route first-viewport contracts', () => {
   it('requires Document Reviews to expose a queue first viewport and preview workspace', async () => {
     const rendered = await renderRoute('/specs-plans');
 

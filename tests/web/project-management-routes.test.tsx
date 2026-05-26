@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import type { AttachmentRef } from '@forgeloop/contracts';
 
 import {
   actorId,
@@ -65,6 +66,26 @@ const renderedProductRoutes = [
   '/executions',
   '/reports',
 ] as const;
+
+const uploadedRouteAttachment = (overrides: Partial<AttachmentRef> = {}): AttachmentRef => ({
+  id: 'att-source-route-upload',
+  owner_object_type: 'requirement',
+  owner_object_id: requirementListItem.id,
+  linked_object_refs: [],
+  filename: 'flow.png',
+  content_type: 'image/png',
+  size_bytes: 128,
+  checksum_sha256: 'a'.repeat(64),
+  uploaded_by_actor_id: actorId,
+  created_at: '2026-05-23T00:00:00.000Z',
+  evidence_category: 'image',
+  caption: 'Flow',
+  alt_text: 'Flow',
+  visibility: 'object',
+  safety_status: 'passed',
+  reference_status: 'active',
+  ...overrides,
+});
 
 describe('project management route IA', () => {
   it('renders grouped primary navigation without generic Tasks or direct artifact routes', async () => {
@@ -131,9 +152,8 @@ describe('project management route IA', () => {
 
     expect(await screen.findByRole('heading', { name: /^Requirement$/ })).toBeTruthy();
     expect(await screen.findByText(/Plan Item governance must be visible before Spec and Execution Plan generation/i)).toBeTruthy();
-    expect(document.querySelector('[data-page-family="source-object-detail"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-document-surface="source-narrative"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-page-family="source-document"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('region', { name: /source narrative document/i })).toBeTruthy();
     expect(screen.getByRole('region', { name: /source metadata/i }).querySelector('[data-compact-metadata]')).toBeInstanceOf(HTMLElement);
     expect(await screen.findByRole('tablist', { name: /source object sections/i })).toBeTruthy();
@@ -152,8 +172,44 @@ describe('project management route IA', () => {
     expect(screen.getByText(/evidence 1/i)).toBeTruthy();
     expect(screen.getByText(new RegExp(`release ${release.id}`, 'i'))).toBeTruthy();
     expect(screen.getByText(/risk medium/i)).toBeTruthy();
-    expect(document.querySelector('[data-first-viewport]')?.textContent).not.toMatch(/Evidence attachments|Planning links/i);
+    expect(document.querySelector('[data-document-surface]')?.textContent).not.toMatch(/Evidence attachments|Planning links/i);
     expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
+  });
+
+  it('uploads source narrative images through stable source-object attachment refs', async () => {
+    let capturedMetadata: unknown;
+    let capturedActorHeader: string | null = null;
+    const screen = await renderRoute(`/requirements/${requirementListItem.id}`, {
+      apiOverrides: {
+        'POST /attachments': ({ init }) => {
+          const form = init?.body;
+          expect(form).toBeInstanceOf(FormData);
+          capturedMetadata = JSON.parse(String((form as FormData).get('metadata')));
+          capturedActorHeader = new Headers(init?.headers).get('x-forgeloop-actor-id');
+          return uploadedRouteAttachment();
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /^Requirement$/ })).toBeTruthy();
+    expect(await screen.findByText(/Plan Item governance must be visible before Spec and Execution Plan generation/i)).toBeTruthy();
+    const image = new File(['image-bytes'], 'flow.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText(/image file/i), { target: { files: [image] } });
+
+    await waitFor(() =>
+      expect((screen.getByRole('textbox', { name: /markdown editor/i }) as HTMLTextAreaElement).value).toContain(
+        'attachment://att-source-route-upload',
+      ),
+    );
+    expect(capturedActorHeader).toBe(actorId);
+    expect(capturedMetadata).toEqual({
+      object_type: 'requirement',
+      object_id: requirementListItem.id,
+      evidence_category: 'image',
+      caption: 'flow',
+      alt_text: 'flow',
+      visibility: 'object',
+    });
   });
 
   it('renders source object evidence routes as product-grade evidence workspaces', async () => {
@@ -166,13 +222,13 @@ describe('project management route IA', () => {
       const screen = await renderRoute(route);
 
       expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy();
-      expect(document.querySelector('[data-page-family="evidence"]')).toBeInstanceOf(HTMLElement);
-      expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
+      expect((await screen.findAllByText(expectedEvidence)).length).toBeGreaterThan(0);
+      expect(document.querySelector('[data-page-family="source-evidence"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-evidence-summary][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(screen.getByRole('region', { name: /evidence readiness summary/i })).toBeTruthy();
       expect(screen.getAllByText(/relevant evidence/i).length).toBeGreaterThan(0);
-      expect((await screen.findAllByText(expectedEvidence)).length).toBeGreaterThan(0);
       expect(screen.getByRole('link', { name: /open source object/i }).getAttribute('href')).toBe(route.replace('/evidence', ''));
-      expect(document.querySelector('[data-first-viewport]')?.textContent).not.toMatch(/Raw artifact links|Evidence attachments/i);
+      expect(document.querySelector('[data-evidence-summary]')?.textContent).not.toMatch(/Raw artifact links|Evidence attachments/i);
       expect(document.body.textContent).not.toMatch(/Scaffold|Generate Spec|Generate Execution Plan|Work Item Owner|owner_actor_id|\/tasks/);
       cleanup();
     }
@@ -207,13 +263,15 @@ describe('project management route IA', () => {
       const screen = await renderRoute(route);
 
       expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy();
-      expect(document.querySelector('[data-page-family="source-object-list"]')).toBeInstanceOf(HTMLElement);
-      expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-page-family="source-database"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-database-toolbar]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-data-table][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(await screen.findByText(itemTitle)).toBeTruthy();
-      expect(screen.getByTestId('current-state').textContent).toMatch(/source object/i);
-      expect(screen.getByTestId('next-action').textContent).toMatch(/open source object to inspect planning state/i);
-      expect(screen.getByTestId('role-responsibility').textContent).toMatch(/responsibility|assigned/i);
-      expect(screen.getByTestId('blocker-risk').textContent).toMatch(/risk|blocker/i);
+      expect(document.querySelector('[data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      expect(document.body.textContent).toMatch(/source object/i);
+      expect(document.body.textContent).toMatch(/open source object to inspect planning state/i);
+      expect(document.body.textContent).toMatch(/responsibility|assigned/i);
+      expect(document.body.textContent).toMatch(/risk|blocker/i);
       if (objectType === 'Bug') {
         expect(screen.getByTestId('surface-state-blocked')).toBeTruthy();
       } else {
@@ -225,7 +283,7 @@ describe('project management route IA', () => {
       expect(screen.getByRole('button', { name: /view: dense/i })).toBeTruthy();
       expect(screen.getByRole('link', { name: /create source object/i }).getAttribute('href')).toBe(createHref);
       expect(screen.getByRole('link', { name: /plan source object/i }).getAttribute('href')).toBe('/development-plans/new');
-      expect(screen.getByRole('table', { name: new RegExp(`${heading} source object queue`, 'i') })).toBeTruthy();
+      expect(screen.getByRole('table', { name: new RegExp(`${heading} source object database`, 'i') })).toBeTruthy();
       for (const column of ['Object', 'Type', 'Gate / status', 'Risk', 'Role / actor', 'Development Plan', 'Next action', 'Last meaningful update']) {
         expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
       }
@@ -315,8 +373,11 @@ describe('project management route IA', () => {
       }
       expect(screen.queryByRole('textbox', { name: /narrative markdown/i })).toBeNull();
       expect(screen.getByRole('region', { name: /narrative document/i })).toBeTruthy();
+      expect(document.querySelector('[data-page-family="source-document"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(screen.getByRole('textbox', { name: /markdown editor/i })).toBeTruthy();
-      expect(screen.getByRole('button', { name: /insert image/i })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /insert image/i })).toBeNull();
+      expect(screen.queryByLabelText(/image file/i)).toBeNull();
       expect(screen.getByRole('link', { name: /cancel/i }).getAttribute('href')).not.toBe('/work-items');
       cleanup();
     }
