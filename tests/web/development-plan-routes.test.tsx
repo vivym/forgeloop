@@ -4,7 +4,7 @@ import { cleanup, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { boundarySummary, developmentPlan, developmentPlanItem } from './fixtures/product-data';
+import { boundarySummary, developmentPlan, developmentPlanItem, projectId } from './fixtures/product-data';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 import { renderRoute } from './router-test-utils';
 
@@ -82,6 +82,47 @@ describe('Development Plan routes', () => {
     expect(document.body.textContent).not.toMatch(/Pick a source object first|Generate Spec|Generate Execution Plan|Work Item Owner|owner_actor_id|\bTask\b/);
   });
 
+  it('loads Development Plan source object choices from live project source lists', async () => {
+    const user = userEvent.setup();
+    const createBodies: unknown[] = [];
+    const liveRequirementResponse = {
+      items: [
+        {
+          id: 'req-live-42',
+          ref: { type: 'requirement', id: 'req-live-42' },
+          title: 'Live checkout telemetry requirement',
+          status: 'active',
+          risk: 'low',
+          driver_actor_id: 'actor-product',
+        },
+      ],
+      degraded_sources: [],
+    };
+    const screen = await renderRoute('/development-plans/new', {
+      apiOverrides: {
+        [`GET /query/requirements?project_id=${projectId}&limit=100`]: liveRequirementResponse,
+        'POST /development-plans': ({ init }) => {
+          createBodies.push(parseRequestBody(init));
+          return { ...developmentPlan, id: 'development-plan-live-source' };
+        },
+      },
+    });
+
+    expect(await screen.findByRole('option', { name: 'Live checkout telemetry requirement' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Checkout requirement' })).toBeNull();
+    await user.clear(screen.getByRole('textbox', { name: /development plan title/i }));
+    await user.type(screen.getByRole('textbox', { name: /development plan title/i }), 'Live source planning');
+    await user.selectOptions(screen.getByRole('combobox', { name: /source object/i }), 'req-live-42');
+    await user.click(screen.getByRole('button', { name: /^create development plan$/i }));
+
+    expect(createBodies).toEqual([
+      expect.objectContaining({
+        title: 'Live source planning',
+        source_ref: { type: 'requirement', id: 'req-live-42', title: 'Live checkout telemetry requirement' },
+      }),
+    ]);
+  });
+
   it('submits manual and AI-assisted Development Plan authoring with source context only', async () => {
     const user = userEvent.setup();
     const createBodies: unknown[] = [];
@@ -109,8 +150,9 @@ describe('Development Plan routes', () => {
     await user.click(screen.getByRole('button', { name: /^create development plan$/i }));
     expect(createBodies).toEqual([
       expect.objectContaining({
+        guidance: 'Keep the plan scoped to checkout validation boundaries.',
         title: 'Checkout planning closure',
-        source_ref: { type: 'requirement', id: 'req-1', title: 'Checkout planning closure source' },
+        source_ref: { type: 'requirement', id: 'req-1', title: 'Checkout requirement' },
       }),
     ]);
     expect(JSON.stringify(createBodies)).not.toMatch(/spec|execution_plan/i);
@@ -135,7 +177,7 @@ describe('Development Plan routes', () => {
     );
     expect(generateBodies).toEqual([
       expect.objectContaining({
-        source_ref: { type: 'requirement', id: 'req-1', title: 'Requirement req-1' },
+        source_ref: { type: 'requirement', id: 'req-1', title: 'Checkout requirement' },
         guidance: expect.stringContaining('Draft Plan Items'),
       }),
     ]);

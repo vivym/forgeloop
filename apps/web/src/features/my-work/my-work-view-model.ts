@@ -362,7 +362,8 @@ function safeBulkActionFor(value: unknown, selectedRows: readonly MyWorkQueueRow
   return {
     id: candidate.id,
     label: candidate.label,
-    enabled: true,
+    enabled: false,
+    disabledReason: 'Bulk action execution command unavailable',
   };
 }
 

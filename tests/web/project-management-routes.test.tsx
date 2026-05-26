@@ -210,6 +210,12 @@ describe('project management route IA', () => {
       expect(screen.getByTestId('next-action').textContent).toMatch(/open source object to inspect planning state/i);
       expect(screen.getByTestId('role-responsibility').textContent).toMatch(/responsibility|assigned/i);
       expect(screen.getByTestId('blocker-risk').textContent).toMatch(/risk|blocker/i);
+      if (objectType === 'Bug') {
+        expect(screen.getByTestId('surface-state-blocked')).toBeTruthy();
+      } else {
+        expect(screen.queryByTestId('surface-state-blocked')).toBeNull();
+        expect(screen.getByTestId('surface-state-approved')).toBeTruthy();
+      }
       expect(screen.getByText('Planning state unknown')).toBeTruthy();
       expect(screen.getByRole('searchbox', { name: new RegExp(`search ${heading}`, 'i') })).toBeTruthy();
       expect(screen.getByRole('button', { name: /view: dense/i })).toBeTruthy();

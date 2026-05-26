@@ -206,7 +206,11 @@ function sourceObjectListSurfaceState(
   if (isLoading) return 'loading';
   if (error) return 'error';
   if (rowCount === 0) return 'empty';
-  return /blocked|high|critical|risk/i.test(blockerRisk) ? 'blocked' : 'approved';
+  return hasBlockingRiskSignal(blockerRisk) ? 'blocked' : 'approved';
+}
+
+function hasBlockingRiskSignal(blockerRisk: string): boolean {
+  return /\bblocked\b/i.test(blockerRisk) || /\bcritical\b/i.test(blockerRisk) || /\bhigh risk\b/i.test(blockerRisk);
 }
 
 function SourceObjectEmptyState({

@@ -111,15 +111,6 @@ export function MyWorkRoute() {
             />
           ) : null}
           <Section
-            actions={
-              viewModel.safeBulkAction ? (
-                <div className="flex flex-wrap items-center gap-2" data-safe-bulk-actions="">
-                  <button className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-semibold text-text-primary" type="button">
-                    {viewModel.safeBulkAction.label}
-                  </button>
-                </div>
-              ) : null
-            }
             title="Queue filters"
             variant="panel"
           >

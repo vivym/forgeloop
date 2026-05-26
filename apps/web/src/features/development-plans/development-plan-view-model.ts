@@ -185,7 +185,7 @@ function nextGateAction(item: DevelopmentPlanItemProjection): string {
   if (item.execution_plan_status !== 'approved') return 'Review Execution Plan';
   if (item.execution_status !== 'completed') return 'Supervise execution';
   if (item.review_status !== 'approved') return 'Complete review';
-  if (item.qa_handoff_status !== 'accepted') return 'Complete QA handoff';
+  if (item.qa_handoff_status !== 'approved') return 'Complete QA handoff';
   return 'Prepare release';
 }
 

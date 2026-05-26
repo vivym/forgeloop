@@ -14,6 +14,7 @@ const createDevelopmentPlanCommandSchema = z
     source_ref: sourceObjectRefSchema,
     title: nonEmptyString,
     actor_id: nonEmptyString.optional(),
+    guidance: nonEmptyString.optional(),
   })
   .strict();
 

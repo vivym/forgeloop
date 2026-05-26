@@ -116,7 +116,7 @@ describe('My Work route', () => {
     expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
   });
 
-  it('renders a compact safe bulk action surface when selected rows share a scoped safe command', async () => {
+  it('keeps scoped bulk actions hidden until an executable command contract exists', async () => {
     const screen = await renderRoute('/my-work', {
       apiOverrides: {
         [`GET /query/my-work?project_id=${projectId}&actor_id=${actorId}`]: {
@@ -153,11 +153,11 @@ describe('My Work route', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout retry requirement/i }));
 
-    expect(document.querySelector('[data-safe-bulk-actions]')).toBeInstanceOf(HTMLElement);
-    expect(screen.getByRole('button', { name: /Acknowledge selected product risk/i }).getAttribute('disabled')).toBeNull();
+    expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
+    expect(screen.getByTestId('next-action').textContent).toMatch(/Bulk action execution command unavailable/i);
   });
 
-  it('does not expose raw bulk action hrefs even when selected rows share a scoped command', async () => {
+  it('does not expose raw bulk action hrefs when selected rows share a scoped but non-executable command', async () => {
     const response = {
       ...myWorkQueueResponse,
       bulk_action: {
@@ -184,7 +184,8 @@ describe('My Work route', () => {
     expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
     fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
 
-    expect(document.querySelector('[data-safe-bulk-actions]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
+    expect(screen.getByTestId('next-action').textContent).toMatch(/Bulk action execution command unavailable/i);
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href')).join(' ')).not.toMatch(/\/runtime\/secret/i);
   });
 

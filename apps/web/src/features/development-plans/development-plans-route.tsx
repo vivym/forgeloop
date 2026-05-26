@@ -1,8 +1,8 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 
 import { createForgeloopCommandApi } from '../../shared/api/commands';
-import { useDevelopmentPlansQuery } from '../../shared/api/hooks';
+import { useBugsQuery, useDevelopmentPlansQuery, useInitiativesQuery, useRequirementsQuery, useTechDebtQuery } from '../../shared/api/hooks';
 import type { SourceObjectRef } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
@@ -33,6 +33,19 @@ type DevelopmentPlanFilterState = {
   gate: string;
   risk: string;
   status: string;
+};
+
+type SourceObjectType = SourceObjectRef['type'];
+
+type SourceObjectListItem = {
+  id?: string | undefined;
+  ref?: { type?: string | undefined; id?: string | undefined; title?: string | undefined } | undefined;
+  title?: string | undefined;
+};
+
+type SourceObjectOption = {
+  label: string;
+  value: string;
 };
 
 const defaultFilters: DevelopmentPlanFilterState = {
@@ -92,16 +105,6 @@ const statusOptions = [
 
 const sourceAuthoringOptions = sourceTypeOptions.filter((option) => option.value !== 'all');
 
-const sourceObjectOptionsByType: Record<string, { label: string; value: string }[]> = {
-  requirement: [
-    { label: 'Checkout requirement', value: 'req-1' },
-    { label: 'Checkout retry requirement', value: 'req-2' },
-  ],
-  initiative: [{ label: 'Marketplace reliability initiative', value: 'init-1' }],
-  bug: [{ label: 'Payment retry bug', value: 'bug-1' }],
-  tech_debt: [{ label: 'Route surface cleanup', value: 'td-1' }],
-};
-
 export function DevelopmentPlansRoute() {
   const { projectId } = useProjectContext();
   const query = useDevelopmentPlansQuery({ project_id: projectId });
@@ -151,15 +154,55 @@ export function DevelopmentPlansRoute() {
 export function DevelopmentPlanNewRoute() {
   const { actorId } = useActorContext();
   const { projectId } = useProjectContext();
+  const requirementQuery = useRequirementsQuery({ project_id: projectId, limit: 100 });
+  const initiativeQuery = useInitiativesQuery({ project_id: projectId, limit: 100 });
+  const bugQuery = useBugsQuery({ project_id: projectId, limit: 100 });
+  const techDebtQuery = useTechDebtQuery({ project_id: projectId, limit: 100 });
   const [title, setTitle] = useState('');
-  const [sourceType, setSourceType] = useState('requirement');
-  const [sourceId, setSourceId] = useState(defaultSourceObjectId('requirement'));
+  const [sourceType, setSourceType] = useState<SourceObjectType>('requirement');
+  const [sourceId, setSourceId] = useState('');
   const [manualGuidance, setManualGuidance] = useState('');
   const [aiGuidance, setAiGuidance] = useState('Draft a table-first Development Plan with source-linked Plan Items and boundary risks.');
   const [actionState, setActionState] = useState<{ status: 'idle' | 'running' | 'success' | 'error'; message?: string; planId?: string }>({ status: 'idle' });
 
-  const validation = validateAuthoring({ sourceId, title });
-  const sourceRef = sourceRefFor(sourceType, sourceId, title);
+  const sourceQueries = useMemo(
+    () => ({
+      bug: bugQuery,
+      initiative: initiativeQuery,
+      requirement: requirementQuery,
+      tech_debt: techDebtQuery,
+    }),
+    [bugQuery, initiativeQuery, requirementQuery, techDebtQuery],
+  );
+  const sourceObjectOptionsByType = useMemo<Record<SourceObjectType, SourceObjectOption[]>>(
+    () => ({
+      bug: sourceOptionsFromItems(bugQuery.data?.items, 'bug'),
+      initiative: sourceOptionsFromItems(initiativeQuery.data?.items, 'initiative'),
+      requirement: sourceOptionsFromItems(requirementQuery.data?.items, 'requirement'),
+      tech_debt: sourceOptionsFromItems(techDebtQuery.data?.items, 'tech_debt'),
+    }),
+    [bugQuery.data?.items, initiativeQuery.data?.items, requirementQuery.data?.items, techDebtQuery.data?.items],
+  );
+  const currentSourceObjectOptions = sourceObjectOptions(sourceType, sourceObjectOptionsByType);
+  const visibleSourceObjectOptions = currentSourceObjectOptions.length > 0
+    ? currentSourceObjectOptions
+    : [{ label: `${formatValue(sourceType)} source objects unavailable`, value: '' }];
+  const selectedSourceQuery = sourceQueries[sourceType];
+  const selectedSourceOption = currentSourceObjectOptions.find((option) => option.value === sourceId);
+  const validation = validateAuthoring({
+    sourceId,
+    sourceObjectCount: currentSourceObjectOptions.length,
+    sourceObjectsError: selectedSourceQuery.isError,
+    sourceObjectsLoading: selectedSourceQuery.isLoading,
+    title,
+  });
+  const sourceRef = sourceRefFor(sourceType, sourceId, selectedSourceOption?.label);
+
+  useEffect(() => {
+    if (!currentSourceObjectOptions.some((option) => option.value === sourceId)) {
+      setSourceId(currentSourceObjectOptions[0]?.value ?? '');
+    }
+  }, [currentSourceObjectOptions, sourceId]);
 
   const createPlan = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -172,6 +215,7 @@ export function DevelopmentPlanNewRoute() {
     try {
       const created = await createForgeloopCommandApi().createDevelopmentPlan({
         actor_id: actorId,
+        ...(manualGuidance.trim().length > 0 ? { guidance: manualGuidance.trim() } : {}),
         project_id: projectId,
         source_ref: sourceRef,
         title: title.trim() || `${sourceRef.title ?? sourceRef.id} Development Plan`,
@@ -248,8 +292,11 @@ export function DevelopmentPlanNewRoute() {
                 value={sourceType}
                 onChange={(event) => {
                   const nextSourceType = event.target.value;
-                  setSourceType(nextSourceType);
-                  setSourceId(defaultSourceObjectId(nextSourceType));
+                  if (isSourceObjectType(nextSourceType)) {
+                    const nextSourceOptions = sourceObjectOptions(nextSourceType, sourceObjectOptionsByType);
+                    setSourceType(nextSourceType);
+                    setSourceId(nextSourceOptions[0]?.value ?? '');
+                  }
                 }}
               />
             </label>
@@ -257,12 +304,18 @@ export function DevelopmentPlanNewRoute() {
               Source object
               <Select
                 aria-label="Source object"
-                options={sourceObjectOptions(sourceType)}
+                disabled={currentSourceObjectOptions.length === 0 || selectedSourceQuery.isLoading || selectedSourceQuery.isError}
+                options={visibleSourceObjectOptions}
                 value={sourceId}
                 onChange={(event) => setSourceId(event.target.value)}
               />
             </label>
           </div>
+          {selectedSourceQuery.isLoading ? <InlineNotice title={`Loading ${formatValue(sourceType)} source objects.`} tone="info" /> : null}
+          {selectedSourceQuery.isError ? <InlineNotice title={`${formatValue(sourceType)} source objects could not be loaded.`} tone="danger" /> : null}
+          {!selectedSourceQuery.isLoading && !selectedSourceQuery.isError && currentSourceObjectOptions.length === 0 ? (
+            <InlineNotice title={`No ${formatValue(sourceType)} source objects are available for this project.`} tone="warning" />
+          ) : null}
           <label className="mt-3 grid gap-1 text-sm font-semibold text-text-primary">
             Manual source guidance
             <Textarea
@@ -426,28 +479,63 @@ function rowMatchesFilters(row: DevelopmentPlanListRow, filters: DevelopmentPlan
   );
 }
 
-function validateAuthoring(input: { sourceId: string; title: string }) {
+function validateAuthoring(input: {
+  sourceId: string;
+  sourceObjectCount: number;
+  sourceObjectsError: boolean;
+  sourceObjectsLoading: boolean;
+  title: string;
+}) {
   const messages = [
     input.title.trim().length > 0 ? 'Title is ready.' : 'Title can be added now or inferred from source context.',
-    input.sourceId.trim().length > 0 ? 'Source object is selected.' : 'Source object selection is required.',
+    sourceObjectSelectionMessage(input),
     'Plan Items remain the boundary for Spec, Execution Plan, execution, review, QA, and release readiness.',
   ];
 
-  return { hasBlockingIssue: input.sourceId.trim().length === 0, messages };
+  return {
+    hasBlockingIssue:
+      input.sourceObjectsLoading ||
+      input.sourceObjectsError ||
+      input.sourceObjectCount === 0 ||
+      input.sourceId.trim().length === 0,
+    messages,
+  };
 }
 
-function sourceObjectOptions(sourceType: string) {
-  return sourceObjectOptionsByType[sourceType] ?? [];
+function sourceObjectSelectionMessage(input: {
+  sourceId: string;
+  sourceObjectCount: number;
+  sourceObjectsError: boolean;
+  sourceObjectsLoading: boolean;
+}) {
+  if (input.sourceObjectsLoading) return 'Source objects are loading from live project data.';
+  if (input.sourceObjectsError) return 'Source object list failed to load.';
+  if (input.sourceObjectCount === 0) return 'Create a source object before authoring a Development Plan.';
+  return input.sourceId.trim().length > 0 ? 'Source object is selected.' : 'Source object selection is required.';
 }
 
-function defaultSourceObjectId(sourceType: string) {
-  return sourceObjectOptions(sourceType)[0]?.value ?? '';
+function sourceObjectOptions(sourceType: SourceObjectType, optionsByType: Record<SourceObjectType, SourceObjectOption[]>) {
+  return optionsByType[sourceType] ?? [];
 }
 
-function sourceRefFor(sourceType: string, sourceId: string, title: string): SourceObjectRef {
+function sourceOptionsFromItems(items: readonly SourceObjectListItem[] | undefined, sourceType: SourceObjectType): SourceObjectOption[] {
+  return (items ?? []).flatMap((item) => {
+    const id = item.ref?.id ?? item.id;
+    if (id === undefined || id.trim().length === 0) return [];
+    return [{
+      label: item.title ?? item.ref?.title ?? `${formatValue(sourceType)} ${id}`,
+      value: id,
+    }];
+  });
+}
+
+function sourceRefFor(sourceType: SourceObjectType, sourceId: string, sourceTitle: string | undefined): SourceObjectRef {
   const id = sourceId.trim();
-  const sourceTitle = title.trim().length > 0 ? `${title.trim()} source` : `${formatValue(sourceType)} ${id}`;
-  return { type: sourceType, id, title: sourceTitle } as SourceObjectRef;
+  return { type: sourceType, id, title: sourceTitle ?? `${formatValue(sourceType)} ${id}` } as SourceObjectRef;
+}
+
+function isSourceObjectType(value: string): value is SourceObjectType {
+  return value === 'requirement' || value === 'initiative' || value === 'bug' || value === 'tech_debt';
 }
 
 function sourceHref(ref: { type: string; id: string }) {

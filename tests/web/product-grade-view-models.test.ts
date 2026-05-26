@@ -117,6 +117,40 @@ describe('product-grade presentation view models', () => {
     });
   });
 
+  it('does not mark scoped My Work bulk actions executable without a command contract', () => {
+    const baseViewModel = myWorkQueueViewModel({
+      ...myWorkQueueResponse,
+      bulk_action: {
+        id: 'bulk-ack-product-risk',
+        label: 'Acknowledge selected product risk',
+        enabled: true,
+        scope_role_ids: ['product'],
+        scope_object_types: ['requirement'],
+        scope_object_refs: [{ type: 'requirement', id: 'req-1' }],
+      },
+    });
+    const viewModel = myWorkQueueViewModel(
+      {
+        ...myWorkQueueResponse,
+        bulk_action: {
+          id: 'bulk-ack-product-risk',
+          label: 'Acknowledge selected product risk',
+          enabled: true,
+          scope_role_ids: ['product'],
+          scope_object_types: ['requirement'],
+          scope_object_refs: [{ type: 'requirement', id: 'req-1' }],
+        },
+      },
+      baseViewModel.allRows.filter((row) => row.objectId === 'req-1' && row.objectType === 'requirement'),
+    );
+
+    expect(viewModel.safeBulkAction).toBeUndefined();
+    expect(viewModel.bulkAction).toMatchObject({
+      enabled: false,
+      disabledReason: 'Bulk action execution command unavailable',
+    });
+  });
+
   it('projects Development Plans and Development Plan Items', () => {
     expect(developmentPlanViewModel(developmentPlan)).toMatchObject({
       objectLabel: 'Web product UI architecture foundation plan',
@@ -135,6 +169,17 @@ describe('product-grade presentation view models', () => {
       primaryActorOrRole: expect.any(String),
       riskSignal: expect.any(String),
     });
+  });
+
+  it('advances Development Plan Items to release preparation after approved QA handoff', () => {
+    const { next_action: _nextAction, ...itemWithoutExplicitNextAction } = developmentPlanItem;
+
+    expect(developmentPlanItemViewModel({
+      ...itemWithoutExplicitNextAction,
+      execution_status: 'completed',
+      qa_handoff_status: 'approved',
+      review_status: 'approved',
+    }).nextAction).toBe('Prepare release');
   });
 
   it('projects Spec and Execution Plan governance queues', () => {
