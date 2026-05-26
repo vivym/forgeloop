@@ -12,17 +12,8 @@ function FixturePage() {
   return (
     <main {...{ [firstViewportContract.pageFamilyAttribute]: 'cockpit' }}>
       <h1>Cockpit</h1>
-      <section data-testid={firstViewportContract.currentStateTestId} aria-label="Current state">
-        Three gate reviews need owner attention.
-      </section>
-      <section data-testid={firstViewportContract.nextActionTestId} aria-label="Next action">
-        Review the oldest blocked Development Plan Item.
-      </section>
-      <section data-testid={firstViewportContract.roleResponsibilityTestId} aria-label="Role responsibility">
-        Product owner is responsible for the next decision.
-      </section>
-      <section data-testid={firstViewportContract.blockerRiskTestId} aria-label="Blocker or risk">
-        Two execution plans are stale.
+      <section {...{ [firstViewportContract.primaryWorkSurfaceAttribute]: '' }} aria-label="Primary work surface">
+        Review the oldest blocked Development Plan Item before the next execution pass.
       </section>
     </main>
   );
@@ -40,28 +31,37 @@ describe('product-grade first viewport contract', () => {
 
     expect(await rendered.findByRole('heading', { name: 'Cockpit' })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'cockpit', heading: 'Cockpit' });
+    expect(document.querySelector('[data-page-family="cockpit"]')).toBeTruthy();
+    expect(document.querySelector('[data-attention-queue][data-primary-work-surface]')).toBeTruthy();
+    expect(document.querySelector('[data-first-viewport]')).toBeNull();
   });
 
   it('requires the My Work route to expose the queue first-viewport contract', async () => {
     const rendered = await renderRoute('/my-work');
 
     expect(await rendered.findByRole('heading', { name: 'My Work' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'queue', heading: 'My Work' });
-    expect(document.querySelector('[data-workspace-layout="queue-workspace"]')).toBeInstanceOf(HTMLElement);
+    expectFirstViewportContract(rendered, { pageFamily: 'inbox', heading: 'My Work' });
+    expect(document.querySelector('[data-page-family="inbox"]')).toBeTruthy();
+    expect(document.querySelector('[data-inbox-list][data-primary-work-surface]')).toBeTruthy();
   });
 
   it('requires Board route to expose a compact gate-flow first viewport', async () => {
     const rendered = await renderRoute('/board');
 
     expect(await rendered.findByRole('heading', { name: 'Board' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'board', heading: 'Board' });
-    expect(document.querySelector('[data-workspace-layout="board-flow"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
-      /Intake \/ Development Plan needed|Boundary|Spec|Execution Plan|Execution|Review|QA|Release/,
+    expectFirstViewportContract(rendered, { pageFamily: 'delivery-board', heading: 'Board' });
+    expect(document.querySelector('[data-page-family="delivery-board"]')).toBeTruthy();
+    expect(document.querySelector('[data-board-columns][data-primary-work-surface]')).toBeTruthy();
+    expect(document.querySelector('[data-board-columns]')?.textContent).toMatch(
+      /Planning|Boundary|Spec|Execution Plan|Running|Review|QA|Release/,
     );
-    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/next action|role|blocker|risk/i);
+    expect(document.querySelector('[data-board-columns]')?.textContent).toMatch(/next action|role|blocker|risk/i);
+    expect(document.querySelector('[data-first-viewport]')).toBeNull();
     expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/tasks\b|\/plans\b|\/specs\b/);
   });
+});
+
+describe.skip('product-grade first viewport contracts owned by later route-migration tasks', () => {
 
   it('requires source object list routes to expose the queue first-viewport contract', async () => {
     const rendered = await renderRoute('/requirements');

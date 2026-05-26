@@ -21,26 +21,22 @@ import { myWorkQueueViewModel } from '../../apps/web/src/features/my-work/my-wor
 const legacyOwnerPattern = new RegExp(`${['Work', 'Item', 'Owner'].join(' ')}|${['owner', 'actor', 'id'].join('_')}`);
 
 describe('My Work route', () => {
-  it('renders the role-aware queue workspace first viewport without generic Work Items copy', async () => {
+  it('renders the role-aware inbox first viewport without generic Work Items copy', async () => {
     const screen = await renderRoute('/my-work');
 
     expect(await screen.findByRole('heading', { name: 'My Work' })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="queue"][data-workspace-layout="queue-workspace"]')).toBeInstanceOf(HTMLElement);
-    expect(screen.getByTestId('current-state').textContent?.trim()).toBeTruthy();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/Next action/i);
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
-    expect(screen.getByTestId('role-responsibility').textContent?.trim()).toBeTruthy();
-    expect(screen.getByTestId('blocker-risk').textContent).toMatch(/blocker|risk|release/i);
-    for (const group of [
-      'Product attention',
-      'Tech Lead attention',
-      'Developer attention',
-      'QA attention',
-      'Release attention',
-      'Manager attention',
-    ]) {
-      expect(screen.getByText(group)).toBeTruthy();
-    }
+    expect(document.querySelector('[data-page-family="inbox"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-inbox-list][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-page-family="queue"]')).toBeNull();
+    expect(document.querySelector('[data-workspace-layout="queue-workspace"]')).toBeNull();
+    expect(document.querySelector('[data-testid="current-state"]')).toBeNull();
+    expect(document.querySelector('[data-testid="next-action"]')).toBeNull();
+    expect(document.querySelector('[data-testid="role-responsibility"]')).toBeNull();
+    expect(document.querySelector('[data-testid="blocker-risk"]')).toBeNull();
+    expect((await screen.findAllByText(/Needs boundary approval/i))[0]).toBeTruthy();
+    expect(screen.getByText('Developer attention')).toBeTruthy();
+    expect(screen.queryByText('No attention items.')).toBeNull();
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
     expect(screen.queryByText('Work Items')).toBeNull();
     expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
   });
@@ -79,7 +75,7 @@ describe('My Work route', () => {
     expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
   });
 
   it('fails closed when a bare enabled bulk action has no selected-row scoped command', async () => {
@@ -101,7 +97,7 @@ describe('My Work route', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${requirementListItem.title}`, 'i') }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
   });
 
   it('fails closed when scoped command metadata does not include selected-row object refs', async () => {
@@ -124,7 +120,7 @@ describe('My Work route', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${requirementListItem.title}`, 'i') }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
   });
 
   it('keeps scoped bulk actions hidden until an executable command contract exists', async () => {
@@ -165,7 +161,7 @@ describe('My Work route', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /Select Plan Item governance retry requirement/i }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/Bulk action execution command unavailable/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/Bulk action execution command unavailable/i)).toBeTruthy();
   });
 
   it('does not expose raw bulk action hrefs when selected rows share a scoped but non-executable command', async () => {
@@ -196,7 +192,7 @@ describe('My Work route', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${requirementListItem.title}`, 'i') }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/Bulk action execution command unavailable/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/Bulk action execution command unavailable/i)).toBeTruthy();
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href')).join(' ')).not.toMatch(/\/runtime\/secret/i);
   });
 
@@ -222,7 +218,7 @@ describe('My Work route', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${bugListItem.title}`, 'i') }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
   });
 
   it('links queue rows to typed object routes', async () => {

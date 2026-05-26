@@ -2,7 +2,7 @@ import { Link } from 'react-router';
 
 import { useDashboardQuery } from '../../shared/api/hooks';
 import { useProjectContext } from '../../shared/context/project-context';
-import { CompactMetadata, GateProgress, Section, WorkspacePage } from '../../shared/layout';
+import { CockpitLayout, CompactMetadata, GateProgress, ProductPage, Section } from '../../shared/layout';
 import { InlineNotice, StatusPill } from '../../shared/ui';
 import { stateFromStatus, SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import { dashboardCockpitViewModel, type DashboardCockpitViewModel } from './cockpit-view-model';
@@ -15,31 +15,36 @@ export function CockpitRoute() {
   const viewModel = dashboardCockpitViewModel(query.data ?? emptyDashboard(projectId));
 
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk={viewModel.riskSignal}
+    <ProductPage
       family="cockpit"
       heading="Cockpit"
-      layout="workspace"
-      nextAction={viewModel.nextAction}
-      roleResponsibility={viewModel.primaryActorOrRole}
-      state={viewModel.currentState}
-      subtitle="Action-first operating cockpit for current delivery state, role responsibility, blockers, execution continuity, review queues, QA, and release readiness."
       toolbar={<StatusPill tone="info">{viewModel.objectType}</StatusPill>}
     >
       <SurfaceStateIndicator label="Cockpit" state={cockpitSurfaceState(query.isLoading, query.isError, query.data)} />
       {query.isLoading ? <InlineNotice title="Loading Cockpit." tone="info" /> : null}
       {query.isError ? <InlineNotice title="Cockpit could not be loaded." tone="danger" /> : null}
-
-      <Section
-        description="Role lens output from the current cockpit signal. Items route to canonical product destinations only."
-        title="Role-selected next-action queue"
-      >
-        <MetadataActionList items={viewModel.roleSelectedQueue} />
-      </Section>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(20rem,0.95fr)]">
-        <Section description="Blocker, aging, risk, release, and stale-source gates that require attention." title="Blockers and stale gates">
+      <CockpitLayout
+        commandStrip={<MetadataActionList items={viewModel.roleSelectedQueue} />}
+        attentionQueue={
+          <div className="grid gap-3">
+            <AttentionSection
+              description="Execution continuity and resumability signals."
+              items={viewModel.activeExecutionItems}
+              title="Active and resumable executions"
+            />
+            <AttentionSection
+              description="Item-scoped Spec and Execution Plan review attention."
+              items={viewModel.specExecutionPlanItems}
+              title="Spec / Execution Plan review queue"
+            />
+            <AttentionSection
+              description="QA handoff, release confidence, and readiness evidence attention."
+              items={viewModel.qaReleaseAttentionItems}
+              title="QA and release readiness attention"
+            />
+          </div>
+        }
+        riskColumn={
           <GateProgress
             gates={viewModel.blockerAndStaleGates.map((gate) => ({
               id: String(gate.label),
@@ -47,31 +52,10 @@ export function CockpitRoute() {
               status: gate.disabledReason === undefined ? gate.state : `${gate.state}: ${gate.disabledReason}`,
             }))}
           />
-        </Section>
-
-        <Section title="Compact health indicators">
-          <CompactMetadata items={viewModel.compactHealthIndicators} />
-        </Section>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-3">
-        <AttentionSection
-          description="Execution continuity and resumability signals."
-          items={viewModel.activeExecutionItems}
-          title="Active and resumable executions"
-        />
-        <AttentionSection
-          description="Item-scoped Spec and Execution Plan review attention."
-          items={viewModel.specExecutionPlanItems}
-          title="Spec / Execution Plan review queue"
-        />
-        <AttentionSection
-          description="QA handoff, release confidence, and readiness evidence attention."
-          items={viewModel.qaReleaseAttentionItems}
-          title="QA and release readiness attention"
-        />
-      </div>
-    </WorkspacePage>
+        }
+        healthRail={<CompactMetadata items={viewModel.compactHealthIndicators} />}
+      />
+    </ProductPage>
   );
 }
 

@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router';
 import { useMyWorkQuery } from '../../shared/api/hooks';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { CompactMetadata, PreviewPane, QueueWorkspace, Section } from '../../shared/layout';
+import { CompactMetadata, InboxLayout, PreviewPane, ProductPage, Section } from '../../shared/layout';
 import { Badge, Checkbox, DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import {
   myWorkQueueViewModel,
@@ -40,6 +40,7 @@ export function MyWorkRoute() {
     [baseViewModel.groups, gateFilter, riskFilter, roleFilter, statusFilter],
   );
   const filteredRows = useMemo(() => filteredGroups.flatMap((group) => group.rows), [filteredGroups]);
+  const visibleGroups = useMemo(() => filteredGroups.filter((group) => group.rows.length > 0), [filteredGroups]);
   const [focusedRowKey, setFocusedRowKey] = useState<string | undefined>(undefined);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const selectedRows = useMemo(
@@ -76,53 +77,36 @@ export function MyWorkRoute() {
     ));
   };
 
-  const currentState = query.isLoading ? 'Loading role queue' : query.isError ? 'Queue failed to load' : viewModel.currentState;
-  const blockerRisk = query.isError ? 'My Work query failed; review the queue source before acting.' : viewModel.riskSignal;
   const degradedSources = query.data?.degraded_sources ?? [];
-  const nextAction = (
-    <div className="grid gap-1">
-      <span>{viewModel.safeBulkAction ? viewModel.nextAction : viewModel.disabledReason}</span>
-      {!viewModel.safeBulkAction ? <span className="text-xs text-text-secondary">{viewModel.disabledReason}</span> : null}
-    </div>
-  );
 
   return (
-    <div data-page-family="queue" data-workspace-layout="queue-workspace">
-      <QueueWorkspace
-        as="div"
-        blockerRisk={blockerRisk}
-        family="queue"
-        heading="My Work"
-        nextAction={nextAction}
-        roleResponsibility={viewModel.primaryActorOrRole}
-        state={currentState}
-        subtitle="Role-aware product inbox."
-        toolbar={<QueueFilterToolbar label="Role" options={baseViewModel.filters.roles} selected={roleFilter} setSelected={setRoleFilter} />}
-      >
-        <div className="grid gap-4">
-          <SurfaceStateIndicator label="My Work" state={myWorkSurfaceState(query.isLoading, query.isError, filteredRows, degradedSources)} />
-          {query.isLoading ? <InlineNotice title="Loading My Work." tone="info" /> : null}
-          {query.error ? <InlineNotice title="My Work could not be loaded." tone="danger" /> : null}
-          {mode === 'reprioritize' ? (
-            <InlineNotice
-              description="Attention items stay grouped by role; use the blocking gate, age, and risk context to reorder the next operating pass."
-              title="Reprioritization mode"
-              tone="info"
-            />
-          ) : null}
-          <Section
-            title="Queue filters"
-            variant="panel"
-          >
-            <div className="grid gap-3">
-              <QueueFilterToolbar label="Status" options={baseViewModel.filters.statuses} selected={statusFilter} setSelected={setStatusFilter} />
-              <QueueFilterToolbar label="Gate" options={baseViewModel.filters.gates} selected={gateFilter} setSelected={setGateFilter} />
-              <QueueFilterToolbar label="Risk" options={baseViewModel.filters.risks} selected={riskFilter} setSelected={setRiskFilter} />
-            </div>
-          </Section>
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-            <div className="grid min-w-0 gap-4">
-              {filteredGroups.map((group) => (
+    <ProductPage
+      family="inbox"
+      heading="My Work"
+      toolbar={<QueueFilterToolbar label="Role" options={baseViewModel.filters.roles} selected={roleFilter} setSelected={setRoleFilter} />}
+    >
+      <SurfaceStateIndicator label="My Work" state={myWorkSurfaceState(query.isLoading, query.isError, filteredRows, degradedSources)} />
+      {query.isLoading ? <InlineNotice title="Loading My Work." tone="info" /> : null}
+      {query.error ? <InlineNotice title="My Work could not be loaded." tone="danger" /> : null}
+      {mode === 'reprioritize' ? (
+        <InlineNotice
+          description="Attention items stay grouped by role; use the blocking gate, age, and risk context to reorder the next operating pass."
+          title="Reprioritization mode"
+          tone="info"
+        />
+      ) : null}
+      <InboxLayout
+        groups={<QueueFilterToolbar label="Gate" options={baseViewModel.filters.gates} selected={gateFilter} setSelected={setGateFilter} />}
+        toolbar={
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <QueueFilterToolbar label="Status" options={baseViewModel.filters.statuses} selected={statusFilter} setSelected={setStatusFilter} />
+            <QueueFilterToolbar label="Risk" options={baseViewModel.filters.risks} selected={riskFilter} setSelected={setRiskFilter} />
+          </div>
+        }
+        list={
+          <div className="grid min-w-0 gap-4">
+            {visibleGroups.length > 0 ? (
+              visibleGroups.map((group) => (
                 <MyWorkGroup
                   focusedRowKey={focusedRow?.id}
                   group={group}
@@ -131,13 +115,17 @@ export function MyWorkRoute() {
                   onToggleSelectedRow={toggleSelectedRow}
                   selectedRowIds={selectedRowIds}
                 />
-              ))}
-            </div>
-            <SelectedItemPreview disabledReason={viewModel.disabledReason} row={focusedRow} selectedCount={selectedRows.length} />
+              ))
+            ) : (
+              <Section title="No attention items" variant="panel">
+                <p className="m-0 text-sm text-text-secondary">No visible items match the selected filters.</p>
+              </Section>
+            )}
           </div>
-        </div>
-      </QueueWorkspace>
-    </div>
+        }
+        inspector={<SelectedItemPreview disabledReason={viewModel.disabledReason} row={focusedRow} selectedCount={selectedRows.length} />}
+      />
+    </ProductPage>
   );
 }
 

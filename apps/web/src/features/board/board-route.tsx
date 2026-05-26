@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router';
 import { useBoardQuery } from '../../shared/api/hooks';
 import type { BoardCard } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
-import { WorkspacePage } from '../../shared/layout';
+import { DeliveryBoardLayout, ProductPage } from '../../shared/layout';
 import { Badge, InlineNotice, StatusPill } from '../../shared/ui';
 import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 
@@ -12,11 +12,11 @@ type BoardProductCard = BoardCard;
 type BoardGateColumnId = 'intake' | 'boundary' | 'spec' | 'execution-plan' | 'execution' | 'review' | 'qa' | 'release';
 
 const boardGateColumns: readonly { id: BoardGateColumnId; label: string; description: string }[] = [
-  { id: 'intake', label: 'Intake / Development Plan needed', description: 'Source objects waiting for planning scope.' },
+  { id: 'intake', label: 'Planning', description: 'Source objects waiting for planning scope.' },
   { id: 'boundary', label: 'Boundary', description: 'Brainstorming and boundary approval.' },
   { id: 'spec', label: 'Spec', description: 'Spec generation and technical review.' },
   { id: 'execution-plan', label: 'Execution Plan', description: 'Plan generation and implementation review.' },
-  { id: 'execution', label: 'Execution', description: 'Codex worker supervision.' },
+  { id: 'execution', label: 'Running', description: 'Codex worker supervision.' },
   { id: 'review', label: 'Review', description: 'Code review and risk handoff.' },
   { id: 'qa', label: 'QA', description: 'Test handoff and acceptance.' },
   { id: 'release', label: 'Release', description: 'Release readiness and launch control.' },
@@ -34,57 +34,48 @@ export function BoardRoute() {
   const cards = activeFocus === undefined ? allCards : focusedCards;
   const columns = groupByGate(cards);
   const blockedCount = cards.filter((card) => card.blocked).length;
-  const highRiskCount = cards.filter((card) => /high|critical/i.test(card.risk ?? '')).length;
   const degradedSources = query.data?.degraded_sources ?? [];
 
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk={boardBlockerRisk(query.isError, blockedCount, highRiskCount, activeFocus)}
-      family="board"
-      heading="Board"
-      layout="board-flow"
-      nextAction={boardNextAction(query.isError, cards, activeFocus)}
-      roleResponsibility="Product drivers, technical leads, developers, reviewers, QA, and release owners share this gate flow."
-      state={boardCurrentState(query.isLoading, query.isError, cards, blockedCount)}
-      subtitle="Development Plan Item gate flow from intake through release readiness."
-    >
+    <ProductPage family="delivery-board" heading="Board">
       <SurfaceStateIndicator label="Board" state={boardSurfaceState(query.isLoading, query.isError, cards, blockedCount, degradedSources)} />
       {query.isLoading ? <InlineNotice title="Loading board cards." tone="info" /> : null}
       {query.isError ? <InlineNotice title="Board cards could not be loaded." tone="danger" /> : null}
-      {focus !== undefined ? (
-        <InlineNotice
-          description={
-            focusedCards.length > 0
-              ? `Showing ${focusedCards.length} matching board card${focusedCards.length === 1 ? '' : 's'}.`
-              : 'No exact board card matched this focus, so the full gate flow remains visible.'
-          }
-          title={activeFocus === undefined ? 'Focus not found' : boardFocusTitle(activeFocus)}
-          tone={focusedCards.length > 0 ? 'info' : 'warning'}
-        />
-      ) : null}
-      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
-        {columns.map(({ cards: columnCards, column }) => (
-            <section
-              aria-label={`${column.label} cards`}
-              className="grid min-w-0 content-start gap-3 border-t border-border pt-3"
-              key={column.id}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <h2 className="m-0 text-sm font-semibold text-text-primary">{column.label}</h2>
-                  <p className="m-0 mt-1 text-xs text-text-secondary">{column.description}</p>
-                </div>
-                <Badge tone={columnCards.length > 0 ? 'primary' : 'neutral'}>{columnCards.length}</Badge>
+      <DeliveryBoardLayout
+        toolbar={
+          focus === undefined ? null : (
+            <InlineNotice
+              description={
+                focusedCards.length > 0
+                  ? `Showing ${focusedCards.length} matching board card${focusedCards.length === 1 ? '' : 's'}.`
+                  : 'No exact board card matched this focus, so the full gate flow remains visible.'
+              }
+              title={activeFocus === undefined ? 'Focus not found' : boardFocusTitle(activeFocus)}
+              tone={focusedCards.length > 0 ? 'info' : 'warning'}
+            />
+          )
+        }
+        columns={columns.map(({ cards: columnCards, column }) => (
+          <section
+            aria-label={`${column.label} cards`}
+            className="grid min-w-0 content-start gap-3 border-t border-border pt-3"
+            key={column.id}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="m-0 text-sm font-semibold text-text-primary">{column.label}</h2>
+                <p className="m-0 mt-1 text-xs text-text-secondary">{column.description}</p>
               </div>
-              {columnCards.map((card) => (
-                <BoardObjectCard card={card} key={card.id} />
-              ))}
-              {columnCards.length === 0 ? <div className="py-2 text-xs text-text-secondary">No cards in this gate.</div> : null}
-            </section>
+              <Badge tone={columnCards.length > 0 ? 'primary' : 'neutral'}>{columnCards.length}</Badge>
+            </div>
+            {columnCards.map((card) => (
+              <BoardObjectCard card={card} key={card.id} />
+            ))}
+            {columnCards.length === 0 ? <div className="py-2 text-xs text-text-secondary">No cards in this gate.</div> : null}
+          </section>
         ))}
-      </div>
-    </WorkspacePage>
+      />
+    </ProductPage>
   );
 }
 
@@ -125,33 +116,6 @@ function isFocusedBoardCard(card: BoardProductCard, focus: BoardFocus): boolean 
 
 function boardFocusTitle(focus: BoardFocus): string {
   return focus.type === 'execution' ? 'Focused Execution card' : 'Focused Development Plan Item card';
-}
-
-function boardCurrentState(
-  isLoading: boolean,
-  isError: boolean,
-  cards: BoardProductCard[],
-  blockedCount: number,
-): string {
-  if (isLoading) return 'Loading gate flow';
-  if (isError) return 'Gate flow unavailable';
-  if (cards.length === 0) return 'No cards in gate flow';
-  if (blockedCount > 0) return `${blockedCount} blocked gate card${blockedCount === 1 ? '' : 's'}`;
-  return `${cards.length} cards across gate flow`;
-}
-
-function boardNextAction(isError: boolean, cards: BoardProductCard[], focus: BoardFocus | undefined): string {
-  if (isError) return 'Reload the board query before changing gate priority.';
-  if (focus !== undefined) return 'Inspect the focused gate card and continue from its canonical route.';
-  const blocked = cards.find((card) => card.blocked);
-  if (blocked !== undefined) return `${nextActionFor(blocked)} for the blocked ${objectLabel(blocked.object_ref.type)}.`;
-  return 'Open the highest-risk gate card or continue the active Development Plan Item.';
-}
-
-function boardBlockerRisk(isError: boolean, blockedCount: number, highRiskCount: number, focus: BoardFocus | undefined): string {
-  if (isError) return 'Board query failed; gate blockers and risk cannot be trusted.';
-  const focusText = focus === undefined ? 'full gate flow visible' : 'focused gate flow visible';
-  return `${blockedCount} blocked / ${highRiskCount} high risk / ${focusText}`;
 }
 
 function BoardObjectCard({ card }: { card: BoardProductCard }) {
