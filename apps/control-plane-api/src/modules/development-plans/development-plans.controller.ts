@@ -1,4 +1,4 @@
-import { Body, Controller, Inject, Param, Post } from '@nestjs/common';
+import { Body, Controller, Inject, Param, Patch, Post } from '@nestjs/common';
 import { sourceObjectRefSchema } from '@forgeloop/contracts';
 import { z } from 'zod';
 
@@ -31,6 +31,17 @@ const createDevelopmentPlanItemCommandSchema = z
   })
   .strict();
 
+const updateDevelopmentPlanItemCommandSchema = z
+  .object({
+    title: nonEmptyString.optional(),
+    summary: nonEmptyString.optional(),
+    actor_id: nonEmptyString.optional(),
+  })
+  .strict()
+  .refine((body) => body.title !== undefined || body.summary !== undefined, {
+    message: 'title or summary is required',
+  });
+
 const generateDevelopmentPlanDraftCommandSchema = z
   .object({
     project_id: nonEmptyString,
@@ -57,6 +68,7 @@ const linkDevelopmentPlanCommandSchema = z
 
 type CreateDevelopmentPlanCommandDto = z.infer<typeof createDevelopmentPlanCommandSchema>;
 type CreateDevelopmentPlanItemCommandDto = z.infer<typeof createDevelopmentPlanItemCommandSchema>;
+type UpdateDevelopmentPlanItemCommandDto = z.infer<typeof updateDevelopmentPlanItemCommandSchema>;
 type GenerateDevelopmentPlanDraftCommandDto = z.infer<typeof generateDevelopmentPlanDraftCommandSchema>;
 type RegenerateDevelopmentPlanDraftCommandDto = z.infer<typeof regenerateDevelopmentPlanDraftCommandSchema>;
 type LinkDevelopmentPlanCommandDto = z.infer<typeof linkDevelopmentPlanCommandSchema>;
@@ -77,6 +89,15 @@ export class DevelopmentPlansController {
     @Body(new ZodValidationPipe(createDevelopmentPlanItemCommandSchema)) body: CreateDevelopmentPlanItemCommandDto,
   ) {
     return this.service.createDevelopmentPlanItem(developmentPlanId, body);
+  }
+
+  @Patch('development-plans/:developmentPlanId/items/:itemId')
+  updateDevelopmentPlanItem(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('itemId') itemId: string,
+    @Body(new ZodValidationPipe(updateDevelopmentPlanItemCommandSchema)) body: UpdateDevelopmentPlanItemCommandDto,
+  ) {
+    return this.service.updateDevelopmentPlanItem(developmentPlanId, itemId, body);
   }
 
   @Post('development-plans/generate-draft')

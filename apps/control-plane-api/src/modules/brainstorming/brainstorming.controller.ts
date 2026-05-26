@@ -118,6 +118,22 @@ export class BrainstormingController {
     });
   }
 
+  @Post('development-plans/:developmentPlanId/items/:itemId/boundary-brainstorming/restart')
+  restartBoundaryBrainstorming(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('itemId') itemId: string,
+    @Body(new ZodValidationPipe(startBoundaryBrainstormingSchema)) body: StartBoundaryBrainstormingDto,
+  ) {
+    return this.service.restartBoundaryBrainstorming({
+      development_plan_id: developmentPlanId,
+      item_id: itemId,
+      actor_id: body.actor_id,
+      leader_actor_id: body.leader_actor_id,
+      leader_delegate_actor_ids: body.leader_delegate_actor_ids,
+      initial_leader_context_markdown: body.initial_leader_context_markdown,
+    });
+  }
+
   @Post('brainstorming-sessions/:sessionId/answers')
   answerQuestion(
     @Param('sessionId') sessionId: string,
@@ -132,6 +148,11 @@ export class BrainstormingController {
     @Body(new ZodValidationPipe(answerQuestionSchema)) body: AnswerQuestionDto,
   ) {
     return this.service.answerQuestion(sessionId, body);
+  }
+
+  @Get('boundary-brainstorming-sessions/:sessionId')
+  getBoundaryBrainstormingSession(@Param('sessionId') sessionId: string) {
+    return this.service.getBoundaryBrainstormingSession(sessionId);
   }
 
   @Post('brainstorming-sessions/:sessionId/decisions')

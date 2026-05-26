@@ -142,18 +142,34 @@ export class BrainstormingService {
     });
   }
 
+  async restartBoundaryBrainstorming(input: StartBoundaryBrainstormingInput): Promise<BrainstormingSession> {
+    return this.startBoundaryProcess({
+      ...input,
+      seedDefaultQuestions: false,
+      scheduleInitialRound: true,
+      allowApprovedBoundaryRestart: true,
+    });
+  }
+
+  async getBoundaryBrainstormingSession(sessionId: string): Promise<BrainstormingSession> {
+    return this.requireBrainstormingSession(sessionId);
+  }
+
   private async startBoundaryProcess(
     input: StartBoundaryBrainstormingInput & {
       seedDefaultQuestions: boolean;
       scheduleInitialRound: boolean;
       legacyActorLeaderWhenUnassigned?: boolean | undefined;
+      allowApprovedBoundaryRestart?: boolean | undefined;
     },
   ): Promise<BrainstormingSession> {
     return this.repository.withObjectLock(`development-plan:${input.development_plan_id}`, async (planLockedRepository) =>
       planLockedRepository.withDeliveryTransaction(async (repository) => {
         const plan = await this.requireDevelopmentPlan(input.development_plan_id, repository);
         const item = await this.requireDevelopmentPlanItem(input.development_plan_id, input.item_id, repository);
-        this.assertItemBoundaryNotApproved(item);
+        if (input.allowApprovedBoundaryRestart !== true) {
+          this.assertItemBoundaryNotApproved(item);
+        }
         const requestedLeaderActorId =
           input.legacyActorLeaderWhenUnassigned === true && item.leader_actor_id === undefined
             ? input.actor_id
@@ -166,10 +182,20 @@ export class BrainstormingService {
         });
         const itemForSession =
           leader.updatedItem === undefined
-            ? item
+            ? input.allowApprovedBoundaryRestart === true
+              ? {
+                  ...item,
+                  boundary_status: 'in_progress' as const,
+                  next_action: 'continue_boundary_brainstorming',
+                  updated_at: this.runtime.now(),
+                }
+              : item
             : {
                 ...leader.updatedItem,
-                boundary_status: leader.updatedItem.boundary_status === 'not_started' ? 'in_progress' : leader.updatedItem.boundary_status,
+                boundary_status:
+                  input.allowApprovedBoundaryRestart === true || leader.updatedItem.boundary_status === 'not_started'
+                    ? 'in_progress'
+                    : leader.updatedItem.boundary_status,
                 next_action: 'continue_boundary_brainstorming',
                 updated_at: this.runtime.now(),
               };

@@ -11,6 +11,8 @@ import {
   seedApprovedExecutionPlan,
 } from '../helpers/execution-supervision-fixtures';
 
+const digest = (seed: string): string => `sha256:${seed.repeat(64).slice(0, 64)}`;
+
 describe('Executions API', () => {
   let app: INestApplication;
 
@@ -152,6 +154,92 @@ describe('Executions API', () => {
     const executionPackage = await repository.getExecutionPackage(executionPackageRef.id);
     expect(executionPackage?.execution_id).toBe(firstExecution.id);
     await expect(repository.listRunSessionsForPackage(executionPackageRef.id)).resolves.toHaveLength(1);
+  });
+
+  it('exposes real run-worker execution evidence on product Development Plan Item projections', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app, {
+      executionPlanRevisionSummary: 'Write strict runtime dogfood report',
+      executionPlanRevisionContent: 'Create the public-safe dogfood report.',
+      executionPlanStructuredDocument: {
+        implementation_sequence: ['Write docs/superpowers/reports/codex-runtime-superpowers-dogfood.md'],
+        validation_strategy: ['Verify public-safe report evidence'],
+        allowed_paths: ['docs/**'],
+        forbidden_paths: ['packages/db/**'],
+        required_checks: [
+          {
+            check_id: 'docs-verify',
+            command: 'pnpm vitest run tests/api/executions.test.ts',
+            timeout_seconds: 120,
+            blocks_review: true,
+          },
+        ],
+        public_summary: 'Docs-only strict runtime dogfood report.',
+      },
+    });
+    const execution = (
+      await request(app.getHttpServer())
+        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+        .send({ actor_id: executionActorDeveloper })
+        .expect(201)
+    ).body;
+    const runSessionRef = execution.runtime_evidence_refs.find((ref: { type: string; id: string }) => ref.type === 'run_session');
+    if (runSessionRef === undefined) {
+      throw new Error('Run session runtime evidence ref was not recorded');
+    }
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const runSession = await repository.getRunSession(runSessionRef.id);
+    if (runSession === undefined) {
+      throw new Error('Run session was not persisted');
+    }
+    const changedFiles = [
+      {
+        repo_id: 'repo-1',
+        path: 'docs/superpowers/reports/codex-runtime-superpowers-dogfood.md',
+        change_kind: 'added' as const,
+      },
+    ];
+    await repository.saveRunSession({
+      ...runSession,
+      status: 'succeeded',
+      changed_files: changedFiles,
+      executor_result: {
+        run_session_id: runSession.id,
+        executor_type: 'local_codex',
+        executor_version: 'codex-remote-worker',
+        status: 'succeeded',
+        started_at: runSession.started_at ?? runSession.created_at,
+        finished_at: '2026-05-05T00:02:00.000Z',
+        summary: 'Strict runtime dogfood report written.',
+        changed_files: changedFiles,
+        checks: [],
+        artifacts: [],
+        raw_metadata: {
+          workspace_bundle_digest: digest('w'),
+          workspace_bundle_manifest_digest: digest('x'),
+          mounted_task_workspace_digest: digest('m'),
+        },
+      },
+      updated_at: '2026-05-05T00:02:00.000Z',
+      finished_at: '2026-05-05T00:02:00.000Z',
+    });
+
+    const response = await request(app.getHttpServer())
+      .get(`/query/development-plans/${developmentPlan.id}/items/${item.id}`)
+      .expect(200);
+
+    expect(response.body.executions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: execution.id,
+          runtime_evidence: {
+            workspace_bundle_digest: digest('w'),
+            workspace_bundle_manifest_digest: digest('x'),
+            mounted_task_workspace_digest: digest('m'),
+            changed_files: ['docs/superpowers/reports/codex-runtime-superpowers-dogfood.md'],
+          },
+        }),
+      ]),
+    );
   });
 
   it('fails docs-only dogfood execution before launch when the approved Execution Plan omits docs allowlist', async () => {

@@ -1578,11 +1578,17 @@ git commit -m "feat: harden execution bridge workspace isolation"
 - Create: `scripts/check-runbook-scripts.ts`
 - Modify: `package.json`
 - Modify: `docs/runbooks/codex-remote-worker-runtime.md`
+- Modify: `apps/control-plane-api/src/modules/brainstorming/brainstorming.controller.ts`
+- Modify: `apps/control-plane-api/src/modules/brainstorming/brainstorming.service.ts`
+- Modify: `apps/control-plane-api/src/modules/development-plans/development-plans.controller.ts`
+- Modify: `apps/control-plane-api/src/modules/development-plans/development-plans.service.ts`
+- Modify: `packages/db/src/queries/project-management-queries.ts`
 - Test: `tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts`
 - Test: `tests/smoke/codex-runtime-no-baggage-gate.test.ts`
 - Test: `tests/smoke/runbook-script-consistency.test.ts`
+- Test: `tests/api/executions.test.ts`
 
-- [ ] **Step 1: Write failing guard tests**
+- [x] **Step 1: Write failing guard tests**
 
 Add smoke tests proving:
 
@@ -1591,7 +1597,7 @@ Add smoke tests proving:
 - no-baggage gate flags active strict dogfood use of `/work-items`, `/tasks`, host `~/.codex` as worker setup, `exec_fallback`, or `codex exec`;
 - allowlist entries must include owner/comment.
 
-- [ ] **Step 2: Write failing dogfood script test**
+- [x] **Step 2: Write failing dogfood script test**
 
 Mock API/worker boundaries and assert strict dogfood sequence:
 
@@ -1611,7 +1617,7 @@ Mock API/worker boundaries and assert strict dogfood sequence:
 14. docs-only source change;
 15. report under `docs/superpowers/reports/`.
 
-- [ ] **Step 3: Run failing smoke tests**
+- [x] **Step 3: Run failing smoke tests**
 
 Run:
 
@@ -1621,7 +1627,7 @@ pnpm vitest run tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts tes
 
 Expected: FAIL because scripts/aliases are missing.
 
-- [ ] **Step 4: Add `package.json` aliases**
+- [x] **Step 4: Add `package.json` aliases**
 
 Add:
 
@@ -1634,7 +1640,7 @@ Add:
 "check:runbook-scripts": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/check-runbook-scripts.ts"
 ```
 
-- [ ] **Step 5: Implement runbook script checker**
+- [x] **Step 5: Implement runbook script checker**
 
 `check-runbook-scripts.ts` should:
 
@@ -1643,7 +1649,7 @@ Add:
 - fail if script is not in `package.json`;
 - print public-safe missing script names.
 
-- [ ] **Step 6: Implement no-baggage gate**
+- [x] **Step 6: Implement no-baggage gate**
 
 `check-codex-runtime-superpowers-no-baggage.ts` should run the focused scans from the spec and classify allowed matches.
 
@@ -1660,7 +1666,7 @@ type AllowedMatch = {
 
 Fail any match not covered by allowlist.
 
-- [ ] **Step 7: Implement strict dogfood driver**
+- [x] **Step 7: Implement strict dogfood driver**
 
 `codex-runtime-superpowers-dogfood.ts` should orchestrate the product loop and write a report:
 
@@ -1690,7 +1696,7 @@ const report = {
 
 The markdown report must use product object names and public-safe digests only.
 
-- [ ] **Step 8: Update runbook**
+- [x] **Step 8: Update runbook**
 
 Update `docs/runbooks/codex-remote-worker-runtime.md`:
 
@@ -1699,7 +1705,7 @@ Update `docs/runbooks/codex-remote-worker-runtime.md`:
 - describe no-shared-filesystem worker mode;
 - state local `~/.codex` is import-only.
 
-- [ ] **Step 9: Run smoke tests and gates**
+- [x] **Step 9: Run smoke tests and gates**
 
 Run:
 
@@ -1711,10 +1717,10 @@ pnpm check:runbook-scripts
 
 Expected: PASS.
 
-- [ ] **Step 10: Commit Task 8**
+- [x] **Step 10: Commit Task 8**
 
 ```bash
-git add package.json scripts/codex-runtime-superpowers-dogfood.ts scripts/check-codex-runtime-superpowers-no-baggage.ts scripts/check-runbook-scripts.ts docs/runbooks/codex-remote-worker-runtime.md tests/smoke
+git add package.json apps/control-plane-api/src/modules/brainstorming/brainstorming.controller.ts apps/control-plane-api/src/modules/brainstorming/brainstorming.service.ts apps/control-plane-api/src/modules/development-plans/development-plans.controller.ts apps/control-plane-api/src/modules/development-plans/development-plans.service.ts packages/db/src/queries/project-management-queries.ts scripts/codex-runtime-superpowers-dogfood.ts scripts/check-codex-runtime-superpowers-no-baggage.ts scripts/check-runbook-scripts.ts docs/runbooks/codex-remote-worker-runtime.md tests/smoke tests/api/executions.test.ts
 git commit -m "feat: add codex runtime superpowers dogfood"
 ```
 

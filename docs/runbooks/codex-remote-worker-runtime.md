@@ -18,13 +18,23 @@ Required setup inputs:
 - `FORGELOOP_CODEX_GENERATION_EXPECTED_EFFECTIVE_CONFIG_DIGEST`
 - `FORGELOOP_CODEX_RUN_EXECUTION_EXPECTED_EFFECTIVE_CONFIG_DIGEST`
 - `FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID`
-- `FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID`
+- `FORGELOOP_CODEX_CONFIG_TOML_PATH`
 - `FORGELOOP_CODEX_AUTH_JSON_PATH`
 
-Run the bootstrap script after verifying the auth file is mode `0600`:
+Optional setup inputs:
+
+- `FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID`
+
+The operator can import profile/auth separately or run the bootstrap wrapper. Both read local Codex files as setup inputs only; workers do not read those files at runtime.
 
 ```bash
-pnpm automation:codex-runtime-bootstrap
+pnpm codex:runtime:import -- --from-local-codex-home --unsafe-db-acknowledgement
+```
+
+Run the bootstrap script after verifying the config and auth files are mode `0600`:
+
+```bash
+pnpm codex:runtime:bootstrap
 ```
 
 Record the returned generation and run-execution runtime profile ids, credential binding ids, Docker image digest, network policy digest, and network provider config digest in the operator environment or deployment secret store.
@@ -37,21 +47,26 @@ Start a same-host remote worker with outbound-only control-plane access:
 FORGELOOP_CODEX_WORKER_MODE=remote_outbound \
 FORGELOOP_CODEX_RUN_WORKER_MODE=remote_outbound \
 FORGELOOP_CONTROL_PLANE_URL=http://127.0.0.1:3000 \
-FORGELOOP_WORKER_ID=codex-worker-local-1 \
+FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET=... \
+FORGELOOP_AUTOMATION_ACTOR_ID=codex-worker-operator \
+FORGELOOP_AUTOMATION_DAEMON_IDENTITY=codex-remote-worker-dogfood \
+FORGELOOP_CODEX_WORKER_ID=codex-worker-local-1 \
 FORGELOOP_WORKER_IDENTITY=codex-worker-local \
 FORGELOOP_WORKER_BOOTSTRAP_TOKEN=... \
 FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION=1 \
 FORGELOOP_WORKER_TEMP_ROOT=/tmp/forgeloop-codex-worker \
 FORGELOOP_DOCKER_BIN=docker \
+FORGELOOP_CODEX_NO_SHARED_FILESYSTEM=1 \
 FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST=sha256:... \
 FORGELOOP_CODEX_NETWORK_POLICY_DIGEST=sha256:... \
-FORGELOOP_CODEX_WORKER_SCOPES_JSON='[{"project_id":"project-1","repo_id":"repo-1"}]' \
+FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID=project-1 \
+FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID=repo-1 \
 FORGELOOP_CODEX_WORKER_CAPABILITIES=generation,run_execution \
 FORGELOOP_WORKER_MAX_CONCURRENCY=1 \
 pnpm codex:remote-worker
 ```
 
-Each task gets a fresh per-task CODEX_HOME created under the worker temp root. The task container must not mount or read the worker host `~/.codex` directory. Config, auth, workspace bundle, network policy, and effective-config checks are all bound to the accepted launch lease.
+Each task gets a fresh per-task CODEX_HOME created under the worker temp root. In no-shared-filesystem mode, the task container must not mount or read the worker host `~/.codex` directory, the control-plane repo path, or direct config/auth paths. Config, auth, workspace bundle, network policy, and effective-config checks are all bound to the accepted launch lease.
 
 ## Generation Dogfood
 
@@ -69,6 +84,36 @@ pnpm automation:dogfood
 
 Strict success requires Dockerized app-server evidence: Docker image digest, network policy digest, effective config digest, container id digest, public-safe artifact names and digests, and high-level timing buckets.
 
+## Superpowers Product Loop Dogfood
+
+The strict Superpowers product loop validates centralized config/auth distribution, same-host generation worker startup, no-shared-filesystem run-worker startup, multi-round Boundary Brainstorming, stale-boundary blocking, Spec generation, Execution Plan generation, and Execution from the approved plan.
+
+Keep the Worker Start environment above available to this command because the strict driver invokes one-shot worker polling for the generation and run-execution legs. If the current operator host has the local Codex files, leave bootstrap enabled and provide the Config Bootstrap inputs. If this host does not have local Codex files, import config/auth on a setup host first, copy only the returned profile and binding ids into the deployment secret store, and set `FORGELOOP_CODEX_DOGFOOD_SKIP_BOOTSTRAP=1`.
+
+Use:
+
+```bash
+FORGELOOP_CONTROL_PLANE_URL=http://127.0.0.1:3000 \
+FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID=codex-runtime-setup \
+FORGELOOP_CODEX_DOGFOOD_PROJECT_ID=project-1 \
+FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID=requirement-1 \
+FORGELOOP_CODEX_GENERATION_DRIVER=app_server \
+FORGELOOP_CODEX_WORKER_MODE=remote_outbound \
+FORGELOOP_CODEX_RUN_WORKER_MODE=remote_outbound \
+FORGELOOP_CODEX_NO_SHARED_FILESYSTEM=1 \
+FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID=... \
+FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID=... \
+FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID=... \
+FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID=... \
+FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS=600000 \
+FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS=1000 \
+# Set only when profile/auth were imported earlier on another setup host:
+# FORGELOOP_CODEX_DOGFOOD_SKIP_BOOTSTRAP=1 \
+pnpm dogfood:codex-runtime:superpowers
+```
+
+The report belongs under `docs/superpowers/reports/` and must contain product object ids, artifact names, and digests only.
+
 ## Run Execution Dogfood
 
 The run execution dogfood path uses a pending workspace bundle created by the run-worker after it holds an active run-worker lease. The remote worker downloads the accepted bundle, materializes the launch lease, starts Codex app-server in Docker, uploads patch/check/review artifacts, and terminalizes the runtime job. Existing run-worker finalization remains the only writer for RunSession and ReviewPacket state.
@@ -82,10 +127,10 @@ FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID=... \
 FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS=600000 \
 FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS=1000 \
 FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 \
-pnpm delivery:local-codex-dogfood
+pnpm dogfood:delivery:local-codex
 ```
 
-Local `exec_fallback`, direct host config/auth, raw app-server endpoints, raw container ids, local refs, and absolute paths do not count as strict remote success.
+Direct host config/auth, raw app-server endpoints, raw container ids, local refs, and absolute paths do not count as strict remote success.
 
 ## Drain And Restart
 
@@ -100,7 +145,7 @@ For worker restart:
 
 1. Run the temp-root scavenger before the first online heartbeat.
 2. Remove only owner-tagged task directories under `FORGELOOP_WORKER_TEMP_ROOT`.
-3. Re-register with the same `FORGELOOP_WORKER_ID` only after the previous worker session is expired, recovered, or explicitly replaced.
+3. Re-register with the same `FORGELOOP_CODEX_WORKER_ID` only after the previous worker session is expired, recovered, or explicitly replaced.
 4. Resume polling accepted runtime jobs and consume terminal evidence through normal writer boundaries.
 
 ## Public-Safe Blocker Codes
