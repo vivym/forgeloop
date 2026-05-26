@@ -4,7 +4,6 @@ export default [
   layout('./routes/_layout.tsx', [
     index('./routes/_index.tsx'),
     route('cockpit', './routes/cockpit/index.tsx'),
-    route('dashboard', './routes/dashboard/index.tsx'),
     route('my-work', './routes/my-work/index.tsx'),
     route('requirements', './routes/requirements/index.tsx'),
     route('requirements/new', './routes/requirements/new.tsx'),
@@ -26,6 +25,8 @@ export default [
     route('development-plans/:developmentPlanId/items/:itemId/spec', './routes/development-plans/$developmentPlanId/items/$itemId/spec.tsx'),
     route('development-plans/:developmentPlanId/items/:itemId/execution-plan', './routes/development-plans/$developmentPlanId/items/$itemId/execution-plan.tsx'),
     route('development-plans/:developmentPlanId/items/:itemId/execution', './routes/development-plans/$developmentPlanId/items/$itemId/execution.tsx'),
+    route('development-plans/:developmentPlanId/items/:itemId/review', './routes/development-plans/$developmentPlanId/items/$itemId/review.tsx'),
+    route('development-plans/:developmentPlanId/items/:itemId/qa', './routes/development-plans/$developmentPlanId/items/$itemId/qa.tsx'),
     route('specs-plans', './routes/specs-plans/index.tsx'),
     route('bugs', './routes/bugs/index.tsx'),
     route('bugs/new', './routes/bugs/new.tsx'),

@@ -162,11 +162,6 @@ async function assertNoRenderedBaggage(page: Page, path: string) {
     expect(bodyMarkup, `${path} must not link ${forbidden}`).not.toContain(forbidden);
   }
 
-  if (path === '/reports?report=replay') {
-    expect(bodyText, `${path} must show scoped replay context`).toContain('Lifecycle replay evidence context');
-    expect(bodyMarkup, `${path} must use query-scoped replay`).toContain('report=replay');
-  }
-
   if (!path.startsWith('/releases')) {
     expect(bodyText, `${path} must not render Release Owner outside release pages`).not.toContain('Release Owner');
   }

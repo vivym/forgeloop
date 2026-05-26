@@ -30,7 +30,7 @@ const baseProductNavigationGroups = [
     label: 'Planning',
     items: [
       { label: 'Development Plans', to: '/development-plans' },
-      { label: 'Specs & Execution Plans', to: '/specs-plans' },
+      { label: 'Document Reviews', to: '/specs-plans' },
     ],
   },
   {
