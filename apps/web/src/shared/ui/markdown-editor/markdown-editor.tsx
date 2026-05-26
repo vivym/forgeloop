@@ -48,6 +48,7 @@ export interface ForgeMarkdownEditorProps {
     debounceMs: number;
     onAutosaveDraft: (markdown: string) => void;
   };
+  guardRouteTransitions?: boolean;
   onChange: (markdown: string) => void;
   onSave?: (document: MarkdownDocument) => void | Promise<void>;
   onUploadAttachment: (file: File, objectRef: EditableObjectRef) => Promise<AttachmentRef>;
@@ -57,6 +58,7 @@ export function ForgeMarkdownEditor({
   allowedBlocks,
   attachments = [],
   autosave,
+  guardRouteTransitions = true,
   mode,
   objectRef,
   onChange,
@@ -370,7 +372,7 @@ export function ForgeMarkdownEditor({
         />
       ) : null}
 
-      <RouteTransitionGuard enabled={dirty && mode === 'edit'} />
+      {guardRouteTransitions ? <RouteTransitionGuard enabled={dirty && mode === 'edit'} /> : null}
     </section>
   );
 }

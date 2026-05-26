@@ -171,6 +171,17 @@ async function assertNoRenderedBaggage(page: Page, path: string) {
     expect(bodyText, `${path} must not render Release Owner outside release pages`).not.toContain('Release Owner');
   }
 
+  if (path === '/development-plans') {
+    expect(bodyText, `${path} must render active plan workspace affordances`).toContain('Active Development Plans');
+    expect(bodyText, `${path} must keep source links visible`).toMatch(/source links/i);
+  }
+
+  if (path === '/development-plans/new') {
+    expect(bodyText, `${path} must render a real authoring workspace`).toContain('AI generation guidance');
+    expect(bodyText, `${path} must avoid old source picker placeholder`).not.toContain('Pick a source object first');
+    expect(bodyText, `${path} must preserve item-scoped downstream generation`).toContain('generated only from Plan Items after boundary approval');
+  }
+
   for (const navText of primaryNavText) {
     for (const label of forbiddenPrimaryNavLabels) {
       expect(navText, `primary navigation must not include ${label}`).not.toContain(label);

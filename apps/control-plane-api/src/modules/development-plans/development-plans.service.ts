@@ -23,6 +23,7 @@ type CreateDevelopmentPlanInput = {
   source_ref: SourceObjectRef;
   title: string;
   actor_id?: string | undefined;
+  guidance?: string | undefined;
 };
 
 type CreateDevelopmentPlanItemInput = {
@@ -85,7 +86,7 @@ export class DevelopmentPlansService {
     return this.withDevelopmentPlanMutation(plan.id, async (repository) => {
       await this.requireSourceObject(input.project_id, input.source_ref, repository);
       await repository.saveDevelopmentPlan(plan);
-      await this.saveSourceLink(plan.id, input.source_ref, 'primary', input.actor_id, undefined, repository);
+      await this.saveSourceLink(plan.id, input.source_ref, 'primary', input.actor_id, input.guidance, repository);
       await this.saveDevelopmentPlanRevision(
         plan,
         {
@@ -97,6 +98,7 @@ export class DevelopmentPlansService {
       await this.appendPlanEvent(plan.id, 'development_plan_created', input.actor_id, {
         source_ref: input.source_ref,
         revision_id: plan.revision_id,
+        ...(input.guidance === undefined ? {} : { guidance: input.guidance }),
       }, repository);
       return this.requireDevelopmentPlan(plan.id, repository);
     });

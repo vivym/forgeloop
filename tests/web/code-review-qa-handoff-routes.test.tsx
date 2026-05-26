@@ -3,14 +3,14 @@
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { codeReviewHandoff, execution, projectId, qaHandoff } from './fixtures/product-data';
+import { codeReviewHandoff, developmentPlanItem, execution, projectId, qaHandoff } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('Code review and QA handoff route panels', () => {
   it('renders code review and QA handoff controls from an execution detail', async () => {
     const screen = await renderRoute(`/executions/${execution.id}`);
 
-    expect(await screen.findByRole('heading', { name: /Execution/i })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
     expect((await screen.findByRole('button', { name: /ready for code review/i }) as HTMLButtonElement).disabled).toBe(true);
     expect(await screen.findByRole('heading', { name: /Code review handoff/i })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: /QA handoff/i })).toBeTruthy();

@@ -50,7 +50,7 @@ export function QaHandoffPanel({
   const [message, setMessage] = useState<string>();
   const [rationale, setRationale] = useState('');
   const commandApi = createForgeloopCommandApi();
-  const evidenceRefs: ProductObjectRef[] = handoff?.verification_evidence_refs ?? execution.evidence_refs ?? [{ type: 'execution', id: execution.id, title: `Execution ${execution.id}` }];
+  const evidenceRefs: ProductObjectRef[] = handoff?.verification_evidence_refs ?? execution.evidence_refs ?? [{ type: 'execution', id: execution.id, title: 'Linked execution evidence' }];
   const criteria = handoff?.acceptance_criteria ?? ['Approved Spec acceptance criteria remain satisfied'];
   const testStrategy = handoff?.test_strategy ?? 'Route tests, focused UI checks, and reviewer evidence.';
   const earlyQa = codeReview?.audited_exception !== undefined && codeReview.status !== 'approved';
@@ -119,12 +119,12 @@ export function QaHandoffPanel({
         ) : null}
         <dl className="grid gap-3 text-sm md:grid-cols-2">
           <Definition label="Source object" value={handoff?.source_ref?.title ?? execution.source_ref?.title ?? 'Not linked'} />
-          <Definition label="Development Plan Item" value={handoff?.development_plan_item_ref?.title ?? execution.development_plan_item_ref?.title ?? handoff?.development_plan_item_id ?? execution.development_plan_item_id ?? 'Not linked'} />
+          <Definition label="Development Plan Item" value={handoff?.development_plan_item_ref?.title ?? execution.development_plan_item_ref?.title ?? ((handoff?.development_plan_item_id ?? execution.development_plan_item_id) === undefined ? 'Not linked' : 'Linked Plan Item')} />
           <Definition label="Approved Spec" value={handoff?.approved_spec_revision_ref?.title ?? 'Not linked'} />
           <Definition label="Approved Execution Plan" value={handoff?.approved_execution_plan_revision_ref?.title ?? execution.execution_plan_revision_ref?.title ?? 'Not linked'} />
           <Definition label="Acceptance criteria" value={criteria.join(', ')} />
           <Definition label="Test strategy" value={testStrategy} />
-          <Definition label="Verification evidence" value={evidenceRefs.map((ref) => ref.title ?? ref.id).join(', ')} />
+          <Definition label="Verification evidence" value={evidenceRefs.map(evidenceLabel).join(', ')} />
           <Definition label="Known risks" value={(handoff?.known_risks ?? []).join(', ') || 'None recorded'} />
           <Definition label="Changed surfaces" value={(handoff?.changed_surfaces ?? codeReview?.changed_surfaces ?? []).join(', ') || 'Not recorded'} />
           <Definition label="Release impact" value={formatValue(handoff?.release_impact)} />
@@ -151,4 +151,8 @@ function Definition({ label, value }: { label: string; value: string }) {
 
 function formatValue(value: string | undefined): string {
   return value === undefined ? 'Not recorded' : value.replaceAll('_', ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function evidenceLabel(ref: ProductObjectRef): string {
+  return ref.title ?? (ref.id === undefined ? 'Linked evidence' : 'Linked evidence');
 }

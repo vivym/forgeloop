@@ -19,16 +19,25 @@ import {
   execution,
   projectId,
 } from '../../web/fixtures/product-data';
+import { firstViewportContract } from '../../../apps/web/src/features/product-surfaces/first-viewport-contract';
+import {
+  requiredScreenshotRoutes,
+  visualViewports,
+  type ProductPageFamily,
+  type ProductRouteContract,
+} from '../../../apps/web/src/features/product-surfaces/route-contract';
 
-export const visualViewportWidths = [375, 768, 1024, 1440] as const;
+export const visualViewportWidths = visualViewports;
 
 export type VisualRouteKind = 'active' | 'retired' | 'source-object';
 
 export interface VisualRoute {
+  family?: ProductPageFamily;
   path: string;
   heading: RegExp;
   kind: VisualRouteKind;
   expectActionSurface?: boolean;
+  expectFirstViewportContract?: boolean;
 }
 
 export interface VisualServer {
@@ -36,23 +45,9 @@ export interface VisualServer {
   url: string;
 }
 
-export const aiNativeProjectManagementRoutes: VisualRoute[] = [
-  { path: '/dashboard', heading: /^Dashboard$/, kind: 'active' },
-  { path: '/plans', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/plans/plan-1', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/specs', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/specs/spec-1', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/requirements/req-1', heading: /^Requirement$/, kind: 'source-object', expectActionSurface: true },
-  { path: '/requirements/req-1/spec', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/requirements/req-1/plan', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/development-plans/dp-1', heading: /Web product UI architecture foundation plan|Development Plan/i, kind: 'active' },
-  { path: '/development-plans/dp-1/items/dpi-1', heading: /Build AI-native project management API clients|Development Plan Item/i, kind: 'active' },
-  { path: '/specs-plans', heading: /^Specs & Execution Plans$/, kind: 'active' },
-  { path: '/executions', heading: /^Executions$/, kind: 'active' },
-  { path: '/executions/exec-1', heading: /Execute AI-native Web API client work|Execution/i, kind: 'active' },
-  { path: '/reports', heading: /^Reports$/, kind: 'active' },
-  { path: '/reports?report=replay', heading: /^Reports$/, kind: 'active' },
-];
+export const aiNativeProjectManagementRoutes: VisualRoute[] = requiredScreenshotRoutes.map(toVisualRoute);
+
+export const productGradeScreenshotRoutes = aiNativeProjectManagementRoutes;
 
 export interface AiNativeProjectManagementFixture {
   baseUrl: string;
@@ -334,7 +329,7 @@ export async function captureRouteScreenshot(page: Page, baseUrl: string, route:
 }
 
 async function assertVisualRoute(page: Page, route: VisualRoute) {
-  await expectPage(page.locator('h1').filter({ hasText: route.heading }).first()).toBeVisible();
+  await expectPage(page.getByRole('heading', { level: 1, name: route.heading }).first()).toBeVisible();
 
   const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
   expect(horizontalOverflow, `${route.path} must not create horizontal page scroll`).toBe(false);
@@ -369,6 +364,53 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
   if (route.kind === 'active') {
     expect(mainText, `${route.path} must render an active product surface`).not.toMatch(/not found|not available|retired/i);
   }
+
+  if (route.expectFirstViewportContract) {
+    await assertFirstViewportContract(page, route);
+  }
+}
+
+async function assertFirstViewportContract(page: Page, route: VisualRoute) {
+  if (route.family === undefined) {
+    throw new Error(`${route.path} cannot assert first viewport contract without a page family`);
+  }
+
+  await expectPage(
+    page.locator(`[${firstViewportContract.pageFamilyAttribute}="${route.family}"]`).first(),
+    `${route.path} must expose ${firstViewportContract.pageFamilyAttribute}="${route.family}"`,
+  ).toBeVisible();
+  if (route.family === 'queue') {
+    await expectPage(
+      page.locator(`[${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"]`).first(),
+      `${route.path} must expose ${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"`,
+    ).toBeVisible();
+  }
+
+  for (const testId of [
+    firstViewportContract.currentStateTestId,
+    firstViewportContract.nextActionTestId,
+    firstViewportContract.roleResponsibilityTestId,
+    firstViewportContract.blockerRiskTestId,
+  ]) {
+    const affordance = page.getByTestId(testId).first();
+    await expectPage(affordance, `${route.path} must expose ${testId}`).toBeVisible();
+    const affordanceText = await affordance.evaluate((element) => [
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.textContent,
+    ].filter(Boolean).join(' ').trim());
+    expect(affordanceText.length, `${route.path} ${testId} must not be an empty or color-only affordance`).toBeGreaterThan(0);
+  }
+}
+
+function toVisualRoute(route: ProductRouteContract): VisualRoute {
+  return {
+    family: route.family,
+    path: route.concretePath,
+    heading: route.heading,
+    kind: route.kind === 'retired' ? 'retired' : route.family === 'source-object-detail' ? 'source-object' : 'active',
+    expectFirstViewportContract: route.kind !== 'retired',
+  };
 }
 
 function isProductApiRequest(url: URL): boolean {

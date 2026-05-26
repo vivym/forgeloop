@@ -13,7 +13,7 @@ import {
 import type { SpecPlan } from '../../apps/web/src/shared/api/types';
 import { installProductApiMock } from './fixtures/product-api-mock';
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
-import { developmentPlan, developmentPlanItem } from './fixtures/product-data';
+import { developmentPlan, developmentPlanItem, executionPlan, projectId } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 const inReviewSpec: SpecPlan = {
@@ -206,21 +206,153 @@ describe('SpecPlanLifecycleActions', () => {
 
 describe('Specs & Execution Plans route queue', () => {
   it('renders governance queues scoped to Development Plan Items', async () => {
-    const routeScreen = await renderRoute('/specs-plans');
+    const governanceRows = [
+      {
+        id: 'spec-needs-generation',
+        artifact_type: 'spec',
+        title: 'Spec needs generation',
+        status: 'missing',
+        gate_state: 'needs_generation',
+        summary: 'Spec is missing for the approved Development Plan Item boundary.',
+        source_ref: developmentPlan.source_refs[0],
+        development_plan_item_ref: {
+          type: 'development_plan_item',
+          id: developmentPlanItem.id,
+          development_plan_id: developmentPlan.id,
+          title: developmentPlanItem.title,
+        },
+        reviewer_actor_id: 'actor-tech-lead',
+        age_label: '2h',
+        risk: developmentPlanItem.risk,
+        next_action: 'Generate Spec from approved boundary.',
+        command: 'Generate Spec',
+        href: '/specs/spec-needs-generation',
+      },
+      {
+        id: 'spec-needs-review',
+        artifact_type: 'spec',
+        title: 'Spec needs review',
+        status: 'in_review',
+        gate_state: 'awaiting_review',
+        source_ref: developmentPlan.source_refs[0],
+        development_plan_item_ref: {
+          type: 'development_plan_item',
+          id: 'development-plan-item-review',
+          development_plan_id: developmentPlan.id,
+          title: 'Review checkout failure states',
+        },
+        reviewer_actor_id: 'actor-reviewer',
+        age_label: '1h',
+        risk: 'medium',
+        next_action: 'Review Spec revision.',
+        command: 'Submit Spec for approval',
+      },
+      {
+        id: 'spec-changes-requested',
+        artifact_type: 'spec',
+        title: 'Spec changes requested',
+        status: 'changes_requested',
+        gate_state: 'changes_requested',
+        source_ref: developmentPlan.source_refs[0],
+        development_plan_item_ref: {
+          type: 'development_plan_item',
+          id: 'development-plan-item-changes',
+          development_plan_id: developmentPlan.id,
+          title: 'Clarify retry behavior',
+        },
+        reviewer_actor_id: 'actor-reviewer',
+        age_label: '4h',
+        risk: 'high',
+        next_action: 'Revise Spec and resubmit.',
+        command: 'Revise Spec',
+      },
+      {
+        id: 'spec-approved',
+        artifact_type: 'spec',
+        title: 'Spec approved',
+        status: 'approved',
+        gate_state: 'approved',
+        source_ref: developmentPlan.source_refs[0],
+        development_plan_item_ref: {
+          type: 'development_plan_item',
+          id: 'development-plan-item-approved',
+          development_plan_id: developmentPlan.id,
+          title: 'Ready execution plan item',
+        },
+        reviewer_actor_id: 'actor-reviewer',
+        age_label: '10m',
+        risk: 'low',
+        next_action: 'Generate Execution Plan.',
+        command: 'Generate Execution Plan',
+      },
+      {
+        id: 'spec-stale',
+        artifact_type: 'spec',
+        title: 'Spec stale after boundary change',
+        status: 'stale',
+        gate_state: 'stale',
+        stale: true,
+        blocked: true,
+        source_ref: developmentPlan.source_refs[0],
+        development_plan_item_ref: {
+          type: 'development_plan_item',
+          id: 'development-plan-item-stale',
+          development_plan_id: developmentPlan.id,
+          title: 'Blocked stale governance row',
+        },
+        reviewer_actor_id: 'actor-reviewer',
+        age_label: '2d',
+        risk: 'critical',
+        next_action: 'Resolve stale boundary blocker.',
+        command: 'Regenerate Spec',
+      },
+      {
+        id: executionPlan.id,
+        artifact_type: 'execution_plan',
+        title: 'Execution Plan needs review',
+        status: 'in_review',
+        gate_state: 'awaiting_review',
+        source_ref: developmentPlan.source_refs[0],
+        development_plan_item_ref: {
+          type: 'development_plan_item',
+          id: developmentPlanItem.id,
+          development_plan_id: developmentPlan.id,
+          title: developmentPlanItem.title,
+        },
+        reviewer_actor_id: 'actor-reviewer',
+        age_label: '45m',
+        risk: developmentPlanItem.risk,
+        next_action: 'Review Execution Plan before execution.',
+        command: 'Approve Execution Plan',
+        href: `/plans/${executionPlan.id}`,
+      },
+    ];
+    const apiOverrides = {
+      [`GET /query/specs-execution-plans?project_id=${projectId}&limit=100`]: {
+        items: governanceRows,
+        degraded_sources: [],
+      },
+    };
+    const routeScreen = await renderRoute('/specs-plans', { apiOverrides });
 
     expect(await routeScreen.findByRole('heading', { name: 'Specs & Execution Plans' })).toBeTruthy();
-    expect((await routeScreen.findAllByText(/Spec needs generation/i)).length).toBeGreaterThan(0);
-    expect((await routeScreen.findAllByRole('link', { name: /open plan item/i })).map((link) => link.getAttribute('href'))).toEqual([
+    for (const label of ['Needs generation', 'Needs review', 'Changes requested', 'Approved / ready', 'Stale / blocked']) {
+      expect(routeScreen.getByRole('region', { name: label })).toBeTruthy();
+    }
+    expect(routeScreen.getByRole('region', { name: /selected governance row/i }).textContent).toMatch(
+      /document summary|gate status|reviewer|development plan item|command/i,
+    );
+    expect((await routeScreen.findAllByRole('link', { name: /open plan item/i })).map((link) => link.getAttribute('href'))).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
-    ]);
+    );
     const plansTab = routeScreen.getByRole('tab', { name: 'Execution Plans' });
     expect(plansTab.getAttribute('href')).toBe('/specs-plans?tab=plans');
     cleanup();
-    const plansScreen = await renderRoute('/specs-plans?tab=plans');
+    const plansScreen = await renderRoute('/specs-plans?tab=plans', { apiOverrides });
     expect((await plansScreen.findAllByText(/Execution Plan needs review/i)).length).toBeGreaterThan(0);
-    expect((await plansScreen.findAllByRole('link', { name: /open plan item/i })).map((link) => link.getAttribute('href'))).toEqual([
+    expect((await plansScreen.findAllByRole('link', { name: /open plan item/i })).map((link) => link.getAttribute('href'))).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
-    ]);
+    );
     expect(document.body.textContent).not.toMatch(/\/plans\/|\/specs\/|\/tasks\//);
   });
 

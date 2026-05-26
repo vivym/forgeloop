@@ -26,7 +26,7 @@ describe('web accessibility gates', () => {
     },
   );
 
-  it.each(['/my-work', '/dashboard', '/specs-plans', '/executions', '/reports'])(
+  it.each(['/my-work', '/cockpit', '/dashboard', '/specs-plans', '/executions', '/reports'])(
     'has no automated axe violations on %s',
     async (route) => {
       await renderRoute(route);
@@ -45,7 +45,7 @@ describe('web accessibility gates', () => {
     expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Skip to main content' }));
 
     await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Dashboard' }));
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Cockpit' }));
 
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole('link', { name: 'My Work' }));
@@ -64,12 +64,12 @@ describe('web accessibility gates', () => {
     await user.tab();
     const trigger = screen.getByRole('button', { name: 'Open navigation' });
     expect(document.activeElement).toBe(trigger);
-    expect(screen.queryByRole('link', { name: 'Dashboard' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Cockpit' })).toBeNull();
 
     await user.keyboard('{Enter}');
 
     expect(screen.getByRole('button', { name: 'Close navigation' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Dashboard' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Cockpit' })).toBeTruthy();
   });
 
   it('keeps mobile navigation drawers keyboard-accessible and closable', async () => {
@@ -95,7 +95,7 @@ describe('web accessibility gates', () => {
     const screen = await renderRoute(`/executions/${execution.id}`);
     const main = screen.getByRole('main');
 
-    expect(await screen.findByRole('heading', { name: 'Execution' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
     main.focus();
     expect(document.activeElement).toBe(main);
   });
@@ -113,7 +113,7 @@ describe('web accessibility gates', () => {
     const tokens = cssTokenMap(css);
     const legacyTokenPrefix = ['--', 'fl'].join('');
 
-    expect(tokens['--color-background']).toBe('#f6f8fb');
+    expect(tokens['--color-background']).toBe('#f3f6fa');
     expect(tokens['--color-surface']).toBe('#ffffff');
     expect(tokens['--color-primary']).toBe('#2563eb');
     expect(tokens['--z-index-sticky']).toBe('10');

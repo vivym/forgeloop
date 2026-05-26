@@ -548,10 +548,7 @@ describe('Web product API hooks', () => {
       'POST /work-items': { ...workItem, id: 'req-created', kind: 'requirement' },
       'POST /development-plans': { ...developmentPlan, id: 'development-plan-created' },
       [`POST /development-plans/${developmentPlan.id}/items`]: { ...developmentPlanItem, id: 'development-plan-item-created' },
-      'POST /development-plans/generate-draft': {
-        development_plan: developmentPlan,
-        revision: { id: developmentPlan.revision_id, development_plan_id: developmentPlan.id, revision_number: 1 },
-      },
+      'POST /development-plans/generate-draft': { ...developmentPlan, generation_state: 'draft_generated' },
     });
     const api = createForgeloopCommandApi();
 

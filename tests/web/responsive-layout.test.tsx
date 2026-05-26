@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
+import { developmentPlan, developmentPlanItem } from './fixtures/product-data';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -14,9 +15,9 @@ describe('responsive layout contract', () => {
   it('renders the shell with stable responsive landmarks', async () => {
     const screen = await renderRoute('/my-work');
 
-    expect(screen.getByRole('banner')).toBeTruthy();
+    expect(screen.getAllByRole('banner').length).toBeGreaterThan(0);
     expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy();
-    expect(screen.getByRole('main')).toBeTruthy();
+    expect(screen.getAllByRole('main').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Open navigation' })).toBeTruthy();
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
@@ -25,9 +26,8 @@ describe('responsive layout contract', () => {
     const screen = await renderRoute('/requirements/req-1');
 
     expect(await screen.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
-    expect(await screen.findByRole('complementary', { name: /next action/i })).toBeTruthy();
-    expect(document.querySelector('[data-detail-layout-rail]')).toBeTruthy();
-    expect(screen.getByRole('main')).toBeTruthy();
+    expect(document.querySelector('[data-workspace-layout="object"]')).toBeTruthy();
+    expect(screen.getAllByRole('main').length).toBeGreaterThan(0);
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
@@ -54,8 +54,33 @@ describe('responsive layout contract', () => {
 
     expect(screen.getByRole('button', { name: 'Open navigation' })).toBeTruthy();
     await waitFor(() => {
-      expect(screen.queryByRole('link', { name: 'Dashboard' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Cockpit' })).toBeNull();
     });
+  });
+
+  it('keeps Development Plan detail table usable across mobile cards and tablet summary columns', async () => {
+    vi.stubGlobal('innerWidth', 375);
+    vi.stubGlobal('matchMedia', createMatchMedia(375));
+
+    const mobileScreen = await renderRoute(`/development-plans/${developmentPlan.id}`);
+
+    expect(await mobileScreen.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
+    await waitFor(() => {
+      expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(developmentPlanItem.title);
+    });
+    expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(/Current gate|Gate progress/i);
+    expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(/Open item/i);
+    expect(document.querySelector('[data-table-scroll-container]')?.className).toMatch(/overflow-x-auto/);
+    cleanup();
+    vi.unstubAllGlobals();
+
+    vi.stubGlobal('innerWidth', 1024);
+    vi.stubGlobal('matchMedia', createMatchMedia(1024));
+    const tabletScreen = await renderRoute(`/development-plans/${developmentPlan.id}`);
+
+    expect(await tabletScreen.findByRole('columnheader', { name: 'Current gate' })).toBeTruthy();
+    expect(tabletScreen.getByRole('columnheader', { name: 'Gate progress' })).toBeTruthy();
+    expect(tabletScreen.queryByRole('columnheader', { name: 'Execution Plan' })).toBeNull();
   });
 });
 

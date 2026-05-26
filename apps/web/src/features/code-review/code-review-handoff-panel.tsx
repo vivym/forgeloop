@@ -45,7 +45,7 @@ export function CodeReviewHandoffPanel({
   const [rationale, setRationale] = useState('');
   const commandApi = createForgeloopCommandApi();
   const executionEvidenceRefs = execution.evidence_refs ?? [];
-  const evidenceRefs: ProductObjectRef[] = handoff?.verification_evidence_refs ?? execution.evidence_refs ?? [{ type: 'execution', id: execution.id, title: `Execution ${execution.id}` }];
+  const evidenceRefs: ProductObjectRef[] = handoff?.verification_evidence_refs ?? execution.evidence_refs ?? [{ type: 'execution', id: execution.id, title: 'Linked execution evidence' }];
   const changedSurfaces = handoff?.changed_surfaces ?? ['Implementation diff'];
   const hasOpenHandoff = handoff?.status === 'in_review' || handoff?.status === 'approved';
   const canReadyForCodeReview = execution.status === 'completed' && executionEvidenceRefs.length > 0 && !hasOpenHandoff;
@@ -105,11 +105,11 @@ export function CodeReviewHandoffPanel({
       <div className="grid gap-4">
         {message ? <InlineNotice title={message} tone="success" /> : null}
         <dl className="grid gap-3 text-sm md:grid-cols-2">
-          <Definition label="Execution" value={execution.id} />
-          <Definition label="Approved Execution Plan revision" value={execution.execution_plan_revision_ref?.title ?? execution.execution_plan_revision_id ?? 'Not linked'} />
-          <Definition label="Reviewer" value={handoff?.reviewer_actor_id ?? 'Unassigned'} />
+          <Definition label="Execution" value={execution.development_plan_item_ref?.title ?? 'Linked execution'} />
+          <Definition label="Approved Execution Plan revision" value={execution.execution_plan_revision_ref?.title ?? (execution.execution_plan_revision_id === undefined ? 'Not linked' : 'Linked revision')} />
+          <Definition label="Reviewer" value={handoff?.reviewer_actor_id === undefined ? 'Unassigned' : 'Assigned reviewer'} />
           <Definition label="Changed surfaces" value={changedSurfaces.join(', ')} />
-          <Definition label="Verification evidence" value={evidenceRefs.map((ref) => ref.title ?? ref.id).join(', ')} />
+          <Definition label="Verification evidence" value={evidenceRefs.map(evidenceLabel).join(', ')} />
           <Definition label="Comments or requested changes" value={[...(handoff?.comments ?? []), ...(handoff?.changes_requested ?? [])].join(', ') || 'None recorded'} />
         </dl>
         {handoff?.audited_exception ? (
@@ -144,4 +144,8 @@ function Definition({ label, value }: { label: string; value: string }) {
       <dd className="font-semibold text-text-primary">{value}</dd>
     </div>
   );
+}
+
+function evidenceLabel(ref: ProductObjectRef): string {
+  return ref.title ?? (ref.id === undefined ? 'Linked evidence' : 'Linked evidence');
 }

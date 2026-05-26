@@ -1,9 +1,11 @@
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
+import type { DeliveryRepository } from '@forgeloop/db';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import {
   executionActorDeveloper,
   executionActorOwner,
@@ -131,6 +133,12 @@ describe('project management query API', () => {
         expect.objectContaining({
           object_ref: expect.objectContaining({ type: 'development_plan', id: developmentPlan.id }),
           item_count: 1,
+          responsible_role: item.responsible_role,
+          responsible_roles: [item.responsible_role],
+          gate_state: 'execution',
+          gate_states: ['execution'],
+          risk: item.risk,
+          risks: [item.risk],
           href: `/development-plans/${developmentPlan.id}`,
         }),
       ]),
@@ -266,6 +274,20 @@ describe('project management query API', () => {
         expect.objectContaining({
           object_ref: expect.objectContaining({ type: 'development_plan_item', id: item.id, development_plan_id: item.development_plan_id }),
         }),
+        expect.objectContaining({
+          object_ref: expect.objectContaining({ type: 'execution', id: execution.id }),
+          href: `/executions/${execution.id}`,
+        }),
+        expect.objectContaining({
+          object_ref: expect.objectContaining({ type: 'code_review_handoff', id: review.id }),
+          column_id: 'review',
+          href: `/executions/${execution.id}`,
+        }),
+        expect.objectContaining({
+          object_ref: expect.objectContaining({ type: 'qa_handoff', id: qa.id }),
+          column_id: 'qa',
+          href: `/executions/${execution.id}`,
+        }),
       ]),
     );
 
@@ -287,6 +309,16 @@ describe('project management query API', () => {
       expect.arrayContaining([expect.objectContaining({ id: 'interrupted_or_resumable' })]),
     );
 
+    const throughputReport = await request(server).get('/query/reports/development-plan-throughput').query(query).expect(200);
+    expect(throughputReport.body.groups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'draft_or_active',
+          items: expect.arrayContaining([expect.objectContaining({ type: 'development_plan_item' })]),
+        }),
+      ]),
+    );
+
     const executionOutcomesReport = await request(server).get('/query/reports/execution-outcomes').query(query).expect(200);
     expect(executionOutcomesReport.body.groups).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: 'succeeded' }), expect.objectContaining({ id: 'failed' })]),
@@ -296,9 +328,60 @@ describe('project management query API', () => {
     expect(qualityReport.body.groups).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: 'escaped_bugs' }), expect.objectContaining({ id: 'qa_blockers' })]),
     );
+    expect(qualityReport.body.groups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'qa_blockers',
+          items: expect.arrayContaining([expect.objectContaining({ type: 'qa_handoff' })]),
+        }),
+      ]),
+    );
 
     expect(JSON.stringify({ dashboard: dashboard.body, board: board.body, qa: qaHandoffs.body })).not.toContain('"type":"task"');
     expect(JSON.stringify({ dashboard: dashboard.body, board: board.body, qa: qaHandoffs.body })).not.toContain('"type":"work_item"');
+  });
+
+  it('preserves real execution supervision fields while keeping blocked resumable rows non-continuable', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
+    const server = app.getHttpServer();
+    const started = (
+      await request(server)
+        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+        .send({ actor_id: executionActorDeveloper })
+        .expect(201)
+    ).body;
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const interruptedAt = '2026-05-24T00:00:00.000Z';
+    const continuedAt = '2026-05-24T00:01:00.000Z';
+    await repository.saveExecution({
+      ...started,
+      status: 'paused',
+      worker_state: 'resumable-worker',
+      current_step: 'Waiting for approval evidence',
+      blocked: true,
+      stale: true,
+      last_event_at: continuedAt,
+      last_event_summary: 'Custom checkpoint recorded by actor-reviewer.',
+      interrupt_history: [{ at: interruptedAt, reason: 'Execution interrupted by actor-owner.' }],
+      continuation_history: [{ at: continuedAt, summary: 'Execution continued by actor-reviewer.' }],
+      updated_at: continuedAt,
+    });
+
+    const executions = await request(server).get('/query/executions').query({ project_id: developmentPlan.project_id }).expect(200);
+    const projectedExecution = executions.body.items.find((row: { id: string }) => row.id === started.id);
+
+    expect(projectedExecution).toMatchObject({
+      id: started.id,
+      status: 'paused',
+      worker_state: 'resumable-worker',
+      current_step: 'Waiting for approval evidence',
+      stale: true,
+      blocked: true,
+      last_event_at: continuedAt,
+      last_event_summary: 'Custom checkpoint recorded by assigned operator.',
+      actions: [{ id: 'inspect', href: `/executions/${started.id}`, label: 'Inspect' }],
+    });
+    expect(JSON.stringify(projectedExecution)).not.toMatch(/actor-owner|actor-reviewer/);
   });
 });
 

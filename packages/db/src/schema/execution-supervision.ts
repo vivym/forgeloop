@@ -1,4 +1,4 @@
-import { jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { boolean, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import type { CodeReviewHandoff, Execution, QaHandoff } from '@forgeloop/domain';
 
 import { timestampColumn } from './_shared';
@@ -20,6 +20,12 @@ export const executions = pgTable('executions', {
     .$type<Execution['execution_plan_revision_ref']>()
     .notNull(),
   status: text('status').$type<Execution['status']>().notNull(),
+  workerState: text('worker_state').$type<Execution['worker_state']>(),
+  currentStep: text('current_step').$type<Execution['current_step']>(),
+  stale: boolean('stale').$type<Execution['stale']>(),
+  blocked: boolean('blocked').$type<Execution['blocked']>(),
+  lastEventAt: timestampColumn('last_event_at').$type<Execution['last_event_at']>(),
+  lastEventSummary: text('last_event_summary').$type<Execution['last_event_summary']>(),
   evidenceRefs: jsonb('evidence_refs').$type<Execution['evidence_refs']>().notNull(),
   runtimeEvidenceRefs: jsonb('runtime_evidence_refs').$type<Execution['runtime_evidence_refs']>().notNull(),
   interruptHistory: jsonb('interrupt_history').$type<Execution['interrupt_history']>().notNull(),

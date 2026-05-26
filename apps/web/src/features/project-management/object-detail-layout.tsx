@@ -6,7 +6,7 @@ import { createForgeloopCommandApi } from '../../shared/api/commands';
 import { useDevelopmentPlansQuery } from '../../shared/api/hooks';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { ActionRail, DetailLayout, MetadataGrid, PageHeader, Section } from '../../shared/layout';
+import { CompactMetadata, ObjectWorkspace, Section } from '../../shared/layout';
 import { Button, Dialog, DialogPanel, EvidenceAttachments, ForgeMarkdownEditor, InlineNotice, Select, SegmentedControl, StatusPill, Tabs, Textarea } from '../../shared/ui';
 import { stateFromStatus, SurfaceStateIndicator, type SurfaceState } from './surface-state';
 
@@ -95,24 +95,47 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   if (isLoading) {
     return (
-      <DetailLayout header={<PageHeader subtitle={`Loading ${objectLabel.toLowerCase()} context.`} title={objectLabel} />}>
+      <ObjectWorkspace
+        as="div"
+        blockerRisk="Risk and evidence metadata are loading."
+        family="source-object-detail"
+        heading={objectLabel}
+        nextAction="Loading source object actions."
+        roleResponsibility="Loading role context."
+        state={`Loading ${objectLabel.toLowerCase()} context.`}
+      >
         <SurfaceStateIndicator label={`${objectLabel} Source Object Workspace`} state="loading" />
         <InlineNotice title={`${objectLabel} is loading.`} tone="info" />
-      </DetailLayout>
+      </ObjectWorkspace>
     );
   }
 
   if (error || detail === undefined) {
     return (
-      <DetailLayout header={<PageHeader subtitle={`${objectLabel} detail could not be loaded.`} title={objectLabel} />}>
+      <ObjectWorkspace
+        as="div"
+        blockerRisk="Source object metadata is unavailable."
+        family="source-object-detail"
+        heading={objectLabel}
+        nextAction="Reload this source object before planning work continues."
+        roleResponsibility="Product owner should confirm the source object exists."
+        state={`${objectLabel} detail could not be loaded.`}
+      >
         <SurfaceStateIndicator label={`${objectLabel} Source Object Workspace`} state={error ? 'error' : 'empty'} />
         <InlineNotice title={`${objectLabel} was not found.`} tone="warning" />
-      </DetailLayout>
+      </ObjectWorkspace>
     );
   }
 
   const surfaceState = surfaceStateForDetail(detail);
   const sourceRef = sourceObjectRefFor(detail);
+  const evidenceCount = detail.attachment_refs?.length ?? 0;
+  const releaseLabel = detail.release_refs?.[0]?.title ?? detail.release_refs?.[0]?.id ?? 'Not release scoped';
+  const stateText = `${objectLabel} ${statusLabel(detail.status)}`;
+  const nextActionTitle = developmentPlanItem ? 'Open item-scoped gate' : 'Create planning table';
+  const nextActionDescription = developmentPlanItem
+    ? 'Select the linked Development Plan Item to continue boundary brainstorming, Spec, Execution Plan, and execution gates.'
+    : 'Create or link a Development Plan before downstream technical work can start.';
   const runAction = async (operation: () => Promise<unknown>, successMessage: string) => {
     setActionState({ status: 'running', message: 'Command is running.' });
     try {
@@ -127,199 +150,156 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
   };
 
   return (
-    <DetailLayout
-      header={
-        <PageHeader
-          actions={
-            <SegmentedControl
-              ariaLabel="Role lens"
-              options={[
-                { label: 'Product', value: 'product' },
-                { label: 'Tech Lead', value: 'tech-lead' },
-                { label: 'Developer', value: 'developer' },
-                { label: 'QA', value: 'qa' },
-              ]}
-              value={roleLens}
-              onValueChange={setRoleLens}
-            />
-          }
-          eyebrow="Source Object Workspace"
-          subtitle={`${detail.title} · ${statusLabel(detail.status)} · ${detail.risk ?? 'Unscored'} risk`}
-          title={objectLabel}
-        />
-      }
-      actionRail={
-        <ActionRail ariaLabel="Next action" title="Next action">
-          <InlineNotice
-            description={
-              developmentPlanItem
-                ? 'Select the linked Development Plan Item to continue boundary brainstorming, Spec, Execution Plan, and execution gates.'
-                : 'Create or link a Development Plan before downstream technical work can start.'
-            }
-            title={developmentPlanItem ? 'Open item-scoped gate' : 'Create planning table'}
-            tone={developmentPlanItem ? 'info' : 'warning'}
-          />
-          <Dialog
-            content={
-              <DialogPanel>
-                <label className="grid gap-1 text-sm font-semibold text-text-primary">
-                  Development Plan title
-                  <input
-                    className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary"
-                    value={planTitle}
-                    onChange={(event) => setPlanTitle(event.target.value)}
-                  />
-                </label>
-                <Button
-                  loading={actionState.status === 'running'}
-                  variant="primary"
-                  onClick={() =>
-                    void runAction(
-                      async () => {
-                        const created = await createForgeloopCommandApi().createDevelopmentPlan({
-                          actor_id: actorId,
-                          project_id: projectId,
-                          source_ref: sourceRef,
-                          title: planTitle.trim() || `${detail.title} development plan`,
-                        });
-                        if (typeof created.id === 'string') navigate(`/development-plans/${created.id}`);
-                      },
-                      'Development Plan created and context manifest captured.',
-                    )
-                  }
-                >
-                  Create
-                </Button>
-              </DialogPanel>
-            }
-            description="Create a table-first Development Plan linked to this source object."
-            title="Create Development Plan"
-          >
+    <ObjectWorkspace
+      as="div"
+      blockerRisk={`Risk ${detail.risk ?? 'unscored'} · Evidence ${evidenceCount} · Release ${releaseLabel}`}
+      family="source-object-detail"
+      heading={objectLabel}
+      nextAction={
+        <div className="grid gap-3">
+          <div>
+            <div className="font-semibold text-text-primary">{nextActionTitle}</div>
+            <p className="mt-1 text-sm text-text-secondary">{nextActionDescription}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Dialog
+              content={
+                <DialogPanel>
+                  <label className="grid gap-1 text-sm font-semibold text-text-primary">
+                    Development Plan title
+                    <input
+                      className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary"
+                      value={planTitle}
+                      onChange={(event) => setPlanTitle(event.target.value)}
+                    />
+                  </label>
+                  <Button
+                    loading={actionState.status === 'running'}
+                    variant="primary"
+                    onClick={() =>
+                      void runAction(
+                        async () => {
+                          const created = await createForgeloopCommandApi().createDevelopmentPlan({
+                            actor_id: actorId,
+                            project_id: projectId,
+                            source_ref: sourceRef,
+                            title: planTitle.trim() || `${detail.title} development plan`,
+                          });
+                          if (typeof created.id === 'string') navigate(`/development-plans/${created.id}`);
+                        },
+                        'Development Plan created and context manifest captured.',
+                      )
+                    }
+                  >
+                    Create
+                  </Button>
+                </DialogPanel>
+              }
+              description="Create a table-first Development Plan linked to this source object."
+              title="Create Development Plan"
+            >
+              <Button variant="primary">Create Development Plan</Button>
+            </Dialog>
             <Button
-              className="w-full justify-start"
-              variant="primary"
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                event.currentTarget.click();
-              }}
+              loading={actionState.status === 'running'}
+              onClick={() =>
+                void runAction(
+                  () =>
+                    createForgeloopCommandApi().generateDevelopmentPlanDraft({
+                      actor_id: actorId,
+                      project_id: projectId,
+                      source_ref: sourceRef,
+                      guidance: generationGuidance,
+                    }),
+                  'Development Plan draft generated with a context manifest.',
+                )
+              }
             >
-              Create Development Plan
+              Generate Development Plan
             </Button>
-          </Dialog>
-          <Textarea
-            aria-label="Regeneration feedback"
-            value={generationGuidance}
-            onChange={(event) => setGenerationGuidance(event.target.value)}
-          />
-          <Button
-            className="w-full justify-start"
-            loading={actionState.status === 'running'}
-            onClick={() =>
-              void runAction(
-                () =>
-                  createForgeloopCommandApi().generateDevelopmentPlanDraft({
-                    actor_id: actorId,
-                    project_id: projectId,
-                    source_ref: sourceRef,
-                    guidance: generationGuidance,
-                  }),
-                'Development Plan draft generated with a context manifest.',
-              )
-            }
-          >
-            Generate Development Plan
-          </Button>
-          <Dialog
-            content={
-              <DialogPanel>
-                <label className="grid gap-1 text-sm font-semibold text-text-primary">
-                  Development Plan
-                  <Select
-                    aria-label="Development Plan"
-                    options={availableDevelopmentPlans.map((plan) => ({ label: plan.title ?? plan.id, value: plan.id }))}
-                    value={selectedDevelopmentPlanId}
-                    onChange={(event) => setSelectedDevelopmentPlanId(event.target.value)}
-                  />
-                </label>
-                <Button
-                  disabled={selectedDevelopmentPlanId.length === 0}
-                  loading={actionState.status === 'running'}
-                  variant="primary"
-                  onClick={() =>
-                    selectedDevelopmentPlanId.length === 0
-                      ? undefined
-                      : void runAction(
-                          async () => {
-                            await createForgeloopCommandApi().linkSourceObjectToDevelopmentPlan(sourceRef.type, sourceRef.id, selectedDevelopmentPlanId, {
-                              actor_id: actorId,
-                              rationale: 'Linked from source object workspace.',
-                            });
-                            const selectedPlan = availableDevelopmentPlans.find((plan) => plan.id === selectedDevelopmentPlanId);
-                            setLinkedDevelopmentPlan({
-                              type: 'development_plan',
-                              id: selectedDevelopmentPlanId,
-                              title: selectedPlan?.title ?? selectedDevelopmentPlanId,
-                            });
-                            setIsLinkPlanOpen(false);
-                          },
-                          'Existing Development Plan linked.',
-                        )
-                  }
-                >
-                  Link
-                </Button>
-              </DialogPanel>
-            }
-            description="Link this source object to an existing Development Plan."
-            open={isLinkPlanOpen}
-            title="Link Existing Development Plan"
-            onOpenChange={setIsLinkPlanOpen}
-          >
-            <Button className="w-full justify-start" disabled={availableDevelopmentPlans.length === 0} variant="secondary">
-              Link Existing Development Plan
+            <Dialog
+              content={
+                <DialogPanel>
+                  <label className="grid gap-1 text-sm font-semibold text-text-primary">
+                    Development Plan
+                    <Select
+                      aria-label="Development Plan"
+                      options={availableDevelopmentPlans.map((plan) => ({ label: plan.title ?? plan.id, value: plan.id }))}
+                      value={selectedDevelopmentPlanId}
+                      onChange={(event) => setSelectedDevelopmentPlanId(event.target.value)}
+                    />
+                  </label>
+                  <Button
+                    disabled={selectedDevelopmentPlanId.length === 0}
+                    loading={actionState.status === 'running'}
+                    variant="primary"
+                    onClick={() =>
+                      selectedDevelopmentPlanId.length === 0
+                        ? undefined
+                        : void runAction(
+                            async () => {
+                              await createForgeloopCommandApi().linkSourceObjectToDevelopmentPlan(sourceRef.type, sourceRef.id, selectedDevelopmentPlanId, {
+                                actor_id: actorId,
+                                rationale: 'Linked from source object workspace.',
+                              });
+                              const selectedPlan = availableDevelopmentPlans.find((plan) => plan.id === selectedDevelopmentPlanId);
+                              setLinkedDevelopmentPlan({
+                                type: 'development_plan',
+                                id: selectedDevelopmentPlanId,
+                                title: selectedPlan?.title ?? selectedDevelopmentPlanId,
+                              });
+                              setIsLinkPlanOpen(false);
+                            },
+                            'Existing Development Plan linked.',
+                          )
+                    }
+                  >
+                    Link
+                  </Button>
+                </DialogPanel>
+              }
+              description="Link this source object to an existing Development Plan."
+              open={isLinkPlanOpen}
+              title="Link Existing Development Plan"
+              onOpenChange={setIsLinkPlanOpen}
+            >
+              <Button disabled={availableDevelopmentPlans.length === 0} variant="secondary">
+                Link Existing Development Plan
+              </Button>
+            </Dialog>
+            <Button
+              disabled={activeDevelopmentPlan === undefined}
+              onClick={() =>
+                activeDevelopmentPlan === undefined
+                  ? undefined
+                  : void runAction(
+                      () =>
+                        createForgeloopCommandApi().createDevelopmentPlanItem(activeDevelopmentPlan.id, {
+                          title: `${detail.title} implementation boundary`,
+                          summary: 'Generated from source object workspace.',
+                          responsible_role: 'tech_lead',
+                          ...(detail.driver_actor_id === undefined ? {} : { driver_actor_id: detail.driver_actor_id }),
+                          risk: riskForCommand(detail.risk),
+                          affected_surfaces: [],
+                          dependency_hints: [],
+                          release_impact: 'release_scoped',
+                        }),
+                      'Development Plan row added for boundary brainstorming.',
+                    )
+              }
+            >
+              Add Row To Existing Development Plan
             </Button>
-          </Dialog>
-          {activeDevelopmentPlan ? (
-            <Link
-              className="inline-flex min-h-10 items-center justify-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-primary hover:border-primary hover:bg-primary-soft"
-              to={relationshipHref(activeDevelopmentPlan)}
-            >
-              {activeDevelopmentPlan.title ?? 'Open linked Development Plan'}
-            </Link>
-          ) : null}
-          <Button
-            className="w-full justify-start"
-            disabled={activeDevelopmentPlan === undefined}
-            onClick={() =>
-              activeDevelopmentPlan === undefined
-                ? undefined
-                : void runAction(
-                    () =>
-                      createForgeloopCommandApi().createDevelopmentPlanItem(activeDevelopmentPlan.id, {
-                        title: `${detail.title} implementation boundary`,
-                        summary: 'Generated from source object workspace.',
-                        responsible_role: 'tech_lead',
-                        ...(detail.driver_actor_id === undefined ? {} : { driver_actor_id: detail.driver_actor_id }),
-                        risk: riskForCommand(detail.risk),
-                        affected_surfaces: [],
-                        dependency_hints: [],
-                        release_impact: 'release_scoped',
-                      }),
-                    'Development Plan row added for boundary brainstorming.',
-                  )
-            }
-          >
-            Add Row To Existing Development Plan
-          </Button>
-          {developmentPlanItem ? (
-            <Link
-              className="inline-flex min-h-10 items-center justify-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-primary hover:border-primary hover:bg-primary-soft"
-              to={relationshipHref(developmentPlanItem)}
-            >
-              Open Development Plan Item In Governance Queue
-            </Link>
-          ) : null}
+          </div>
+          <label className="grid gap-1 text-sm font-semibold text-text-secondary">
+            Regeneration feedback
+            <Textarea
+              aria-label="Regeneration feedback"
+              className="min-h-16"
+              value={generationGuidance}
+              onChange={(event) => setGenerationGuidance(event.target.value)}
+            />
+          </label>
           {actionState.status !== 'idle' ? (
             <InlineNotice
               description={actionState.message}
@@ -332,10 +312,77 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
             title="Downstream artifact gates"
             tone="neutral"
           />
-        </ActionRail>
+        </div>
+      }
+      roleResponsibility={`${roleLensLabel(roleLens)} lens · ${detail.driver_actor_id ?? 'Unassigned driver'}`}
+      state={stateText}
+      subtitle={`${detail.title} · ${statusLabel(detail.status)}`}
+      toolbar={
+        <SegmentedControl
+          ariaLabel="Role lens"
+          options={[
+            { label: 'Product', value: 'product' },
+            { label: 'Tech Lead', value: 'tech-lead' },
+            { label: 'Developer', value: 'developer' },
+            { label: 'QA', value: 'qa' },
+          ]}
+          value={roleLens}
+          onValueChange={setRoleLens}
+        />
       }
     >
-      <SurfaceStateIndicator label={`${objectLabel} Source Object Workspace`} state={surfaceState} />
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(20rem,0.8fr)]">
+        <Section
+          actions={<StatusPill tone="neutral">{roleLensLabel(roleLens)} lens</StatusPill>}
+          aria-label="Source narrative document"
+          data-document-surface="source-narrative"
+          description="Edit the durable source narrative here; downstream Spec and Execution Plan work starts from a Development Plan Item."
+          title={detail.title}
+          variant="panel"
+        >
+          <ForgeMarkdownEditor
+            allowedBlocks={allowedNarrativeBlocks}
+            attachments={detail.attachment_refs ?? []}
+            mode="edit"
+            objectRef={detail.ref}
+            onChange={setMarkdown}
+            onUploadAttachment={() => Promise.reject(new Error('Attachment uploads are not enabled on this route yet.'))}
+            validationPolicy={{ validation_version: '2026-05-23' }}
+            value={markdown}
+            {...(onSaveNarrative === undefined ? {} : { onSave: onSaveNarrative })}
+          />
+        </Section>
+        <div className="grid content-start gap-4">
+          <Section aria-label="Source metadata" title="Source metadata" variant="subtle">
+            <CompactMetadata
+              items={[
+                { label: 'Type', value: objectLabel },
+                { label: 'Lifecycle', value: detail.status },
+                { label: 'Risk', value: detail.risk ?? 'Unscored' },
+                { label: 'Driver', value: detail.driver_actor_id ?? 'Unassigned' },
+                { label: 'Release', value: releaseLabel },
+                { label: 'Evidence', value: `${evidenceCount} ${evidenceCount === 1 ? 'attachment' : 'attachments'}` },
+              ]}
+            />
+          </Section>
+          <Section aria-label="Linked planning" title="Linked planning" variant="subtle">
+            <div className="grid gap-2 text-sm">
+              {activeDevelopmentPlan ? (
+                <Link className="font-semibold text-primary hover:underline" to={relationshipHref(activeDevelopmentPlan)}>
+                  {activeDevelopmentPlan.title ?? 'Open linked Development Plan'}
+                </Link>
+              ) : (
+                <p className="text-text-secondary">No Development Plan linked yet.</p>
+              )}
+              {developmentPlanItem ? (
+                <Link className="font-semibold text-primary hover:underline" to={relationshipHref(developmentPlanItem)}>
+                  Open Development Plan Item In Governance Queue
+                </Link>
+              ) : null}
+            </div>
+          </Section>
+        </div>
+      </div>
       <Tabs
         ariaLabel="Source object sections"
         items={[
@@ -343,24 +390,8 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
             label: 'Brief',
             value: 'brief',
             content: (
-              <Section
-                actions={<StatusPill tone="neutral">{roleLensLabel(roleLens)} lens</StatusPill>}
-                description="The source narrative remains editable here; delivery work starts from Development Plan rows."
-                title={detail.title}
-              >
-                <div className="grid gap-4">
-                  <ForgeMarkdownEditor
-                    allowedBlocks={allowedNarrativeBlocks}
-                    attachments={detail.attachment_refs ?? []}
-                    mode="edit"
-                    objectRef={detail.ref}
-                    onChange={setMarkdown}
-                    onUploadAttachment={() => Promise.reject(new Error('Attachment uploads are not enabled on this route yet.'))}
-                    validationPolicy={{ validation_version: '2026-05-23' }}
-                    value={markdown}
-                    {...(onSaveNarrative === undefined ? {} : { onSave: onSaveNarrative })}
-                  />
-                </div>
+              <Section description="Summary context stays below the action-first workspace." title="Brief">
+                <SurfaceStateIndicator label={`${objectLabel} Source Object Workspace`} state={surfaceState} />
               </Section>
             ),
           },
@@ -393,20 +424,8 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
           { label: 'Evidence', value: 'evidence', content: <EvidencePanel detail={detail} /> },
         ]}
       />
-      <Section title="Structured fields">
-        <MetadataGrid
-          items={[
-            { label: 'Type', value: objectLabel },
-            { label: 'Lifecycle', value: <StatusPill tone="neutral">{detail.status}</StatusPill> },
-            { label: 'Risk', value: detail.risk ?? 'Unscored' },
-            { label: 'Driver', value: detail.driver_actor_id ?? 'Unassigned' },
-            { label: 'Release', value: detail.release_refs?.[0]?.title ?? detail.release_refs?.[0]?.id ?? 'Not release scoped' },
-            { label: 'Freshness', value: 'Current source revision' },
-          ]}
-        />
-      </Section>
       {renderSections?.(detail)}
-    </DetailLayout>
+    </ObjectWorkspace>
   );
 }
 

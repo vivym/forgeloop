@@ -115,6 +115,7 @@ export type CreateTechDebtBody = TypedWorkItemCreateBody<'tech_debt'>;
 export type CreateBugBody = TypedWorkItemCreateBody<'bug'>;
 
 export interface CreateDevelopmentPlanBody extends ActorCommandBody {
+  guidance?: string;
   project_id: string;
   source_ref: SourceObjectRef;
   title: string;

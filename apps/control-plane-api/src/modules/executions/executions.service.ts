@@ -128,7 +128,7 @@ export class ExecutionsService {
         status: 'running' as const,
         continuation_history: [
           ...execution.continuation_history,
-          { at: this.now(), summary: dto.actor_id === undefined ? 'Execution continued.' : `Execution continued by ${dto.actor_id}.` },
+          { at: this.now(), summary: dto.actor_id === undefined ? 'Execution continued.' : 'Execution continued by assigned operator.' },
         ],
         updated_at: this.now(),
       };
@@ -160,7 +160,7 @@ export class ExecutionsService {
         status: 'interrupted' as const,
         interrupt_history: [
           ...execution.interrupt_history,
-          { at: this.now(), reason: dto.actor_id === undefined ? 'Execution interrupted.' : `Execution interrupted by ${dto.actor_id}.` },
+          { at: this.now(), reason: dto.actor_id === undefined ? 'Execution interrupted.' : 'Execution interrupted by assigned operator.' },
         ],
         updated_at: this.now(),
       };

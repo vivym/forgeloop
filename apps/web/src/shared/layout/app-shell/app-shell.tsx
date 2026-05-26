@@ -14,7 +14,7 @@ export function AppShell({ children, sidebar, topbar, className }: AppShellProps
   const mobileNavigation = useMobileNavigation();
 
   return (
-    <div className={cn('min-h-screen bg-background text-text-primary lg:grid lg:grid-cols-[17rem_minmax(0,1fr)]', className)}>
+    <div className={cn('min-h-screen bg-background text-text-primary lg:grid lg:grid-cols-[16rem_minmax(0,1fr)]', className)}>
       <a
         className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-modal focus:rounded-md focus:bg-surface focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-text-primary focus:shadow-elevated"
         href="#main-content"
@@ -24,7 +24,7 @@ export function AppShell({ children, sidebar, topbar, className }: AppShellProps
       {sidebar ? (
         <aside
           aria-label="Primary navigation"
-          className="hidden border-r border-border bg-surface p-4 lg:sticky lg:top-0 lg:z-sticky lg:block lg:h-screen"
+          className="hidden border-r border-border bg-surface p-3 lg:sticky lg:top-0 lg:z-sticky lg:block lg:h-screen"
           data-desktop-navigation=""
           hidden={mobileNavigation}
         >
@@ -32,7 +32,7 @@ export function AppShell({ children, sidebar, topbar, className }: AppShellProps
         </aside>
       ) : null}
       <div className="min-w-0">
-        <header className="sticky top-0 z-sticky flex min-h-16 items-center gap-3 border-b border-border bg-surface/95 px-4 backdrop-blur lg:px-6">
+        <header className="sticky top-0 z-sticky flex min-h-16 items-center gap-3 border-b border-border bg-surface/95 px-4 backdrop-blur lg:px-5">
           {sidebar ? (
             <button
               aria-controls="primary-navigation"

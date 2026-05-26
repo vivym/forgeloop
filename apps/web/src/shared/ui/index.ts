@@ -4,6 +4,7 @@ export { Checkbox, type CheckboxProps } from './checkbox/checkbox';
 export { Dialog, DialogClose, DialogPanel, type DialogCloseProps, type DialogProps } from './dialog/dialog';
 export { Drawer, DrawerClose, type DrawerCloseProps, type DrawerProps } from './drawer/drawer';
 export { EmptyState, type EmptyStateProps } from './empty-state/empty-state';
+export { ErrorState, type ErrorStateProps } from './error-state/error-state';
 export { EvidenceAttachments, type EvidenceAttachmentsProps } from './evidence-attachments';
 export { Field, type FieldProps } from './field/field';
 export { IconButton, type IconButtonProps } from './icon-button/icon-button';

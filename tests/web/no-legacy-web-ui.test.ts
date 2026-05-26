@@ -30,6 +30,7 @@ const productSourceText = () =>
         (file) =>
           !file.endsWith('no-legacy-web-ui.test.ts') &&
           !file.endsWith('dev-tools-gating.test.tsx') &&
+          !file.endsWith('product-grade-first-viewport.test.tsx') &&
           !file.endsWith('project-management-routes.test.tsx'),
       ),
     )
@@ -176,7 +177,7 @@ describe('no legacy Web UI baggage', () => {
   });
 
   it('does not expose raw or debug-only controls on product Web surfaces', () => {
-    expect(productSourceText()).not.toMatch(
+    expect(activeWebSourceText()).not.toMatch(
       /raw JSON|raw replay|raw payload|Replay payload|Load raw replay|Object ID|manual ID|manual .*loader|direct id loading|debug-only/i,
     );
   });
