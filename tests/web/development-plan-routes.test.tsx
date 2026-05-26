@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent } from '@testing-library/react';
+import { cleanup, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { boundarySummary, developmentPlan, developmentPlanItem, projectId } from './fixtures/product-data';
+import { boundarySummary, developmentPlan, developmentPlanItem, projectId, spec, specRevision } from './fixtures/product-data';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 import { renderRoute } from './router-test-utils';
 
@@ -13,8 +13,9 @@ describe('Development Plan routes', () => {
     const screen = await renderRoute('/development-plans');
 
     expect(await screen.findByRole('heading', { name: 'Development Plans' })).toBeTruthy();
-    expectFirstViewportContract(screen, { pageFamily: 'development-plan-index', heading: 'Development Plans' });
-    expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
+    expectFirstViewportContract(screen, { pageFamily: 'planning-table', heading: 'Development Plans' });
+    expect(document.querySelector('[data-page-family="planning-table"]')).toBeTruthy();
+    expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeTruthy();
     expect(screen.getByRole('table', { name: /active development plans/i })).toBeTruthy();
     for (const column of ['Development Plan', 'Source links', 'Plan items', 'Role', 'Gate', 'Risk', 'Status']) {
       expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
@@ -68,8 +69,9 @@ describe('Development Plan routes', () => {
     const screen = await renderRoute('/development-plans/new');
 
     expect(await screen.findByRole('heading', { name: 'New Development Plan' })).toBeTruthy();
-    expectFirstViewportContract(screen, { pageFamily: 'development-plan-index', heading: 'New Development Plan' });
-    expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
+    expectFirstViewportContract(screen, { pageFamily: 'plan-authoring', heading: 'New Development Plan' });
+    expect(document.querySelector('[data-page-family="plan-authoring"]')).toBeTruthy();
+    expect(document.querySelector('[data-source-context-picker][data-primary-work-surface], [data-plan-preview][data-primary-work-surface]')).toBeTruthy();
     expect(screen.getByRole('textbox', { name: /development plan title/i })).toBeTruthy();
     expect(screen.getByRole('combobox', { name: /source type/i })).toBeTruthy();
     expect(screen.getByRole('combobox', { name: /source object/i })).toBeTruthy();
@@ -190,6 +192,9 @@ describe('Development Plan routes', () => {
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}`);
 
     expect(await screen.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
+    expectFirstViewportContract(screen, { pageFamily: 'planning-table', heading: developmentPlan.title });
+    expect(document.querySelector('[data-page-family="planning-table"]')).toBeTruthy();
+    expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeTruthy();
     for (const column of ['Plan Item', 'Role', 'Risk', 'Boundary', 'Spec', 'Execution Plan', 'Execution', 'Review', 'QA', 'Release impact', 'Next action']) {
       expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
     }
@@ -269,37 +274,99 @@ describe('Development Plan routes', () => {
     expect(document.body.textContent).not.toMatch(/\bTask\b|Work Item Owner|owner_actor_id/);
   });
 
-  it('renders Development Plan Item overview and focus routes as GateWorkspace first viewports', async () => {
+  it('renders Development Plan Item overview, brainstorming, and execution as gate-flow workspaces', async () => {
     for (const route of [
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`,
-      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
-      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`,
     ]) {
       const screen = await renderRoute(route);
 
       expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-      expectFirstViewportContract(screen, { pageFamily: 'gate-workspace', heading: developmentPlanItem.title });
-      expect(document.querySelector('[data-workspace-layout="gate"]')).toBeInstanceOf(HTMLElement);
-      const firstViewport = document.querySelector('[data-first-viewport]');
-      expect(firstViewport?.textContent).toContain(developmentPlan.title);
-      expect(firstViewport?.textContent).toContain('Plan Item governed Spec and Execution Plan generation');
-      expect(firstViewport?.textContent).toMatch(/Gate progress/i);
-      expect(firstViewport?.textContent).toMatch(/Current enabled action/i);
-      expect(firstViewport?.textContent).toMatch(/Disabled reasons/i);
-      expect(firstViewport?.textContent).toMatch(/Evidence side context/i);
-      expect(firstViewport?.textContent).toContain(developmentPlanItem.next_action);
+      expectFirstViewportContract(screen, { pageFamily: 'gate-flow', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-page-family="gate-flow"]')).toBeTruthy();
+      expect(document.querySelector('[data-gate-workspace][data-primary-work-surface]')).toBeTruthy();
+      expect(document.querySelector('[data-gate-workspace]')?.textContent).toContain(developmentPlanItem.next_action);
       expect(document.body.textContent).not.toMatch(/\bTask\b|Work Item Owner|owner_actor_id|\/specs\/|\/plans\//);
       cleanup();
     }
   });
 
+  it('renders Spec and Execution Plan focus routes as document review editors', async () => {
+    for (const focus of ['spec', 'execution-plan'] as const) {
+      const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/${focus}`);
+
+      expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+      expectFirstViewportContract(screen, { pageFamily: 'document-review', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-page-family="document-review"]')).toBeTruthy();
+      expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeTruthy();
+      expect(await screen.findByLabelText(/editor toolbar/i)).toBeTruthy();
+      expect(screen.getByRole('button', { name: /source mode|rich mode/i })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /insert image/i })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /save/i })).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it('does not expose draft save when the persisted item-scoped revision body is unavailable', async () => {
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`, {
+      apiOverrides: {
+        [`GET /spec-revisions/${specRevision.id}`]: new Response(JSON.stringify({ message: 'revision unavailable' }), {
+          headers: { 'content-type': 'application/json' },
+          status: 500,
+        }),
+      },
+    });
+
+    expect((await screen.findAllByText(/Revision body unavailable/i)).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText(/editor toolbar/i)).toBeNull();
+    expect(screen.queryByRole('textbox', { name: /markdown editor/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /save/i })).toBeNull();
+  });
+
+  it('loads and saves real item-scoped Spec revision drafts through the route API', async () => {
+    const user = userEvent.setup();
+    const draftBodies: unknown[] = [];
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`, {
+      apiOverrides: {
+        [`GET /spec-revisions/${specRevision.id}`]: {
+          ...specRevision,
+          content: 'Persisted route Spec body',
+          scope_ref: developmentPlan.source_refs[0],
+          attachment_refs: [],
+        },
+        [`PATCH /development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec/draft`]: ({ init }) => {
+          const body = parseRequestBody(init);
+          draftBodies.push(body);
+          return {
+            ...specRevision,
+            id: 'specrev-route-save-v2',
+            content: (body as { markdown: string }).markdown,
+            scope_ref: developmentPlan.source_refs[0],
+            attachment_refs: [],
+          };
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+    const editor = await screen.findByRole('textbox', { name: /markdown editor/i }) as HTMLTextAreaElement;
+    await waitFor(() => expect(editor.value).toContain('Persisted route Spec body'));
+    fireEvent.change(editor, { target: { value: `${editor.value}\n\nSaved through the route draft endpoint.` } });
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    expect(await screen.findByText(/Spec document draft saved/i)).toBeTruthy();
+    expect(draftBodies).toEqual([
+      expect.objectContaining({
+        markdown: expect.stringContaining('Saved through the route draft endpoint.'),
+        object_ref: { type: 'spec_revision', id: specRevision.id, spec_id: spec.id },
+      }),
+    ]);
+  });
+
   it('prioritizes the active gate body on Development Plan Item focus routes', async () => {
     for (const [route, title, bodyText] of [
       [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`, 'Boundary brainstorming', /Which source and code boundaries are in scope/i],
-      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`, 'Spec document', /Cockpit operational command center Spec/i],
-      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`, 'Execution Plan document', /Requirements database view Execution Plan/i],
       [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, 'Execution supervision', /Codex worker is seeding visual review data/i],
     ] as const) {
       const screen = await renderRoute(route);

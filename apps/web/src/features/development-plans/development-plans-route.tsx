@@ -6,7 +6,7 @@ import { useBugsQuery, useDevelopmentPlansQuery, useInitiativesQuery, useRequire
 import type { SourceObjectRef } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { PlanningTableWorkspace, Section } from '../../shared/layout';
+import { PlanAuthoringLayout, PlanningTableLayout, ProductPage, Section } from '../../shared/layout';
 import { Badge, Button, DataTable, EmptyState, InlineNotice, Select, StatusPill, Textarea, type DataTableColumn } from '../../shared/ui';
 import { SurfaceStateIndicator } from '../project-management/surface-state';
 import { formatValue } from './development-plan-table';
@@ -116,38 +116,38 @@ export function DevelopmentPlansRoute() {
   const activeCount = rows.filter((row) => row.status === 'active').length;
 
   return (
-    <PlanningTableWorkspace
-      as="div"
-      blockerRisk={`${blockedCount} blocked. ${rows.length === 0 ? 'No source-linked planning risk yet.' : 'Review blocked Plan Items before downstream artifact work.'}`}
-      family="development-plan-index"
+    <ProductPage
+      family="planning-table"
       heading="Development Plans"
-      nextAction={rows.length === 0 ? 'Create or generate a Development Plan from source context.' : 'Open the oldest blocked or high-risk Plan Item.'}
-      roleResponsibility="Product and tech lead roles maintain source-linked Plan Item boundaries."
-      state={query.isLoading ? 'Loading plans' : query.isError ? 'Plan index error' : `${activeCount} active ${pluralize(activeCount, 'plan')}`}
-      subtitle="Create source-linked Development Plans, then govern Spec and Execution Plan work through approved Plan Items."
       toolbar={<DevelopmentPlanIndexActions />}
     >
-      <SurfaceStateIndicator
-        label="Development Plans"
-        state={query.isLoading ? 'loading' : query.isError ? 'error' : rows.length === 0 ? 'empty' : undefined}
+      <PlanningTableLayout
+        toolbar={<DevelopmentPlanFilters filters={filters} onFiltersChange={setFilters} />}
+        table={
+          <div className="grid gap-3">
+            <SurfaceStateIndicator
+              label="Development Plans"
+              state={query.isLoading ? 'loading' : query.isError ? 'error' : rows.length === 0 ? 'empty' : undefined}
+            />
+            {query.isError ? <InlineNotice title="Development Plans could not be loaded." tone="danger" /> : null}
+            <Section
+              description={`${rows.length} ${pluralize(rows.length, 'plan')} · ${totalItems} ${pluralize(totalItems, 'Plan Item')} · ${blockedCount} blocked · ${activeCount} active ${pluralize(activeCount, 'plan')}`}
+              title="Active Development Plans"
+            >
+              <DataTable
+                ariaLabel="Active Development Plans"
+                columns={columns}
+                density="compact"
+                emptyMessage={<DevelopmentPlanEmptyState />}
+                getRowKey={(row) => row.id}
+                rows={filteredRows}
+                stickyHeader
+              />
+            </Section>
+          </div>
+        }
       />
-      {query.isError ? <InlineNotice title="Development Plans could not be loaded." tone="danger" /> : null}
-      <Section
-        actions={<DevelopmentPlanFilters filters={filters} onFiltersChange={setFilters} />}
-        description={`${rows.length} ${pluralize(rows.length, 'plan')} · ${totalItems} ${pluralize(totalItems, 'Plan Item')} · ${blockedCount} blocked`}
-        title="Active Development Plans"
-      >
-        <DataTable
-          ariaLabel="Active Development Plans"
-          columns={columns}
-          density="compact"
-          emptyMessage={<DevelopmentPlanEmptyState />}
-          getRowKey={(row) => row.id}
-          rows={filteredRows}
-          stickyHeader
-        />
-      </Section>
-    </PlanningTableWorkspace>
+    </ProductPage>
   );
 }
 
@@ -257,118 +257,119 @@ export function DevelopmentPlanNewRoute() {
   };
 
   return (
-    <PlanningTableWorkspace
-      as="div"
-      blockerRisk="Downstream Spec and Execution Plan documents are generated only from Plan Items after boundary approval."
-      family="development-plan-index"
+    <ProductPage
+      family="plan-authoring"
       heading="New Development Plan"
-      nextAction="Select source context, then create or generate a Plan Item table."
-      roleResponsibility="Product owns source intent; tech lead owns the first boundary review."
-      state="Authoring from source context"
-      subtitle="Author a source-linked planning workspace without directly generating downstream documents."
       toolbar={<Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:bg-surface-muted" to="/development-plans">Back to Development Plans</Link>}
     >
       <SurfaceStateIndicator label="New Development Plan" state={validation.hasBlockingIssue ? 'blocked' : 'approved'} />
-      <form className="grid gap-4" onSubmit={(event) => void createPlan(event)}>
-        <Section
-          description="Manual creation records source context and starts an empty Plan Item table for boundary approval."
-          title="Manual source context"
-          variant="panel"
-        >
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_minmax(10rem,0.8fr)]">
+      <PlanAuthoringLayout
+        sourceContext={
+          <form className="grid gap-4" onSubmit={(event) => void createPlan(event)}>
+            <Section
+              description="Manual creation records source context and starts an empty Plan Item table for boundary approval."
+              title="Manual source context"
+              variant="panel"
+            >
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_minmax(10rem,0.8fr)]">
+                <label className="grid gap-1 text-sm font-semibold text-text-primary">
+                  Development Plan title
+                  <input
+                    className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary"
+                    value={title}
+                    onChange={(event) => setTitle(event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-semibold text-text-primary">
+                  Source type
+                  <Select
+                    aria-label="Source type"
+                    options={sourceAuthoringOptions}
+                    value={sourceType}
+                    onChange={(event) => {
+                      const nextSourceType = event.target.value;
+                      if (isSourceObjectType(nextSourceType)) {
+                        const nextSourceOptions = sourceObjectOptions(nextSourceType, sourceObjectOptionsByType);
+                        setSourceType(nextSourceType);
+                        setSourceId(nextSourceOptions[0]?.value ?? '');
+                      }
+                    }}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-semibold text-text-primary">
+                  Source object
+                  <Select
+                    aria-label="Source object"
+                    disabled={currentSourceObjectOptions.length === 0 || selectedSourceQuery.isLoading || selectedSourceQuery.isError}
+                    options={visibleSourceObjectOptions}
+                    value={sourceId}
+                    onChange={(event) => setSourceId(event.target.value)}
+                  />
+                </label>
+              </div>
+              {selectedSourceQuery.isLoading ? <InlineNotice title={`Loading ${formatValue(sourceType)} source objects.`} tone="info" /> : null}
+              {selectedSourceQuery.isError ? <InlineNotice title={`${formatValue(sourceType)} source objects could not be loaded.`} tone="danger" /> : null}
+              {!selectedSourceQuery.isLoading && !selectedSourceQuery.isError && currentSourceObjectOptions.length === 0 ? (
+                <InlineNotice title={`No ${formatValue(sourceType)} source objects are available for this project.`} tone="warning" />
+              ) : null}
+              <label className="mt-3 grid gap-1 text-sm font-semibold text-text-primary">
+                Manual source guidance
+                <Textarea
+                  aria-label="Manual source guidance"
+                  placeholder="Capture source constraints, acceptance criteria, dependencies, or known risks for Plan Item authoring."
+                  value={manualGuidance}
+                  onChange={(event) => setManualGuidance(event.target.value)}
+                />
+              </label>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button disabled={validation.hasBlockingIssue} loading={actionState.status === 'running'} type="submit" variant="primary">
+                  Create Development Plan
+                </Button>
+              </div>
+            </Section>
+          </form>
+        }
+        aiAssist={
+          <Section
+            description="AI assistance proposes Development Plan rows from source context. It does not create Spec or Execution Plan documents."
+            title="AI-assisted plan generation"
+            variant="panel"
+          >
             <label className="grid gap-1 text-sm font-semibold text-text-primary">
-              Development Plan title
-              <input
-                className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
+              AI generation guidance
+              <Textarea
+                aria-label="AI generation guidance"
+                value={aiGuidance}
+                onChange={(event) => setAiGuidance(event.target.value)}
               />
             </label>
-            <label className="grid gap-1 text-sm font-semibold text-text-primary">
-              Source type
-              <Select
-                aria-label="Source type"
-                options={sourceAuthoringOptions}
-                value={sourceType}
-                onChange={(event) => {
-                  const nextSourceType = event.target.value;
-                  if (isSourceObjectType(nextSourceType)) {
-                    const nextSourceOptions = sourceObjectOptions(nextSourceType, sourceObjectOptionsByType);
-                    setSourceType(nextSourceType);
-                    setSourceId(nextSourceOptions[0]?.value ?? '');
-                  }
-                }}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button disabled={validation.hasBlockingIssue} loading={actionState.status === 'running'} onClick={() => void generatePlan()} type="button" variant="secondary">
+                Generate AI-assisted draft
+              </Button>
+            </div>
+          </Section>
+        }
+        preview={
+          <Section title="Validation summary" variant="subtle">
+            <ul className="m-0 grid gap-2 pl-5 text-sm text-text-secondary">
+              {validation.messages.map((message) => (
+                <li key={message}>{message}</li>
+              ))}
+              <li>Downstream Spec and Execution Plan documents are generated only from Plan Items after boundary approval.</li>
+              <li>Source objects create or generate Development Plans only; downstream artifacts wait for approved Plan Items.</li>
+            </ul>
+            {actionState.status !== 'idle' ? (
+              <InlineNotice
+                description={actionState.planId ? <Link className="font-semibold text-primary hover:underline" to={`/development-plans/${actionState.planId}`}>Open Development Plan</Link> : undefined}
+                title={actionState.message ?? 'Command state updated.'}
+                tone={actionState.status === 'success' ? 'success' : actionState.status === 'error' ? 'danger' : 'info'}
               />
-            </label>
-            <label className="grid gap-1 text-sm font-semibold text-text-primary">
-              Source object
-              <Select
-                aria-label="Source object"
-                disabled={currentSourceObjectOptions.length === 0 || selectedSourceQuery.isLoading || selectedSourceQuery.isError}
-                options={visibleSourceObjectOptions}
-                value={sourceId}
-                onChange={(event) => setSourceId(event.target.value)}
-              />
-            </label>
-          </div>
-          {selectedSourceQuery.isLoading ? <InlineNotice title={`Loading ${formatValue(sourceType)} source objects.`} tone="info" /> : null}
-          {selectedSourceQuery.isError ? <InlineNotice title={`${formatValue(sourceType)} source objects could not be loaded.`} tone="danger" /> : null}
-          {!selectedSourceQuery.isLoading && !selectedSourceQuery.isError && currentSourceObjectOptions.length === 0 ? (
-            <InlineNotice title={`No ${formatValue(sourceType)} source objects are available for this project.`} tone="warning" />
-          ) : null}
-          <label className="mt-3 grid gap-1 text-sm font-semibold text-text-primary">
-            Manual source guidance
-            <Textarea
-              aria-label="Manual source guidance"
-              placeholder="Capture source constraints, acceptance criteria, dependencies, or known risks for Plan Item authoring."
-              value={manualGuidance}
-              onChange={(event) => setManualGuidance(event.target.value)}
-            />
-          </label>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button disabled={validation.hasBlockingIssue} loading={actionState.status === 'running'} type="submit" variant="primary">
-              Create Development Plan
-            </Button>
-          </div>
-        </Section>
-
-        <Section
-          description="AI assistance proposes Development Plan rows from source context. It does not create Spec or Execution Plan documents."
-          title="AI-assisted plan generation"
-          variant="panel"
-        >
-          <label className="grid gap-1 text-sm font-semibold text-text-primary">
-            AI generation guidance
-            <Textarea
-              aria-label="AI generation guidance"
-              value={aiGuidance}
-              onChange={(event) => setAiGuidance(event.target.value)}
-            />
-          </label>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button disabled={validation.hasBlockingIssue} loading={actionState.status === 'running'} onClick={() => void generatePlan()} variant="secondary">
-              Generate AI-assisted draft
-            </Button>
-          </div>
-        </Section>
-      </form>
-
-      <Section title="Validation summary" variant="subtle">
-        <ul className="m-0 grid gap-2 pl-5 text-sm text-text-secondary">
-          {validation.messages.map((message) => (
-            <li key={message}>{message}</li>
-          ))}
-          <li>Source objects create or generate Development Plans only; downstream artifacts wait for approved Plan Items.</li>
-        </ul>
-        {actionState.status !== 'idle' ? (
-          <InlineNotice
-            description={actionState.planId ? <Link className="font-semibold text-primary hover:underline" to={`/development-plans/${actionState.planId}`}>Open Development Plan</Link> : undefined}
-            title={actionState.message ?? 'Command state updated.'}
-            tone={actionState.status === 'success' ? 'success' : actionState.status === 'error' ? 'danger' : 'info'}
-          />
-        ) : null}
-      </Section>
-    </PlanningTableWorkspace>
+            ) : null}
+          </Section>
+        }
+      />
+    </ProductPage>
   );
 }
 

@@ -1,3 +1,3 @@
-import { DevelopmentPlanItemDetailRoute } from '../../../../../../features/development-plans/development-plan-item-detail-route';
+import { DevelopmentPlanItemQaRoute } from '../../../../../../features/development-plans/development-plan-item-detail-route';
 
-export default DevelopmentPlanItemDetailRoute;
+export default DevelopmentPlanItemQaRoute;

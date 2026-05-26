@@ -259,6 +259,129 @@ describe('ForgeMarkdownEditor attachments', () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
   });
 
+  it('keeps Spec and Execution Plan image refs stable across failed upload and recovery', async () => {
+    const onChange = vi.fn();
+    const onUploadAttachment = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('upload failed'))
+      .mockResolvedValueOnce(
+        publicAttachmentFixture({
+          id: 'att-gate-state',
+          owner_object_type: 'spec_revision',
+          owner_object_id: 'specrev-cockpit-command-center-v1',
+          filename: 'gate.png',
+          content_type: 'image/png',
+          alt_text: 'Gate state diagram',
+        }),
+      );
+
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code']}
+        mode="edit"
+        objectRef={{ type: 'spec_revision', id: 'specrev-cockpit-command-center-v1', spec_id: 'spec-cockpit-command-center' }}
+        onChange={onChange}
+        onUploadAttachment={onUploadAttachment}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value="## Spec"
+        attachments={[]}
+      />,
+    );
+
+    await pasteImage(screen.getByRole('textbox', { name: /markdown editor/i }));
+    expect(await screen.findByText(/upload failed/i)).toBeTruthy();
+    expect(onChange).not.toHaveBeenCalledWith(expect.stringContaining('attachment://'));
+
+    await pasteImage(screen.getByRole('textbox', { name: /markdown editor/i }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.stringContaining('attachment://att-gate-state')));
+    expect(onUploadAttachment).toHaveBeenLastCalledWith(expect.any(File), {
+      type: 'spec_revision',
+      id: 'specrev-cockpit-command-center-v1',
+      spec_id: 'spec-cockpit-command-center',
+    });
+  });
+
+  it('keeps item-scoped document image refs stable for drop and file-picker insertion', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const onUploadAttachment = vi
+      .fn()
+      .mockResolvedValueOnce(
+        publicAttachmentFixture({
+          id: 'att-execution-plan-drop',
+          owner_object_type: 'execution_plan_revision',
+          owner_object_id: 'planrev-requirements-database-view-v1',
+          filename: 'drop.png',
+          content_type: 'image/png',
+          alt_text: 'Execution Plan dropped image',
+        }),
+      )
+      .mockResolvedValueOnce(
+        publicAttachmentFixture({
+          id: 'att-execution-plan-picker',
+          owner_object_type: 'execution_plan_revision',
+          owner_object_id: 'planrev-requirements-database-view-v1',
+          filename: 'picker.png',
+          content_type: 'image/png',
+          alt_text: 'Execution Plan picker image',
+        }),
+      );
+
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code']}
+        mode="edit"
+        objectRef={{
+          type: 'execution_plan_revision',
+          id: 'planrev-requirements-database-view-v1',
+          execution_plan_id: 'plan-requirements-database-view',
+        }}
+        onChange={onChange}
+        onUploadAttachment={onUploadAttachment}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value="## Execution Plan"
+        attachments={[]}
+      />,
+    );
+
+    await dropImage(screen.getByRole('textbox', { name: /markdown editor/i }), new File(['image'], 'drop.png', { type: 'image/png' }));
+    await user.click(screen.getByRole('button', { name: /insert image/i }));
+    await uploadFile(screen.getByLabelText(/image file/i), new File(['image'], 'picker.png', { type: 'image/png' }));
+
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledTimes(2));
+    expect(onChange).toHaveBeenCalledWith(expect.stringContaining('attachment://att-execution-plan-drop'));
+    expect(onChange).toHaveBeenCalledWith(expect.stringContaining('attachment://att-execution-plan-picker'));
+  });
+
+  it('keeps item-scoped document edits recoverable after failed draft save', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockRejectedValueOnce(new Error('save failed')).mockResolvedValueOnce(undefined);
+
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code']}
+        mode="edit"
+        objectRef={{ type: 'spec_revision', id: 'specrev-cockpit-command-center-v1', spec_id: 'spec-cockpit-command-center' }}
+        onChange={vi.fn()}
+        onSave={onSave}
+        onUploadAttachment={vi.fn()}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value="## Spec"
+        attachments={[]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /source mode/i }));
+    await user.type(screen.getByRole('textbox', { name: /markdown source/i }), '\nRecoverable draft note');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    expect(await screen.findByText(/save failed/i)).toBeTruthy();
+    expect((screen.getByRole('textbox', { name: /markdown source/i }) as HTMLTextAreaElement).value).toContain('Recoverable draft note');
+
+    await user.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+  });
+
   it('inserts non-image attachments through the attachment picker as link references', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

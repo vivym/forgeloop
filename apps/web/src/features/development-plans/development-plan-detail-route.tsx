@@ -6,7 +6,7 @@ import { createForgeloopCommandApi } from '../../shared/api/commands';
 import { useDevelopmentPlanQuery } from '../../shared/api/hooks';
 import { queryKeys } from '../../shared/api/query-keys';
 import { useActorContext } from '../../shared/context/actor-context';
-import { CompactMetadata, GateProgress, PlanningTableWorkspace, PreviewPane, PrioritySummary, Section } from '../../shared/layout';
+import { CompactMetadata, GateProgress, PlanningTableLayout, PreviewPane, ProductPage, Section } from '../../shared/layout';
 import { Badge, Button, Checkbox, Dialog, DialogPanel, Drawer, EmptyState, Field, InlineNotice, Input, Textarea } from '../../shared/ui';
 import { SurfaceStateIndicator } from '../project-management/surface-state';
 import { currentPlanItemGate, developmentPlanItemViewModel, itemGateProgress } from './development-plan-view-model';
@@ -92,15 +92,9 @@ export function DevelopmentPlanDetailRoute() {
   }
 
   return (
-    <PlanningTableWorkspace
-      as="div"
-      blockerRisk={blockedCount === 0 ? 'No blocked Plan Item gate in this table.' : `${blockedCount} blocked Plan Item gate(s) need review.`}
-      family="development-plan-detail"
+    <ProductPage
+      family="planning-table"
       heading={plan?.title ?? 'Development Plan'}
-      nextAction={rows.length === 0 ? 'Add Plan Items before downstream artifact work.' : selectedItem?.next_action ?? 'Review the selected Plan Item gate state.'}
-      roleResponsibility="Product and technical roles keep every Plan Item scoped through boundary, Spec, Execution Plan, execution, review, QA, and release readiness."
-      state={query.isLoading ? 'Loading Development Plan' : query.isError ? 'Development Plan load error' : formatValue(plan?.status)}
-      subtitle={`Source objects: ${sourceSummary(plan)}`}
       toolbar={
           <>
             <Button onClick={() => setIsAddOpen(true)} type="button">Add row</Button>
@@ -113,19 +107,22 @@ export function DevelopmentPlanDetailRoute() {
       <SurfaceStateIndicator label="Development Plan Page" state={developmentPlanSurfaceState(query.isLoading, query.isError, rows)} />
       {status ? <InlineNotice title={status} tone="info" /> : null}
       {query.isError ? <InlineNotice title="Development Plan could not be loaded." tone="danger" /> : null}
-      <Section
-        description="Rows are the governed unit that moves through boundary brainstorming, Spec, Execution Plan, execution, review, and QA."
-        title="Development Plan Items"
-      >
-        {plan === undefined ? (
-          <EmptyState title={query.isLoading ? 'Loading Development Plan.' : 'Development Plan not found.'} />
-        ) : (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(18rem,0.85fr)]">
-            <DevelopmentPlanTable items={rows} selectedItemId={selectedItem?.id} onSelectItem={(item) => setSelectedItemId(item.id)} />
-            <SelectedPlanItemPanel item={selectedItem} />
-          </div>
-        )}
-      </Section>
+      <PlanningTableLayout
+        toolbar={<PlanTableContext plan={plan} rowCount={rows.length} blockedCount={blockedCount} />}
+        table={
+          <Section
+            description="Rows are the governed unit that moves through boundary brainstorming, Spec, Execution Plan, execution, review, and QA."
+            title="Development Plan Items"
+          >
+            {plan === undefined ? (
+              <EmptyState title={query.isLoading ? 'Loading Development Plan.' : 'Development Plan not found.'} />
+            ) : (
+              <DevelopmentPlanTable items={rows} selectedItemId={selectedItem?.id} onSelectItem={(item) => setSelectedItemId(item.id)} />
+            )}
+          </Section>
+        }
+        inspector={plan === undefined ? undefined : <SelectedPlanItemPanel item={selectedItem} />}
+      />
       <Dialog
         content={
           <DialogPanel>
@@ -180,7 +177,17 @@ export function DevelopmentPlanDetailRoute() {
         title="Context manifest"
         onOpenChange={setIsManifestOpen}
       />
-    </PlanningTableWorkspace>
+    </ProductPage>
+  );
+}
+
+function PlanTableContext({ blockedCount, plan, rowCount }: { blockedCount: number; plan: DevelopmentPlanProjection | undefined; rowCount: number }) {
+  return (
+    <div className="grid gap-2 text-sm text-text-secondary md:grid-cols-3">
+      <p className="m-0">Status: {formatValue(plan?.status)}</p>
+      <p className="m-0">Source objects: {sourceSummary(plan)}</p>
+      <p className="m-0">{rowCount} Plan Items · {blockedCount} blocked</p>
+    </div>
   );
 }
 
@@ -215,17 +222,15 @@ function SelectedPlanItemPanel({ item }: { item: DevelopmentPlanItemRow | undefi
           <p className="text-sm text-text-secondary">{viewModel.previewSummary}</p>
           <p className="text-sm font-semibold text-text-primary">Next action: {viewModel.nextAction}</p>
         </div>
-        <PrioritySummary
-          blockerRisk={viewModel.riskSignal}
-          roleResponsibility={viewModel.primaryActorOrRole}
-          state={`${currentGate.label}: ${formatValue(currentGate.state)}`}
-        />
         <GateProgress
           currentGateId={currentGate.label}
           gates={itemGateProgress(item).map((gate) => ({ id: gate.label, label: gate.label, status: formatValue(gate.state) }))}
         />
         <CompactMetadata
           items={[
+            { label: 'Current gate', value: `${currentGate.label}: ${formatValue(currentGate.state)}` },
+            { label: 'Blocker / risk', value: viewModel.riskSignal },
+            { label: 'Driver', value: viewModel.primaryActorOrRole },
             { label: 'Source context', value: sourceContext },
             { label: 'Gate evidence', value: viewModel.criticalEvidence[0]?.compactText ?? 'Gate evidence unavailable' },
             ...viewModel.secondaryMetadata.map((metadata) => ({ label: metadata.label, value: metadata.value })),

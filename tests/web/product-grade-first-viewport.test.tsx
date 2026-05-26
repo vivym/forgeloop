@@ -91,22 +91,24 @@ describe('Task 5 source object first viewport contracts', () => {
   });
 });
 
-describe.skip('Task 6 owner: Development Plan and Plan Item route first-viewport contracts', () => {
+describe('Task 6 owner: Development Plan and Plan Item route first-viewport contracts', () => {
   it('requires Development Plan index routes to expose the planning table first-viewport contract', async () => {
     const rendered = await renderRoute('/development-plans');
 
     expect(await rendered.findByRole('heading', { name: 'Development Plans' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'development-plan-index', heading: 'Development Plans' });
-    expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
+    expectFirstViewportContract(rendered, { pageFamily: 'planning-table', heading: 'Development Plans' });
+    expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')).toBeNull();
   });
 
   it('requires Development Plan authoring to expose source-context planning controls before downstream artifacts', async () => {
     const rendered = await renderRoute('/development-plans/new');
 
     expect(await rendered.findByRole('heading', { name: 'New Development Plan' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'development-plan-index', heading: 'New Development Plan' });
-    expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/source context/i);
+    expectFirstViewportContract(rendered, { pageFamily: 'plan-authoring', heading: 'New Development Plan' });
+    expect(document.querySelector('[data-source-context-picker][data-primary-work-surface], [data-plan-preview][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')).toBeNull();
+    expect(document.querySelector('[data-source-context-picker]')?.textContent).toMatch(/source/i);
     expect(document.body.textContent).toMatch(/generated only from Plan Items after boundary approval/i);
   });
 
@@ -114,31 +116,43 @@ describe.skip('Task 6 owner: Development Plan and Plan Item route first-viewport
     const rendered = await renderRoute(`/development-plans/${developmentPlan.id}`);
 
     expect(await rendered.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
-    expect(document.querySelector('[data-page-family]')?.getAttribute('data-page-family')).toBe('development-plan-detail');
-    expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/gate|Plan Item/i);
-    expect(rendered.getAllByTestId(firstViewportContract.currentStateTestId)[0]?.textContent).toMatch(/active/i);
-    expect(rendered.getByTestId(firstViewportContract.nextActionTestId).textContent).toMatch(/Resolve Spec review comments/i);
-    expect(rendered.getAllByTestId(firstViewportContract.roleResponsibilityTestId)[0]?.textContent).toMatch(/Product and technical roles/i);
-    expect(rendered.getAllByTestId(firstViewportContract.blockerRiskTestId)[0]?.textContent).toMatch(/blocked Plan Item/i);
+    expectFirstViewportContract(rendered, { pageFamily: 'planning-table', heading: developmentPlan.title });
+    expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-first-viewport]')).toBeNull();
+    expect(document.querySelector('[data-plan-items-table]')?.textContent).toMatch(/Plan Item|gate|Resolve Spec review comments/i);
     expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b/);
   });
 
-  it('requires Development Plan Item gate routes to expose gate workspace first viewports', async () => {
+  it('requires Development Plan Item gate routes to expose gate-flow workspaces', async () => {
     for (const route of [
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`,
-      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
-      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`,
     ]) {
       const rendered = await renderRoute(route);
 
       expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-      expectFirstViewportContract(rendered, { pageFamily: 'gate-workspace', heading: developmentPlanItem.title });
-      expect(document.querySelector('[data-workspace-layout="gate"]')).toBeInstanceOf(HTMLElement);
-      expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/Gate progress|Current enabled action|Evidence side context/i);
+      expectFirstViewportContract(rendered, { pageFamily: 'gate-flow', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-gate-workspace][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-first-viewport]')).toBeNull();
+      expect(document.querySelector('[data-gate-workspace]')?.textContent).toMatch(/Gate progress|Current gate|Evidence side context|Execution supervision/i);
       expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/specs\/|\/plans\//);
+      cleanup();
+    }
+  });
+
+  it('requires Spec and Execution Plan routes to expose document-review workspaces', async () => {
+    for (const route of [
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
+    ]) {
+      const rendered = await renderRoute(route);
+
+      expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+      expectFirstViewportContract(rendered, { pageFamily: 'document-review', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-first-viewport]')).toBeNull();
+      expect(document.querySelector('[data-document-surface]')?.textContent).toMatch(/Spec|Execution Plan|Save/i);
       cleanup();
     }
   });

@@ -69,8 +69,13 @@ const cockpitPlanFor = (artifact: typeof plan, item: Pick<typeof workItem, 'id' 
 
 const cockpitSpecRevisionFor = (revision: typeof specRevision, item: Pick<typeof workItem, 'id' | 'kind' | 'title'>) => {
   const { work_item_id: _workItemId, ...publicRevision } = revision;
-  return { ...publicRevision, scope_ref: scopeRefForItem(item) };
+  return { ...publicRevision, scope_ref: scopeRefForItem(item), attachment_refs: [] };
 };
+
+const itemExecutionPlanRevisionFor = (revision: typeof executionPlanRevision) => ({
+  ...revision,
+  attachment_refs: [],
+});
 
 const cockpitPlanRevisionFor = (revision: typeof planRevision, item: Pick<typeof workItem, 'id' | 'kind' | 'title'>) => {
   const { work_item_id: _workItemId, ...publicRevision } = revision;
@@ -683,6 +688,28 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   'POST /development-plans/generate-draft': { ...developmentPlan, generation_state: 'draft_generated' },
   [`POST /development-plans/${developmentPlan.id}/items`]: developmentPlanItem,
   [`POST /development-plans/${developmentPlan.id}/regenerate-draft`]: { ...developmentPlan, revision_id: 'development-plan-revision-regenerated', generation_state: 'draft_regenerated' },
+  [`GET /spec-revisions/${specRevision.id}`]: cockpitSpecRevisionFor(specRevision, workItem),
+  [`GET /execution-plan-revisions/${executionPlanRevision.id}`]: itemExecutionPlanRevisionFor(executionPlanRevision),
+  ...Object.fromEntries(
+    developmentPlan.items.map((item) => [
+      `PATCH /development-plans/${developmentPlan.id}/items/${item.id}/spec/draft`,
+      ({ init }: Parameters<ProductApiMockHandler>[0]) => ({
+        ...cockpitSpecRevisionFor(specRevision, workItem),
+        id: `specrev-${item.id}-saved`,
+        content: requestBody(init).markdown ?? specRevision.content,
+      }),
+    ]),
+  ),
+  ...Object.fromEntries(
+    developmentPlan.items.map((item) => [
+      `PATCH /development-plans/${developmentPlan.id}/items/${item.id}/execution-plan/draft`,
+      ({ init }: Parameters<ProductApiMockHandler>[0]) => ({
+        ...itemExecutionPlanRevisionFor(executionPlanRevision),
+        id: `planrev-${item.id}-saved`,
+        content: requestBody(init).markdown ?? executionPlanRevision.content,
+      }),
+    ]),
+  ),
   [`POST /source-objects/requirement/${requirementDetail.id}/development-plans/${developmentPlan.id}/link`]: {
     id: 'development-plan-source-link-product-architecture-demo',
     development_plan_id: developmentPlan.id,
@@ -900,6 +927,16 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     next_actions: [],
   },
 };
+
+function requestBody(init: RequestInit | undefined): Record<string, unknown> {
+  if (typeof init?.body !== 'string') return {};
+  try {
+    const parsed = JSON.parse(init.body);
+    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
 
 export function installProductApiMock(overrides: ProductApiResponseMap = {}) {
   const responses = { ...defaultProductApiResponses, ...overrides };
