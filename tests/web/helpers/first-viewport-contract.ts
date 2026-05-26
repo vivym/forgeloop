@@ -5,7 +5,7 @@ import { expect } from 'vitest';
 import { firstViewportContract } from '../../../apps/web/src/features/product-surfaces/first-viewport-contract';
 import type { ProductPageFamily } from '../../../apps/web/src/features/product-surfaces/route-contract';
 
-type ScreenQueries = Pick<typeof defaultScreen, 'getByRole' | 'getByTestId'>;
+type ScreenQueries = Pick<typeof defaultScreen, 'getByRole' | 'queryByTestId'>;
 
 export interface FirstViewportContractOptions {
   heading?: RegExp | string;
@@ -21,18 +21,27 @@ export function expectFirstViewportContract(
     : screen.getByRole('heading', { level: 1, name: options.heading });
   expectVisibleAffordance(heading, 'first viewport must expose a visible h1 with text');
 
-  const marker = document.querySelector(`[${firstViewportContract.pageFamilyAttribute}]`);
+  const markers = document.querySelectorAll(`[${firstViewportContract.pageFamilyAttribute}]`);
+  expect(markers).toHaveLength(1);
+  const marker = markers[0];
   expect(marker).toBeInstanceOf(HTMLElement);
   expect((marker as HTMLElement).getAttribute(firstViewportContract.pageFamilyAttribute)).toBe(options.pageFamily);
   expectVisibleElement(marker as HTMLElement, 'first viewport must expose a visible page-family marker');
 
-  expectVisibleAffordance(screen.getByTestId(firstViewportContract.currentStateTestId), 'current state must be visible and non-empty');
-  expectVisibleAffordance(screen.getByTestId(firstViewportContract.nextActionTestId), 'next action must be visible and non-empty');
+  const primaryWorkSurfaces = document.querySelectorAll(`[${firstViewportContract.primaryWorkSurfaceAttribute}]`);
+  expect(primaryWorkSurfaces).toHaveLength(1);
   expectVisibleAffordance(
-    screen.getByTestId(firstViewportContract.roleResponsibilityTestId),
-    'role responsibility must be visible and non-empty',
+    primaryWorkSurfaces[0] as HTMLElement,
+    'first viewport must expose exactly one visible primary work surface with content',
   );
-  expectVisibleAffordance(screen.getByTestId(firstViewportContract.blockerRiskTestId), 'blocker or risk must be visible and non-empty');
+
+  for (const attribute of firstViewportContract.forbiddenAttributes) {
+    expect(document.querySelector(`[${attribute}]`)).toBeNull();
+  }
+
+  for (const testId of firstViewportContract.forbiddenTestIds) {
+    expect(screen.queryByTestId(testId)).toBeNull();
+  }
 
   for (const statusAffordance of document.querySelectorAll('[role="status"], [role="alert"], [data-disabled-reason], [aria-disabled="true"]')) {
     expectVisibleAffordance(statusAffordance as HTMLElement, 'state, disabled, blocker, and status affordances must not be empty wrappers');

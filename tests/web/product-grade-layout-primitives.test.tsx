@@ -5,52 +5,170 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ActionStrip,
+  CockpitLayout,
   CompactMetadata,
+  DatabaseViewLayout,
+  DocumentWorkspaceLayout,
+  ExecutionSupervisionLayout,
   EvidenceDrawer,
   GateProgress,
   GateWorkspace,
+  InboxLayout,
   ObjectWorkspace,
+  PlanAuthoringLayout,
   PlanningTableWorkspace,
   PreviewPane,
   PrioritySummary,
+  ProductPage,
   QueueWorkspace,
   RevisionDrawer,
   Section,
-  WorkspacePage,
 } from '../../apps/web/src/shared/layout';
 import { EmptyState, InlineNotice, Skeleton } from '../../apps/web/src/shared/ui';
 import { ErrorState } from '../../apps/web/src/shared/ui/error-state/error-state';
 import { DataTable } from '../../apps/web/src/shared/ui/table/table';
+import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 
 afterEach(() => {
   cleanup();
 });
 
 describe('product-grade layout primitives', () => {
-  it('renders WorkspacePage as the product page root with first-viewport hooks', () => {
+  it('renders ProductPage without old first viewport summary markers', () => {
     render(
-      <WorkspacePage
-        blockerRisk="Blocked by stale evidence"
-        family="release"
-        heading="Release cockpit"
-        layout="object"
-        nextAction={<button type="button">Approve next gate</button>}
-        roleResponsibility="Release owner decides"
-        state="Gate review pending"
-        subtitle="Operational overview"
-        toolbar={<button type="button">Refresh</button>}
-      >
-        <section aria-label="Release body">Body</section>
-      </WorkspacePage>,
+      <ProductPage family="cockpit" heading="Cockpit">
+        <CockpitLayout
+          attentionQueue={<section>Attention queue</section>}
+          commandStrip={<div>Command strip</div>}
+          healthRail={<aside>Health</aside>}
+          riskColumn={<section>Risks</section>}
+        />
+      </ProductPage>,
     );
 
-    const page = screen.getByRole('main', { name: 'Release cockpit' });
-    expect(page.getAttribute('data-page-family')).toBe('release');
-    expect(page.getAttribute('data-workspace-layout')).toBe('object');
-    expect(screen.getByTestId('current-state').textContent).toContain('Gate review pending');
-    expect(screen.getByTestId('next-action').textContent).toContain('Approve next gate');
-    expect(screen.getByTestId('role-responsibility').textContent).toContain('Release owner decides');
-    expect(screen.getByTestId('blocker-risk').textContent).toContain('Blocked by stale evidence');
+    expect(screen.getByRole('main', { name: 'Cockpit' }).getAttribute('data-page-family')).toBe('cockpit');
+    expect(document.querySelectorAll('[data-primary-work-surface]')).toHaveLength(1);
+    expect(document.querySelector('[data-primary-work-surface]')?.textContent).toBe('Attention queue');
+    expect(document.querySelector('[data-first-viewport]')).toBeNull();
+    expect(screen.queryByTestId('current-state')).toBeNull();
+    expect(screen.queryByTestId('next-action')).toBeNull();
+  });
+
+  it('falls back to source context when PlanAuthoringLayout preview primary is omitted', () => {
+    render(
+      <PlanAuthoringLayout
+        aiAssist={<section>AI assist</section>}
+        primarySurface="preview"
+        sourceContext={<section>Source context</section>}
+      />,
+    );
+
+    const primaryWorkSurfaces = document.querySelectorAll('[data-primary-work-surface]');
+    expect(primaryWorkSurfaces).toHaveLength(1);
+    expect(primaryWorkSurfaces[0]?.textContent).toBe('Source context');
+    expect(primaryWorkSurfaces[0]?.hasAttribute('data-source-context-picker')).toBe(true);
+  });
+
+  it('falls back to source context when PlanAuthoringLayout preview primary is null', () => {
+    render(
+      <PlanAuthoringLayout
+        preview={null}
+        primarySurface="preview"
+        sourceContext={<section>Source context</section>}
+      />,
+    );
+
+    const primaryWorkSurfaces = document.querySelectorAll('[data-primary-work-surface]');
+    expect(primaryWorkSurfaces).toHaveLength(1);
+    expect(primaryWorkSurfaces[0]?.textContent).toBe('Source context');
+    expect(primaryWorkSurfaces[0]?.hasAttribute('data-source-context-picker')).toBe(true);
+  });
+
+  it('falls back to lanes when ExecutionSupervisionLayout evidence primary is omitted', () => {
+    render(
+      <ExecutionSupervisionLayout
+        controls={<section>Worker controls</section>}
+        lanes={<section>Execution lanes</section>}
+        primarySurface="evidence"
+      />,
+    );
+
+    const primaryWorkSurfaces = document.querySelectorAll('[data-primary-work-surface]');
+    expect(primaryWorkSurfaces).toHaveLength(1);
+    expect(primaryWorkSurfaces[0]?.textContent).toBe('Execution lanes');
+    expect(primaryWorkSurfaces[0]?.hasAttribute('data-execution-lanes')).toBe(true);
+  });
+
+  it('falls back to lanes when ExecutionSupervisionLayout evidence primary is null', () => {
+    render(
+      <ExecutionSupervisionLayout
+        evidence={null}
+        lanes={<section>Execution lanes</section>}
+        primarySurface="evidence"
+      />,
+    );
+
+    const primaryWorkSurfaces = document.querySelectorAll('[data-primary-work-surface]');
+    expect(primaryWorkSurfaces).toHaveLength(1);
+    expect(primaryWorkSurfaces[0]?.textContent).toBe('Execution lanes');
+    expect(primaryWorkSurfaces[0]?.hasAttribute('data-execution-lanes')).toBe(true);
+  });
+
+  it('keeps optional-rail layouts single-column when rail content is absent', () => {
+    render(<InboxLayout list={<section>Inbox queue</section>} />);
+
+    const primaryWorkSurface = document.querySelector('[data-primary-work-surface]');
+    expect(primaryWorkSurface?.textContent).toBe('Inbox queue');
+    expect(document.querySelector('[data-inspector-panel]')).toBeNull();
+    expect(primaryWorkSurface?.parentElement?.className).not.toContain('xl:grid-cols');
+  });
+
+  it('keeps DatabaseViewLayout single-column when inspector is an empty array', () => {
+    render(
+      <DatabaseViewLayout
+        inspector={[]}
+        table={<section>Database table</section>}
+        toolbar={<button type="button">Filter</button>}
+      />,
+    );
+
+    const primaryWorkSurfaces = document.querySelectorAll('[data-primary-work-surface]');
+    expect(primaryWorkSurfaces).toHaveLength(1);
+    expect(primaryWorkSurfaces[0]?.textContent).toBe('Database table');
+    expect(document.querySelector('[data-row-preview]')).toBeNull();
+    expect(primaryWorkSurfaces[0]?.parentElement?.className).not.toContain('xl:grid-cols');
+  });
+
+  it('does not render empty child wrappers inside multi-slot rails', () => {
+    render(
+      <DocumentWorkspaceLayout
+        attachments={[]}
+        document={<section>Source document</section>}
+        properties={<section>Properties</section>}
+      />,
+    );
+
+    expect(document.querySelector('[data-property-rail]')?.textContent).toBe('Properties');
+    expect(document.querySelector('[data-attachment-strip]')).toBeNull();
+    expect(document.querySelectorAll('[data-primary-work-surface]')).toHaveLength(1);
+  });
+
+  it('rejects duplicate first viewport page-family markers', () => {
+    render(
+      <>
+        <ProductPage family="cockpit" heading="Cockpit">
+          <CockpitLayout
+            attentionQueue={<section>Attention queue</section>}
+            commandStrip={<div>Command strip</div>}
+            healthRail={<aside>Health</aside>}
+            riskColumn={<section>Risks</section>}
+          />
+        </ProductPage>
+        <div data-page-family="cockpit">Duplicate marker</div>
+      </>,
+    );
+
+    expect(() => expectFirstViewportContract(screen, { pageFamily: 'cockpit' })).toThrow();
   });
 
   it('composes specialized workspaces through WorkspacePage markers', () => {

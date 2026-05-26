@@ -14,8 +14,28 @@ export { ObjectSummary, type ObjectSummaryProps } from './object-summary/object-
 export { PageHeader, type PageHeaderProps } from './page-header/page-header';
 export { PillGroup, type PillGroupProps } from './pill-group/pill-group';
 export { PlanningTableWorkspace, type PlanningTableWorkspaceProps } from './planning-table-workspace/planning-table-workspace';
+export {
+  CockpitLayout,
+  CodeReviewLayout,
+  DatabaseViewLayout,
+  DeliveryBoardLayout,
+  DocumentGovernanceLayout,
+  DocumentReviewLayout,
+  DocumentWorkspaceLayout,
+  ExecutionSupervisionLayout,
+  GateFlowLayout,
+  InboxLayout,
+  PlanAuthoringLayout,
+  PlanningTableLayout,
+  QaHandoffLayout,
+  ReleaseEvidenceLayout,
+  ReleaseReadinessLayout,
+  ReportInsightLayout,
+  SourceEvidenceLayout,
+} from './page-families/page-families';
 export { PreviewPane, type PreviewPaneProps } from './preview-pane/preview-pane';
 export { PrioritySummary, type PrioritySummaryProps } from './priority-summary/priority-summary';
+export { ProductPage, type ProductPageProps } from './product-page/product-page';
 export { QueueWorkspace, type QueueWorkspaceProps } from './queue-workspace/queue-workspace';
 export { RevisionDrawer, type RevisionDrawerProps } from './revision-drawer/revision-drawer';
 export { Section, type SectionProps } from './section/section';
