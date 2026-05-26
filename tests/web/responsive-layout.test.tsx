@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
-import { developmentPlan, developmentPlanItem } from './fixtures/product-data';
+import { developmentPlan, developmentPlanItem, requirementListItem } from './fixtures/product-data';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -23,7 +23,7 @@ describe('responsive layout contract', () => {
   });
 
   it('renders source object workspace without old responsive class tokens', async () => {
-    const screen = await renderRoute('/requirements/req-1');
+    const screen = await renderRoute(`/requirements/${requirementListItem.id}`);
 
     expect(await screen.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
     expect(document.querySelector('[data-workspace-layout="object"]')).toBeTruthy();
@@ -36,8 +36,8 @@ describe('responsive layout contract', () => {
       vi.stubGlobal('innerWidth', width);
       vi.stubGlobal('matchMedia', createMatchMedia(width));
 
-      const screen = await renderRoute('/development-plans/development-plan-web-product/items/development-plan-item-web-product');
-      expect(await screen.findByRole('heading', { name: /Development Plan Item/i })).toBeTruthy();
+      const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+      expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
       await waitFor(() => expect(document.body.textContent).toMatch(/approved|running|pending|status/i));
       expect(document.querySelector('[data-card-in-card="true"]')).toBeNull();
       expect(legacyRenderedClassTokens(document.body)).toEqual([]);

@@ -11,6 +11,7 @@ import {
   deliveryReadiness,
   developmentPlan,
   developmentPlanItem,
+  developmentPlanItemsById,
   execution,
   executionPackage,
   executionPlan,
@@ -41,46 +42,14 @@ import {
 } from './product-data';
 import type { ProductLaneId, ProductLaneItem, ProductLaneResponse } from '@forgeloop/contracts';
 
-const { development_plan_id: _developmentPlanItemLegacyPlanId, ...developmentPlanItemProjection } = developmentPlanItem;
-void _developmentPlanItemLegacyPlanId;
+const developmentPlanItemProjectionFor = <T extends { development_plan_id: string }>(item: T) => {
+  const { development_plan_id: _developmentPlanItemPlanId, ...projection } = item;
+  void _developmentPlanItemPlanId;
+  return projection;
+};
 
 export type ProductApiMockHandler = (request: { body?: unknown; input: RequestInfo | URL; init?: RequestInit; key: string }) => unknown | Promise<unknown>;
 export type ProductApiResponseMap = Record<string, unknown | ProductApiMockHandler>;
-
-const routeWorkItem = {
-  ...workItem,
-  id: 'wi-1',
-  title: 'Improve release cockpit',
-  goal: 'Improve release readiness visibility.',
-  success_criteria: ['Planning artifacts are visible', 'Validation path is visible'],
-  intake_context: {
-    type: 'requirement',
-    stakeholder_problem: 'Release readiness is hard to inspect.',
-    desired_outcome: 'Planning artifacts and validation path are visible.',
-    acceptance_criteria: ['Planning artifacts are visible', 'Validation path is visible'],
-    in_scope: ['Release cockpit'],
-  },
-  phase: 'planning',
-};
-
-const routeSpec = {
-  ...spec,
-  work_item_id: routeWorkItem.id,
-  scope_ref: { type: routeWorkItem.kind, id: routeWorkItem.id, title: routeWorkItem.title },
-};
-
-const routePlan = {
-  ...plan,
-  work_item_id: routeWorkItem.id,
-  scope_ref: { type: routeWorkItem.kind, id: routeWorkItem.id, title: routeWorkItem.title },
-};
-
-const routeExecutionPackage = {
-  ...executionPackage,
-  work_item_id: routeWorkItem.id,
-  scope_ref: { type: routeWorkItem.kind, id: routeWorkItem.id, title: routeWorkItem.title },
-  objective: 'Improve release cockpit planning flow',
-};
 
 const scopeRefForItem = (item: Pick<typeof workItem, 'id' | 'kind' | 'title'>) => ({
   type: item.kind,
@@ -118,7 +87,7 @@ const cockpitPackageFor = (
 
 const routeProductActions = [
   {
-    id: 'open-route-work-item',
+    id: 'open-product-architecture-requirement',
     lane_id: 'requirements',
     priority: 'primary',
     label: 'Open requirement',
@@ -127,12 +96,12 @@ const routeProductActions = [
     target: {
       kind: 'object',
       object_type: 'requirement',
-      object_id: routeWorkItem.id,
-      href: `/requirements/${routeWorkItem.id}`,
+      object_id: workItem.id,
+      href: `/requirements/${workItem.id}`,
     },
   },
   {
-    id: 'run-route-package',
+    id: 'run-product-architecture-package',
     lane_id: 'requirements',
     priority: 'secondary',
     label: 'Run package',
@@ -142,9 +111,9 @@ const routeProductActions = [
     command: {
       type: 'run_package',
       object_type: 'execution_package',
-      object_id: routeExecutionPackage.id,
-      scope_ref: { type: 'requirement', id: routeWorkItem.id },
-      package_id: routeExecutionPackage.id,
+      object_id: executionPackage.id,
+      scope_ref: { type: 'requirement', id: workItem.id },
+      package_id: executionPackage.id,
     },
     target: {
       kind: 'object',
@@ -156,17 +125,17 @@ const routeProductActions = [
 ] as const;
 
 const routeProductLaneItem = {
-  id: routeWorkItem.id,
-  title: routeWorkItem.title,
-  object: { type: 'requirement', id: routeWorkItem.id },
-  kind: routeWorkItem.kind,
-  phase: routeWorkItem.phase,
-  status: routeWorkItem.activity_state,
-  gate_state: routeWorkItem.gate_state,
-  resolution: routeWorkItem.resolution,
-  risk: routeWorkItem.risk,
-  driver_actor_id: routeWorkItem.driver_actor_id,
-  updated_at: routeWorkItem.updated_at ?? '2026-05-18T00:00:00.000Z',
+  id: workItem.id,
+  title: workItem.title,
+  object: { type: 'requirement', id: workItem.id },
+  kind: workItem.kind,
+  phase: workItem.phase,
+  status: workItem.activity_state,
+  gate_state: workItem.gate_state,
+  resolution: workItem.resolution,
+  risk: workItem.risk,
+  driver_actor_id: workItem.driver_actor_id,
+  updated_at: workItem.updated_at ?? '2026-05-18T00:00:00.000Z',
   actions: routeProductActions,
 };
 
@@ -204,12 +173,6 @@ const itemForLane = (item: ProductLaneItem, laneId: ProductLaneId): ProductLaneI
   ...item,
   actions: item.actions.map((action) => ({ ...action, lane_id: laneId })),
 });
-
-const routeTimeline = timeline.map((entry) => ({
-  ...entry,
-  object_id: routeWorkItem.id,
-  summary: 'Created release cockpit improvement work item.',
-}));
 
 const productListItem = (
   artifact: typeof spec | typeof plan,
@@ -265,6 +228,105 @@ const packageListItem = {
   counts: {},
   updated_at: executionPackage.updated_at ?? '2026-05-18T00:00:00.000Z',
 };
+
+const developmentPlanItemRows = developmentPlan.items.map((item) => ({
+  id: item.id,
+  object_ref: {
+    type: 'development_plan_item',
+    id: item.id,
+    development_plan_id: developmentPlan.id,
+    title: item.title,
+  },
+  title: item.title,
+  responsible_role: item.responsible_role,
+  driver_actor_id: item.driver_actor_id,
+  reviewer_actor_id: item.reviewer_actor_id,
+  risk: item.risk,
+  boundary_status: item.boundary_status,
+  spec_status: item.spec_status,
+  execution_plan_status: item.execution_plan_status,
+  execution_status: item.execution_status,
+  review_status: item.review_status,
+  qa_handoff_status: item.qa_handoff_status,
+  next_action: item.next_action,
+  href: `/development-plans/${developmentPlan.id}/items/${item.id}`,
+}));
+
+const developmentPlanItemResponseFor = (item: (typeof developmentPlan.items)[number]) => ({
+  ...developmentPlanItemProjectionFor(item),
+  object_ref: {
+    type: 'development_plan_item',
+    id: item.id,
+    development_plan_id: developmentPlan.id,
+    title: item.title,
+  },
+  development_plan_ref: { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
+  source_ref: developmentPlan.source_refs[0],
+  revisions: [],
+  boundary_summary_revisions: [{
+    ...boundarySummary,
+    id: boundarySummary.revision_id,
+    boundary_summary_id: boundarySummary.id,
+    revision_number: 1,
+    summary_markdown: boundarySummary.summary_markdown,
+    decision_count: brainstormingSession.decisions.length,
+    decision_snapshot: brainstormingSession.decisions,
+  }],
+  specs: [{ id: spec.id, artifact_type: 'spec', title: specRevision.summary, current_revision_id: spec.current_revision_id, approved_revision_id: spec.approved_revision_id }],
+  execution_plans: [{ id: executionPlanRevision.execution_plan_id, artifact_type: 'execution_plan', title: executionPlanRevision.summary, current_revision_id: executionPlan.current_revision_id, approved_revision_id: executionPlan.approved_revision_id }],
+  executions: [{ id: execution.id, title: execution.ref.title, status: execution.status }],
+  code_review_handoffs: [{ id: codeReviewHandoff.id, title: codeReviewHandoff.ref.title, status: codeReviewHandoff.status }],
+  qa_handoffs: [{ id: qaHandoff.id, title: qaHandoff.ref.title, status: qaHandoff.status }],
+  compare_links: {
+    item_revisions_href: `/development-plans/${developmentPlan.id}/items/${item.id}/revisions/compare`,
+    boundary_summary_revisions_href: `/boundary-summaries/${boundarySummary.id}/revisions/compare`,
+  },
+  href: `/development-plans/${developmentPlan.id}/items/${item.id}`,
+});
+
+const developmentPlanItemResponses = Object.fromEntries(
+  developmentPlan.items.map((item) => [
+    `GET /query/development-plans/${developmentPlan.id}/items/${item.id}`,
+    developmentPlanItemResponseFor(item),
+  ]),
+);
+
+const developmentPlanItemRevisionResponses = Object.fromEntries(
+  developmentPlan.items.map((item) => [
+    `GET /development-plans/${developmentPlan.id}/items/${item.id}/revisions`,
+    [{ id: item.revision_id, development_plan_item_id: item.id, revision_number: 1, snapshot: item }],
+  ]),
+);
+
+const developmentPlanItemSpecCompareResponses = Object.fromEntries(
+  developmentPlan.items.map((item) => [
+    `GET /development-plans/${developmentPlan.id}/items/${item.id}/spec/revisions/compare?base_revision_id=${specRevision.id}&compare_revision_id=${specRevision.id}`,
+    {
+      base_revision_id: specRevision.id,
+      compare_revision_id: specRevision.id,
+      summary: 'No Spec revision changes in seeded product architecture data.',
+      changed_sections: [],
+    },
+  ]),
+);
+
+const developmentPlanItemExecutionPlanCompareResponses = Object.fromEntries(
+  developmentPlan.items.map((item) => [
+    `GET /development-plans/${developmentPlan.id}/items/${item.id}/execution-plan/revisions/compare?base_revision_id=${executionPlanRevision.id}&compare_revision_id=${executionPlanRevision.id}`,
+    {
+      base_revision_id: executionPlanRevision.id,
+      compare_revision_id: executionPlanRevision.id,
+      summary: 'No Execution Plan revision changes in seeded product architecture data.',
+      changed_sections: [],
+    },
+  ]),
+);
+
+const executionDetailResponse = (() => {
+  const { title: _title, ...detail } = execution;
+  void _title;
+  return detail;
+})();
 
 export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/pipeline?project_id=${projectId}`]: {
@@ -363,13 +425,13 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
         status: developmentPlan.status,
         source_refs: developmentPlan.source_refs,
         item_count: developmentPlan.items.length,
-        blocked_count: 0,
+        blocked_count: developmentPlan.items.filter((item) => item.boundary_status === 'changes_requested' || item.spec_status === 'blocked' || item.execution_plan_status === 'blocked').length,
         responsible_role: developmentPlanItem.responsible_role,
-        responsible_roles: [developmentPlanItem.responsible_role],
+        responsible_roles: [...new Set(developmentPlan.items.map((item) => item.responsible_role))],
         gate_state: 'execution',
-        gate_states: ['execution'],
+        gate_states: ['boundary', 'spec', 'execution_plan', 'execution', 'review', 'qa'],
         risk: developmentPlanItem.risk,
-        risks: [developmentPlanItem.risk],
+        risks: [...new Set(developmentPlan.items.map((item) => item.risk))],
         href: `/development-plans/${developmentPlan.id}`,
         updated_at: developmentPlan.updated_at,
       },
@@ -381,65 +443,13 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     object_ref: { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
     source_links: [],
     revisions: [],
-    items: [
-      {
-        id: developmentPlanItem.id,
-        object_ref: {
-          type: 'development_plan_item',
-          id: developmentPlanItem.id,
-          development_plan_id: developmentPlan.id,
-          title: developmentPlanItem.title,
-        },
-        title: developmentPlanItem.title,
-        responsible_role: developmentPlanItem.responsible_role,
-        driver_actor_id: developmentPlanItem.driver_actor_id,
-        reviewer_actor_id: developmentPlanItem.reviewer_actor_id,
-        risk: developmentPlanItem.risk,
-        boundary_status: developmentPlanItem.boundary_status,
-        spec_status: developmentPlanItem.spec_status,
-        execution_plan_status: developmentPlanItem.execution_plan_status,
-        execution_status: developmentPlanItem.execution_status,
-        review_status: developmentPlanItem.review_status,
-        qa_handoff_status: developmentPlanItem.qa_handoff_status,
-        next_action: developmentPlanItem.next_action,
-        href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
-      },
-    ],
+    items: developmentPlanItemRows,
     href: `/development-plans/${developmentPlan.id}`,
   },
-  [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: {
-    ...developmentPlanItemProjection,
-    object_ref: {
-      type: 'development_plan_item',
-      id: developmentPlanItem.id,
-      development_plan_id: developmentPlan.id,
-      title: developmentPlanItem.title,
-    },
-    development_plan_ref: { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
-    source_ref: developmentPlan.source_refs[0],
-    revisions: [],
-    boundary_summary_revisions: [{
-      ...boundarySummary,
-      id: boundarySummary.revision_id,
-      boundary_summary_id: boundarySummary.id,
-      revision_number: 1,
-      summary_markdown: boundarySummary.summary_markdown,
-      decision_count: brainstormingSession.decisions.length,
-      decision_snapshot: brainstormingSession.decisions,
-    }],
-    specs: [{ id: spec.id, artifact_type: 'spec', title: specRevision.summary, current_revision_id: spec.current_revision_id, approved_revision_id: spec.approved_revision_id }],
-    execution_plans: [{ id: executionPlanRevision.execution_plan_id, artifact_type: 'execution_plan', title: executionPlanRevision.summary, current_revision_id: executionPlan.current_revision_id, approved_revision_id: executionPlan.approved_revision_id }],
-    executions: [{ id: execution.id, title: execution.ref.title, status: execution.status }],
-    qa_handoffs: [{ id: qaHandoff.id, title: qaHandoff.ref.title, status: qaHandoff.status }],
-    compare_links: {
-      item_revisions_href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/revisions/compare`,
-      boundary_summary_revisions_href: `/boundary-summaries/${boundarySummary.id}/revisions/compare`,
-    },
-    href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
-  },
-  [`GET /development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/revisions`]: [
-    { id: developmentPlanItem.revision_id, development_plan_item_id: developmentPlanItem.id, revision_number: 1, snapshot: developmentPlanItem },
-  ],
+  ...developmentPlanItemResponses,
+  ...developmentPlanItemRevisionResponses,
+  ...developmentPlanItemSpecCompareResponses,
+  ...developmentPlanItemExecutionPlanCompareResponses,
   [`GET /boundary-summaries/${boundarySummary.id}/revisions`]: [
     {
       ...boundarySummary,
@@ -549,7 +559,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     items: [{ ...execution, title: execution.ref.title, href: `/executions/${execution.id}`, last_event_at: execution.updated_at }],
     degraded_sources: [],
   },
-  [`GET /query/executions/${execution.id}`]: execution,
+  [`GET /query/executions/${execution.id}`]: executionDetailResponse,
   [`GET /query/code-review-handoffs?project_id=${projectId}`]: {
     items: [{ ...codeReviewHandoff, title: codeReviewHandoff.ref.title, href: `/executions/${execution.id}` }],
     degraded_sources: [],
@@ -576,17 +586,20 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   },
   [`GET /query/requirements?project_id=${projectId}`]: requirementListResponse,
   [`GET /query/requirements?project_id=${projectId}&limit=100`]: requirementListResponse,
-  'GET /query/requirements/req-1': requirementDetail,
+  [`GET /query/requirements/${requirementDetail.id}`]: requirementDetail,
   [`GET /query/initiatives?project_id=${projectId}`]: initiativeListResponse,
   [`GET /query/initiatives?project_id=${projectId}&limit=100`]: initiativeListResponse,
-  'GET /query/initiatives/init-1': initiativeDetail,
+  [`GET /query/initiatives/${initiativeDetail.id}`]: initiativeDetail,
   [`GET /query/tech-debt?project_id=${projectId}`]: techDebtListResponse,
   [`GET /query/tech-debt?project_id=${projectId}&limit=100`]: techDebtListResponse,
-  'GET /query/tech-debt/td-1': techDebtDetail,
+  [`GET /query/tech-debt/${techDebtDetail.id}`]: techDebtDetail,
   [`GET /query/bugs?project_id=${projectId}`]: bugListResponse,
   [`GET /query/bugs?project_id=${projectId}&limit=100`]: bugListResponse,
-  'GET /query/bugs/bug-1': bugDetail,
+  [`GET /query/bugs/${bugDetail.id}`]: bugDetail,
   [`GET /query/board?project_id=${projectId}&limit=100`]: { items: boardCards },
+  [`GET /query/reports?project_id=${projectId}&report=replay`]: () =>
+    new Response(JSON.stringify({ message: 'Replay report is dev-only in product architecture rebuild.' }), { status: 404 }),
+  [`GET /query/reports/delivery?project_id=${projectId}&limit=100`]: reportFixtures.delivery,
   [`GET /query/reports/development-plan-throughput?project_id=${projectId}&limit=100`]: {
     ...reportFixtures.developmentPlanThroughput,
   },
@@ -620,15 +633,15 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /run-sessions/${runSession.id}/events`]: {
     events: [
       {
-        id: 'event-web-product-1',
+        id: 'event-demo-seed-visual-review-1',
         run_session_id: runSession.id,
         sequence: 1,
         cursor: '0000000001',
         event_type: 'agent_message',
         source: 'fixture',
         visibility: 'public',
-        summary: 'Shared product API foundation passed deterministic checks.',
-        payload: { message: 'Shared product API foundation passed deterministic checks.' },
+        summary: 'Demo seed visual review data passed deterministic checks.',
+        payload: { message: 'Demo seed visual review data passed deterministic checks.' },
         created_at: '2026-05-18T00:24:30.000Z',
       },
     ],
@@ -636,7 +649,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     has_more: false,
   },
   [`POST /run-sessions/${runSession.id}/events/stream-token`]: {
-    token: 'stream-token-web-product',
+    token: 'stream-token-demo-seed-visual-review',
     expires_at: '2026-05-18T00:30:00.000Z',
   },
   [`POST /review-packets/${reviewPacket.id}/approve`]: {
@@ -670,8 +683,8 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   'POST /development-plans/generate-draft': { ...developmentPlan, generation_state: 'draft_generated' },
   [`POST /development-plans/${developmentPlan.id}/items`]: developmentPlanItem,
   [`POST /development-plans/${developmentPlan.id}/regenerate-draft`]: { ...developmentPlan, revision_id: 'development-plan-revision-regenerated', generation_state: 'draft_regenerated' },
-  [`POST /source-objects/requirement/req-1/development-plans/${developmentPlan.id}/link`]: {
-    id: 'development-plan-source-link-web-product',
+  [`POST /source-objects/requirement/${requirementDetail.id}/development-plans/${developmentPlan.id}/link`]: {
+    id: 'development-plan-source-link-product-architecture-demo',
     development_plan_id: developmentPlan.id,
     source_ref: developmentPlan.source_refs[0],
   },
@@ -682,44 +695,29 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     session: brainstormingSession,
     boundary_summary: boundarySummary,
   },
-  'POST /development-plans/development-plan-web-product/items/development-plan-item-web-product/spec/generate-draft': cockpitSpecRevisionFor(
+  [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-cockpit-command-center'].id}/spec/generate-draft`]: cockpitSpecRevisionFor(
     specRevision,
     workItem,
   ),
-  'GET /development-plans/development-plan-web-product/items/development-plan-item-web-product/spec/revisions/compare?base_revision_id=spec-revision-web-product&compare_revision_id=spec-revision-web-product': {
+  [`GET /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-cockpit-command-center'].id}/spec/revisions/compare?base_revision_id=${specRevision.id}&compare_revision_id=${specRevision.id}`]: {
     base_revision_id: specRevision.id,
     compare_revision_id: specRevision.id,
     changed_fields: [],
   },
-  'POST /development-plans/development-plan-route/items/development-plan-item-route/spec/generate-draft': {
-    ...cockpitSpecRevisionFor(specRevision, routeWorkItem),
-    id: 'spec-revision-route',
-    spec_id: routeSpec.id,
-  },
-  'POST /development-plans/development-plan-web-product/items/development-plan-item-web-product/execution-plan/generate-draft': {
-    id: 'execution-plan-revision-web-product',
-    execution_plan_id: 'execution-plan-web-product',
-    development_plan_item_id: 'development-plan-item-web-product',
+  [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-requirements-database-view'].id}/execution-plan/generate-draft`]: {
+    id: executionPlanRevision.id,
+    execution_plan_id: executionPlan.id,
+    development_plan_item_id: developmentPlanItemsById['dpi-requirements-database-view'].id,
     based_on_spec_revision_id: specRevision.id,
     revision_number: 1,
     summary: planRevision.summary,
     content: planRevision.content,
     created_at: planRevision.created_at,
   },
-  'GET /development-plans/development-plan-web-product/items/development-plan-item-web-product/execution-plan/revisions/compare?base_revision_id=execution-plan-revision-web-product&compare_revision_id=execution-plan-revision-web-product': {
+  [`GET /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-requirements-database-view'].id}/execution-plan/revisions/compare?base_revision_id=${executionPlanRevision.id}&compare_revision_id=${executionPlanRevision.id}`]: {
     base_revision_id: executionPlanRevision.id,
     compare_revision_id: executionPlanRevision.id,
     changed_fields: [],
-  },
-  'POST /development-plans/development-plan-route/items/development-plan-item-route/execution-plan/generate-draft': {
-    id: 'execution-plan-revision-route',
-    execution_plan_id: 'execution-plan-route',
-    development_plan_item_id: 'development-plan-item-route',
-    based_on_spec_revision_id: specRevision.id,
-    revision_number: 1,
-    summary: planRevision.summary,
-    content: planRevision.content,
-    created_at: planRevision.created_at,
   },
   [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution/start`]: execution,
   [`POST /executions/${execution.id}/continue`]: { ...execution, status: 'running' },

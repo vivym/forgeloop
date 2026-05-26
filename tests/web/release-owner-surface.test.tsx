@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
+import { release } from './fixtures/product-data';
 
 describe('Release Owner surface', () => {
   it('renders the release list route as a product inventory', async () => {
@@ -21,7 +22,7 @@ describe('Release Owner surface', () => {
   });
 
   it('renders the release cockpit route as a governed product surface', async () => {
-    const screen = await renderRoute('/releases/release-web-product');
+    const screen = await renderRoute(`/releases/${release.id}`);
 
     expect(await screen.findByRole('heading', { name: 'Release Readiness' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="release"][data-workspace-layout="release-readiness"]')).toBeInstanceOf(HTMLElement);
@@ -34,7 +35,7 @@ describe('Release Owner surface', () => {
   });
 
   it('renders release evidence readiness as a dedicated evidence workspace', async () => {
-    const screen = await renderRoute('/releases/release-web-product/evidence');
+    const screen = await renderRoute(`/releases/${release.id}/evidence`);
 
     expect(await screen.findByRole('heading', { name: 'Release Evidence' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="evidence"][data-workspace-layout="release-evidence"]')).toBeInstanceOf(HTMLElement);

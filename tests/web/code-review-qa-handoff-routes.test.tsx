@@ -24,7 +24,7 @@ describe('Code review and QA handoff route panels', () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/executions/${execution.id}`, {
       apiOverrides: {
-        [`GET /query/executions/${execution.id}`]: { ...execution, status: 'completed', worker_state: 'completed' },
+        [`GET /query/executions/${execution.id}`]: executionDetailOverride({ status: 'completed', worker_state: 'completed' }),
         [`GET /query/code-review-handoffs?project_id=${projectId}&execution_id=${execution.id}&limit=100`]: {
           items: [],
           degraded_sources: [],
@@ -45,7 +45,7 @@ describe('Code review and QA handoff route panels', () => {
     const changesRequestedReview = { ...codeReviewHandoff, status: 'changes_requested' };
     const screen = await renderRoute(`/executions/${execution.id}`, {
       apiOverrides: {
-        [`GET /query/executions/${execution.id}`]: { ...execution, status: 'completed', worker_state: 'completed' },
+        [`GET /query/executions/${execution.id}`]: executionDetailOverride({ status: 'completed', worker_state: 'completed' }),
         [`GET /query/code-review-handoffs?project_id=${projectId}&execution_id=${execution.id}&limit=100`]: {
           items: [{ ...changesRequestedReview, title: changesRequestedReview.ref.title }],
           degraded_sources: [],
@@ -165,3 +165,9 @@ describe('Code review and QA handoff route panels', () => {
     expect(await screen.findByRole('button', { name: /accept qa handoff/i })).toBeTruthy();
   });
 });
+
+function executionDetailOverride(overrides: Record<string, unknown>) {
+  const { title: _title, ...detail } = execution;
+  void _title;
+  return { ...detail, ...overrides };
+}

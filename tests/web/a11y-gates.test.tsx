@@ -6,7 +6,7 @@ import axe from 'axe-core';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { developmentPlan, developmentPlanItem, execution } from './fixtures/product-data';
+import { developmentPlan, developmentPlanItem, execution, release } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('web accessibility gates', () => {
@@ -14,7 +14,7 @@ describe('web accessibility gates', () => {
     '/my-work',
     `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     `/executions/${execution.id}`,
-    '/releases/release-web-product',
+    `/releases/${release.id}`,
   ])(
     'renders a skip link to the primary main landmark on %s',
     async (route) => {
@@ -38,7 +38,7 @@ describe('web accessibility gates', () => {
   );
 
   it('supports keyboard traversal through the project-management navigation', async () => {
-    const screen = await renderRoute('/releases/release-web-product');
+    const screen = await renderRoute(`/releases/${release.id}`);
     const user = userEvent.setup();
 
     await user.tab();

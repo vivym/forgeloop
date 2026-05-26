@@ -3,7 +3,17 @@
 import { cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { actorId, developmentPlan, developmentPlanItem, projectId, requirementListItem } from './fixtures/product-data';
+import {
+  actorId,
+  bugListItem,
+  developmentPlan,
+  developmentPlanItem,
+  initiativeListItem,
+  projectId,
+  release,
+  requirementListItem,
+  techDebtListItem,
+} from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 const removedRoutes = [
@@ -21,14 +31,14 @@ const removedRoutes = [
   '/specs/spec-1',
   '/plans',
   '/plans/plan-1',
-  '/requirements/req-1/spec',
-  '/requirements/req-1/plan',
-  '/bugs/bug-1/spec',
-  '/bugs/bug-1/plan',
-  '/tech-debt/td-1/spec',
-  '/tech-debt/td-1/plan',
-  '/initiatives/init-1/spec',
-  '/initiatives/init-1/plan',
+  `/requirements/${requirementListItem.id}/spec`,
+  `/requirements/${requirementListItem.id}/plan`,
+  `/bugs/${bugListItem.id}/spec`,
+  `/bugs/${bugListItem.id}/plan`,
+  `/tech-debt/${techDebtListItem.id}/spec`,
+  `/tech-debt/${techDebtListItem.id}/plan`,
+  `/initiatives/${initiativeListItem.id}/spec`,
+  `/initiatives/${initiativeListItem.id}/plan`,
   '/packages',
   '/runs',
   '/reviews',
@@ -48,20 +58,18 @@ const forbiddenProductStrings = [
 const forbiddenPrimaryNavLabels = ['Execution Packages', 'Run Sessions', 'Review Packets', 'Replay', 'Traces'] as const;
 const renderedProductRoutes = [
   '/cockpit',
-  '/dashboard',
-  '/requirements/req-1',
+  `/requirements/${requirementListItem.id}`,
   `/development-plans/${developmentPlan.id}`,
   `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
   '/specs-plans',
   '/executions',
   '/reports',
-  '/reports?report=replay',
 ] as const;
 
 describe('project management route IA', () => {
   it('renders grouped primary navigation without generic Tasks or direct artifact routes', async () => {
     const screen = await renderRoute('/my-work');
-    for (const label of ['Cockpit', 'My Work', 'Requirements', 'Bugs', 'Tech Debt', 'Development Plans', 'Specs & Execution Plans', 'Board', 'Executions', 'Releases', 'Reports']) {
+    for (const label of ['Cockpit', 'My Work', 'Requirements', 'Bugs', 'Tech Debt', 'Development Plans', 'Document Reviews', 'Board', 'Executions', 'Releases', 'Reports']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
     for (const label of ['Dashboard', 'Lanes', 'Pipeline', 'Work Items', 'Tasks', 'Packages', 'Runs', 'Reviews', 'Specs', 'Plans']) {
@@ -82,10 +90,6 @@ describe('project management route IA', () => {
       expect(renderedText).not.toContain(forbidden);
       expect(renderedMarkup).not.toContain(forbidden);
     }
-    if (route === '/reports?report=replay') {
-      expect(renderedText).toContain('Lifecycle replay evidence context');
-      expect(renderedMarkup).toContain('report=replay');
-    }
     if (!route.startsWith('/releases')) {
       expect(renderedText).not.toContain('Release Owner');
     }
@@ -100,9 +104,9 @@ describe('project management route IA', () => {
     cleanup();
   });
 
-  it('renders Specs & Execution Plans as a governance queue instead of direct document browsers', async () => {
+  it('renders Document Reviews as a governance queue instead of direct document browsers', async () => {
     const screen = await renderRoute('/specs-plans');
-    expect(await screen.findByRole('heading', { name: 'Specs & Execution Plans' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
     expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('tab', { name: 'Specs' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Execution Plans' })).toBeTruthy();
@@ -112,7 +116,7 @@ describe('project management route IA', () => {
     expect(document.body.textContent).not.toMatch(/\/specs\/|\/plans\/|\/tasks\//);
   });
 
-  it('renders focused Specs & Execution Plans context from Development Plan Item links', async () => {
+  it('renders focused Document Reviews context from Development Plan Item links', async () => {
     const screen = await renderRoute(`/specs-plans?development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`);
 
     expect(await screen.findByText(/Focused governance queue/i)).toBeTruthy();
@@ -123,10 +127,10 @@ describe('project management route IA', () => {
   });
 
   it('renders source object workspace with role lens and item-scoped downstream actions', async () => {
-    const screen = await renderRoute('/requirements/req-1');
+    const screen = await renderRoute(`/requirements/${requirementListItem.id}`);
 
     expect(await screen.findByRole('heading', { name: /^Requirement$/ })).toBeTruthy();
-    expect(await screen.findByText(/checkout validation must block bad payment states/i)).toBeTruthy();
+    expect(await screen.findByText(/Plan Item governance must be visible before Spec and Execution Plan generation/i)).toBeTruthy();
     expect(document.querySelector('[data-page-family="source-object-detail"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-workspace-layout="object"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-document-surface="source-narrative"]')).toBeInstanceOf(HTMLElement);
@@ -146,7 +150,7 @@ describe('project management route IA', () => {
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
     expect(screen.getByText(/evidence 1/i)).toBeTruthy();
-    expect(screen.getByText(/release release-web-product/i)).toBeTruthy();
+    expect(screen.getByText(new RegExp(`release ${release.id}`, 'i'))).toBeTruthy();
     expect(screen.getByText(/risk medium/i)).toBeTruthy();
     expect(document.querySelector('[data-first-viewport]')?.textContent).not.toMatch(/Evidence attachments|Planning links/i);
     expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
@@ -154,10 +158,10 @@ describe('project management route IA', () => {
 
   it('renders source object evidence routes as product-grade evidence workspaces', async () => {
     for (const [route, heading, expectedEvidence] of [
-      ['/requirements/req-1/evidence', 'Requirement Evidence', /checkout validation acceptance evidence/i],
-      ['/initiatives/init-1/evidence', 'Initiative Evidence', /checkout reliability initiative evidence/i],
-      ['/bugs/bug-1/evidence', 'Bug Evidence', /checkout regression reproduction evidence/i],
-      ['/tech-debt/td-1/evidence', 'Tech Debt Evidence', /checkout validation debt evidence/i],
+      [`/requirements/${requirementListItem.id}/evidence`, 'Requirement Evidence', /Plan Item generation flow/i],
+      [`/initiatives/${initiativeListItem.id}/evidence`, 'Initiative Evidence', /AI-native project management rollout evidence/i],
+      [`/bugs/${bugListItem.id}/evidence`, 'Bug Evidence', /Continuation loses review context/i],
+      [`/tech-debt/${techDebtListItem.id}/evidence`, 'Tech Debt Evidence', /WorkspacePage template retirement evidence/i],
     ] as const) {
       const screen = await renderRoute(route);
 
@@ -176,14 +180,14 @@ describe('project management route IA', () => {
 
   it('renders typed list and detail source object surfaces', async () => {
     for (const [route, heading, expectedText] of [
-      ['/requirements', 'Requirements', /checkout requirement/i],
-      ['/requirements/req-1', 'Requirement', /checkout validation must block bad payment states/i],
-      ['/initiatives', 'Initiatives', /checkout reliability initiative/i],
-      ['/initiatives/init-1', 'Initiative', /coordinate checkout reliability/i],
-      ['/tech-debt', 'Tech Debt', /checkout validation debt/i],
-      ['/tech-debt/td-1', 'Tech Debt', /validation logic is duplicated/i],
-      ['/bugs', 'Bugs', /checkout regression/i],
-      ['/bugs/bug-1', 'Bug', /checkout accepts invalid cards/i],
+      ['/requirements', 'Requirements', new RegExp(requirementListItem.title, 'i')],
+      [`/requirements/${requirementListItem.id}`, 'Requirement', /Plan Item governance must be visible/i],
+      ['/initiatives', 'Initiatives', new RegExp(initiativeListItem.title, 'i')],
+      [`/initiatives/${initiativeListItem.id}`, 'Initiative', /Coordinate AI-native project management surfaces/i],
+      ['/tech-debt', 'Tech Debt', new RegExp(techDebtListItem.title, 'i')],
+      [`/tech-debt/${techDebtListItem.id}`, 'Tech Debt', /Generic WorkspacePage composition/i],
+      ['/bugs', 'Bugs', new RegExp(bugListItem.title, 'i')],
+      [`/bugs/${bugListItem.id}`, 'Bug', /Continuation must preserve the review context/i],
     ] as const) {
       const screen = await renderRoute(route);
       expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
@@ -195,10 +199,10 @@ describe('project management route IA', () => {
 
   it('renders source object lists as dense planning queues', async () => {
     for (const [route, heading, objectType, itemTitle, createHref] of [
-      ['/requirements', 'Requirements', 'Requirement', /checkout requirement/i, '/requirements/new'],
-      ['/initiatives', 'Initiatives', 'Initiative', /checkout reliability initiative/i, '/initiatives/new'],
-      ['/tech-debt', 'Tech Debt', 'Tech Debt', /checkout validation debt/i, '/tech-debt/new'],
-      ['/bugs', 'Bugs', 'Bug', /checkout regression/i, '/bugs/new'],
+      ['/requirements', 'Requirements', 'Requirement', new RegExp(requirementListItem.title, 'i'), '/requirements/new'],
+      ['/initiatives', 'Initiatives', 'Initiative', new RegExp(initiativeListItem.title, 'i'), '/initiatives/new'],
+      ['/tech-debt', 'Tech Debt', 'Tech Debt', new RegExp(techDebtListItem.title, 'i'), '/tech-debt/new'],
+      ['/bugs', 'Bugs', 'Bug', new RegExp(bugListItem.title, 'i'), '/bugs/new'],
     ] as const) {
       const screen = await renderRoute(route);
 
@@ -237,9 +241,9 @@ describe('project management route IA', () => {
   it('keeps source object preview tied to the selected row and resets after filtering', async () => {
     const retryRequirement = {
       ...requirementListItem,
-      id: 'req-2',
-      ref: { type: 'requirement', id: 'req-2' },
-      title: 'Checkout retry requirement',
+      id: 'req-visual-review-followup',
+      ref: { type: 'requirement', id: 'req-visual-review-followup' },
+      title: 'Visual review follow-up requirement',
       risk: 'high',
       updated_at: '2026-05-18T02:00:00.000Z',
     };
@@ -254,18 +258,18 @@ describe('project management route IA', () => {
       },
     });
 
-    expect(await screen.findByText('Checkout retry requirement')).toBeTruthy();
+    expect(await screen.findByText('Visual review follow-up requirement')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /view: preview/i }));
-    fireEvent.click(screen.getByText('Checkout retry requirement', { selector: 'span.font-semibold' }));
+    fireEvent.click(screen.getByText('Visual review follow-up requirement', { selector: 'span.font-semibold' }));
 
     const preview = screen.getByRole('region', { name: /source object preview/i });
     expect(within(preview).getByText('Updated 2026-05-18T02:00:00.000Z')).toBeTruthy();
 
     fireEvent.change(screen.getByRole('searchbox', { name: /search requirements/i }), {
-      target: { value: 'Checkout requirement' },
+      target: { value: requirementListItem.title },
     });
 
-    await waitFor(() => expect(screen.queryByText('Checkout retry requirement', { selector: 'span.font-semibold' })).toBeNull());
+    await waitFor(() => expect(screen.queryByText('Visual review follow-up requirement', { selector: 'span.font-semibold' })).toBeNull());
     expect(within(screen.getByRole('region', { name: /source object preview/i })).queryByText('Updated 2026-05-18T02:00:00.000Z')).toBeNull();
     expect(within(screen.getByRole('region', { name: /source object preview/i })).getByText('Updated 2026-05-18T01:00:00.000Z')).toBeTruthy();
   });
@@ -273,7 +277,7 @@ describe('project management route IA', () => {
   it('renders unavailable source list relationship metadata without false zeroes', async () => {
     const screen = await renderRoute('/requirements');
 
-    expect(await screen.findByText(/checkout requirement/i)).toBeTruthy();
+    expect(await screen.findByText(new RegExp(requirementListItem.title, 'i'))).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /view: preview/i }));
 
     const preview = screen.getByRole('region', { name: /source object preview/i });
@@ -322,7 +326,7 @@ describe('project management route IA', () => {
     const screen = await renderRoute('/requirements/new');
 
     fireEvent.change(await screen.findByLabelText(/stakeholder problem/i), {
-      target: { value: 'Checkout operators need better payment validation.' },
+      target: { value: 'Product teams need governed Plan Item generation.' },
     });
 
     expect(await screen.findByRole('status', { name: /draft changes/i })).toBeTruthy();
@@ -338,7 +342,7 @@ describe('project management route IA', () => {
     const screen = await renderRoute('/requirements/new');
 
     fireEvent.change(await screen.findByLabelText(/stakeholder problem/i), {
-      target: { value: 'Checkout operators need better payment validation.' },
+      target: { value: 'Product teams need governed Plan Item generation.' },
     });
     fireEvent.click(screen.getByRole('link', { name: 'Reports' }));
 
@@ -353,7 +357,7 @@ describe('project management route IA', () => {
     const screen = await renderRoute('/requirements/new');
 
     fireEvent.change(await screen.findByLabelText(/stakeholder problem/i), {
-      target: { value: 'Checkout operators need better payment validation.' },
+      target: { value: 'Product teams need governed Plan Item generation.' },
     });
     fireEvent.click(screen.getByRole('link', { name: /cancel/i }));
 
@@ -373,16 +377,16 @@ describe('project management route IA', () => {
     });
 
     fireEvent.change(await screen.findByLabelText(/stakeholder problem/i), {
-      target: { value: 'Checkout operators need better payment validation.' },
+      target: { value: 'Product teams need governed Plan Item generation.' },
     });
     fireEvent.change(screen.getByLabelText(/desired outcome/i), {
-      target: { value: 'Invalid payment states are rejected before submission.' },
+      target: { value: 'Spec and Execution Plan generation stay item-scoped.' },
     });
     fireEvent.change(screen.getByLabelText(/acceptance criteria/i), {
-      target: { value: 'Invalid cards cannot be submitted.' },
+      target: { value: 'Plan Item generation flow is visible before document generation.' },
     });
     fireEvent.change(screen.getByLabelText(/^in scope/i), {
-      target: { value: 'Checkout payment validation.' },
+      target: { value: 'Plan Item governance.' },
     });
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
 

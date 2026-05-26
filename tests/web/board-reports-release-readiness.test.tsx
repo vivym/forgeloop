@@ -11,6 +11,7 @@ import {
   executionPlan,
   projectId,
   qaHandoff,
+  release,
   reviewPacket,
   spec,
 } from './fixtures/product-data';
@@ -94,7 +95,7 @@ describe('board, reports, and release readiness routes', () => {
   });
 
   it('shows release readiness by typed object and scoped evidence', async () => {
-    const screen = await renderRoute('/releases/release-web-product');
+    const screen = await renderRoute(`/releases/${release.id}`);
 
     expect(await screen.findByRole('heading', { name: /release readiness/i })).toBeTruthy();
     expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
@@ -128,7 +129,6 @@ describe('board, reports, and release readiness routes', () => {
       ['/reports/quality', 'Quality'],
       ['/reports/release-readiness', 'Release Readiness'],
       ['/reports/observation', 'Observation'],
-      ['/reports?report=replay', 'Reports'],
     ] as const) {
       const screen = await renderRoute(route);
 
@@ -154,15 +154,19 @@ describe('board, reports, and release readiness routes', () => {
       if (route === '/reports/release-readiness') {
         expect(firstViewportText).toMatch(/Release/i);
       }
-      if (route === '/reports/observation' || route.includes('report=replay')) {
+      if (route === '/reports/observation') {
         expect(firstViewportText).toMatch(/Execution/i);
       }
       expect(document.querySelector('[data-page-family="report"][data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
-      if (route.includes('report=replay')) {
-        expect(screen.getByText(/lifecycle replay evidence context/i)).toBeTruthy();
-        expect(document.body.innerHTML).not.toContain('/reports/replay');
-      }
       cleanup();
     }
+  });
+
+  it('rejects the retired replay report query mode', async () => {
+    const screen = await renderRoute('/reports?report=replay');
+
+    expect(await screen.findByRole('heading', { name: /not found/i })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/Lifecycle replay evidence context|Raw Replay Browser/i);
+    expect(document.body.innerHTML).not.toContain('/reports/replay');
   });
 });

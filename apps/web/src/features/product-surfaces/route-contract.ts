@@ -52,7 +52,11 @@ const qaItemId = 'dpi-requirements-database-view';
 const executionId = 'exec-demo-seed-visual-review';
 const releaseId = 'rel-product-architecture-preview';
 
-const developmentPlanItemHeading = /Development Plan Item|Build AI-native project management API clients/i;
+const developmentPlanHeading = /^Project architecture and visual rebuild$/i;
+const cockpitItemHeading = /^Rebuild Cockpit into operational command center$/i;
+const requirementsDatabaseItemHeading = /^Replace Requirements list with database view$/i;
+const demoSeedItemHeading = /^Seed demo project state for visual review$/i;
+const developmentPlanTableItemHeading = /^Rewrite Development Plan table and inspector$/i;
 
 function productRoute(
   path: string,
@@ -103,60 +107,60 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
     `/development-plans/${developmentPlanId}`,
     'Development Plan',
     'planning-table',
-    /Development Plan|Web product UI architecture foundation plan/i,
+    developmentPlanHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId',
     `/development-plans/${developmentPlanId}/items/${reviewItemId}`,
     'Development Plan Item',
     'gate-flow',
-    developmentPlanItemHeading,
+    cockpitItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/brainstorming',
     `/development-plans/${developmentPlanId}/items/${boundaryItemId}/brainstorming`,
     'Boundary Brainstorming',
     'gate-flow',
-    /Brainstorming|Development Plan Item|Build AI-native project management API clients/i,
+    developmentPlanTableItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/spec',
     `/development-plans/${developmentPlanId}/items/${reviewItemId}/spec`,
     'Spec',
     'document-review',
-    /Spec|Development Plan Item|Build AI-native project management API clients/i,
+    cockpitItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/execution-plan',
     `/development-plans/${developmentPlanId}/items/${executionPlanItemId}/execution-plan`,
     'Execution Plan',
     'document-review',
-    /Execution Plan|Development Plan Item|Build AI-native project management API clients/i,
+    requirementsDatabaseItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/execution',
     `/development-plans/${developmentPlanId}/items/${executionItemId}/execution`,
     'Execution',
     'execution-supervision',
-    /Execution|Development Plan Item|Build AI-native project management API clients/i,
+    demoSeedItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/review',
     `/development-plans/${developmentPlanId}/items/${reviewItemId}/review`,
     'Code Review',
     'code-review',
-    /Code Review|Development Plan Item|Build AI-native project management API clients/i,
+    cockpitItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/qa',
     `/development-plans/${developmentPlanId}/items/${qaItemId}/qa`,
     'QA Handoff',
     'qa-handoff',
-    /QA|Development Plan Item|Build AI-native project management API clients/i,
+    requirementsDatabaseItemHeading,
   ),
-  productRoute('/specs-plans', '/specs-plans', 'Document Reviews', 'document-governance', /Document Reviews|Specs & Execution Plans/i),
+  productRoute('/specs-plans', '/specs-plans', 'Document Reviews', 'document-governance', /^Document Reviews$/i),
   productRoute('/executions', '/executions', 'Executions', 'execution-supervision', /^Executions$/i),
-  productRoute('/executions/:id', `/executions/${executionId}`, 'Execution', 'execution-supervision', /Execution|Build AI-native project management API clients/i),
+  productRoute('/executions/:id', `/executions/${executionId}`, 'Execution', 'execution-supervision', demoSeedItemHeading),
   productRoute('/board', '/board', 'Board', 'delivery-board', /^Board$/i),
   productRoute('/releases', '/releases', 'Releases', 'release-readiness', /^Releases$/i),
   productRoute('/releases/:id', `/releases/${releaseId}`, 'Release', 'release-readiness', /Release/i),

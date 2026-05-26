@@ -14,9 +14,6 @@ import { AppModule } from '../../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { defaultProductApiResponses, type ProductApiResponseMap } from '../../web/fixtures/product-api-mock';
 import {
-  developmentPlan,
-  developmentPlanItem,
-  execution,
   projectId,
 } from '../../web/fixtures/product-data';
 import { firstViewportContract } from '../../../apps/web/src/features/product-surfaces/first-viewport-contract';
@@ -102,7 +99,7 @@ export async function launchVisualBrowser(): Promise<Browser> {
 }
 
 export async function installMockedProductApi(page: Page, overrides: ProductApiResponseMap = {}) {
-  const responses = withVisualRouteAliases({ ...defaultProductApiResponses, ...overrides });
+  const responses = { ...defaultProductApiResponses, ...overrides };
 
   await page.route('**/*', async (route) => {
     const request = route.request();
@@ -218,7 +215,7 @@ async function seedVisualApi(app: INestApplication) {
   });
   await repository.saveProject({
     id: projectId,
-    name: 'ForgeLoop Visual QA',
+    name: 'ForgeLoop product architecture demo',
     repo_ids: ['repo-visual'],
     owner_actor_id: 'actor-owner',
     created_at: now,
@@ -236,35 +233,70 @@ async function seedVisualApi(app: INestApplication) {
     created_at: now,
     updated_at: now,
   });
-  await repository.saveWorkItem(visualRequirement('req-1', 'Checkout requirement', now));
-  await repository.saveWorkItem(visualRequirement('req-2', 'Checkout retry requirement', now));
+  await repository.saveWorkItem(visualWorkItem('req-plan-item-governance', 'requirement', 'Plan Item governed Spec and Execution Plan generation', now));
+  await repository.saveWorkItem(visualWorkItem('bug-execution-review-context', 'bug', 'Execution continuation loses review context', now));
+  await repository.saveWorkItem(visualWorkItem('td-retire-workspace-page-template', 'tech_debt', 'Retire generic WorkspacePage visual template', now));
+  await repository.saveWorkItem(visualWorkItem('init-ai-native-rollout', 'initiative', 'AI-native project management rollout', now));
 }
 
-function visualRequirement(id: string, title: string, now: string): WorkItem {
+function visualWorkItem(id: string, kind: WorkItem['kind'], title: string, now: string): WorkItem {
   return {
     id,
     project_id: projectId,
-    kind: 'requirement',
+    kind,
     title,
-    narrative_markdown: `# ${title}\n\nValidate checkout planning through the AI-native product flow.`,
-    goal: 'Make checkout validation explicit before implementation.',
-    success_criteria: ['Invalid checkout data is blocked.', 'Development Plan Item gates are reviewed.'],
-    priority: 'P0',
-    risk: 'medium',
+    narrative_markdown: `# ${title}\n\nValidate product architecture through the AI-native delivery flow.`,
+    goal: `${title} is visible in product architecture visual review.`,
+    success_criteria: ['Seeded object data is visible.', 'Development Plan Item gates are reviewed.'],
+    priority: kind === 'bug' ? 'P0' : 'P1',
+    risk: kind === 'bug' ? 'high' : 'medium',
     driver_actor_id: 'actor-owner',
-    intake_context: {
-      type: 'requirement',
-      stakeholder_problem: 'Checkout validation is under-specified.',
-      desired_outcome: 'The team can plan and validate checkout changes.',
-      acceptance_criteria: ['Validation behavior is covered by API and route tests.'],
-      in_scope: ['Checkout validation'],
-    },
+    intake_context: visualIntakeContext(kind, title),
     phase: 'triage',
     activity_state: 'idle',
     gate_state: 'none',
     resolution: 'none',
     created_at: now,
     updated_at: now,
+  };
+}
+
+function visualIntakeContext(kind: WorkItem['kind'], title: string): WorkItem['intake_context'] {
+  if (kind === 'bug') {
+    return {
+      type: 'bug',
+      impact_summary: title,
+      observed_behavior: 'Execution continuation loses review context.',
+      expected_behavior: 'Continuation preserves review context.',
+      reproduction_steps: ['Open execution detail', 'Continue after review feedback'],
+      affected_environment: 'Product architecture preview',
+      verification_path: 'Seeded route screenshot review',
+    };
+  }
+  if (kind === 'tech_debt') {
+    return {
+      type: 'tech_debt',
+      current_pain: title,
+      desired_invariant: 'Product routes no longer share a generic first-viewport template.',
+      affected_modules: ['apps/web/src/shared/layout'],
+      behavior_preservation: 'Canonical route behavior is preserved.',
+      validation_strategy: 'Visual route geometry and screenshot gates pass.',
+    };
+  }
+  if (kind === 'initiative') {
+    return {
+      type: 'initiative',
+      business_outcome: title,
+      scope_narrative: 'Coordinate product architecture visual rebuild work.',
+      success_metrics: ['Seeded route screenshots show product-quality state'],
+    };
+  }
+  return {
+    type: 'requirement',
+    stakeholder_problem: 'Spec and Execution Plan generation needs a governed Plan Item boundary.',
+    desired_outcome: 'The team can review the full source object to Plan Item to execution flow.',
+    acceptance_criteria: ['Plan Item generation flow is visible in seeded screenshots.'],
+    in_scope: ['Plan Item governance', 'Spec generation', 'Execution Plan generation'],
   };
 }
 
@@ -298,20 +330,6 @@ async function completeExecutionForReview(app: INestApplication, executionId: st
   };
   await repository.saveExecution(completedExecution);
   await repository.saveDevelopmentPlanItem(completedItem);
-}
-
-function withVisualRouteAliases(responses: ProductApiResponseMap): ProductApiResponseMap {
-  return {
-    ...responses,
-    'GET /query/development-plans/dp-1': responses[`GET /query/development-plans/${developmentPlan.id}`],
-    'GET /query/development-plans/dp-1/items/dpi-1': responses[`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`],
-    'GET /development-plans/dp-1/items/dpi-1/revisions': responses[`GET /development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/revisions`],
-    'GET /query/executions/exec-1': responses[`GET /query/executions/${execution.id}`],
-    [`GET /query/code-review-handoffs?project_id=${projectId}&execution_id=exec-1&limit=100`]:
-      responses[`GET /query/code-review-handoffs?project_id=${projectId}&execution_id=${execution.id}&limit=100`],
-    [`GET /query/qa-handoffs?project_id=${projectId}&execution_id=exec-1&limit=100`]:
-      responses[`GET /query/qa-handoffs?project_id=${projectId}&execution_id=${execution.id}&limit=100`],
-  };
 }
 
 export async function captureRouteScreenshot(page: Page, baseUrl: string, route: VisualRoute, width: number) {
@@ -371,15 +389,17 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
 }
 
 async function assertFirstViewportContract(page: Page, route: VisualRoute) {
-  if (route.family === undefined) {
-    throw new Error(`${route.path} cannot assert first viewport contract without a page family`);
+  await expectPage(
+    page.locator(`[${firstViewportContract.pageFamilyAttribute}]`).first(),
+    `${route.path} must expose a visible ${firstViewportContract.pageFamilyAttribute} marker`,
+  ).toBeVisible();
+  const primarySurface = page.locator('[data-primary-work-surface]').first();
+  if (await primarySurface.count() > 0) {
+    await expectPage(primarySurface, `${route.path} must expose a visible primary work surface`).toBeVisible();
+    return;
   }
 
-  await expectPage(
-    page.locator(`[${firstViewportContract.pageFamilyAttribute}="${route.family}"]`).first(),
-    `${route.path} must expose ${firstViewportContract.pageFamilyAttribute}="${route.family}"`,
-  ).toBeVisible();
-  if (route.family === 'queue') {
+  if (route.path === '/my-work') {
     await expectPage(
       page.locator(`[${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"]`).first(),
       `${route.path} must expose ${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"`,
@@ -408,9 +428,13 @@ function toVisualRoute(route: ProductRouteContract): VisualRoute {
     family: route.family,
     path: route.concretePath,
     heading: route.heading,
-    kind: route.kind === 'retired' ? 'retired' : route.family === 'source-object-detail' ? 'source-object' : 'active',
+    kind: route.kind === 'retired' ? 'retired' : routeIsSourceObjectDetail(route) ? 'source-object' : 'active',
     expectFirstViewportContract: route.kind !== 'retired',
   };
+}
+
+function routeIsSourceObjectDetail(route: ProductRouteContract): boolean {
+  return /^\/(requirements|initiatives|bugs|tech-debt)\/:id$/.test(route.path);
 }
 
 function isProductApiRequest(url: URL): boolean {

@@ -4,12 +4,12 @@ import type { ReactNode } from 'react';
 import { useReportQuery } from '../../shared/api/hooks';
 import type { ProductObjectRef } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
-import { CompactMetadata, Section, WorkspacePage } from '../../shared/layout';
+import { CompactMetadata, PageHeader, Section, WorkspacePage } from '../../shared/layout';
 import { DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import { stateFromStatus, SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import { reportViewModel, type ReportProjection } from './report-view-model';
 
-type ReportId = 'delivery' | 'quality' | 'release-readiness' | 'observation' | 'replay';
+type ReportId = 'delivery' | 'quality' | 'release-readiness' | 'observation';
 type BackendReportId =
   | 'development-plan-throughput'
   | 'execution-continuation'
@@ -65,14 +65,6 @@ const reportCatalog: ReportCatalogItem[] = [
     href: '/reports/observation',
     summary: 'Post-release signals, observation evidence, and regression follow-up.',
     owner: 'Manager',
-  },
-  {
-    id: 'replay',
-    backendReportId: 'execution-continuation',
-    title: 'Replay',
-    href: '/reports?report=replay',
-    summary: 'Query-scoped lifecycle evidence context for project management objects.',
-    owner: 'Developer',
   },
 ];
 
@@ -132,8 +124,10 @@ const metricSections = [
 export function ReportsIndexRoute() {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
-  const scopedReportId = scopedReportFromSearchParams(searchParams);
-  const report = reportCatalog.find((candidate) => candidate.id === (scopedReportId ?? 'delivery')) ?? reportCatalog[0]!;
+  if (retiredReportQueryRequested(searchParams)) {
+    return <RetiredReportQueryState />;
+  }
+  const report = reportCatalog[0]!;
   const query = useReportQuery(report.backendReportId, { project_id: projectId, limit: 100 });
   const context = reportContextFromSearchParams(searchParams);
   const viewModel = reportViewModel(reportProjection(query.data, report));
@@ -180,6 +174,17 @@ export function ReportsIndexRoute() {
         </div>
       </Section>
     </ReportWorkspace>
+  );
+}
+
+function RetiredReportQueryState() {
+  return (
+    <>
+      <PageHeader subtitle="This report query mode is not available in the product workspace." title="Not Found" />
+      <Section title="Report unavailable">
+        <InlineNotice title="The requested report query mode was not found." tone="warning" />
+      </Section>
+    </>
   );
 }
 
@@ -283,13 +288,6 @@ function reportProjection(data: Record<string, unknown> | undefined, report: Rep
 }
 
 function reportContextFromSearchParams(searchParams: URLSearchParams): { title: string; description: string } | undefined {
-  if (scopedReportFromSearchParams(searchParams) === 'replay') {
-    return {
-      title: 'Lifecycle replay evidence context',
-      description: 'Showing query-scoped lifecycle evidence inside Reports without exposing an object-level replay browser route.',
-    };
-  }
-
   const codeReviewHandoffId = searchParams.get('code_review_handoff_id');
   if (codeReviewHandoffId !== null) {
     return {
@@ -317,8 +315,8 @@ function reportContextFromSearchParams(searchParams: URLSearchParams): { title: 
   return undefined;
 }
 
-function scopedReportFromSearchParams(searchParams: URLSearchParams): ReportId | undefined {
-  return searchParams.get('report') === 'replay' ? 'replay' : undefined;
+function retiredReportQueryRequested(searchParams: URLSearchParams): boolean {
+  return searchParams.get('report') === 'replay';
 }
 
 function reportSurfaceState(isLoading: boolean, isError: boolean, data: Record<string, unknown> | undefined): SurfaceState | undefined {

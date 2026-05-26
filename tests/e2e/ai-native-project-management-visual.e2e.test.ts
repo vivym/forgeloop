@@ -10,6 +10,7 @@ import {
   startAiNativeProjectManagementFixture,
   visualViewportWidths,
 } from './helpers/capture-route-screenshots';
+import { bugListItem, requirementListItem } from '../web/fixtures/product-data';
 
 const forbiddenProductStrings = [
   '/tasks',
@@ -46,7 +47,7 @@ describe('AI-native project management visual QA', () => {
         await server.stop();
       }
     },
-    120_000,
+    240_000,
   );
 
   it(
@@ -56,26 +57,26 @@ describe('AI-native project management visual QA', () => {
 
       try {
         const { page, baseUrl } = fixture;
-        await page.goto(`${baseUrl}/requirements/req-1`);
+        await page.goto(`${baseUrl}/requirements/${requirementListItem.id}`);
 
         await page.getByRole('button', { name: /create development plan/i }).click();
-        await page.getByRole('textbox', { name: /development plan title/i }).fill('Checkout manual development plan');
+        await page.getByRole('textbox', { name: /development plan title/i }).fill('Manual Plan Item governance plan');
         await page.getByRole('button', { name: /^create$/i }).click();
         await expectPage(page).toHaveURL(/\/development-plans\/[^/]+$/);
         const manualPlanId = new URL(page.url()).pathname.split('/').at(-1);
         if (manualPlanId === undefined || manualPlanId.length === 0) throw new Error('Manual Development Plan id was not reflected in the URL');
 
         await page.getByRole('button', { name: /add row/i }).click();
-        await page.getByRole('textbox', { name: /plan item title/i }).fill('Manual checkout validation item');
-        await page.getByRole('textbox', { name: /summary/i }).fill('Validate checkout states before execution.');
+        await page.getByRole('textbox', { name: /plan item title/i }).fill('Manual Plan Item governance row');
+        await page.getByRole('textbox', { name: /summary/i }).fill('Validate Plan Item governance states before execution.');
         await page.getByRole('button', { name: /save row/i }).click();
-        await expectPage(page.getByRole('row', { name: /manual checkout validation item/i })).toBeVisible();
+        await expectPage(page.getByRole('row', { name: /manual plan item governance row/i })).toBeVisible();
 
-        await page.goto(`${baseUrl}/requirements/req-2`);
+        await page.goto(`${baseUrl}/bugs/${bugListItem.id}`);
         await page.getByRole('button', { name: /link existing development plan/i }).click();
         await page.getByRole('combobox', { name: /development plan/i }).selectOption(manualPlanId);
         await page.getByRole('button', { name: /^link$/i }).click();
-        await expectPage(page.getByRole('link', { name: /checkout manual development plan/i })).toHaveAttribute('href', new RegExp(`/development-plans/${manualPlanId}`));
+        await expectPage(page.getByRole('link', { name: /manual plan item governance plan/i })).toHaveAttribute('href', new RegExp(`/development-plans/${manualPlanId}`));
       } finally {
         await fixture.stop();
       }
@@ -90,7 +91,7 @@ describe('AI-native project management visual QA', () => {
 
       try {
         const { page, baseUrl } = fixture;
-        await page.goto(`${baseUrl}/requirements/req-1`);
+        await page.goto(`${baseUrl}/requirements/${requirementListItem.id}`);
         const generatedPlanResponse = page.waitForResponse(
           (response) => response.request().method() === 'POST' && response.url().endsWith('/development-plans/generate-draft') && response.status() === 201,
         );

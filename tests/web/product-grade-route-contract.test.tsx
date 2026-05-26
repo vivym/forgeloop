@@ -142,6 +142,21 @@ describe('product-grade route contract', () => {
     expect(requiredScreenshotRoutes.map((route) => route.concretePath)).toEqual(expectedConcreteScreenshotRoutes);
   });
 
+  it('does not accept retired visual fixture headings as product review evidence', () => {
+    const retiredHeadings = [
+      'Build AI-native project management API clients',
+      'Web product UI architecture foundation plan',
+      'Specs & Execution Plans',
+      'Specs and Execution Plans',
+    ];
+
+    for (const route of requiredScreenshotRoutes) {
+      for (const heading of retiredHeadings) {
+        expect(route.heading.test(heading), `${route.path} must not accept retired heading ${heading}`).toBe(false);
+      }
+    }
+  });
+
   it('uses the approved primary navigation labels', () => {
     const labels = productNavigationGroups({ devToolsEnabled: false }).flatMap((group) => group.items.map((item) => item.label));
     expect(labels).toContain('Document Reviews');

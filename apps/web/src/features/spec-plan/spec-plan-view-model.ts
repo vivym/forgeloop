@@ -89,7 +89,7 @@ export function specPlanQueueViewModel(queue: SpecPlanQueueProjection): SpecPlan
   const activeGroupCount = specPlanQueueGroups(rows).filter((group) => group.rows.length > 0).length;
 
   return {
-    objectLabel: 'Specs & Execution Plans',
+    objectLabel: 'Document Reviews',
     objectType: 'Governance Queue',
     currentState: queue.degraded_sources?.length
       ? 'Degraded governance signal'

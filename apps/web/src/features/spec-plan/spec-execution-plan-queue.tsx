@@ -60,7 +60,7 @@ export function SpecExecutionPlanQueue() {
   }, [focusedRowKey, rows]);
 
   const state = query.isLoading ? 'Loading governance queue' : query.isError ? 'Governance queue unavailable' : viewModel.currentState;
-  const blockerRisk = query.isError ? 'Specs & Execution Plans governance risk could not be loaded.' : viewModel.riskSignal;
+  const blockerRisk = query.isError ? 'Document Reviews governance risk could not be loaded.' : viewModel.riskSignal;
   const nextAction = focusedRow?.nextAction ?? viewModel.nextAction;
   const roleResponsibility = focusedRow?.reviewer ?? viewModel.primaryActorOrRole;
 
@@ -69,13 +69,13 @@ export function SpecExecutionPlanQueue() {
       as="div"
       blockerRisk={blockerRisk}
       family="governance-queue"
-      heading="Specs & Execution Plans"
+      heading="Document Reviews"
       nextAction={nextAction}
       roleResponsibility={`Reviewer: ${roleResponsibility}`}
       state={state}
       subtitle="Governance queue for item-scoped Spec and Execution Plan documents."
       toolbar={
-        <InlineActions aria-label="Specs and Execution Plans tabs" role="tablist">
+        <InlineActions aria-label="Document review tabs" role="tablist">
           <Link aria-selected={activeTab === 'specs'} className={activeTab === 'specs' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref('specs', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
             Specs
           </Link>
@@ -86,9 +86,9 @@ export function SpecExecutionPlanQueue() {
       }
     >
       <div className="grid gap-4">
-        <SurfaceStateIndicator label="Specs & Execution Plans Queue" state={queueSurfaceState(query.isLoading, query.isError, rows, queueProjection.degraded_sources)} />
-        {query.isLoading ? <InlineNotice title="Loading Specs & Execution Plans queue." tone="info" /> : null}
-        {query.isError ? <InlineNotice title="Specs & Execution Plans queue data is temporarily unavailable." tone="danger" /> : null}
+        <SurfaceStateIndicator label="Document Reviews Queue" state={queueSurfaceState(query.isLoading, query.isError, rows, queueProjection.degraded_sources)} />
+        {query.isLoading ? <InlineNotice title="Loading Document Reviews queue." tone="info" /> : null}
+        {query.isError ? <InlineNotice title="Document Reviews queue data is temporarily unavailable." tone="danger" /> : null}
         {focusedDevelopmentPlanId !== null || focusedDevelopmentPlanItemId !== null ? (
           <InlineNotice
             description={queueFocusDescription(focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}

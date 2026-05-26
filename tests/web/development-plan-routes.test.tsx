@@ -25,9 +25,9 @@ describe('Development Plan routes', () => {
     expect(screen.getByRole('link', { name: /create development plan/i }).getAttribute('href')).toBe('/development-plans/new');
     expect(screen.getByRole('link', { name: /generate with ai assistance/i }).getAttribute('href')).toBe('/development-plans/new');
     expect(await screen.findByText(/1 active plan/i)).toBeTruthy();
-    expect(screen.getAllByText(/0 blocked/i).length).toBeGreaterThan(0);
-    expect((await screen.findByRole('link', { name: /checkout requirement/i })).getAttribute('href')).toBe('/requirements/req-1');
-    expect(screen.getAllByText(/1 Plan Item/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/1 blocked/i).length).toBeGreaterThan(0);
+    expect((await screen.findByRole('link', { name: /Plan Item governed Spec and Execution Plan generation/i })).getAttribute('href')).toBe('/requirements/req-plan-item-governance');
+    expect(screen.getAllByText(/4 Plan Items/i).length).toBeGreaterThan(0);
     expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b/);
     expect(document.body.textContent).not.toContain('Release Owner');
   });
@@ -49,7 +49,7 @@ describe('Development Plan routes', () => {
   it('renders a useful Development Plans empty state without reverting to a source picker placeholder', async () => {
     const screen = await renderRoute('/development-plans', {
       apiOverrides: {
-        'GET /query/development-plans?project_id=project-web-product': {
+        [`GET /query/development-plans?project_id=${projectId}`]: {
           items: [],
           degraded_sources: [],
         },
@@ -90,7 +90,7 @@ describe('Development Plan routes', () => {
         {
           id: 'req-live-42',
           ref: { type: 'requirement', id: 'req-live-42' },
-          title: 'Live checkout telemetry requirement',
+          title: 'Live Plan Item governance requirement',
           status: 'active',
           risk: 'low',
           driver_actor_id: 'actor-product',
@@ -108,8 +108,8 @@ describe('Development Plan routes', () => {
       },
     });
 
-    expect(await screen.findByRole('option', { name: 'Live checkout telemetry requirement' })).toBeTruthy();
-    expect(screen.queryByRole('option', { name: 'Checkout requirement' })).toBeNull();
+    expect(await screen.findByRole('option', { name: 'Live Plan Item governance requirement' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Plan Item governed Spec and Execution Plan generation' })).toBeNull();
     await user.clear(screen.getByRole('textbox', { name: /development plan title/i }));
     await user.type(screen.getByRole('textbox', { name: /development plan title/i }), 'Live source planning');
     await user.selectOptions(screen.getByRole('combobox', { name: /source object/i }), 'req-live-42');
@@ -118,7 +118,7 @@ describe('Development Plan routes', () => {
     expect(createBodies).toEqual([
       expect.objectContaining({
         title: 'Live source planning',
-        source_ref: { type: 'requirement', id: 'req-live-42', title: 'Live checkout telemetry requirement' },
+        source_ref: { type: 'requirement', id: 'req-live-42', title: 'Live Plan Item governance requirement' },
       }),
     ]);
   });
@@ -141,21 +141,21 @@ describe('Development Plan routes', () => {
     });
 
     await user.clear(await screen.findByRole('textbox', { name: /development plan title/i }));
-    await user.type(screen.getByRole('textbox', { name: /development plan title/i }), 'Checkout planning closure');
+    await user.type(screen.getByRole('textbox', { name: /development plan title/i }), 'Plan Item governance closure');
     await user.selectOptions(screen.getByRole('combobox', { name: /source type/i }), 'requirement');
-    await user.selectOptions(screen.getByRole('combobox', { name: /source object/i }), 'req-1');
-    await user.type(screen.getByRole('textbox', { name: /manual source guidance/i }), 'Keep the plan scoped to checkout validation boundaries.');
-    await user.type(screen.getByRole('textbox', { name: /ai generation guidance/i }), 'Draft Plan Items from checkout acceptance criteria.');
+    await user.selectOptions(screen.getByRole('combobox', { name: /source object/i }), 'req-plan-item-governance');
+    await user.type(screen.getByRole('textbox', { name: /manual source guidance/i }), 'Keep the plan scoped to Plan Item governance boundaries.');
+    await user.type(screen.getByRole('textbox', { name: /ai generation guidance/i }), 'Draft Plan Items from governed generation acceptance criteria.');
 
     await user.click(screen.getByRole('button', { name: /^create development plan$/i }));
     expect(createBodies).toEqual([
       expect.objectContaining({
-        guidance: 'Keep the plan scoped to checkout validation boundaries.',
-        title: 'Checkout planning closure',
-        source_ref: { type: 'requirement', id: 'req-1', title: 'Checkout requirement' },
+        guidance: 'Keep the plan scoped to Plan Item governance boundaries.',
+        title: 'Plan Item governance closure',
+        source_ref: { type: 'requirement', id: 'req-plan-item-governance', title: 'Plan Item governed Spec and Execution Plan generation' },
       }),
     ]);
-    expect(JSON.stringify(createBodies)).not.toMatch(/spec|execution_plan/i);
+    expectNoDownstreamArtifactPayload(createBodies[0]);
 
     cleanup();
     const generateScreen = await renderRoute('/development-plans/new', {
@@ -167,8 +167,8 @@ describe('Development Plan routes', () => {
       },
     });
     await user.selectOptions(await generateScreen.findByRole('combobox', { name: /source type/i }), 'requirement');
-    await user.selectOptions(generateScreen.getByRole('combobox', { name: /source object/i }), 'req-1');
-    await user.type(generateScreen.getByRole('textbox', { name: /ai generation guidance/i }), 'Draft Plan Items from checkout acceptance criteria.');
+    await user.selectOptions(generateScreen.getByRole('combobox', { name: /source object/i }), 'req-plan-item-governance');
+    await user.type(generateScreen.getByRole('textbox', { name: /ai generation guidance/i }), 'Draft Plan Items from governed generation acceptance criteria.');
     await user.click(generateScreen.getByRole('button', { name: /^generate ai-assisted draft$/i }));
 
     expect(await generateScreen.findByText(/Development Plan draft generated with source context/i)).toBeTruthy();
@@ -177,11 +177,11 @@ describe('Development Plan routes', () => {
     );
     expect(generateBodies).toEqual([
       expect.objectContaining({
-        source_ref: { type: 'requirement', id: 'req-1', title: 'Checkout requirement' },
+        source_ref: { type: 'requirement', id: 'req-plan-item-governance', title: 'Plan Item governed Spec and Execution Plan generation' },
         guidance: expect.stringContaining('Draft Plan Items'),
       }),
     ]);
-    expect(JSON.stringify(generateBodies)).not.toMatch(/spec|execution_plan/i);
+    expectNoDownstreamArtifactPayload(generateBodies[0]);
   });
 
   it('renders a desktop Development Plan table with prioritized planning columns and contained overflow', async () => {
@@ -202,7 +202,7 @@ describe('Development Plan routes', () => {
     expect(screen.getByRole('link', { name: developmentPlanItem.title }).getAttribute('href')).toBe(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
-    expect(screen.getByRole('link', { name: /open item/i }).getAttribute('href')).toBe(
+    expect(screen.getAllByRole('link', { name: /open item/i }).map((link) => link.getAttribute('href'))).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
     expect(screen.getByRole('button', { name: /add row/i })).toBeTruthy();
@@ -244,7 +244,7 @@ describe('Development Plan routes', () => {
     expect(preview.textContent).toMatch(/Current gate/i);
     expect(preview.textContent).toContain(developmentPlanItem.next_action);
     expect(preview.textContent).toMatch(/Blocker \/ risk/i);
-    expect(preview.textContent).toMatch(/Checkout requirement/i);
+    expect(preview.textContent).toMatch(/Plan Item governed Spec and Execution Plan generation/i);
     expect(preview.textContent).toMatch(/Gate evidence/i);
     expect(preview.textContent).toMatch(/Driver/i);
     expect(preview.textContent).toMatch(/Reviewer/i);
@@ -284,7 +284,7 @@ describe('Development Plan routes', () => {
       expect(document.querySelector('[data-workspace-layout="gate"]')).toBeInstanceOf(HTMLElement);
       const firstViewport = document.querySelector('[data-first-viewport]');
       expect(firstViewport?.textContent).toContain(developmentPlan.title);
-      expect(firstViewport?.textContent).toContain('Checkout requirement');
+      expect(firstViewport?.textContent).toContain('Plan Item governed Spec and Execution Plan generation');
       expect(firstViewport?.textContent).toMatch(/Gate progress/i);
       expect(firstViewport?.textContent).toMatch(/Current enabled action/i);
       expect(firstViewport?.textContent).toMatch(/Disabled reasons/i);
@@ -298,9 +298,9 @@ describe('Development Plan routes', () => {
   it('prioritizes the active gate body on Development Plan Item focus routes', async () => {
     for (const [route, title, bodyText] of [
       [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`, 'Boundary brainstorming', /Which source and code boundaries are in scope/i],
-      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`, 'Spec document', /Route-backed Product Lane spec/i],
-      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`, 'Execution Plan document', /Implement AI-native Web API clients/i],
-      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, 'Execution supervision', /Execute AI-native Web API client work/i],
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`, 'Spec document', /Cockpit operational command center Spec/i],
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`, 'Execution Plan document', /Requirements database view Execution Plan/i],
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, 'Execution supervision', /Codex worker is seeding visual review data/i],
     ] as const) {
       const screen = await renderRoute(route);
 
@@ -322,10 +322,14 @@ describe('Development Plan routes', () => {
     expect(await screen.findByRole('table', { name: /development plan items/i })).toBeTruthy();
 
     await user.tab();
-    while (document.activeElement !== screen.getByRole('link', { name: /open item/i })) {
+    const targetOpenItemLink = screen
+      .getAllByRole('link', { name: /open item/i })
+      .find((link) => link.getAttribute('href') === `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+    expect(targetOpenItemLink).toBeTruthy();
+    for (let index = 0; index < 50 && document.activeElement !== targetOpenItemLink; index += 1) {
       await user.tab();
     }
-    expect(document.activeElement).toBe(screen.getByRole('link', { name: /open item/i }));
+    expect(document.activeElement).toBe(targetOpenItemLink);
     await user.keyboard('{Enter}');
     expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
   });
@@ -598,25 +602,32 @@ function itemOverride(
         summary_markdown: boundarySummary.summary_markdown,
       },
     ] : [],
-    specs: status.spec_status === 'missing' || status.spec_status === 'not_started' ? [] : [{ id: 'spec-web-product', title: 'Spec revision', current_revision_id: 'spec-revision-web-product', approved_revision_id: 'spec-revision-web-product' }],
-    execution_plans: status.execution_plan_status === 'missing' || status.execution_plan_status === 'not_started' ? [] : [{ id: 'execution-plan-web-product', title: 'Execution Plan revision', current_revision_id: 'execution-plan-revision-web-product', approved_revision_id: 'execution-plan-revision-web-product' }],
+    specs: status.spec_status === 'missing' || status.spec_status === 'not_started' ? [] : [{ id: 'spec-cockpit-command-center', title: 'Spec revision', current_revision_id: 'specrev-cockpit-command-center-v1', approved_revision_id: 'specrev-cockpit-command-center-v1' }],
+    execution_plans: status.execution_plan_status === 'missing' || status.execution_plan_status === 'not_started' ? [] : [{ id: 'execution-plan-requirements-database-view', title: 'Execution Plan revision', current_revision_id: 'planrev-requirements-database-view-v1', approved_revision_id: 'planrev-requirements-database-view-v1' }],
     executions: status.execution_status === 'not_started' ? [] : [{
-      id: 'execution-web-product',
+      id: 'exec-demo-seed-visual-review',
       title: 'Execution',
       status: status.execution_status ?? developmentPlanItem.execution_status,
-      evidence_refs: [{ type: 'execution', id: 'execution-web-product', title: 'Verification evidence' }],
+      evidence_refs: [{ type: 'execution', id: 'evidence-exec-demo-seed-checks', title: 'Verification evidence' }],
       ...options.execution,
     }],
     code_review_handoffs: status.review_status === 'approved' || options.codeReview !== undefined
-      ? [{ id: 'code-review-handoff-web-product', title: 'Code review', status: 'approved', ...options.codeReview }]
+      ? [{ id: 'review-cockpit-requested-changes', title: 'Code review', status: 'approved', ...options.codeReview }]
       : [],
     qa_handoffs: status.qa_handoff_status === 'not_started' ? [] : [{
-      id: 'qa-handoff-web-product',
+      id: 'qa-requirements-authoring-mdx',
       title: 'QA handoff',
       status: status.qa_handoff_status === 'in_review' ? 'pending' : (status.qa_handoff_status ?? developmentPlanItem.qa_handoff_status),
     }],
     href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
   };
+}
+
+function expectNoDownstreamArtifactPayload(body: unknown) {
+  expect(body).not.toEqual(expect.objectContaining({ spec_id: expect.anything() }));
+  expect(body).not.toEqual(expect.objectContaining({ spec_revision_id: expect.anything() }));
+  expect(body).not.toEqual(expect.objectContaining({ execution_plan_id: expect.anything() }));
+  expect(body).not.toEqual(expect.objectContaining({ execution_plan_revision_id: expect.anything() }));
 }
 
 function expectButtonDisabled(element: HTMLElement) {

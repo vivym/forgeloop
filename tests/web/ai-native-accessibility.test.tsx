@@ -4,12 +4,13 @@ import { describe, expect, it } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { fireEvent, within } from '@testing-library/react';
 
+import { requirementListItem } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('AI-native accessibility interactions', () => {
   it('supports keyboard operation for role lens and action rail commands', async () => {
     const user = userEvent.setup();
-    const screen = await renderRoute('/requirements/req-1');
+    const screen = await renderRoute(`/requirements/${requirementListItem.id}`);
     const roleLens = await screen.findByRole('radiogroup', { name: /role lens/i });
 
     roleLens.focus();

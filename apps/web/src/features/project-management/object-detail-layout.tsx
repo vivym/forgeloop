@@ -417,7 +417,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
               </Section>
             ),
           },
-          { label: 'Specs & Execution Plans', value: 'specs-execution-plans', content: <GatePlaceholder label="Specs and Execution Plans" /> },
+          { label: 'Documents', value: 'documents', content: <GatePlaceholder label="Spec and Execution Plan documents" /> },
           { label: 'Execution', value: 'execution', content: <GatePlaceholder label="Execution" /> },
           { label: 'QA', value: 'qa', content: <GatePlaceholder label="QA" /> },
           { label: 'Release', value: 'release', content: <GatePlaceholder label="Release" /> },
