@@ -55,7 +55,7 @@ export function ObjectList<T extends ProjectObjectListItem>({
   const [search, setSearch] = useState('');
   const [riskFilter, setRiskFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [viewMode, setViewMode] = useState<'dense' | 'preview'>('dense');
+  const [viewMode, setViewMode] = useState<'dense' | 'preview'>('preview');
   const [focusedRowKey, setFocusedRowKey] = useState<string | undefined>(undefined);
   const filteredRows = useMemo(
     () => rows.filter((row) =>
@@ -123,43 +123,13 @@ export function ObjectList<T extends ProjectObjectListItem>({
       className="source-object-database"
       family="source-database"
       heading={title}
-      toolbar={
-        <>
-          <Link className={primaryLinkClass} to={createHref}>
-            Create source object
-          </Link>
-          <Link className={secondaryButtonClass} to={planningHref}>
-            Plan source object
-          </Link>
-        </>
-      }
     >
       <div className="grid gap-4">
-        <Section description={subtitle} title={`${title} planning state`} variant="subtle">
-          <div className="grid gap-3 text-sm text-text-secondary md:grid-cols-3">
-            <div>
-              <div className="font-semibold text-text-primary">Current state</div>
-              <p className="m-0">{listState}</p>
-            </div>
-            <div>
-              <div className="font-semibold text-text-primary">Next action</div>
-              <p className="m-0">{nextAction}</p>
-            </div>
-            <div>
-              <div className="font-semibold text-text-primary">Role and risk</div>
-              <p className="m-0">{roleResponsibility}</p>
-              <p className="m-0">{blockerRisk}</p>
-            </div>
-          </div>
-        </Section>
-        <SurfaceStateIndicator label={title} state={sourceObjectListSurfaceState(isLoading, error, filteredRows.length, blockerRisk)} />
-        {isLoading ? <InlineNotice title={`Loading ${title.toLowerCase()} source objects.`} tone="info" /> : null}
-        {error ? <InlineNotice title={`${title} source objects could not be loaded.`} tone="danger" /> : null}
         <DatabaseViewLayout
           toolbar={
-            <div className="flex min-w-0 flex-wrap items-end gap-2">
-              <label className="grid min-w-[14rem] flex-1 gap-1 sm:max-w-sm">
-                <span className="text-sm font-semibold text-text-secondary">Search {title}</span>
+            <div className="flex min-w-0 items-center gap-2 overflow-x-auto pb-1">
+              <label className="grid min-w-[14rem] shrink-0 sm:w-72">
+                <span className="sr-only">Search {title}</span>
                 <Input
                   aria-label={`Search ${title}`}
                   onChange={(event) => setSearch(event.target.value)}
@@ -168,19 +138,19 @@ export function ObjectList<T extends ProjectObjectListItem>({
                   value={search}
                 />
               </label>
-              <div className="flex flex-wrap items-center gap-2" data-filter-chip-group="risk">
+              <div className="flex shrink-0 flex-nowrap items-center gap-2" data-filter-chip-group="risk">
                 <FilterChip label="Risk: All" onClick={() => setRiskFilter('all')} selected={riskFilter === 'all'} />
                 {uniqueValues(rows.map((row) => row.riskLabel)).map((risk) => (
                   <FilterChip key={risk} label={risk} onClick={() => setRiskFilter(risk)} selected={riskFilter === risk} />
                 ))}
               </div>
-              <div className="flex flex-wrap items-center gap-2" data-filter-chip-group="status">
+              <div className="flex shrink-0 flex-nowrap items-center gap-2" data-filter-chip-group="status">
                 <FilterChip label="Status: All" onClick={() => setStatusFilter('all')} selected={statusFilter === 'all'} />
                 {uniqueValues(rows.map((row) => row.statusLabel)).map((status) => (
                   <FilterChip key={status} label={status} onClick={() => setStatusFilter(status)} selected={statusFilter === status} />
                 ))}
               </div>
-              <div className="flex flex-wrap items-center gap-2" data-view-options="">
+              <div className="flex shrink-0 flex-nowrap items-center gap-2" data-view-options="">
                 <FilterChip label="View: Dense" onClick={() => setViewMode('dense')} selected={viewMode === 'dense'} />
                 <FilterChip label="View: Preview" onClick={() => setViewMode('preview')} selected={viewMode === 'preview'} />
               </div>
@@ -207,6 +177,34 @@ export function ObjectList<T extends ProjectObjectListItem>({
           }
           inspector={viewMode === 'preview' ? <SourceObjectPreview row={focusedRow} /> : undefined}
         />
+        <div className="flex flex-wrap items-center gap-2">
+          <Link className={primaryLinkClass} to={createHref}>
+            Create source object
+          </Link>
+          <Link className={secondaryButtonClass} to={planningHref}>
+            Plan source object
+          </Link>
+        </div>
+        <Section description={subtitle} title={`${title} planning state`} variant="subtle">
+          <div className="grid gap-3 text-sm text-text-secondary md:grid-cols-3">
+            <div>
+              <div className="font-semibold text-text-primary">Current state</div>
+              <p className="m-0">{listState}</p>
+            </div>
+            <div>
+              <div className="font-semibold text-text-primary">Next action</div>
+              <p className="m-0">{nextAction}</p>
+            </div>
+            <div>
+              <div className="font-semibold text-text-primary">Role and risk</div>
+              <p className="m-0">{roleResponsibility}</p>
+              <p className="m-0">{blockerRisk}</p>
+            </div>
+          </div>
+        </Section>
+        <SurfaceStateIndicator label={title} state={sourceObjectListSurfaceState(isLoading, error, filteredRows.length, blockerRisk)} />
+        {isLoading ? <InlineNotice title={`Loading ${title.toLowerCase()} source objects.`} tone="info" /> : null}
+        {error ? <InlineNotice title={`${title} source objects could not be loaded.`} tone="danger" /> : null}
       </div>
     </ProductPage>
   );

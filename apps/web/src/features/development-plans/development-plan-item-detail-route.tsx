@@ -16,7 +16,7 @@ import { CodeReviewLayout, CompactMetadata, DocumentReviewLayout, GateFlowLayout
 import { ForgeMarkdownEditor, InlineNotice, StatusPill } from '../../shared/ui';
 import { BrainstormingPanel } from '../brainstorming/brainstorming-panel';
 import { CodeReviewHandoffPanel, type CodeReviewHandoffProjection } from '../code-review/code-review-handoff-panel';
-import { SurfaceStateIndicator } from '../project-management/surface-state';
+import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import { QaHandoffPanel, type QaHandoffProjection } from '../qa/qa-handoff-panel';
 import {
   BoundarySummaryRevisionHistory,
@@ -80,28 +80,20 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
   const gates = itemWithRoutePlan === undefined ? [] : planItemGateModels(itemWithRoutePlan);
   const currentGateId = itemWithRoutePlan === undefined ? undefined : currentGateIdFor(itemWithRoutePlan, focus);
   const pageFamily = pageFamilyForFocus(focus);
+  const routeChrome = (
+    <ItemRouteChrome
+      isError={query.isError}
+      isNotFound={itemWithRoutePlan === undefined && !query.isLoading}
+      item={itemWithRoutePlan}
+      state={query.isLoading ? 'loading' : query.isError ? 'error' : itemWithRoutePlan === undefined ? 'empty' : itemSurfaceState(itemWithRoutePlan)}
+    />
+  );
 
   return (
     <ProductPage
       family={pageFamily}
       heading={itemWithRoutePlan?.title ?? 'Development Plan Item'}
-      toolbar={
-        <div className="flex flex-wrap items-start gap-2">
-          {itemWithRoutePlan?.development_plan_ref ? (
-            <Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-primary" to={`/development-plans/${itemWithRoutePlan.development_plan_ref.id}`}>
-              Back to Development Plan
-            </Link>
-          ) : null}
-          {itemWithRoutePlan ? <EvidenceSideContext compact item={itemWithRoutePlan} /> : null}
-        </div>
-      }
     >
-      <SurfaceStateIndicator
-        label="Development Plan Item Detail"
-        state={query.isLoading ? 'loading' : query.isError ? 'error' : itemWithRoutePlan === undefined ? 'empty' : itemSurfaceState(itemWithRoutePlan)}
-      />
-      {query.isError ? <InlineNotice title="Development Plan Item could not be loaded." tone="danger" /> : null}
-      {itemWithRoutePlan === undefined && !query.isLoading ? <InlineNotice title="Development Plan Item not found." tone="warning" /> : null}
       {itemWithRoutePlan ? (
         <DevelopmentPlanItemFocusedLayout
           boundaryRevisions={boundaryRevisions}
@@ -112,10 +104,41 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
           item={itemWithRoutePlan}
           itemId={itemId}
           revisions={revisions}
+          routeChrome={routeChrome}
           session={session}
         />
-      ) : null}
+      ) : (
+        <GateFlowLayout workspace={routeChrome} />
+      )}
     </ProductPage>
+  );
+}
+
+function ItemRouteChrome({
+  isError,
+  isNotFound,
+  item,
+  state,
+}: {
+  isError: boolean;
+  isNotFound: boolean;
+  item: DevelopmentPlanItemProjection | undefined;
+  state: SurfaceState | undefined;
+}) {
+  return (
+    <div className="grid gap-3" data-item-route-chrome="">
+      <div className="flex min-w-0 flex-wrap items-start gap-2">
+        {item?.development_plan_ref ? (
+          <Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-primary" to={`/development-plans/${item.development_plan_ref.id}`}>
+            Back to Development Plan
+          </Link>
+        ) : null}
+        {item ? <EvidenceSideContext compact item={item} /> : null}
+      </div>
+      <SurfaceStateIndicator label="Development Plan Item Detail" state={state} />
+      {isError ? <InlineNotice title="Development Plan Item could not be loaded." tone="danger" /> : null}
+      {isNotFound ? <InlineNotice title="Development Plan Item not found." tone="warning" /> : null}
+    </div>
   );
 }
 
@@ -128,6 +151,7 @@ function DevelopmentPlanItemFocusedLayout({
   item,
   itemId,
   revisions,
+  routeChrome,
   session,
 }: {
   boundaryRevisions: BoundarySummaryRevision[];
@@ -138,10 +162,11 @@ function DevelopmentPlanItemFocusedLayout({
   item: DevelopmentPlanItemProjection;
   itemId: string | undefined;
   revisions: DevelopmentPlanItemRevision[];
+  routeChrome: ReactNode;
   session: BrainstormingSession | undefined;
 }) {
   if (focus === 'spec' || focus === 'execution-plan') {
-    return <ItemDocumentReviewSurface developmentPlanId={developmentPlanId} focus={focus} item={item} itemId={itemId} />;
+    return <ItemDocumentReviewSurface developmentPlanId={developmentPlanId} focus={focus} item={item} itemId={itemId} routeChrome={routeChrome} />;
   }
 
   if (focus === 'review') {
@@ -149,7 +174,7 @@ function DevelopmentPlanItemFocusedLayout({
     const handoff = codeReviewHandoffFor(item, execution.id);
     return (
       <CodeReviewLayout
-        workspace={<CodeReviewHandoffPanel execution={execution} handoff={handoff} />}
+        workspace={<div className="grid gap-3">{routeChrome}<CodeReviewHandoffPanel execution={execution} handoff={handoff} /></div>}
         evidence={<EvidenceSideContext item={item} />}
         controls={<ReviewDecisionSummary status={handoff?.status ?? item.review_status} />}
       />
@@ -162,7 +187,7 @@ function DevelopmentPlanItemFocusedLayout({
     const handoff = qaHandoffFor(item, execution.id);
     return (
       <QaHandoffLayout
-        workspace={<QaHandoffPanel codeReview={codeReview} execution={execution} handoff={handoff} />}
+        workspace={<div className="grid gap-3">{routeChrome}<QaHandoffPanel codeReview={codeReview} execution={execution} handoff={handoff} /></div>}
         evidence={<EvidenceSideContext item={item} />}
         controls={<ReviewDecisionSummary status={handoff?.status ?? item.qa_handoff_status} />}
       />
@@ -172,9 +197,10 @@ function DevelopmentPlanItemFocusedLayout({
   return (
     <GateFlowLayout
       contextRail={<EvidenceSideContext item={item} />}
-      gateStepper={<FirstViewportContext currentGateId={currentGateId} focus={focus} gates={gates} item={item} />}
       workspace={
         <div className="grid gap-4" data-workspace-content="">
+          {routeChrome}
+          <FirstViewportContext currentGateId={currentGateId} focus={focus} gates={gates} item={item} />
           <GateRouteContextSummary currentGateId={currentGateId} gates={gates} item={item} />
           <ActiveGateBody
             developmentPlanId={developmentPlanId}
@@ -230,11 +256,13 @@ function ItemDocumentReviewSurface({
   focus,
   item,
   itemId,
+  routeChrome,
 }: {
   developmentPlanId: string | undefined;
   focus: 'spec' | 'execution-plan';
   item: DevelopmentPlanItemProjection;
   itemId: string | undefined;
+  routeChrome: ReactNode;
 }) {
   const { actorId } = useActorContext();
   const commandApi = useMemo(() => createForgeloopCommandApi(), []);
@@ -288,34 +316,37 @@ function ItemDocumentReviewSurface({
     <DocumentReviewLayout
       toolbar={<DocumentReviewToolbar label={documentLabel} status={documentStatus} />}
       document={
-        <Section
-          actions={
-            saveMessage ? (
-              <StatusPill tone="success">{saveMessage}</StatusPill>
-            ) : revisionQuery.isError ? (
-              <StatusPill tone="warning">Revision body unavailable</StatusPill>
-            ) : undefined
-          }
-          description="Save draft keeps review submission and approval as separate Plan Item gate actions."
-          title={documentLabel}
-          variant="panel"
-        >
-          {documentRevision === undefined ? (
-            <InlineNotice
-              title={revisionQuery.isError ? 'Revision body unavailable.' : 'Loading persisted revision body.'}
-              tone={revisionQuery.isError ? 'warning' : 'info'}
-            />
-          ) : (
-            <ItemRevisionMarkdownEditor
-              actorId={actorId}
-              attachmentApi={attachmentApi}
-              documentRevision={documentRevision}
-              markdown={markdown}
-              onChange={setMarkdown}
-              onSave={saveDraftOnly}
-            />
-          )}
-        </Section>
+        <div className="grid gap-3">
+          {routeChrome}
+          <Section
+            actions={
+              saveMessage ? (
+                <StatusPill tone="success">{saveMessage}</StatusPill>
+              ) : revisionQuery.isError ? (
+                <StatusPill tone="warning">Revision body unavailable</StatusPill>
+              ) : undefined
+            }
+            description="Save draft keeps review submission and approval as separate Plan Item gate actions."
+            title={documentLabel}
+            variant="panel"
+          >
+            {documentRevision === undefined ? (
+              <InlineNotice
+                title={revisionQuery.isError ? 'Revision body unavailable.' : 'Loading persisted revision body.'}
+                tone={revisionQuery.isError ? 'warning' : 'info'}
+              />
+            ) : (
+              <ItemRevisionMarkdownEditor
+                actorId={actorId}
+                attachmentApi={attachmentApi}
+                documentRevision={documentRevision}
+                markdown={markdown}
+                onChange={setMarkdown}
+                onSave={saveDraftOnly}
+              />
+            )}
+          </Section>
+        </div>
       }
       reviewState={<DocumentGateState status={documentStatus} />}
       commentSummary={<DocumentCommentSummary focus={focus} item={item} />}

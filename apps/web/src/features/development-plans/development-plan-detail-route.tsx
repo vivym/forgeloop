@@ -95,31 +95,35 @@ export function DevelopmentPlanDetailRoute() {
     <ProductPage
       family="planning-table"
       heading={plan?.title ?? 'Development Plan'}
-      toolbar={
-          <>
-            <Button onClick={() => setIsAddOpen(true)} type="button">Add row</Button>
-            <Button onClick={() => void generateMissingRows()} type="button" variant="secondary">Generate missing rows with AI</Button>
-            <Button onClick={() => setIsRegenerateOpen(true)} type="button" variant="secondary">Regenerate with AI</Button>
-            <Button onClick={() => setIsManifestOpen(true)} type="button" variant="secondary">Show context manifest</Button>
-          </>
-        }
     >
-      <SurfaceStateIndicator label="Development Plan Page" state={developmentPlanSurfaceState(query.isLoading, query.isError, rows)} />
-      {status ? <InlineNotice title={status} tone="info" /> : null}
-      {query.isError ? <InlineNotice title="Development Plan could not be loaded." tone="danger" /> : null}
       <PlanningTableLayout
-        toolbar={<PlanTableContext plan={plan} rowCount={rows.length} blockedCount={blockedCount} />}
+        toolbar={
+          <div className="flex min-w-0 flex-wrap items-center gap-3 pb-1 lg:flex-nowrap lg:overflow-x-auto">
+            <PlanTableContext plan={plan} rowCount={rows.length} blockedCount={blockedCount} />
+            <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:flex-nowrap">
+              <Button onClick={() => setIsAddOpen(true)} type="button">Add row</Button>
+              <Button onClick={() => void generateMissingRows()} type="button" variant="secondary">Generate missing rows with AI</Button>
+              <Button onClick={() => setIsRegenerateOpen(true)} type="button" variant="secondary">Regenerate with AI</Button>
+              <Button onClick={() => setIsManifestOpen(true)} type="button" variant="secondary">Show context manifest</Button>
+            </div>
+          </div>
+        }
         table={
-          <Section
-            description="Rows are the governed unit that moves through boundary brainstorming, Spec, Execution Plan, execution, review, and QA."
-            title="Development Plan Items"
-          >
-            {plan === undefined ? (
-              <EmptyState title={query.isLoading ? 'Loading Development Plan.' : 'Development Plan not found.'} />
-            ) : (
-              <DevelopmentPlanTable items={rows} selectedItemId={selectedItem?.id} onSelectItem={(item) => setSelectedItemId(item.id)} />
-            )}
-          </Section>
+          <div className="grid gap-3">
+            <SurfaceStateIndicator label="Development Plan Page" state={developmentPlanSurfaceState(query.isLoading, query.isError, rows)} />
+            {status ? <InlineNotice title={status} tone="info" /> : null}
+            {query.isError ? <InlineNotice title="Development Plan could not be loaded." tone="danger" /> : null}
+            <Section
+              description="Rows are the governed unit that moves through boundary brainstorming, Spec, Execution Plan, execution, review, and QA."
+              title="Development Plan Items"
+            >
+              {plan === undefined ? (
+                <EmptyState title={query.isLoading ? 'Loading Development Plan.' : 'Development Plan not found.'} />
+              ) : (
+                <DevelopmentPlanTable items={rows} selectedItemId={selectedItem?.id} onSelectItem={(item) => setSelectedItemId(item.id)} />
+              )}
+            </Section>
+          </div>
         }
         inspector={plan === undefined ? undefined : <SelectedPlanItemPanel item={selectedItem} />}
       />
@@ -183,7 +187,7 @@ export function DevelopmentPlanDetailRoute() {
 
 function PlanTableContext({ blockedCount, plan, rowCount }: { blockedCount: number; plan: DevelopmentPlanProjection | undefined; rowCount: number }) {
   return (
-    <div className="grid gap-2 text-sm text-text-secondary md:grid-cols-3">
+    <div className="flex flex-wrap items-center gap-3 text-sm text-text-secondary lg:shrink-0 lg:flex-nowrap">
       <p className="m-0">Status: {formatValue(plan?.status)}</p>
       <p className="m-0">Source objects: {sourceSummary(plan)}</p>
       <p className="m-0">{rowCount} Plan Items · {blockedCount} blocked</p>

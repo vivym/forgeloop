@@ -8,7 +8,7 @@ import { queryKeys } from '../../shared/api/query-keys';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { ExecutionSupervisionLayout, ProductPage, Section } from '../../shared/layout';
-import { Button, InlineNotice, StatusPill } from '../../shared/ui';
+import { Button, EmptyState, InlineNotice, StatusPill } from '../../shared/ui';
 import { CodeReviewHandoffPanel, type CodeReviewHandoffProjection } from '../code-review/code-review-handoff-panel';
 import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import { QaHandoffPanel, type QaHandoffProjection } from '../qa/qa-handoff-panel';
@@ -62,23 +62,27 @@ export function ExecutionDetailRoute() {
   function retryExecution() {
     setMessage('Retry requested. Inspect execution evidence before restarting the worker.');
   }
-
-  return (
-    <ProductPage family="execution-supervision" heading={viewModel?.title ?? 'Execution supervision'}>
+  const routeState = (
+    <div className="grid gap-3">
       <SurfaceStateIndicator label="Execution Detail" state={executionSurfaceState(executionQuery.isLoading, executionQuery.isError, execution)} />
-      <div className="sr-only">
-        <span>
-          {viewModel === undefined
-            ? 'Execution supervision cannot be evaluated until detail data loads.'
-            : `${viewModel.riskSignal} Current step: ${viewModel.currentStep}. Last meaningful event: ${viewModel.lastMeaningfulEvent}. PR, diff, and test evidence: ${viewModel.evidenceSummary}.`}
-        </span>
-        <span>{viewModel?.nextAction ?? 'Allowed action: load execution supervision'}</span>
-        <span>{viewModel?.primaryActorOrRole ?? 'Linked Plan Item unavailable'}</span>
-        <span>{viewModel?.currentState ?? (executionQuery.isLoading ? 'Loading execution supervision' : 'Execution supervision unavailable')}</span>
-      </div>
       {message ? <InlineNotice title={message} tone="success" /> : null}
       {executionQuery.isError ? <InlineNotice title="Execution detail could not be loaded." tone="danger" /> : null}
       {execution === undefined && !executionQuery.isLoading ? <InlineNotice title="Execution not found." tone="warning" /> : null}
+    </div>
+  );
+
+  return (
+    <ProductPage family="execution-supervision" heading={viewModel?.title ?? 'Execution supervision'}>
+      <div className="sr-only">
+        {[
+          viewModel === undefined
+            ? 'Execution supervision cannot be evaluated until detail data loads.'
+            : `${viewModel.riskSignal} Current step: ${viewModel.currentStep}. Last meaningful event: ${viewModel.lastMeaningfulEvent}. PR, diff, and test evidence: ${viewModel.evidenceSummary}.`,
+          viewModel?.nextAction ?? 'Allowed action: load execution supervision',
+          viewModel?.primaryActorOrRole ?? 'Linked Plan Item unavailable',
+          viewModel?.currentState ?? (executionQuery.isLoading ? 'Loading execution supervision' : 'Execution supervision unavailable'),
+        ].join(' ')}
+      </div>
       {execution !== undefined && viewModel !== undefined ? (
         <ExecutionSupervisionLayout
           controls={
@@ -89,11 +93,22 @@ export function ExecutionDetailRoute() {
               viewModel={viewModel}
             />
           }
-          evidence={<ExecutionEvidence viewModel={viewModel} />}
+          evidence={
+            <div className="grid gap-3">
+              {routeState}
+              <ExecutionEvidence viewModel={viewModel} />
+            </div>
+          }
           lanes={<ExecutionHandoffLanes codeReview={codeReview} execution={execution} qaHandoff={qaHandoff} />}
           primarySurface="evidence"
         />
-      ) : null}
+      ) : (
+        <ExecutionSupervisionLayout
+          evidence={routeState}
+          lanes={<EmptyState description="Execution handoff lanes appear after execution detail data loads." title="No execution detail loaded." />}
+          primarySurface="evidence"
+        />
+      )}
     </ProductPage>
   );
 }
@@ -223,9 +238,9 @@ function executionSurfaceState(isLoading: boolean, isError: boolean, execution: 
 
 function Definition({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid gap-1 rounded-md border border-border bg-background p-3">
+    <div className="grid min-w-0 gap-1 rounded-md border border-border bg-background p-3">
       <dt className="text-text-secondary">{label}</dt>
-      <dd className="font-semibold text-text-primary">{value}</dd>
+      <dd className="break-words font-semibold text-text-primary">{value}</dd>
     </div>
   );
 }

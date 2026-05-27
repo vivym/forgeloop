@@ -78,7 +78,6 @@ export function SpecExecutionPlanQueue() {
   return (
     <ProductPage family="document-governance" heading="Document Reviews" toolbar={toolbar}>
       <div className="grid gap-4">
-        <SurfaceStateIndicator label="Document Reviews Queue" state={queueSurfaceState(query.isLoading, query.isError, rows, queueProjection.degraded_sources)} />
         <div className="sr-only">
           <span>{state}</span>
           <span>{blockerRisk}</span>
@@ -94,28 +93,27 @@ export function SpecExecutionPlanQueue() {
             tone="info"
           />
         ) : null}
-        {!query.isError ? (
-          <DocumentGovernanceLayout
-            groups={<DocumentReviewGroups groups={groups} />}
-            inspector={<DocumentReviewInspector row={focusedRow} />}
-            queue={
-              <div className="grid min-w-0 gap-4">
-                {groups.map((group) => (
-                  <SpecPlanGroup
-                    focusedRowKey={focusedRow?.id}
-                    group={group}
-                    isLoading={query.isLoading}
-                    key={group.id}
-                    onFocusRow={(row) => setFocusedRowKey(row.id)}
-                  />
-                ))}
-                {rows.length === 0 && query.isLoading !== true ? (
-                  <EmptyState description="No Spec or Execution Plan rows currently need governance action." title="No governance rows." />
-                ) : null}
-              </div>
-            }
-          />
-        ) : null}
+        <DocumentGovernanceLayout
+          groups={query.isError ? undefined : <DocumentReviewGroups groups={groups} />}
+          inspector={query.isError ? undefined : <DocumentReviewInspector row={focusedRow} />}
+          queue={
+            <div className="grid min-w-0 gap-4">
+              <SurfaceStateIndicator label="Document Reviews Queue" state={queueSurfaceState(query.isLoading, query.isError, rows, queueProjection.degraded_sources)} />
+              {query.isError ? null : groups.map((group) => (
+                <SpecPlanGroup
+                  focusedRowKey={focusedRow?.id}
+                  group={group}
+                  isLoading={query.isLoading}
+                  key={group.id}
+                  onFocusRow={(row) => setFocusedRowKey(row.id)}
+                />
+              ))}
+              {rows.length === 0 && query.isLoading !== true ? (
+                <EmptyState description="No Spec or Execution Plan rows currently need governance action." title="No governance rows." />
+              ) : null}
+            </div>
+          }
+        />
       </div>
     </ProductPage>
   );
@@ -282,7 +280,7 @@ function queueSurfaceState(isLoading: boolean, isError: boolean, rows: SpecPlanQ
   if (text.includes('interrupted') || text.includes('resumable')) return 'resumable';
   if (text.includes('running')) return 'running';
   if (text.includes('approved')) return 'approved';
-  return undefined;
+  return 'approved';
 }
 
 function statusTone(row: SpecPlanQueueRow): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {

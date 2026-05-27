@@ -20,9 +20,6 @@ export function CockpitRoute() {
       heading="Cockpit"
       toolbar={<StatusPill tone="info">{viewModel.objectType}</StatusPill>}
     >
-      <SurfaceStateIndicator label="Cockpit" state={cockpitSurfaceState(query.isLoading, query.isError, query.data)} />
-      {query.isLoading ? <InlineNotice title="Loading Cockpit." tone="info" /> : null}
-      {query.isError ? <InlineNotice title="Cockpit could not be loaded." tone="danger" /> : null}
       <CockpitLayout
         commandStrip={<MetadataActionList items={viewModel.roleSelectedQueue} />}
         attentionQueue={
@@ -55,6 +52,9 @@ export function CockpitRoute() {
         }
         healthRail={<CompactMetadata items={viewModel.compactHealthIndicators} />}
       />
+      <SurfaceStateIndicator label="Cockpit" state={cockpitSurfaceState(query.isLoading, query.isError, query.data)} />
+      {query.isLoading ? <InlineNotice title="Loading Cockpit." tone="info" /> : null}
+      {query.isError ? <InlineNotice title="Cockpit could not be loaded." tone="danger" /> : null}
     </ProductPage>
   );
 }

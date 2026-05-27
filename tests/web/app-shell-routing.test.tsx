@@ -66,7 +66,7 @@ describe('React Router product shell', () => {
     const commandSuggestions = screen.getByRole('navigation', { name: 'Command suggestions' });
     expect(commandSuggestions).toBeTruthy();
     expect(screen.queryByRole('listbox', { name: 'Command suggestions' })).toBeNull();
-    expect(screen.queryByRole('option')).toBeNull();
+    expect(within(commandSuggestions).queryByRole('option')).toBeNull();
     expect(within(commandSuggestions).getByRole('link', { name: 'Cockpit' })).toBeTruthy();
     expect(within(commandSuggestions).queryByRole('link', { name: 'Dashboard' })).toBeNull();
 

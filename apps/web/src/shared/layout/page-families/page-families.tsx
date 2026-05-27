@@ -34,7 +34,6 @@ export function CockpitLayout({
 }) {
   return (
     <div className="grid gap-4" data-command-strip="">
-      <div>{commandStrip}</div>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,0.7fr)_18rem]">
         <PrimarySurface className="content-start" data-attention-queue="">
           {attentionQueue}
@@ -42,6 +41,7 @@ export function CockpitLayout({
         <section data-risk-column="">{riskColumn}</section>
         <div data-health-rail="">{healthRail}</div>
       </div>
+      <div>{commandStrip}</div>
     </div>
   );
 }
@@ -58,12 +58,12 @@ export function DatabaseViewLayout({
   const hasInspector = hasRenderableSlot(inspector);
 
   return (
-    <div className="grid gap-3">
-      <div data-database-toolbar="">{toolbar}</div>
-      <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
-        <PrimarySurface data-data-table="">{table}</PrimarySurface>
-        {hasInspector ? <div data-row-preview="">{inspector}</div> : null}
-      </div>
+    <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
+      <PrimarySurface className="grid content-start gap-3 lg:min-h-[70vh] xl:min-h-[90vh]" data-data-table="">
+        <div className="min-w-0 overflow-hidden" data-database-toolbar="">{toolbar}</div>
+        {table}
+      </PrimarySurface>
+      {hasInspector ? <div data-row-preview="">{inspector}</div> : null}
     </div>
   );
 }
@@ -82,13 +82,13 @@ export function InboxLayout({
   const hasInspector = hasRenderableSlot(inspector);
 
   return (
-    <div className="grid gap-3">
-      {toolbar ? <div data-inbox-toolbar="">{toolbar}</div> : null}
-      {groups ? <div data-inbox-groups="">{groups}</div> : null}
-      <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
-        <PrimarySurface data-inbox-list="">{list}</PrimarySurface>
-        {hasInspector ? <div data-inspector-panel="">{inspector}</div> : null}
-      </div>
+    <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
+      <PrimarySurface className="grid content-start gap-3 lg:min-h-[60vh]" data-inbox-list="">
+        {groups ? <div className="min-w-0" data-inbox-groups="">{groups}</div> : null}
+        {toolbar ? <div className="min-w-0 overflow-hidden" data-inbox-toolbar="">{toolbar}</div> : null}
+        {list}
+      </PrimarySurface>
+      {hasInspector ? <div data-inspector-panel="">{inspector}</div> : null}
     </div>
   );
 }
@@ -108,7 +108,7 @@ export function DocumentWorkspaceLayout({
 
   return (
     <div className={cn('grid gap-4', hasPropertyRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
-      <PrimarySurface data-document-surface="">{document}</PrimarySurface>
+      <PrimarySurface className="lg:min-h-[80vh] xl:min-h-[90vh]" data-document-surface="">{document}</PrimarySurface>
       {hasPropertyRail ? (
         <div className="grid content-start gap-3">
           {hasProperties ? <div data-property-rail="">{properties}</div> : null}
@@ -149,12 +149,12 @@ export function PlanningTableLayout({ inspector, table, toolbar }: { inspector?:
   const hasInspector = hasRenderableSlot(inspector);
 
   return (
-    <div className="grid gap-3">
-      {toolbar ? <div data-planning-toolbar="">{toolbar}</div> : null}
-      <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
-        <PrimarySurface data-plan-items-table="">{table}</PrimarySurface>
-        {hasInspector ? <div data-inspector-panel="">{inspector}</div> : null}
-      </div>
+    <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
+      <PrimarySurface className="grid content-start gap-3 lg:min-h-[70vh]" data-plan-items-table="">
+        {toolbar ? <div className="min-w-0 overflow-hidden" data-planning-toolbar="">{toolbar}</div> : null}
+        {table}
+      </PrimarySurface>
+      {hasInspector ? <div data-inspector-panel="">{inspector}</div> : null}
     </div>
   );
 }
@@ -238,17 +238,17 @@ export function DocumentReviewLayout({
   const hasReviewRail = hasReviewState || hasCommentSummary;
 
   return (
-    <div className="grid gap-3">
-      {toolbar ? <div data-review-toolbar="">{toolbar}</div> : null}
-      <div className={cn('grid gap-4', hasReviewRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
-        <PrimarySurface data-document-surface="">{document}</PrimarySurface>
-        {hasReviewRail ? (
-          <div className="grid content-start gap-3">
-            {hasReviewState ? <div data-review-state="">{reviewState}</div> : null}
-            {hasCommentSummary ? <div data-comment-summary="">{commentSummary}</div> : null}
-          </div>
-        ) : null}
-      </div>
+    <div className={cn('grid gap-4', hasReviewRail ? 'xl:grid-cols-[minmax(0,1fr)_16rem]' : undefined)}>
+      <PrimarySurface className="grid content-start gap-3 lg:min-h-[80vh] xl:min-h-[90vh]" data-document-surface="">
+        {toolbar ? <div className="min-w-0 overflow-x-auto" data-review-toolbar="">{toolbar}</div> : null}
+        {document}
+      </PrimarySurface>
+      {hasReviewRail ? (
+        <div className="grid content-start gap-3">
+          {hasReviewState ? <div data-review-state="">{reviewState}</div> : null}
+          {hasCommentSummary ? <div data-comment-summary="">{commentSummary}</div> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -293,24 +293,25 @@ export function DocumentGovernanceLayout({ groups, inspector, queue }: { groups?
   const hasInspector = hasRenderableSlot(inspector);
 
   return (
-    <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
-      <div className="grid gap-3">
+    <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_18rem]' : undefined)}>
+      <PrimarySurface className="grid content-start gap-3 lg:min-h-[70vh] xl:min-h-[90vh]" data-document-queue="">
         {groups ? <div data-document-review-groups="">{groups}</div> : null}
-        <PrimarySurface data-document-queue="">{queue}</PrimarySurface>
-      </div>
+        {queue}
+      </PrimarySurface>
       {hasInspector ? <div data-inspector-panel="">{inspector}</div> : null}
     </div>
   );
 }
 
-export function DeliveryBoardLayout({ columns, toolbar }: { columns: ReactNode; toolbar?: ReactNode }) {
+export function DeliveryBoardLayout({ columns, state, toolbar }: { columns: ReactNode; state?: ReactNode; toolbar?: ReactNode }) {
   return (
-    <div className="grid gap-3">
-      {toolbar ? <div data-board-toolbar="">{toolbar}</div> : null}
-      <PrimarySurface className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4" data-board-columns="">
+    <PrimarySurface className="grid content-start gap-3 lg:min-h-[70vh] xl:min-h-[90vh]" data-board-columns="">
+      {state}
+      {toolbar ? <div className="min-w-0 overflow-x-auto" data-board-toolbar="">{toolbar}</div> : null}
+      <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
         {columns}
-      </PrimarySurface>
-    </div>
+      </div>
+    </PrimarySurface>
   );
 }
 
@@ -328,29 +329,38 @@ export function ExecutionSupervisionLayout({
   const hasControls = hasRenderableSlot(controls);
   const hasEvidence = hasRenderableSlot(evidence);
   const effectivePrimarySurface = primarySurface === 'evidence' && !hasEvidence ? 'lanes' : primarySurface;
-  const hasExecutionRail = hasEvidence || hasControls;
   const lanesNode =
     effectivePrimarySurface === 'lanes' ? (
-      <PrimarySurface data-execution-lanes="">{lanes}</PrimarySurface>
+      <PrimarySurface className="lg:min-h-[70vh] xl:min-h-[90vh]" data-execution-lanes="">{lanes}</PrimarySurface>
     ) : (
-      <section data-execution-lanes="">{lanes}</section>
+      <section className="min-w-0" data-execution-lanes="">{lanes}</section>
     );
   const evidenceNode =
     !hasEvidence ? null : effectivePrimarySurface === 'evidence' ? (
-      <PrimarySurface data-run-evidence="">{evidence}</PrimarySurface>
+      <PrimarySurface className="lg:min-h-[70vh] xl:min-h-[90vh]" data-run-evidence="">{evidence}</PrimarySurface>
     ) : (
-      <div data-run-evidence="">{evidence}</div>
+      <div className="min-w-0" data-run-evidence="">{evidence}</div>
     );
-
-  return (
-    <div className={cn('grid gap-4', hasExecutionRail ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
-      {lanesNode}
-      {hasExecutionRail ? (
-        <div className="grid content-start gap-3">
+  const primaryNode = effectivePrimarySurface === 'lanes' ? lanesNode : evidenceNode;
+  const secondaryRail =
+    effectivePrimarySurface === 'lanes' ? (
+      hasEvidence || hasControls ? (
+        <div className="grid min-w-0 content-start gap-3">
           {evidenceNode}
           {hasControls ? <div data-worker-controls="">{controls}</div> : null}
         </div>
-      ) : null}
+      ) : null
+    ) : (
+      <div className="grid min-w-0 content-start gap-3">
+        {lanesNode}
+        {hasControls ? <div data-worker-controls="">{controls}</div> : null}
+      </div>
+    );
+
+  return (
+    <div className={cn('grid gap-4', secondaryRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
+      {primaryNode}
+      {secondaryRail}
     </div>
   );
 }
@@ -372,8 +382,8 @@ export function ReleaseReadinessLayout({
   const hasReadinessRail = hasScope || hasEvidence || hasRolloutPlan;
 
   return (
-    <div className={cn('grid gap-4', hasReadinessRail ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
-      <PrimarySurface data-readiness-blockers="">{blockers}</PrimarySurface>
+    <div className={cn('grid gap-4', hasReadinessRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
+      <PrimarySurface className="lg:min-h-[70vh] xl:min-h-[90vh]" data-readiness-blockers="">{blockers}</PrimarySurface>
       {hasReadinessRail ? (
         <div className="grid content-start gap-3">
           {hasScope ? <div data-release-scope="">{scope}</div> : null}
@@ -409,8 +419,8 @@ export function ReportInsightLayout({ actions, conclusion, signals }: { actions?
   const hasInsightRail = hasSignals || hasActions;
 
   return (
-    <div className={cn('grid gap-4', hasInsightRail ? 'xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)]' : undefined)}>
-      <PrimarySurface data-report-conclusion="">{conclusion}</PrimarySurface>
+    <div className={cn('grid gap-4', hasInsightRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
+      <PrimarySurface className="lg:min-h-[70vh] xl:min-h-[90vh]" data-report-conclusion="">{conclusion}</PrimarySurface>
       {hasInsightRail ? (
         <section className="grid content-start gap-3">
           {hasSignals ? <div data-report-signals="">{signals}</div> : null}

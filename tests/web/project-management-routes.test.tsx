@@ -279,7 +279,7 @@ describe('project management route IA', () => {
         expect(screen.queryByTestId('surface-state-blocked')).toBeNull();
         expect(screen.getByTestId('surface-state-approved')).toBeTruthy();
       }
-      expect(screen.getByText('Planning state unknown')).toBeTruthy();
+      expect(screen.getAllByText('Planning state unknown')[0]).toBeTruthy();
       expect(screen.getByRole('searchbox', { name: new RegExp(`search ${heading}`, 'i') })).toBeTruthy();
       expect(screen.getByRole('button', { name: /view: dense/i })).toBeTruthy();
       expect(screen.getByRole('link', { name: /create source object/i }).getAttribute('href')).toBe(createHref);
@@ -289,7 +289,7 @@ describe('project management route IA', () => {
         expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
       }
       expect(screen.getAllByText(objectType)[0]).toBeTruthy();
-      expect(screen.getByRole('link', { name: new RegExp(`open ${objectType}`, 'i') })).toBeTruthy();
+      expect(screen.getAllByRole('link', { name: new RegExp(`open ${objectType}`, 'i') })[0]).toBeTruthy();
       expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
       expect(document.body.textContent).not.toContain('Development Plan missing');
       expect(document.body.textContent).not.toContain('Create Development Plan from source object');

@@ -117,7 +117,7 @@ export function QaHandoffPanel({
             tone="warning"
           />
         ) : null}
-        <dl className="grid gap-3 text-sm md:grid-cols-2">
+        <dl className="grid gap-3 text-sm">
           <Definition label="Source object" value={handoff?.source_ref?.title ?? execution.source_ref?.title ?? 'Not linked'} />
           <Definition label="Development Plan Item" value={handoff?.development_plan_item_ref?.title ?? execution.development_plan_item_ref?.title ?? ((handoff?.development_plan_item_id ?? execution.development_plan_item_id) === undefined ? 'Not linked' : 'Linked Plan Item')} />
           <Definition label="Approved Spec" value={handoff?.approved_spec_revision_ref?.title ?? 'Not linked'} />
@@ -142,9 +142,9 @@ export function QaHandoffPanel({
 
 function Definition({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid gap-1 rounded-md border border-border bg-background p-3">
+    <div className="grid min-w-0 gap-1 rounded-md border border-border bg-background p-3">
       <dt className="text-text-secondary">{label}</dt>
-      <dd className="font-semibold text-text-primary">{value}</dd>
+      <dd className="break-words font-semibold text-text-primary">{value}</dd>
     </div>
   );
 }

@@ -119,15 +119,14 @@ export function DevelopmentPlansRoute() {
     <ProductPage
       family="planning-table"
       heading="Development Plans"
-      toolbar={<DevelopmentPlanIndexActions />}
     >
       <PlanningTableLayout
-        toolbar={<DevelopmentPlanFilters filters={filters} onFiltersChange={setFilters} />}
+        toolbar={<DevelopmentPlanIndexToolbar filters={filters} onFiltersChange={setFilters} />}
         table={
           <div className="grid gap-3">
             <SurfaceStateIndicator
               label="Development Plans"
-              state={query.isLoading ? 'loading' : query.isError ? 'error' : rows.length === 0 ? 'empty' : undefined}
+              state={query.isLoading ? 'loading' : query.isError ? 'error' : rows.length === 0 ? 'empty' : 'approved'}
             />
             {query.isError ? <InlineNotice title="Development Plans could not be loaded." tone="danger" /> : null}
             <Section
@@ -260,74 +259,78 @@ export function DevelopmentPlanNewRoute() {
     <ProductPage
       family="plan-authoring"
       heading="New Development Plan"
-      toolbar={<Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:bg-surface-muted" to="/development-plans">Back to Development Plans</Link>}
     >
-      <SurfaceStateIndicator label="New Development Plan" state={validation.hasBlockingIssue ? 'blocked' : 'approved'} />
       <PlanAuthoringLayout
         sourceContext={
-          <form className="grid gap-4" onSubmit={(event) => void createPlan(event)}>
-            <Section
-              description="Manual creation records source context and starts an empty Plan Item table for boundary approval."
-              title="Manual source context"
-              variant="panel"
-            >
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_minmax(10rem,0.8fr)]">
-                <label className="grid gap-1 text-sm font-semibold text-text-primary">
-                  Development Plan title
-                  <input
-                    className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary"
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
+          <div className="grid gap-4">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:bg-surface-muted" to="/development-plans">Back to Development Plans</Link>
+            </div>
+            <SurfaceStateIndicator label="New Development Plan" state={validation.hasBlockingIssue ? 'blocked' : 'approved'} />
+            <form className="grid gap-4" onSubmit={(event) => void createPlan(event)}>
+              <Section
+                description="Manual creation records source context and starts an empty Plan Item table for boundary approval."
+                title="Manual source context"
+                variant="panel"
+              >
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_minmax(10rem,0.8fr)]">
+                  <label className="grid gap-1 text-sm font-semibold text-text-primary">
+                    Development Plan title
+                    <input
+                      className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary"
+                      value={title}
+                      onChange={(event) => setTitle(event.target.value)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-semibold text-text-primary">
+                    Source type
+                    <Select
+                      aria-label="Source type"
+                      options={sourceAuthoringOptions}
+                      value={sourceType}
+                      onChange={(event) => {
+                        const nextSourceType = event.target.value;
+                        if (isSourceObjectType(nextSourceType)) {
+                          const nextSourceOptions = sourceObjectOptions(nextSourceType, sourceObjectOptionsByType);
+                          setSourceType(nextSourceType);
+                          setSourceId(nextSourceOptions[0]?.value ?? '');
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-semibold text-text-primary">
+                    Source object
+                    <Select
+                      aria-label="Source object"
+                      disabled={currentSourceObjectOptions.length === 0 || selectedSourceQuery.isLoading || selectedSourceQuery.isError}
+                      options={visibleSourceObjectOptions}
+                      value={sourceId}
+                      onChange={(event) => setSourceId(event.target.value)}
+                    />
+                  </label>
+                </div>
+                {selectedSourceQuery.isLoading ? <InlineNotice title={`Loading ${formatValue(sourceType)} source objects.`} tone="info" /> : null}
+                {selectedSourceQuery.isError ? <InlineNotice title={`${formatValue(sourceType)} source objects could not be loaded.`} tone="danger" /> : null}
+                {!selectedSourceQuery.isLoading && !selectedSourceQuery.isError && currentSourceObjectOptions.length === 0 ? (
+                  <InlineNotice title={`No ${formatValue(sourceType)} source objects are available for this project.`} tone="warning" />
+                ) : null}
+                <label className="mt-3 grid gap-1 text-sm font-semibold text-text-primary">
+                  Manual source guidance
+                  <Textarea
+                    aria-label="Manual source guidance"
+                    placeholder="Capture source constraints, acceptance criteria, dependencies, or known risks for Plan Item authoring."
+                    value={manualGuidance}
+                    onChange={(event) => setManualGuidance(event.target.value)}
                   />
                 </label>
-                <label className="grid gap-1 text-sm font-semibold text-text-primary">
-                  Source type
-                  <Select
-                    aria-label="Source type"
-                    options={sourceAuthoringOptions}
-                    value={sourceType}
-                    onChange={(event) => {
-                      const nextSourceType = event.target.value;
-                      if (isSourceObjectType(nextSourceType)) {
-                        const nextSourceOptions = sourceObjectOptions(nextSourceType, sourceObjectOptionsByType);
-                        setSourceType(nextSourceType);
-                        setSourceId(nextSourceOptions[0]?.value ?? '');
-                      }
-                    }}
-                  />
-                </label>
-                <label className="grid gap-1 text-sm font-semibold text-text-primary">
-                  Source object
-                  <Select
-                    aria-label="Source object"
-                    disabled={currentSourceObjectOptions.length === 0 || selectedSourceQuery.isLoading || selectedSourceQuery.isError}
-                    options={visibleSourceObjectOptions}
-                    value={sourceId}
-                    onChange={(event) => setSourceId(event.target.value)}
-                  />
-                </label>
-              </div>
-              {selectedSourceQuery.isLoading ? <InlineNotice title={`Loading ${formatValue(sourceType)} source objects.`} tone="info" /> : null}
-              {selectedSourceQuery.isError ? <InlineNotice title={`${formatValue(sourceType)} source objects could not be loaded.`} tone="danger" /> : null}
-              {!selectedSourceQuery.isLoading && !selectedSourceQuery.isError && currentSourceObjectOptions.length === 0 ? (
-                <InlineNotice title={`No ${formatValue(sourceType)} source objects are available for this project.`} tone="warning" />
-              ) : null}
-              <label className="mt-3 grid gap-1 text-sm font-semibold text-text-primary">
-                Manual source guidance
-                <Textarea
-                  aria-label="Manual source guidance"
-                  placeholder="Capture source constraints, acceptance criteria, dependencies, or known risks for Plan Item authoring."
-                  value={manualGuidance}
-                  onChange={(event) => setManualGuidance(event.target.value)}
-                />
-              </label>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Button disabled={validation.hasBlockingIssue} loading={actionState.status === 'running'} type="submit" variant="primary">
-                  Create Development Plan
-                </Button>
-              </div>
-            </Section>
-          </form>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button disabled={validation.hasBlockingIssue} loading={actionState.status === 'running'} type="submit" variant="primary">
+                    Create Development Plan
+                  </Button>
+                </div>
+              </Section>
+            </form>
+          </div>
         }
         aiAssist={
           <Section
@@ -386,6 +389,23 @@ function DevelopmentPlanIndexActions() {
   );
 }
 
+function DevelopmentPlanIndexToolbar({
+  filters,
+  onFiltersChange,
+}: {
+  filters: DevelopmentPlanFilterState;
+  onFiltersChange: (filters: DevelopmentPlanFilterState) => void;
+}) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2 pb-1 lg:flex-nowrap lg:overflow-x-auto">
+      <DevelopmentPlanFilters filters={filters} onFiltersChange={onFiltersChange} />
+      <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:flex-nowrap">
+        <DevelopmentPlanIndexActions />
+      </div>
+    </div>
+  );
+}
+
 function DevelopmentPlanFilters({
   filters,
   onFiltersChange,
@@ -396,25 +416,25 @@ function DevelopmentPlanFilters({
   const updateFilter = (key: keyof DevelopmentPlanFilterState, value: string) => onFiltersChange({ ...filters, [key]: value });
 
   return (
-    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
-        Source type
+    <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:flex-nowrap">
+      <label className="grid min-w-40">
+        <span className="sr-only">Source type</span>
         <Select aria-label="Source type" options={sourceTypeOptions} value={filters.sourceType} onChange={(event) => updateFilter('sourceType', event.target.value)} />
       </label>
-      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
-        Role
+      <label className="grid min-w-36">
+        <span className="sr-only">Role</span>
         <Select aria-label="Role" options={roleOptions} value={filters.role} onChange={(event) => updateFilter('role', event.target.value)} />
       </label>
-      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
-        Gate
+      <label className="grid min-w-36">
+        <span className="sr-only">Gate</span>
         <Select aria-label="Gate" options={gateOptions} value={filters.gate} onChange={(event) => updateFilter('gate', event.target.value)} />
       </label>
-      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
-        Risk
+      <label className="grid min-w-32">
+        <span className="sr-only">Risk</span>
         <Select aria-label="Risk" options={riskOptions} value={filters.risk} onChange={(event) => updateFilter('risk', event.target.value)} />
       </label>
-      <label className="grid gap-1 text-xs font-semibold uppercase text-text-secondary">
-        Status
+      <label className="grid min-w-36">
+        <span className="sr-only">Status</span>
         <Select aria-label="Status" options={statusOptions} value={filters.status} onChange={(event) => updateFilter('status', event.target.value)} />
       </label>
     </div>

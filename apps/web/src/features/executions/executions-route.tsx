@@ -61,25 +61,27 @@ export function ExecutionsRoute() {
 
   return (
     <ProductPage family="execution-supervision" heading="Executions">
-      <SurfaceStateIndicator label="Executions Queue" state={executionsSurfaceState(query.isLoading, query.isError, rows, degradedSources)} />
       <div className="sr-only">
         <span>{pageState}</span>
         <span>{executionRisk(rows, query.isError)}</span>
         <span>{focusedRow === undefined ? 'Allowed action: wait for an approved Execution Plan to start' : `Allowed action: ${focusedRow.allowedAction.label}`}</span>
         <span>{focusedRow === undefined ? 'Execution owner supervises Development Plan Item delivery.' : `Development Plan Item: ${focusedRow.developmentPlanItem}`}</span>
       </div>
-      {message ? <InlineNotice title={message} tone="success" /> : null}
-      {query.isLoading ? <InlineNotice title="Loading execution supervision lanes." tone="info" /> : null}
-      {query.isError ? <InlineNotice title="Execution supervision data is temporarily unavailable." tone="danger" /> : null}
       <ExecutionSupervisionLayout
         evidence={<ExecutionEvidence row={focusedRow} />}
         lanes={
-          <ExecutionLanes
-            onContinueExecution={continueExecution}
-            onInterruptExecution={interruptExecution}
-            onRetryExecution={retryExecution}
-            rows={rows}
-          />
+          <div className="grid gap-3">
+            <SurfaceStateIndicator label="Executions Queue" state={executionsSurfaceState(query.isLoading, query.isError, rows, degradedSources)} />
+            {message ? <InlineNotice title={message} tone="success" /> : null}
+            {query.isLoading ? <InlineNotice title="Loading execution supervision lanes." tone="info" /> : null}
+            {query.isError ? <InlineNotice title="Execution supervision data is temporarily unavailable." tone="danger" /> : null}
+            <ExecutionLanes
+              onContinueExecution={continueExecution}
+              onInterruptExecution={interruptExecution}
+              onRetryExecution={retryExecution}
+              rows={rows}
+            />
+          </div>
         }
       />
     </ProductPage>

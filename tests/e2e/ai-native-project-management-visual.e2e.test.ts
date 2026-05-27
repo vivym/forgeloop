@@ -7,9 +7,12 @@ import {
   ensureVisualWebServer,
   installMockedProductApi,
   launchVisualBrowser,
+  writeProductArchitectureScreenshotReviewReport,
   startAiNativeProjectManagementFixture,
+  type ScreenshotReviewRecord,
   visualViewportWidths,
 } from './helpers/capture-route-screenshots';
+import { requiredScreenshotRoutes } from '../../apps/web/src/features/product-surfaces/route-contract';
 import { bugListItem, requirementListItem } from '../web/fixtures/product-data';
 
 const forbiddenProductStrings = [
@@ -35,13 +38,70 @@ describe('AI-native project management visual QA', () => {
       try {
         const page = await browser.newPage();
         await installMockedProductApi(page);
+        const records: ScreenshotReviewRecord[] = [];
 
         for (const route of aiNativeProjectManagementRoutes) {
           for (const width of visualViewportWidths) {
-            await captureRouteScreenshot(page, server.url, route, width);
+            records.push(await captureRouteScreenshot(page, server.url, route, width));
             await assertNoRenderedBaggage(page, route.path);
           }
         }
+
+        const report = await writeProductArchitectureScreenshotReviewReport(records);
+        expect(report.records.every((record) => record.decision === 'pass')).toBe(true);
+        expect(new Set(report.records.map((record) => record.route))).toEqual(new Set(requiredScreenshotRoutes.map((route) => route.concretePath)));
+        expect(requiredScreenshotRoutes.map((route) => route.concretePath)).toEqual([
+          '/',
+          '/cockpit',
+          '/my-work',
+          '/initiatives',
+          '/initiatives/new',
+          '/initiatives/init-ai-native-rollout',
+          '/initiatives/init-ai-native-rollout/evidence',
+          '/requirements',
+          '/requirements/new',
+          '/requirements/req-plan-item-governance',
+          '/requirements/req-plan-item-governance/evidence',
+          '/bugs',
+          '/bugs/new',
+          '/bugs/bug-execution-review-context',
+          '/bugs/bug-execution-review-context/evidence',
+          '/tech-debt',
+          '/tech-debt/new',
+          '/tech-debt/td-retire-workspace-page-template',
+          '/tech-debt/td-retire-workspace-page-template/evidence',
+          '/development-plans',
+          '/development-plans/new',
+          '/development-plans/dp-product-architecture-visual-rebuild',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-development-plan-table-inspector/brainstorming',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center/spec',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-requirements-database-view/execution-plan',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-demo-seed-visual-review/execution',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center/review',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-requirements-database-view/qa',
+          '/specs-plans',
+          '/executions',
+          '/executions/exec-demo-seed-visual-review',
+          '/board',
+          '/releases',
+          '/releases/rel-product-architecture-preview',
+          '/releases/rel-product-architecture-preview/evidence',
+          '/reports',
+          '/reports/delivery',
+          '/reports/quality',
+          '/reports/release-readiness',
+          '/reports/observation',
+        ]);
+        expect(
+          new Set(report.records.map((record) => `${record.route} @ ${record.viewport}`)),
+        ).toEqual(
+          new Set(requiredScreenshotRoutes.flatMap((route) => route.viewports.map((viewport) => `${route.concretePath} @ ${viewport}`))),
+        );
+        expect(report.records).toHaveLength(requiredScreenshotRoutes.reduce((sum, route) => sum + route.viewports.length, 0));
+        expect(report.records.every((record) => record.geometry.horizontalOverflowPx <= 1)).toBe(true);
+        expect(report.records.filter((record) => record.viewport >= 1024).every((record) => (record.geometry.pageHeaderHeight ?? 0) <= 96)).toBe(true);
+        expect(report.manualReviewChecklist.every((item) => item.decision === 'pass')).toBe(true);
       } finally {
         await browser.close();
         await server.stop();
@@ -79,6 +139,33 @@ describe('AI-native project management visual QA', () => {
         await expectPage(page.getByRole('link', { name: /manual plan item governance plan/i })).toHaveAttribute('href', new RegExp(`/development-plans/${manualPlanId}`));
       } finally {
         await fixture.stop();
+      }
+    },
+    120_000,
+  );
+
+  it(
+    'keeps My Work filters operable on mobile viewports',
+    async () => {
+      const server = await ensureVisualWebServer();
+      const browser = await launchVisualBrowser();
+
+      try {
+        const page = await browser.newPage();
+        await installMockedProductApi(page);
+        await page.setViewportSize({ width: 375, height: 900 });
+        await page.goto(`${server.url}/my-work`);
+
+        await expectPage(page.getByRole('combobox', { name: /role filter/i })).toBeVisible();
+        await expectPage(page.getByRole('combobox', { name: /gate filter/i })).toBeVisible();
+        await expectPage(page.getByRole('combobox', { name: /status filter/i })).toBeVisible();
+        await expectPage(page.getByRole('combobox', { name: /risk filter/i })).toBeVisible();
+
+        await page.getByRole('combobox', { name: /role filter/i }).selectOption('developer');
+        await expectPage(page.getByRole('region', { name: /developer attention/i })).toBeVisible();
+      } finally {
+        await browser.close();
+        await server.stop();
       }
     },
     120_000,

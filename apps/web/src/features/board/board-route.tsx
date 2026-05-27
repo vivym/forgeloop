@@ -38,21 +38,27 @@ export function BoardRoute() {
 
   return (
     <ProductPage family="delivery-board" heading="Board">
-      <SurfaceStateIndicator label="Board" state={boardSurfaceState(query.isLoading, query.isError, cards, blockedCount, degradedSources)} />
-      {query.isLoading ? <InlineNotice title="Loading board cards." tone="info" /> : null}
-      {query.isError ? <InlineNotice title="Board cards could not be loaded." tone="danger" /> : null}
       <DeliveryBoardLayout
+        state={
+          <div className="grid gap-3">
+            <SurfaceStateIndicator label="Board" state={boardSurfaceState(query.isLoading, query.isError, cards, blockedCount, degradedSources)} />
+            {query.isLoading ? <InlineNotice title="Loading board cards." tone="info" /> : null}
+            {query.isError ? <InlineNotice title="Board cards could not be loaded." tone="danger" /> : null}
+          </div>
+        }
         toolbar={
           focus === undefined ? null : (
-            <InlineNotice
-              description={
-                focusedCards.length > 0
-                  ? `Showing ${focusedCards.length} matching board card${focusedCards.length === 1 ? '' : 's'}.`
-                  : 'No exact board card matched this focus, so the full gate flow remains visible.'
-              }
-              title={activeFocus === undefined ? 'Focus not found' : boardFocusTitle(activeFocus)}
-              tone={focusedCards.length > 0 ? 'info' : 'warning'}
-            />
+            <div className="grid gap-3">
+              <InlineNotice
+                description={
+                  focusedCards.length > 0
+                    ? `Showing ${focusedCards.length} matching board card${focusedCards.length === 1 ? '' : 's'}.`
+                    : 'No exact board card matched this focus, so the full gate flow remains visible.'
+                }
+                title={activeFocus === undefined ? 'Focus not found' : boardFocusTitle(activeFocus)}
+                tone={focusedCards.length > 0 ? 'info' : 'warning'}
+              />
+            </div>
           )
         }
         columns={columns.map(({ cards: columnCards, column }) => (

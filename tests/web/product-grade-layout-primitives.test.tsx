@@ -134,7 +134,8 @@ describe('product-grade layout primitives', () => {
 
     const primaryWorkSurfaces = document.querySelectorAll('[data-primary-work-surface]');
     expect(primaryWorkSurfaces).toHaveLength(1);
-    expect(primaryWorkSurfaces[0]?.textContent).toBe('Database table');
+    expect(primaryWorkSurfaces[0]?.textContent).toBe('FilterDatabase table');
+    expect(primaryWorkSurfaces[0]?.querySelector('[data-database-toolbar]')).toBeTruthy();
     expect(document.querySelector('[data-row-preview]')).toBeNull();
     expect(primaryWorkSurfaces[0]?.parentElement?.className).not.toContain('xl:grid-cols');
   });

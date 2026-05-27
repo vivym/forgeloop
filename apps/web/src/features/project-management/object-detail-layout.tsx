@@ -324,13 +324,6 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
         />
       }
     >
-      <Section title={`${detail.title} · ${statusLabel(detail.status)}`} variant="subtle">
-        <div className="grid gap-2 text-sm text-text-secondary md:grid-cols-3">
-          <p className="m-0">{stateText}</p>
-          <p className="m-0">{`${roleLensLabel(roleLens)} lens · ${detail.driver_actor_id ?? 'Unassigned driver'}`}</p>
-          <p className="m-0">{`Risk ${detail.risk ?? 'unscored'} · Evidence ${evidenceCount} · Release ${releaseLabel}`}</p>
-        </div>
-      </Section>
       <DocumentWorkspaceLayout
         document={
         <Section
@@ -396,6 +389,13 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
         }
         attachments={<EvidencePanel detail={detail} />}
       />
+      <Section title={`${detail.title} · ${statusLabel(detail.status)}`} variant="subtle">
+        <div className="grid gap-2 text-sm text-text-secondary md:grid-cols-3">
+          <p className="m-0">{stateText}</p>
+          <p className="m-0">{`${roleLensLabel(roleLens)} lens · ${detail.driver_actor_id ?? 'Unassigned driver'}`}</p>
+          <p className="m-0">{`Risk ${detail.risk ?? 'unscored'} · Evidence ${evidenceCount} · Release ${releaseLabel}`}</p>
+        </div>
+      </Section>
       <Tabs
         ariaLabel="Source object sections"
         items={[

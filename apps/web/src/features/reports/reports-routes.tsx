@@ -237,28 +237,26 @@ function ReportWorkspace({
 
   return (
     <ProductPage family="report-insight" heading={heading}>
-      <SurfaceStateIndicator label={stateLabel} state={reportSurfaceState(isLoading, isError, reportData)} />
-      {isLoading ? <InlineNotice title={`${heading} report is loading.`} tone="info" /> : null}
-      {isError ? <InlineNotice title={`${heading} report could not be loaded.`} tone="danger" /> : null}
-      {context !== undefined ? <InlineNotice description={context.description} title={context.title} tone="info" /> : null}
       <ReportInsightLayout
         conclusion={
-          <ReportConclusion
-            affected={affected}
-            conclusion={conclusion}
-            report={report}
-            riskSignal={viewModel.riskSignal}
-            suggestedAction={suggestedAction}
-            supportingSignal={supporting}
-          />
-        }
-        signals={<ReportSignals report={report} reportData={reportData} />}
-        actions={
-          <div className="grid gap-4">
-            <RecommendedActions action={suggestedAction} report={report} />
+          <div className="grid gap-3">
+            <SurfaceStateIndicator label={stateLabel} state={reportSurfaceState(isLoading, isError, reportData)} />
+            {isLoading ? <InlineNotice title={`${heading} report is loading.`} tone="info" /> : null}
+            {isError ? <InlineNotice title={`${heading} report could not be loaded.`} tone="danger" /> : null}
+            {context !== undefined ? <InlineNotice description={context.description} title={context.title} tone="info" /> : null}
+            <ReportConclusion
+              affected={affected}
+              conclusion={conclusion}
+              report={report}
+              riskSignal={viewModel.riskSignal}
+              suggestedAction={suggestedAction}
+              supportingSignal={supporting}
+            />
             {children}
           </div>
         }
+        signals={<ReportSignals report={report} reportData={reportData} />}
+        actions={<RecommendedActions action={suggestedAction} report={report} />}
       />
     </ProductPage>
   );

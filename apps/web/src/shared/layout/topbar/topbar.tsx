@@ -18,8 +18,8 @@ export function Topbar({ actions, actorId, children, className, devToolsEnabled,
   const content =
     children ??
     (projectId || actorId || devToolsEnabled !== undefined ? (
-      <div className="flex min-w-0 flex-1 flex-col gap-2 py-2 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+      <div className="flex min-w-0 flex-1 items-center gap-2 py-2 lg:justify-between">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <CommandSearch className="w-full sm:max-w-md" />
         <SegmentedControl
           ariaLabel="Global role selection"
@@ -33,7 +33,7 @@ export function Topbar({ actions, actorId, children, className, devToolsEnabled,
           ]}
         />
         </div>
-        <dl className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <dl className="hidden shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs md:flex">
           {projectId ? (
             <div className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1">
               <dt className="text-text-muted">Project</dt>
