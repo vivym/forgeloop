@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRequirementDetail } from '../../packages/db/src';
+import { getReleaseReadinessDetail, getRequirementDetail } from '../../packages/db/src';
 
 import {
   productWorkspacePreviewSeedId,
@@ -65,5 +65,66 @@ describe('product review preview script helpers', () => {
       id: 'exec-product-workspace-preview-active',
       ref: { title: 'Codex worker is rebuilding product workspace preview data' },
     });
+
+    const workItems = await repository.listWorkItems(productWorkspacePreviewSeedId);
+    expect(workItems.filter((item) => item.kind === 'requirement')).toHaveLength(4);
+    expect(workItems.filter((item) => item.kind === 'initiative')).toHaveLength(1);
+    expect(workItems.filter((item) => item.kind === 'bug')).toHaveLength(1);
+    expect(workItems.filter((item) => item.kind === 'tech_debt')).toHaveLength(1);
+
+    const developmentPlans = await repository.listDevelopmentPlans(productWorkspacePreviewSeedId);
+    expect(developmentPlans).toHaveLength(2);
+    const planItems = (
+      await Promise.all(developmentPlans.map((plan) => repository.listDevelopmentPlanItems(plan.id)))
+    ).flat();
+    expect(planItems.length).toBeGreaterThanOrEqual(8);
+    expect(planItems.map((item) => item.id)).toEqual(
+      expect.arrayContaining([
+        'dpi-cockpit-command-center',
+        'dpi-development-plan-table-inspector',
+        'dpi-plan-item-gate-eligibility',
+        'dpi-product-workspace-preview-state',
+        'dpi-qa-shift-left-strategy',
+        'dpi-release-blocker-closure',
+        'dpi-requirements-database-view',
+        'dpi-typed-source-boundary',
+      ]),
+    );
+
+    await expect(repository.getExecution('exec-release-risk-closure-interrupted')).resolves.toMatchObject({
+      id: 'exec-release-risk-closure-interrupted',
+      status: 'interrupted',
+      worker_state: 'interrupted',
+    });
+    const executions = await repository.listExecutions();
+    expect(executions.map((execution) => execution.status)).toEqual(
+      expect.arrayContaining(['running', 'interrupted']),
+    );
+    expect((await repository.listCodeReviewHandoffs()).map((handoff) => handoff.status)).toEqual(
+      expect.arrayContaining(['changes_requested']),
+    );
+    expect((await repository.listQaHandoffs()).map((handoff) => handoff.status)).toEqual(
+      expect.arrayContaining(['pending', 'blocked']),
+    );
+
+    await expect(
+      getReleaseReadinessDetail(repository, 'rel-product-workspace-preview', {
+        project_id: productWorkspacePreviewSeedId,
+      }),
+    ).resolves.toMatchObject({
+      release_id: 'rel-product-workspace-preview',
+      ready: false,
+      disabled_reasons: expect.arrayContaining([expect.objectContaining({ code: expect.any(String) })]),
+    });
+
+    await expect(repository.listAttachmentsForObject('requirement', 'req-product-workspace-clarity')).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'att-requirement-flow-image',
+          content_type: 'image/png',
+          alt_text: 'Plan Item generation flow',
+        }),
+      ]),
+    );
   });
 });
