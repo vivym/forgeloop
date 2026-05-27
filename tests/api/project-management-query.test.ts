@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
-import { seedProductArchitectureDemoRepository } from '../../apps/control-plane-api/src/modules/core/product-architecture-demo-seed';
+import { seedProductWorkspacePreviewRepository } from '../../apps/control-plane-api/src/modules/core/product-workspace-preview-seed';
 import {
   executionActorDeveloper,
   executionActorOwner,
@@ -266,21 +266,21 @@ describe('project management query API', () => {
     expect(byStatus.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
   });
 
-  it('strictly projects all product architecture demo typed source detail routes', async () => {
+  it('strictly projects all product workspace preview typed source detail routes', async () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    await seedProductArchitectureDemoRepository(repository);
+    await seedProductWorkspacePreviewRepository(repository);
     const server = app.getHttpServer();
 
-    const requirement = await request(server).get('/query/requirements/req-plan-item-governance').expect(200);
+    const requirement = await request(server).get('/query/requirements/req-product-workspace-clarity').expect(200);
     expect(() => requirementDetailSchema.parse(requirement.body)).not.toThrow();
 
-    const initiative = await request(server).get('/query/initiatives/init-ai-native-rollout').expect(200);
+    const initiative = await request(server).get('/query/initiatives/init-product-workspace-redesign').expect(200);
     expect(() => initiativeDetailSchema.parse(initiative.body)).not.toThrow();
 
-    const techDebt = await request(server).get('/query/tech-debt/td-retire-workspace-page-template').expect(200);
+    const techDebt = await request(server).get('/query/tech-debt/td-retire-generic-product-page').expect(200);
     expect(() => techDebtDetailSchema.parse(techDebt.body)).not.toThrow();
 
-    const bug = await request(server).get('/query/bugs/bug-execution-review-context').expect(200);
+    const bug = await request(server).get('/query/bugs/bug-plan-item-action-eligibility').expect(200);
     expect(() => bugDetailSchema.parse(bug.body)).not.toThrow();
 
     expect(JSON.stringify({ requirement: requirement.body, initiative: initiative.body, techDebt: techDebt.body, bug: bug.body })).not.toMatch(

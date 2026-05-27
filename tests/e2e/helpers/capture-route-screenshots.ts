@@ -16,11 +16,11 @@ import { defaultProductApiResponses, type ProductApiResponseMap } from '../../we
 import {
   bugListItem,
   cockpitCommandCenterItem,
-  demoSeedVisualReviewItem,
+  productWorkspacePreviewItem,
   developmentPlan,
   developmentPlanTableInspectorItem,
   initiativeListItem,
-  productArchitectureSeedId,
+  productWorkspacePreviewSeedId,
   projectId,
   release,
   requirementListItem,
@@ -77,7 +77,7 @@ const seededReviewLabels = [
   developmentPlan.title,
   cockpitCommandCenterItem.title,
   requirementsDatabaseViewItem.title,
-  demoSeedVisualReviewItem.title,
+  productWorkspacePreviewItem.title,
   developmentPlanTableInspectorItem.title,
   requirementListItem.title,
   initiativeListItem.title,
@@ -113,7 +113,7 @@ export interface ManualReviewChecklistRecord {
   notes: string;
 }
 
-export interface ProductArchitectureScreenshotReviewReport {
+export interface ProductWorkspaceScreenshotReviewReport {
   records: ScreenshotReviewRecord[];
   manualReviewChecklist: ManualReviewChecklistRecord[];
 }
@@ -147,6 +147,7 @@ export async function ensureVisualWebServer(): Promise<VisualServer> {
     env: {
       ...process.env,
       VITE_FORGELOOP_API_URL: 'http://127.0.0.1:3000',
+      VITE_FORGELOOP_PROJECT_ID: projectId,
       VITE_FORGELOOP_QUERY_RETRY: 'false',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -256,6 +257,7 @@ async function startOwnedVisualWebServer(apiUrl: string): Promise<VisualServer> 
     env: {
       ...process.env,
       VITE_FORGELOOP_API_URL: apiUrl,
+      VITE_FORGELOOP_PROJECT_ID: projectId,
       VITE_FORGELOOP_QUERY_RETRY: 'false',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -287,7 +289,7 @@ async function seedVisualApi(app: INestApplication) {
   });
   await repository.saveProject({
     id: projectId,
-    name: 'ForgeLoop product architecture demo',
+    name: 'ForgeLoop product workspace preview',
     repo_ids: ['repo-visual'],
     owner_actor_id: 'actor-owner',
     created_at: now,
@@ -305,10 +307,10 @@ async function seedVisualApi(app: INestApplication) {
     created_at: now,
     updated_at: now,
   });
-  await repository.saveWorkItem(visualWorkItem('req-plan-item-governance', 'requirement', 'Plan Item governed Spec and Execution Plan generation', now));
-  await repository.saveWorkItem(visualWorkItem('bug-execution-review-context', 'bug', 'Execution continuation loses review context', now));
-  await repository.saveWorkItem(visualWorkItem('td-retire-workspace-page-template', 'tech_debt', 'Retire generic WorkspacePage visual template', now));
-  await repository.saveWorkItem(visualWorkItem('init-ai-native-rollout', 'initiative', 'AI-native project management rollout', now));
+  await repository.saveWorkItem(visualWorkItem('req-product-workspace-clarity', 'requirement', 'Product workspace clarity and route-backed context', now));
+  await repository.saveWorkItem(visualWorkItem('bug-plan-item-action-eligibility', 'bug', 'Plan Item action eligibility exposes premature execution', now));
+  await repository.saveWorkItem(visualWorkItem('td-retire-generic-product-page', 'tech_debt', 'Retire generic ProductPage visual fallback', now));
+  await repository.saveWorkItem(visualWorkItem('init-product-workspace-redesign', 'initiative', 'Product workspace redesign rollout', now));
 }
 
 function visualWorkItem(id: string, kind: WorkItem['kind'], title: string, now: string): WorkItem {
@@ -317,8 +319,8 @@ function visualWorkItem(id: string, kind: WorkItem['kind'], title: string, now: 
     project_id: projectId,
     kind,
     title,
-    narrative_markdown: `# ${title}\n\nValidate product architecture through the AI-native delivery flow.`,
-    goal: `${title} is visible in product architecture visual review.`,
+    narrative_markdown: `# ${title}\n\nValidate product workspace state through the AI-native delivery flow.`,
+    goal: `${title} is visible in product workspace visual review.`,
     success_criteria: ['Seeded object data is visible.', 'Development Plan Item gates are reviewed.'],
     priority: kind === 'bug' ? 'critical' : 'P1',
     risk: kind === 'bug' ? 'high' : 'medium',
@@ -338,10 +340,10 @@ function visualIntakeContext(kind: WorkItem['kind'], title: string): WorkItem['i
     return {
       type: 'bug',
       impact_summary: title,
-      observed_behavior: 'Execution continuation loses review context.',
-      expected_behavior: 'Continuation preserves review context.',
-      reproduction_steps: ['Open execution detail', 'Continue after review feedback'],
-      affected_environment: 'Product architecture preview',
+      observed_behavior: 'The Plan Item route exposes execution affordances before QA participation is recorded.',
+      expected_behavior: 'Execution actions remain disabled until required gate evidence is complete.',
+      reproduction_steps: ['Open Plan Item gate route', 'Inspect execution action eligibility before QA participation'],
+      affected_environment: 'Product workspace preview',
       verification_path: 'Seeded route screenshot review',
     };
   }
@@ -349,7 +351,7 @@ function visualIntakeContext(kind: WorkItem['kind'], title: string): WorkItem['i
     return {
       type: 'tech_debt',
       current_pain: title,
-      desired_invariant: 'Product routes no longer share a generic first-viewport template.',
+      desired_invariant: 'Core product routes use page-family-specific workspace shells.',
       affected_modules: ['apps/web/src/shared/layout'],
       behavior_preservation: 'Canonical route behavior is preserved.',
       validation_strategy: 'Visual route geometry and screenshot gates pass.',
@@ -359,16 +361,17 @@ function visualIntakeContext(kind: WorkItem['kind'], title: string): WorkItem['i
     return {
       type: 'initiative',
       business_outcome: title,
-      scope_narrative: 'Coordinate product architecture visual rebuild work.',
+      scope_narrative: 'Coordinate product workspace preview work.',
       success_metrics: ['Seeded route screenshots show product-quality state'],
     };
   }
   return {
     type: 'requirement',
-    stakeholder_problem: 'Spec and Execution Plan generation needs a governed Plan Item boundary.',
-    desired_outcome: 'The team can review the full source object to Plan Item to execution flow.',
-    acceptance_criteria: ['Plan Item generation flow is visible in seeded screenshots.'],
-    in_scope: ['Plan Item governance', 'Spec generation', 'Execution Plan generation'],
+    stakeholder_problem: 'Product operators need route-backed planning, gate, execution, review, QA, and release context.',
+    desired_outcome: 'Every source object route opens with deterministic product workspace context.',
+    acceptance_criteria: ['Typed source routes expose planning coverage.'],
+    in_scope: ['Typed source workspaces', 'Development Plan routes', 'Plan Item gates'],
+    out_of_scope: ['External tracker synchronization', 'Direct source object execution'],
   };
 }
 
@@ -424,7 +427,7 @@ export async function captureRouteScreenshot(page: Page, baseUrl: string, route:
   return {
     route: route.path,
     viewport: width,
-    seededProjectId: productArchitectureSeedId,
+    seededProjectId: productWorkspacePreviewSeedId,
     ...(selectedObjectId === undefined ? {} : { selectedObjectId }),
     screenshotPath,
     landmarks,
@@ -504,16 +507,16 @@ export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: Visual
   };
 }
 
-export async function writeProductArchitectureScreenshotReviewReport(
+export async function writeProductWorkspaceScreenshotReviewReport(
   records: ScreenshotReviewRecord[],
-): Promise<ProductArchitectureScreenshotReviewReport> {
-  const report: ProductArchitectureScreenshotReviewReport = {
+): Promise<ProductWorkspaceScreenshotReviewReport> {
+  const report: ProductWorkspaceScreenshotReviewReport = {
     records,
-    manualReviewChecklist: productArchitectureManualReviewChecklist(),
+    manualReviewChecklist: productWorkspaceManualReviewChecklist(),
   };
-  const reportPath = resolve('docs/superpowers/reports/product-architecture-visual-rebuild-review.md');
+  const reportPath = resolve('docs/superpowers/reports/product-workspace-core-surface-redesign-review.md');
   await mkdir(resolve('docs/superpowers/reports'), { recursive: true });
-  await writeFile(reportPath, productArchitectureScreenshotReviewMarkdown(report), 'utf8');
+  await writeFile(reportPath, productWorkspaceScreenshotReviewMarkdown(report), 'utf8');
   return report;
 }
 
@@ -578,7 +581,7 @@ async function tallestElementHeight(locator: Locator): Promise<number | undefine
   return heights.length === 0 ? undefined : Math.max(...heights);
 }
 
-function productArchitectureManualReviewChecklist(): ManualReviewChecklistRecord[] {
+function productWorkspaceManualReviewChecklist(): ManualReviewChecklistRecord[] {
   return [
     'Cockpit operational command center',
     'My Work role inbox',
@@ -587,7 +590,7 @@ function productArchitectureManualReviewChecklist(): ManualReviewChecklistRecord
     'Plan Item governed AI-native gate flow',
     'Spec and Execution Plan document review surfaces',
     'Reports intelligence surfaces',
-    'Removed `WorkspacePage` visual assumptions',
+    'Removed generic ProductPage visual assumptions',
     'Remaining empty states and rationale',
   ].map((item) => ({
     item,
@@ -596,7 +599,7 @@ function productArchitectureManualReviewChecklist(): ManualReviewChecklistRecord
   }));
 }
 
-function productArchitectureScreenshotReviewMarkdown(report: ProductArchitectureScreenshotReviewReport): string {
+function productWorkspaceScreenshotReviewMarkdown(report: ProductWorkspaceScreenshotReviewReport): string {
   const routeRows = report.records
     .map((record) => [
       markdownCell(record.route),
@@ -617,11 +620,11 @@ function productArchitectureScreenshotReviewMarkdown(report: ProductArchitecture
     .join('\n');
   const screenshotDirectory = relative(resolve('.'), resolve('test-results/ai-native-project-management'));
 
-  return `# Product Architecture Visual Rebuild Review
+  return `# Product Workspace Core Surface Redesign Review
 
 ## Seed
 
-- Seed: ${productArchitectureSeedId}
+- Seed: ${productWorkspacePreviewSeedId}
 - Screenshot directory: ${screenshotDirectory}
 - Records: ${report.records.length}
 - Viewports: ${[...new Set(report.records.map((record) => record.viewport))].sort((left, right) => left - right).join(', ')}

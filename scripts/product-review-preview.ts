@@ -3,16 +3,16 @@ import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { productArchitectureDemoSeedId } from '../apps/control-plane-api/src/modules/core/product-architecture-demo-seed';
+import { productWorkspacePreviewSeedId as controlPlaneProductWorkspacePreviewSeedId } from '../apps/control-plane-api/src/modules/core/product-workspace-preview-seed';
 
-export const productArchitectureSeedId = productArchitectureDemoSeedId;
+export const productWorkspacePreviewSeedId = controlPlaneProductWorkspacePreviewSeedId;
 
 export function productReviewPreviewEnv({ apiPort, webPort }: { apiPort: number; webPort: number }) {
   return {
-    FORGELOOP_DEMO_SEED_ID: productArchitectureSeedId,
+    FORGELOOP_PREVIEW_SEED_ID: productWorkspacePreviewSeedId,
     FORGELOOP_REPOSITORY_MODE: 'memory',
     VITE_FORGELOOP_API_URL: `http://127.0.0.1:${apiPort}`,
-    VITE_FORGELOOP_PROJECT_ID: productArchitectureSeedId,
+    VITE_FORGELOOP_PROJECT_ID: productWorkspacePreviewSeedId,
     VITE_FORGELOOP_QUERY_RETRY: 'false',
     FORGELOOP_WEB_PORT: String(webPort),
   } satisfies Record<string, string>;
@@ -34,7 +34,7 @@ export function productReviewPreviewProcessEnv(
 }
 
 export function renderProductReviewPreviewSummary({ apiUrl, webUrl }: { apiUrl: string; webUrl: string }) {
-  return [`Seed: ${productArchitectureSeedId}`, `API: ${apiUrl}`, `Web: ${webUrl}`].join('\n');
+  return [`Seed: ${productWorkspacePreviewSeedId}`, `API: ${apiUrl}`, `Web: ${webUrl}`].join('\n');
 }
 
 async function main() {

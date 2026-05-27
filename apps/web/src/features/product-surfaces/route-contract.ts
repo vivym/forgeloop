@@ -39,24 +39,25 @@ export interface ProductCommandItem {
 
 export const visualViewports = [1440, 1024, 768, 375] as const;
 
-const requirementId = 'req-plan-item-governance';
-const initiativeId = 'init-ai-native-rollout';
-const bugId = 'bug-execution-review-context';
-const techDebtId = 'td-retire-workspace-page-template';
-const developmentPlanId = 'dp-product-architecture-visual-rebuild';
-const boundaryItemId = 'dpi-development-plan-table-inspector';
-const reviewItemId = 'dpi-cockpit-command-center';
+const requirementId = 'req-product-workspace-clarity';
+const initiativeId = 'init-product-workspace-redesign';
+const bugId = 'bug-plan-item-action-eligibility';
+const techDebtId = 'td-retire-generic-product-page';
+const developmentPlanId = 'dp-product-workspace-core-surface-redesign';
+const boundaryItemId = 'dpi-typed-source-boundary';
+const reviewItemId = 'dpi-plan-item-gate-eligibility';
 const executionPlanItemId = 'dpi-requirements-database-view';
-const executionItemId = 'dpi-demo-seed-visual-review';
-const qaItemId = 'dpi-requirements-database-view';
-const executionId = 'exec-demo-seed-visual-review';
-const releaseId = 'rel-product-architecture-preview';
+const executionItemId = 'dpi-product-workspace-preview-state';
+const qaItemId = 'dpi-qa-shift-left-strategy';
+const executionId = 'exec-product-workspace-preview-active';
+const releaseId = 'rel-product-workspace-preview';
 
-const developmentPlanHeading = /^Project architecture and visual rebuild$/i;
-const cockpitItemHeading = /^Rebuild Cockpit into operational command center$/i;
+const developmentPlanHeading = /^Product workspace core surface redesign$/i;
+const actionEligibilityItemHeading = /^Enforce Plan Item action eligibility$/i;
 const requirementsDatabaseItemHeading = /^Replace Requirements list with database view$/i;
-const demoSeedItemHeading = /^Seed demo project state for visual review$/i;
-const developmentPlanTableItemHeading = /^Rewrite Development Plan table and inspector$/i;
+const productWorkspacePreviewItemHeading = /^Seed product workspace state for visual review$/i;
+const typedSourceBoundaryItemHeading = /^Define typed source workspace boundaries$/i;
+const qaShiftLeftItemHeading = /^Expose QA strategy before execution planning$/i;
 
 function productRoute(
   path: string,
@@ -114,21 +115,21 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
     `/development-plans/${developmentPlanId}/items/${reviewItemId}`,
     'Development Plan Item',
     'gate-flow',
-    cockpitItemHeading,
+    actionEligibilityItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/brainstorming',
     `/development-plans/${developmentPlanId}/items/${boundaryItemId}/brainstorming`,
     'Boundary Brainstorming',
     'gate-flow',
-    developmentPlanTableItemHeading,
+    typedSourceBoundaryItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/spec',
     `/development-plans/${developmentPlanId}/items/${reviewItemId}/spec`,
     'Spec',
     'document-review',
-    cockpitItemHeading,
+    actionEligibilityItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/execution-plan',
@@ -142,25 +143,25 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
     `/development-plans/${developmentPlanId}/items/${executionItemId}/execution`,
     'Execution',
     'execution-supervision',
-    demoSeedItemHeading,
+    productWorkspacePreviewItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/review',
     `/development-plans/${developmentPlanId}/items/${reviewItemId}/review`,
     'Code Review',
     'code-review',
-    cockpitItemHeading,
+    actionEligibilityItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/qa',
     `/development-plans/${developmentPlanId}/items/${qaItemId}/qa`,
     'QA Handoff',
     'qa-handoff',
-    requirementsDatabaseItemHeading,
+    qaShiftLeftItemHeading,
   ),
   productRoute('/specs-plans', '/specs-plans', 'Document Reviews', 'document-governance', /^Document Reviews$/i),
   productRoute('/executions', '/executions', 'Executions', 'execution-supervision', /^Executions$/i),
-  productRoute('/executions/:id', `/executions/${executionId}`, 'Execution', 'execution-supervision', demoSeedItemHeading),
+  productRoute('/executions/:id', `/executions/${executionId}`, 'Execution', 'execution-supervision', productWorkspacePreviewItemHeading),
   productRoute('/board', '/board', 'Board', 'delivery-board', /^Board$/i),
   productRoute('/releases', '/releases', 'Releases', 'release-readiness', /^Releases$/i),
   productRoute('/releases/:id', `/releases/${releaseId}`, 'Release', 'release-readiness', /Release/i),

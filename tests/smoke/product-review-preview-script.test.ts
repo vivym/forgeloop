@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getRequirementDetail } from '../../packages/db/src';
 
 import {
-  productArchitectureSeedId,
+  productWorkspacePreviewSeedId,
   productReviewPreviewEnv,
   productReviewPreviewProcessEnv,
   renderProductReviewPreviewSummary,
@@ -13,10 +13,10 @@ describe('product review preview script helpers', () => {
   it('builds deterministic product review preview environment', () => {
     const env = productReviewPreviewEnv({ apiPort: 58988, webPort: 58772 });
 
-    expect(env.FORGELOOP_DEMO_SEED_ID).toBe('project-product-architecture-demo');
+    expect(env.FORGELOOP_PREVIEW_SEED_ID).toBe('project-product-workspace-preview');
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.VITE_FORGELOOP_API_URL).toBe('http://127.0.0.1:58988');
-    expect(env.VITE_FORGELOOP_PROJECT_ID).toBe('project-product-architecture-demo');
+    expect(env.VITE_FORGELOOP_PROJECT_ID).toBe('project-product-workspace-preview');
     expect(env.VITE_FORGELOOP_QUERY_RETRY).toBe('false');
     expect(env.FORGELOOP_WEB_PORT).toBe('58772');
   });
@@ -27,7 +27,7 @@ describe('product review preview script helpers', () => {
         apiUrl: 'http://127.0.0.1:58988',
         webUrl: 'http://127.0.0.1:58772',
       }),
-    ).toContain('Seed: project-product-architecture-demo');
+    ).toContain('Seed: project-product-workspace-preview');
   });
 
   it('sanitizes parent database configuration before spawning preview services', () => {
@@ -49,21 +49,21 @@ describe('product review preview script helpers', () => {
 
   it('seeds the control-plane in-memory repository for product review preview', async () => {
     const repository = await createControlPlaneRepository({
-      FORGELOOP_DEMO_SEED_ID: productArchitectureSeedId,
+      FORGELOOP_PREVIEW_SEED_ID: productWorkspacePreviewSeedId,
       FORGELOOP_REPOSITORY_MODE: 'memory',
     } as NodeJS.ProcessEnv);
 
-    await expect(getRequirementDetail(repository, 'req-plan-item-governance')).resolves.toMatchObject({
-      id: 'req-plan-item-governance',
-      title: 'Plan Item governed Spec and Execution Plan generation',
+    await expect(getRequirementDetail(repository, 'req-product-workspace-clarity')).resolves.toMatchObject({
+      id: 'req-product-workspace-clarity',
+      title: 'Product workspace clarity and route-backed context',
     });
-    await expect(repository.getDevelopmentPlan('dp-product-architecture-visual-rebuild')).resolves.toMatchObject({
-      id: 'dp-product-architecture-visual-rebuild',
-      title: 'Project architecture and visual rebuild',
+    await expect(repository.getDevelopmentPlan('dp-product-workspace-core-surface-redesign')).resolves.toMatchObject({
+      id: 'dp-product-workspace-core-surface-redesign',
+      title: 'Product workspace core surface redesign',
     });
-    await expect(repository.getExecution('exec-demo-seed-visual-review')).resolves.toMatchObject({
-      id: 'exec-demo-seed-visual-review',
-      ref: { title: 'Codex worker is seeding visual review data' },
+    await expect(repository.getExecution('exec-product-workspace-preview-active')).resolves.toMatchObject({
+      id: 'exec-product-workspace-preview-active',
+      ref: { title: 'Codex worker is rebuilding product workspace preview data' },
     });
   });
 });

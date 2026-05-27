@@ -16,6 +16,7 @@ import {
   executionPackage,
   executionPlan,
   executionPlanRevision,
+  interruptedExecution,
   initiativeDetail,
   initiativeListResponse,
   myWorkQueueResponse,
@@ -23,7 +24,10 @@ import {
   planRevision,
   productDynamicRouteFixtureManifest,
   productLaneFixtureItemsByLane,
+  productWorkspaceDevelopmentPlanItems,
+  productWorkspaceDevelopmentPlans,
   projectId,
+  blockedQaHandoff,
   qaHandoff,
   release,
   releaseEvidenceRefs,
@@ -92,7 +96,7 @@ const cockpitPackageFor = (
 
 const routeProductActions = [
   {
-    id: 'open-product-architecture-requirement',
+    id: 'open-product-workspace-requirement',
     lane_id: 'requirements',
     priority: 'primary',
     label: 'Open requirement',
@@ -106,7 +110,7 @@ const routeProductActions = [
     },
   },
   {
-    id: 'run-product-architecture-package',
+    id: 'run-product-workspace-package',
     lane_id: 'requirements',
     priority: 'secondary',
     label: 'Run package',
@@ -234,13 +238,17 @@ const packageListItem = {
   updated_at: executionPackage.updated_at ?? '2026-05-18T00:00:00.000Z',
 };
 
-const developmentPlanItemRows = developmentPlan.items.map((item) => ({
+const developmentPlanItemRows = productWorkspaceDevelopmentPlanItems.map((item) => ({
   id: item.id,
   object_ref: {
     type: 'development_plan_item',
     id: item.id,
-    development_plan_id: developmentPlan.id,
+    development_plan_id: item.development_plan_id,
     title: item.title,
+  },
+  development_plan_ref: {
+    id: item.development_plan_id,
+    title: productWorkspaceDevelopmentPlans.find((plan) => plan.id === item.development_plan_id)?.title ?? developmentPlan.title,
   },
   title: item.title,
   responsible_role: item.responsible_role,
@@ -254,7 +262,7 @@ const developmentPlanItemRows = developmentPlan.items.map((item) => ({
   review_status: item.review_status,
   qa_handoff_status: item.qa_handoff_status,
   next_action: item.next_action,
-  href: `/development-plans/${developmentPlan.id}/items/${item.id}`,
+  href: `/development-plans/${item.development_plan_id}/items/${item.id}`,
 }));
 
 const developmentPlanItemResponseFor = (item: (typeof developmentPlan.items)[number]) => ({
@@ -265,7 +273,11 @@ const developmentPlanItemResponseFor = (item: (typeof developmentPlan.items)[num
     development_plan_id: developmentPlan.id,
     title: item.title,
   },
-  development_plan_ref: { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
+  development_plan_ref: {
+    type: 'development_plan',
+    id: item.development_plan_id,
+    title: productWorkspaceDevelopmentPlans.find((plan) => plan.id === item.development_plan_id)?.title ?? developmentPlan.title,
+  },
   source_ref: developmentPlan.source_refs[0],
   revisions: [],
   boundary_summary_revisions: [{
@@ -286,42 +298,42 @@ const developmentPlanItemResponseFor = (item: (typeof developmentPlan.items)[num
     item_revisions_href: `/development-plans/${developmentPlan.id}/items/${item.id}/revisions/compare`,
     boundary_summary_revisions_href: `/boundary-summaries/${boundarySummary.id}/revisions/compare`,
   },
-  href: `/development-plans/${developmentPlan.id}/items/${item.id}`,
+  href: `/development-plans/${item.development_plan_id}/items/${item.id}`,
 });
 
 const developmentPlanItemResponses = Object.fromEntries(
-  developmentPlan.items.map((item) => [
-    `GET /query/development-plans/${developmentPlan.id}/items/${item.id}`,
+  productWorkspaceDevelopmentPlanItems.map((item) => [
+    `GET /query/development-plans/${item.development_plan_id}/items/${item.id}`,
     developmentPlanItemResponseFor(item),
   ]),
 );
 
 const developmentPlanItemRevisionResponses = Object.fromEntries(
-  developmentPlan.items.map((item) => [
-    `GET /development-plans/${developmentPlan.id}/items/${item.id}/revisions`,
+  productWorkspaceDevelopmentPlanItems.map((item) => [
+    `GET /development-plans/${item.development_plan_id}/items/${item.id}/revisions`,
     [{ id: item.revision_id, development_plan_item_id: item.id, revision_number: 1, snapshot: item }],
   ]),
 );
 
 const developmentPlanItemSpecCompareResponses = Object.fromEntries(
-  developmentPlan.items.map((item) => [
-    `GET /development-plans/${developmentPlan.id}/items/${item.id}/spec/revisions/compare?base_revision_id=${specRevision.id}&compare_revision_id=${specRevision.id}`,
+  productWorkspaceDevelopmentPlanItems.map((item) => [
+    `GET /development-plans/${item.development_plan_id}/items/${item.id}/spec/revisions/compare?base_revision_id=${specRevision.id}&compare_revision_id=${specRevision.id}`,
     {
       base_revision_id: specRevision.id,
       compare_revision_id: specRevision.id,
-      summary: 'No Spec revision changes in seeded product architecture data.',
+      summary: 'No Spec revision changes in seeded product workspace data.',
       changed_sections: [],
     },
   ]),
 );
 
 const developmentPlanItemExecutionPlanCompareResponses = Object.fromEntries(
-  developmentPlan.items.map((item) => [
-    `GET /development-plans/${developmentPlan.id}/items/${item.id}/execution-plan/revisions/compare?base_revision_id=${executionPlanRevision.id}&compare_revision_id=${executionPlanRevision.id}`,
+  productWorkspaceDevelopmentPlanItems.map((item) => [
+    `GET /development-plans/${item.development_plan_id}/items/${item.id}/execution-plan/revisions/compare?base_revision_id=${executionPlanRevision.id}&compare_revision_id=${executionPlanRevision.id}`,
     {
       base_revision_id: executionPlanRevision.id,
       compare_revision_id: executionPlanRevision.id,
-      summary: 'No Execution Plan revision changes in seeded product architecture data.',
+      summary: 'No Execution Plan revision changes in seeded product workspace data.',
       changed_sections: [],
     },
   ]),
@@ -422,25 +434,23 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     degraded_sources: [],
   },
   [`GET /query/development-plans?project_id=${projectId}`]: {
-    items: [
-      {
-        id: developmentPlan.id,
-        object_ref: { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
-        title: developmentPlan.title,
-        status: developmentPlan.status,
-        source_refs: developmentPlan.source_refs,
-        item_count: developmentPlan.items.length,
-        blocked_count: developmentPlan.items.filter((item) => item.boundary_status === 'changes_requested' || item.spec_status === 'blocked' || item.execution_plan_status === 'blocked').length,
-        responsible_role: developmentPlanItem.responsible_role,
-        responsible_roles: [...new Set(developmentPlan.items.map((item) => item.responsible_role))],
-        gate_state: 'execution',
-        gate_states: ['boundary', 'spec', 'execution_plan', 'execution', 'review', 'qa'],
-        risk: developmentPlanItem.risk,
-        risks: [...new Set(developmentPlan.items.map((item) => item.risk))],
-        href: `/development-plans/${developmentPlan.id}`,
-        updated_at: developmentPlan.updated_at,
-      },
-    ],
+    items: productWorkspaceDevelopmentPlans.map((plan) => ({
+      id: plan.id,
+      object_ref: { type: 'development_plan', id: plan.id, title: plan.title },
+      title: plan.title,
+      status: plan.status,
+      source_refs: plan.source_refs,
+      item_count: plan.items.length,
+      blocked_count: plan.items.filter((item) => item.boundary_status === 'changes_requested' || item.spec_status === 'blocked' || item.execution_plan_status === 'blocked' || item.qa_handoff_status === 'blocked').length,
+      responsible_role: plan.items[0]?.responsible_role ?? developmentPlanItem.responsible_role,
+      responsible_roles: [...new Set(plan.items.map((item) => item.responsible_role))],
+      gate_state: 'execution',
+      gate_states: ['boundary', 'spec', 'execution_plan', 'execution', 'review', 'qa'],
+      risk: plan.items[0]?.risk ?? developmentPlanItem.risk,
+      risks: [...new Set(plan.items.map((item) => item.risk))],
+      href: `/development-plans/${plan.id}`,
+      updated_at: plan.updated_at,
+    })),
     degraded_sources: [],
   },
   [`GET /query/development-plans/${developmentPlan.id}`]: {
@@ -448,9 +458,20 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     object_ref: { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
     source_links: [],
     revisions: [],
-    items: developmentPlanItemRows,
+    items: developmentPlanItemRows.filter((item) => item.development_plan_ref.id === developmentPlan.id),
     href: `/development-plans/${developmentPlan.id}`,
   },
+  ...Object.fromEntries(productWorkspaceDevelopmentPlans.filter((plan) => plan.id !== developmentPlan.id).map((plan) => [
+    `GET /query/development-plans/${plan.id}`,
+    {
+      ...plan,
+      object_ref: { type: 'development_plan', id: plan.id, title: plan.title },
+      source_links: [],
+      revisions: [],
+      items: developmentPlanItemRows.filter((item) => item.development_plan_ref.id === plan.id),
+      href: `/development-plans/${plan.id}`,
+    },
+  ])),
   ...developmentPlanItemResponses,
   ...developmentPlanItemRevisionResponses,
   ...developmentPlanItemSpecCompareResponses,
@@ -557,14 +578,19 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     degraded_sources: [],
   },
   [`GET /query/executions?project_id=${projectId}`]: {
-    items: [{ ...execution, title: execution.ref.title, href: `/executions/${execution.id}`, last_event_at: execution.updated_at }],
+    items: [execution, interruptedExecution].map((item) => ({ ...item, title: item.ref.title, href: `/executions/${item.id}`, last_event_at: item.updated_at })),
     degraded_sources: [],
   },
   [`GET /query/executions?project_id=${projectId}&limit=100`]: {
-    items: [{ ...execution, title: execution.ref.title, href: `/executions/${execution.id}`, last_event_at: execution.updated_at }],
+    items: [execution, interruptedExecution].map((item) => ({ ...item, title: item.ref.title, href: `/executions/${item.id}`, last_event_at: item.updated_at })),
     degraded_sources: [],
   },
   [`GET /query/executions/${execution.id}`]: executionDetailResponse,
+  [`GET /query/executions/${interruptedExecution.id}`]: (() => {
+    const { title: _title, ...detail } = interruptedExecution;
+    void _title;
+    return detail;
+  })(),
   [`GET /query/code-review-handoffs?project_id=${projectId}`]: {
     items: [{ ...codeReviewHandoff, title: codeReviewHandoff.ref.title, href: `/executions/${execution.id}` }],
     degraded_sources: [],
@@ -578,15 +604,25 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     degraded_sources: [],
   },
   [`GET /query/qa-handoffs?project_id=${projectId}`]: {
-    items: [{ ...qaHandoff, title: qaHandoff.ref.title, href: `/executions/${execution.id}` }],
+    items: [
+      { ...qaHandoff, title: qaHandoff.ref.title, href: `/executions/${execution.id}` },
+      { ...blockedQaHandoff, title: blockedQaHandoff.ref.title, href: `/executions/${interruptedExecution.id}` },
+    ],
     degraded_sources: [],
   },
   [`GET /query/qa-handoffs?project_id=${projectId}&limit=100`]: {
-    items: [{ ...qaHandoff, title: qaHandoff.ref.title, href: `/executions/${execution.id}` }],
+    items: [
+      { ...qaHandoff, title: qaHandoff.ref.title, href: `/executions/${execution.id}` },
+      { ...blockedQaHandoff, title: blockedQaHandoff.ref.title, href: `/executions/${interruptedExecution.id}` },
+    ],
     degraded_sources: [],
   },
   [`GET /query/qa-handoffs?project_id=${projectId}&execution_id=${execution.id}&limit=100`]: {
     items: [{ ...qaHandoff, title: qaHandoff.ref.title, href: `/executions/${execution.id}` }],
+    degraded_sources: [],
+  },
+  [`GET /query/qa-handoffs?project_id=${projectId}&execution_id=${interruptedExecution.id}&limit=100`]: {
+    items: [{ ...blockedQaHandoff, title: blockedQaHandoff.ref.title, href: `/executions/${interruptedExecution.id}` }],
     degraded_sources: [],
   },
   [`GET /query/requirements?project_id=${projectId}`]: requirementListResponse,
@@ -603,7 +639,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /query/bugs/${bugDetail.id}`]: bugDetail,
   [`GET /query/board?project_id=${projectId}&limit=100`]: { items: boardCards },
   [`GET /query/reports?project_id=${projectId}&report=replay`]: () =>
-    new Response(JSON.stringify({ message: 'Replay report is dev-only in product architecture rebuild.' }), { status: 404 }),
+    new Response(JSON.stringify({ message: 'Replay report is dev-only in product workspace rebuild.' }), { status: 404 }),
   [`GET /query/reports/delivery?project_id=${projectId}&limit=100`]: reportFixtures.delivery,
   [`GET /query/reports/development-plan-throughput?project_id=${projectId}&limit=100`]: {
     ...reportFixtures.developmentPlanThroughput,
@@ -638,15 +674,15 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /run-sessions/${runSession.id}/events`]: {
     events: [
       {
-        id: 'event-demo-seed-visual-review-1',
+        id: 'event-product-workspace-preview-1',
         run_session_id: runSession.id,
         sequence: 1,
         cursor: '0000000001',
         event_type: 'agent_message',
         source: 'fixture',
         visibility: 'public',
-        summary: 'Demo seed visual review data passed deterministic checks.',
-        payload: { message: 'Demo seed visual review data passed deterministic checks.' },
+        summary: 'Product workspace preview visual review data passed deterministic checks.',
+        payload: { message: 'Product workspace preview visual review data passed deterministic checks.' },
         created_at: '2026-05-18T00:24:30.000Z',
       },
     ],
@@ -654,7 +690,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     has_more: false,
   },
   [`POST /run-sessions/${runSession.id}/events/stream-token`]: {
-    token: 'stream-token-demo-seed-visual-review',
+    token: 'stream-token-product-workspace-preview',
     expires_at: '2026-05-18T00:30:00.000Z',
   },
   [`POST /review-packets/${reviewPacket.id}/approve`]: {
@@ -711,7 +747,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     ]),
   ),
   [`POST /source-objects/requirement/${requirementDetail.id}/development-plans/${developmentPlan.id}/link`]: {
-    id: 'development-plan-source-link-product-architecture-demo',
+    id: 'development-plan-source-link-product-workspace-preview',
     development_plan_id: developmentPlan.id,
     source_ref: developmentPlan.source_refs[0],
   },
