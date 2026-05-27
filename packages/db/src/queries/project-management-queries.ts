@@ -78,6 +78,31 @@ type ExecutionRuntimeEvidenceProjection = {
   mounted_task_workspace_digest: string;
   changed_files: string[];
 };
+type DashboardCommandAction = {
+  href: string;
+  id: string;
+  kind:
+    | 'release_blocker'
+    | 'code_review_changes'
+    | 'qa_blocker'
+    | 'missing_execution_plan_approval'
+    | 'missing_spec_approval'
+    | 'resumable_execution'
+    | 'stale_context';
+  label: string;
+  next_action: string;
+  runtime?: { execution_id: string; resumable: boolean; state: string };
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  stage_id: 'boundary' | 'spec' | 'execution_plan' | 'execution' | 'code_review' | 'qa' | 'release';
+  typed_ref: ReturnType<typeof developmentPlanItemRef>;
+};
+type DashboardRuntimeSignal = {
+  execution_id: string;
+  href: string;
+  label: string;
+  resumable: boolean;
+  state: string;
+};
 type TypedSourceProjectionContext = {
   plans: DevelopmentPlan[];
   planItems: DevelopmentPlanItemWithPlan[];
@@ -347,11 +372,13 @@ export async function getDashboard(
         { label: 'QA accepted', value: qaHandoffs.filter(({ handoff }) => handoff.status === 'accepted').length },
       ]),
     ],
-    next_actions: [
-      { id: 'unblock-items', label: 'Unblock blocked items', href: '/my-work' },
-      { id: 'review-aging-artifacts', label: 'Review aging artifacts', href: '/reports/spec-review-aging' },
-      { id: 'continue-executions', label: 'Continue interrupted executions', href: '/reports/execution-continuation' },
-    ],
+    next_actions: dashboardCommandActions({
+      developmentPlanItems,
+      executions,
+      codeReviews,
+      qaHandoffs,
+    }),
+    runtime_signals: dashboardRuntimeSignals(executions),
     report_links: reportLinks(),
     degraded_sources: [],
   };
@@ -662,6 +689,179 @@ async function listQaHandoffsForProject(repository: DeliveryRepository, projectI
     }
   }
   return rows.sort((left, right) => right.handoff.updated_at.localeCompare(left.handoff.updated_at));
+}
+
+function dashboardCommandActions({
+  codeReviews,
+  developmentPlanItems,
+  executions,
+  qaHandoffs,
+}: {
+  codeReviews: readonly CodeReviewWithContext[];
+  developmentPlanItems: readonly DevelopmentPlanItemWithPlan[];
+  executions: readonly ExecutionWithContext[];
+  qaHandoffs: readonly QaWithContext[];
+}): DashboardCommandAction[] {
+  const releaseBlockers = developmentPlanItems
+    .filter(({ item }) => item.release_impact === 'release_blocking' && isDevelopmentPlanItemBlocked(item))
+    .map(({ item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `release-blocker:${item.id}`,
+        item,
+        kind: 'release_blocker',
+        label: item.title,
+        next_action: item.next_action,
+        plan,
+        severity: 'critical',
+        stage_id: 'release',
+      }),
+    );
+  const reviewChanges = codeReviews
+    .filter(({ handoff }) => handoff.status === 'changes_requested')
+    .map(({ handoff, item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `code-review:${handoff.id}`,
+        item,
+        kind: 'code_review_changes',
+        label: handoff.ref.title ?? `${item.title} code review`,
+        next_action: handoff.decision_rationale ?? handoff.summary,
+        plan,
+        severity: 'high',
+        stage_id: 'code_review',
+      }),
+    );
+  const qaBlockers = qaHandoffs
+    .filter(({ handoff }) => handoff.status === 'blocked' || handoff.status === 'pending')
+    .map(({ handoff, item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `qa:${handoff.id}`,
+        item,
+        kind: 'qa_blocker',
+        label: handoff.ref.title ?? `${item.title} QA handoff`,
+        next_action: handoff.rationale ?? handoff.known_risks[0] ?? handoff.test_strategy,
+        plan,
+        severity: handoff.status === 'blocked' ? 'high' : 'medium',
+        stage_id: 'qa',
+      }),
+    );
+  const missingSpecApprovals = developmentPlanItems
+    .filter(({ item }) => item.spec_status === 'blocked' || item.spec_status === 'changes_requested' || item.spec_status === 'in_review')
+    .map(({ item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `spec:${item.id}`,
+        item,
+        kind: 'missing_spec_approval',
+        label: item.title,
+        next_action: item.next_action,
+        plan,
+        severity: item.spec_status === 'in_review' ? 'medium' : 'high',
+        stage_id: 'spec',
+      }),
+    );
+  const missingExecutionPlanApprovals = developmentPlanItems
+    .filter(({ item }) =>
+      item.execution_plan_status === 'blocked' ||
+      item.execution_plan_status === 'changes_requested' ||
+      item.execution_plan_status === 'in_review',
+    )
+    .map(({ item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `execution-plan:${item.id}`,
+        item,
+        kind: 'missing_execution_plan_approval',
+        label: item.title,
+        next_action: item.next_action,
+        plan,
+        severity: item.execution_plan_status === 'in_review' ? 'medium' : 'high',
+        stage_id: 'execution_plan',
+      }),
+    );
+  const resumableExecutions = executions
+    .filter(({ execution }) => execution.status === 'interrupted' || execution.status === 'paused')
+    .map(({ execution, item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        href: `/executions/${execution.id}`,
+        id: `execution:${execution.id}`,
+        item,
+        kind: 'resumable_execution',
+        label: execution.ref.title ?? `${item.title} execution`,
+        next_action: execution.current_step ?? executionLastEventSummary(execution),
+        plan,
+        runtime: { execution_id: execution.id, resumable: true, state: execution.status },
+        severity: 'medium',
+        stage_id: 'execution',
+      }),
+    );
+
+  return uniqueDashboardActions([
+    ...releaseBlockers,
+    ...reviewChanges,
+    ...qaBlockers,
+    ...missingSpecApprovals,
+    ...missingExecutionPlanApprovals,
+    ...resumableExecutions,
+  ]).slice(0, 7);
+}
+
+function dashboardRuntimeSignals(executions: readonly ExecutionWithContext[]): DashboardRuntimeSignal[] {
+  return executions
+    .filter(({ execution }) => execution.status === 'interrupted' || execution.status === 'paused' || execution.status === 'running')
+    .map(({ execution, item }) => ({
+      execution_id: execution.id,
+      href: `/executions/${execution.id}`,
+      label: execution.ref.title ?? `${item.title} execution`,
+      resumable: execution.status === 'interrupted' || execution.status === 'paused',
+      state: execution.status,
+    }))
+    .slice(0, 4);
+}
+
+function dashboardDevelopmentPlanItemAction({
+  href,
+  id,
+  item,
+  kind,
+  label,
+  next_action,
+  plan,
+  runtime,
+  severity,
+  stage_id,
+}: {
+  href?: string;
+  id: string;
+  item: DevelopmentPlanItem;
+  kind: DashboardCommandAction['kind'];
+  label: string;
+  next_action: string;
+  plan: DevelopmentPlan;
+  runtime?: DashboardCommandAction['runtime'];
+  severity: DashboardCommandAction['severity'];
+  stage_id: DashboardCommandAction['stage_id'];
+}): DashboardCommandAction {
+  return {
+    href: href ?? `/development-plans/${plan.id}/items/${item.id}`,
+    id,
+    kind,
+    label,
+    next_action,
+    runtime,
+    severity,
+    stage_id,
+    typed_ref: developmentPlanItemRef(item),
+  };
+}
+
+function uniqueDashboardActions(actions: readonly DashboardCommandAction[]): DashboardCommandAction[] {
+  const seen = new Set<string>();
+  const uniqueActions: DashboardCommandAction[] = [];
+  for (const action of actions) {
+    const key = `${action.kind}:${action.typed_ref.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueActions.push(action);
+  }
+  return uniqueActions;
 }
 
 async function itemContextFor(

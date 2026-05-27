@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { firstViewportContract } from '../../apps/web/src/features/product-surfaces/first-viewport-contract';
 import { developmentPlan, developmentPlanItem, execution, release, requirementListItem } from './fixtures/product-data';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 import { renderRoute } from './router-test-utils';
+
+const retiredOwnerLabel = ['Work Item', 'Owner'].join(' ');
 
 function FixturePage() {
   return (
@@ -27,13 +29,30 @@ describe('product-grade first viewport contract', () => {
   });
 
   it('requires the Cockpit route to expose the shared first-viewport contract', async () => {
+    const genericReportLabelPattern = `${['Report', '1'].join(' ')}|${['Report', '2'].join(' ')}|${['report', 'follow-up'].join(' ')}`;
     const rendered = await renderRoute('/cockpit');
 
     expect(await rendered.findByRole('heading', { name: 'Cockpit' })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'cockpit', heading: 'Cockpit' });
     expect(document.querySelector('[data-page-family="cockpit"]')).toBeTruthy();
+    expect(document.querySelector('[data-product-shell="cockpit-command-center"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-cockpit-command-strip]')?.textContent).toMatch(/role lens|runtime|command/i);
+    expect(rendered.getByRole('searchbox', { name: /cockpit command search/i })).toBeTruthy();
+    expect(rendered.getByText(/create \/ action/i)).toBeTruthy();
     expect(document.querySelector('[data-attention-queue][data-primary-work-surface]')).toBeTruthy();
+    expect(document.querySelector('[data-attention-queue]')?.textContent).toMatch(/release blocker|code-review|QA|Spec|Codex/i);
+    expect(document.querySelector('[data-flow-strip]')?.textContent).toMatch(/Spec|Execution Plan|QA|Release/i);
+    expect(document.querySelector('[data-risk-readiness-rail]')?.textContent).toMatch(/risk|readiness|release blocker|code-review|QA/i);
+    expect(document.querySelector('[data-runtime-status]')?.textContent).toMatch(/active|resumable|Codex/i);
+    const runtimeStatus = document.querySelector('[data-runtime-status]');
+    expect(runtimeStatus).toBeInstanceOf(HTMLElement);
+    await waitFor(() =>
+      expect(within(runtimeStatus as HTMLElement).getByRole('link', { name: /resume interrupted codex execution/i }).getAttribute('href')).toContain(
+        '/executions/exec-release-risk-closure-interrupted',
+      ),
+    );
     expect(document.querySelector('[data-first-viewport]')).toBeNull();
+    expect(document.body.textContent).not.toMatch(new RegExp(`${retiredOwnerLabel}|${genericReportLabelPattern}`, 'i'));
   });
 
   it('requires the My Work route to expose the queue first-viewport contract', async () => {

@@ -352,7 +352,37 @@ describe('project management query API', () => {
         expect.objectContaining({ id: 'role-load' }),
         expect.objectContaining({ id: 'release-confidence' }),
       ]),
+      next_actions: expect.arrayContaining([
+        expect.objectContaining({
+          href: `/development-plans/${developmentPlan.id}/items/${item.id}`,
+          kind: 'qa_blocker',
+          next_action: 'Acceptance evidence is incomplete.',
+          stage_id: 'qa',
+          typed_ref: expect.objectContaining({
+            type: 'development_plan_item',
+            id: item.id,
+            development_plan_id: developmentPlan.id,
+          }),
+        }),
+      ]),
+      runtime_signals: expect.any(Array),
     });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await repository.saveExecution({ ...execution, id: `${execution.id}-running`, status: 'running', updated_at: '2026-05-28T00:00:00.000Z' });
+    const dashboardWithRunningExecution = await request(server).get('/query/dashboard').query(query).expect(200);
+    expect(dashboardWithRunningExecution.body.runtime_signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: `${execution.id}-running`,
+          href: `/executions/${execution.id}-running`,
+          resumable: false,
+          state: 'running',
+        }),
+      ]),
+    );
+    expect(dashboard.body.next_actions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'continue-executions' })]),
+    );
 
     const developmentPlans = await request(server).get('/query/development-plans').query(query).expect(200);
     expect(developmentPlans.body.items).toEqual(

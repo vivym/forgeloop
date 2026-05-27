@@ -92,6 +92,7 @@ const dashboardResponseSchema = z
     project_id: z.string(),
     sections: z.array(z.record(z.string(), z.unknown())).default([]),
     next_actions: z.array(z.record(z.string(), z.unknown())).default([]),
+    runtime_signals: z.array(z.record(z.string(), z.unknown())).default([]),
     report_links: z.array(z.record(z.string(), z.unknown())).default([]),
     degraded_sources: z.array(z.string()).default([]),
   })

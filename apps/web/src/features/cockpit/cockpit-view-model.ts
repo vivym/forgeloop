@@ -8,13 +8,84 @@ type DashboardSection = {
   metrics?: readonly { label?: string; value?: unknown }[];
 };
 type DashboardAction = { id?: string; label?: string; href?: string; enabled?: boolean };
+type CockpitCommandRef = { type?: string; id?: string; title?: string };
+type CockpitCommandRuntime = { execution_id?: string; state?: string; resumable?: boolean };
+type DashboardCommandAction = DashboardAction & {
+  kind?: string;
+  next_action?: string;
+  runtime?: CockpitCommandRuntime;
+  severity?: string;
+  stage_id?: string;
+  typed_ref?: CockpitCommandRef;
+};
+type DashboardRuntimeSignal = Record<string, unknown>;
+type CockpitRoleLens = {
+  actor_id?: string;
+  available?: readonly { id: string; label: string }[];
+  label?: string;
+  selected?: string;
+};
 
 interface DashboardCockpitProjection {
   project_id: string;
   sections?: readonly DashboardSection[];
-  next_actions?: readonly DashboardAction[];
+  next_actions?: readonly DashboardCommandAction[];
+  runtime_signals?: readonly DashboardRuntimeSignal[];
   report_links?: readonly DashboardAction[];
   degraded_sources?: readonly string[];
+  role_lens?: CockpitRoleLens;
+}
+
+export type CockpitAttentionItem = {
+  href?: string;
+  id: string;
+  kind: string;
+  label: string;
+  next_action: string;
+  severity: string;
+  stage_id?: string;
+  typed_ref: { type: 'requirement' | 'bug' | 'tech_debt' | 'initiative' | 'development_plan_item'; id: string; title?: string };
+};
+
+export type CockpitFlowStage = {
+  count: number;
+  id: 'boundary' | 'spec' | 'execution_plan' | 'execution' | 'code_review' | 'qa' | 'release';
+  label: string;
+};
+
+export type CockpitRiskRailItem = {
+  href?: string;
+  kind: string;
+  label: string;
+  severity: string;
+  summary: string;
+};
+
+export type CockpitRuntimeSignal = {
+  execution_id: string;
+  href?: string;
+  label: string;
+  resumable: boolean;
+  state: string;
+};
+
+export type CockpitDegradedState = {
+  label: string;
+  source: string;
+};
+
+export interface CockpitCommandCenterViewModel extends ProductPageViewModel {
+  attentionItems: CockpitAttentionItem[];
+  degradedStates: CockpitDegradedState[];
+  flowStrip: CockpitFlowStage[];
+  riskRail: CockpitRiskRailItem[];
+  roleLens: {
+    actor_id?: string;
+    available: readonly { id: string; label: string }[];
+    label: string;
+    selected: string;
+  };
+  runtimeSignals: CockpitRuntimeSignal[];
 }
 
 export interface DashboardCockpitViewModel extends ProductPageViewModel {
@@ -121,6 +192,290 @@ export function dashboardCockpitViewModel(cockpit: DashboardCockpitProjection): 
     qaReleaseAttentionItems: qaReleaseItems(sections, roleSelectedQueue),
     compactHealthIndicators,
   };
+}
+
+export function cockpitCommandCenterViewModel(cockpit: DashboardCockpitProjection): CockpitCommandCenterViewModel {
+  const degradedSources = cockpit.degraded_sources ?? [];
+  const attentionItems = priorityAttentionItems(cockpit.next_actions);
+  const flowStrip = commandFlowStrip(cockpit.sections, attentionItems);
+  const riskRail = commandRiskRail(attentionItems, cockpit.sections, degradedSources);
+  const runtimeSignals = commandRuntimeSignals(cockpit.runtime_signals, cockpit.next_actions);
+  const roleLens = commandRoleLens(cockpit.role_lens);
+  const degradedStates = degradedSources.map((source) => ({ source, label: readableSource(source) }));
+  const nextAction = attentionItems[0]?.next_action ?? 'Review command center queue';
+
+  return {
+    objectLabel: 'Cockpit',
+    objectType: 'Command Center',
+    currentState: degradedStates.length > 0 ? 'Degraded cockpit signal' : 'Command center current',
+    nextAction,
+    disabledReason: degradedStates[0]?.label,
+    primaryActorOrRole: roleLens.label,
+    riskSignal: riskRail[0]?.summary ?? 'No release blocker signal',
+    gateProgress: flowStrip.map((stage) => ({ label: stage.label, state: `${stage.count} item(s)` })),
+    criticalEvidence: degradedStates.length > 0
+      ? [{ label: 'Cockpit source freshness', state: 'stale', compactText: degradedStates.map((state) => state.label).join(', ') }]
+      : [{ label: 'Cockpit source freshness', state: 'available', compactText: 'Signals current' }],
+    secondaryMetadata: [
+      { label: 'Role lens', value: roleLens.label },
+      { label: 'Priority attention', value: String(attentionItems.length) },
+      { label: 'Runtime signals', value: String(runtimeSignals.length) },
+    ],
+    previewSummary: `${attentionItems.length} priority attention item(s), ${riskRail.length} rail signal(s)`,
+    timelineSummary: degradedStates.length > 0 ? `Degraded sources: ${degradedSources.join(', ')}` : 'Cockpit projection current',
+    attentionItems,
+    degradedStates,
+    flowStrip,
+    riskRail,
+    roleLens,
+    runtimeSignals,
+  };
+}
+
+function priorityAttentionItems(
+  nextActions: readonly DashboardCommandAction[] | undefined,
+): CockpitAttentionItem[] {
+  const explicitItems = (nextActions ?? [])
+    .map((action, index) => attentionItemFromAction(action, index))
+    .filter((item): item is CockpitAttentionItem => item !== undefined);
+
+  return uniqueById(explicitItems)
+    .sort((left, right) => attentionRank(left) - attentionRank(right))
+    .slice(0, 7);
+}
+
+function attentionItemFromAction(action: DashboardCommandAction, index: number): CockpitAttentionItem | undefined {
+  const label = action.label?.trim();
+  const nextAction = action.next_action?.trim();
+  if (label === undefined || label.length === 0 || nextAction === undefined || isGenericReportAttention(label, action.id)) return undefined;
+
+  const kind = normalizeAttentionKind(action.kind);
+  if (kind === undefined) return undefined;
+  if (kind === 'resumable_execution' && action.runtime === undefined) return undefined;
+  const typedRef = typedAttentionRef(action.typed_ref);
+  if (typedRef === undefined) return undefined;
+
+  const href = safeProductHref(action.href);
+  const stageId = normalizeStageId(action.stage_id ?? kind);
+  return {
+    ...(href === undefined ? {} : { href }),
+    id: action.id ?? `attention-${index + 1}`,
+    kind,
+    label,
+    next_action: nextAction,
+    severity: action.severity ?? inferSeverity(kind),
+    ...(stageId === undefined ? {} : { stage_id: stageId }),
+    typed_ref: typedRef,
+  };
+}
+
+function commandFlowStrip(
+  sections: readonly DashboardSection[] | undefined,
+  attentionItems: readonly CockpitAttentionItem[],
+): CockpitFlowStage[] {
+  return [
+    { id: 'boundary', label: 'Boundary', count: flowStageCount('boundary', sections, attentionItems) },
+    { id: 'spec', label: 'Spec', count: flowStageCount('spec', sections, attentionItems) },
+    { id: 'execution_plan', label: 'Execution Plan', count: flowStageCount('execution_plan', sections, attentionItems) },
+    { id: 'execution', label: 'Execution', count: flowStageCount('execution', sections, attentionItems) },
+    { id: 'code_review', label: 'Code Review', count: flowStageCount('code_review', sections, attentionItems) },
+    { id: 'qa', label: 'QA', count: flowStageCount('qa', sections, attentionItems) },
+    { id: 'release', label: 'Release', count: flowStageCount('release', sections, attentionItems) },
+  ];
+}
+
+function flowStageCount(
+  stageId: CockpitFlowStage['id'],
+  sections: readonly DashboardSection[] | undefined,
+  attentionItems: readonly CockpitAttentionItem[],
+): number {
+  const sectionCount = (sections ?? []).reduce((total, section) => {
+    const id = normalizeStageId(`${section.id ?? ''} ${section.label ?? ''}`);
+    return id === stageId ? total + asNumber(section.value) : total;
+  }, 0);
+  const attentionCount = attentionItems.filter((item) => normalizeStageId(item.stage_id ?? item.kind) === stageId).length;
+  return Math.max(sectionCount, attentionCount);
+}
+
+function commandRiskRail(
+  attentionItems: readonly CockpitAttentionItem[],
+  sections: readonly DashboardSection[] | undefined,
+  degradedSources: readonly string[],
+): CockpitRiskRailItem[] {
+  const releaseBlockers = attentionItems.filter((item) => item.kind === 'release_blocker');
+  const blockerItems = releaseBlockers.map((item) => ({
+    href: item.href,
+    kind: 'release_blocker',
+    label: item.label,
+    severity: item.severity,
+    summary: item.next_action,
+  }));
+  const reviewAgingItems = attentionItems
+    .filter((item) => item.kind === 'code_review_changes')
+    .map((item) => ({
+      href: item.href,
+      kind: 'review_aging',
+      label: item.label,
+      severity: item.severity,
+      summary: item.next_action,
+    }));
+  const qaBlockerItems = attentionItems
+    .filter((item) => item.kind === 'qa_blocker')
+    .map((item) => ({
+      href: item.href,
+      kind: 'qa_blocker',
+      label: item.label,
+      severity: item.severity,
+      summary: item.next_action,
+    }));
+  const riskCount = sectionNumericValue(sections ?? [], 'risk-concentration');
+  const degradedItems = degradedSources.map((source) => ({
+    kind: 'stale_context',
+    label: readableSource(source),
+    severity: 'low',
+    summary: 'Cockpit source is stale or partially unavailable.',
+  }));
+  const riskConcentration = riskCount > 0
+    ? [{ kind: 'risk_concentration', label: 'Risk concentration', severity: 'medium', summary: `${riskCount} concentrated risk signal(s)` }]
+    : [];
+  return [...blockerItems, ...reviewAgingItems, ...qaBlockerItems, ...riskConcentration, ...degradedItems].slice(0, 6);
+}
+
+function commandRuntimeSignals(
+  runtimeSignals: readonly DashboardRuntimeSignal[] | undefined,
+  nextActions: readonly DashboardCommandAction[] | undefined,
+): CockpitRuntimeSignal[] {
+  const explicitRuntimeSignals = (runtimeSignals ?? [])
+    .map((signal) => {
+      const executionId = typeof signal.execution_id === 'string' ? signal.execution_id : undefined;
+      const label = typeof signal.label === 'string' ? signal.label : undefined;
+      const state = typeof signal.state === 'string' ? signal.state : undefined;
+      if (executionId === undefined || label === undefined || state === undefined) return undefined;
+      const href = typeof signal.href === 'string' ? safeProductHref(signal.href) : undefined;
+      return {
+        execution_id: executionId,
+        ...(href === undefined ? {} : { href }),
+        label,
+        resumable: signal.resumable === true,
+        state,
+      };
+    })
+    .filter((signal): signal is CockpitRuntimeSignal => signal !== undefined);
+  const legacyActionRuntimeSignals = (nextActions ?? [])
+    .filter((action) => action.kind === 'resumable_execution' && action.runtime !== undefined)
+    .map((action, index) => {
+      const href = safeProductHref(action.href);
+      return {
+        execution_id: action.runtime?.execution_id ?? action.id ?? `execution-${index + 1}`,
+        ...(href === undefined ? {} : { href }),
+        label: action.label ?? 'Codex execution',
+        resumable: action.runtime?.resumable === true,
+        state: action.runtime?.state ?? 'unknown',
+      };
+    });
+  return uniqueBy([...explicitRuntimeSignals, ...legacyActionRuntimeSignals], (signal) => signal.execution_id).slice(0, 4);
+}
+
+function commandRoleLens(roleLens: CockpitRoleLens | undefined): CockpitCommandCenterViewModel['roleLens'] {
+  return {
+    ...(roleLens?.actor_id === undefined ? {} : { actor_id: roleLens.actor_id }),
+    available: roleLens?.available ?? [
+      { id: 'driver_actor_id', label: 'Driver' },
+      { id: 'execution_owner_actor_id', label: 'Execution owner' },
+      { id: 'reviewer_actor_id', label: 'Reviewer' },
+      { id: 'qa_owner_actor_id', label: 'QA owner' },
+      { id: 'release_owner_actor_id', label: 'Release owner' },
+    ],
+    label: roleLens?.label ?? 'Role lens: all delivery roles',
+    selected: roleLens?.selected ?? 'all',
+  };
+}
+
+function attentionRank(item: CockpitAttentionItem): number {
+  if (item.kind === 'release_blocker') return 0;
+  if (item.kind === 'code_review_changes') return 1;
+  if (item.kind === 'qa_blocker') return 2;
+  if (item.kind === 'missing_spec_approval' || item.kind === 'missing_execution_plan_approval') return 3;
+  if (item.kind === 'resumable_execution') return 4;
+  if (item.kind === 'stale_context') return 5;
+  return 6;
+}
+
+function normalizeAttentionKind(kind: string | undefined): string | undefined {
+  if (
+    kind === 'release_blocker'
+    || kind === 'code_review_changes'
+    || kind === 'qa_blocker'
+    || kind === 'missing_execution_plan_approval'
+    || kind === 'missing_spec_approval'
+    || kind === 'resumable_execution'
+    || kind === 'stale_context'
+  ) {
+    return kind;
+  }
+  return undefined;
+}
+
+function inferSeverity(kind: string): string {
+  if (kind === 'release_blocker') return 'critical';
+  if (kind === 'code_review_changes' || kind === 'qa_blocker') return 'high';
+  if (kind === 'missing_spec_approval' || kind === 'missing_execution_plan_approval' || kind === 'resumable_execution') return 'medium';
+  return 'low';
+}
+
+function typedAttentionRef(
+  ref: CockpitCommandRef | undefined,
+): CockpitAttentionItem['typed_ref'] | undefined {
+  const type = normalizeTypedRefType(ref?.type);
+  if (type === undefined || ref?.id === undefined || ref.id.length === 0) return undefined;
+  return {
+    type,
+    id: ref.id,
+    ...(ref.title === undefined ? {} : { title: ref.title }),
+  };
+}
+
+function normalizeTypedRefType(type: string | undefined): CockpitAttentionItem['typed_ref']['type'] | undefined {
+  if (type === 'requirement' || type === 'bug' || type === 'tech_debt' || type === 'initiative' || type === 'development_plan_item') return type;
+  return undefined;
+}
+
+function normalizeStageId(value: string): CockpitFlowStage['id'] | undefined {
+  const text = value.toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+  if (text.includes('execution_plan') || text.includes('plan_approval')) return 'execution_plan';
+  if (text.includes('code_review') || text.includes('review_changes')) return 'code_review';
+  if (text.includes('boundary')) return 'boundary';
+  if (text.includes('spec')) return 'spec';
+  if (text.includes('execution') || text.includes('codex')) return 'execution';
+  if (text.includes('qa') || text.includes('quality')) return 'qa';
+  if (text.includes('release')) return 'release';
+  return undefined;
+}
+
+function isGenericReportAttention(label: string, id: string | undefined): boolean {
+  const followUpLabelPattern = new RegExp(['report', 'follow-up'].join(' '), 'i');
+  const followUpIdPattern = new RegExp(['report', 'follow-up'].join('-'), 'i');
+  return /^report\s+\d+$/i.test(label) || followUpLabelPattern.test(label) || followUpIdPattern.test(id ?? '');
+}
+
+function readableSource(source: string): string {
+  return source.replaceAll(':', ' ').replaceAll('_', ' ');
+}
+
+function uniqueById<T extends { id: string }>(items: readonly T[]): T[] {
+  return uniqueBy(items, (item) => item.id);
+}
+
+function uniqueBy<T>(items: readonly T[], keyForItem: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const uniqueItems: T[] = [];
+  for (const item of items) {
+    const key = keyForItem(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueItems.push(item);
+  }
+  return uniqueItems;
 }
 
 function gateProgress(stages: readonly CockpitStage[] | undefined): ViewModelGate[] {

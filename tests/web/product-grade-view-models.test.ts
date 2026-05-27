@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cockpitViewModel } from '../../apps/web/src/features/cockpit/cockpit-view-model';
+import { cockpitCommandCenterViewModel, cockpitViewModel } from '../../apps/web/src/features/cockpit/cockpit-view-model';
 import {
   developmentPlanItemViewModel,
   developmentPlanViewModel,
@@ -88,6 +88,239 @@ describe('product-grade presentation view models', () => {
       previewSummary: expect.any(String),
       timelineSummary: expect.any(String),
     });
+  });
+
+  it('projects Cockpit command center attention, role lens, flow, risk, runtime, and real degradation signals', () => {
+    const genericReportLabel = (index: number) => ['Report', String(index)].join(' ');
+    const genericReportFollowUpLabel = ['Report', 'follow-up'].join(' ');
+    const realActions = [
+      {
+        id: 'close-release-blocker',
+        label: 'Close release blocker evidence',
+        href: `/development-plans/${developmentPlan.id}/items/dpi-release-risk-closure`,
+        typed_ref: { type: 'development_plan_item', id: 'dpi-release-risk-closure', title: 'Close release blocker evidence' },
+        kind: 'release_blocker',
+        severity: 'critical',
+        stage_id: 'release',
+        next_action: 'Resolve QA blocker before release readiness clears',
+      },
+      {
+        id: 'requested-review-changes',
+        label: 'Requested code-review changes',
+        href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+        typed_ref: { type: 'development_plan_item', id: developmentPlanItem.id, title: developmentPlanItem.title },
+        kind: 'code_review_changes',
+        severity: 'high',
+        stage_id: 'code_review',
+        next_action: 'Address requested code-review changes',
+      },
+      {
+        id: 'qa-release-impact',
+        label: 'QA pending release-impacting handoff',
+        href: `/development-plans/${developmentPlan.id}/items/dpi-qa-shift-left-strategy`,
+        typed_ref: { type: 'requirement', id: 'req-qa-shift-left', title: 'QA shift-left strategy' },
+        kind: 'qa_blocker',
+        severity: 'high',
+        stage_id: 'qa',
+        next_action: 'Record QA owner acceptance',
+      },
+      {
+        id: 'missing-spec-approval',
+        label: 'Missing Spec approval',
+        href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
+        typed_ref: { type: 'development_plan_item', id: developmentPlanItem.id, title: developmentPlanItem.title },
+        kind: 'missing_spec_approval',
+        severity: 'medium',
+        stage_id: 'spec',
+        next_action: 'Approve Spec revision before execution planning',
+      },
+      {
+        id: 'resume-interrupted-execution',
+        label: 'Resume interrupted Codex execution',
+        href: '/executions/exec-release-risk-closure-interrupted',
+        typed_ref: { type: 'development_plan_item', id: 'dpi-release-risk-closure', title: 'Close release blocker evidence' },
+        kind: 'resumable_execution',
+        severity: 'medium',
+        stage_id: 'execution',
+        next_action: 'Resume Codex execution after blocker ownership is clear',
+        runtime: { state: 'interrupted', resumable: true, execution_id: 'exec-release-risk-closure-interrupted' },
+      },
+      {
+        id: 'stale-context',
+        label: 'Refresh stale delivery context',
+        typed_ref: { type: 'initiative', id: 'init-product-workspace', title: 'Product workspace redesign' },
+        kind: 'stale_context',
+        severity: 'low',
+        stage_id: 'boundary',
+        next_action: 'Refresh stale cockpit source context',
+      },
+    ] as const;
+    const model = cockpitCommandCenterViewModel({
+      project_id: projectId,
+      role_lens: {
+        selected: 'release_owner_actor_id',
+        label: 'Release owner',
+        actor_id: 'actor-release',
+        available: [
+          { id: 'driver_actor_id', label: 'Driver' },
+          { id: 'reviewer_actor_id', label: 'Reviewer' },
+          { id: 'release_owner_actor_id', label: 'Release owner' },
+        ],
+      },
+      sections: [
+        { id: 'flow-health', label: 'Flow Health', value: 6 },
+        { id: 'spec', label: 'Spec', value: 2 },
+        { id: 'execution-plan', label: 'Execution Plan', value: 1 },
+        { id: 'release-confidence', label: 'Release Confidence', value: 1 },
+      ],
+      next_actions: [
+        ...realActions,
+        {
+          id: 'report-1',
+          label: genericReportLabel(1),
+          href: '/reports',
+          next_action: 'Open generic report',
+        },
+      ],
+      runtime_signals: [
+        {
+          execution_id: 'exec-release-risk-closure-interrupted',
+          href: '/executions/exec-release-risk-closure-interrupted',
+          label: 'Resume interrupted Codex execution',
+          resumable: true,
+          state: 'interrupted',
+        },
+      ],
+      report_links: [
+        { id: 'report-2', label: genericReportLabel(2), href: '/reports' },
+        { id: 'report-follow-up', label: genericReportFollowUpLabel, href: '/reports/delivery' },
+      ],
+      degraded_sources: ['dashboard:stale_context'],
+    });
+
+    expect(model.attentionItems.length).toBeGreaterThanOrEqual(3);
+    expect(model.attentionItems.length).toBeLessThanOrEqual(7);
+    expect(model.attentionItems[0]).toMatchObject({
+      kind: 'release_blocker',
+      typed_ref: expect.objectContaining({ type: expect.stringMatching(/requirement|bug|tech_debt|initiative|development_plan_item/) }),
+      next_action: expect.any(String),
+      severity: expect.any(String),
+    });
+    expect(model.attentionItems.map((item) => item.label)).not.toEqual(
+      expect.arrayContaining([genericReportLabel(1), genericReportLabel(2), genericReportFollowUpLabel]),
+    );
+    expect(model.roleLens).toMatchObject({
+      selected: 'release_owner_actor_id',
+      label: 'Release owner',
+      actor_id: 'actor-release',
+      available: expect.arrayContaining([expect.objectContaining({ id: 'reviewer_actor_id' })]),
+    });
+    expect(model.flowStrip).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'spec', count: 2 }),
+        expect.objectContaining({ id: 'execution_plan', count: 1 }),
+      ]),
+    );
+    expect(model.riskRail).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'release_blocker' }),
+      expect.objectContaining({ kind: 'review_aging' }),
+      expect.objectContaining({ kind: 'qa_blocker' }),
+      expect.objectContaining({ kind: 'stale_context' }),
+    ]));
+    expect(model.runtimeSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: 'exec-release-risk-closure-interrupted',
+          state: 'interrupted',
+          resumable: true,
+        }),
+      ]),
+    );
+    expect(model.degradedStates).toEqual([expect.objectContaining({ source: 'dashboard:stale_context' })]);
+    expect(cockpitCommandCenterViewModel({ project_id: projectId, sections: [], next_actions: [], report_links: [], degraded_sources: [] })).toMatchObject({
+      attentionItems: [],
+      degradedStates: [],
+      riskRail: [],
+      runtimeSignals: [],
+    });
+    expect(cockpitCommandCenterViewModel({ project_id: projectId, next_actions: [realActions[0]], degraded_sources: [] }).attentionItems).toHaveLength(1);
+    expect(cockpitCommandCenterViewModel({
+      project_id: projectId,
+      next_actions: [
+        { id: 'continue-execution', label: 'Continue execution', href: '/executions/exec-1' },
+        { id: 'close-release-blocker', label: 'Close release blocker evidence', href: '/development-plans/dp-1/items/dpi-1' },
+        {
+          id: 'runtime-without-kind',
+          label: 'Runtime payload without structured kind',
+          href: '/executions/exec-2',
+          runtime: { execution_id: 'exec-2', state: 'interrupted', resumable: true },
+        },
+        {
+          id: 'kind-without-runtime',
+          label: 'Structured execution kind without runtime',
+          href: '/executions/exec-3',
+          kind: 'resumable_execution',
+          typed_ref: { type: 'development_plan_item', id: 'dpi-3', title: 'Execution without runtime' },
+        },
+      ],
+      degraded_sources: [],
+    })).toMatchObject({
+      attentionItems: [],
+      riskRail: [],
+      runtimeSignals: [],
+    });
+    expect(cockpitCommandCenterViewModel({
+      project_id: projectId,
+      next_actions: [
+        ...realActions,
+        {
+          id: 'extra-release-blocker',
+          label: 'Extra release blocker',
+          typed_ref: { type: 'development_plan_item', id: 'dpi-extra-release-blocker', title: 'Extra release blocker' },
+          kind: 'release_blocker',
+          severity: 'critical',
+          stage_id: 'release',
+          next_action: 'Close extra release blocker',
+        },
+        {
+          id: 'extra-review-aging',
+          label: 'Extra review aging',
+          typed_ref: { type: 'development_plan_item', id: 'dpi-extra-review-aging', title: 'Extra review aging' },
+          kind: 'code_review_changes',
+          severity: 'high',
+          stage_id: 'code_review',
+          next_action: 'Close extra review aging',
+        },
+      ],
+      runtime_signals: [
+        {
+          execution_id: 'exec-runtime-preserved-after-attention-cap',
+          href: '/executions/exec-runtime-preserved-after-attention-cap',
+          label: 'Runtime preserved after attention cap',
+          resumable: true,
+          state: 'paused',
+        },
+        {
+          execution_id: 'exec-running-runtime',
+          href: '/executions/exec-running-runtime',
+          label: 'Running Codex execution',
+          resumable: false,
+          state: 'running',
+        },
+      ],
+      degraded_sources: [],
+    }).runtimeSignals).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        execution_id: 'exec-runtime-preserved-after-attention-cap',
+        state: 'paused',
+        resumable: true,
+      }),
+      expect.objectContaining({
+        execution_id: 'exec-running-runtime',
+        state: 'running',
+        resumable: false,
+      }),
+    ]));
   });
 
   it('does not surface cockpit next actions without explicit enabled metadata as executable', () => {
