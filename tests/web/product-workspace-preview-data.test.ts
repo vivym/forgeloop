@@ -155,6 +155,11 @@ describe('product workspace preview data', () => {
     );
   });
 
+  it('does not carry retired fixture terminology in active preview fixtures', () => {
+    const retiredFixtureTerm = 'de' + 'mo';
+    expect(JSON.stringify(defaultProductApiResponses)).not.toMatch(new RegExp(`\\b${retiredFixtureTerm}\\b`, 'i'));
+  });
+
   it('rejects the retired replay report query mode', async () => {
     const key = `GET /query/reports?project_id=${productWorkspacePreviewSeedId}&report=replay`;
     const response = defaultProductApiResponses[key];

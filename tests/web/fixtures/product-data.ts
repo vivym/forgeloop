@@ -174,7 +174,7 @@ export const developmentPlanTableInspectorItem = {
   revision_id: 'dpirev-development-plan-table-inspector-v1',
   title: 'Rewrite Development Plan table and inspector',
   summary: 'Replace the generic table detail with a dense plan table and inspector workflow.',
-  dependency_hints: ['Demo fixture data must include blocked boundary state'],
+  dependency_hints: ['Preview workspace data must include blocked boundary state'],
   affected_surfaces: ['apps/web/src/features/development-plans'],
   boundary_status: 'changes_requested',
   spec_status: 'blocked',
