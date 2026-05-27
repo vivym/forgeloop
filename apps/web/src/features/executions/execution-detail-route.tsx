@@ -7,8 +7,8 @@ import { useCodeReviewHandoffsQuery, useExecutionQuery, useQaHandoffsQuery } fro
 import { queryKeys } from '../../shared/api/query-keys';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { Section, WorkspacePage } from '../../shared/layout';
-import { Button, InlineNotice, StatusPill } from '../../shared/ui';
+import { ExecutionSupervisionLayout, ProductPage, Section } from '../../shared/layout';
+import { Button, EmptyState, InlineNotice, StatusPill } from '../../shared/ui';
 import { CodeReviewHandoffPanel, type CodeReviewHandoffProjection } from '../code-review/code-review-handoff-panel';
 import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import { QaHandoffPanel, type QaHandoffProjection } from '../qa/qa-handoff-panel';
@@ -62,57 +62,64 @@ export function ExecutionDetailRoute() {
   function retryExecution() {
     setMessage('Retry requested. Inspect execution evidence before restarting the worker.');
   }
-
-  return (
-    <WorkspacePage
-      as="div"
-      blockerRisk={
-        viewModel === undefined
-          ? 'Execution supervision cannot be evaluated until detail data loads.'
-          : `${viewModel.riskSignal} Current step: ${viewModel.currentStep}. Last meaningful event: ${viewModel.lastMeaningfulEvent}. PR, diff, and test evidence: ${viewModel.evidenceSummary}.`
-      }
-      family="execution-detail"
-      heading={viewModel?.title ?? 'Execution supervision'}
-      layout="supervision-detail"
-      nextAction={viewModel?.nextAction ?? 'Allowed action: load execution supervision'}
-      roleResponsibility={viewModel?.primaryActorOrRole ?? 'Linked Plan Item unavailable'}
-      state={viewModel?.currentState ?? (executionQuery.isLoading ? 'Loading execution supervision' : 'Execution supervision unavailable')}
-      subtitle="Product supervision for the worker, evidence, and review path attached to an approved Execution Plan revision."
-      toolbar={
-        viewModel === undefined ? undefined : (
-          <FirstViewportActionControls
-            onContinueExecution={continueExecution}
-            onInterruptExecution={interrupt}
-            onRetryExecution={retryExecution}
-            viewModel={viewModel}
-          />
-        )
-      }
-    >
+  const routeState = (
+    <div className="grid gap-3">
       <SurfaceStateIndicator label="Execution Detail" state={executionSurfaceState(executionQuery.isLoading, executionQuery.isError, execution)} />
       {message ? <InlineNotice title={message} tone="success" /> : null}
       {executionQuery.isError ? <InlineNotice title="Execution detail could not be loaded." tone="danger" /> : null}
       {execution === undefined && !executionQuery.isLoading ? <InlineNotice title="Execution not found." tone="warning" /> : null}
+    </div>
+  );
+
+  return (
+    <ProductPage family="execution-supervision" heading={viewModel?.title ?? 'Execution supervision'}>
+      <div className="sr-only">
+        {[
+          viewModel === undefined
+            ? 'Execution supervision cannot be evaluated until detail data loads.'
+            : `${viewModel.riskSignal} Current step: ${viewModel.currentStep}. Last meaningful event: ${viewModel.lastMeaningfulEvent}. PR, diff, and test evidence: ${viewModel.evidenceSummary}.`,
+          viewModel?.nextAction ?? 'Allowed action: load execution supervision',
+          viewModel?.primaryActorOrRole ?? 'Linked Plan Item unavailable',
+          viewModel?.currentState ?? (executionQuery.isLoading ? 'Loading execution supervision' : 'Execution supervision unavailable'),
+        ].join(' ')}
+      </div>
       {execution !== undefined && viewModel !== undefined ? (
-        <>
-          <ExecutionSupervisionPanel
-            viewModel={viewModel}
-          />
-          <CodeReviewHandoffPanel execution={execution} handoff={codeReview} />
-          <QaHandoffPanel codeReview={codeReview} execution={execution} handoff={qaHandoff} />
-        </>
-      ) : null}
-    </WorkspacePage>
+        <ExecutionSupervisionLayout
+          controls={
+            <WorkerControls
+              onContinueExecution={continueExecution}
+              onInterruptExecution={interrupt}
+              onRetryExecution={retryExecution}
+              viewModel={viewModel}
+            />
+          }
+          evidence={
+            <div className="grid gap-3">
+              {routeState}
+              <ExecutionEvidence viewModel={viewModel} />
+            </div>
+          }
+          lanes={<ExecutionHandoffLanes codeReview={codeReview} execution={execution} qaHandoff={qaHandoff} />}
+          primarySurface="evidence"
+        />
+      ) : (
+        <ExecutionSupervisionLayout
+          evidence={routeState}
+          lanes={<EmptyState description="Execution handoff lanes appear after execution detail data loads." title="No execution detail loaded." />}
+          primarySurface="evidence"
+        />
+      )}
+    </ProductPage>
   );
 }
 
-function ExecutionSupervisionPanel({
+function ExecutionEvidence({
   viewModel,
 }: {
   viewModel: ExecutionSupervisionDetail;
 }) {
   return (
-    <Section actions={<StatusPill tone={viewModel.statusTone}>{viewModel.status}</StatusPill>} title="Execution supervision summary" variant="panel">
+    <Section actions={<StatusPill tone={viewModel.statusTone}>{viewModel.status}</StatusPill>} title="Execution evidence" variant="panel">
       <div className="grid gap-4">
         <dl className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-3">
           <Definition label="Approved Execution Plan revision" value={viewModel.approvedExecutionPlanRevision} />
@@ -130,7 +137,24 @@ function ExecutionSupervisionPanel({
   );
 }
 
-function FirstViewportActionControls({
+function ExecutionHandoffLanes({
+  codeReview,
+  execution,
+  qaHandoff,
+}: {
+  codeReview: CodeReviewHandoffProjection | undefined;
+  execution: ExecutionProjection;
+  qaHandoff: QaHandoffProjection | undefined;
+}) {
+  return (
+    <div className="grid gap-4">
+      <CodeReviewHandoffPanel execution={execution} handoff={codeReview} />
+      <QaHandoffPanel codeReview={codeReview} execution={execution} handoff={qaHandoff} />
+    </div>
+  );
+}
+
+function WorkerControls({
   viewModel,
   onInterruptExecution,
   onContinueExecution,
@@ -214,9 +238,9 @@ function executionSurfaceState(isLoading: boolean, isError: boolean, execution: 
 
 function Definition({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid gap-1 rounded-md border border-border bg-background p-3">
+    <div className="grid min-w-0 gap-1 rounded-md border border-border bg-background p-3">
       <dt className="text-text-secondary">{label}</dt>
-      <dd className="font-semibold text-text-primary">{value}</dd>
+      <dd className="break-words font-semibold text-text-primary">{value}</dd>
     </div>
   );
 }

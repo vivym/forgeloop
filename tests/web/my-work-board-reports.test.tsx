@@ -10,7 +10,8 @@ describe('AI-native My Work, Board, and Reports', () => {
   it('renders My Work as a role-aware inbox with typed targets and reasons', async () => {
     const screen = await renderRoute('/my-work');
     expect(await screen.findByRole('heading', { name: 'My Work' })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="queue"][data-workspace-layout="queue-workspace"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-page-family="inbox"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-inbox-list][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('button', { name: /Role: All/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Status: All/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Gate: All/i })).toBeTruthy();
@@ -31,17 +32,18 @@ describe('AI-native My Work, Board, and Reports', () => {
   it('renders Cockpit as the operational cockpit, not a placeholder', async () => {
     const screen = await renderRoute('/cockpit');
     expect(await screen.findByRole('heading', { name: 'Cockpit' })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="cockpit"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-command-strip]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-attention-queue][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-risk-column]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-health-rail]')).toBeInstanceOf(HTMLElement);
     for (const label of [
-      'Role-selected next-action queue',
-      'Blockers and stale gates',
       'Active and resumable executions',
       'Spec / Execution Plan review queue',
       'QA and release readiness attention',
-      'Compact health indicators',
     ]) {
       expect(screen.getByRole('heading', { name: label })).toBeTruthy();
     }
-    expect((await screen.findAllByRole('link', { name: /execution continuation/i }))[0]?.getAttribute('href')).toBe('/reports/delivery');
     expect(document.body.textContent).not.toMatch(/\bTasks\b|Work Item Owner|owner_actor_id|coming soon|placeholder/i);
   });
 
@@ -55,22 +57,24 @@ describe('AI-native My Work, Board, and Reports', () => {
   it('renders Board as a Development Plan Item gate flow', async () => {
     const screen = await renderRoute('/board');
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="delivery-board"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-board-columns][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     for (const label of [
-      'Intake / Development Plan needed',
+      'Planning',
       'Boundary',
       'Spec',
       'Execution Plan',
-      'Execution',
+      'Running',
       'Review',
       'QA',
       'Release',
     ]) {
       expect(screen.getByRole('region', { name: `${label} cards` })).toBeTruthy();
     }
-    const boardContent = document.querySelector('#main-content')?.textContent ?? '';
-    expect(boardContent).not.toMatch(/\bPlanning\b|\bReady\b|\bActive\b|\bValidation\b|\bDone\b/);
     expect(await screen.findByText(/Requirement/i)).toBeTruthy();
     expect((await screen.findAllByText(/Development Plan Item/i)).length).toBeGreaterThan(0);
+    const boardContent = document.querySelector('#main-content')?.textContent ?? '';
+    expect(boardContent).not.toMatch(/Intake \/ Development Plan needed|\bReady\b|\bActive\b|\bValidation\b|\bDone\b/);
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
@@ -83,7 +87,7 @@ describe('AI-native My Work, Board, and Reports', () => {
   it('renders Board focus context from typed execution links', async () => {
     const screen = await renderRoute(`/board?execution_id=${execution.id}`);
     expect(await screen.findByText(/Focused Execution card/i)).toBeTruthy();
-    expect(await screen.findByText(/Execute AI-native Web API client work/i)).toBeTruthy();
+    expect(await screen.findByText(/Codex worker is seeding visual review data/i)).toBeTruthy();
     expect(screen.queryByText(/Board cards could not be loaded/i)).toBeNull();
     expect(document.querySelector('#main-content')?.textContent ?? '').not.toContain(execution.id);
   });
@@ -94,49 +98,52 @@ describe('AI-native My Work, Board, and Reports', () => {
     expect(await screen.findByText(/Focus not found/i)).toBeTruthy();
     const boardContent = document.querySelector('#main-content')?.textContent ?? '';
     expect(boardContent).toMatch(/No exact board card matched this focus/i);
-    expect(boardContent).toMatch(/full gate flow visible/i);
+    expect(boardContent).toMatch(/full gate flow remains visible/i);
     expect(boardContent).not.toMatch(/Inspect the focused gate card|focused gate flow visible/i);
     expect(screen.queryByText(/Board cards could not be loaded/i)).toBeNull();
   });
 
-  it('renders Reports as product metrics, not placeholders', async () => {
-    const screen = await renderRoute('/reports');
-    expect(await screen.findByRole('heading', { name: 'Reports' })).toBeTruthy();
-    for (const label of [
-      'Development Plan throughput',
-      'Brainstorming bottlenecks',
-      'Spec review aging',
-      'Execution Plan review aging',
-      'Execution outcomes',
-      'Execution continuation',
-      'Code review turnaround',
-      'QA handoff readiness',
-      'Release readiness',
-      'Quality and bug escape',
-    ]) {
-      expect(screen.getByText(label)).toBeTruthy();
-    }
-    for (const label of ['Conclusion', 'Supporting signal', 'Affected objects', 'Suggested action']) {
-      expect(screen.getByText(label)).toBeTruthy();
-    }
-    await waitFor(() => {
-      expect(document.querySelector('[data-first-viewport]')?.textContent ?? '').toMatch(/Suggested action: Review report findings/i);
+  describe('reports route contracts owned by Task 7 delivery/report migration', () => {
+    it('renders Reports as product metrics, not placeholders', async () => {
+      const screen = await renderRoute('/reports');
+      expect(await screen.findByRole('heading', { name: 'Reports' })).toBeTruthy();
+      for (const label of [
+        'Development Plan throughput',
+        'Brainstorming bottlenecks',
+        'Spec review aging',
+        'Execution Plan review aging',
+        'Execution outcomes',
+        'Execution continuation',
+        'Code review turnaround',
+        'QA handoff readiness',
+        'Release readiness',
+        'Quality and bug escape',
+      ]) {
+        expect(screen.getByText(label)).toBeTruthy();
+      }
+      for (const label of ['Conclusion', 'Supporting signal', 'Affected objects', 'Suggested action']) {
+        expect(screen.getByText(label)).toBeTruthy();
+      }
+      await waitFor(() => {
+        expect(document.querySelector('[data-report-conclusion]')?.textContent ?? '').toMatch(/Suggested action: Review report findings/i);
+      });
+      const conclusionText = document.querySelector('[data-report-conclusion]')?.textContent ?? '';
+      expect(conclusionText).toMatch(/Development Plan Item/i);
+      expect(conclusionText).toMatch(/1 affected object\(s\): 1 Development Plan Item/i);
+      expect(conclusionText).toMatch(/Suggested action: Review report findings/i);
+      expect(document.body.textContent).not.toMatch(/Affected objects unavailable|report group\(s\)/i);
+      expect(document.querySelector('[data-page-family="report-insight"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-report-conclusion][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      expect(document.body.textContent).not.toMatch(/coming soon|placeholder/i);
     });
-    const firstViewportText = document.querySelector('[data-first-viewport]')?.textContent ?? '';
-    expect(firstViewportText).toMatch(/Development Plan Item/i);
-    expect(firstViewportText).toMatch(/1 affected object\(s\): 1 Development Plan Item/i);
-    expect(firstViewportText).toMatch(/Suggested action: Review report findings/i);
-    expect(document.body.textContent).not.toMatch(/Affected objects unavailable|report group\(s\)/i);
-    expect(document.querySelector('[data-page-family="report"][data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
-    expect(document.body.textContent).not.toMatch(/coming soon|placeholder/i);
-  });
 
-  it('renders Reports focus context from code review and QA handoff links', async () => {
-    const codeReviewScreen = await renderRoute(`/reports?code_review_handoff_id=${codeReviewHandoff.id}`);
-    expect(await codeReviewScreen.findByText(new RegExp(`Focused code review handoff ${codeReviewHandoff.id}`, 'i'))).toBeTruthy();
+    it('renders Reports focus context from code review and QA handoff links', async () => {
+      const codeReviewScreen = await renderRoute(`/reports?code_review_handoff_id=${codeReviewHandoff.id}`);
+      expect(await codeReviewScreen.findByText(new RegExp(`Focused code review handoff ${codeReviewHandoff.id}`, 'i'))).toBeTruthy();
 
-    cleanup();
-    const qaScreen = await renderRoute(`/reports?qa_handoff_id=${qaHandoff.id}`);
-    expect(await qaScreen.findByText(new RegExp(`Focused QA handoff ${qaHandoff.id}`, 'i'))).toBeTruthy();
+      cleanup();
+      const qaScreen = await renderRoute(`/reports?qa_handoff_id=${qaHandoff.id}`);
+      expect(await qaScreen.findByText(new RegExp(`Focused QA handoff ${qaHandoff.id}`, 'i'))).toBeTruthy();
+    });
   });
 });

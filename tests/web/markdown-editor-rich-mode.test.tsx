@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttachmentRef } from '@forgeloop/contracts';
 
@@ -67,5 +68,31 @@ describe('ForgeMarkdownEditor rich editor events', () => {
     expect(rendered.getByRole('button', { name: /source mode/i })).toBeTruthy();
     expect(rendered.getByRole('button', { name: /revisions/i })).toBeTruthy();
     expect(rendered.queryByRole('textbox', { name: /narrative markdown/i })).toBeNull();
+  });
+
+  it('guards navigation away from dirty Spec and Execution Plan documents without submitting or approving', async () => {
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code']}
+        guardRouteTransitions
+        mode="edit"
+        objectRef={{
+          type: 'execution_plan_revision',
+          id: 'planrev-requirements-database-view-v1',
+          execution_plan_id: 'plan-requirements-database-view',
+        }}
+        onChange={vi.fn()}
+        onUploadAttachment={vi.fn()}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value="Draft"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /source mode/i }));
+    await userEvent.type(screen.getByRole('textbox', { name: /markdown source/i }), '\nUnsaved acceptance notes');
+
+    expect(screen.getByLabelText(/editor toolbar/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^approve/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^submit/i })).toBeNull();
   });
 });

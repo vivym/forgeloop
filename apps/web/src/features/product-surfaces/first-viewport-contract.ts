@@ -1,8 +1,5 @@
 export const firstViewportContract = {
   pageFamilyAttribute: 'data-page-family',
-  workspaceLayoutAttribute: 'data-workspace-layout',
-  currentStateTestId: 'current-state',
-  nextActionTestId: 'next-action',
-  roleResponsibilityTestId: 'role-responsibility',
-  blockerRiskTestId: 'blocker-risk',
+  primaryWorkSurfaceAttribute: 'data-primary-work-surface',
+  forbiddenTestIds: ['current-state', 'role-responsibility', 'blocker-risk', 'next-action'],
 } as const;

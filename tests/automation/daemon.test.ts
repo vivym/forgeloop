@@ -919,6 +919,7 @@ describe('automation daemon loop', () => {
   });
 
   it('caps remote runtime job polling sleep to the configured wait deadline', async () => {
+    let monotonicNowMs = 0;
     const sleepDurations: number[] = [];
     const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
     const runtime = createRemoteCodexGenerationRuntime({
@@ -928,8 +929,10 @@ describe('automation daemon loop', () => {
       pollIntervalMs: 5_000,
       actionClaimRenewalMs: 30_000,
       now: () => '2026-05-23T00:00:00.000Z',
+      monotonicNowMs: () => monotonicNowMs,
       sleep: async (durationMs) => {
         sleepDurations.push(durationMs);
+        monotonicNowMs += durationMs;
       },
       controlPlaneClient: {
         getStatus: async () => ({

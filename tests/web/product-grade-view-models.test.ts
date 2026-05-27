@@ -15,6 +15,8 @@ import {
   developmentPlan,
   developmentPlanItem,
   execution,
+  bugListItem,
+  initiativeListItem,
   myWorkQueueResponse,
   productDynamicRouteFixtureManifest,
   projectId,
@@ -22,6 +24,8 @@ import {
   releaseReadinessDetail,
   reportFixtures,
   requirementDetail,
+  requirementListItem,
+  techDebtListItem,
   workItemKindCockpitFixtures,
 } from './fixtures/product-data';
 import { defaultProductApiResponses } from './fixtures/product-api-mock';
@@ -36,7 +40,7 @@ const specPlanQueueResponse = defaultProductApiResponses[
 describe('product-grade presentation view models', () => {
   it('projects source objects into first-viewport fields without bypassing Development Plan boundaries', () => {
     expect(sourceObjectListViewModel(requirementDetail)).toMatchObject({
-      objectLabel: 'Checkout requirement',
+      objectLabel: requirementDetail.title,
       objectType: 'Requirement',
       currentState: expect.any(String),
       nextAction: expect.any(String),
@@ -126,7 +130,7 @@ describe('product-grade presentation view models', () => {
         enabled: true,
         scope_role_ids: ['product'],
         scope_object_types: ['requirement'],
-        scope_object_refs: [{ type: 'requirement', id: 'req-1' }],
+        scope_object_refs: [{ type: 'requirement', id: requirementListItem.id }],
       },
     });
     const viewModel = myWorkQueueViewModel(
@@ -138,10 +142,10 @@ describe('product-grade presentation view models', () => {
           enabled: true,
           scope_role_ids: ['product'],
           scope_object_types: ['requirement'],
-          scope_object_refs: [{ type: 'requirement', id: 'req-1' }],
+          scope_object_refs: [{ type: 'requirement', id: requirementListItem.id }],
         },
       },
-      baseViewModel.allRows.filter((row) => row.objectId === 'req-1' && row.objectType === 'requirement'),
+      baseViewModel.allRows.filter((row) => row.objectId === requirementListItem.id && row.objectType === 'requirement'),
     );
 
     expect(viewModel.safeBulkAction).toBeUndefined();
@@ -153,7 +157,7 @@ describe('product-grade presentation view models', () => {
 
   it('projects Development Plans and Development Plan Items', () => {
     expect(developmentPlanViewModel(developmentPlan)).toMatchObject({
-      objectLabel: 'Web product UI architecture foundation plan',
+      objectLabel: developmentPlan.title,
       objectType: 'Development Plan',
       currentState: expect.any(String),
       nextAction: expect.any(String),
@@ -162,7 +166,7 @@ describe('product-grade presentation view models', () => {
     });
 
     expect(developmentPlanItemViewModel(developmentPlanItem)).toMatchObject({
-      objectLabel: 'Build AI-native project management API clients',
+      objectLabel: developmentPlanItem.title,
       objectType: 'Development Plan Item',
       currentState: expect.any(String),
       nextAction: expect.any(String),
@@ -184,7 +188,7 @@ describe('product-grade presentation view models', () => {
 
   it('projects Spec and Execution Plan governance queues', () => {
     expect(specPlanQueueViewModel(specPlanQueueResponse)).toMatchObject({
-      objectLabel: 'Specs & Execution Plans',
+      objectLabel: 'Document Reviews',
       objectType: 'Governance Queue',
       currentState: expect.any(String),
       nextAction: expect.any(String),
@@ -196,7 +200,7 @@ describe('product-grade presentation view models', () => {
 
   it('projects Execution evidence and degrades missing PR, diff, and test refs', () => {
     expect(executionViewModel(execution)).toMatchObject({
-      objectLabel: 'Build AI-native project management API clients',
+      objectLabel: developmentPlanItem.title,
       objectType: 'Execution supervision',
       currentState: expect.any(String),
       nextAction: expect.any(String),
@@ -229,7 +233,7 @@ describe('product-grade presentation view models', () => {
 
   it('projects Release readiness and disables launch or rollback when approvals or rollback details are missing', () => {
     expect(releaseViewModel({ release, readiness: releaseReadinessDetail })).toMatchObject({
-      objectLabel: 'Web product UI architecture foundation',
+      objectLabel: release.title,
       objectType: 'Release',
       currentState: expect.any(String),
       nextAction: expect.any(String),
@@ -327,16 +331,16 @@ describe('product-grade presentation view models', () => {
   it('keeps the fixture manifest populated for every dynamic product route family', () => {
     expect(productDynamicRouteFixtureManifest).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ family: 'source-object-detail', objectType: 'requirement', objectId: 'req-1' }),
-        expect.objectContaining({ family: 'evidence', objectType: 'requirement', objectId: 'req-1' }),
-        expect.objectContaining({ family: 'evidence', objectType: 'initiative', objectId: 'init-1' }),
-        expect.objectContaining({ family: 'evidence', objectType: 'bug', objectId: 'bug-1' }),
-        expect.objectContaining({ family: 'evidence', objectType: 'tech_debt', objectId: 'td-1' }),
-        expect.objectContaining({ family: 'development-plan-detail', objectType: 'development_plan' }),
-        expect.objectContaining({ family: 'gate-workspace', objectType: 'development_plan_item' }),
-        expect.objectContaining({ family: 'execution-detail', objectType: 'execution' }),
-        expect.objectContaining({ family: 'release', objectType: 'release' }),
-        expect.objectContaining({ family: 'evidence', objectType: 'release' }),
+        expect.objectContaining({ family: 'source-document', objectType: 'requirement', objectId: requirementListItem.id }),
+        expect.objectContaining({ family: 'source-evidence', objectType: 'requirement', objectId: requirementListItem.id }),
+        expect.objectContaining({ family: 'source-evidence', objectType: 'initiative', objectId: initiativeListItem.id }),
+        expect.objectContaining({ family: 'source-evidence', objectType: 'bug', objectId: bugListItem.id }),
+        expect.objectContaining({ family: 'source-evidence', objectType: 'tech_debt', objectId: techDebtListItem.id }),
+        expect.objectContaining({ family: 'planning-table', objectType: 'development_plan' }),
+        expect.objectContaining({ family: 'gate-flow', objectType: 'development_plan_item' }),
+        expect.objectContaining({ family: 'execution-supervision', objectType: 'execution' }),
+        expect.objectContaining({ family: 'release-readiness', objectType: 'release' }),
+        expect.objectContaining({ family: 'release-evidence', objectType: 'release' }),
       ]),
     );
   });

@@ -24,6 +24,8 @@ describe('Executions routes', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'Executions' })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="execution-supervision"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-execution-lanes][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     for (const lane of ['Active', 'Resumable', 'Review pending', 'Failed / blocked', 'Completed / recent']) {
       expect(await screen.findByRole('heading', { name: lane })).toBeTruthy();
     }
@@ -32,7 +34,7 @@ describe('Executions routes', () => {
     expect((await screen.findAllByText(/Worker state/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Applying approved Execution Plan/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Last event/i)).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/AI-native Web API clients PR/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Product architecture preview data PR/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Allowed action/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByRole('link', { name: /inspect execution/i })).some((link) => link.getAttribute('href') === `/executions/${execution.id}`)).toBe(true);
     expect(document.body.textContent).toMatch(/Continue disabled: execution is still running/i);
@@ -42,7 +44,9 @@ describe('Executions routes', () => {
   it('renders execution detail as product supervision with running controls and handoff panels', async () => {
     const screen = await renderRoute(`/executions/${execution.id}`);
 
-    expect(await screen.findByRole('heading', { name: /Build AI-native project management API clients/i })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="execution-supervision"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-run-evidence][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(document.body.textContent).toMatch(new RegExp(executionPlanRevision.summary));
     expect(document.body.textContent).not.toMatch(new RegExp(`Execution ${execution.id}`));
     expect(document.body.textContent).toMatch(/Worker state/i);
@@ -66,7 +70,7 @@ describe('Executions routes', () => {
   it('renders execution detail continue control only for resumable executions', async () => {
     const screen = await renderRoute(`/executions/${execution.id}`, {
       apiOverrides: {
-        [`GET /query/executions/${execution.id}`]: { ...execution, status: 'interrupted', worker_state: 'interrupted' },
+        [`GET /query/executions/${execution.id}`]: executionDetailFixture({ status: 'interrupted', worker_state: 'interrupted' }),
       },
     });
 
@@ -78,16 +82,15 @@ describe('Executions routes', () => {
   it('renders actor-like execution history as role-safe event text', async () => {
     const screen = await renderRoute(`/executions/${execution.id}`, {
       apiOverrides: {
-        [`GET /query/executions/${execution.id}`]: {
-          ...execution,
+        [`GET /query/executions/${execution.id}`]: executionDetailFixture({
           last_event_summary: 'Execution continued by actor-reviewer.',
           interrupt_history: [{ at: execution.updated_at, reason: 'Execution interrupted by actor-owner.' }],
           continuation_history: [{ at: execution.updated_at, summary: 'Execution continued by actor-reviewer.' }],
-        },
+        }),
       },
     });
 
-    expect(await screen.findByRole('heading', { name: /Build AI-native project management API clients/i })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
     expect(document.body.textContent).toMatch(/assigned operator/i);
     expect(document.body.textContent).not.toMatch(/actor-owner|actor-reviewer/i);
   });
@@ -143,4 +146,10 @@ function executionRow(idSuffix: string, overrides: Record<string, unknown>) {
     href: idSuffix === 'active' ? `/executions/${execution.id}` : `/executions/execution-${idSuffix}`,
     last_event_at: execution.updated_at,
   };
+}
+
+function executionDetailFixture(overrides: Record<string, unknown>) {
+  const { title: _title, ...detail } = execution;
+  void _title;
+  return { ...detail, ...overrides };
 }

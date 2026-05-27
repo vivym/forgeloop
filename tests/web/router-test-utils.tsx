@@ -12,12 +12,13 @@ import BugDetailRoute from '../../apps/web/src/app/routes/bugs/$bugId';
 import BugEvidenceRoute from '../../apps/web/src/app/routes/bugs/$bugId/evidence';
 import BugsRoute from '../../apps/web/src/app/routes/bugs';
 import NewBugRoute from '../../apps/web/src/app/routes/bugs/new';
-import DashboardRoute from '../../apps/web/src/app/routes/dashboard';
 import DevelopmentPlanDetailRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId';
 import DevelopmentPlanItemDetailRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId';
 import DevelopmentPlanItemBrainstormingRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/brainstorming';
 import DevelopmentPlanItemExecutionRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/execution';
 import DevelopmentPlanItemExecutionPlanRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/execution-plan';
+import DevelopmentPlanItemQaRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/qa';
+import DevelopmentPlanItemReviewRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/review';
 import DevelopmentPlanItemSpecRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/spec';
 import DevelopmentPlansRoute from '../../apps/web/src/app/routes/development-plans';
 import NewDevelopmentPlanRoute from '../../apps/web/src/app/routes/development-plans/new';
@@ -51,6 +52,7 @@ import { ProjectProvider } from '../../apps/web/src/shared/context/project-conte
 import { RuntimeFlagsProvider } from '../../apps/web/src/shared/context/runtime-flags';
 import { PageHeader, Section } from '../../apps/web/src/shared/layout';
 import { InlineNotice } from '../../apps/web/src/shared/ui';
+import { projectId as fixtureProjectId } from './fixtures/product-data';
 import { installProductApiMock, type ProductApiResponseMap } from './fixtures/product-api-mock';
 
 function ProductNotFoundRoute() {
@@ -71,7 +73,6 @@ const productRoutes: RouteObject[] = [
     children: [
       { index: true, Component: RootIndexRoute },
       { path: 'cockpit', Component: CockpitRoute },
-      { path: 'dashboard', Component: DashboardRoute },
       { path: 'my-work', Component: MyWorkRoute },
       { path: 'requirements', Component: RequirementsRoute },
       { path: 'requirements/new', Component: NewRequirementRoute },
@@ -93,6 +94,8 @@ const productRoutes: RouteObject[] = [
       { path: 'development-plans/:developmentPlanId/items/:itemId/spec', Component: DevelopmentPlanItemSpecRoute },
       { path: 'development-plans/:developmentPlanId/items/:itemId/execution-plan', Component: DevelopmentPlanItemExecutionPlanRoute },
       { path: 'development-plans/:developmentPlanId/items/:itemId/execution', Component: DevelopmentPlanItemExecutionRoute },
+      { path: 'development-plans/:developmentPlanId/items/:itemId/review', Component: DevelopmentPlanItemReviewRoute },
+      { path: 'development-plans/:developmentPlanId/items/:itemId/qa', Component: DevelopmentPlanItemQaRoute },
       { path: 'specs-plans', Component: SpecsPlansRoute },
       { path: 'bugs', Component: BugsRoute },
       { path: 'bugs/new', Component: NewBugRoute },
@@ -138,7 +141,7 @@ export async function renderRoute(
   render(
     <QueryClientProvider client={queryClient}>
       <ActorProvider value={options.actorId ? { actorId: options.actorId } : undefined}>
-        <ProjectProvider value={options.projectId ? { projectId: options.projectId } : undefined}>
+        <ProjectProvider value={{ projectId: options.projectId ?? fixtureProjectId }}>
           <RuntimeFlagsProvider value={{ devToolsEnabled: options.devToolsEnabled ?? false }}>
             <RoutesStub initialEntries={[path]} />
           </RuntimeFlagsProvider>

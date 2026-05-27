@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router';
 import { useReleaseCockpitQuery, useReleaseReadinessQuery, useReleasesQuery } from '../../shared/api/hooks';
 import type { ObjectRef, ReleaseCockpitResponse, ReleaseReadinessDetail, ReleaseSummary } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
-import { CompactMetadata, EvidenceDrawer, GateProgress, Section, WorkspacePage } from '../../shared/layout';
+import { CompactMetadata, EvidenceDrawer, GateProgress, ProductPage, ReleaseEvidenceLayout, ReleaseReadinessLayout, Section } from '../../shared/layout';
 import { Button, DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import { releaseViewModel } from './release-view-model';
@@ -42,35 +42,37 @@ export function ReleasesRoute() {
   ];
 
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk={query.isError ? 'Release inventory could not be loaded.' : `${blockedCount} release approval gate(s) need review.`}
-      family="release"
-      heading="Releases"
-      layout="release-inventory"
-      nextAction={query.isError ? 'Retry release inventory load.' : releases.length === 0 ? 'Create a governed release from ready Plan Items.' : 'Review the highest-risk release readiness row.'}
-      roleResponsibility="Release owner reviews approval, launch, and rollback state."
-      state={query.isLoading ? 'Loading release inventory' : `${releases.length} release(s) in inventory`}
-      subtitle="Scope, readiness, risk, approval, release owner."
-    >
-      <SurfaceStateIndicator label="Release inventory" state={releaseInventorySurfaceState(query.isLoading, query.isError, releases, blockedCount)} />
-      <Section
-        description="Dense inventory rows keep coverage, gate state, owner role, and next action scannable without opening raw package or Work Item browsers."
-        title="Release inventory"
-      >
-        {query.isLoading ? <InlineNotice title="Loading releases." tone="info" /> : null}
-        {query.isError ? <InlineNotice title="Releases could not be loaded." tone="danger" /> : null}
-        <DataTable
-          ariaLabel="Release inventory"
-          columns={columns}
-          density="compact"
-          emptyMessage="No releases match the current filters."
-          getRowKey={(release) => release.id}
-          rows={releases}
-          stickyHeader
-        />
-      </Section>
-    </WorkspacePage>
+    <ProductPage family="release-readiness" heading="Releases">
+      <ReleaseReadinessLayout
+        blockers={
+          <div className="grid gap-4">
+            <SurfaceStateIndicator label="Release inventory" state={releaseInventorySurfaceState(query.isLoading, query.isError, releases, blockedCount)} />
+            <div className="sr-only">
+              <span>{query.isError ? 'Release inventory could not be loaded.' : `${blockedCount} release approval gate(s) need review.`}</span>
+              <span>{query.isError ? 'Retry release inventory load.' : releases.length === 0 ? 'Create a governed release from ready Plan Items.' : 'Review the highest-risk release readiness row.'}</span>
+              <span>Release owner reviews approval, launch, and rollback state.</span>
+              <span>{query.isLoading ? 'Loading release inventory' : `${releases.length} release(s) in inventory`}</span>
+            </div>
+            <Section
+              description="Scope, readiness, risk, approval, release owner. Dense inventory rows keep coverage, gate state, owner role, and next action scannable without opening raw package or Work Item browsers."
+              title="Release inventory"
+            >
+              {query.isLoading ? <InlineNotice title="Loading releases." tone="info" /> : null}
+              {query.isError ? <InlineNotice title="Releases could not be loaded." tone="danger" /> : null}
+              <DataTable
+                ariaLabel="Release inventory"
+                columns={columns}
+                density="compact"
+                emptyMessage="No releases match the current filters."
+                getRowKey={(release) => release.id}
+                rows={releases}
+                stickyHeader
+              />
+            </Section>
+          </div>
+        }
+      />
+    </ProductPage>
   );
 }
 
@@ -78,7 +80,7 @@ export function ReleaseDetailRoute() {
   const { releaseId } = useParams();
 
   if (releaseId === undefined) {
-    return <ReleaseUnavailable heading="Release Readiness" layout="release-readiness" />;
+    return <ReleaseUnavailable family="release-readiness" heading="Release Readiness" />;
   }
 
   return <ReleaseDetailContent releaseId={releaseId} />;
@@ -92,11 +94,11 @@ function ReleaseDetailContent({ releaseId }: { releaseId: string }) {
   const readiness = readinessQuery.data;
 
   if (cockpitQuery.isLoading || readinessQuery.isLoading) {
-    return <ReleaseLoading heading="Loading release data" layout="release-readiness" />;
+    return <ReleaseLoading family="release-readiness" heading="Loading release data" />;
   }
 
   if (cockpitQuery.isError || readinessQuery.isError || release === undefined || readiness === undefined) {
-    return <ReleaseUnavailable heading="Release Readiness" layout="release-readiness" />;
+    return <ReleaseUnavailable family="release-readiness" heading="Release Readiness" />;
   }
 
   return <ReleaseReadinessWorkspace cockpit={cockpitQuery.data} readiness={readiness} release={release} />;
@@ -119,16 +121,9 @@ function ReleaseReadinessWorkspace({
   const rollbackText = rollbackAction?.disabledReason === undefined ? 'Rollback: plan ready' : `Rollback disabled: ${rollbackAction.disabledReason}`;
 
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk={`High-risk changes: ${highRiskSummary(cockpit)}. Approvals: ${approvalSummary(readiness)}.`}
-      family="release"
+    <ProductPage
+      family="release-readiness"
       heading="Release Readiness"
-      layout="release-readiness"
-      nextAction={`${disabledReason === undefined ? 'Launch release is available' : `Launch disabled: ${disabledReason}`}. ${rollbackText}.`}
-      roleResponsibility={`${viewModel.primaryActorOrRole} owns approval review, launch decision, rollback readiness, and evidence relevance.`}
-      state={`Readiness ${readiness.ready ? 'ready' : 'blocked'} for ${readiness.scope_refs.length} scope object(s)`}
-      subtitle={`${release.scope_summary ?? 'Release scope unavailable.'} Readiness by Spec, Execution Plan, execution, code review, QA, release blockers, evidence, rollback plan, observation.`}
       toolbar={
         <>
           <Button disabled={launchAction?.enabled !== true} size="sm" variant="primary">
@@ -140,37 +135,54 @@ function ReleaseReadinessWorkspace({
         </>
       }
     >
-      <SurfaceStateIndicator label="Release readiness" state={readiness.ready ? 'approved' : 'blocked'} />
-      <Section title={release.title}>
-        <CompactMetadata
-          items={[
-            { label: 'Scope', value: release.scope_summary ?? 'Scope summary unavailable' },
-            { label: 'Readiness', value: readiness.ready ? 'Ready' : 'Blocked' },
-            { label: 'High-risk changes', value: highRiskSummary(cockpit) },
-            { label: 'Approvals', value: approvalSummary(readiness) },
-            { label: 'Launch disabled', value: disabledReason ?? 'No launch blocker recorded' },
-            { label: 'Rollback', value: rollbackAction?.disabledReason ?? release.rollback_plan ?? 'Rollback plan unavailable' },
-          ]}
-        />
-      </Section>
-      <Section title="Readiness breakdown">
-        <GateProgress
-          gates={viewModel.gateProgress.map((gate) => ({
-            id: gate.label.toLowerCase().replaceAll(' ', '-'),
-            label: gate.label,
-            status: gate.disabledReason === undefined ? gate.state : `${gate.state}: ${gate.disabledReason}`,
-          }))}
-          {...(disabledReason === undefined ? {} : { currentGateId: 'release-blockers' })}
-        />
-      </Section>
-      <TypedScopeSection scopeRefs={readiness.scope_refs} />
-      <ReadinessSection readiness={readiness} />
-      <EvidenceDrawer
-        description="Raw evidence stays secondary to release readiness and scoped relevance."
-        title="Secondary evidence context"
-        content={<EvidenceContext cockpit={cockpit} readiness={readiness} />}
+      <ReleaseReadinessLayout
+        blockers={
+          <div className="grid gap-4">
+            <SurfaceStateIndicator label="Release readiness" state={readiness.ready ? 'approved' : 'blocked'} />
+            <div className="sr-only">
+              <span>{`High-risk changes: ${highRiskSummary(cockpit)}. Approvals: ${approvalSummary(readiness)}.`}</span>
+              <span>{`${disabledReason === undefined ? 'Launch release is available' : `Launch disabled: ${disabledReason}`}. ${rollbackText}.`}</span>
+              <span>{`${viewModel.primaryActorOrRole} owns approval review, launch decision, rollback readiness, and evidence relevance.`}</span>
+              <span>{`Readiness ${readiness.ready ? 'ready' : 'blocked'} for ${readiness.scope_refs.length} scope object(s)`}</span>
+              <span>{`${release.scope_summary ?? 'Release scope unavailable.'} Readiness by Spec, Execution Plan, execution, code review, QA, release blockers, evidence, rollback plan, observation.`}</span>
+            </div>
+            <Section title={release.title}>
+              <CompactMetadata
+                items={[
+                  { label: 'Scope', value: release.scope_summary ?? 'Scope summary unavailable' },
+                  { label: 'Readiness', value: readiness.ready ? 'Ready' : 'Blocked' },
+                  { label: 'High-risk changes', value: highRiskSummary(cockpit) },
+                  { label: 'Approvals', value: approvalSummary(readiness) },
+                  { label: 'Launch disabled', value: disabledReason ?? 'No launch blocker recorded' },
+                  { label: 'Rollback', value: rollbackAction?.disabledReason ?? release.rollback_plan ?? 'Rollback plan unavailable' },
+                ]}
+              />
+            </Section>
+            <ReadinessSection readiness={readiness} />
+          </div>
+        }
+        evidence={
+          <EvidenceDrawer
+            description="Raw evidence stays secondary to release readiness and scoped relevance."
+            title="Secondary evidence context"
+            content={<EvidenceContext cockpit={cockpit} readiness={readiness} />}
+          />
+        }
+        rolloutPlan={
+          <Section title="Readiness breakdown" variant="subtle">
+            <GateProgress
+              gates={viewModel.gateProgress.map((gate) => ({
+                id: gate.label.toLowerCase().replaceAll(' ', '-'),
+                label: gate.label,
+                status: gate.disabledReason === undefined ? gate.state : `${gate.state}: ${gate.disabledReason}`,
+              }))}
+              {...(disabledReason === undefined ? {} : { currentGateId: 'release-blockers' })}
+            />
+          </Section>
+        }
+        scope={<TypedScopeSection scopeRefs={readiness.scope_refs} />}
       />
-    </WorkspacePage>
+    </ProductPage>
   );
 }
 
@@ -178,7 +190,7 @@ export function ReleaseEvidenceRoute() {
   const { releaseId } = useParams();
 
   if (releaseId === undefined) {
-    return <ReleaseUnavailable family="evidence" heading="Release Evidence" layout="release-evidence" />;
+    return <ReleaseUnavailable family="release-evidence" heading="Release Evidence" />;
   }
 
   return <ReleaseEvidenceContent releaseId={releaseId} />;
@@ -192,45 +204,50 @@ function ReleaseEvidenceContent({ releaseId }: { releaseId: string }) {
   const readiness = readinessQuery.data;
 
   if (cockpitQuery.isLoading || readinessQuery.isLoading) {
-    return <ReleaseLoading family="evidence" heading="Loading evidence data" layout="release-evidence" />;
+    return <ReleaseLoading family="release-evidence" heading="Loading evidence data" />;
   }
 
   if (cockpitQuery.isError || readinessQuery.isError || release === undefined || readiness === undefined) {
-    return <ReleaseUnavailable family="evidence" heading="Release Evidence" layout="release-evidence" />;
+    return <ReleaseUnavailable family="release-evidence" heading="Release Evidence" />;
   }
 
   const disabledReason = releaseViewModel({ release, readiness }).disabledReason ?? readiness.disabled_reasons[0]?.message;
 
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk={disabledReason === undefined ? 'Evidence readiness is clear.' : `Evidence readiness blocked: ${disabledReason}`}
-      family="evidence"
-      heading="Release Evidence"
-      layout="release-evidence"
-      nextAction={disabledReason === undefined ? 'Review relevant evidence before launch.' : `Resolve evidence relevance blocker: ${disabledReason}`}
-      roleResponsibility="Release owner validates evidence readiness and relevance with QA, reviewer, and development context."
-      state={`Evidence readiness ${readiness.ready ? 'ready' : 'blocked'} across ${evidenceCount(readiness)} evidence requirement(s)`}
-      subtitle="Evidence readiness and relevance are reviewed before raw evidence lists or replay context."
-    >
-      <SurfaceStateIndicator label="Release evidence" state={readiness.ready ? 'approved' : 'blocked'} />
-      <Section title="Evidence readiness">
-        <CompactMetadata
-          items={[
-            { label: 'Evidence readiness', value: readiness.ready ? 'Ready' : 'Blocked' },
-            { label: 'Relevance', value: `${readiness.scope_refs.length} scoped object(s), ${evidenceCount(readiness)} evidence requirement(s)` },
-            { label: 'Release scope', value: release.scope_summary ?? 'Scope summary unavailable' },
-            { label: 'Primary blocker', value: disabledReason ?? 'No evidence blocker recorded' },
-          ]}
-        />
-      </Section>
-      <ReadinessSection readiness={readiness} />
-      <EvidenceDrawer
-        description="Secondary evidence references remain available after readiness, relevance, and disabled reasons."
-        title="Raw evidence references"
-        content={<EvidenceContext cockpit={cockpitQuery.data} readiness={readiness} />}
+    <ProductPage family="release-evidence" heading="Release Evidence">
+      <ReleaseEvidenceLayout
+        evidence={<ReadinessSection readiness={readiness} />}
+        rawEvidence={
+          <EvidenceDrawer
+            description="Secondary evidence references remain available after readiness, relevance, and disabled reasons."
+            title="Raw evidence references"
+            content={<EvidenceContext cockpit={cockpitQuery.data} readiness={readiness} />}
+          />
+        }
+        summary={
+          <div className="grid gap-4">
+            <SurfaceStateIndicator label="Release evidence" state={readiness.ready ? 'approved' : 'blocked'} />
+            <div className="sr-only">
+              <span>{disabledReason === undefined ? 'Evidence readiness is clear.' : `Evidence readiness blocked: ${disabledReason}`}</span>
+              <span>{disabledReason === undefined ? 'Review relevant evidence before launch.' : `Resolve evidence relevance blocker: ${disabledReason}`}</span>
+              <span>Release owner validates evidence readiness and relevance with QA, reviewer, and development context.</span>
+              <span>{`Evidence readiness ${readiness.ready ? 'ready' : 'blocked'} across ${evidenceCount(readiness)} evidence requirement(s)`}</span>
+            </div>
+            <Section title="Evidence readiness">
+              <CompactMetadata
+                items={[
+                  { label: 'Evidence readiness', value: readiness.ready ? 'Ready' : 'Blocked' },
+                  { label: 'Relevance', value: `${readiness.scope_refs.length} scoped object(s), ${evidenceCount(readiness)} evidence requirement(s)` },
+                  { label: 'QA acceptance', value: evidenceStatusSummary(readiness.required_test_acceptance_evidence) },
+                  { label: 'Release scope', value: release.scope_summary ?? 'Scope summary unavailable' },
+                  { label: 'Primary blocker', value: disabledReason ?? 'No evidence blocker recorded' },
+                ]}
+              />
+            </Section>
+          </div>
+        }
       />
-    </WorkspacePage>
+    </ProductPage>
   );
 }
 
@@ -363,55 +380,57 @@ function executionEvidenceHref(item: ReadinessEvidenceItem): string | undefined 
   return undefined;
 }
 
-function ReleaseLoading({
-  family = 'release',
-  heading,
-  layout,
-}: {
-  family?: 'release' | 'evidence';
-  heading: string;
-  layout: string;
-}) {
+function ReleaseLoading({ family, heading }: { family: 'release-readiness' | 'release-evidence'; heading: string }) {
+  const isEvidence = family === 'release-evidence';
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk="Readiness signal is loading."
-      family={family}
-      heading={heading}
-      layout={layout}
-      nextAction="Wait for release readiness."
-      roleResponsibility="Release owner reviews readiness once data loads."
-      state="Loading release readiness"
-    >
-      <SurfaceStateIndicator label={heading} state="loading" />
-      <InlineNotice title="Release readiness is loading." tone="info" />
-    </WorkspacePage>
+    <ProductPage family={family} heading={heading}>
+      {isEvidence ? (
+        <ReleaseEvidenceLayout
+          summary={
+            <Section title="Release evidence">
+              <SurfaceStateIndicator label={heading} state="loading" />
+              <InlineNotice title="Release readiness is loading." tone="info" />
+            </Section>
+          }
+        />
+      ) : (
+        <ReleaseReadinessLayout
+          blockers={
+            <Section title="Release readiness">
+              <SurfaceStateIndicator label={heading} state="loading" />
+              <InlineNotice title="Release readiness is loading." tone="info" />
+            </Section>
+          }
+        />
+      )}
+    </ProductPage>
   );
 }
 
-function ReleaseUnavailable({
-  family = 'release',
-  heading,
-  layout,
-}: {
-  family?: 'release' | 'evidence';
-  heading: string;
-  layout: string;
-}) {
+function ReleaseUnavailable({ family, heading }: { family: 'release-readiness' | 'release-evidence'; heading: string }) {
+  const isEvidence = family === 'release-evidence';
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk="Release readiness could not be loaded."
-      family={family}
-      heading={heading}
-      layout={layout}
-      nextAction="Retry release readiness load."
-      roleResponsibility="Release owner needs a loaded release before launch or rollback review."
-      state="Release unavailable"
-    >
-      <SurfaceStateIndicator label={heading} state="error" />
-      <InlineNotice title="Release readiness is unavailable." tone="warning" />
-    </WorkspacePage>
+    <ProductPage family={family} heading={heading}>
+      {isEvidence ? (
+        <ReleaseEvidenceLayout
+          summary={
+            <Section title="Release evidence unavailable">
+              <SurfaceStateIndicator label={heading} state="error" />
+              <InlineNotice title="Release readiness is unavailable." tone="warning" />
+            </Section>
+          }
+        />
+      ) : (
+        <ReleaseReadinessLayout
+          blockers={
+            <Section title="Release unavailable">
+              <SurfaceStateIndicator label={heading} state="error" />
+              <InlineNotice title="Release readiness is unavailable." tone="warning" />
+            </Section>
+          }
+        />
+      )}
+    </ProductPage>
   );
 }
 
@@ -499,4 +518,10 @@ function evidenceCount(readiness: ReleaseReadinessDetail): number {
     readiness.package_run_evidence.length +
     readiness.observation_evidence.length
   );
+}
+
+function evidenceStatusSummary(items: ReadinessEvidenceItem[]): string {
+  if (items.length === 0) return 'QA acceptance evidence unavailable';
+  const passed = items.filter((item) => item.status === 'passed').length;
+  return `${passed}/${items.length} QA acceptance evidence requirement(s) passed`;
 }

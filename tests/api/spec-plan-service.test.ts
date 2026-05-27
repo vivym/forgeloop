@@ -1,5 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import type { DeliveryRepository } from '@forgeloop/db';
+import type { AttachmentRef } from '@forgeloop/contracts';
+import type { Attachment } from '@forgeloop/domain';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -10,6 +12,7 @@ import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/co
 const actorProduct = 'actor-product';
 const actorTech = 'actor-tech';
 const actorReviewer = 'actor-reviewer';
+const now = '2026-05-23T00:00:00.000Z';
 
 describe('SpecPlanService item-scoped delivery API', () => {
   let app: INestApplication;
@@ -134,6 +137,119 @@ describe('SpecPlanService item-scoped delivery API', () => {
     );
   });
 
+  it('saves item-scoped Spec Markdown drafts as new current revisions', async () => {
+    const { plan, item } = await seedApprovedBoundary(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const firstSpecRevision = await generateItemSpecDraft(app, plan.id, item.id);
+    const markdown = [
+      '# Saved Spec draft',
+      '',
+      '## Background',
+      '',
+      'The edited Spec background replaces the generated context.',
+      '',
+      '## Goals',
+      '',
+      '- Preserve Markdown-authored goals',
+      '- Feed automation with current structure',
+      '',
+      '## Scope In',
+      '',
+      '- Item-scoped draft saving',
+      '- Structured field synchronization',
+      '',
+      '## Scope Out',
+      '',
+      '- Legacy Work Item artifact editing',
+      '',
+      '## Acceptance Criteria',
+      '',
+      '- Downstream automation reads edited acceptance criteria',
+      '- Reviewers see the same draft content and structure',
+      '',
+      '## Risk Notes',
+      '',
+      '- Markdown sections can be incomplete',
+      '',
+      '## Test Strategy',
+      '',
+      'Run API draft save regression coverage.',
+    ].join('\n');
+
+    const savedRevision = (
+      await request(server)
+        .patch(`/development-plans/${plan.id}/items/${item.id}/spec/draft`)
+        .send({
+          markdown,
+          object_ref: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
+          allowed_blocks: ['paragraph', 'heading', 'list', 'link', 'image', 'table', 'code_block', 'inline_code'],
+          attachment_refs: [],
+          validation_version: '2026-05-23',
+        })
+        .expect(200)
+    ).body;
+
+    expect(savedRevision).toMatchObject({
+      spec_id: firstSpecRevision.spec_id,
+      revision_number: firstSpecRevision.revision_number + 1,
+      content: markdown,
+      background: 'The edited Spec background replaces the generated context.',
+      goals: ['Preserve Markdown-authored goals', 'Feed automation with current structure'],
+      scope_in: ['Item-scoped draft saving', 'Structured field synchronization'],
+      scope_out: ['Legacy Work Item artifact editing'],
+      acceptance_criteria: [
+        'Downstream automation reads edited acceptance criteria',
+        'Reviewers see the same draft content and structure',
+      ],
+      risk_notes: ['Markdown sections can be incomplete'],
+      test_strategy_summary: 'Run API draft save regression coverage.',
+      attachment_refs: [],
+    });
+    expect(savedRevision).not.toHaveProperty('structured_document');
+    expect(savedRevision).not.toHaveProperty('artifact_refs');
+    await expect(repository.getSpec(firstSpecRevision.spec_id)).resolves.toMatchObject({ current_revision_id: savedRevision.id });
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ spec_status: 'draft' });
+    await expect(repository.listObjectEvents(savedRevision.id, 'spec_revision')).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actor_id: actorTech,
+          event_type: 'spec_draft_saved',
+          metadata: expect.objectContaining({ previous_revision_id: firstSpecRevision.id }),
+        }),
+      ]),
+    );
+  });
+
+  it('preserves non-inline item-scoped Spec attachments across Markdown draft saves', async () => {
+    const { plan, item } = await seedApprovedBoundary(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const firstSpecRevision = await generateItemSpecDraft(app, plan.id, item.id);
+    const attachment = await seedRevisionAttachment(repository, {
+      id: 'att-spec-non-inline',
+      objectRef: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
+    });
+
+    const savedRevision = (
+      await request(server)
+        .patch(`/development-plans/${plan.id}/items/${item.id}/spec/draft`)
+        .send({
+          markdown: '# Saved Spec draft\n\nText-only edit should keep the attached diagram available.',
+          object_ref: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
+          allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
+          attachment_refs: [attachment],
+          validation_version: '2026-05-23',
+        })
+        .expect(200)
+    ).body;
+
+    expect(savedRevision.attachment_refs).toEqual([expect.objectContaining({ id: attachment.id })]);
+    await expect(repository.listAttachmentsForObject('spec_revision', savedRevision.id)).resolves.toEqual([
+      expect.objectContaining({ id: attachment.id }),
+    ]);
+  });
+
   it('supports generate after approved Spec, submit, reject, regenerate, and compare for Execution Plan reviews', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
@@ -213,7 +329,141 @@ describe('SpecPlanService item-scoped delivery API', () => {
       ]),
     );
   });
+
+  it('saves item-scoped Execution Plan Markdown drafts as new current revisions', async () => {
+    const { plan, item } = await seedApprovedBoundary(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+
+    await generateItemSpecDraft(app, plan.id, item.id);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
+      .send({ actor_id: actorTech })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
+      .expect(201);
+    const firstExecutionPlanRevision = await generateItemExecutionPlanDraft(app, plan.id, item.id);
+
+    const savedRevision = (
+      await request(server)
+        .patch(`/development-plans/${plan.id}/items/${item.id}/execution-plan/draft`)
+        .send({
+          markdown: '# Saved Execution Plan draft\n\nPersisted through the item-scoped draft endpoint.',
+          object_ref: {
+            type: 'execution_plan_revision',
+            id: firstExecutionPlanRevision.id,
+            execution_plan_id: firstExecutionPlanRevision.execution_plan_id,
+          },
+          allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
+          attachment_refs: [],
+          validation_version: '2026-05-23',
+        })
+        .expect(200)
+    ).body;
+
+    expect(savedRevision).toMatchObject({
+      execution_plan_id: firstExecutionPlanRevision.execution_plan_id,
+      revision_number: firstExecutionPlanRevision.revision_number + 1,
+      content: '# Saved Execution Plan draft\n\nPersisted through the item-scoped draft endpoint.',
+      attachment_refs: [],
+    });
+    expect(savedRevision).not.toHaveProperty('structured_document');
+    await expect(repository.getExecutionPlan(firstExecutionPlanRevision.execution_plan_id)).resolves.toMatchObject({
+      current_revision_id: savedRevision.id,
+    });
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ execution_plan_status: 'draft' });
+    await expect(repository.listObjectEvents(savedRevision.id, 'execution_plan_revision')).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actor_id: actorTech,
+          event_type: 'execution_plan_draft_saved',
+          metadata: expect.objectContaining({ previous_revision_id: firstExecutionPlanRevision.id }),
+        }),
+      ]),
+    );
+  });
+
+  it('preserves non-inline item-scoped Execution Plan attachments across Markdown draft saves', async () => {
+    const { plan, item } = await seedApprovedBoundary(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+
+    await generateItemSpecDraft(app, plan.id, item.id);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
+      .send({ actor_id: actorTech })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
+      .expect(201);
+    const firstExecutionPlanRevision = await generateItemExecutionPlanDraft(app, plan.id, item.id);
+    const attachment = await seedRevisionAttachment(repository, {
+      id: 'att-execution-plan-non-inline',
+      objectRef: {
+        type: 'execution_plan_revision',
+        id: firstExecutionPlanRevision.id,
+        execution_plan_id: firstExecutionPlanRevision.execution_plan_id,
+      },
+    });
+
+    const savedRevision = (
+      await request(server)
+        .patch(`/development-plans/${plan.id}/items/${item.id}/execution-plan/draft`)
+        .send({
+          markdown: '# Saved Execution Plan draft\n\nText-only edit should keep the attached checklist available.',
+          object_ref: {
+            type: 'execution_plan_revision',
+            id: firstExecutionPlanRevision.id,
+            execution_plan_id: firstExecutionPlanRevision.execution_plan_id,
+          },
+          allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
+          attachment_refs: [attachment],
+          validation_version: '2026-05-23',
+        })
+        .expect(200)
+    ).body;
+
+    expect(savedRevision.attachment_refs).toEqual([expect.objectContaining({ id: attachment.id })]);
+    await expect(repository.listAttachmentsForObject('execution_plan_revision', savedRevision.id)).resolves.toEqual([
+      expect.objectContaining({ id: attachment.id }),
+    ]);
+  });
 });
+
+async function seedRevisionAttachment(
+  repository: DeliveryRepository,
+  input: {
+    id: string;
+    objectRef:
+      | { type: 'spec_revision'; id: string; spec_id: string }
+      | { type: 'execution_plan_revision'; id: string; execution_plan_id: string };
+  },
+): Promise<AttachmentRef> {
+  const attachment: Attachment = {
+    id: input.id,
+    owner_object_type: input.objectRef.type,
+    owner_object_id: input.objectRef.id,
+    linked_object_refs: [],
+    filename: `${input.id}.png`,
+    content_type: 'image/png',
+    size_bytes: 9,
+    storage_uri: `memory://attachments/${input.id}`,
+    checksum_sha256: 'c'.repeat(64),
+    uploaded_by_actor_id: actorTech,
+    created_at: now,
+    evidence_category: 'image',
+    alt_text: 'Non-inline review attachment',
+    visibility: 'object',
+    safety_status: 'passed',
+    reference_status: 'active',
+  };
+  await repository.saveAttachment(attachment);
+  const { storage_uri: _storageUri, ...publicAttachment } = attachment;
+  return publicAttachment;
+}
 
 async function generateItemSpecDraft(app: INestApplication, developmentPlanId: string, itemId: string) {
   return (

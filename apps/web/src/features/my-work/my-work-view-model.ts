@@ -73,7 +73,7 @@ export interface MyWorkQueueFilters {
   statuses: MyWorkFilterOption[];
 }
 
-export interface MyWorkQueueWorkspaceViewModel extends ProductPageViewModel {
+export interface MyWorkQueueViewModel extends ProductPageViewModel {
   allRows: MyWorkQueueRow[];
   bulkAction: ViewModelAction;
   disabledReason: string;
@@ -92,7 +92,7 @@ const bulkActionUnavailable: ViewModelAction = {
 export function myWorkQueueViewModel(
   queue: MyWorkQueueProjection = { items: undefined, degraded_sources: undefined, bulk_action: undefined },
   selectedRows: readonly MyWorkQueueRow[] = [],
-): MyWorkQueueWorkspaceViewModel {
+): MyWorkQueueViewModel {
   const rows = (queue.items ?? []).map(queueRowFor);
   const bulkAction = safeBulkActionFor(queue.bulk_action, selectedRows) ?? bulkActionUnavailable;
   const safeBulkAction = bulkAction.enabled ? bulkAction : undefined;

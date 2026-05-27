@@ -175,6 +175,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^tests\/smoke\/(?:delivery-dogfood-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
   ];
   const executionPackageOwnerPaths = [
+    /^apps\/control-plane-api\/src\/modules\/core\/product-architecture-demo-seed\.ts$/,
     /^apps\/control-plane-api\/src\/modules\/execution-packages\//,
     /^apps\/control-plane-api\/src\/modules\/automation\//,
     /^apps\/control-plane-api\/src\/modules\/run-control\//,

@@ -5,13 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttachmentRef, AttachmentRenderRef } from '@forgeloop/contracts';
 
 import { EvidenceAttachments } from '../../apps/web/src/shared/ui/evidence-attachments';
-import { requirementDetail } from './fixtures/product-data';
+import { requirementDetail, requirementListItem } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 const publicAttachmentFixture = (overrides: Partial<AttachmentRef> = {}): AttachmentRef => ({
   id: 'att-1',
   owner_object_type: 'requirement',
-  owner_object_id: 'req-1',
+  owner_object_id: requirementListItem.id,
   linked_object_refs: [],
   filename: 'flow.png',
   content_type: 'image/png',
@@ -44,9 +44,9 @@ describe('EvidenceAttachments', () => {
   it('resolves safe render URLs and renders images inline with alt text', async () => {
     const createRenderUrl = vi.fn(async () => renderRefFixture());
 
-    render(<EvidenceAttachments attachments={[publicAttachmentFixture({ alt_text: 'Checkout flow' })]} createRenderUrl={createRenderUrl} />);
+    render(<EvidenceAttachments attachments={[publicAttachmentFixture({ alt_text: 'Plan Item generation flow' })]} createRenderUrl={createRenderUrl} />);
 
-    expect((await screen.findByRole('img', { name: 'Checkout flow' })).getAttribute('src')).toBe(
+    expect((await screen.findByRole('img', { name: 'Plan Item generation flow' })).getAttribute('src')).toBe(
       '/api/attachments/att-1/render/render-token',
     );
     expect(createRenderUrl).toHaveBeenCalledWith('att-1', { disposition: 'inline' });
@@ -111,21 +111,21 @@ describe('EvidenceAttachments', () => {
       }),
     );
 
-    render(<EvidenceAttachments attachments={[publicAttachmentFixture({ alt_text: 'Checkout flow' })]} createRenderUrl={createRenderUrl} />);
+    render(<EvidenceAttachments attachments={[publicAttachmentFixture({ alt_text: 'Plan Item generation flow' })]} createRenderUrl={createRenderUrl} />);
 
     await waitFor(() => expect(screen.getByText(/unavailable evidence/i)).toBeTruthy());
-    expect(screen.queryByRole('img', { name: 'Checkout flow' })).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Plan Item generation flow' })).toBeNull();
     expect(document.body.innerHTML).not.toContain('/api/attachments/att-other/render/render-token');
   });
 
   it('renders source evidence readiness states without promoting raw artifact links', async () => {
-    const screen = await renderRoute('/requirements/req-1/evidence', {
+    const screen = await renderRoute(`/requirements/${requirementListItem.id}/evidence`, {
       apiOverrides: {
-        'GET /query/requirements/req-1': {
+        [`GET /query/requirements/${requirementListItem.id}`]: {
           ...requirementDetail,
           evidence_refs: [
-            { type: 'attachment', id: 'att-relevant', title: 'Relevant checkout evidence' },
-            { type: 'attachment', id: 'att-missing', title: 'Missing checkout evidence' },
+            { type: 'attachment', id: 'att-relevant', title: 'Relevant Plan Item generation evidence' },
+            { type: 'attachment', id: 'att-missing', title: 'Missing Plan Item generation evidence' },
           ],
           attachment_refs: [
             publicAttachmentFixture({
@@ -133,29 +133,29 @@ describe('EvidenceAttachments', () => {
               filename: 'relevant.md',
               content_type: 'text/markdown',
               evidence_category: 'document',
-              owner_object_id: 'req-1',
-              caption: 'Relevant checkout evidence',
-              alt_text: 'Relevant checkout evidence',
+              owner_object_id: requirementListItem.id,
+              caption: 'Relevant Plan Item generation evidence',
+              alt_text: 'Relevant Plan Item generation evidence',
             }),
             publicAttachmentFixture({
               id: 'att-stale',
               filename: 'stale.md',
               content_type: 'text/markdown',
               evidence_category: 'document',
-              owner_object_id: 'req-1',
+              owner_object_id: requirementListItem.id,
               reference_status: 'archived',
-              caption: 'Stale checkout evidence',
-              alt_text: 'Stale checkout evidence',
+              caption: 'Stale Plan Item generation evidence',
+              alt_text: 'Stale Plan Item generation evidence',
             }),
             publicAttachmentFixture({
               id: 'att-unavailable',
               filename: 'unsafe.md',
               content_type: 'text/markdown',
               evidence_category: 'document',
-              owner_object_id: 'req-1',
+              owner_object_id: requirementListItem.id,
               safety_status: 'unavailable',
-              caption: 'Unavailable checkout evidence',
-              alt_text: 'Unavailable checkout evidence',
+              caption: 'Unavailable Plan Item generation evidence',
+              alt_text: 'Unavailable Plan Item generation evidence',
             }),
           ],
         },
@@ -163,10 +163,12 @@ describe('EvidenceAttachments', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'Requirement Evidence' })).toBeTruthy();
-    expect(screen.getAllByText(/relevant evidence/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/missing evidence/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/stale evidence/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/unavailable evidence/i).length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.getAllByText(/relevant evidence/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/missing evidence/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/stale evidence/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/unavailable evidence/i).length).toBeGreaterThan(0);
+    });
     expect(document.body.textContent).not.toContain('bucket.example.com');
     expect(document.body.textContent).not.toContain('Raw artifact browser');
   });

@@ -3,24 +3,33 @@
 import { cleanup } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import {
+  bugListItem,
+  execution,
+  initiativeListItem,
+  release,
+  requirementListItem,
+  techDebtListItem,
+  developmentPlanItem,
+} from '../web/fixtures/product-data';
 import { renderRoute } from '../web/router-test-utils';
 
 const activeRoutes = [
   ['/my-work', /my work/i],
   ['/requirements', /^Requirements$/],
-  ['/requirements/req-1', /^Requirement$/],
+  [`/requirements/${requirementListItem.id}`, /^Requirement$/],
   ['/initiatives', /^Initiatives$/],
-  ['/initiatives/init-1', /^Initiative$/],
+  [`/initiatives/${initiativeListItem.id}`, /^Initiative$/],
   ['/tech-debt', /^Tech Debt$/],
-  ['/tech-debt/td-1', /^Tech Debt$/],
-  ['/specs-plans', /^Specs & Execution Plans$/],
+  [`/tech-debt/${techDebtListItem.id}`, /^Tech Debt$/],
+  ['/specs-plans', /^Document Reviews$/],
   ['/executions', /^Executions$/],
-  ['/executions/execution-web-product', /Build AI-native project management API clients/i],
+  [`/executions/${execution.id}`, new RegExp(developmentPlanItem.title, 'i')],
   ['/bugs', /^Bugs$/],
-  ['/bugs/bug-1', /^Bug$/],
+  [`/bugs/${bugListItem.id}`, /^Bug$/],
   ['/board', /^Board$/],
   ['/releases', /^Releases$/],
-  ['/releases/release-web-product', /^Typed scope$/],
+  [`/releases/${release.id}`, /^Release Readiness$/],
   ['/reports', /^Reports$/],
 ] as const;
 
@@ -40,8 +49,8 @@ const removedRoutes = [
   '/specs/spec-1',
   '/plans',
   '/plans/plan-1',
-  '/requirements/req-1/spec',
-  '/requirements/req-1/plan',
+  `/requirements/${requirementListItem.id}/spec`,
+  `/requirements/${requirementListItem.id}/plan`,
 ] as const;
 
 describe('web product route smoke', () => {

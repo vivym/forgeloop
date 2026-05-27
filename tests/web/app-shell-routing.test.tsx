@@ -4,7 +4,7 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { projectId } from './fixtures/product-data';
+import { developmentPlan, execution, initiativeListItem, projectId } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 function containsElement(node: ReactNode, predicate: (element: ReactElement) => boolean): boolean {
@@ -37,7 +37,7 @@ describe('React Router product shell', () => {
   it('shows project management nav labels without removed product route families', async () => {
     const screen = await renderRoute('/my-work');
 
-    for (const label of ['Cockpit', 'My Work', 'Initiatives', 'Requirements', 'Development Plans', 'Specs & Execution Plans', 'Bugs', 'Board', 'Executions', 'Releases', 'Reports']) {
+    for (const label of ['Cockpit', 'My Work', 'Initiatives', 'Requirements', 'Development Plans', 'Document Reviews', 'Bugs', 'Board', 'Executions', 'Releases', 'Reports']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
 
@@ -66,7 +66,7 @@ describe('React Router product shell', () => {
     const commandSuggestions = screen.getByRole('navigation', { name: 'Command suggestions' });
     expect(commandSuggestions).toBeTruthy();
     expect(screen.queryByRole('listbox', { name: 'Command suggestions' })).toBeNull();
-    expect(screen.queryByRole('option')).toBeNull();
+    expect(within(commandSuggestions).queryByRole('option')).toBeNull();
     expect(within(commandSuggestions).getByRole('link', { name: 'Cockpit' })).toBeTruthy();
     expect(within(commandSuggestions).queryByRole('link', { name: 'Dashboard' })).toBeNull();
 
@@ -145,26 +145,26 @@ describe('React Router product shell', () => {
   });
 
   it('marks typed Discovery routes active independently', async () => {
-    const screen = await renderRoute('/initiatives/init-1');
+    const screen = await renderRoute(`/initiatives/${initiativeListItem.id}`);
 
     expect(screen.getByRole('link', { name: 'Initiatives' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('link', { name: 'Requirements' }).getAttribute('aria-current')).toBe(null);
   });
 
-  it('marks Specs & Execution Plans active for the governance queue route', async () => {
+  it('marks Document Reviews active for the governance queue route', async () => {
     const screen = await renderRoute('/specs-plans');
 
-    expect(screen.getByRole('link', { name: 'Specs & Execution Plans' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Document Reviews' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('marks Development Plans active for planning table routes', async () => {
-    const screen = await renderRoute('/development-plans/development-plan-web-product');
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}`);
 
     expect(screen.getByRole('link', { name: 'Development Plans' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('marks Executions active for execution supervision routes', async () => {
-    const screen = await renderRoute('/executions/execution-web-product');
+    const screen = await renderRoute(`/executions/${execution.id}`);
 
     expect(screen.getByRole('link', { name: 'Executions' }).getAttribute('aria-current')).toBe('page');
   });

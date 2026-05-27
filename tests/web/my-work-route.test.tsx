@@ -4,32 +4,39 @@ import { fireEvent, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { renderRoute } from './router-test-utils';
-import { actorId, execution, executionPlan, myWorkQueueResponse, projectId, spec } from './fixtures/product-data';
+import {
+  actorId,
+  bugListItem,
+  developmentPlan,
+  developmentPlanItem,
+  execution,
+  executionPlan,
+  myWorkQueueResponse,
+  projectId,
+  requirementListItem,
+  spec,
+} from './fixtures/product-data';
 import { myWorkQueueViewModel } from '../../apps/web/src/features/my-work/my-work-view-model';
 
 const legacyOwnerPattern = new RegExp(`${['Work', 'Item', 'Owner'].join(' ')}|${['owner', 'actor', 'id'].join('_')}`);
 
 describe('My Work route', () => {
-  it('renders the role-aware queue workspace first viewport without generic Work Items copy', async () => {
+  it('renders the role-aware inbox first viewport without generic Work Items copy', async () => {
     const screen = await renderRoute('/my-work');
 
     expect(await screen.findByRole('heading', { name: 'My Work' })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="queue"][data-workspace-layout="queue-workspace"]')).toBeInstanceOf(HTMLElement);
-    expect(screen.getByTestId('current-state').textContent?.trim()).toBeTruthy();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/Next action/i);
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
-    expect(screen.getByTestId('role-responsibility').textContent?.trim()).toBeTruthy();
-    expect(screen.getByTestId('blocker-risk').textContent).toMatch(/blocker|risk|release/i);
-    for (const group of [
-      'Product attention',
-      'Tech Lead attention',
-      'Developer attention',
-      'QA attention',
-      'Release attention',
-      'Manager attention',
-    ]) {
-      expect(screen.getByText(group)).toBeTruthy();
-    }
+    expect(document.querySelector('[data-page-family="inbox"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-inbox-list][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-page-family="queue"]')).toBeNull();
+    expect(document.querySelector('[data-workspace-layout="queue-workspace"]')).toBeNull();
+    expect(document.querySelector('[data-testid="current-state"]')).toBeNull();
+    expect(document.querySelector('[data-testid="next-action"]')).toBeNull();
+    expect(document.querySelector('[data-testid="role-responsibility"]')).toBeNull();
+    expect(document.querySelector('[data-testid="blocker-risk"]')).toBeNull();
+    expect((await screen.findAllByText(/Needs boundary approval/i))[0]).toBeTruthy();
+    expect(screen.getByText('Developer attention')).toBeTruthy();
+    expect(screen.queryByText('No attention items.')).toBeNull();
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
     expect(screen.queryByText('Work Items')).toBeNull();
     expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
   });
@@ -46,18 +53,18 @@ describe('My Work route', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Developer$/i }));
     expect(screen.getByRole('button', { name: /Role: Developer/i })).toBeTruthy();
     expect(screen.getByText('Developer attention')).toBeTruthy();
-    expect(screen.getByText('Build AI-native project management API clients', { selector: 'span.font-semibold' })).toBeTruthy();
-    expect(screen.queryByText('Checkout requirement', { selector: 'span.font-semibold' })).toBeNull();
+    expect(screen.getByText(developmentPlanItem.title, { selector: 'span.font-semibold' })).toBeTruthy();
+    expect(screen.queryByText(requirementListItem.title, { selector: 'span.font-semibold' })).toBeNull();
   });
 
   it('shows a selected queue item preview with next action and disabled reason', async () => {
     const screen = await renderRoute('/my-work');
 
     expect(await screen.findByRole('region', { name: /Selected queue item/i })).toBeTruthy();
-    expect((await screen.findByText('Checkout requirement', { selector: 'span.font-semibold' })) as HTMLElement).toBeTruthy();
+    expect((await screen.findByText(requirementListItem.title, { selector: 'span.font-semibold' })) as HTMLElement).toBeTruthy();
     expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
 
-    fireEvent.click(screen.getByText('Build AI-native project management API clients', { selector: 'span.font-semibold' }));
+    fireEvent.click(screen.getByText(developmentPlanItem.title, { selector: 'span.font-semibold' }));
 
     expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/Open Development Plan Item/i)).toBeTruthy();
   });
@@ -68,7 +75,7 @@ describe('My Work route', () => {
     expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
   });
 
   it('fails closed when a bare enabled bulk action has no selected-row scoped command', async () => {
@@ -87,10 +94,10 @@ describe('My Work route', () => {
 
     expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'My Work' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${requirementListItem.title}`, 'i') }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
   });
 
   it('fails closed when scoped command metadata does not include selected-row object refs', async () => {
@@ -110,10 +117,10 @@ describe('My Work route', () => {
     });
 
     expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${requirementListItem.title}`, 'i') }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
   });
 
   it('keeps scoped bulk actions hidden until an executable command contract exists', async () => {
@@ -124,13 +131,13 @@ describe('My Work route', () => {
           items: [
             myWorkQueueResponse.items[0],
             {
-              id: 'product:req-2',
-              object_ref: { type: 'requirement', id: 'req-2' },
-              title: 'Checkout retry requirement',
+              id: 'product:req-plan-item-governance-retry',
+              object_ref: { type: 'requirement', id: 'req-plan-item-governance-retry' },
+              title: 'Plan Item governance retry requirement',
               attention_reason: 'product_attention',
               expected_action: 'Clarify retry acceptance criteria',
               actor_id: actorId,
-              href: '/requirements/req-2',
+              href: '/requirements/req-plan-item-governance-retry',
             },
             ...myWorkQueueResponse.items.slice(1),
           ],
@@ -141,8 +148,8 @@ describe('My Work route', () => {
             scope_role_ids: ['product'],
             scope_object_types: ['requirement'],
             scope_object_refs: [
-              { type: 'requirement', id: 'req-1' },
-              { type: 'requirement', id: 'req-2' },
+              { type: 'requirement', id: requirementListItem.id },
+              { type: 'requirement', id: 'req-plan-item-governance-retry' },
             ],
           },
         },
@@ -150,11 +157,11 @@ describe('My Work route', () => {
     });
 
     expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout retry requirement/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${requirementListItem.title}`, 'i') }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Select Plan Item governance retry requirement/i }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/Bulk action execution command unavailable/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/Bulk action execution command unavailable/i)).toBeTruthy();
   });
 
   it('does not expose raw bulk action hrefs when selected rows share a scoped but non-executable command', async () => {
@@ -167,11 +174,11 @@ describe('My Work route', () => {
         href: '/runtime/secret',
         scope_role_ids: ['product'],
         scope_object_types: ['requirement'],
-        scope_object_refs: [{ type: 'requirement', id: 'req-1' }],
+        scope_object_refs: [{ type: 'requirement', id: requirementListItem.id }],
       },
     };
     const baseViewModel = myWorkQueueViewModel(response);
-    const viewModel = myWorkQueueViewModel(response, baseViewModel.allRows.filter((row) => row.id === 'product:req-1'));
+    const viewModel = myWorkQueueViewModel(response, baseViewModel.allRows.filter((row) => row.id === `product:${requirementListItem.id}`));
 
     expect(viewModel.safeBulkAction?.href).toBeUndefined();
 
@@ -182,10 +189,10 @@ describe('My Work route', () => {
     });
 
     expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${requirementListItem.title}`, 'i') }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/Bulk action execution command unavailable/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/Bulk action execution command unavailable/i)).toBeTruthy();
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href')).join(' ')).not.toMatch(/\/runtime\/secret/i);
   });
 
@@ -200,26 +207,26 @@ describe('My Work route', () => {
             enabled: true,
             scope_role_ids: ['product'],
             scope_object_types: ['requirement'],
-            scope_object_refs: [{ type: 'requirement', id: 'req-1' }],
+            scope_object_refs: [{ type: 'requirement', id: requirementListItem.id }],
           },
         },
       },
     });
 
     expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout requirement/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /Select Checkout regression/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${requirementListItem.title}`, 'i') }));
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`Select ${bugListItem.title}`, 'i') }));
 
     expect(document.querySelector('[data-safe-bulk-actions]')).toBeNull();
-    expect(screen.getByTestId('next-action').textContent).toMatch(/No shared safe bulk action/i);
+    expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();
   });
 
   it('links queue rows to typed object routes', async () => {
     const screen = await renderRoute('/my-work');
 
-    expect((await screen.findByRole('link', { name: /open requirement/i })).getAttribute('href')).toBe('/requirements/req-1');
+    expect((await screen.findByRole('link', { name: /open requirement/i })).getAttribute('href')).toBe(`/requirements/${requirementListItem.id}`);
     expect(screen.getByRole('link', { name: /^Open Development Plan Item$/i }).getAttribute('href')).toBe(
-      '/development-plans/development-plan-web-product/items/development-plan-item-web-product',
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
   });
 
@@ -280,7 +287,7 @@ describe('My Work route', () => {
       },
     });
 
-    expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]?.getAttribute('href')).toBe('/requirements/req-1');
+    expect((await screen.findAllByRole('link', { name: /^Open Requirement$/i }))[0]?.getAttribute('href')).toBe(`/requirements/${requirementListItem.id}`);
     expect(document.body.textContent).not.toContain('javascript:alert');
   });
 });

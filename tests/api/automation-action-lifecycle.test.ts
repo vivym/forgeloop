@@ -8,6 +8,7 @@ import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/co
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import { signAutomationRequest } from '../../packages/automation/src/index';
+import { captureEnv, restoreEnv } from '../helpers/env-restore';
 
 const secret = 'test-secret';
 const actorId = 'daemon-actor';
@@ -105,15 +106,17 @@ const expectPublicAction = (action: Record<string, unknown>) => {
 };
 
 describe('internal automation action lifecycle', () => {
+  let envSnapshot: Record<string, string | undefined>;
+
   beforeEach(() => {
+    envSnapshot = captureEnv(['TZ', 'FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET', 'FORGELOOP_AUTOMATION_TEST_NOW']);
     process.env.TZ = 'UTC';
     process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = secret;
     process.env.FORGELOOP_AUTOMATION_TEST_NOW = now;
   });
 
   afterEach(async () => {
-    delete process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
-    delete process.env.FORGELOOP_AUTOMATION_TEST_NOW;
+    restoreEnv(envSnapshot);
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 

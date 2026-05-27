@@ -66,7 +66,7 @@ export interface SpecPlanQueueGroup {
   rows: SpecPlanQueueRow[];
 }
 
-export interface SpecPlanQueueWorkspaceViewModel extends ProductPageViewModel {
+export interface SpecPlanQueueViewModel extends ProductPageViewModel {
   rows: SpecPlanQueueRow[];
   groups: SpecPlanQueueGroup[];
 }
@@ -79,7 +79,7 @@ export const specPlanQueueGroupDefinitions: Array<{ id: SpecPlanQueueGroupId; la
   { id: 'stale-blocked', label: 'Stale / blocked' },
 ];
 
-export function specPlanQueueViewModel(queue: SpecPlanQueueProjection): SpecPlanQueueWorkspaceViewModel {
+export function specPlanQueueViewModel(queue: SpecPlanQueueProjection): SpecPlanQueueViewModel {
   const items = queue.items ?? [];
   const rows = items.map(specPlanQueueRow);
   const firstRow = rows[0];
@@ -89,7 +89,7 @@ export function specPlanQueueViewModel(queue: SpecPlanQueueProjection): SpecPlan
   const activeGroupCount = specPlanQueueGroups(rows).filter((group) => group.rows.length > 0).length;
 
   return {
-    objectLabel: 'Specs & Execution Plans',
+    objectLabel: 'Document Reviews',
     objectType: 'Governance Queue',
     currentState: queue.degraded_sources?.length
       ? 'Degraded governance signal'

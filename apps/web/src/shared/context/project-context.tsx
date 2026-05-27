@@ -6,7 +6,7 @@ export interface ProjectContextValue {
 }
 
 export const defaultProjectContext: ProjectContextValue = {
-  projectId: 'project-web-product',
+  projectId: import.meta.env.VITE_FORGELOOP_PROJECT_ID || 'project-1',
 };
 
 const ProjectContext = createContext<ProjectContextValue>(defaultProjectContext);

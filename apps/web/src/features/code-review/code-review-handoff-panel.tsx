@@ -104,7 +104,7 @@ export function CodeReviewHandoffPanel({
     >
       <div className="grid gap-4">
         {message ? <InlineNotice title={message} tone="success" /> : null}
-        <dl className="grid gap-3 text-sm md:grid-cols-2">
+        <dl className="grid gap-3 text-sm">
           <Definition label="Execution" value={execution.development_plan_item_ref?.title ?? 'Linked execution'} />
           <Definition label="Approved Execution Plan revision" value={execution.execution_plan_revision_ref?.title ?? (execution.execution_plan_revision_id === undefined ? 'Not linked' : 'Linked revision')} />
           <Definition label="Reviewer" value={handoff?.reviewer_actor_id === undefined ? 'Unassigned' : 'Assigned reviewer'} />
@@ -139,9 +139,9 @@ export function CodeReviewHandoffPanel({
 
 function Definition({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid gap-1 rounded-md border border-border bg-background p-3">
+    <div className="grid min-w-0 gap-1 rounded-md border border-border bg-background p-3">
       <dt className="text-text-secondary">{label}</dt>
-      <dd className="font-semibold text-text-primary">{value}</dd>
+      <dd className="break-words font-semibold text-text-primary">{value}</dd>
     </div>
   );
 }

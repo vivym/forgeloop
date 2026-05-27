@@ -13,7 +13,16 @@ import {
 import type { SpecPlan } from '../../apps/web/src/shared/api/types';
 import { installProductApiMock } from './fixtures/product-api-mock';
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
-import { developmentPlan, developmentPlanItem, executionPlan, projectId } from './fixtures/product-data';
+import {
+  bugListItem,
+  developmentPlan,
+  developmentPlanItem,
+  executionPlan,
+  initiativeListItem,
+  projectId,
+  requirementListItem,
+  techDebtListItem,
+} from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 const inReviewSpec: SpecPlan = {
@@ -204,7 +213,7 @@ describe('SpecPlanLifecycleActions', () => {
   });
 });
 
-describe('Specs & Execution Plans route queue', () => {
+describe('Document Reviews route queue', () => {
   it('renders governance queues scoped to Development Plan Items', async () => {
     const governanceRows = [
       {
@@ -239,7 +248,7 @@ describe('Specs & Execution Plans route queue', () => {
           type: 'development_plan_item',
           id: 'development-plan-item-review',
           development_plan_id: developmentPlan.id,
-          title: 'Review checkout failure states',
+          title: 'Review execution continuation states',
         },
         reviewer_actor_id: 'actor-reviewer',
         age_label: '1h',
@@ -335,7 +344,7 @@ describe('Specs & Execution Plans route queue', () => {
     };
     const routeScreen = await renderRoute('/specs-plans', { apiOverrides });
 
-    expect(await routeScreen.findByRole('heading', { name: 'Specs & Execution Plans' })).toBeTruthy();
+    expect(await routeScreen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
     for (const label of ['Needs generation', 'Needs review', 'Changes requested', 'Approved / ready', 'Stale / blocked']) {
       expect(routeScreen.getByRole('region', { name: label })).toBeTruthy();
     }
@@ -361,14 +370,14 @@ describe('Specs & Execution Plans route queue', () => {
     '/plans/plan-1',
     '/specs',
     '/specs/spec-1',
-    '/requirements/req-1/spec',
-    '/requirements/req-1/plan',
-    '/bugs/bug-1/spec',
-    '/bugs/bug-1/plan',
-    '/tech-debt/td-1/spec',
-    '/tech-debt/td-1/plan',
-    '/initiatives/init-1/spec',
-    '/initiatives/init-1/plan',
+    `/requirements/${requirementListItem.id}/spec`,
+    `/requirements/${requirementListItem.id}/plan`,
+    `/bugs/${bugListItem.id}/spec`,
+    `/bugs/${bugListItem.id}/plan`,
+    `/tech-debt/${techDebtListItem.id}/spec`,
+    `/tech-debt/${techDebtListItem.id}/plan`,
+    `/initiatives/${initiativeListItem.id}/spec`,
+    `/initiatives/${initiativeListItem.id}/plan`,
   ])('does not expose legacy or direct artifact route %s', async (route) => {
     const routeScreen = await renderRoute(route);
     expect(await routeScreen.findByRole('heading', { name: /not found/i })).toBeTruthy();

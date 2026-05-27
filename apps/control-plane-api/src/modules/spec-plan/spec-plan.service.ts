@@ -26,8 +26,9 @@ import {
   transitionSpecPlan,
 } from '@forgeloop/domain';
 import type { DeliveryRepository } from '@forgeloop/db';
-import type { ObjectRef } from '@forgeloop/contracts';
+import type { AttachmentRef, MarkdownDocument, ObjectRef } from '@forgeloop/contracts';
 
+import { AttachmentsService } from '../attachments/attachments.service';
 import { AuditWriterService } from '../audit/audit-writer.service';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
@@ -39,10 +40,15 @@ import type {
   RevisionCompareQueryDto,
   SubmitForApprovalCommandDto,
 } from '../delivery/dto';
+import { MarkdownDocumentService } from '../markdown/markdown-document.service';
 
 export type PublicSpecPlan = Omit<Spec | Plan, 'work_item_id'> & { scope_ref: ObjectRef };
-export type PublicSpecRevision = Omit<SpecRevision, 'work_item_id' | 'structured_document' | 'artifact_refs'> & { scope_ref: ObjectRef };
+export type PublicSpecRevision = Omit<SpecRevision, 'work_item_id' | 'structured_document' | 'artifact_refs'> & {
+  attachment_refs: AttachmentRef[];
+  scope_ref: ObjectRef;
+};
 export type PublicPlanRevision = Omit<PlanRevision, 'work_item_id' | 'structured_document' | 'artifact_refs'> & { scope_ref: ObjectRef };
+export type PublicExecutionPlanRevision = Omit<ExecutionPlanRevision, 'structured_document'> & { attachment_refs: AttachmentRef[] };
 
 @Injectable()
 export class SpecPlanService {
@@ -51,6 +57,8 @@ export class SpecPlanService {
     @Inject(ControlPlaneRuntimeService)
     private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
+    @Inject(AttachmentsService) private readonly attachments: AttachmentsService,
+    @Inject(MarkdownDocumentService) private readonly markdownDocuments: MarkdownDocumentService,
   ) {}
 
   async generateItemSpecDraft(
@@ -189,6 +197,71 @@ export class SpecPlanService {
         preserve_prior_decisions: dto.preserve_prior_decisions,
       });
       return revision;
+    });
+  }
+
+  async saveItemSpecDraft(
+    developmentPlanId: string,
+    itemId: string,
+    document: MarkdownDocument,
+  ): Promise<PublicSpecRevision> {
+    return this.withPlanItemMutation(developmentPlanId, async (repository) => {
+      const { plan, item, workItem } = await this.requirePlanItem(developmentPlanId, itemId, repository);
+      const actorId = item.driver_actor_id ?? workItem.driver_actor_id;
+      const spec = await this.requireItemSpec(item.id, repository);
+      const currentRevision = await this.requireItemSpecRevision(item.id, this.requireCurrentRevision(spec), repository);
+      this.requireDocumentObjectRef(document, 'spec_revision', currentRevision.id);
+      const validatedDocument = await this.markdownDocuments.validateForWrite(document);
+      const draftDocument = {
+        ...validatedDocument,
+        attachment_refs: await this.attachmentRefsForDraftSave(document, validatedDocument),
+      };
+      const nextSpec = {
+        ...spec,
+        status: 'draft' as const,
+        editing_state: 'idle' as const,
+        gate_state: 'not_submitted' as const,
+        resolution: 'none' as const,
+        updated_at: this.now(),
+      };
+      await repository.saveSpec(nextSpec);
+      const draftSpecFields = specStructuredFieldsFromMarkdown(draftDocument.markdown);
+      const revision = await this.saveSpecRevisionWithRepository(repository, nextSpec, {
+        ...currentRevision,
+        ...draftSpecFields,
+        content: draftDocument.markdown,
+        structured_document: {
+          ...(currentRevision.structured_document ?? {}),
+          markdown_document: draftDocument,
+        },
+      });
+      const updatedSpec = { ...nextSpec, current_revision_id: revision.id, updated_at: this.now() };
+      await repository.saveSpec(updatedSpec);
+      await repository.saveWorkItem({
+        ...workItem,
+        current_spec_id: spec.id,
+        current_spec_revision_id: revision.id,
+        updated_at: updatedSpec.updated_at,
+      });
+      await this.linkMarkdownAttachmentsToRevision(repository, draftDocument.attachment_refs, {
+        type: 'spec_revision',
+        id: revision.id,
+        spec_id: spec.id,
+      });
+      await this.updateDevelopmentPlanItemArtifactStatus(
+        repository,
+        plan,
+        item,
+        'spec_status',
+        'draft',
+        'spec_draft_saved',
+        actorId,
+      );
+      await this.eventWithRepository(repository, 'spec_revision', revision.id, 'spec_draft_saved', actorId, {
+        spec_id: spec.id,
+        previous_revision_id: currentRevision.id,
+      });
+      return this.toPublicSpecRevision(revision, repository);
     });
   }
 
@@ -455,6 +528,72 @@ export class SpecPlanService {
     });
   }
 
+  async saveItemExecutionPlanDraft(
+    developmentPlanId: string,
+    itemId: string,
+    document: MarkdownDocument,
+  ): Promise<PublicExecutionPlanRevision> {
+    return this.withPlanItemMutation(developmentPlanId, async (repository) => {
+      const { plan, item, workItem } = await this.requirePlanItem(developmentPlanId, itemId, repository);
+      const actorId = item.driver_actor_id ?? workItem.driver_actor_id;
+      const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
+      const currentRevision = await this.requireItemExecutionPlanRevision(
+        item.id,
+        this.requireExecutionPlanCurrentRevision(executionPlan),
+        repository,
+      );
+      this.requireDocumentObjectRef(document, 'execution_plan_revision', currentRevision.id);
+      const validatedDocument = await this.markdownDocuments.validateForWrite(document);
+      const draftDocument = {
+        ...validatedDocument,
+        attachment_refs: await this.attachmentRefsForDraftSave(document, validatedDocument),
+      };
+      const draftPlan: ExecutionPlanDocument = {
+        ...executionPlan,
+        status: 'draft',
+        updated_at: this.now(),
+      };
+      await repository.saveExecutionPlan(draftPlan);
+      const revision = await this.saveExecutionPlanRevisionWithRepository(repository, draftPlan, {
+        ...currentRevision,
+        summary: summaryFromMarkdown(draftDocument.markdown, currentRevision.summary),
+        content: draftDocument.markdown,
+        structured_document: {
+          ...(currentRevision.structured_document ?? {}),
+          markdown_document: draftDocument,
+        },
+      });
+      const updatedPlan = { ...draftPlan, current_revision_id: revision.id, updated_at: this.now() };
+      await repository.saveExecutionPlan(updatedPlan);
+      await this.linkMarkdownAttachmentsToRevision(repository, draftDocument.attachment_refs, {
+        type: 'execution_plan_revision',
+        id: revision.id,
+        execution_plan_id: executionPlan.id,
+      });
+      await this.updateDevelopmentPlanItemArtifactStatus(
+        repository,
+        plan,
+        item,
+        'execution_plan_status',
+        'draft',
+        'execution_plan_draft_saved',
+        actorId,
+      );
+      await this.eventWithRepository(
+        repository,
+        'execution_plan_revision',
+        revision.id,
+        'execution_plan_draft_saved',
+        actorId,
+        {
+          execution_plan_id: executionPlan.id,
+          previous_revision_id: currentRevision.id,
+        },
+      );
+      return this.toPublicExecutionPlanRevision(revision, repository);
+    });
+  }
+
   async submitItemExecutionPlanForApproval(
     developmentPlanId: string,
     itemId: string,
@@ -654,6 +793,17 @@ export class SpecPlanService {
 
   async getPublicPlanRevision(planRevisionId: string): Promise<PublicPlanRevision> {
     return this.toPublicPlanRevision(await this.getPlanRevision(planRevisionId));
+  }
+
+  async getExecutionPlanRevision(executionPlanRevisionId: string): Promise<ExecutionPlanRevision> {
+    return this.requireFound(
+      await this.repository.getExecutionPlanRevision(executionPlanRevisionId),
+      `ExecutionPlanRevision ${executionPlanRevisionId}`,
+    );
+  }
+
+  async getPublicExecutionPlanRevision(executionPlanRevisionId: string): Promise<PublicExecutionPlanRevision> {
+    return this.toPublicExecutionPlanRevision(await this.getExecutionPlanRevision(executionPlanRevisionId));
   }
 
   private withPlanItemMutation<T>(
@@ -1058,16 +1208,24 @@ export class SpecPlanService {
     return revision;
   }
 
-  private async requireItemSpecRevision(itemId: string, revisionId: string): Promise<SpecRevision> {
-    const revision = this.requireFound(await this.repository.getSpecRevision(revisionId), `Spec Revision ${revisionId}`);
+  private async requireItemSpecRevision(
+    itemId: string,
+    revisionId: string,
+    repository: DeliveryRepository = this.repository,
+  ): Promise<SpecRevision> {
+    const revision = this.requireFound(await repository.getSpecRevision(revisionId), `Spec Revision ${revisionId}`);
     if (revision.development_plan_item_id !== itemId) {
       throw new NotFoundException(`Spec Revision ${revisionId} not found`);
     }
     return revision;
   }
 
-  private async requireItemExecutionPlanRevision(itemId: string, revisionId: string): Promise<ExecutionPlanRevision> {
-    const revision = this.requireFound(await this.repository.getExecutionPlanRevision(revisionId), `Execution Plan Revision ${revisionId}`);
+  private async requireItemExecutionPlanRevision(
+    itemId: string,
+    revisionId: string,
+    repository: DeliveryRepository = this.repository,
+  ): Promise<ExecutionPlanRevision> {
+    const revision = this.requireFound(await repository.getExecutionPlanRevision(revisionId), `Execution Plan Revision ${revisionId}`);
     if (revision.development_plan_item_id !== itemId) {
       throw new NotFoundException(`Execution Plan Revision ${revisionId} not found`);
     }
@@ -1148,14 +1306,21 @@ export class SpecPlanService {
     return { ...publicEntity, scope_ref: await this.scopeRefForWorkItemId(workItemId) };
   }
 
-  private async toPublicSpecRevision(revision: SpecRevision): Promise<PublicSpecRevision> {
+  private async toPublicSpecRevision(
+    revision: SpecRevision,
+    repository: DeliveryRepository = this.repository,
+  ): Promise<PublicSpecRevision> {
     const {
       work_item_id: workItemId,
       structured_document: _structuredDocument,
       artifact_refs: _artifactRefs,
       ...publicRevision
     } = revision;
-    return { ...publicRevision, scope_ref: await this.scopeRefForWorkItemId(workItemId) };
+    return {
+      ...publicRevision,
+      attachment_refs: await this.publicAttachmentsForObject(repository, 'spec_revision', revision.id),
+      scope_ref: await this.scopeRefForWorkItemId(workItemId),
+    };
   }
 
   private async toPublicPlanRevision(revision: PlanRevision): Promise<PublicPlanRevision> {
@@ -1166,6 +1331,59 @@ export class SpecPlanService {
       ...publicRevision
     } = revision;
     return { ...publicRevision, scope_ref: await this.scopeRefForWorkItemId(workItemId) };
+  }
+
+  private async toPublicExecutionPlanRevision(
+    revision: ExecutionPlanRevision,
+    repository: DeliveryRepository = this.repository,
+  ): Promise<PublicExecutionPlanRevision> {
+    const { structured_document: _structuredDocument, ...publicRevision } = revision;
+    return {
+      ...publicRevision,
+      attachment_refs: await this.publicAttachmentsForObject(repository, 'execution_plan_revision', revision.id),
+    };
+  }
+
+  private async publicAttachmentsForObject(
+    repository: DeliveryRepository,
+    objectType: 'spec_revision' | 'execution_plan_revision',
+    objectId: string,
+  ): Promise<AttachmentRef[]> {
+    return (await repository.listAttachmentsForObject(objectType, objectId)).map((attachment) => this.attachments.toPublicRef(attachment));
+  }
+
+  private requireDocumentObjectRef(
+    document: MarkdownDocument,
+    expectedType: 'spec_revision' | 'execution_plan_revision',
+    expectedRevisionId: string,
+  ): void {
+    if (document.object_ref.type !== expectedType || document.object_ref.id !== expectedRevisionId) {
+      throw new BadRequestException(`${expectedType} draft save must target the current document revision`);
+    }
+  }
+
+  private async linkMarkdownAttachmentsToRevision(
+    repository: DeliveryRepository,
+    attachments: AttachmentRef[],
+    objectRef: Extract<ObjectRef, { type: 'spec_revision' | 'execution_plan_revision' }>,
+  ): Promise<void> {
+    await Promise.all(attachments.map((attachment) => repository.linkAttachmentToObject(attachment.id, objectRef)));
+  }
+
+  private async attachmentRefsForDraftSave(
+    document: MarkdownDocument,
+    validatedDocument: MarkdownDocument,
+  ): Promise<AttachmentRef[]> {
+    const attachmentsById = new Map(validatedDocument.attachment_refs.map((attachment) => [attachment.id, attachment]));
+
+    for (const attachment of document.attachment_refs) {
+      const referenceable = await this.attachments.getReferenceableAttachment(attachment.id, document.object_ref);
+      if (referenceable !== undefined) {
+        attachmentsById.set(referenceable.id, referenceable);
+      }
+    }
+
+    return [...attachmentsById.values()];
   }
 
   private async scopeRefForWorkItemId(workItemId: string): Promise<ObjectRef> {
@@ -1248,4 +1466,127 @@ export class SpecPlanService {
   private now(): string {
     return this.controlPlaneRuntime.now();
   }
+}
+
+function summaryFromMarkdown(markdown: string, fallback: string): string {
+  const heading = markdown
+    .split('\n')
+    .map((line) => line.replace(/^#{1,6}\s+/, '').trim())
+    .find((line) => line.length > 0);
+  return heading ?? fallback;
+}
+
+type SpecStructuredFields = Pick<
+  SpecRevision,
+  'summary' | 'background' | 'goals' | 'scope_in' | 'scope_out' | 'acceptance_criteria' | 'risk_notes' | 'test_strategy_summary'
+>;
+
+function specStructuredFieldsFromMarkdown(markdown: string): SpecStructuredFields {
+  const sections = markdownSections(markdown);
+  const summary = summaryFromMarkdown(markdown, 'Untitled Spec draft');
+  const fallbackBody = firstMarkdownParagraph(markdown) ?? summary;
+
+  return {
+    summary,
+    background: sectionText(sections, ['background', 'context', 'problem', '背景']) ?? fallbackBody,
+    goals: sectionItems(sections, ['goals', 'goal', 'objectives', '目标']) ?? [summary],
+    scope_in: sectionItems(sections, ['scope in', 'in scope', 'scope', 'included scope', '范围内']) ?? [fallbackBody],
+    scope_out: sectionItems(sections, ['scope out', 'out of scope', 'non goals', 'non-goals', 'exclusions', '范围外']) ?? [],
+    acceptance_criteria: sectionItems(sections, ['acceptance criteria', 'acceptance', 'success criteria', '验收标准']) ?? [fallbackBody],
+    risk_notes: sectionItems(sections, ['risk notes', 'risks', 'risk', 'risks and mitigations', '风险']) ?? [],
+    test_strategy_summary: sectionText(sections, ['test strategy', 'testing', 'validation', 'verification plan', '测试策略']) ?? fallbackBody,
+  };
+}
+
+function markdownSections(markdown: string): Map<string, string[]> {
+  const sections = new Map<string, string[]>();
+  let currentHeading = 'intro';
+  let inCodeFence = false;
+
+  for (const line of markdown.split('\n')) {
+    if (line.trim().startsWith('```')) {
+      inCodeFence = !inCodeFence;
+      sections.set(currentHeading, [...(sections.get(currentHeading) ?? []), line]);
+      continue;
+    }
+
+    const heading = inCodeFence ? undefined : line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/)?.[1];
+    if (heading !== undefined) {
+      currentHeading = normalizeMarkdownHeading(heading);
+      if (!sections.has(currentHeading)) sections.set(currentHeading, []);
+      continue;
+    }
+
+    sections.set(currentHeading, [...(sections.get(currentHeading) ?? []), line]);
+  }
+
+  return sections;
+}
+
+function sectionText(sections: Map<string, string[]>, headings: string[]): string | undefined {
+  const lines = findSectionLines(sections, headings);
+  if (lines === undefined) return undefined;
+  return markdownParagraphs(lines).join('\n\n') || undefined;
+}
+
+function sectionItems(sections: Map<string, string[]>, headings: string[]): string[] | undefined {
+  const lines = findSectionLines(sections, headings);
+  if (lines === undefined) return undefined;
+  const listItems = lines
+    .map((line) => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').replace(/^\[[ xX]\]\s+/, '').trim())
+    .filter((line) => line.length > 0);
+  if (listItems.length > 0) return listItems;
+  const paragraphs = markdownParagraphs(lines);
+  return paragraphs.length > 0 ? paragraphs : undefined;
+}
+
+function findSectionLines(sections: Map<string, string[]>, headings: string[]): string[] | undefined {
+  for (const heading of headings) {
+    const section = sections.get(normalizeMarkdownHeading(heading));
+    if (section !== undefined) return section;
+  }
+  return undefined;
+}
+
+function firstMarkdownParagraph(markdown: string): string | undefined {
+  return markdownParagraphs(markdown.split('\n').filter((line) => !/^#{1,6}\s+/.test(line))).at(0);
+}
+
+function markdownParagraphs(lines: string[]): string[] {
+  const paragraphs: string[] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    const normalized = line.trim();
+    if (normalized.length === 0) {
+      if (current.length > 0) {
+        paragraphs.push(cleanMarkdownText(current.join(' ')));
+        current = [];
+      }
+      continue;
+    }
+    current.push(normalized);
+  }
+
+  if (current.length > 0) paragraphs.push(cleanMarkdownText(current.join(' ')));
+  return paragraphs.filter((paragraph) => paragraph.length > 0);
+}
+
+function cleanMarkdownText(value: string): string {
+  return value
+    .replace(/^>\s*/, '')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[*_`~]/g, '')
+    .trim();
+}
+
+function normalizeMarkdownHeading(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[:：]/g, ' ')
+    .replace(/[^\p{Letter}\p{Number}\s-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }

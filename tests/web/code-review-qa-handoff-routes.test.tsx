@@ -3,10 +3,26 @@
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { codeReviewHandoff, developmentPlanItem, execution, projectId, qaHandoff } from './fixtures/product-data';
+import { codeReviewHandoff, developmentPlan, developmentPlanItem, execution, projectId, qaHandoff } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('Code review and QA handoff route panels', () => {
+  it('renders Plan Item code review route as a code-review workspace', async () => {
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/dpi-cockpit-command-center/review`);
+
+    expect(await screen.findByRole('heading', { name: /Cockpit/i, level: 1 })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="code-review"]')).toBeTruthy();
+    expect(document.querySelector('[data-code-review-workspace][data-primary-work-surface]')).toBeTruthy();
+  });
+
+  it('renders Plan Item QA route as a qa-handoff workspace', async () => {
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/dpi-requirements-database-view/qa`);
+
+    expect(await screen.findByRole('heading', { name: /Requirements/i, level: 1 })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeTruthy();
+    expect(document.querySelector('[data-qa-handoff-workspace][data-primary-work-surface]')).toBeTruthy();
+  });
+
   it('renders code review and QA handoff controls from an execution detail', async () => {
     const screen = await renderRoute(`/executions/${execution.id}`);
 
@@ -24,7 +40,7 @@ describe('Code review and QA handoff route panels', () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/executions/${execution.id}`, {
       apiOverrides: {
-        [`GET /query/executions/${execution.id}`]: { ...execution, status: 'completed', worker_state: 'completed' },
+        [`GET /query/executions/${execution.id}`]: executionDetailOverride({ status: 'completed', worker_state: 'completed' }),
         [`GET /query/code-review-handoffs?project_id=${projectId}&execution_id=${execution.id}&limit=100`]: {
           items: [],
           degraded_sources: [],
@@ -45,7 +61,7 @@ describe('Code review and QA handoff route panels', () => {
     const changesRequestedReview = { ...codeReviewHandoff, status: 'changes_requested' };
     const screen = await renderRoute(`/executions/${execution.id}`, {
       apiOverrides: {
-        [`GET /query/executions/${execution.id}`]: { ...execution, status: 'completed', worker_state: 'completed' },
+        [`GET /query/executions/${execution.id}`]: executionDetailOverride({ status: 'completed', worker_state: 'completed' }),
         [`GET /query/code-review-handoffs?project_id=${projectId}&execution_id=${execution.id}&limit=100`]: {
           items: [{ ...changesRequestedReview, title: changesRequestedReview.ref.title }],
           degraded_sources: [],
@@ -165,3 +181,9 @@ describe('Code review and QA handoff route panels', () => {
     expect(await screen.findByRole('button', { name: /accept qa handoff/i })).toBeTruthy();
   });
 });
+
+function executionDetailOverride(overrides: Record<string, unknown>) {
+  const { title: _title, ...detail } = execution;
+  void _title;
+  return { ...detail, ...overrides };
+}

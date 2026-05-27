@@ -54,11 +54,45 @@ export type DevelopmentPlanItemProjection = {
     title?: string;
     status?: string;
     worker_state?: string;
+    development_plan_item_ref?: ProductObjectRef & { development_plan_id?: string };
+    execution_plan_revision_id?: string;
+    execution_plan_revision_ref?: ProductObjectRef & { execution_plan_id?: string };
     evidence_refs?: ProductObjectRef[];
     test_evidence_refs?: ProductObjectRef[];
   }>;
-  code_review_handoffs?: Array<{ id: string; title?: string; status?: string; audited_exception?: { reason?: string } }>;
-  qa_handoffs?: Array<{ id: string; title?: string; status?: string }>;
+  code_review_handoffs?: Array<{
+    id: string;
+    title?: string;
+    execution_id?: string;
+    execution_plan_revision_id?: string;
+    reviewer_actor_id?: string;
+    status?: string;
+    summary?: string;
+    changed_surfaces?: string[];
+    verification_evidence_refs?: ProductObjectRef[];
+    comments?: string[];
+    changes_requested?: string[];
+    audited_exception?: { reason?: string; risk?: string; rollback_plan?: string };
+  }>;
+  qa_handoffs?: Array<{
+    id: string;
+    title?: string;
+    code_review_handoff_id?: string;
+    execution_id?: string;
+    source_ref?: ProductObjectRef;
+    development_plan_item_id?: string;
+    development_plan_item_ref?: ProductObjectRef & { development_plan_id?: string };
+    approved_spec_revision_ref?: ProductObjectRef & { spec_id?: string };
+    approved_execution_plan_revision_ref?: ProductObjectRef & { execution_plan_id?: string };
+    status?: string;
+    acceptance_criteria?: string[];
+    test_strategy?: string;
+    verification_evidence_refs?: ProductObjectRef[];
+    known_risks?: string[];
+    changed_surfaces?: string[];
+    release_impact?: string;
+    audited_exception?: { reason?: string };
+  }>;
 };
 
 export type PlanItemGateModel = {
@@ -133,8 +167,8 @@ export function planItemGateModels(item: DevelopmentPlanItemProjection): PlanIte
     gateConfig('spec', 'Spec document', item.spec_status, href('/spec'), isApproved(item.boundary_status)),
     gateConfig('execution-plan', 'Execution Plan document', item.execution_plan_status, href('/execution-plan'), isApproved(item.spec_status)),
     gateConfig('execution', 'Execution', item.execution_status, href('/execution'), isApproved(item.execution_plan_status)),
-    gateConfig('code-review', 'Code review', item.review_status, `/reports?development_plan_item_id=${item.id}`, item.execution_status === 'completed' || isReviewOpen(item.review_status)),
-    gateConfig('qa-handoff', 'QA handoff', item.qa_handoff_status, `/reports?development_plan_item_id=${item.id}`, item.review_status === 'approved' || isQaOpen(item.qa_handoff_status)),
+    gateConfig('code-review', 'Code review', item.review_status, href('/review'), item.execution_status === 'completed' || isReviewOpen(item.review_status)),
+    gateConfig('qa-handoff', 'QA handoff', item.qa_handoff_status, href('/qa'), item.review_status === 'approved' || isQaOpen(item.qa_handoff_status)),
   ];
 }
 

@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Inject, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, Query } from '@nestjs/common';
+import { markdownDocumentSchema, type MarkdownDocument } from '@forgeloop/contracts';
 
 import {
   approveArtifactCommandSchema,
@@ -29,6 +30,11 @@ export class SpecPlanController {
   @Get('plan-revisions/:planRevisionId')
   getPlanRevision(@Param('planRevisionId') planRevisionId: string) {
     return this.specPlanService.getPublicPlanRevision(planRevisionId);
+  }
+
+  @Get('execution-plan-revisions/:executionPlanRevisionId')
+  getExecutionPlanRevision(@Param('executionPlanRevisionId') executionPlanRevisionId: string) {
+    return this.specPlanService.getPublicExecutionPlanRevision(executionPlanRevisionId);
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/spec/generate-draft')
@@ -83,6 +89,15 @@ export class SpecPlanController {
     @Body(new ZodValidationPipe(regenerateArtifactDraftCommandSchema)) body: RegenerateArtifactDraftCommandDto,
   ) {
     return this.specPlanService.regenerateItemSpecDraft(developmentPlanId, itemId, body);
+  }
+
+  @Patch('development-plans/:developmentPlanId/items/:itemId/spec/draft')
+  saveItemSpecDraft(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('itemId') itemId: string,
+    @Body(new ZodValidationPipe(markdownDocumentSchema)) body: MarkdownDocument,
+  ) {
+    return this.specPlanService.saveItemSpecDraft(developmentPlanId, itemId, body);
   }
 
   @Get('development-plans/:developmentPlanId/items/:itemId/spec/revisions/compare')
@@ -146,6 +161,15 @@ export class SpecPlanController {
     @Body(new ZodValidationPipe(regenerateArtifactDraftCommandSchema)) body: RegenerateArtifactDraftCommandDto,
   ) {
     return this.specPlanService.regenerateItemExecutionPlanDraft(developmentPlanId, itemId, body);
+  }
+
+  @Patch('development-plans/:developmentPlanId/items/:itemId/execution-plan/draft')
+  saveItemExecutionPlanDraft(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('itemId') itemId: string,
+    @Body(new ZodValidationPipe(markdownDocumentSchema)) body: MarkdownDocument,
+  ) {
+    return this.specPlanService.saveItemExecutionPlanDraft(developmentPlanId, itemId, body);
   }
 
   @Get('development-plans/:developmentPlanId/items/:itemId/execution-plan/revisions/compare')
