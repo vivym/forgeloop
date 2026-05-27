@@ -14,8 +14,11 @@ import type {
   RequirementListItem,
   TechDebtDetail,
   TechDebtListItem,
+  TypedSourceAttachmentRef,
+  TypedSourceEvidenceRef,
+  TypedSourceRelationshipRef,
 } from '@forgeloop/contracts';
-import { productObjectRefSchema, releaseReadinessDetailSchema } from '@forgeloop/contracts';
+import { productObjectRefSchema, releaseReadinessDetailSchema, typedSourceRelationshipRefSchema } from '@forgeloop/contracts';
 import type {
   CodeReviewHandoff,
   DevelopmentPlan,
@@ -31,6 +34,7 @@ import type {
   RunSession,
   Spec,
   SpecRevision,
+  Attachment,
   WorkItem,
 } from '@forgeloop/domain';
 
@@ -40,7 +44,12 @@ type WorkItemObjectType = Extract<ObjectRef['type'], 'initiative' | 'requirement
 type MyWorkQueueObjectRef = MyWorkQueueItem['object_ref'];
 type WorkItemPublicRef = Extract<MyWorkQueueObjectRef, { type: WorkItemObjectType }>;
 type TypedWorkItem = WorkItem & { kind: WorkItemObjectType };
-type ProductListQuery = { project_id: string };
+type ProductListQuery = {
+  project_id: string;
+  status?: string | undefined;
+  risk?: string | undefined;
+  driver_actor_id?: string | undefined;
+};
 type ReleaseRevisionAuthority = {
   current_spec_revision_id?: string;
   current_plan_revision_id?: string;
@@ -56,6 +65,44 @@ type ExecutionRuntimeEvidenceProjection = {
   workspace_bundle_manifest_digest?: string;
   mounted_task_workspace_digest: string;
   changed_files: string[];
+};
+type TypedSourceProjectionContext = {
+  plans: DevelopmentPlan[];
+  planItems: DevelopmentPlanItemWithPlan[];
+  releases: Release[];
+  attachments: Attachment[];
+  releaseEvidence: ReleaseEvidence[];
+};
+type TypedSourceProjection = {
+  planning_coverage: {
+    development_plan_count: number;
+    plan_item_count: number;
+    uncovered: boolean;
+  };
+  downstream_gate_summary: {
+    current_gate_counts: {
+      boundary: number;
+      spec: number;
+      execution_plan: number;
+      execution: number;
+      code_review: number;
+      qa: number;
+      release: number;
+    };
+    blocker_count: number;
+  };
+  linked_development_plans: Extract<TypedSourceRelationshipRef, { type: 'development_plan' }>[];
+  linked_plan_items: Extract<TypedSourceRelationshipRef, { type: 'development_plan_item' }>[];
+  evidence_refs: TypedSourceEvidenceRef[];
+  attachment_refs: TypedSourceAttachmentRef[];
+  release_refs: Extract<TypedSourceRelationshipRef, { type: 'release' }>[];
+  audit: {
+    created_at: string;
+    updated_at: string;
+    updated_by_actor_id?: string;
+  };
+  last_meaningful_update_at: string;
+  next_action: string;
 };
 
 export async function listMyWorkQueue(
@@ -145,43 +192,71 @@ export async function listMyWorkQueue(
 }
 
 export async function listRequirements(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: RequirementListItem[] }> {
-  return { items: (await typedWorkItems(repository, query.project_id, 'requirement')).map(workItemToRequirementListItem) };
+  const [workItems, context] = await Promise.all([
+    typedWorkItemsForQuery(repository, query, 'requirement'),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return { items: workItems.map((workItem) => workItemToRequirementListItem(workItem, typedSourceProjection(workItem, context))) };
 }
 
 export async function getRequirementDetail(repository: DeliveryRepository, requirementId: string): Promise<RequirementDetail | undefined> {
   const workItem = await typedWorkItemById(repository, requirementId, 'requirement');
-  return workItem === undefined
-    ? undefined
-    : workItemToRequirementDetail(workItem, await sourceRelationshipRefs(repository, workItem));
+  if (workItem === undefined) {
+    return undefined;
+  }
+  const context = await typedSourceProjectionContext(repository, workItem.project_id);
+  return workItemToRequirementDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listInitiatives(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: InitiativeListItem[] }> {
-  return { items: (await typedWorkItems(repository, query.project_id, 'initiative')).map(workItemToInitiativeListItem) };
+  const [workItems, context] = await Promise.all([
+    typedWorkItemsForQuery(repository, query, 'initiative'),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return { items: workItems.map((workItem) => workItemToInitiativeListItem(workItem, typedSourceProjection(workItem, context))) };
 }
 
 export async function getInitiativeDetail(repository: DeliveryRepository, initiativeId: string): Promise<InitiativeDetail | undefined> {
   const workItem = await typedWorkItemById(repository, initiativeId, 'initiative');
-  return workItem === undefined
-    ? undefined
-    : workItemToInitiativeDetail(workItem, await sourceRelationshipRefs(repository, workItem));
+  if (workItem === undefined) {
+    return undefined;
+  }
+  const context = await typedSourceProjectionContext(repository, workItem.project_id);
+  return workItemToInitiativeDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listTechDebt(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: TechDebtListItem[] }> {
-  return { items: (await typedWorkItems(repository, query.project_id, 'tech_debt')).map(workItemToTechDebtListItem) };
+  const [workItems, context] = await Promise.all([
+    typedWorkItemsForQuery(repository, query, 'tech_debt'),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return { items: workItems.map((workItem) => workItemToTechDebtListItem(workItem, typedSourceProjection(workItem, context))) };
 }
 
 export async function getTechDebtDetail(repository: DeliveryRepository, techDebtId: string): Promise<TechDebtDetail | undefined> {
   const workItem = await typedWorkItemById(repository, techDebtId, 'tech_debt');
-  return workItem === undefined ? undefined : workItemToTechDebtDetail(workItem, await sourceRelationshipRefs(repository, workItem));
+  if (workItem === undefined) {
+    return undefined;
+  }
+  const context = await typedSourceProjectionContext(repository, workItem.project_id);
+  return workItemToTechDebtDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listBugs(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: BugListItem[] }> {
-  return { items: (await typedWorkItems(repository, query.project_id, 'bug')).map(workItemToBugListItem) };
+  const [workItems, context] = await Promise.all([
+    typedWorkItemsForQuery(repository, query, 'bug'),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return { items: workItems.map((workItem) => workItemToBugListItem(workItem, typedSourceProjection(workItem, context))) };
 }
 
 export async function getBugDetail(repository: DeliveryRepository, bugId: string): Promise<BugDetail | undefined> {
   const workItem = await typedWorkItemById(repository, bugId, 'bug');
-  return workItem === undefined ? undefined : workItemToBugDetail(workItem, await sourceRelationshipRefs(repository, workItem));
+  if (workItem === undefined) {
+    return undefined;
+  }
+  const context = await typedSourceProjectionContext(repository, workItem.project_id);
+  return workItemToBugDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function getReleaseReadinessDetail(
@@ -1269,6 +1344,15 @@ async function typedWorkItems(repository: DeliveryRepository, projectId: string,
   return (await repository.listWorkItems(projectId)).filter((workItem): workItem is TypedWorkItem => workItem.kind === kind);
 }
 
+async function typedWorkItemsForQuery(repository: DeliveryRepository, query: ProductListQuery, kind: WorkItemObjectType): Promise<TypedWorkItem[]> {
+  return (await typedWorkItems(repository, query.project_id, kind)).filter(
+    (workItem) =>
+      (query.status === undefined || workItem.phase === query.status) &&
+      (query.risk === undefined || workItem.risk === query.risk) &&
+      (query.driver_actor_id === undefined || workItem.driver_actor_id === query.driver_actor_id),
+  );
+}
+
 async function typedWorkItemById(
   repository: DeliveryRepository,
   workItemId: string,
@@ -1278,13 +1362,13 @@ async function typedWorkItemById(
   return workItem?.kind === kind ? (workItem as TypedWorkItem) : undefined;
 }
 
-async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: TypedWorkItem): Promise<ProductObjectRef[]> {
-  const sourceRef = { type: workItem.kind, id: workItem.id } as const;
+async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: TypedWorkItem): Promise<TypedSourceRelationshipRef[]> {
+  const sourceRef = sourceRefFor(workItem);
   const sourceLinks = await repository.listDevelopmentPlanSourceLinksForSource(sourceRef);
-  const refs: ProductObjectRef[] = [];
+  const refs: TypedSourceRelationshipRef[] = [];
   const seen = new Set<string>();
 
-  const push = (ref: ProductObjectRef) => {
+  const push = (ref: TypedSourceRelationshipRef) => {
     const key = JSON.stringify(ref);
     if (!seen.has(key)) {
       seen.add(key);
@@ -1300,12 +1384,8 @@ async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: 
     push(developmentPlanRef(plan));
     const items = await repository.listDevelopmentPlanItems(plan.id);
     for (const item of items) {
-      push(developmentPlanItemRef(item));
-      for (const spec of (await repository.listSpecs(workItem.project_id)).filter((candidate) => candidate.development_plan_item_id === item.id)) {
-        push({ type: 'spec', id: spec.id });
-      }
-      for (const executionPlan of await repository.listExecutionPlansForDevelopmentPlanItem(item.id)) {
-        push({ type: 'execution_plan', id: executionPlan.id });
+      if (sourceRefsMatch(item.source_ref, sourceRef)) {
+        push(developmentPlanItemRef(item));
       }
     }
   }
@@ -1313,8 +1393,248 @@ async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: 
   return refs;
 }
 
+async function typedSourceProjectionContext(repository: DeliveryRepository, projectId: string): Promise<TypedSourceProjectionContext> {
+  const [plans, planItems, releases, workItems] = await Promise.all([
+    repository.listDevelopmentPlans(projectId),
+    listDevelopmentPlanItemsForProject(repository, projectId),
+    repository.listReleases(projectId),
+    repository.listWorkItems(projectId),
+  ]);
+  const releaseEvidence = (await Promise.all(releases.map((release) => repository.listReleaseEvidences(release.id)))).flat();
+  const typedWorkItemRefs = workItems.map((workItem) => sourceRefFor(workItem));
+  const planItemRefs = planItems.map(({ item }) => developmentPlanItemRef(item));
+  const attachmentScopes = [...typedWorkItemRefs, ...planItemRefs];
+  const attachmentRows = await Promise.all(
+    attachmentScopes.map((ref) => repository.listAttachmentsForObject(ref.type, ref.id)),
+  );
+  return {
+    plans,
+    planItems,
+    releases,
+    releaseEvidence,
+    attachments: uniqueById(attachmentRows.flat()),
+  };
+}
+
+function typedSourceProjection(workItem: TypedWorkItem, context: TypedSourceProjectionContext): TypedSourceProjection {
+  const sourceRef = sourceRefFor(workItem);
+  const linkedDevelopmentPlans = context.plans.filter((plan) => plan.source_refs.some((ref) => sourceRefsMatch(ref, sourceRef)));
+  const linkedDevelopmentPlanIds = new Set(linkedDevelopmentPlans.map((plan) => plan.id));
+  const linkedPlanItems = context.planItems.filter(({ plan, item }) => linkedDevelopmentPlanIds.has(plan.id) && sourceRefsMatch(item.source_ref, sourceRef));
+  const releaseRefs = context.releases.filter((release) => releaseLinksSource(release, workItem, linkedPlanItems));
+  const attachmentRefs = context.attachments.filter((attachment) => attachmentLinksSource(attachment, sourceRef, linkedPlanItems));
+  const evidenceRefs = context.releaseEvidence.filter((evidence) => evidenceLinksSource(evidence, sourceRef, attachmentRefs, linkedPlanItems));
+  const updatedValues = [
+    workItem.updated_at,
+    ...linkedDevelopmentPlans.map((plan) => plan.updated_at),
+    ...linkedPlanItems.map(({ item }) => item.updated_at),
+    ...releaseRefs.map((release) => release.updated_at),
+    ...attachmentRefs.map((attachment) => attachment.created_at),
+    ...evidenceRefs.map((evidence) => evidence.updated_at ?? evidence.created_at),
+  ];
+
+  return {
+    planning_coverage: {
+      development_plan_count: linkedDevelopmentPlans.length,
+      plan_item_count: linkedPlanItems.length,
+      uncovered: linkedDevelopmentPlans.length === 0 || linkedPlanItems.length === 0,
+    },
+    downstream_gate_summary: downstreamGateSummary(linkedPlanItems.map(({ item }) => item)),
+    linked_development_plans: linkedDevelopmentPlans.map(developmentPlanRef),
+    linked_plan_items: linkedPlanItems.map(({ item }) => developmentPlanItemRef(item)),
+    evidence_refs: evidenceRefs.map(typedSourceEvidenceRef),
+    attachment_refs: attachmentRefs.map(attachmentPublicRef),
+    release_refs: releaseRefs.map((release) => ({ type: 'release' as const, id: release.id, title: release.title })),
+    audit: {
+      created_at: workItem.created_at,
+      updated_at: workItem.updated_at,
+      ...(workItem.driver_actor_id === undefined ? {} : { updated_by_actor_id: workItem.driver_actor_id }),
+    },
+    last_meaningful_update_at: latestUpdatedAt(updatedValues) ?? workItem.updated_at,
+    next_action: nextSourceAction(linkedPlanItems.map(({ item }) => item), workItem),
+  };
+}
+
+function sourceRefFor(workItem: WorkItem): WorkItemPublicRef {
+  return { type: workItemKindToObjectType(workItem.kind), id: workItem.id, title: workItem.title } as WorkItemPublicRef;
+}
+
+function sourceRefsMatch(left: { type: string; id: string }, right: { type: string; id: string }): boolean {
+  return left.type === right.type && left.id === right.id;
+}
+
+function downstreamGateSummary(items: DevelopmentPlanItem[]): TypedSourceProjection['downstream_gate_summary'] {
+  const current_gate_counts = {
+    boundary: 0,
+    spec: 0,
+    execution_plan: 0,
+    execution: 0,
+    code_review: 0,
+    qa: 0,
+    release: 0,
+  };
+  for (const item of items) {
+    current_gate_counts[downstreamGateFor(item)] += 1;
+  }
+  return {
+    current_gate_counts,
+    blocker_count: items.filter(isDevelopmentPlanItemBlocked).length,
+  };
+}
+
+function downstreamGateFor(item: DevelopmentPlanItem): keyof TypedSourceProjection['downstream_gate_summary']['current_gate_counts'] {
+  if (item.boundary_status !== 'approved') return 'boundary';
+  if (item.spec_status !== 'approved') return 'spec';
+  if (item.execution_plan_status !== 'approved') return 'execution_plan';
+  if (item.execution_status !== 'completed') return 'execution';
+  if (item.review_status !== 'approved') return 'code_review';
+  if (item.qa_handoff_status !== 'approved') return 'qa';
+  return 'release';
+}
+
+function nextSourceAction(items: DevelopmentPlanItem[], workItem: WorkItem): string {
+  const priority = [
+    (item: DevelopmentPlanItem) => item.release_impact === 'release_blocking' && isDevelopmentPlanItemBlocked(item),
+    (item: DevelopmentPlanItem) => item.review_status === 'changes_requested' || item.review_status === 'blocked',
+    (item: DevelopmentPlanItem) => item.qa_handoff_status === 'blocked' || item.qa_handoff_status === 'changes_requested',
+    (item: DevelopmentPlanItem) => item.spec_status === 'blocked' || item.spec_status === 'changes_requested',
+    (item: DevelopmentPlanItem) => item.execution_plan_status === 'blocked' || item.execution_plan_status === 'changes_requested',
+    (item: DevelopmentPlanItem) => item.boundary_status === 'changes_requested',
+    (item: DevelopmentPlanItem) => item.spec_status !== 'approved',
+    (item: DevelopmentPlanItem) => item.execution_plan_status !== 'approved',
+    (item: DevelopmentPlanItem) => item.execution_status !== 'completed',
+  ];
+  for (const matcher of priority) {
+    const item = items.find(matcher);
+    if (item !== undefined) {
+      return item.next_action;
+    }
+  }
+  return items[0]?.next_action ?? `Create Development Plan for ${typedSourceLabel(workItem.kind)}`;
+}
+
+function typedSourceLabel(kind: WorkItem['kind']): string {
+  if (kind === 'tech_debt') return 'Tech Debt';
+  return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+}
+
+function releaseLinksSource(release: Release, workItem: WorkItem, items: DevelopmentPlanItemWithPlan[]): boolean {
+  if (release.work_item_ids.includes(workItem.id) || release.id === workItem.current_release_id) {
+    return true;
+  }
+  const scopeRefs = releaseScopeRefs(release);
+  return scopeRefs.some(
+    (ref) =>
+      sourceRefsMatch(ref, sourceRefFor(workItem)) ||
+      items.some(({ item }) => ref.type === 'development_plan_item' && ref.id === item.id),
+  );
+}
+
+function attachmentLinksSource(attachment: Attachment, sourceRef: WorkItemPublicRef, items: DevelopmentPlanItemWithPlan[]): boolean {
+  if (attachment.owner_object_type === sourceRef.type && attachment.owner_object_id === sourceRef.id) {
+    return true;
+  }
+  return attachment.linked_object_refs.some(
+    (ref) =>
+      sourceRefsMatch(ref, sourceRef) ||
+      items.some(({ item }) => ref.type === 'development_plan_item' && ref.id === item.id),
+  );
+}
+
+function evidenceLinksSource(
+  evidence: ReleaseEvidence,
+  sourceRef: WorkItemPublicRef,
+  attachments: Attachment[],
+  items: DevelopmentPlanItemWithPlan[],
+): boolean {
+  const scopeRef = evidenceScopeRef(evidence);
+  if (scopeRef !== undefined && typedSourceRefMatches(scopeRef, sourceRef, items)) {
+    return true;
+  }
+  if (evidence.object_ref !== undefined) {
+    if (evidence.object_ref.object_type === 'work_item' && evidence.object_ref.object_id === sourceRef.id) {
+      return true;
+    }
+  }
+  const attachmentIds = new Set(attachments.map((attachment) => attachment.id));
+  return observationLinks(evidence).some((link) => link.object_type === 'attachment' && attachmentIds.has(link.object_id));
+}
+
+function evidenceScopeRef(evidence: ReleaseEvidence): ObjectRef | undefined {
+  return isRecord(evidence.extra) ? productSafeObjectRef(evidence.extra.scope_ref) : undefined;
+}
+
+function typedSourceRefMatches(ref: ObjectRef, sourceRef: WorkItemPublicRef, items: DevelopmentPlanItemWithPlan[]): boolean {
+  return (
+    sourceRefsMatch(ref, sourceRef) ||
+    items.some(({ item }) => ref.type === 'development_plan_item' && ref.id === item.id)
+  );
+}
+
+function observationLinks(evidence: ReleaseEvidence): Array<{ object_type: string; object_id: string }> {
+  const observation = value(evidence.extra, 'observation');
+  const links = value(observation, 'links');
+  if (!Array.isArray(links)) {
+    return [];
+  }
+  return links.flatMap((link) => {
+    if (!isRecord(link) || typeof link.object_type !== 'string' || typeof link.object_id !== 'string') {
+      return [];
+    }
+    return [{ object_type: link.object_type, object_id: link.object_id }];
+  });
+}
+
+function evidenceAttachmentId(evidence: ReleaseEvidence): string | undefined {
+  return observationLinks(evidence).find((link) => link.object_type === 'attachment')?.object_id;
+}
+
+function typedSourceEvidenceRef(evidence: ReleaseEvidence): TypedSourceEvidenceRef {
+  const attachmentId = evidenceAttachmentId(evidence);
+  if (attachmentId !== undefined) {
+    return { type: 'attachment', id: attachmentId, title: evidence.title ?? evidence.summary };
+  }
+  return { type: 'release_evidence', id: evidence.id, release_id: evidence.release_id, title: evidence.title ?? evidence.summary };
+}
+
+function uniqueById<T extends { id: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    if (seen.has(row.id)) {
+      return false;
+    }
+    seen.add(row.id);
+    return true;
+  });
+}
+
+function attachmentPublicRef(attachment: Attachment): TypedSourceAttachmentRef {
+  return {
+    id: attachment.id,
+    owner_object_type: attachment.owner_object_type,
+    owner_object_id: attachment.owner_object_id,
+    linked_object_refs: attachment.linked_object_refs.filter(isTypedSourceRelationshipRef),
+    filename: attachment.filename,
+    content_type: attachment.content_type,
+    size_bytes: attachment.size_bytes,
+    checksum_sha256: attachment.checksum_sha256,
+    uploaded_by_actor_id: attachment.uploaded_by_actor_id,
+    created_at: attachment.created_at,
+    evidence_category: attachment.evidence_category,
+    ...(attachment.caption === undefined ? {} : { caption: attachment.caption }),
+    ...(attachment.alt_text === undefined ? {} : { alt_text: attachment.alt_text }),
+    visibility: attachment.visibility,
+    safety_status: attachment.safety_status,
+    reference_status: attachment.reference_status,
+  };
+}
+
+function isTypedSourceRelationshipRef(ref: ObjectRef): ref is TypedSourceRelationshipRef {
+  return typedSourceRelationshipRefSchema.safeParse(ref).success;
+}
+
 function workItemRef(workItem: WorkItem): WorkItemPublicRef {
-  return { type: workItemKindToObjectType(workItem.kind), id: workItem.id };
+  return sourceRefFor(workItem);
 }
 
 function workItemHref(workItem: WorkItem): string {
@@ -1349,87 +1669,156 @@ function releaseToMyWorkQueueItem(release: Release): MyWorkQueueItem {
   };
 }
 
-function baseWorkItemListItem(workItem: WorkItem) {
+function baseWorkItemListItem(workItem: WorkItem, projection: TypedSourceProjection) {
   return {
     id: workItem.id,
     ref: workItemRef(workItem),
     title: workItem.title,
-    status: `${workItem.phase}/${workItem.activity_state}/${workItem.gate_state}`,
+    status: workItem.phase,
     priority: workItem.priority,
     risk: workItem.risk,
     driver_actor_id: workItem.driver_actor_id,
+    planning_coverage: projection.planning_coverage,
+    downstream_gate_summary: projection.downstream_gate_summary,
+    last_meaningful_update_at: projection.last_meaningful_update_at,
+    next_action: projection.next_action,
+    release_refs: projection.release_refs,
     updated_at: workItem.updated_at,
   };
 }
 
-function baseWorkItemDetail(workItem: TypedWorkItem) {
+function baseWorkItemDetail(workItem: TypedWorkItem, projection: TypedSourceProjection) {
   return {
-    ...baseWorkItemListItem(workItem),
+    ...baseWorkItemListItem(workItem, projection),
     narrative_markdown: workItem.narrative_markdown,
-    evidence_refs: [],
-    attachment_refs: [],
+    linked_development_plans: projection.linked_development_plans,
+    linked_plan_items: projection.linked_plan_items,
+    evidence_refs: projection.evidence_refs,
+    attachment_refs: projection.attachment_refs,
+    audit: projection.audit,
   };
 }
 
-function workItemToRequirementListItem(workItem: TypedWorkItem): RequirementListItem {
-  return { ...baseWorkItemListItem(workItem), ref: { type: 'requirement', id: workItem.id }, phase: workItem.phase };
+function workItemToRequirementListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): RequirementListItem {
+  return { ...baseWorkItemListItem(workItem, projection), ref: { type: 'requirement', id: workItem.id, title: workItem.title } };
 }
 
-function workItemToRequirementDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): RequirementDetail {
+function workItemToRequirementDetail(
+  workItem: TypedWorkItem,
+  projection: TypedSourceProjection,
+  relationshipRefs: TypedSourceRelationshipRef[],
+): RequirementDetail {
+  const context = workItem.intake_context.type === 'requirement' ? workItem.intake_context : undefined;
   return {
-    ...baseWorkItemDetail(workItem),
-    ref: { type: 'requirement', id: workItem.id },
+    ...baseWorkItemDetail(workItem, projection),
+    ref: { type: 'requirement', id: workItem.id, title: workItem.title },
     relationship_refs: relationshipRefs,
-    bug_refs: [],
-    release_refs: workItem.current_release_id === undefined ? [] : [{ type: 'release', id: workItem.current_release_id }],
+    stakeholder_problem: requiredContextValue(context?.stakeholder_problem, workItem, 'stakeholder problem'),
+    desired_outcome: requiredContextValue(context?.desired_outcome, workItem, 'desired outcome'),
+    acceptance_criteria_summary: requiredContextValue(context?.acceptance_criteria.join(' '), workItem, 'acceptance criteria'),
+    scope_summary: {
+      in_scope: requiredContextValue(context?.in_scope.join(', '), workItem, 'in scope'),
+      out_of_scope: requiredContextValue(context?.out_of_scope?.join(', '), workItem, 'out of scope'),
+    },
   };
 }
 
-function workItemToInitiativeListItem(workItem: TypedWorkItem): InitiativeListItem {
+function workItemToInitiativeListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): InitiativeListItem {
   const context = workItem.intake_context.type === 'initiative' ? workItem.intake_context : undefined;
-  return { ...baseWorkItemListItem(workItem), ref: { type: 'initiative', id: workItem.id }, business_outcome: context?.business_outcome };
-}
-
-function workItemToInitiativeDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): InitiativeDetail {
   return {
-    ...baseWorkItemDetail(workItem),
-    ref: { type: 'initiative', id: workItem.id },
-    relationship_refs: relationshipRefs,
-    child_refs: [],
-    release_refs: workItem.current_release_id === undefined ? [] : [{ type: 'release', id: workItem.current_release_id }],
+    ...baseWorkItemListItem(workItem, projection),
+    ref: { type: 'initiative', id: workItem.id, title: workItem.title },
+    business_outcome: requiredContextValue(context?.business_outcome, workItem, 'business outcome'),
   };
 }
 
-function workItemToTechDebtListItem(workItem: TypedWorkItem): TechDebtListItem {
-  const context = workItem.intake_context.type === 'tech_debt' ? workItem.intake_context : undefined;
-  return { ...baseWorkItemListItem(workItem), ref: { type: 'tech_debt', id: workItem.id }, affected_modules: context?.affected_modules ?? [] };
+function workItemToInitiativeDetail(
+  workItem: TypedWorkItem,
+  projection: TypedSourceProjection,
+  relationshipRefs: TypedSourceRelationshipRef[],
+): InitiativeDetail {
+  const context = workItem.intake_context.type === 'initiative' ? workItem.intake_context : undefined;
+  return {
+    ...baseWorkItemDetail(workItem, projection),
+    ref: { type: 'initiative', id: workItem.id, title: workItem.title },
+    relationship_refs: relationshipRefs,
+    business_outcome: requiredContextValue(context?.business_outcome, workItem, 'business outcome'),
+    milestone_intent: requiredContextValue(context?.milestone_intent, workItem, 'milestone intent'),
+    child_refs: relationshipRefs.filter((ref) => ref.type === 'requirement' || ref.type === 'bug' || ref.type === 'tech_debt'),
+    release_coverage: releaseCoverageText(projection),
+  };
 }
 
-function workItemToTechDebtDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): TechDebtDetail {
+function workItemToTechDebtListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): TechDebtListItem {
   const context = workItem.intake_context.type === 'tech_debt' ? workItem.intake_context : undefined;
   return {
-    ...baseWorkItemDetail(workItem),
-    ref: { type: 'tech_debt', id: workItem.id },
+    ...baseWorkItemListItem(workItem, projection),
+    ref: { type: 'tech_debt', id: workItem.id, title: workItem.title },
+    affected_modules: context?.affected_modules ?? [],
+    risk_rationale: requiredContextValue(context?.current_pain, workItem, 'risk rationale'),
+  };
+}
+
+function workItemToTechDebtDetail(
+  workItem: TypedWorkItem,
+  projection: TypedSourceProjection,
+  relationshipRefs: TypedSourceRelationshipRef[],
+): TechDebtDetail {
+  const context = workItem.intake_context.type === 'tech_debt' ? workItem.intake_context : undefined;
+  return {
+    ...baseWorkItemDetail(workItem, projection),
+    ref: { type: 'tech_debt', id: workItem.id, title: workItem.title },
     relationship_refs: relationshipRefs,
     affected_modules: context?.affected_modules ?? [],
-    validation_strategy: context?.validation_strategy,
+    risk_rationale: requiredContextValue(context?.current_pain, workItem, 'risk rationale'),
+    validation_strategy: requiredContextValue(context?.validation_strategy, workItem, 'validation strategy'),
+    remediation_intent: requiredContextValue(context?.desired_invariant, workItem, 'remediation intent'),
   };
 }
 
-function workItemToBugListItem(workItem: TypedWorkItem): BugListItem {
-  return { ...baseWorkItemListItem(workItem), ref: { type: 'bug', id: workItem.id }, severity: workItem.risk };
-}
-
-function workItemToBugDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): BugDetail {
+function workItemToBugListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): BugListItem {
   const context = workItem.intake_context.type === 'bug' ? workItem.intake_context : undefined;
   return {
-    ...baseWorkItemDetail(workItem),
-    ref: { type: 'bug', id: workItem.id },
-    relationship_refs: relationshipRefs,
-    observed_behavior: context?.observed_behavior,
-    expected_behavior: context?.expected_behavior,
-    reproduction_steps: context?.reproduction_steps ?? [],
+    ...baseWorkItemListItem(workItem, projection),
+    ref: { type: 'bug', id: workItem.id, title: workItem.title },
+    severity: workItem.risk,
+    affected_surfaces: bugAffectedSurfaces(context),
   };
+}
+
+function workItemToBugDetail(workItem: TypedWorkItem, projection: TypedSourceProjection, relationshipRefs: TypedSourceRelationshipRef[]): BugDetail {
+  const context = workItem.intake_context.type === 'bug' ? workItem.intake_context : undefined;
+  return {
+    ...baseWorkItemDetail(workItem, projection),
+    ref: { type: 'bug', id: workItem.id, title: workItem.title },
+    relationship_refs: relationshipRefs,
+    observed_behavior: requiredContextValue(context?.observed_behavior, workItem, 'observed behavior'),
+    expected_behavior: requiredContextValue(context?.expected_behavior, workItem, 'expected behavior'),
+    reproduction_steps: context?.reproduction_steps ?? [],
+    severity: workItem.risk,
+    affected_surfaces: bugAffectedSurfaces(context),
+  };
+}
+
+function requiredContextValue(valueToCheck: string | undefined, workItem: WorkItem, field: string): string {
+  if (valueToCheck !== undefined && valueToCheck.trim().length > 0) {
+    return valueToCheck;
+  }
+  throw new Error(`${workItem.kind} ${workItem.id} is missing required ${field} projection data`);
+}
+
+function releaseCoverageText(projection: TypedSourceProjection): string {
+  if (projection.release_refs.length === 0) {
+    return 'No release coverage yet.';
+  }
+  return projection.release_refs.map((ref) => ref.title ?? ref.id).join(', ');
+}
+
+function bugAffectedSurfaces(context: Extract<WorkItem['intake_context'], { type: 'bug' }> | undefined): string[] {
+  if (context === undefined) {
+    return [];
+  }
+  return [context.affected_environment, context.suspected_area].filter((valueToCheck): valueToCheck is string => valueToCheck !== undefined);
 }
 
 function releaseScopeRefs(release: Release): ObjectRef[] {

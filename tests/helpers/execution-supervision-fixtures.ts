@@ -84,6 +84,7 @@ export async function seedApprovedExecutionPlan(
           desired_outcome: 'A Development Plan Item can move through execution, code review, and QA.',
           acceptance_criteria: ['The execution supervision API is item scoped.'],
           in_scope: ['Execution supervision API tests'],
+          out_of_scope: ['Top-level Task routes'],
         },
       })
       .expect(201)

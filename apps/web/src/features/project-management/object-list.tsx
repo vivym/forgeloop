@@ -7,6 +7,13 @@ import type { ProductPageViewModel } from '../product-surfaces/view-model-types'
 import { SurfaceStateIndicator, type SurfaceState } from './surface-state';
 import { sourceObjectListViewModel } from './source-object-view-model';
 
+type ProjectObjectRef = {
+  type?: string | undefined;
+  id?: string | undefined;
+  title?: string | undefined;
+  development_plan_id?: string | undefined;
+};
+
 export interface ProjectObjectListItem {
   id: string;
   ref: { type: string; id: string };
@@ -17,12 +24,12 @@ export interface ProjectObjectListItem {
   driver_actor_id?: string | undefined;
   updated_at?: string | undefined;
   narrative_markdown?: string | undefined;
-  relationship_refs?: readonly { type?: string; id?: string; title?: string; development_plan_id?: string }[] | undefined;
-  child_refs?: readonly { type?: string; id?: string; title?: string }[] | undefined;
-  bug_refs?: readonly { type?: string; id?: string; title?: string }[] | undefined;
-  release_refs?: readonly { type?: string; id?: string; title?: string }[] | undefined;
-  evidence_refs?: readonly { type?: string; id?: string; title?: string }[] | undefined;
-  attachment_refs?: readonly { type?: string; id?: string; title?: string }[] | undefined;
+  relationship_refs?: readonly ProjectObjectRef[] | undefined;
+  child_refs?: readonly ProjectObjectRef[] | undefined;
+  bug_refs?: readonly ProjectObjectRef[] | undefined;
+  release_refs?: readonly ProjectObjectRef[] | undefined;
+  evidence_refs?: readonly ProjectObjectRef[] | undefined;
+  attachment_refs?: readonly ProjectObjectRef[] | undefined;
 }
 
 export interface ObjectListProps<T extends ProjectObjectListItem> {

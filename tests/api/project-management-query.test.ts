@@ -1,11 +1,14 @@
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import type { DeliveryRepository } from '@forgeloop/db';
+import { bugDetailSchema, initiativeDetailSchema, requirementDetailSchema, techDebtDetailSchema } from '@forgeloop/contracts';
+import type { Attachment, DevelopmentPlan, DevelopmentPlanItem, Release, ReleaseEvidence, WorkItem } from '@forgeloop/domain';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { seedProductArchitectureDemoRepository } from '../../apps/control-plane-api/src/modules/core/product-architecture-demo-seed';
 import {
   executionActorDeveloper,
   executionActorOwner,
@@ -97,10 +100,192 @@ describe('project management query API', () => {
         expect.objectContaining({ type: 'development_plan_item', id: item.id, development_plan_id: developmentPlan.id }),
       ]),
     );
+    expect(response.body.relationship_refs).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'spec' }),
+        expect.objectContaining({ type: 'execution_plan' }),
+      ]),
+    );
     expect(response.body).not.toHaveProperty('task_refs');
     expect(response.body).not.toHaveProperty('plan_ref');
     expect(JSON.stringify(response.body)).not.toContain('"type":"task"');
     expect(JSON.stringify(response.body)).not.toContain('"type":"work_item"');
+  });
+
+  it('projects typed Requirement list and detail fields from stored planning, release, evidence, and attachment data', async () => {
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await seedTypedRequirementProjection(repository);
+    const server = app.getHttpServer();
+
+    const listResponse = await request(server).get('/query/requirements').query({ project_id: 'project-typed-source' }).expect(200);
+    expect(listResponse.body.items).toEqual([
+      expect.objectContaining({
+        id: 'req-checkout-risk',
+        ref: { type: 'requirement', id: 'req-checkout-risk', title: 'Checkout risk controls' },
+        title: 'Checkout risk controls',
+        status: 'triage',
+        priority: 'high',
+        risk: 'high',
+        driver_actor_id: 'actor-product',
+        planning_coverage: { development_plan_count: 1, plan_item_count: 3, uncovered: false },
+        downstream_gate_summary: {
+          current_gate_counts: { boundary: 1, spec: 1, execution_plan: 1, execution: 0, code_review: 0, qa: 0, release: 0 },
+          blocker_count: 1,
+        },
+        last_meaningful_update_at: '2026-05-27T08:45:00.000Z',
+        next_action: 'Review Spec test strategy',
+        release_refs: [{ type: 'release', id: 'rel-preview', title: 'Preview release' }],
+        updated_at: '2026-05-27T08:00:00.000Z',
+      }),
+    ]);
+
+    const detailResponse = await request(server).get('/query/requirements/req-checkout-risk').expect(200);
+    expect(() => requirementDetailSchema.parse(detailResponse.body)).not.toThrow();
+    expect(detailResponse.body).toMatchObject({
+      id: 'req-checkout-risk',
+      ref: { type: 'requirement', id: 'req-checkout-risk', title: 'Checkout risk controls' },
+      stakeholder_problem: 'Product needs confidence that risky checkout changes are reviewed before release.',
+      desired_outcome: 'Every release-impacting checkout change carries approved Spec, plan, QA, and release evidence.',
+      acceptance_criteria_summary: 'Risky paths have approved test strategy and QA handoff before release readiness clears.',
+      scope_summary: {
+        in_scope: 'Checkout requirements, delivery plan links, QA evidence, release blockers',
+        out_of_scope: 'External Jira sync, retro learning loop',
+      },
+      linked_development_plans: [{ type: 'development_plan', id: 'dp-core', title: 'Core redesign plan' }],
+      linked_plan_items: expect.arrayContaining([
+        expect.objectContaining({ type: 'development_plan_item', id: 'dpi-boundary', development_plan_id: 'dp-core', title: 'Confirm checkout boundary' }),
+        expect.objectContaining({ type: 'development_plan_item', id: 'dpi-spec', development_plan_id: 'dp-core', title: 'Review Spec test strategy' }),
+        expect.objectContaining({ type: 'development_plan_item', id: 'dpi-plan', development_plan_id: 'dp-core', title: 'Approve checkout execution plan' }),
+      ]),
+      evidence_refs: [{ type: 'attachment', id: 'att-1', title: 'Research screenshot' }],
+      attachment_refs: [
+        expect.objectContaining({
+          id: 'att-1',
+          owner_object_type: 'requirement',
+          owner_object_id: 'req-checkout-risk',
+          filename: 'scope.png',
+          evidence_category: 'image',
+          linked_object_refs: [{ type: 'requirement', id: 'req-checkout-risk', title: 'Checkout risk controls' }],
+        }),
+      ],
+      audit: { created_at: '2026-05-27T08:00:00.000Z', updated_at: '2026-05-27T08:00:00.000Z', updated_by_actor_id: 'actor-product' },
+      last_meaningful_update_at: '2026-05-27T08:45:00.000Z',
+      next_action: 'Review Spec test strategy',
+      release_refs: [{ type: 'release', id: 'rel-preview', title: 'Preview release' }],
+    });
+    expect(JSON.stringify(detailResponse.body)).not.toContain('storage_uri');
+    expect(JSON.stringify(detailResponse.body.attachment_refs)).not.toMatch(/\"type\":\"spec\"|\"type\":\"execution_plan\"|\"type\":\"execution\"/);
+    expect(JSON.stringify({ list: listResponse.body, detail: detailResponse.body })).not.toMatch(/unavailable|source object|owner_actor_id/);
+
+    await repository.saveReleaseEvidence({
+      id: 'evidence-scope-only',
+      org_id: 'org-typed-source',
+      project_id: 'project-typed-source',
+      release_id: 'rel-preview',
+      title: 'Scope-only Plan Item evidence',
+      evidence_type: 'observation_note',
+      summary: 'Scope-only Plan Item evidence',
+      extra: {
+        scope_ref: {
+          type: 'development_plan_item',
+          id: 'dpi-spec',
+          development_plan_id: 'dp-core',
+          title: 'Review Spec test strategy',
+        },
+      },
+      redacted: false,
+      status: 'current',
+      created_at: '2026-05-27T08:46:00.000Z',
+      created_by_actor_id: 'actor-product',
+    });
+    const scopeOnlyDetailResponse = await request(server).get('/query/requirements/req-checkout-risk').expect(200);
+    expect(scopeOnlyDetailResponse.body.evidence_refs).toEqual(
+      expect.arrayContaining([
+        {
+          type: 'release_evidence',
+          id: 'evidence-scope-only',
+          release_id: 'rel-preview',
+          title: 'Scope-only Plan Item evidence',
+        },
+      ]),
+    );
+    expect(scopeOnlyDetailResponse.body.evidence_refs).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'attachment', id: 'evidence-scope-only' }),
+      ]),
+    );
+  });
+
+  it('applies typed source list filters instead of silently ignoring them', async () => {
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await seedTypedRequirementProjection(repository);
+    await repository.saveWorkItem({
+      id: 'req-low-risk-followup',
+      project_id: 'project-typed-source',
+      kind: 'requirement',
+      title: 'Low risk follow-up',
+      narrative_markdown: 'Low risk follow-up narrative.',
+      goal: 'Keep low-risk cleanup separate.',
+      success_criteria: ['Low-risk cleanup remains separately filterable.'],
+      priority: 'low',
+      risk: 'low',
+      driver_actor_id: 'actor-secondary',
+      intake_context: {
+        type: 'requirement',
+        stakeholder_problem: 'Secondary cleanup needs separate ownership.',
+        desired_outcome: 'Secondary cleanup does not appear in primary driver filters.',
+        acceptance_criteria: ['Filtering by driver, risk, and status excludes this row.'],
+        in_scope: ['Secondary cleanup'],
+        out_of_scope: ['Checkout risk controls'],
+      },
+      phase: 'draft',
+      activity_state: 'idle',
+      gate_state: 'none',
+      resolution: 'none',
+      created_at: '2026-05-27T09:00:00.000Z',
+      updated_at: '2026-05-27T09:00:00.000Z',
+    });
+    const server = app.getHttpServer();
+
+    const byDriver = await request(server)
+      .get('/query/requirements')
+      .query({ project_id: 'project-typed-source', driver_actor_id: 'actor-product' })
+      .expect(200);
+    expect(byDriver.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
+
+    const byRisk = await request(server)
+      .get('/query/requirements')
+      .query({ project_id: 'project-typed-source', risk: 'low' })
+      .expect(200);
+    expect(byRisk.body.items.map((item: { id: string }) => item.id)).toEqual(['req-low-risk-followup']);
+
+    const byStatus = await request(server)
+      .get('/query/requirements')
+      .query({ project_id: 'project-typed-source', status: 'triage' })
+      .expect(200);
+    expect(byStatus.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
+  });
+
+  it('strictly projects all product architecture demo typed source detail routes', async () => {
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await seedProductArchitectureDemoRepository(repository);
+    const server = app.getHttpServer();
+
+    const requirement = await request(server).get('/query/requirements/req-plan-item-governance').expect(200);
+    expect(() => requirementDetailSchema.parse(requirement.body)).not.toThrow();
+
+    const initiative = await request(server).get('/query/initiatives/init-ai-native-rollout').expect(200);
+    expect(() => initiativeDetailSchema.parse(initiative.body)).not.toThrow();
+
+    const techDebt = await request(server).get('/query/tech-debt/td-retire-workspace-page-template').expect(200);
+    expect(() => techDebtDetailSchema.parse(techDebt.body)).not.toThrow();
+
+    const bug = await request(server).get('/query/bugs/bug-execution-review-context').expect(200);
+    expect(() => bugDetailSchema.parse(bug.body)).not.toThrow();
+
+    expect(JSON.stringify({ requirement: requirement.body, initiative: initiative.body, techDebt: techDebt.body, bug: bug.body })).not.toMatch(
+      /storage_uri|\"type\":\"spec\"|\"type\":\"execution_plan\"/,
+    );
   });
 
   it('does not expose old product registry query route families', async () => {
@@ -425,4 +610,179 @@ async function seedExecutionReviewAndQa(app: INestApplication) {
     .expect(201);
 
   return { ...seeded, review, qa: { ...qa, status: 'blocked' } };
+}
+
+async function seedTypedRequirementProjection(repository: DeliveryRepository) {
+  const requirement: WorkItem = {
+    id: 'req-checkout-risk',
+    project_id: 'project-typed-source',
+    kind: 'requirement',
+    title: 'Checkout risk controls',
+    narrative_markdown: 'Checkout risk controls narrative.',
+    goal: 'Reduce checkout release risk.',
+    success_criteria: ['Risky paths have approved test strategy and QA handoff before release readiness clears.'],
+    priority: 'high',
+    risk: 'high',
+    driver_actor_id: 'actor-product',
+    intake_context: {
+      type: 'requirement',
+      stakeholder_problem: 'Product needs confidence that risky checkout changes are reviewed before release.',
+      desired_outcome: 'Every release-impacting checkout change carries approved Spec, plan, QA, and release evidence.',
+      acceptance_criteria: ['Risky paths have approved test strategy and QA handoff before release readiness clears.'],
+      in_scope: ['Checkout requirements', 'delivery plan links', 'QA evidence', 'release blockers'],
+      out_of_scope: ['External Jira sync', 'retro learning loop'],
+    },
+    phase: 'triage',
+    activity_state: 'idle',
+    gate_state: 'none',
+    resolution: 'none',
+    current_release_id: 'rel-preview',
+    created_at: '2026-05-27T08:00:00.000Z',
+    updated_at: '2026-05-27T08:00:00.000Z',
+  };
+  const sourceRef = { type: 'requirement' as const, id: requirement.id, title: requirement.title };
+  const developmentPlan: DevelopmentPlan = {
+    id: 'dp-core',
+    revision_id: 'dp-core-rev-1',
+    project_id: requirement.project_id,
+    title: 'Core redesign plan',
+    status: 'active',
+    source_refs: [sourceRef],
+    items: [],
+    created_at: '2026-05-27T08:05:00.000Z',
+    updated_at: '2026-05-27T08:05:00.000Z',
+  };
+  const items: DevelopmentPlanItem[] = [
+    {
+      id: 'dpi-boundary',
+      revision_id: 'dpi-boundary-rev-1',
+      development_plan_id: developmentPlan.id,
+      source_ref: sourceRef,
+      title: 'Confirm checkout boundary',
+      summary: 'Confirm checkout scope.',
+      responsible_role: 'product',
+      driver_actor_id: 'actor-product',
+      reviewer_actor_id: 'actor-tech',
+      risk: 'high',
+      dependency_hints: [],
+      affected_surfaces: ['checkout'],
+      boundary_status: 'not_started',
+      spec_status: 'missing',
+      execution_plan_status: 'missing',
+      execution_status: 'not_started',
+      review_status: 'missing',
+      qa_handoff_status: 'missing',
+      release_impact: 'release_scoped',
+      next_action: 'Clarify checkout boundary',
+      created_at: '2026-05-27T08:10:00.000Z',
+      updated_at: '2026-05-27T08:10:00.000Z',
+    },
+    {
+      id: 'dpi-spec',
+      revision_id: 'dpi-spec-rev-1',
+      development_plan_id: developmentPlan.id,
+      source_ref: sourceRef,
+      title: 'Review Spec test strategy',
+      summary: 'Review checkout Spec test strategy.',
+      responsible_role: 'tech_lead',
+      driver_actor_id: 'actor-product',
+      reviewer_actor_id: 'actor-tech',
+      risk: 'high',
+      dependency_hints: [],
+      affected_surfaces: ['checkout'],
+      boundary_status: 'approved',
+      spec_status: 'blocked',
+      execution_plan_status: 'missing',
+      execution_status: 'not_started',
+      review_status: 'missing',
+      qa_handoff_status: 'missing',
+      release_impact: 'release_blocking',
+      next_action: 'Review Spec test strategy',
+      created_at: '2026-05-27T08:30:00.000Z',
+      updated_at: '2026-05-27T08:30:00.000Z',
+    },
+    {
+      id: 'dpi-plan',
+      revision_id: 'dpi-plan-rev-1',
+      development_plan_id: developmentPlan.id,
+      source_ref: sourceRef,
+      title: 'Approve checkout execution plan',
+      summary: 'Approve checkout execution plan.',
+      responsible_role: 'tech_lead',
+      driver_actor_id: 'actor-product',
+      reviewer_actor_id: 'actor-tech',
+      risk: 'medium',
+      dependency_hints: [],
+      affected_surfaces: ['checkout'],
+      boundary_status: 'approved',
+      spec_status: 'approved',
+      execution_plan_status: 'in_review',
+      execution_status: 'not_started',
+      review_status: 'missing',
+      qa_handoff_status: 'missing',
+      release_impact: 'release_scoped',
+      next_action: 'Approve checkout execution plan',
+      created_at: '2026-05-27T08:20:00.000Z',
+      updated_at: '2026-05-27T08:20:00.000Z',
+    },
+  ];
+  const release: Release = {
+    id: 'rel-preview',
+    org_id: 'org-typed-source',
+    project_id: requirement.project_id,
+    title: 'Preview release',
+    phase: 'planning',
+    activity_state: 'idle',
+    gate_state: 'not_started',
+    resolution: 'none',
+    work_item_ids: [requirement.id],
+    execution_package_ids: [],
+    extra: { project_management_scope_refs: [sourceRef, { type: 'development_plan_item', id: 'dpi-spec', development_plan_id: 'dp-core' }] },
+    created_by_actor_id: 'actor-release',
+    created_at: '2026-05-27T08:40:00.000Z',
+    updated_at: '2026-05-27T08:40:00.000Z',
+  };
+  const attachment: Attachment = {
+    id: 'att-1',
+    owner_object_type: 'requirement',
+    owner_object_id: requirement.id,
+    linked_object_refs: [sourceRef, { type: 'spec', id: 'spec-direct-attachment' }],
+    filename: 'scope.png',
+    content_type: 'image/png',
+    size_bytes: 128,
+    storage_uri: 'memory://scope.png',
+    checksum_sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    uploaded_by_actor_id: 'actor-product',
+    created_at: '2026-05-27T08:00:00.000Z',
+    evidence_category: 'image',
+    visibility: 'object',
+    safety_status: 'passed',
+    reference_status: 'active',
+  };
+  const evidence: ReleaseEvidence = {
+    id: 'evidence-1',
+    org_id: 'org-typed-source',
+    project_id: requirement.project_id,
+    release_id: release.id,
+    title: 'Research screenshot',
+    evidence_type: 'observation_note',
+    summary: 'Research screenshot',
+    object_ref: { object_type: 'work_item', object_id: requirement.id, relationship: 'supports' },
+    extra: {
+      observation: {
+        links: [{ object_type: 'attachment', object_id: attachment.id, relationship: 'supports' }],
+      },
+    },
+    redacted: false,
+    status: 'current',
+    created_at: '2026-05-27T08:45:00.000Z',
+    created_by_actor_id: 'actor-product',
+  };
+
+  await repository.saveWorkItem(requirement);
+  await repository.saveDevelopmentPlan(developmentPlan);
+  await Promise.all(items.map((item) => repository.saveDevelopmentPlanItem(item)));
+  await repository.saveRelease(release);
+  await repository.saveAttachment(attachment);
+  await repository.saveReleaseEvidence(evidence);
 }

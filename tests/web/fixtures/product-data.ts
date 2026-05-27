@@ -517,13 +517,20 @@ export const timeline = [
 
 export const requirementListItem = {
   id: 'req-plan-item-governance',
-  ref: { type: 'requirement', id: 'req-plan-item-governance' },
+  ref: { type: 'requirement', id: 'req-plan-item-governance', title: 'Plan Item governed Spec and Execution Plan generation' },
   title: 'Plan Item governed Spec and Execution Plan generation',
   status: 'planning/active/open',
   priority: 'P1',
   risk: 'medium',
   driver_actor_id: actorId,
-  phase: 'planning',
+  planning_coverage: { development_plan_count: 1, plan_item_count: 1, uncovered: false },
+  downstream_gate_summary: {
+    current_gate_counts: { boundary: 0, spec: 0, execution_plan: 0, execution: 1, code_review: 0, qa: 0, release: 0 },
+    blocker_count: 0,
+  },
+  last_meaningful_update_at: '2026-05-18T01:00:00.000Z',
+  next_action: 'Open governed Plan Item',
+  release_refs: [{ type: 'release', id: release.id, title: release.title }],
   updated_at: '2026-05-18T01:00:00.000Z',
 } as const;
 
@@ -564,8 +571,22 @@ export const requirementDetail = {
   priority: requirementListItem.priority,
   risk: requirementListItem.risk,
   driver_actor_id: requirementListItem.driver_actor_id,
+  planning_coverage: requirementListItem.planning_coverage,
+  downstream_gate_summary: requirementListItem.downstream_gate_summary,
+  last_meaningful_update_at: requirementListItem.last_meaningful_update_at,
+  next_action: requirementListItem.next_action,
+  release_refs: requirementListItem.release_refs,
   updated_at: requirementListItem.updated_at,
   narrative_markdown: 'Plan Item governance must be visible before Spec and Execution Plan generation.',
+  linked_development_plans: [{ type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title }],
+  linked_plan_items: [
+    {
+      type: 'development_plan_item',
+      id: developmentPlanItem.id,
+      development_plan_id: developmentPlan.id,
+      title: developmentPlanItem.title,
+    },
+  ],
   evidence_refs: [{ type: 'attachment', id: 'att-requirement-flow-image', title: 'Plan Item generation flow' }],
   attachment_refs: [
     attachmentRef({
@@ -575,6 +596,7 @@ export const requirementDetail = {
       title: 'Plan Item generation flow',
     }),
   ],
+  audit: { created_at: '2026-05-18T00:00:00.000Z', updated_at: '2026-05-18T01:00:00.000Z', updated_by_actor_id: actorId },
   relationship_refs: [
     { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
     {
@@ -584,18 +606,28 @@ export const requirementDetail = {
       title: developmentPlanItem.title,
     },
   ],
-  bug_refs: [{ type: 'bug', id: 'bug-execution-review-context' }],
-  release_refs: [{ type: 'release', id: release.id }],
+  stakeholder_problem: requirementIntakeContext.stakeholder_problem,
+  desired_outcome: requirementIntakeContext.desired_outcome,
+  acceptance_criteria_summary: requirementIntakeContext.acceptance_criteria.join(' '),
+  scope_summary: {
+    in_scope: requirementIntakeContext.in_scope.join(', '),
+    out_of_scope: 'External issue tracker sync',
+  },
 } as const;
 
 export const initiativeListItem = {
   id: 'init-ai-native-rollout',
-  ref: { type: 'initiative', id: 'init-ai-native-rollout' },
+  ref: { type: 'initiative', id: 'init-ai-native-rollout', title: 'AI-native project management rollout' },
   title: 'AI-native project management rollout',
   status: 'planning/active/open',
   priority: 'P1',
   risk: 'medium',
   driver_actor_id: actorId,
+  planning_coverage: { development_plan_count: 1, plan_item_count: 1, uncovered: false },
+  downstream_gate_summary: requirementListItem.downstream_gate_summary,
+  last_meaningful_update_at: '2026-05-18T01:01:00.000Z',
+  next_action: 'Review rollout Development Plan',
+  release_refs: [{ type: 'release', id: release.id, title: release.title }],
   business_outcome: 'Coordinate the product architecture rebuild rollout.',
   updated_at: '2026-05-18T01:01:00.000Z',
 } as const;
@@ -608,8 +640,22 @@ export const initiativeDetail = {
   priority: initiativeListItem.priority,
   risk: initiativeListItem.risk,
   driver_actor_id: initiativeListItem.driver_actor_id,
+  planning_coverage: initiativeListItem.planning_coverage,
+  downstream_gate_summary: initiativeListItem.downstream_gate_summary,
+  last_meaningful_update_at: initiativeListItem.last_meaningful_update_at,
+  next_action: initiativeListItem.next_action,
+  release_refs: initiativeListItem.release_refs,
   updated_at: initiativeListItem.updated_at,
   narrative_markdown: 'Coordinate AI-native project management surfaces across source objects, Plan Items, execution, and release.',
+  linked_development_plans: [{ type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title }],
+  linked_plan_items: [
+    {
+      type: 'development_plan_item',
+      id: developmentPlanItem.id,
+      development_plan_id: developmentPlan.id,
+      title: developmentPlanItem.title,
+    },
+  ],
   evidence_refs: [{ type: 'attachment', id: 'att-init-ai-native-rollout', title: 'AI-native project management rollout evidence' }],
   attachment_refs: [
     attachmentRef({
@@ -619,27 +665,44 @@ export const initiativeDetail = {
       title: 'AI-native project management rollout evidence',
     }),
   ],
+  audit: { created_at: '2026-05-18T01:01:00.000Z', updated_at: '2026-05-18T01:01:00.000Z', updated_by_actor_id: actorId },
+  business_outcome: initiativeListItem.business_outcome,
   child_refs: [{ type: 'requirement', id: requirementListItem.id }],
   relationship_refs: [],
   milestone_intent: 'Product architecture preview readiness',
-  release_refs: [{ type: 'release', id: release.id }],
+  release_coverage: release.title,
 } as const;
 
 export const techDebtListItem = {
   id: 'td-retire-workspace-page-template',
-  ref: { type: 'tech_debt', id: 'td-retire-workspace-page-template' },
+  ref: { type: 'tech_debt', id: 'td-retire-workspace-page-template', title: 'Retire generic WorkspacePage visual template' },
   title: 'Retire generic WorkspacePage visual template',
   status: 'planning/active/open',
   priority: 'P2',
   risk: 'medium',
   driver_actor_id: actorId,
+  planning_coverage: { development_plan_count: 1, plan_item_count: 1, uncovered: false },
+  downstream_gate_summary: requirementListItem.downstream_gate_summary,
+  last_meaningful_update_at: '2026-05-18T01:02:00.000Z',
+  next_action: 'Retire generic shell dependency',
+  release_refs: [{ type: 'release', id: release.id, title: release.title }],
   affected_modules: ['apps/web/src/features/product-surfaces'],
+  risk_rationale: 'Generic WorkspacePage composition prevents product-specific density and visual hierarchy.',
   updated_at: '2026-05-18T01:02:00.000Z',
 } as const;
 
 export const techDebtDetail = {
   ...techDebtListItem,
   narrative_markdown: 'Generic WorkspacePage composition prevents product-specific density and visual hierarchy.',
+  linked_development_plans: [{ type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title }],
+  linked_plan_items: [
+    {
+      type: 'development_plan_item',
+      id: developmentPlanItem.id,
+      development_plan_id: developmentPlan.id,
+      title: developmentPlanItem.title,
+    },
+  ],
   evidence_refs: [{ type: 'attachment', id: 'att-td-workspace-page-template', title: 'WorkspacePage template retirement evidence' }],
   attachment_refs: [
     attachmentRef({
@@ -649,7 +712,9 @@ export const techDebtDetail = {
       title: 'WorkspacePage template retirement evidence',
     }),
   ],
+  audit: { created_at: '2026-05-18T01:02:00.000Z', updated_at: '2026-05-18T01:02:00.000Z', updated_by_actor_id: actorId },
   validation_strategy: 'Focused route tests and visual screenshot review.',
+  remediation_intent: 'Replace shared page-template visual decisions with typed workspace shells.',
   relationship_refs: [
     {
       type: 'development_plan_item',
@@ -662,13 +727,22 @@ export const techDebtDetail = {
 
 export const bugListItem = {
   id: 'bug-execution-review-context',
-  ref: { type: 'bug', id: 'bug-execution-review-context' },
+  ref: { type: 'bug', id: 'bug-execution-review-context', title: 'Execution continuation loses review context' },
   title: 'Execution continuation loses review context',
   status: 'validation/active/open',
   priority: 'P0',
   risk: 'high',
   driver_actor_id: actorId,
+  planning_coverage: { development_plan_count: 1, plan_item_count: 1, uncovered: false },
+  downstream_gate_summary: {
+    current_gate_counts: { boundary: 0, spec: 0, execution_plan: 0, execution: 0, code_review: 1, qa: 0, release: 0 },
+    blocker_count: 1,
+  },
+  last_meaningful_update_at: '2026-05-18T01:04:00.000Z',
+  next_action: 'Resolve requested review context changes',
+  release_refs: [{ type: 'release', id: release.id, title: release.title }],
   severity: 'high',
+  affected_surfaces: ['Executions', 'Code Review'],
   updated_at: '2026-05-18T01:04:00.000Z',
 } as const;
 
@@ -680,8 +754,22 @@ export const bugDetail = {
   priority: bugListItem.priority,
   risk: bugListItem.risk,
   driver_actor_id: bugListItem.driver_actor_id,
+  planning_coverage: bugListItem.planning_coverage,
+  downstream_gate_summary: bugListItem.downstream_gate_summary,
+  last_meaningful_update_at: bugListItem.last_meaningful_update_at,
+  next_action: bugListItem.next_action,
+  release_refs: bugListItem.release_refs,
   updated_at: bugListItem.updated_at,
   narrative_markdown: 'Continuation must preserve the review context needed by the execution owner and reviewer.',
+  linked_development_plans: [{ type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title }],
+  linked_plan_items: [
+    {
+      type: 'development_plan_item',
+      id: developmentPlanItem.id,
+      development_plan_id: developmentPlan.id,
+      title: developmentPlanItem.title,
+    },
+  ],
   evidence_refs: [{ type: 'attachment', id: 'att-bug-reproduction-screenshot', title: 'Continuation loses review context' }],
   attachment_refs: [
     attachmentRef({
@@ -691,9 +779,12 @@ export const bugDetail = {
       title: 'Continuation loses review context',
     }),
   ],
+  audit: { created_at: '2026-05-18T01:04:00.000Z', updated_at: '2026-05-18T01:04:00.000Z', updated_by_actor_id: actorId },
   observed_behavior: 'Execution continuation opens without the prior review context.',
   expected_behavior: 'Execution continuation preserves the review context and pending decisions.',
   reproduction_steps: ['Open the execution detail', 'Continue the running execution after review feedback'],
+  severity: bugListItem.severity,
+  affected_surfaces: bugListItem.affected_surfaces,
   relationship_refs: [
     {
       type: 'development_plan_item',

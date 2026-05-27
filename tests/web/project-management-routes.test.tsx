@@ -171,7 +171,7 @@ describe('project management route IA', () => {
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
     expect(screen.getByText(/evidence 1/i)).toBeTruthy();
-    expect(screen.getByText(new RegExp(`release ${release.id}`, 'i'))).toBeTruthy();
+    expect(screen.getByText(new RegExp(`release ${release.title}`, 'i'))).toBeTruthy();
     expect(screen.getByText(/risk medium/i)).toBeTruthy();
     expect(document.querySelector('[data-document-surface]')?.textContent).not.toMatch(/Evidence attachments|Planning links/i);
     expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
@@ -342,7 +342,7 @@ describe('project management route IA', () => {
     const preview = screen.getByRole('region', { name: /source object preview/i });
     expect(within(preview).getByText('Related objects')).toBeTruthy();
     expect(within(preview).getByText('Release refs')).toBeTruthy();
-    expect(within(preview).getAllByText('Unavailable').length).toBeGreaterThanOrEqual(2);
+    expect(within(preview).getAllByText('Unavailable').length).toBeGreaterThanOrEqual(1);
     expect(within(preview).queryByText('0')).toBeNull();
   });
 

@@ -48,7 +48,6 @@ export function RequirementDetailRoute() {
             {detail.relationship_refs.map((ref) => (
               <li key={`${ref.type}:${ref.id}`}>{`${formatRelationshipType(ref.type)} ${ref.id}`}</li>
             ))}
-            {detail.bug_refs.map((bug) => <li key={bug.id}>{`Bug ${bug.id}`}</li>)}
           </ul>
         </Section>
       )}
