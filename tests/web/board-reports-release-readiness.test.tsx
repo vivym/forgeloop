@@ -99,17 +99,18 @@ describe('board, reports, and release readiness routes', () => {
     );
   });
 
-  describe.skip('release readiness and report route contracts owned by Task 7 delivery/report migration', () => {
+  describe('release readiness and report route contracts owned by Task 7 delivery/report migration', () => {
     it('shows release readiness by typed object and scoped evidence', async () => {
       const screen = await renderRoute(`/releases/${release.id}`);
 
       expect(await screen.findByRole('heading', { name: /release readiness/i })).toBeTruthy();
-      expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
-        /scope|readiness|high-risk changes|approvals|launch disabled|rollback/i,
-      );
-      expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
-        /Spec|Execution Plan|execution|code review|QA|release blockers|evidence|rollback plan|observation/i,
-      );
+      expect(document.querySelector('[data-page-family="release-readiness"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-readiness-blockers][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      await waitFor(() => {
+        const readinessText = document.querySelector('[data-readiness-blockers]')?.textContent ?? '';
+        expect(readinessText).toMatch(/scope|readiness|high-risk changes|approvals|launch disabled|rollback|release owner/i);
+        expect(readinessText).toMatch(/Spec|Execution Plan|execution|code review|QA|release blockers|evidence|rollback plan|observation/i);
+      });
       for (const label of ['Initiative', 'Requirement', 'Tech Debt', 'Development Plan Item', 'Bug']) {
         expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
       }
@@ -140,30 +141,31 @@ describe('board, reports, and release readiness routes', () => {
 
         expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
         await waitFor(() => {
-          expect(document.querySelector('[data-first-viewport]')?.textContent ?? '').toMatch(/suggested action: review report findings/i);
+          expect(document.querySelector('[data-report-conclusion]')?.textContent ?? '').toMatch(/suggested action: review report findings/i);
         });
         for (const label of ['Conclusion', 'Supporting signal', 'Affected objects', 'Suggested action']) {
           expect(screen.getByText(label)).toBeTruthy();
         }
-        const firstViewportText = document.querySelector('[data-first-viewport]')?.textContent ?? '';
-        expect(firstViewportText).toMatch(/signal available/i);
-        expect(firstViewportText).toMatch(/supporting signal/i);
-        expect(firstViewportText).toMatch(/affected object\(s\): 1 /i);
-        expect(firstViewportText).toMatch(/suggested action: review report findings/i);
+        expect(document.querySelector('[data-page-family="report-insight"]')).toBeInstanceOf(HTMLElement);
+        expect(document.querySelector('[data-report-conclusion][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+        const conclusionText = document.querySelector('[data-report-conclusion]')?.textContent ?? '';
+        expect(conclusionText).toMatch(/signal available/i);
+        expect(conclusionText).toMatch(/supporting signal/i);
+        expect(conclusionText).toMatch(/affected object\(s\): 1 /i);
+        expect(conclusionText).toMatch(/suggested action: review report findings/i);
         expect(document.body.textContent).not.toMatch(/Affected objects unavailable|report group\(s\)/i);
         if (route === '/reports' || route === '/reports/delivery') {
-          expect(firstViewportText).toMatch(/Development Plan Item/i);
+          expect(conclusionText).toMatch(/Development Plan Item/i);
         }
         if (route === '/reports/quality') {
-          expect(firstViewportText).toMatch(/Bug/i);
+          expect(conclusionText).toMatch(/Bug/i);
         }
         if (route === '/reports/release-readiness') {
-          expect(firstViewportText).toMatch(/Release/i);
+          expect(conclusionText).toMatch(/Release/i);
         }
         if (route === '/reports/observation') {
-          expect(firstViewportText).toMatch(/Execution/i);
+          expect(conclusionText).toMatch(/Execution/i);
         }
-        expect(document.querySelector('[data-page-family="report"][data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
         cleanup();
       }
     });
@@ -172,7 +174,8 @@ describe('board, reports, and release readiness routes', () => {
   it('rejects the retired replay report query mode', async () => {
     const screen = await renderRoute('/reports?report=replay');
 
-    expect(await screen.findByRole('heading', { name: /not found/i })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Reports' })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="report-insight"]')).toBeInstanceOf(HTMLElement);
     expect(document.body.textContent).not.toMatch(/Lifecycle replay evidence context|Raw Replay Browser/i);
     expect(document.body.innerHTML).not.toContain('/reports/replay');
   });

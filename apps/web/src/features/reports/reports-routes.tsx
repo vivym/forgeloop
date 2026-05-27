@@ -1,10 +1,11 @@
-import { Link, useSearchParams } from 'react-router';
+import { Link, Navigate, useSearchParams } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { useReportQuery } from '../../shared/api/hooks';
 import type { ProductObjectRef } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
-import { CompactMetadata, PageHeader, Section, WorkspacePage } from '../../shared/layout';
+import { useRuntimeFlags } from '../../shared/context/runtime-flags';
+import { CompactMetadata, ProductPage, ReportInsightLayout, Section } from '../../shared/layout';
 import { DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import { stateFromStatus, SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import { reportViewModel, type ReportProjection } from './report-view-model';
@@ -123,14 +124,16 @@ const metricSections = [
 
 export function ReportsIndexRoute() {
   const { projectId } = useProjectContext();
+  const runtimeFlags = useRuntimeFlags();
   const [searchParams] = useSearchParams();
-  if (retiredReportQueryRequested(searchParams)) {
-    return <RetiredReportQueryState />;
-  }
   const report = reportCatalog[0]!;
   const query = useReportQuery(report.backendReportId, { project_id: projectId, limit: 100 });
   const context = reportContextFromSearchParams(searchParams);
   const viewModel = reportViewModel(reportProjection(query.data, report));
+
+  if (retiredReportQueryRequested(searchParams)) {
+    return runtimeFlags.devToolsEnabled ? <ReplayDevOnlyPanel /> : <Navigate replace to="/reports" />;
+  }
 
   return (
     <ReportWorkspace
@@ -177,14 +180,13 @@ export function ReportsIndexRoute() {
   );
 }
 
-function RetiredReportQueryState() {
+function ReplayDevOnlyPanel() {
   return (
-    <>
-      <PageHeader subtitle="This report query mode is not available in the product workspace." title="Not Found" />
+    <ProductPage family="report-insight" heading="Reports Replay Dev Panel">
       <Section title="Report unavailable">
-        <InlineNotice title="The requested report query mode was not found." tone="warning" />
+        <InlineNotice title="Lifecycle replay evidence context is available only with dev tools enabled." tone="warning" />
       </Section>
-    </>
+    </ProductPage>
   );
 }
 
@@ -228,44 +230,98 @@ function ReportWorkspace({
   stateLabel: string;
   viewModel: ReturnType<typeof reportViewModel>;
 }) {
+  const conclusion = viewModel.conclusion ?? viewModel.currentState;
+  const supporting = supportingSignal(reportData);
+  const affected = affectedObjects(reportData);
+  const suggestedAction = viewModel.suggestedAction?.label ?? viewModel.nextAction;
+
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk={`Affected objects: ${affectedObjects(reportData)}. ${viewModel.riskSignal}`}
-      family="report"
-      heading={heading}
-      layout="operational-intelligence"
-      nextAction={`Suggested action: ${viewModel.suggestedAction?.label ?? viewModel.nextAction}`}
-      roleResponsibility={`Supporting signal: ${supportingSignal(reportData)}`}
-      state={`Conclusion: ${viewModel.conclusion ?? viewModel.currentState}`}
-      subtitle={report.summary}
-    >
+    <ProductPage family="report-insight" heading={heading}>
       <SurfaceStateIndicator label={stateLabel} state={reportSurfaceState(isLoading, isError, reportData)} />
       {isLoading ? <InlineNotice title={`${heading} report is loading.`} tone="info" /> : null}
       {isError ? <InlineNotice title={`${heading} report could not be loaded.`} tone="danger" /> : null}
       {context !== undefined ? <InlineNotice description={context.description} title={context.title} tone="info" /> : null}
-      <Section title="Operational intelligence">
-        <CompactMetadata
-          items={[
-            { label: 'Conclusion', value: viewModel.conclusion ?? viewModel.currentState },
-            { label: 'Supporting signal', value: supportingSignal(reportData) },
-            { label: 'Affected objects', value: affectedObjects(reportData) },
-            { label: 'Suggested action', value: viewModel.suggestedAction?.label ?? viewModel.nextAction },
-          ]}
-        />
-      </Section>
-      <Section title={`${report.title} signal`}>
-        <DataTable
-          ariaLabel={`${report.title} report groups`}
-          columns={reportGroupColumns}
-          density="compact"
-          emptyMessage="No supporting report groups are available."
-          getRowKey={(row) => row.id}
-          rows={reportGroupRows(reportData)}
-        />
-      </Section>
-      {children}
-    </WorkspacePage>
+      <ReportInsightLayout
+        conclusion={
+          <ReportConclusion
+            affected={affected}
+            conclusion={conclusion}
+            report={report}
+            riskSignal={viewModel.riskSignal}
+            suggestedAction={suggestedAction}
+            supportingSignal={supporting}
+          />
+        }
+        signals={<ReportSignals report={report} reportData={reportData} />}
+        actions={
+          <div className="grid gap-4">
+            <RecommendedActions action={suggestedAction} report={report} />
+            {children}
+          </div>
+        }
+      />
+    </ProductPage>
+  );
+}
+
+function ReportConclusion({
+  affected,
+  conclusion,
+  report,
+  riskSignal,
+  suggestedAction,
+  supportingSignal,
+}: {
+  affected: string;
+  conclusion: string;
+  report: ReportCatalogItem;
+  riskSignal: string;
+  suggestedAction: string;
+  supportingSignal: string;
+}) {
+  return (
+    <Section description={report.summary} title="Operational intelligence">
+      <p className="sr-only">
+        {`Conclusion: ${conclusion}. Supporting signal: ${supportingSignal}. Affected objects: ${affected}. Suggested action: ${suggestedAction}. ${riskSignal}`}
+      </p>
+      <CompactMetadata
+        items={[
+          { label: 'Conclusion', value: conclusion },
+          { label: 'Supporting signal', value: supportingSignal },
+          { label: 'Affected objects', value: affected },
+          { label: 'Suggested action', value: suggestedAction },
+        ]}
+      />
+    </Section>
+  );
+}
+
+function ReportSignals({ report, reportData }: { report: ReportCatalogItem; reportData: Record<string, unknown> | undefined }) {
+  return (
+    <Section title={`${report.title} signal`}>
+      <DataTable
+        ariaLabel={`${report.title} report groups`}
+        columns={reportGroupColumns}
+        density="compact"
+        emptyMessage="No supporting report groups are available."
+        getRowKey={(row) => row.id}
+        rows={reportGroupRows(reportData)}
+      />
+    </Section>
+  );
+}
+
+function RecommendedActions({ action, report }: { action: string; report: ReportCatalogItem }) {
+  return (
+    <Section title="Recommended actions" variant="subtle">
+      <CompactMetadata
+        items={[
+          { label: 'Primary action', value: action },
+          { label: 'Responsible role', value: report.owner },
+          { label: 'Report family', value: report.title },
+        ]}
+      />
+    </Section>
   );
 }
 

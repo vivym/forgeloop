@@ -6,7 +6,7 @@ import { createForgeloopCommandApi } from '../../shared/api/commands';
 import { useExecutionsQuery } from '../../shared/api/hooks';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { Section, WorkspacePage } from '../../shared/layout';
+import { ExecutionSupervisionLayout, ProductPage, Section } from '../../shared/layout';
 import { Badge, Button, EmptyState, InlineNotice, StatusPill } from '../../shared/ui';
 import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import {
@@ -60,34 +60,33 @@ export function ExecutionsRoute() {
         : `Worker state ${focusedRow.workerState}; approved Execution Plan ${focusedRow.approvedExecutionPlanRevision}`;
 
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk={executionRisk(rows, query.isError)}
-      family="execution-list"
-      heading="Executions"
-      layout="supervision-lanes"
-      nextAction={focusedRow === undefined ? 'Allowed action: wait for an approved Execution Plan to start' : `Allowed action: ${focusedRow.allowedAction.label}`}
-      roleResponsibility={focusedRow === undefined ? 'Execution owner supervises Development Plan Item delivery.' : `Development Plan Item: ${focusedRow.developmentPlanItem}`}
-      state={pageState}
-      subtitle="Supervision lanes for workers started from approved Execution Plan revisions."
-    >
+    <ProductPage family="execution-supervision" heading="Executions">
       <SurfaceStateIndicator label="Executions Queue" state={executionsSurfaceState(query.isLoading, query.isError, rows, degradedSources)} />
+      <div className="sr-only">
+        <span>{pageState}</span>
+        <span>{executionRisk(rows, query.isError)}</span>
+        <span>{focusedRow === undefined ? 'Allowed action: wait for an approved Execution Plan to start' : `Allowed action: ${focusedRow.allowedAction.label}`}</span>
+        <span>{focusedRow === undefined ? 'Execution owner supervises Development Plan Item delivery.' : `Development Plan Item: ${focusedRow.developmentPlanItem}`}</span>
+      </div>
       {message ? <InlineNotice title={message} tone="success" /> : null}
       {query.isLoading ? <InlineNotice title="Loading execution supervision lanes." tone="info" /> : null}
       {query.isError ? <InlineNotice title="Execution supervision data is temporarily unavailable." tone="danger" /> : null}
-      {!query.isLoading && !query.isError ? (
-        <SupervisionLanes
-          onContinueExecution={continueExecution}
-          onInterruptExecution={interruptExecution}
-          onRetryExecution={retryExecution}
-          rows={rows}
-        />
-      ) : null}
-    </WorkspacePage>
+      <ExecutionSupervisionLayout
+        evidence={<ExecutionEvidence row={focusedRow} />}
+        lanes={
+          <ExecutionLanes
+            onContinueExecution={continueExecution}
+            onInterruptExecution={interruptExecution}
+            onRetryExecution={retryExecution}
+            rows={rows}
+          />
+        }
+      />
+    </ProductPage>
   );
 }
 
-function SupervisionLanes({
+function ExecutionLanes({
   rows,
   onContinueExecution,
   onInterruptExecution,
@@ -126,6 +125,23 @@ function SupervisionLanes({
         </Section>
       ))}
     </div>
+  );
+}
+
+function ExecutionEvidence({ row }: { row: ExecutionSupervisionRow | undefined }) {
+  return (
+    <Section title="Execution evidence" variant="panel">
+      {row === undefined ? (
+        <p className="m-0 text-sm text-text-secondary">No execution evidence is selected.</p>
+      ) : (
+        <dl className="grid gap-2 text-sm">
+          <Definition label="Approved Execution Plan" value={row.approvedExecutionPlanRevision} />
+          <Definition label="Development Plan Item" value={row.developmentPlanItem} />
+          <Definition label="Current step" value={row.currentStep} />
+          <Definition label="PR, diff, and test evidence" value={row.evidenceSummary} />
+        </dl>
+      )}
+    </Section>
   );
 }
 

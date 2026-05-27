@@ -24,6 +24,8 @@ describe('Executions routes', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'Executions' })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="execution-supervision"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-execution-lanes][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     for (const lane of ['Active', 'Resumable', 'Review pending', 'Failed / blocked', 'Completed / recent']) {
       expect(await screen.findByRole('heading', { name: lane })).toBeTruthy();
     }
@@ -43,6 +45,8 @@ describe('Executions routes', () => {
     const screen = await renderRoute(`/executions/${execution.id}`);
 
     expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="execution-supervision"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-run-evidence][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(document.body.textContent).toMatch(new RegExp(executionPlanRevision.summary));
     expect(document.body.textContent).not.toMatch(new RegExp(`Execution ${execution.id}`));
     expect(document.body.textContent).toMatch(/Worker state/i);

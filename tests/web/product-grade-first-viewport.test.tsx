@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { firstViewportContract } from '../../apps/web/src/features/product-surfaces/first-viewport-contract';
@@ -158,14 +158,14 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
   });
 });
 
-describe.skip('Task 7 owner: Document Review, execution, release, and report route first-viewport contracts', () => {
+describe('Task 7 owner: Document Review, execution, release, and report route first-viewport contracts', () => {
   it('requires Document Reviews to expose a queue first viewport and preview workspace', async () => {
     const rendered = await renderRoute('/specs-plans');
 
     expect(await rendered.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'governance-queue', heading: 'Document Reviews' });
-    expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/governance|reviewer|risk/i);
+    expectFirstViewportContract(rendered, { pageFamily: 'document-governance', heading: 'Document Reviews' });
+    expect(document.querySelector('[data-document-queue][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-document-queue]')?.textContent).toMatch(/governance|reviewer|risk/i);
     expect(rendered.getByRole('region', { name: /selected governance row/i })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/specs\/|\/plans\//);
   });
@@ -174,9 +174,9 @@ describe.skip('Task 7 owner: Document Review, execution, release, and report rou
     const rendered = await renderRoute('/executions');
 
     expect(await rendered.findByRole('heading', { name: 'Executions' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'execution-list', heading: 'Executions' });
-    expect(document.querySelector('[data-workspace-layout="supervision-lanes"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/worker state|allowed action|approved Execution Plan/i);
+    expectFirstViewportContract(rendered, { pageFamily: 'execution-supervision', heading: 'Executions' });
+    expect(document.querySelector('[data-execution-lanes][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-execution-lanes]')?.textContent).toMatch(/worker state|allowed action|approved Execution Plan/i);
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|run session browser/i);
   });
 
@@ -184,31 +184,30 @@ describe.skip('Task 7 owner: Document Review, execution, release, and report rou
     const rendered = await renderRoute(`/executions/${execution.id}`);
 
     expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'execution-detail', heading: developmentPlanItem.title });
-    const firstViewport = document.querySelector('[data-first-viewport]');
-    expect(document.querySelector('[data-workspace-layout="supervision-detail"]')).toBeInstanceOf(HTMLElement);
-    expect(firstViewport?.textContent).toMatch(/current step|last meaningful event|PR, diff, and test evidence/i);
-    expect(within(firstViewport as HTMLElement).getByRole('button', { name: /interrupt execution/i })).toBeTruthy();
-    expect(within(firstViewport as HTMLElement).getByRole('button', { name: /continue execution/i })).toBeTruthy();
-    expect(within(firstViewport as HTMLElement).getByRole('button', { name: /retry execution/i })).toBeTruthy();
-    expect(within(firstViewport as HTMLElement).getByRole('link', { name: /inspect execution/i })).toBeTruthy();
-    expect(firstViewport?.textContent).toMatch(/Continue disabled|Retry unavailable/i);
+    expectFirstViewportContract(rendered, { pageFamily: 'execution-supervision', heading: developmentPlanItem.title });
+    expect(document.querySelector('[data-run-evidence][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-run-evidence]')?.textContent).toMatch(/current step|last meaningful event|PR, diff, and test evidence/i);
+    expect(document.querySelector('[data-worker-controls]')?.textContent).toMatch(/Continue disabled|Retry unavailable/i);
+    expect(rendered.getByRole('button', { name: /interrupt execution/i })).toBeTruthy();
+    expect(rendered.getByRole('button', { name: /continue execution/i })).toBeTruthy();
+    expect(rendered.getByRole('button', { name: /retry execution/i })).toBeTruthy();
+    expect(rendered.getByRole('link', { name: /inspect execution/i })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|run session browser/i);
   });
 
   it('requires release routes to expose readiness cockpit first viewports', async () => {
-    for (const [route, heading, layout] of [
-      ['/releases', 'Releases', 'release-inventory'],
-      [`/releases/${release.id}`, 'Release Readiness', 'release-readiness'],
+    for (const [route, heading] of [
+      ['/releases', 'Releases'],
+      [`/releases/${release.id}`, 'Release Readiness'],
     ] as const) {
       const rendered = await renderRoute(route);
 
       expect(await rendered.findByRole('heading', { name: heading })).toBeTruthy();
-      expectFirstViewportContract(rendered, { pageFamily: 'release', heading });
-      expect(document.querySelector(`[data-workspace-layout="${layout}"]`)).toBeInstanceOf(HTMLElement);
-      expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/scope|readiness|risk|approval|release owner/i);
+      expectFirstViewportContract(rendered, { pageFamily: 'release-readiness', heading });
+      expect(document.querySelector('[data-readiness-blockers][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-readiness-blockers]')?.textContent).toMatch(/scope|readiness|risk|approval|release owner/i);
       if (route.includes(release.id)) {
-        expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(
+        expect(document.querySelector('[data-readiness-blockers]')?.textContent).toMatch(
           /Spec|Execution Plan|execution|code review|QA|release blockers|evidence|rollback plan|observation/i,
         );
       }
@@ -221,9 +220,9 @@ describe.skip('Task 7 owner: Document Review, execution, release, and report rou
     const rendered = await renderRoute(`/releases/${release.id}/evidence`);
 
     expect(await rendered.findByRole('heading', { name: 'Release Evidence' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'evidence', heading: 'Release Evidence' });
-    expect(document.querySelector('[data-workspace-layout="release-evidence"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-first-viewport]')?.textContent).toMatch(/evidence readiness|relevance|QA acceptance/i);
+    expectFirstViewportContract(rendered, { pageFamily: 'release-evidence', heading: 'Release Evidence' });
+    expect(document.querySelector('[data-release-evidence-summary][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-release-evidence-summary]')?.textContent).toMatch(/evidence readiness|relevance|QA acceptance/i);
     expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/tasks\b|\/packages\b|actor-release-owner/);
   });
 
@@ -239,13 +238,13 @@ describe.skip('Task 7 owner: Document Review, execution, release, and report rou
 
       expect(await rendered.findByRole('heading', { name: heading })).toBeTruthy();
       await waitFor(() => {
-        expect(document.querySelector('[data-first-viewport]')?.textContent ?? '').toMatch(/Suggested action: Review report findings/i);
+        expect(document.querySelector('[data-report-conclusion]')?.textContent ?? '').toMatch(/Suggested action: Review report findings/i);
       });
-      expectFirstViewportContract(rendered, { pageFamily: 'report', heading });
-      expect(document.querySelector('[data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
-      const firstViewportText = document.querySelector('[data-first-viewport]')?.textContent ?? '';
-      expect(firstViewportText).toMatch(/conclusion|supporting signal|affected objects|suggested action/i);
-      expect(firstViewportText).toMatch(/1 affected object\(s\): 1 (Development Plan Item|Bug|Release|Execution)/i);
+      expectFirstViewportContract(rendered, { pageFamily: 'report-insight', heading });
+      expect(document.querySelector('[data-report-conclusion][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      const conclusionText = document.querySelector('[data-report-conclusion]')?.textContent ?? '';
+      expect(conclusionText).toMatch(/conclusion|supporting signal|affected objects|suggested action/i);
+      expect(conclusionText).toMatch(/1 affected object\(s\): 1 (Development Plan Item|Bug|Release|Execution)/i);
       expect(document.body.textContent).not.toMatch(/Affected objects unavailable|report group\(s\)/i);
       expect(document.body.textContent).not.toMatch(/coming soon|placeholder|raw replay browser|\/reports\/replay/i);
       cleanup();
@@ -255,8 +254,9 @@ describe.skip('Task 7 owner: Document Review, execution, release, and report rou
   it('rejects the retired replay report query mode before rendering report intelligence', async () => {
     const rendered = await renderRoute('/reports?report=replay');
 
-    expect(await rendered.findByRole('heading', { name: /not found/i })).toBeTruthy();
+    expect(await rendered.findByRole('heading', { name: 'Reports' })).toBeTruthy();
+    expectFirstViewportContract(rendered, { pageFamily: 'report-insight', heading: 'Reports' });
     expect(document.body.textContent).not.toMatch(/Lifecycle replay evidence context|raw replay browser/i);
-    expect(document.querySelector('[data-workspace-layout="operational-intelligence"]')).toBeNull();
+    expect(document.querySelector('[data-report-conclusion][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
   });
 });

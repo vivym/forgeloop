@@ -103,7 +103,7 @@ describe('AI-native My Work, Board, and Reports', () => {
     expect(screen.queryByText(/Board cards could not be loaded/i)).toBeNull();
   });
 
-  describe.skip('reports route contracts owned by Task 7 delivery/report migration', () => {
+  describe('reports route contracts owned by Task 7 delivery/report migration', () => {
     it('renders Reports as product metrics, not placeholders', async () => {
       const screen = await renderRoute('/reports');
       expect(await screen.findByRole('heading', { name: 'Reports' })).toBeTruthy();
@@ -125,14 +125,15 @@ describe('AI-native My Work, Board, and Reports', () => {
         expect(screen.getByText(label)).toBeTruthy();
       }
       await waitFor(() => {
-        expect(document.querySelector('[data-first-viewport]')?.textContent ?? '').toMatch(/Suggested action: Review report findings/i);
+        expect(document.querySelector('[data-report-conclusion]')?.textContent ?? '').toMatch(/Suggested action: Review report findings/i);
       });
-      const firstViewportText = document.querySelector('[data-first-viewport]')?.textContent ?? '';
-      expect(firstViewportText).toMatch(/Development Plan Item/i);
-      expect(firstViewportText).toMatch(/1 affected object\(s\): 1 Development Plan Item/i);
-      expect(firstViewportText).toMatch(/Suggested action: Review report findings/i);
+      const conclusionText = document.querySelector('[data-report-conclusion]')?.textContent ?? '';
+      expect(conclusionText).toMatch(/Development Plan Item/i);
+      expect(conclusionText).toMatch(/1 affected object\(s\): 1 Development Plan Item/i);
+      expect(conclusionText).toMatch(/Suggested action: Review report findings/i);
       expect(document.body.textContent).not.toMatch(/Affected objects unavailable|report group\(s\)/i);
-      expect(document.querySelector('[data-page-family="report"][data-workspace-layout="operational-intelligence"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-page-family="report-insight"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-report-conclusion][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(document.body.textContent).not.toMatch(/coming soon|placeholder/i);
     });
 

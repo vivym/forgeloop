@@ -7,7 +7,7 @@ import { useCodeReviewHandoffsQuery, useExecutionQuery, useQaHandoffsQuery } fro
 import { queryKeys } from '../../shared/api/query-keys';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { Section, WorkspacePage } from '../../shared/layout';
+import { ExecutionSupervisionLayout, ProductPage, Section } from '../../shared/layout';
 import { Button, InlineNotice, StatusPill } from '../../shared/ui';
 import { CodeReviewHandoffPanel, type CodeReviewHandoffProjection } from '../code-review/code-review-handoff-panel';
 import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
@@ -64,55 +64,47 @@ export function ExecutionDetailRoute() {
   }
 
   return (
-    <WorkspacePage
-      as="div"
-      blockerRisk={
-        viewModel === undefined
-          ? 'Execution supervision cannot be evaluated until detail data loads.'
-          : `${viewModel.riskSignal} Current step: ${viewModel.currentStep}. Last meaningful event: ${viewModel.lastMeaningfulEvent}. PR, diff, and test evidence: ${viewModel.evidenceSummary}.`
-      }
-      family="execution-detail"
-      heading={viewModel?.title ?? 'Execution supervision'}
-      layout="supervision-detail"
-      nextAction={viewModel?.nextAction ?? 'Allowed action: load execution supervision'}
-      roleResponsibility={viewModel?.primaryActorOrRole ?? 'Linked Plan Item unavailable'}
-      state={viewModel?.currentState ?? (executionQuery.isLoading ? 'Loading execution supervision' : 'Execution supervision unavailable')}
-      subtitle="Product supervision for the worker, evidence, and review path attached to an approved Execution Plan revision."
-      toolbar={
-        viewModel === undefined ? undefined : (
-          <FirstViewportActionControls
-            onContinueExecution={continueExecution}
-            onInterruptExecution={interrupt}
-            onRetryExecution={retryExecution}
-            viewModel={viewModel}
-          />
-        )
-      }
-    >
+    <ProductPage family="execution-supervision" heading={viewModel?.title ?? 'Execution supervision'}>
       <SurfaceStateIndicator label="Execution Detail" state={executionSurfaceState(executionQuery.isLoading, executionQuery.isError, execution)} />
+      <div className="sr-only">
+        <span>
+          {viewModel === undefined
+            ? 'Execution supervision cannot be evaluated until detail data loads.'
+            : `${viewModel.riskSignal} Current step: ${viewModel.currentStep}. Last meaningful event: ${viewModel.lastMeaningfulEvent}. PR, diff, and test evidence: ${viewModel.evidenceSummary}.`}
+        </span>
+        <span>{viewModel?.nextAction ?? 'Allowed action: load execution supervision'}</span>
+        <span>{viewModel?.primaryActorOrRole ?? 'Linked Plan Item unavailable'}</span>
+        <span>{viewModel?.currentState ?? (executionQuery.isLoading ? 'Loading execution supervision' : 'Execution supervision unavailable')}</span>
+      </div>
       {message ? <InlineNotice title={message} tone="success" /> : null}
       {executionQuery.isError ? <InlineNotice title="Execution detail could not be loaded." tone="danger" /> : null}
       {execution === undefined && !executionQuery.isLoading ? <InlineNotice title="Execution not found." tone="warning" /> : null}
       {execution !== undefined && viewModel !== undefined ? (
-        <>
-          <ExecutionSupervisionPanel
-            viewModel={viewModel}
-          />
-          <CodeReviewHandoffPanel execution={execution} handoff={codeReview} />
-          <QaHandoffPanel codeReview={codeReview} execution={execution} handoff={qaHandoff} />
-        </>
+        <ExecutionSupervisionLayout
+          controls={
+            <WorkerControls
+              onContinueExecution={continueExecution}
+              onInterruptExecution={interrupt}
+              onRetryExecution={retryExecution}
+              viewModel={viewModel}
+            />
+          }
+          evidence={<ExecutionEvidence viewModel={viewModel} />}
+          lanes={<ExecutionHandoffLanes codeReview={codeReview} execution={execution} qaHandoff={qaHandoff} />}
+          primarySurface="evidence"
+        />
       ) : null}
-    </WorkspacePage>
+    </ProductPage>
   );
 }
 
-function ExecutionSupervisionPanel({
+function ExecutionEvidence({
   viewModel,
 }: {
   viewModel: ExecutionSupervisionDetail;
 }) {
   return (
-    <Section actions={<StatusPill tone={viewModel.statusTone}>{viewModel.status}</StatusPill>} title="Execution supervision summary" variant="panel">
+    <Section actions={<StatusPill tone={viewModel.statusTone}>{viewModel.status}</StatusPill>} title="Execution evidence" variant="panel">
       <div className="grid gap-4">
         <dl className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-3">
           <Definition label="Approved Execution Plan revision" value={viewModel.approvedExecutionPlanRevision} />
@@ -130,7 +122,24 @@ function ExecutionSupervisionPanel({
   );
 }
 
-function FirstViewportActionControls({
+function ExecutionHandoffLanes({
+  codeReview,
+  execution,
+  qaHandoff,
+}: {
+  codeReview: CodeReviewHandoffProjection | undefined;
+  execution: ExecutionProjection;
+  qaHandoff: QaHandoffProjection | undefined;
+}) {
+  return (
+    <div className="grid gap-4">
+      <CodeReviewHandoffPanel execution={execution} handoff={codeReview} />
+      <QaHandoffPanel codeReview={codeReview} execution={execution} handoff={qaHandoff} />
+    </div>
+  );
+}
+
+function WorkerControls({
   viewModel,
   onInterruptExecution,
   onContinueExecution,

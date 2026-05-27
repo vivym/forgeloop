@@ -40,7 +40,7 @@ export function CockpitLayout({
           {attentionQueue}
         </PrimarySurface>
         <section data-risk-column="">{riskColumn}</section>
-        <aside data-health-rail="">{healthRail}</aside>
+        <div data-health-rail="">{healthRail}</div>
       </div>
     </div>
   );
@@ -62,7 +62,7 @@ export function DatabaseViewLayout({
       <div data-database-toolbar="">{toolbar}</div>
       <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
         <PrimarySurface data-data-table="">{table}</PrimarySurface>
-        {hasInspector ? <aside data-row-preview="">{inspector}</aside> : null}
+        {hasInspector ? <div data-row-preview="">{inspector}</div> : null}
       </div>
     </div>
   );
@@ -87,7 +87,7 @@ export function InboxLayout({
       {groups ? <div data-inbox-groups="">{groups}</div> : null}
       <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
         <PrimarySurface data-inbox-list="">{list}</PrimarySurface>
-        {hasInspector ? <aside data-inspector-panel="">{inspector}</aside> : null}
+        {hasInspector ? <div data-inspector-panel="">{inspector}</div> : null}
       </div>
     </div>
   );
@@ -110,10 +110,10 @@ export function DocumentWorkspaceLayout({
     <div className={cn('grid gap-4', hasPropertyRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
       <PrimarySurface data-document-surface="">{document}</PrimarySurface>
       {hasPropertyRail ? (
-        <aside className="grid content-start gap-3">
+        <div className="grid content-start gap-3">
           {hasProperties ? <div data-property-rail="">{properties}</div> : null}
           {hasAttachments ? <div data-attachment-strip="">{attachments}</div> : null}
-        </aside>
+        </div>
       ) : null}
     </div>
   );
@@ -153,7 +153,7 @@ export function PlanningTableLayout({ inspector, table, toolbar }: { inspector?:
       {toolbar ? <div data-planning-toolbar="">{toolbar}</div> : null}
       <div className={cn('grid gap-4', hasInspector ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
         <PrimarySurface data-plan-items-table="">{table}</PrimarySurface>
-        {hasInspector ? <aside data-inspector-panel="">{inspector}</aside> : null}
+        {hasInspector ? <div data-inspector-panel="">{inspector}</div> : null}
       </div>
     </div>
   );
@@ -217,7 +217,7 @@ export function GateFlowLayout({
         {gateStepper ? <div data-gate-stepper="">{gateStepper}</div> : null}
         <PrimarySurface data-gate-workspace="">{workspace}</PrimarySurface>
       </div>
-      {hasContextRail ? <aside data-context-rail="">{contextRail}</aside> : null}
+      {hasContextRail ? <div data-context-rail="">{contextRail}</div> : null}
     </div>
   );
 }
@@ -243,10 +243,10 @@ export function DocumentReviewLayout({
       <div className={cn('grid gap-4', hasReviewRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
         <PrimarySurface data-document-surface="">{document}</PrimarySurface>
         {hasReviewRail ? (
-          <aside className="grid content-start gap-3">
+          <div className="grid content-start gap-3">
             {hasReviewState ? <div data-review-state="">{reviewState}</div> : null}
             {hasCommentSummary ? <div data-comment-summary="">{commentSummary}</div> : null}
-          </aside>
+          </div>
         ) : null}
       </div>
     </div>
@@ -262,10 +262,10 @@ export function CodeReviewLayout({ controls, evidence, workspace }: { controls?:
     <div className={cn('grid gap-4', hasReviewRail ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
       <PrimarySurface data-code-review-workspace="">{workspace}</PrimarySurface>
       {hasReviewRail ? (
-        <aside className="grid content-start gap-3">
+        <div className="grid content-start gap-3">
           {hasEvidence ? <div data-review-evidence="">{evidence}</div> : null}
           {hasControls ? <div data-review-decision-controls="">{controls}</div> : null}
-        </aside>
+        </div>
       ) : null}
     </div>
   );
@@ -280,10 +280,10 @@ export function QaHandoffLayout({ controls, evidence, workspace }: { controls?: 
     <div className={cn('grid gap-4', hasQaRail ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
       <PrimarySurface data-qa-handoff-workspace="">{workspace}</PrimarySurface>
       {hasQaRail ? (
-        <aside className="grid content-start gap-3">
+        <div className="grid content-start gap-3">
           {hasEvidence ? <div data-qa-acceptance-evidence="">{evidence}</div> : null}
           {hasControls ? <div data-qa-decision-controls="">{controls}</div> : null}
-        </aside>
+        </div>
       ) : null}
     </div>
   );
@@ -298,7 +298,7 @@ export function DocumentGovernanceLayout({ groups, inspector, queue }: { groups?
         {groups ? <div data-document-review-groups="">{groups}</div> : null}
         <PrimarySurface data-document-queue="">{queue}</PrimarySurface>
       </div>
-      {hasInspector ? <aside data-inspector-panel="">{inspector}</aside> : null}
+      {hasInspector ? <div data-inspector-panel="">{inspector}</div> : null}
     </div>
   );
 }
@@ -346,10 +346,10 @@ export function ExecutionSupervisionLayout({
     <div className={cn('grid gap-4', hasExecutionRail ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
       {lanesNode}
       {hasExecutionRail ? (
-        <aside className="grid content-start gap-3">
+        <div className="grid content-start gap-3">
           {evidenceNode}
           {hasControls ? <div data-worker-controls="">{controls}</div> : null}
-        </aside>
+        </div>
       ) : null}
     </div>
   );
@@ -375,11 +375,11 @@ export function ReleaseReadinessLayout({
     <div className={cn('grid gap-4', hasReadinessRail ? 'xl:grid-cols-[minmax(0,1fr)_22rem]' : undefined)}>
       <PrimarySurface data-readiness-blockers="">{blockers}</PrimarySurface>
       {hasReadinessRail ? (
-        <aside className="grid content-start gap-3">
+        <div className="grid content-start gap-3">
           {hasScope ? <div data-release-scope="">{scope}</div> : null}
           {hasEvidence ? <div data-qa-evidence="">{evidence}</div> : null}
           {hasRolloutPlan ? <div data-rollout-plan="">{rolloutPlan}</div> : null}
-        </aside>
+        </div>
       ) : null}
     </div>
   );

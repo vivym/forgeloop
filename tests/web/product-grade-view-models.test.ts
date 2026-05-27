@@ -331,16 +331,16 @@ describe('product-grade presentation view models', () => {
   it('keeps the fixture manifest populated for every dynamic product route family', () => {
     expect(productDynamicRouteFixtureManifest).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ family: 'source-object-detail', objectType: 'requirement', objectId: requirementListItem.id }),
-        expect.objectContaining({ family: 'evidence', objectType: 'requirement', objectId: requirementListItem.id }),
-        expect.objectContaining({ family: 'evidence', objectType: 'initiative', objectId: initiativeListItem.id }),
-        expect.objectContaining({ family: 'evidence', objectType: 'bug', objectId: bugListItem.id }),
-        expect.objectContaining({ family: 'evidence', objectType: 'tech_debt', objectId: techDebtListItem.id }),
-        expect.objectContaining({ family: 'development-plan-detail', objectType: 'development_plan' }),
-        expect.objectContaining({ family: 'gate-workspace', objectType: 'development_plan_item' }),
-        expect.objectContaining({ family: 'execution-detail', objectType: 'execution' }),
-        expect.objectContaining({ family: 'release', objectType: 'release' }),
-        expect.objectContaining({ family: 'evidence', objectType: 'release' }),
+        expect.objectContaining({ family: 'source-document', objectType: 'requirement', objectId: requirementListItem.id }),
+        expect.objectContaining({ family: 'source-evidence', objectType: 'requirement', objectId: requirementListItem.id }),
+        expect.objectContaining({ family: 'source-evidence', objectType: 'initiative', objectId: initiativeListItem.id }),
+        expect.objectContaining({ family: 'source-evidence', objectType: 'bug', objectId: bugListItem.id }),
+        expect.objectContaining({ family: 'source-evidence', objectType: 'tech_debt', objectId: techDebtListItem.id }),
+        expect.objectContaining({ family: 'planning-table', objectType: 'development_plan' }),
+        expect.objectContaining({ family: 'gate-flow', objectType: 'development_plan_item' }),
+        expect.objectContaining({ family: 'execution-supervision', objectType: 'execution' }),
+        expect.objectContaining({ family: 'release-readiness', objectType: 'release' }),
+        expect.objectContaining({ family: 'release-evidence', objectType: 'release' }),
       ]),
     );
   });

@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router';
 
 import { useSpecExecutionPlanQueueQuery } from '../../shared/api/hooks';
 import { useProjectContext } from '../../shared/context/project-context';
-import { CompactMetadata, InlineActions, PreviewPane, QueueWorkspace, Section } from '../../shared/layout';
+import { CompactMetadata, DocumentGovernanceLayout, InlineActions, PreviewPane, ProductPage, Section } from '../../shared/layout';
 import { Badge, DataTable, EmptyState, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import {
@@ -64,17 +64,7 @@ export function SpecExecutionPlanQueue() {
   const nextAction = focusedRow?.nextAction ?? viewModel.nextAction;
   const roleResponsibility = focusedRow?.reviewer ?? viewModel.primaryActorOrRole;
 
-  return (
-    <QueueWorkspace
-      as="div"
-      blockerRisk={blockerRisk}
-      family="governance-queue"
-      heading="Document Reviews"
-      nextAction={nextAction}
-      roleResponsibility={`Reviewer: ${roleResponsibility}`}
-      state={state}
-      subtitle="Governance queue for item-scoped Spec and Execution Plan documents."
-      toolbar={
+  const toolbar = (
         <InlineActions aria-label="Document review tabs" role="tablist">
           <Link aria-selected={activeTab === 'specs'} className={activeTab === 'specs' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref('specs', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
             Specs
@@ -83,10 +73,18 @@ export function SpecExecutionPlanQueue() {
             Execution Plans
           </Link>
         </InlineActions>
-      }
-    >
+  );
+
+  return (
+    <ProductPage family="document-governance" heading="Document Reviews" toolbar={toolbar}>
       <div className="grid gap-4">
         <SurfaceStateIndicator label="Document Reviews Queue" state={queueSurfaceState(query.isLoading, query.isError, rows, queueProjection.degraded_sources)} />
+        <div className="sr-only">
+          <span>{state}</span>
+          <span>{blockerRisk}</span>
+          <span>{nextAction}</span>
+          <span>{`Reviewer: ${roleResponsibility}`}</span>
+        </div>
         {query.isLoading ? <InlineNotice title="Loading Document Reviews queue." tone="info" /> : null}
         {query.isError ? <InlineNotice title="Document Reviews queue data is temporarily unavailable." tone="danger" /> : null}
         {focusedDevelopmentPlanId !== null || focusedDevelopmentPlanItemId !== null ? (
@@ -97,26 +95,41 @@ export function SpecExecutionPlanQueue() {
           />
         ) : null}
         {!query.isError ? (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
-            <div className="grid min-w-0 gap-4">
-              {groups.map((group) => (
-                <SpecPlanGroup
-                  focusedRowKey={focusedRow?.id}
-                  group={group}
-                  isLoading={query.isLoading}
-                  key={group.id}
-                  onFocusRow={(row) => setFocusedRowKey(row.id)}
-                />
-              ))}
-              {rows.length === 0 && query.isLoading !== true ? (
-                <EmptyState description="No Spec or Execution Plan rows currently need governance action." title="No governance rows." />
-              ) : null}
-            </div>
-            <SelectedGovernancePreview row={focusedRow} />
-          </div>
+          <DocumentGovernanceLayout
+            groups={<DocumentReviewGroups groups={groups} />}
+            inspector={<DocumentReviewInspector row={focusedRow} />}
+            queue={
+              <div className="grid min-w-0 gap-4">
+                {groups.map((group) => (
+                  <SpecPlanGroup
+                    focusedRowKey={focusedRow?.id}
+                    group={group}
+                    isLoading={query.isLoading}
+                    key={group.id}
+                    onFocusRow={(row) => setFocusedRowKey(row.id)}
+                  />
+                ))}
+                {rows.length === 0 && query.isLoading !== true ? (
+                  <EmptyState description="No Spec or Execution Plan rows currently need governance action." title="No governance rows." />
+                ) : null}
+              </div>
+            }
+          />
         ) : null}
       </div>
-    </QueueWorkspace>
+    </ProductPage>
+  );
+}
+
+function DocumentReviewGroups({ groups }: { groups: SpecPlanQueueGroup[] }) {
+  return (
+    <div className="flex flex-wrap gap-2" aria-label="Document review groups">
+      {groups.map((group) => (
+        <Badge key={group.id} tone={group.rows.length === 0 ? 'neutral' : 'info'}>
+          {group.label}: {group.rows.length}
+        </Badge>
+      ))}
+    </div>
   );
 }
 
@@ -172,7 +185,7 @@ const specPlanColumns: DataTableColumn<SpecPlanQueueRow>[] = [
   { key: 'action', header: 'Next action', cell: (row) => row.nextAction },
 ];
 
-function SelectedGovernancePreview({ row }: { row: SpecPlanQueueRow | undefined }) {
+function DocumentReviewInspector({ row }: { row: SpecPlanQueueRow | undefined }) {
   if (row === undefined) {
     return (
       <PreviewPane aria-label="Selected governance row" meta="No row selected" title="Selected governance row">

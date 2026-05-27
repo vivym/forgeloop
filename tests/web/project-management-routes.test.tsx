@@ -128,7 +128,8 @@ describe('project management route IA', () => {
   it('renders Document Reviews as a governance queue instead of direct document browsers', async () => {
     const screen = await renderRoute('/specs-plans');
     expect(await screen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
-    expect(document.querySelector('[data-workspace-layout="queue"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-page-family="document-governance"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-document-queue][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('tab', { name: 'Specs' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Execution Plans' })).toBeTruthy();
     expect((await screen.findAllByRole('link', { name: /open plan item/i }))[0]?.getAttribute('href')).toMatch(/^\/development-plans\//);

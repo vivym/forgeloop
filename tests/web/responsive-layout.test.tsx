@@ -26,7 +26,8 @@ describe('responsive layout contract', () => {
     const screen = await renderRoute(`/requirements/${requirementListItem.id}`);
 
     expect(await screen.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
-    expect(document.querySelector('[data-workspace-layout="object"]')).toBeTruthy();
+    expect(document.querySelector('[data-page-family="source-document"]')).toBeTruthy();
+    expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeTruthy();
     expect(screen.getAllByRole('main').length).toBeGreaterThan(0);
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });

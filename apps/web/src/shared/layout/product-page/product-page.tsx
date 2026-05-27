@@ -17,7 +17,7 @@ export function ProductPage({ children, className, family, heading, headingClass
   const label = typeof heading === 'string' ? heading : undefined;
 
   return (
-    <main
+    <section
       aria-label={label}
       aria-labelledby={label ? undefined : headingId}
       className={cn('grid min-w-0 gap-4 px-4 py-4 md:px-6 md:py-5', className)}
@@ -30,6 +30,6 @@ export function ProductPage({ children, className, family, heading, headingClass
         {toolbar ? <div className="flex min-w-0 flex-wrap items-center gap-2">{toolbar}</div> : null}
       </header>
       {children}
-    </main>
+    </section>
   );
 }

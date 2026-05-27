@@ -163,10 +163,12 @@ describe('EvidenceAttachments', () => {
     });
 
     expect(await screen.findByRole('heading', { name: 'Requirement Evidence' })).toBeTruthy();
-    expect(screen.getAllByText(/relevant evidence/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/missing evidence/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/stale evidence/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/unavailable evidence/i).length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.getAllByText(/relevant evidence/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/missing evidence/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/stale evidence/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/unavailable evidence/i).length).toBeGreaterThan(0);
+    });
     expect(document.body.textContent).not.toContain('bucket.example.com');
     expect(document.body.textContent).not.toContain('Raw artifact browser');
   });

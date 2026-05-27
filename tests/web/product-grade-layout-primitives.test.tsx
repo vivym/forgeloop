@@ -46,7 +46,7 @@ describe('product-grade layout primitives', () => {
       </ProductPage>,
     );
 
-    expect(screen.getByRole('main', { name: 'Cockpit' }).getAttribute('data-page-family')).toBe('cockpit');
+    expect(screen.getByRole('region', { name: 'Cockpit' }).getAttribute('data-page-family')).toBe('cockpit');
     expect(document.querySelectorAll('[data-primary-work-surface]')).toHaveLength(1);
     expect(document.querySelector('[data-primary-work-surface]')?.textContent).toBe('Attention queue');
     expect(document.querySelector('[data-first-viewport]')).toBeNull();
