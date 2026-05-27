@@ -320,7 +320,7 @@ function visualWorkItem(id: string, kind: WorkItem['kind'], title: string, now: 
     narrative_markdown: `# ${title}\n\nValidate product architecture through the AI-native delivery flow.`,
     goal: `${title} is visible in product architecture visual review.`,
     success_criteria: ['Seeded object data is visible.', 'Development Plan Item gates are reviewed.'],
-    priority: kind === 'bug' ? 'P0' : 'P1',
+    priority: kind === 'bug' ? 'critical' : 'P1',
     risk: kind === 'bug' ? 'high' : 'medium',
     driver_actor_id: 'actor-owner',
     intake_context: visualIntakeContext(kind, title),

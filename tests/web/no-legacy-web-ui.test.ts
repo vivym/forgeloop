@@ -195,6 +195,20 @@ describe('no legacy Web UI baggage', () => {
     }
   });
 
+  it('removes retired generic product workspace layout primitives', () => {
+    for (const path of [
+      'apps/web/src/shared/layout/action-strip/action-strip.tsx',
+      'apps/web/src/shared/layout/priority-summary/priority-summary.tsx',
+      'apps/web/src/shared/layout/object-workspace/object-workspace.tsx',
+      'apps/web/src/shared/layout/queue-workspace/queue-workspace.tsx',
+      'apps/web/src/shared/layout/planning-table-workspace/planning-table-workspace.tsx',
+      'apps/web/src/shared/layout/gate-workspace/gate-workspace.tsx',
+      'apps/web/src/shared/layout/workspace-page/workspace-page.tsx',
+    ]) {
+      expect(existsSync(path), path).toBe(false);
+    }
+  });
+
   it('does not use old global visual class tokens on active Web surfaces', () => {
     expect(legacyClassTokenMatches()).toEqual([]);
   });

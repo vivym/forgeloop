@@ -7,6 +7,8 @@ import type { ProductPageFamily } from '../../../apps/web/src/features/product-s
 
 type ScreenQueries = Pick<typeof defaultScreen, 'getByRole' | 'queryByTestId'>;
 
+const retiredFirstViewportAttributes = ['data-first-viewport', 'data-priority-summary', 'data-action-strip'] as const;
+
 export interface FirstViewportContractOptions {
   heading?: RegExp | string;
   pageFamily: ProductPageFamily | string;
@@ -35,7 +37,7 @@ export function expectFirstViewportContract(
     'first viewport must expose exactly one visible primary work surface with content',
   );
 
-  for (const attribute of firstViewportContract.forbiddenAttributes) {
+  for (const attribute of retiredFirstViewportAttributes) {
     expect(document.querySelector(`[${attribute}]`)).toBeNull();
   }
 

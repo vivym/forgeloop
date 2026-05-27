@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  ActionStrip,
   CockpitLayout,
   CompactMetadata,
   DatabaseViewLayout,
@@ -12,15 +11,10 @@ import {
   ExecutionSupervisionLayout,
   EvidenceDrawer,
   GateProgress,
-  GateWorkspace,
   InboxLayout,
-  ObjectWorkspace,
   PlanAuthoringLayout,
-  PlanningTableWorkspace,
   PreviewPane,
-  PrioritySummary,
   ProductPage,
-  QueueWorkspace,
   RevisionDrawer,
   Section,
 } from '../../apps/web/src/shared/layout';
@@ -170,76 +164,6 @@ describe('product-grade layout primitives', () => {
     );
 
     expect(() => expectFirstViewportContract(screen, { pageFamily: 'cockpit' })).toThrow();
-  });
-
-  it('composes specialized workspaces through WorkspacePage markers', () => {
-    render(
-      <>
-        <ObjectWorkspace
-          blockerRisk="No blockers"
-          family="object"
-          heading="Object"
-          nextAction="Inspect object"
-          roleResponsibility="Owner"
-          state="Ready"
-        >
-          Object body
-        </ObjectWorkspace>
-        <QueueWorkspace
-          blockerRisk="Two risks"
-          family="queue"
-          heading="Queue"
-          nextAction="Triage first"
-          roleResponsibility="Operator"
-          state="Waiting"
-        >
-          Queue body
-        </QueueWorkspace>
-        <PlanningTableWorkspace
-          blockerRisk="Plan drift"
-          family="planning"
-          heading="Planning"
-          nextAction="Assign owner"
-          roleResponsibility="Planner"
-          state="Drafting"
-        >
-          Planning body
-        </PlanningTableWorkspace>
-        <GateWorkspace
-          blockerRisk="Gate blocked"
-          family="gate"
-          heading="Gate"
-          nextAction="Resolve gate"
-          roleResponsibility="Approver"
-          state="Blocked"
-        >
-          Gate body
-        </GateWorkspace>
-      </>,
-    );
-
-    expect(document.querySelector('[data-workspace-layout="object"]')).toBeTruthy();
-    expect(document.querySelector('[data-workspace-layout="queue"]')).toBeTruthy();
-    expect(document.querySelector('[data-workspace-layout="planning-table"]')).toBeTruthy();
-    expect(document.querySelector('[data-workspace-layout="gate"]')).toBeTruthy();
-  });
-
-  it('exposes next action, responsibility, and blocker risk through shared summaries', () => {
-    render(
-      <>
-        <ActionStrip nextAction={<button type="button">Review package</button>} secondaryActions={<button type="button">Defer</button>} />
-        <PrioritySummary
-          blockerRisk="Evidence is stale"
-          roleResponsibility="Release captain"
-          state="Needs decision"
-        />
-      </>,
-    );
-
-    expect(screen.getByTestId('next-action').textContent).toContain('Review package');
-    expect(screen.getByTestId('current-state').textContent).toContain('Needs decision');
-    expect(screen.getByTestId('role-responsibility').textContent).toContain('Release captain');
-    expect(screen.getByTestId('blocker-risk').textContent).toContain('Evidence is stale');
   });
 
   it('renders gate progress with text labels, status text, and current gate semantics', () => {

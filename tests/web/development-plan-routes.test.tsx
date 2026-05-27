@@ -9,7 +9,7 @@ import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 import { renderRoute } from './router-test-utils';
 
 describe('Development Plan routes', () => {
-  it('renders the Development Plans index as a PlanningTableWorkspace with filters and summary actions', async () => {
+  it('renders the Development Plans index as a planning-table product surface with filters and summary actions', async () => {
     const screen = await renderRoute('/development-plans');
 
     expect(await screen.findByRole('heading', { name: 'Development Plans' })).toBeTruthy();

@@ -101,7 +101,6 @@ const project = {
   key: 'PRODUCT-ARCH',
   name: 'ForgeLoop product architecture demo',
   repo_ids: [repoId],
-  owner_actor_id: ownerActorId,
   created_at: now,
   updated_at: '2026-05-18T00:40:00.000Z',
 } satisfies Project;
