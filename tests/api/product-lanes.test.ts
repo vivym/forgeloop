@@ -401,7 +401,7 @@ describe('product lane projections', () => {
       .expect(400);
   });
 
-  it('filters Work Item type lanes by driver_actor_id and rejects execution_owner_actor_id', async () => {
+  it('filters Work Item type lanes by driver_actor_id and reports unsupported execution_owner_actor_id explicitly', async () => {
     const { app } = await track(createTestApp());
     const { project, workItem } = await seedDraftWorkItem(app, 'bug');
     const server = app.getHttpServer();
@@ -419,9 +419,13 @@ describe('product lane projections', () => {
     );
     expect(JSON.stringify(response.body.items)).not.toContain('owner_actor_id');
 
-    await request(server)
+    const unsupportedResponse = await request(server)
       .get(`/query/product-lanes/bugs?project_id=${project.id}&execution_owner_actor_id=${actorOwner}`)
-      .expect(400);
+      .expect(200);
+    expect(unsupportedResponse.body.unsupported_filters).toContain('execution_owner_actor_id');
+    expect(unsupportedResponse.body.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ object: { type: 'bug', id: workItem.id } })]),
+    );
   });
 
   it('keeps execution-owner lane execution_owner_actor_id filtering for execution packages', async () => {

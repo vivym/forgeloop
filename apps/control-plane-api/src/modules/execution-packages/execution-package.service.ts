@@ -73,6 +73,7 @@ type ItemExecutionPackageContext = {
   executionPlan: ExecutionPlanDocument;
   executionPlanRevision: ExecutionPlanRevision;
   execution: Execution;
+  ownerActorId: string;
 };
 
 export type PublicExecutionPackage = Omit<ExecutionPackage, 'work_item_id'> & { scope_ref: ObjectRef };
@@ -260,7 +261,7 @@ export class ExecutionPackageService {
     }
     const reviewerActorId =
       context.item.reviewer_actor_id ?? context.executionPlan.approved_by_actor_id ?? context.spec.approved_by_actor_id ?? context.workItem.driver_actor_id;
-    const ownerActorId = context.item.driver_actor_id ?? context.workItem.driver_actor_id;
+    const ownerActorId = context.ownerActorId;
     const createdAt = this.now();
     const packagePolicy = this.packagePolicyFromExecutionPlanRevision(context.executionPlanRevision);
     const packagePolicyFields = await defaultPackagePolicyFields(repository, {

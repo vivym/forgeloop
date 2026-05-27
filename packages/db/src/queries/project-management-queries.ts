@@ -46,9 +46,21 @@ type WorkItemPublicRef = Extract<MyWorkQueueObjectRef, { type: WorkItemObjectTyp
 type TypedWorkItem = WorkItem & { kind: WorkItemObjectType };
 type ProductListQuery = {
   project_id: string;
+  actor_id?: string | undefined;
   status?: string | undefined;
+  phase?: string | undefined;
+  gate_state?: string | undefined;
+  resolution?: string | undefined;
   risk?: string | undefined;
   driver_actor_id?: string | undefined;
+  execution_owner_actor_id?: string | undefined;
+  reviewer_actor_id?: string | undefined;
+  qa_owner_actor_id?: string | undefined;
+  release_owner_actor_id?: string | undefined;
+  blocked?: boolean | undefined;
+  stale?: boolean | undefined;
+  cursor?: string | undefined;
+  limit?: number | undefined;
 };
 type ReleaseRevisionAuthority = {
   current_spec_revision_id?: string;
@@ -69,6 +81,10 @@ type ExecutionRuntimeEvidenceProjection = {
 type TypedSourceProjectionContext = {
   plans: DevelopmentPlan[];
   planItems: DevelopmentPlanItemWithPlan[];
+  executionPackages: ExecutionPackage[];
+  executions: ExecutionWithContext[];
+  codeReviewHandoffs: CodeReviewWithContext[];
+  qaHandoffs: QaWithContext[];
   releases: Release[];
   attachments: Attachment[];
   releaseEvidence: ReleaseEvidence[];
@@ -343,11 +359,15 @@ export async function getDashboard(
 
 export async function listDevelopmentPlanProjections(
   repository: DeliveryRepository,
-  query: AiNativeQuery,
+  query: ProductListQuery,
 ): Promise<Record<string, unknown>> {
-  const plans = await repository.listDevelopmentPlans(query.project_id);
+  const [plans, roleContext] = await Promise.all([
+    repository.listDevelopmentPlans(query.project_id),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  const visiblePlans = plans.filter((plan) => developmentPlanMatchesQuery(plan, query, roleContext));
   const rows = await Promise.all(
-    plans.map(async (plan) => {
+    visiblePlans.map(async (plan) => {
       const items = await repository.listDevelopmentPlanItems(plan.id);
       const responsibleRoles = uniqueStrings(items.map((item) => item.responsible_role));
       const gateStates = uniqueStrings(items.map(currentDevelopmentPlanItemGate));
@@ -1345,12 +1365,11 @@ async function typedWorkItems(repository: DeliveryRepository, projectId: string,
 }
 
 async function typedWorkItemsForQuery(repository: DeliveryRepository, query: ProductListQuery, kind: WorkItemObjectType): Promise<TypedWorkItem[]> {
-  return (await typedWorkItems(repository, query.project_id, kind)).filter(
-    (workItem) =>
-      (query.status === undefined || workItem.phase === query.status) &&
-      (query.risk === undefined || workItem.risk === query.risk) &&
-      (query.driver_actor_id === undefined || workItem.driver_actor_id === query.driver_actor_id),
-  );
+  const [workItems, context] = await Promise.all([
+    typedWorkItems(repository, query.project_id, kind),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return workItems.filter((workItem) => typedWorkItemMatchesQuery(workItem, query, context));
 }
 
 async function typedWorkItemById(
@@ -1394,9 +1413,13 @@ async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: 
 }
 
 async function typedSourceProjectionContext(repository: DeliveryRepository, projectId: string): Promise<TypedSourceProjectionContext> {
-  const [plans, planItems, releases, workItems] = await Promise.all([
+  const [plans, planItems, executionPackages, executions, codeReviewHandoffs, qaHandoffs, releases, workItems] = await Promise.all([
     repository.listDevelopmentPlans(projectId),
     listDevelopmentPlanItemsForProject(repository, projectId),
+    repository.listExecutionPackages(projectId),
+    listExecutionsForProject(repository, projectId),
+    listCodeReviewHandoffsForProject(repository, projectId),
+    listQaHandoffsForProject(repository, projectId),
     repository.listReleases(projectId),
     repository.listWorkItems(projectId),
   ]);
@@ -1410,6 +1433,10 @@ async function typedSourceProjectionContext(repository: DeliveryRepository, proj
   return {
     plans,
     planItems,
+    executionPackages,
+    executions,
+    codeReviewHandoffs,
+    qaHandoffs,
     releases,
     releaseEvidence,
     attachments: uniqueById(attachmentRows.flat()),
@@ -1453,6 +1480,200 @@ function typedSourceProjection(workItem: TypedWorkItem, context: TypedSourceProj
     last_meaningful_update_at: latestUpdatedAt(updatedValues) ?? workItem.updated_at,
     next_action: nextSourceAction(linkedPlanItems.map(({ item }) => item), workItem),
   };
+}
+
+function typedWorkItemMatchesQuery(
+  workItem: TypedWorkItem,
+  query: ProductListQuery,
+  context: TypedSourceProjectionContext,
+): boolean {
+  if (query.status !== undefined && workItem.phase !== query.status) {
+    return false;
+  }
+  if (query.phase !== undefined && workItem.phase !== query.phase) {
+    return false;
+  }
+  if (query.gate_state !== undefined && workItem.gate_state !== query.gate_state) {
+    return false;
+  }
+  if (query.resolution !== undefined && workItem.resolution !== query.resolution) {
+    return false;
+  }
+  if (query.risk !== undefined && workItem.risk !== query.risk) {
+    return false;
+  }
+  if (query.driver_actor_id !== undefined && workItem.driver_actor_id !== query.driver_actor_id) {
+    return false;
+  }
+  if (query.actor_id !== undefined && workItem.driver_actor_id !== query.actor_id) {
+    return false;
+  }
+  return sourceRoleFilterState(workItem, context).matches(query);
+}
+
+function developmentPlanMatchesQuery(
+  plan: DevelopmentPlan,
+  query: ProductListQuery,
+  context: TypedSourceProjectionContext,
+): boolean {
+  if (query.status !== undefined && plan.status !== query.status) {
+    return false;
+  }
+  const planItems = context.planItems.filter(({ plan: candidatePlan }) => candidatePlan.id === plan.id);
+  if (query.phase !== undefined && !planItems.some(({ item }) => currentDevelopmentPlanItemGate(item) === query.phase)) {
+    return false;
+  }
+  if (query.gate_state !== undefined && !planItems.some(({ item }) => currentDevelopmentPlanItemGate(item) === query.gate_state)) {
+    return false;
+  }
+  if (query.risk !== undefined && !planItems.some(({ item }) => item.risk === query.risk)) {
+    return false;
+  }
+  if (query.blocked !== undefined && planItems.some(({ item }) => isDevelopmentPlanItemBlocked(item)) !== query.blocked) {
+    return false;
+  }
+  if (
+    query.stale !== undefined &&
+    planItems.some(({ item }) => item.spec_status === 'stale' || item.execution_plan_status === 'stale' || item.boundary_status === 'stale') !== query.stale
+  ) {
+    return false;
+  }
+  return planRoleFilterState(plan, context).matches(query);
+}
+
+function sourceRoleFilterState(workItem: TypedWorkItem, context: TypedSourceProjectionContext) {
+  const sourceRef = sourceRefFor(workItem);
+  const linkedDevelopmentPlanIds = new Set(
+    context.plans.filter((plan) => plan.source_refs.some((ref) => sourceRefsMatch(ref, sourceRef))).map((plan) => plan.id),
+  );
+  const linkedPlanItems = context.planItems.filter(
+    ({ plan, item }) => linkedDevelopmentPlanIds.has(plan.id) && sourceRefsMatch(item.source_ref, sourceRef),
+  );
+  const linkedPlanItemIds = new Set(linkedPlanItems.map(({ item }) => item.id));
+  const linkedExecutionIds = new Set(
+    context.executions.filter(({ item }) => linkedPlanItemIds.has(item.id)).map(({ execution }) => execution.id),
+  );
+  const linkedReleaseRefs = context.releases.filter((release) => releaseLinksSource(release, workItem, linkedPlanItems));
+
+  return roleFilterState({
+    driverActorIds: [workItem.driver_actor_id, ...linkedPlanItems.map(({ item }) => item.driver_actor_id)],
+    executionOwnerActorIds: [
+      ...context.executionPackages
+        .filter(
+          (executionPackage) =>
+            executionPackage.work_item_id === workItem.id ||
+            (executionPackage.development_plan_item_id !== undefined && linkedPlanItemIds.has(executionPackage.development_plan_item_id)),
+        )
+        .map((executionPackage) => executionPackage.owner_actor_id),
+    ],
+    reviewerActorIds: [
+      ...linkedPlanItems.map(({ item }) => item.reviewer_actor_id),
+      ...context.executionPackages
+        .filter(
+          (executionPackage) =>
+            executionPackage.work_item_id === workItem.id ||
+            (executionPackage.development_plan_item_id !== undefined && linkedPlanItemIds.has(executionPackage.development_plan_item_id)),
+        )
+        .map((executionPackage) => executionPackage.reviewer_actor_id),
+      ...context.codeReviewHandoffs
+        .filter(({ handoff, item }) => linkedPlanItemIds.has(item.id) || linkedExecutionIds.has(handoff.execution_id))
+        .map(({ handoff }) => handoff.reviewer_actor_id),
+    ],
+    qaOwnerActorIds: [
+      ...context.executionPackages
+        .filter(
+          (executionPackage) =>
+            executionPackage.work_item_id === workItem.id ||
+            (executionPackage.development_plan_item_id !== undefined && linkedPlanItemIds.has(executionPackage.development_plan_item_id)),
+        )
+        .map((executionPackage) => executionPackage.qa_owner_actor_id),
+      ...context.qaHandoffs
+        .filter(({ item }) => linkedPlanItemIds.has(item.id))
+        .flatMap(({ handoff }) => [handoff.blocked_by_actor_id, handoff.accepted_by_actor_id]),
+    ],
+    releaseOwnerActorIds: linkedReleaseRefs.map((release) => release.release_owner_actor_id ?? release.created_by_actor_id),
+  });
+}
+
+function planRoleFilterState(plan: DevelopmentPlan, context: TypedSourceProjectionContext) {
+  const planItems = context.planItems.filter(({ plan: candidatePlan }) => candidatePlan.id === plan.id);
+  const planItemIds = new Set(planItems.map(({ item }) => item.id));
+  const sourceIds = new Set(plan.source_refs.map((sourceRef) => `${sourceRef.type}:${sourceRef.id}`));
+  const sourceLinkedReleaseRefs = context.releases.filter((release) =>
+    release.work_item_ids.some((workItemId) =>
+      plan.source_refs.some((sourceRef) => sourceRef.id === workItemId),
+    ),
+  );
+  const planScopedReleaseRefs = context.releases.filter((release) =>
+    releaseScopeRefs(release).some(
+      (ref) =>
+        (ref.type === 'development_plan_item' && planItemIds.has(ref.id)) ||
+        sourceIds.has(`${ref.type}:${ref.id}`),
+    ),
+  );
+
+  return roleFilterState({
+    driverActorIds: planItems.map(({ item }) => item.driver_actor_id),
+    executionOwnerActorIds: [
+      ...context.executionPackages
+        .filter((executionPackage) => executionPackage.development_plan_item_id !== undefined && planItemIds.has(executionPackage.development_plan_item_id))
+        .map((executionPackage) => executionPackage.owner_actor_id),
+    ],
+    reviewerActorIds: [
+      ...planItems.map(({ item }) => item.reviewer_actor_id),
+      ...context.executionPackages
+        .filter((executionPackage) => executionPackage.development_plan_item_id !== undefined && planItemIds.has(executionPackage.development_plan_item_id))
+        .map((executionPackage) => executionPackage.reviewer_actor_id),
+      ...context.codeReviewHandoffs
+        .filter(({ item }) => planItemIds.has(item.id))
+        .map(({ handoff }) => handoff.reviewer_actor_id),
+    ],
+    qaOwnerActorIds: [
+      ...context.executionPackages
+        .filter((executionPackage) => executionPackage.development_plan_item_id !== undefined && planItemIds.has(executionPackage.development_plan_item_id))
+        .map((executionPackage) => executionPackage.qa_owner_actor_id),
+      ...context.qaHandoffs
+        .filter(({ item }) => planItemIds.has(item.id))
+        .flatMap(({ handoff }) => [handoff.blocked_by_actor_id, handoff.accepted_by_actor_id]),
+    ],
+    releaseOwnerActorIds: [...sourceLinkedReleaseRefs, ...planScopedReleaseRefs].map(
+      (release) => release.release_owner_actor_id ?? release.created_by_actor_id,
+    ),
+  });
+}
+
+function roleFilterState(input: {
+  driverActorIds: Array<string | undefined>;
+  executionOwnerActorIds: Array<string | undefined>;
+  reviewerActorIds: Array<string | undefined>;
+  qaOwnerActorIds: Array<string | undefined>;
+  releaseOwnerActorIds: Array<string | undefined>;
+}) {
+  const driverActorIds = new Set(compactStrings(input.driverActorIds));
+  const executionOwnerActorIds = new Set(compactStrings(input.executionOwnerActorIds));
+  const reviewerActorIds = new Set(compactStrings(input.reviewerActorIds));
+  const qaOwnerActorIds = new Set(compactStrings(input.qaOwnerActorIds));
+  const releaseOwnerActorIds = new Set(compactStrings(input.releaseOwnerActorIds));
+
+  return {
+    matches(query: ProductListQuery): boolean {
+      return (
+        matchesOptionalActor(driverActorIds, query.driver_actor_id) &&
+        matchesOptionalActor(executionOwnerActorIds, query.execution_owner_actor_id) &&
+        matchesOptionalActor(reviewerActorIds, query.reviewer_actor_id) &&
+        matchesOptionalActor(qaOwnerActorIds, query.qa_owner_actor_id) &&
+        matchesOptionalActor(releaseOwnerActorIds, query.release_owner_actor_id)
+      );
+    },
+  };
+}
+
+function compactStrings(values: Array<string | undefined>): string[] {
+  return values.filter((value): value is string => value !== undefined && value.length > 0);
+}
+
+function matchesOptionalActor(actorIds: ReadonlySet<string>, expected: string | undefined): boolean {
+  return expected === undefined || actorIds.has(expected);
 }
 
 function sourceRefFor(workItem: WorkItem): WorkItemPublicRef {

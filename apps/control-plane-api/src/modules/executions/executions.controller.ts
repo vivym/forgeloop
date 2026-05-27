@@ -10,6 +10,13 @@ import { ExecutionsService } from './executions.service';
 const nonEmptyString = z.string().trim().min(1);
 const productEvidenceRefsSchema = z.array(productObjectRefSchema);
 
+const startExecutionCommandSchema = z
+  .object({
+    actor_id: nonEmptyString,
+  })
+  .strict();
+type StartExecutionCommandDto = z.infer<typeof startExecutionCommandSchema>;
+
 const readyForCodeReviewCommandSchema = actorCommandSchema
   .extend({
     summary: nonEmptyString,
@@ -68,7 +75,7 @@ export class ExecutionsController {
   startExecution(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(actorCommandSchema)) body: z.infer<typeof actorCommandSchema>,
+    @Body(new ZodValidationPipe(startExecutionCommandSchema)) body: StartExecutionCommandDto,
   ) {
     return this.executionsService.startExecution(developmentPlanId, itemId, body);
   }

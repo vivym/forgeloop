@@ -221,7 +221,20 @@ describe('Executions API', () => {
     await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
-  it('replays an already-started item revision without enqueueing a second run session', async () => {
+  it('requires an explicit execution actor before persisting Execution Package ownership', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
+    const server = app.getHttpServer();
+
+    await request(server)
+      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+      .send({})
+      .expect(400);
+
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.listExecutionPackages(developmentPlan.project_id)).resolves.toEqual([]);
+  });
+
+  it('does not create a second product Execution for an already-started item revision', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
     const server = app.getHttpServer();
     const firstExecution = (

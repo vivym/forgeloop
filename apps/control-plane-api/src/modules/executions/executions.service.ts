@@ -40,6 +40,7 @@ import { ExecutionPackageService } from '../execution-packages/execution-package
 import { RunControlService } from '../run-control/run-control.service';
 
 type ActorCommand = { actor_id?: string | undefined };
+type StartExecutionCommand = { actor_id: string };
 type ReadyForCodeReviewCommand = ActorCommand & {
   summary: string;
   changed_surfaces: string[];
@@ -82,7 +83,7 @@ export class ExecutionsService {
     @Inject(RunControlService) private readonly runControlService: RunControlService,
   ) {}
 
-  async startExecution(developmentPlanId: string, itemId: string, dto: ActorCommand): Promise<Execution> {
+  async startExecution(developmentPlanId: string, itemId: string, dto: StartExecutionCommand): Promise<Execution> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
       const replayedExecution = await this.findReplayableItemExecution(repository, developmentPlanId, itemId);
       if (replayedExecution !== undefined) {
@@ -108,6 +109,7 @@ export class ExecutionsService {
         executionPlan: context.executionPlan,
         executionPlanRevision: context.executionPlanRevision,
         execution,
+        ownerActorId: dto.actor_id,
       });
 
       const run = await this.runControlService.enqueueRunWithRepository(repository, executionPackage, {
