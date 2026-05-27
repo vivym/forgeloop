@@ -20,6 +20,7 @@ import type {
 } from '../../packages/domain/src/index';
 import { buildManualScopeKey, transitionExecutionPackage } from '../../packages/domain/src/index';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
+import { captureEnv, restoreEnv } from '../helpers/env-restore';
 
 const secret = 'test-secret';
 const actorOwner = 'actor-owner';
@@ -309,14 +310,16 @@ const seedCompletedAction = async (
 };
 
 describe('internal automation runtime snapshot', () => {
+  let envSnapshot: Record<string, string | undefined>;
+
   beforeEach(() => {
+    envSnapshot = captureEnv(['FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET', 'FORGELOOP_AUTOMATION_TEST_NOW']);
     process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = secret;
     process.env.FORGELOOP_AUTOMATION_TEST_NOW = now;
   });
 
   afterEach(async () => {
-    delete process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
-    delete process.env.FORGELOOP_AUTOMATION_TEST_NOW;
+    restoreEnv(envSnapshot);
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 

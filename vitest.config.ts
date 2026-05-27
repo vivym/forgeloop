@@ -17,5 +17,6 @@ export default defineConfig({
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     exclude: explicitE2eSelected ? [] : ['tests/e2e/**'],
     environment: 'node',
+    setupFiles: ['tests/setup/supertest-local-socket.ts'],
   },
 });
