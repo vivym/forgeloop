@@ -42,7 +42,8 @@ export function ReleasesRoute() {
   ];
 
   return (
-    <ProductPage family="release-readiness" heading="Releases">
+    <ProductPage family="release-readiness" ariaLabel="Releases">
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Releases</h1>
       <ReleaseReadinessLayout
         blockers={
           <div className="grid gap-4">
@@ -123,21 +124,20 @@ function ReleaseReadinessWorkspace({
   return (
     <ProductPage
       family="release-readiness"
-      heading="Release Readiness"
-      toolbar={
-        <>
-          <Button disabled={launchAction?.enabled !== true} size="sm" variant="primary">
-            Launch release
-          </Button>
-          <Button disabled={rollbackAction?.enabled !== true} size="sm" variant="secondary">
-            Rollback release
-          </Button>
-        </>
-      }
+      ariaLabel="Release Readiness"
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Release Readiness</h1>
       <ReleaseReadinessLayout
         blockers={
           <div className="grid gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button disabled={launchAction?.enabled !== true} size="sm" variant="primary">
+                Launch release
+              </Button>
+              <Button disabled={rollbackAction?.enabled !== true} size="sm" variant="secondary">
+                Rollback release
+              </Button>
+            </div>
             <SurfaceStateIndicator label="Release readiness" state={readiness.ready ? 'approved' : 'blocked'} />
             <div className="sr-only">
               <span>{`High-risk changes: ${highRiskSummary(cockpit)}. Approvals: ${approvalSummary(readiness)}.`}</span>
@@ -214,7 +214,8 @@ function ReleaseEvidenceContent({ releaseId }: { releaseId: string }) {
   const disabledReason = releaseViewModel({ release, readiness }).disabledReason ?? readiness.disabled_reasons[0]?.message;
 
   return (
-    <ProductPage family="release-evidence" heading="Release Evidence">
+    <ProductPage family="release-evidence" ariaLabel="Release Evidence">
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Release Evidence</h1>
       <ReleaseEvidenceLayout
         evidence={<ReadinessSection readiness={readiness} />}
         rawEvidence={
@@ -383,7 +384,8 @@ function executionEvidenceHref(item: ReadinessEvidenceItem): string | undefined 
 function ReleaseLoading({ family, heading }: { family: 'release-readiness' | 'release-evidence'; heading: string }) {
   const isEvidence = family === 'release-evidence';
   return (
-    <ProductPage family={family} heading={heading}>
+    <ProductPage family={family} ariaLabel={heading}>
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
       {isEvidence ? (
         <ReleaseEvidenceLayout
           summary={
@@ -410,7 +412,8 @@ function ReleaseLoading({ family, heading }: { family: 'release-readiness' | 're
 function ReleaseUnavailable({ family, heading }: { family: 'release-readiness' | 'release-evidence'; heading: string }) {
   const isEvidence = family === 'release-evidence';
   return (
-    <ProductPage family={family} heading={heading}>
+    <ProductPage family={family} ariaLabel={heading}>
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
       {isEvidence ? (
         <ReleaseEvidenceLayout
           summary={

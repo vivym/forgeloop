@@ -76,7 +76,8 @@ export function SpecExecutionPlanQueue() {
   );
 
   return (
-    <ProductPage family="document-governance" heading="Document Reviews" toolbar={toolbar}>
+    <ProductPage family="document-governance" ariaLabel="Document Reviews">
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Document Reviews</h1>
       <div className="grid gap-4">
         <div className="sr-only">
           <span>{state}</span>
@@ -93,6 +94,7 @@ export function SpecExecutionPlanQueue() {
             tone="info"
           />
         ) : null}
+        {toolbar}
         <DocumentGovernanceLayout
           groups={query.isError ? undefined : <DocumentReviewGroups groups={groups} />}
           inspector={query.isError ? undefined : <DocumentReviewInspector row={focusedRow} />}

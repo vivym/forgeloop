@@ -82,11 +82,16 @@ export function MyWorkRoute() {
   return (
     <ProductPage
       family="inbox"
-      heading="My Work"
-      toolbar={<QueueFilterToolbar label="Role" options={baseViewModel.filters.roles} selected={roleFilter} setSelected={setRoleFilter} />}
+      ariaLabel="My Work"
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">My Work</h1>
       <InboxLayout
-        groups={<QueueFilterToolbar label="Gate" options={baseViewModel.filters.gates} selected={gateFilter} setSelected={setGateFilter} />}
+        groups={
+          <div className="grid gap-2">
+            <QueueFilterToolbar label="Role" options={baseViewModel.filters.roles} selected={roleFilter} setSelected={setRoleFilter} />
+            <QueueFilterToolbar label="Gate" options={baseViewModel.filters.gates} selected={gateFilter} setSelected={setGateFilter} />
+          </div>
+        }
         toolbar={
           <div className="flex min-w-0 items-center gap-2 overflow-x-auto pb-1">
             <QueueFilterToolbar label="Status" options={baseViewModel.filters.statuses} selected={statusFilter} setSelected={setStatusFilter} />

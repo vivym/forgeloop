@@ -129,8 +129,9 @@ export function ObjectList<T extends ProjectObjectListItem>({
     <ProductPage
       className="source-object-database"
       family="source-database"
-      heading={title}
+      ariaLabel={title}
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{title}</h1>
       <div className="grid gap-4">
         <DatabaseViewLayout
           toolbar={

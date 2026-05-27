@@ -97,7 +97,8 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   if (isLoading) {
     return (
-      <ProductPage family="source-document" heading={objectLabel}>
+      <ProductPage family="source-document" ariaLabel={objectLabel}>
+        <h1 className="mb-3 text-xl font-semibold text-text-primary">{objectLabel}</h1>
         <DocumentWorkspaceLayout
           document={
             <Section aria-label="Source narrative document" title={`${objectLabel} source document`} variant="panel">
@@ -112,7 +113,8 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   if (error || detail === undefined) {
     return (
-      <ProductPage family="source-document" heading={objectLabel}>
+      <ProductPage family="source-document" ariaLabel={objectLabel}>
+        <h1 className="mb-3 text-xl font-semibold text-text-primary">{objectLabel}</h1>
         <DocumentWorkspaceLayout
           document={
             <Section aria-label="Source narrative document" title={`${objectLabel} source document`} variant="panel">
@@ -309,25 +311,28 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
   return (
     <ProductPage
       family="source-document"
-      heading={objectLabel}
-      toolbar={
-        <SegmentedControl
-          ariaLabel="Role lens"
-          options={[
-            { label: 'Product', value: 'product' },
-            { label: 'Tech Lead', value: 'tech-lead' },
-            { label: 'Developer', value: 'developer' },
-            { label: 'QA', value: 'qa' },
-          ]}
-          value={roleLens}
-          onValueChange={setRoleLens}
-        />
-      }
+      ariaLabel={objectLabel}
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{objectLabel}</h1>
       <DocumentWorkspaceLayout
         document={
         <Section
-          actions={<StatusPill tone="neutral">{roleLensLabel(roleLens)} lens</StatusPill>}
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <SegmentedControl
+                ariaLabel="Role lens"
+                options={[
+                  { label: 'Product', value: 'product' },
+                  { label: 'Tech Lead', value: 'tech-lead' },
+                  { label: 'Developer', value: 'developer' },
+                  { label: 'QA', value: 'qa' },
+                ]}
+                value={roleLens}
+                onValueChange={setRoleLens}
+              />
+              <StatusPill tone="neutral">{roleLensLabel(roleLens)} lens</StatusPill>
+            </div>
+          }
           aria-label="Source narrative document"
           description="Edit the durable source narrative here; downstream Spec and Execution Plan work starts from a Development Plan Item."
           title={detail.title}

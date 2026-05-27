@@ -108,7 +108,8 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
   const objectLabel = sourceObjectLabel(objectType);
 
   return (
-    <ProductPage family="source-document" heading={title}>
+    <ProductPage family="source-document" ariaLabel={title}>
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{title}</h1>
       <DiscardChangesPrompt bypassRef={intentionalExitRef} enabled={dirty} />
       <DocumentWorkspaceLayout
         document={

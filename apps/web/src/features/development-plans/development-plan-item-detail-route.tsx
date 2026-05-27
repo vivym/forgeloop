@@ -94,8 +94,9 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
   return (
     <ProductPage
       family={pageFamily}
-      heading={itemWithRoutePlan?.title ?? 'Development Plan Item'}
+      ariaLabel={itemWithRoutePlan?.title ?? 'Development Plan Item'}
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{itemWithRoutePlan?.title ?? 'Development Plan Item'}</h1>
       {itemWithRoutePlan ? (
         <DevelopmentPlanItemFocusedLayout
           boundaryRevisions={boundaryRevisions}

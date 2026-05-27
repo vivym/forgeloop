@@ -17,11 +17,16 @@ export function CockpitRoute() {
   return (
     <ProductPage
       family="cockpit"
-      heading="Cockpit"
-      toolbar={<StatusPill tone="info">{viewModel.objectType}</StatusPill>}
+      ariaLabel="Cockpit"
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Cockpit</h1>
       <CockpitLayout
-        commandStrip={<MetadataActionList items={viewModel.roleSelectedQueue} />}
+        commandStrip={
+          <div className="grid gap-3">
+            <StatusPill tone="info">{viewModel.objectType}</StatusPill>
+            <MetadataActionList items={viewModel.roleSelectedQueue} />
+          </div>
+        }
         attentionQueue={
           <div className="grid gap-3">
             <AttentionSection

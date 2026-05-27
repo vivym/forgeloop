@@ -60,7 +60,8 @@ export function ExecutionsRoute() {
         : `Worker state ${focusedRow.workerState}; approved Execution Plan ${focusedRow.approvedExecutionPlanRevision}`;
 
   return (
-    <ProductPage family="execution-supervision" heading="Executions">
+    <ProductPage family="execution-supervision" ariaLabel="Executions">
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Executions</h1>
       <div className="sr-only">
         <span>{pageState}</span>
         <span>{executionRisk(rows, query.isError)}</span>

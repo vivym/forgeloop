@@ -56,7 +56,8 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
 
   if (detailLoading) {
     return (
-      <ProductPage family="source-evidence" heading={heading}>
+      <ProductPage family="source-evidence" ariaLabel={heading}>
+        <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
         <SourceEvidenceLayout
           summary={
             <Section aria-label="Evidence readiness summary" title="Evidence readiness summary" variant="panel">
@@ -71,7 +72,8 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
 
   if (detailError || detail === undefined) {
     return (
-      <ProductPage family="source-evidence" heading={heading}>
+      <ProductPage family="source-evidence" ariaLabel={heading}>
+        <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
         <SourceEvidenceLayout
           summary={
             <Section aria-label="Evidence readiness summary" title="Evidence readiness summary" variant="panel">
@@ -94,8 +96,9 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
   return (
     <ProductPage
       family="source-evidence"
-      heading={heading}
+      ariaLabel={heading}
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
       <SourceEvidenceLayout
         summary={
           <Section

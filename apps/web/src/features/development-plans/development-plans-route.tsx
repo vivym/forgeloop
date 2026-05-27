@@ -118,8 +118,9 @@ export function DevelopmentPlansRoute() {
   return (
     <ProductPage
       family="planning-table"
-      heading="Development Plans"
+      ariaLabel="Development Plans"
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Development Plans</h1>
       <PlanningTableLayout
         toolbar={<DevelopmentPlanIndexToolbar filters={filters} onFiltersChange={setFilters} />}
         table={
@@ -258,8 +259,9 @@ export function DevelopmentPlanNewRoute() {
   return (
     <ProductPage
       family="plan-authoring"
-      heading="New Development Plan"
+      ariaLabel="New Development Plan"
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">New Development Plan</h1>
       <PlanAuthoringLayout
         sourceContext={
           <div className="grid gap-4">

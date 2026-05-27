@@ -94,8 +94,9 @@ export function DevelopmentPlanDetailRoute() {
   return (
     <ProductPage
       family="planning-table"
-      heading={plan?.title ?? 'Development Plan'}
+      ariaLabel={plan?.title ?? 'Development Plan'}
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{plan?.title ?? 'Development Plan'}</h1>
       <PlanningTableLayout
         toolbar={
           <div className="flex min-w-0 flex-wrap items-center gap-3 pb-1 lg:flex-nowrap lg:overflow-x-auto">

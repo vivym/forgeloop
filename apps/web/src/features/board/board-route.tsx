@@ -37,7 +37,8 @@ export function BoardRoute() {
   const degradedSources = query.data?.degraded_sources ?? [];
 
   return (
-    <ProductPage family="delivery-board" heading="Board">
+    <ProductPage family="delivery-board" ariaLabel="Board">
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Board</h1>
       <DeliveryBoardLayout
         state={
           <div className="grid gap-3">
