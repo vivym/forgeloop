@@ -133,6 +133,28 @@ describe('product workspace preview data', () => {
     ).toEqual([]);
   });
 
+  it('keeps typed source lane actions governed by Plan Item routes', () => {
+    const response = defaultProductApiResponses[
+      `GET /query/product-lanes/requirements?project_id=${productWorkspacePreviewSeedId}`
+    ] as {
+      items: Array<{
+        actions: Array<{
+          command?: { type: string };
+          target?: { href?: string };
+        }>;
+      }>;
+    };
+
+    const actions = response.items.flatMap((item) => item.actions);
+    expect(actions.map((action) => action.command?.type).filter(Boolean)).not.toContain('run_package');
+    expect(actions.map((action) => action.target?.href).filter(Boolean)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/^\/executions\//)]),
+    );
+    expect(actions.map((action) => action.target?.href)).toEqual(
+      expect.arrayContaining([`/development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-product-workspace-preview-state'].id}`]),
+    );
+  });
+
   it('rejects the retired replay report query mode', async () => {
     const key = `GET /query/reports?project_id=${productWorkspacePreviewSeedId}&report=replay`;
     const response = defaultProductApiResponses[key];
