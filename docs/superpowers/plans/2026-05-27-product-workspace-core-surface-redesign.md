@@ -143,6 +143,7 @@ This is one integrated implementation slice because the product-quality failure 
 - Modify `tests/e2e/ai-native-project-management-visual.e2e.test.ts`
 - Modify `tests/e2e/web-product-routes.e2e.test.ts`
 - Modify `tests/e2e/helpers/capture-route-screenshots.ts`
+- Modify `apps/web/src/features/product-surfaces/route-contract.ts`
 - Create or update `docs/superpowers/reports/product-workspace-core-surface-redesign-review.md`
   - Store visual acceptance notes, screenshot route list, viewport evidence, and any deferred non-blocking polish.
 
@@ -275,13 +276,13 @@ const downstreamGateSummarySchema = z
   .object({
     current_gate_counts: z
       .object({
-        boundary: z.number().int().nonnegative().default(0),
-        spec: z.number().int().nonnegative().default(0),
-        execution_plan: z.number().int().nonnegative().default(0),
-        execution: z.number().int().nonnegative().default(0),
-        code_review: z.number().int().nonnegative().default(0),
-        qa: z.number().int().nonnegative().default(0),
-        release: z.number().int().nonnegative().default(0),
+        boundary: z.number().int().nonnegative(),
+        spec: z.number().int().nonnegative(),
+        execution_plan: z.number().int().nonnegative(),
+        execution: z.number().int().nonnegative(),
+        code_review: z.number().int().nonnegative(),
+        qa: z.number().int().nonnegative(),
+        release: z.number().int().nonnegative(),
       })
       .strict(),
     blocker_count: z.number().int().nonnegative(),
@@ -297,7 +298,7 @@ const sourceAuditSchema = z
   .strict();
 ```
 
-Extend each typed list/detail schema with type-specific fields from the spec. Do not make required product-grade fields optional to avoid hiding missing backend projections with UI fallbacks.
+Extend each typed list/detail schema with type-specific fields from the spec. Do not make required product-grade fields optional and do not use Zod defaults for required projection values such as gate counts, coverage counts, narrative summaries, or next actions. Missing backend data must fail strict parsing or surface a compact degraded-data state intentionally; it must not parse as synthetic zeros or unavailable text.
 
 - [ ] **Step 4: Implement projection builders in the query layer**
 
@@ -370,6 +371,7 @@ export const productWorkspacePreviewScenario = {
   codeReviews,
   qaHandoffs,
   releases,
+  releaseReadiness,
 } as const;
 ```
 
@@ -386,7 +388,7 @@ expect(productWorkspacePreviewScenario.executions.some((execution) => execution.
 expect(productWorkspacePreviewScenario.executions.some((execution) => execution.status === 'interrupted')).toBe(true);
 expect(productWorkspacePreviewScenario.codeReviews.some((review) => review.status === 'changes_requested')).toBe(true);
 expect(productWorkspacePreviewScenario.qaHandoffs.some((handoff) => handoff.status === 'blocked' || handoff.status === 'pending')).toBe(true);
-expect(productWorkspacePreviewScenario.releases.some((release) => release.blockers.length > 0)).toBe(true);
+expect(productWorkspacePreviewScenario.releaseReadiness.disabled_reasons.length).toBeGreaterThan(0);
 ```
 
 Run: `pnpm vitest run tests/web/product-grade-route-contract.test.tsx`
@@ -444,9 +446,17 @@ git commit -m "test: seed product workspace preview data"
 - Create: `apps/web/src/features/product-surfaces/role-lens.ts`
 - Modify: `packages/contracts/src/web-product-query.ts`
 - Modify: `apps/web/src/shared/api/types.ts`
+- Modify: `apps/web/src/shared/api/query.ts`
+- Modify: `apps/web/src/shared/api/hooks.ts`
+- Modify: `apps/web/src/shared/api/query-keys.ts`
+- Modify: `apps/control-plane-api/src/modules/query/query.controller.ts`
+- Modify: `apps/control-plane-api/src/modules/query/query.service.ts`
+- Modify: `packages/db/src/queries/project-management-queries.ts`
 - Modify: `packages/db/src/queries/product-lane-filters.ts`
 - Modify: `packages/db/src/queries/product-lane-types.ts`
 - Modify: `tests/api/product-lanes.test.ts`
+- Modify: `tests/api/project-management-query.test.ts`
+- Modify: `tests/web/api-client-contract.test.ts`
 
 - [ ] **Step 1: Write failing role-lens tests**
 
@@ -463,6 +473,14 @@ In `tests/api/product-lanes.test.ts`, assert role filters map to existing actor 
 Run: `pnpm vitest run tests/api/product-lanes.test.ts`
 
 Expected: FAIL on incomplete mapping or client restrictions.
+
+In `tests/api/project-management-query.test.ts`, add typed source and Development Plan query assertions that would fail if role filters are silently dropped:
+
+- `/query/requirements?driver_actor_id=actor-product` returns only matching Requirement drivers.
+- `/query/requirements?reviewer_actor_id=actor-reviewer` either applies a real downstream reviewer/approver relationship filter or returns a typed unsupported-filter/degraded response defined by the contract; it must not behave identically to an unfiltered request without acknowledgement.
+- `/query/development-plans?driver_actor_id=actor-product`, `reviewer_actor_id`, `qa_owner_actor_id`, and `release_owner_actor_id` filter through Plan Items and linked source refs.
+
+In `tests/web/api-client-contract.test.ts`, assert `queryKeys.requirements(...)`, `queryKeys.developmentPlans(...)`, and the API client request URLs preserve actor filters so React Query cache keys do not collapse filtered and unfiltered data.
 
 - [ ] **Step 2: Implement role-lens parser and mapping**
 
@@ -489,13 +507,23 @@ export function roleLensActorFilter(role: RoleLens, actorId: string | undefined)
 
 Extend as needed for tech-lead where reviewer/approver fields exist. Keep manager as a sorting lens, not an owner fallback.
 
-- [ ] **Step 3: Extend query types and filters**
+- [ ] **Step 3: Extend typed source and Development Plan query chains**
 
-Update `packages/contracts/src/web-product-query.ts`, `apps/web/src/shared/api/types.ts`, and db query filters so actor filters are accepted only where supported and rejected or ignored intentionally with tests. Remove the current client-side restriction that hides `execution_owner_actor_id` except for one lane when the route now has a real execution-oriented Plan Item view.
+Update the full typed source and Development Plan query chain, not only Product Lane filters:
+
+- `packages/contracts/src/web-product-query.ts` and any project-management query type must accept explicit actor filters or a typed unsupported-filter result.
+- `apps/web/src/shared/api/types.ts` must expose the same actor filter fields for typed source and Development Plan list queries.
+- `apps/web/src/shared/api/query.ts` must include `driver_actor_id`, `execution_owner_actor_id`, `reviewer_actor_id`, `qa_owner_actor_id`, and `release_owner_actor_id` in `projectManagementListQueryString` and Development Plan list requests.
+- `apps/web/src/shared/api/hooks.ts` and `apps/web/src/shared/api/query-keys.ts` must normalize those actor filters into query keys for Requirements, Initiatives, Bugs, Tech Debt, and Development Plans.
+- `apps/control-plane-api/src/modules/query/query.controller.ts` and `query.service.ts` must pass parsed filters through to typed source and Development Plan query functions.
+- `packages/db/src/queries/project-management-queries.ts` must apply role filters to typed source projections and Development Plan projections using typed source drivers and downstream Plan Item fields; unsupported filters must be explicit and tested, not silently ignored.
+- `packages/db/src/queries/product-lane-filters.ts` and `product-lane-types.ts` should remain the Product Lane metadata source, but they are not sufficient by themselves.
+
+Remove the current client-side restriction that hides `execution_owner_actor_id` except for one lane when the route now has a real execution-oriented Plan Item view.
 
 - [ ] **Step 4: Run focused role-lens tests**
 
-Run: `pnpm vitest run tests/api/product-lanes.test.ts tests/web/api-client-contract.test.ts`
+Run: `pnpm vitest run tests/api/product-lanes.test.ts tests/api/project-management-query.test.ts tests/web/api-client-contract.test.ts`
 
 Expected: PASS. Do not add route-render shell or no-baggage tests in this task unless this task also makes those routes pass; those guards are introduced in Tasks 4, 6, 7, and 8 at the point they can turn green.
 
@@ -504,7 +532,7 @@ Expected: PASS. Do not add route-render shell or no-baggage tests in this task u
 Commit only role-lens implementation and tests that pass now.
 
 ```bash
-git add apps/web/src/features/product-surfaces/role-lens.ts packages/contracts/src/web-product-query.ts apps/web/src/shared/api/types.ts packages/db/src/queries/product-lane-filters.ts packages/db/src/queries/product-lane-types.ts tests/api/product-lanes.test.ts
+git add apps/web/src/features/product-surfaces/role-lens.ts packages/contracts/src/web-product-query.ts apps/web/src/shared/api/types.ts apps/web/src/shared/api/query.ts apps/web/src/shared/api/hooks.ts apps/web/src/shared/api/query-keys.ts apps/control-plane-api/src/modules/query/query.controller.ts apps/control-plane-api/src/modules/query/query.service.ts packages/db/src/queries/project-management-queries.ts packages/db/src/queries/product-lane-filters.ts packages/db/src/queries/product-lane-types.ts tests/api/product-lanes.test.ts tests/api/project-management-query.test.ts tests/web/api-client-contract.test.ts
 git commit -m "feat: add product role lens query mapping"
 ```
 
@@ -620,7 +648,6 @@ git commit -m "feat: add product workspace shell primitives"
 - Modify: `apps/web/src/features/cockpit/cockpit-route.tsx`
 - Modify: `tests/web/product-grade-view-models.test.ts`
 - Modify: `tests/web/product-grade-first-viewport.test.tsx`
-- Modify: `tests/e2e/ai-native-project-management-visual.e2e.test.ts`
 
 - [ ] **Step 1: Write failing Cockpit view-model tests**
 
@@ -675,14 +702,14 @@ Use `CockpitCommandCenter` shell and Tailwind utility classes. Remove `ProductPa
 
 - [ ] **Step 4: Run focused Cockpit tests**
 
-Run: `pnpm vitest run tests/web/product-grade-view-models.test.ts tests/web/product-grade-first-viewport.test.tsx tests/e2e/ai-native-project-management-visual.e2e.test.ts --pool=forks --no-file-parallelism --maxWorkers=1`
+Run: `pnpm vitest run tests/web/product-grade-view-models.test.ts tests/web/product-grade-first-viewport.test.tsx`
 
-Expected: PASS for Cockpit-specific assertions. If the full e2e file still includes unmigrated routes, run the Cockpit test name only and keep the remaining failures for later tasks.
+Expected: PASS for Cockpit-specific assertions. Do not run or edit `tests/e2e/ai-native-project-management-visual.e2e.test.ts` in this task unless the route manifest has been split so the command can target only `/cockpit`; the current visual e2e route loop covers all required routes and must remain a final integrated gate in Task 9.
 
 - [ ] **Step 5: Commit Task 5**
 
 ```bash
-git add apps/web/src/features/cockpit/cockpit-view-model.ts apps/web/src/features/cockpit/cockpit-route.tsx tests/web/product-grade-view-models.test.ts tests/web/product-grade-first-viewport.test.tsx tests/e2e/ai-native-project-management-visual.e2e.test.ts
+git add apps/web/src/features/cockpit/cockpit-view-model.ts apps/web/src/features/cockpit/cockpit-route.tsx tests/web/product-grade-view-models.test.ts tests/web/product-grade-first-viewport.test.tsx
 git commit -m "feat: rebuild cockpit command center"
 ```
 
@@ -906,11 +933,19 @@ git commit -m "feat: upgrade development plan workspace"
 - Modify: `apps/web/src/features/spec-plan/spec-plan-lifecycle-actions.tsx`
 - Modify: `apps/web/src/features/code-review/code-review-handoff-panel.tsx`
 - Modify: `apps/web/src/features/qa/qa-handoff-panel.tsx`
+- Modify: `apps/control-plane-api/src/modules/spec-plan/spec-plan.service.ts`
+- Modify: `apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts`
+- Modify: `apps/control-plane-api/src/modules/executions/executions.service.ts`
+- Modify: `apps/control-plane-api/src/modules/executions/executions.controller.ts`
+- Modify: `packages/domain/src/development-plan.ts`
+- Modify: `packages/domain/src/execution-supervision.ts`
+- Modify: `apps/web/src/shared/api/commands.ts`
 - Modify: `tests/web/development-plan-routes.test.tsx`
 - Modify: `tests/web/code-review-qa-handoff-routes.test.tsx`
 - Modify: `tests/api/development-plans.test.ts`
 - Modify: `tests/api/spec-plan-service.test.ts`
 - Modify: `tests/api/execution-package-service.test.ts`
+- Modify: `tests/api/executions.test.ts`
 - Modify: `tests/domain/ai-native-planning-gates.test.ts`
 - Modify: `tests/web/product-workspace-shell-boundaries.test.tsx`
 - Modify: `tests/web/no-legacy-web-ui.test.ts`
@@ -952,7 +987,27 @@ Add tests for disabled actions:
 
 API/domain tests should assert the same conditions where command eligibility is built, not only in the UI.
 
-- [ ] **Step 4: Implement `planItemGateWorkspaceViewModel`**
+- [ ] **Step 4: Enforce gate eligibility in command/domain services**
+
+Update backend command owners before trusting UI disabled states:
+
+- `packages/domain/src/development-plan.ts` must model required QA/Test Owner participation, testability note, acceptance criteria, and test strategy summary in `canGenerateExecutionPlanFromApprovedSpec`.
+- `packages/domain/src/execution-supervision.ts` must model approved Boundary, approved Spec, approved Execution Plan, required QA/test-strategy gates, and runnable Execution Package boundary checks in `canStartExecutionFromApprovedExecutionPlan`.
+- `apps/control-plane-api/src/modules/spec-plan/spec-plan.service.ts` must reject Execution Plan generation/regeneration/submission/approval paths when the required Spec review QA/test-strategy gates are missing.
+- `apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts` should not add bypass endpoints; controller DTOs must pass any required actor/test strategy fields through strict validation.
+- `apps/control-plane-api/src/modules/executions/executions.service.ts` must reject execution start when approved document gates are present but the internal Execution Package boundary is missing or stale.
+- `apps/control-plane-api/src/modules/executions/executions.controller.ts` must keep execution start scoped to `/development-plans/:developmentPlanId/items/:itemId/execution/start` with no direct typed source, draft Spec, or draft Execution Plan path.
+- `apps/web/src/shared/api/commands.ts` must surface command rejections/disabled reasons consistently to the Plan Item gate workspace.
+
+Run backend/domain tests before UI work:
+
+```bash
+pnpm vitest run tests/domain/ai-native-planning-gates.test.ts tests/api/spec-plan-service.test.ts tests/api/executions.test.ts tests/api/execution-package-service.test.ts
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Implement `planItemGateWorkspaceViewModel`**
 
 In `plan-item-gates.tsx` or a new focused helper, build a view model that exposes:
 
@@ -966,7 +1021,7 @@ In `plan-item-gates.tsx` or a new focused helper, build a view model that expose
 
 Keep Execution Package as an internal authority link/eligibility field, not a new primary route.
 
-- [ ] **Step 5: Rewrite overview and gate shell**
+- [ ] **Step 6: Rewrite overview and gate shell**
 
 In `development-plan-item-detail-route.tsx`:
 
@@ -976,7 +1031,7 @@ In `development-plan-item-detail-route.tsx`:
 - show adjacent gates as compact rail entries;
 - move evidence/activity/context/revisions into right rail or lower secondary region.
 
-- [ ] **Step 6: Preserve document editing routes**
+- [ ] **Step 7: Preserve document editing routes**
 
 For `/spec` and `/execution-plan`:
 
@@ -986,7 +1041,7 @@ For `/spec` and `/execution-plan`:
 - add QA/Test Owner participation, testability note, acceptance criteria, risk scenarios, and test strategy summary when required;
 - keep document actions separated from gate eligibility.
 
-- [ ] **Step 7: Update execution, review, QA, and release gate content**
+- [ ] **Step 8: Update execution, review, QA, and release gate content**
 
 Execution route:
 
@@ -1004,20 +1059,20 @@ Release gate/context:
 
 - release linkage, release impact, readiness blockers, QA/test evidence required for release inclusion, link to owning Release.
 
-- [ ] **Step 8: Run Plan Item and eligibility tests**
+- [ ] **Step 9: Run Plan Item and eligibility tests**
 
 Run:
 
 ```bash
-pnpm vitest run tests/web/development-plan-routes.test.tsx tests/web/code-review-qa-handoff-routes.test.tsx tests/web/product-workspace-shell-boundaries.test.tsx tests/web/no-legacy-web-ui.test.ts tests/api/development-plans.test.ts tests/api/spec-plan-service.test.ts tests/api/execution-package-service.test.ts tests/domain/ai-native-planning-gates.test.ts
+pnpm vitest run tests/web/development-plan-routes.test.tsx tests/web/code-review-qa-handoff-routes.test.tsx tests/web/product-workspace-shell-boundaries.test.tsx tests/web/no-legacy-web-ui.test.ts tests/api/development-plans.test.ts tests/api/spec-plan-service.test.ts tests/api/executions.test.ts tests/api/execution-package-service.test.ts tests/domain/ai-native-planning-gates.test.ts
 ```
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 8**
+- [ ] **Step 10: Commit Task 8**
 
 ```bash
-git add apps/web/src/features/development-plans/development-plan-item-detail-route.tsx apps/web/src/features/development-plans/plan-item-gates.tsx apps/web/src/features/brainstorming/brainstorming-panel.tsx apps/web/src/features/spec-plan/spec-plan-lifecycle-actions.tsx apps/web/src/features/code-review/code-review-handoff-panel.tsx apps/web/src/features/qa/qa-handoff-panel.tsx tests/web/development-plan-routes.test.tsx tests/web/code-review-qa-handoff-routes.test.tsx tests/web/product-workspace-shell-boundaries.test.tsx tests/web/no-legacy-web-ui.test.ts tests/api/development-plans.test.ts tests/api/spec-plan-service.test.ts tests/api/execution-package-service.test.ts tests/domain/ai-native-planning-gates.test.ts
+git add apps/web/src/features/development-plans/development-plan-item-detail-route.tsx apps/web/src/features/development-plans/plan-item-gates.tsx apps/web/src/features/brainstorming/brainstorming-panel.tsx apps/web/src/features/spec-plan/spec-plan-lifecycle-actions.tsx apps/web/src/features/code-review/code-review-handoff-panel.tsx apps/web/src/features/qa/qa-handoff-panel.tsx apps/control-plane-api/src/modules/spec-plan/spec-plan.service.ts apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts apps/control-plane-api/src/modules/executions/executions.service.ts apps/control-plane-api/src/modules/executions/executions.controller.ts packages/domain/src/development-plan.ts packages/domain/src/execution-supervision.ts apps/web/src/shared/api/commands.ts tests/web/development-plan-routes.test.tsx tests/web/code-review-qa-handoff-routes.test.tsx tests/web/product-workspace-shell-boundaries.test.tsx tests/web/no-legacy-web-ui.test.ts tests/api/development-plans.test.ts tests/api/spec-plan-service.test.ts tests/api/executions.test.ts tests/api/execution-package-service.test.ts tests/domain/ai-native-planning-gates.test.ts
 git commit -m "feat: rebuild plan item gate workspace"
 ```
 
@@ -1029,11 +1084,23 @@ git commit -m "feat: rebuild plan item gate workspace"
 - Modify: `tests/e2e/ai-native-project-management-visual.e2e.test.ts`
 - Modify: `tests/e2e/web-product-routes.e2e.test.ts`
 - Modify: `tests/e2e/helpers/capture-route-screenshots.ts`
+- Modify: `apps/web/src/features/product-surfaces/route-contract.ts`
+- Modify: `tests/web/product-grade-route-contract.test.tsx`
 - Modify: `tests/web/product-grade-first-viewport.test.tsx`
 - Modify: `tests/web/no-legacy-web-ui.test.ts`
 - Create or update: `docs/superpowers/reports/product-workspace-core-surface-redesign-review.md`
 
-- [ ] **Step 1: Run full product route guard suite**
+- [ ] **Step 1: Update visual viewport contract to explicit pairs**
+
+Update viewport modeling before running route guards:
+
+- In `apps/web/src/features/product-surfaces/route-contract.ts`, replace `visualViewports = [1440, 1024, 768, 375]` and `viewports: readonly [1440, 1024, 768, 375]` with a typed list of `{ width, height, label }` pairs for `375x812`, `768x1024`, `1280x720`, and `1440x900`.
+- In `tests/e2e/helpers/capture-route-screenshots.ts`, use each pair's height instead of hard-coded `900`, include the label in screenshot filenames and report records, and keep geometry checks tied to the actual viewport area.
+- In `tests/e2e/ai-native-project-management-visual.e2e.test.ts`, compare route coverage against `route.viewports.map((viewport) => viewport.label)` or an equivalent stable pair id, not bare widths.
+- In `tests/web/product-grade-route-contract.test.tsx` and `tests/web/product-grade-first-viewport.test.tsx`, assert the exact required pairs so tests cannot pass while missing `1280x720`.
+- If the helper still writes the previous product-architecture report path, update `tests/e2e/helpers/capture-route-screenshots.ts` or the test caller so this slice writes `docs/superpowers/reports/product-workspace-core-surface-redesign-review.md`.
+
+- [ ] **Step 2: Run full product route guard suite**
 
 Run:
 
@@ -1043,7 +1110,7 @@ pnpm vitest run tests/web/product-grade-route-contract.test.tsx tests/web/produc
 
 Expected: PASS.
 
-- [ ] **Step 2: Start local preview on a free port**
+- [ ] **Step 3: Start local preview on a free port**
 
 Use the repo's existing preview/dev command. If the default port is occupied, choose a free port. If a local database is needed, do not use occupied ports `5432`, `15432`, or `25432`; pick a free high port and document it in the report.
 
@@ -1061,9 +1128,9 @@ pnpm --filter @forgeloop/web dev --host 127.0.0.1 --port 0
 
 Expected: preview prints the selected URL and seeded product scenario.
 
-- [ ] **Step 3: Capture screenshots across required viewports**
+- [ ] **Step 4: Capture screenshots across required viewports**
 
-Run the existing Vitest-backed screenshot helper/e2e flow. If the helper still writes the previous product-architecture report path, update `tests/e2e/helpers/capture-route-screenshots.ts` or the test caller so this slice writes `docs/superpowers/reports/product-workspace-core-surface-redesign-review.md`.
+Run the existing Vitest-backed screenshot helper/e2e flow:
 
 ```bash
 pnpm vitest run tests/e2e/ai-native-project-management-visual.e2e.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
@@ -1078,7 +1145,7 @@ Required viewport evidence:
 
 Expected: screenshots cover every `requiredScreenshotRoutes` entry, with no route omitted.
 
-- [ ] **Step 4: Manually review visual output against the spec**
+- [ ] **Step 5: Manually review visual output against the spec**
 
 Open representative screenshots or the live preview for:
 
@@ -1101,7 +1168,7 @@ Record findings in `docs/superpowers/reports/product-workspace-core-surface-rede
 - any overlap/clipping/card-in-card/excessive banner/low-density issue;
 - whether the issue was fixed or intentionally deferred as non-blocking.
 
-- [ ] **Step 5: Run full verification**
+- [ ] **Step 6: Run full verification**
 
 Run:
 
@@ -1113,7 +1180,7 @@ git diff --check
 
 Expected: all commands pass.
 
-- [ ] **Step 6: Request blocker-focused code review**
+- [ ] **Step 7: Request blocker-focused code review**
 
 Use `superpowers:requesting-code-review` or the repo's established review workflow. The review prompt must include:
 
@@ -1125,10 +1192,10 @@ Use `superpowers:requesting-code-review` or the repo's established review workfl
 
 Fix blockers and rerun review until approved. Do not merge with known blockers.
 
-- [ ] **Step 7: Commit final verification/report updates**
+- [ ] **Step 8: Commit final verification/report updates**
 
 ```bash
-git add docs/superpowers/reports/product-workspace-core-surface-redesign-review.md tests/e2e/ai-native-project-management-visual.e2e.test.ts tests/e2e/web-product-routes.e2e.test.ts tests/e2e/helpers/capture-route-screenshots.ts tests/web/product-grade-first-viewport.test.tsx tests/web/no-legacy-web-ui.test.ts
+git add docs/superpowers/reports/product-workspace-core-surface-redesign-review.md apps/web/src/features/product-surfaces/route-contract.ts tests/e2e/ai-native-project-management-visual.e2e.test.ts tests/e2e/web-product-routes.e2e.test.ts tests/e2e/helpers/capture-route-screenshots.ts tests/web/product-grade-route-contract.test.tsx tests/web/product-grade-first-viewport.test.tsx tests/web/no-legacy-web-ui.test.ts
 git commit -m "test: verify product workspace visual redesign"
 ```
 
@@ -1149,6 +1216,6 @@ git commit -m "test: verify product workspace visual redesign"
 - [ ] No public generic `source object`, `Work Item Owner`, generic `owner`, generic `row`, raw `Package`, raw `Run`, raw `Trace`, or raw `Review Packet` navigation leaks into primary surfaces.
 - [ ] Core routes expose required `data-product-shell` markers and do not use generic page templates for visible first-viewport composition.
 - [ ] `requiredScreenshotRoutes` equals `canonicalProductRoutes`.
-- [ ] Screenshots pass at 375, 768, 1280, and 1440 widths with no overlapping text, clipped controls, incoherent overflow, card-in-card sections, oversized normal-state banners, or decorative hero treatment.
+- [ ] Screenshots pass at 375x812, 768x1024, 1280x720, and 1440x900 with no overlapping text, clipped controls, incoherent overflow, card-in-card sections, oversized normal-state banners, or decorative hero treatment.
 - [ ] Styling is Tailwind-first with global CSS limited to tokens/base/MDXEditor integration.
 - [ ] `pnpm test`, `pnpm build`, `git diff --check`, and blocker-focused review pass before merge.
