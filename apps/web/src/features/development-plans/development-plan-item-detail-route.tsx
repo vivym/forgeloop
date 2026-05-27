@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router';
 import type { AttachmentRef, AttachmentUploadMetadata, EditableObjectRef, MarkdownDocument } from '@forgeloop/contracts';
 
@@ -10,6 +10,7 @@ import {
   useDevelopmentPlanItemQuery,
   useDevelopmentPlanItemRevisionsQuery,
 } from '../../shared/api/hooks';
+import { queryKeys } from '../../shared/api/query-keys';
 import type { ProductObjectRef, SpecRevision } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { CodeReviewLayout, CompactMetadata, DocumentReviewLayout, GateFlowLayout, GateProgress, ProductPage, QaHandoffLayout, Section } from '../../shared/layout';
@@ -80,8 +81,9 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
   const gates = itemWithRoutePlan === undefined ? [] : planItemGateModels(itemWithRoutePlan);
   const currentGateId = itemWithRoutePlan === undefined ? undefined : currentGateIdFor(itemWithRoutePlan, focus);
   const pageFamily = pageFamilyForFocus(focus);
-  const routeChrome = (
+  const routeChrome = (evidenceExecutionId?: string) => (
     <ItemRouteChrome
+      {...(evidenceExecutionId === undefined ? {} : { evidenceExecutionId })}
       isError={query.isError}
       isNotFound={itemWithRoutePlan === undefined && !query.isLoading}
       item={itemWithRoutePlan}
@@ -108,18 +110,20 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
           session={session}
         />
       ) : (
-        <GateFlowLayout workspace={routeChrome} />
+        <GateFlowLayout workspace={routeChrome()} />
       )}
     </ProductPage>
   );
 }
 
 function ItemRouteChrome({
+  evidenceExecutionId,
   isError,
   isNotFound,
   item,
   state,
 }: {
+  evidenceExecutionId?: string;
   isError: boolean;
   isNotFound: boolean;
   item: DevelopmentPlanItemProjection | undefined;
@@ -133,7 +137,7 @@ function ItemRouteChrome({
             Back to Development Plan
           </Link>
         ) : null}
-        {item ? <EvidenceSideContext compact item={item} /> : null}
+        {item ? <EvidenceSideContext compact item={item} {...(evidenceExecutionId === undefined ? {} : { executionId: evidenceExecutionId })} /> : null}
       </div>
       <SurfaceStateIndicator label="Development Plan Item Detail" state={state} />
       {isError ? <InlineNotice title="Development Plan Item could not be loaded." tone="danger" /> : null}
@@ -162,33 +166,34 @@ function DevelopmentPlanItemFocusedLayout({
   item: DevelopmentPlanItemProjection;
   itemId: string | undefined;
   revisions: DevelopmentPlanItemRevision[];
-  routeChrome: ReactNode;
+  routeChrome: (evidenceExecutionId?: string) => ReactNode;
   session: BrainstormingSession | undefined;
 }) {
   if (focus === 'spec' || focus === 'execution-plan') {
-    return <ItemDocumentReviewSurface developmentPlanId={developmentPlanId} focus={focus} item={item} itemId={itemId} routeChrome={routeChrome} />;
+    return <ItemDocumentReviewSurface developmentPlanId={developmentPlanId} focus={focus} item={item} itemId={itemId} routeChrome={routeChrome()} />;
   }
 
   if (focus === 'review') {
-    const execution = executionSummaryFor(item);
-    const handoff = codeReviewHandoffFor(item, execution.id);
+    const handoff = codeReviewHandoffFor(item);
+    const execution = executionSummaryFor(item, handoff?.execution_id);
     return (
       <CodeReviewLayout
-        workspace={<div className="grid gap-3">{routeChrome}<CodeReviewHandoffPanel execution={execution} handoff={handoff} /></div>}
-        evidence={<EvidenceSideContext item={item} />}
+        workspace={<div className="grid gap-3">{routeChrome(execution.id)}<CodeReviewHandoffPanel execution={execution} handoff={handoff} /></div>}
+        evidence={<EvidenceSideContext executionId={execution.id} item={item} />}
         controls={<ReviewDecisionSummary status={handoff?.status ?? item.review_status} />}
       />
     );
   }
 
   if (focus === 'qa') {
-    const execution = executionSummaryFor(item);
-    const codeReview = codeReviewHandoffFor(item, execution.id);
-    const handoff = qaHandoffFor(item, execution.id);
+    const initialCodeReview = codeReviewHandoffFor(item);
+    const handoff = qaHandoffFor(item, initialCodeReview?.execution_id);
+    const execution = executionSummaryFor(item, handoff?.execution_id ?? initialCodeReview?.execution_id);
+    const codeReview = codeReviewHandoffFor(item, handoff?.execution_id ?? execution.id);
     return (
       <QaHandoffLayout
-        workspace={<div className="grid gap-3">{routeChrome}<QaHandoffPanel codeReview={codeReview} execution={execution} handoff={handoff} /></div>}
-        evidence={<EvidenceSideContext item={item} />}
+        workspace={<div className="grid gap-3">{routeChrome(execution.id)}<QaHandoffPanel codeReview={codeReview} execution={execution} handoff={handoff} /></div>}
+        evidence={<EvidenceSideContext executionId={execution.id} item={item} />}
         controls={<ReviewDecisionSummary status={handoff?.status ?? item.qa_handoff_status} />}
       />
     );
@@ -199,7 +204,7 @@ function DevelopmentPlanItemFocusedLayout({
       contextRail={<EvidenceSideContext item={item} />}
       workspace={
         <div className="grid gap-4" data-workspace-content="">
-          {routeChrome}
+          {routeChrome()}
           <FirstViewportContext currentGateId={currentGateId} focus={focus} gates={gates} item={item} />
           <GateRouteContextSummary currentGateId={currentGateId} gates={gates} item={item} />
           <ActiveGateBody
@@ -265,6 +270,7 @@ function ItemDocumentReviewSurface({
   routeChrome: ReactNode;
 }) {
   const { actorId } = useActorContext();
+  const queryClient = useQueryClient();
   const commandApi = useMemo(() => createForgeloopCommandApi(), []);
   const attachmentApi = useMemo(() => createForgeloopAttachmentApi(), []);
   const fallbackRevision = useMemo(() => documentRevisionFor(item, focus), [focus, item]);
@@ -303,10 +309,16 @@ function ItemDocumentReviewSurface({
       focus === 'spec'
         ? await commandApi.saveItemSpecDraft(developmentPlanId, itemId, document)
         : await commandApi.saveItemExecutionPlanDraft(developmentPlanId, itemId, document);
-    const nextRevision = documentRevisionFor(item, focus, saved);
+    const nextRevision = { ...documentRevisionFor(item, focus, saved), status: 'draft' };
     setDocumentRevision(nextRevision);
     setMarkdown(nextRevision.markdown);
     setSaveMessage(`${nextRevision.label} draft saved.`);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlan(developmentPlanId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItem(developmentPlanId, itemId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId) }),
+      queryClient.invalidateQueries({ queryKey: ['spec-execution-plan-queue'] }),
+    ]);
   }
 
   const documentLabel = documentRevision?.label ?? fallbackRevision.label;
@@ -346,6 +358,7 @@ function ItemDocumentReviewSurface({
               />
             )}
           </Section>
+          <PlanItemGateSummary item={item} />
         </div>
       }
       reviewState={<DocumentGateState status={documentStatus} />}
@@ -544,8 +557,8 @@ function ArtifactList({ items, empty }: { items: Array<{ id: string; title?: str
   );
 }
 
-function EvidenceSideContext({ compact = false, item }: { compact?: boolean; item: DevelopmentPlanItemProjection }) {
-  const evidence = executionEvidenceRefs(item);
+function EvidenceSideContext({ compact = false, executionId, item }: { compact?: boolean; executionId?: string; item: DevelopmentPlanItemProjection }) {
+  const evidence = executionEvidenceRefs(item, executionId);
   const firstTitle = evidence[0]?.title ?? evidence[0]?.id;
   const summary = evidence.length === 0
     ? 'No execution evidence linked yet.'
@@ -685,29 +698,40 @@ function readableAttachmentLabel(filename: string): string {
   return withoutExtension.length === 0 ? filename : withoutExtension.replace(/[-_]+/g, ' ');
 }
 
-function executionSummaryFor(item: DevelopmentPlanItemProjection) {
-  const execution = item.executions?.[0];
-  const evidenceRefs = executionEvidenceRefs(item);
+type ItemExecutionSummary = Parameters<typeof CodeReviewHandoffPanel>[0]['execution'];
+
+function executionSummaryFor(item: DevelopmentPlanItemProjection, executionId?: string): ItemExecutionSummary {
+  const execution = executionFor(item, executionId);
+  const resolvedExecutionId = execution?.id ?? executionId ?? `execution-${item.id}`;
+  const evidenceRefs = executionEvidenceRefs(item, resolvedExecutionId);
   const fallbackEvidenceRefs: ProductObjectRef[] = [
-    { type: 'execution', id: execution?.id ?? `execution-${item.id}`, title: 'Linked execution evidence' },
+    { type: 'execution', id: resolvedExecutionId, title: 'Linked execution evidence' },
   ];
   const developmentPlanId = item.development_plan_ref?.id ?? item.development_plan_id ?? 'unknown-development-plan';
   const executionPlanRevisionId = item.execution_plans?.[0]?.approved_revision_id ?? item.execution_plans?.[0]?.current_revision_id;
-  const executionPlanRevisionRef = executionPlanRevisionRefFor(item);
+  const executionPlanRevisionRef = execution?.execution_plan_revision_ref ?? executionPlanRevisionRefFor(item);
+  const resolvedExecutionPlanRevisionId = execution?.execution_plan_revision_id ?? executionPlanRevisionId;
   return {
-    id: execution?.id ?? `execution-${item.id}`,
+    id: resolvedExecutionId,
     development_plan_item_id: item.id,
-    development_plan_item_ref: {
+    development_plan_item_ref: execution?.development_plan_item_ref ?? {
       type: 'development_plan_item' as const,
       id: item.id,
       title: item.title,
       development_plan_id: developmentPlanId,
     },
     evidence_refs: evidenceRefs.length > 0 ? evidenceRefs : fallbackEvidenceRefs,
-    ...(executionPlanRevisionId === undefined ? {} : { execution_plan_revision_id: executionPlanRevisionId }),
+    ...(resolvedExecutionPlanRevisionId === undefined ? {} : { execution_plan_revision_id: resolvedExecutionPlanRevisionId }),
     ...(executionPlanRevisionRef === undefined ? {} : { execution_plan_revision_ref: executionPlanRevisionRef }),
     ...((execution?.status ?? item.execution_status) === undefined ? {} : { status: execution?.status ?? item.execution_status }),
   };
+}
+
+function executionFor(item: DevelopmentPlanItemProjection, executionId?: string) {
+  if (executionId !== undefined) {
+    return item.executions?.find((execution) => execution.id === executionId);
+  }
+  return item.executions?.[0];
 }
 
 function executionPlanRevisionRefFor(item: DevelopmentPlanItemProjection): ProductObjectRef & { execution_plan_id?: string } | undefined {
@@ -722,47 +746,62 @@ function executionPlanRevisionRefFor(item: DevelopmentPlanItemProjection): Produ
   };
 }
 
-function codeReviewHandoffFor(item: DevelopmentPlanItemProjection, executionId: string): CodeReviewHandoffProjection | undefined {
-  const handoff = item.code_review_handoffs?.[0];
+function codeReviewHandoffFor(item: DevelopmentPlanItemProjection, executionId?: string): CodeReviewHandoffProjection | undefined {
+  const handoff = handoffForExecution(item.code_review_handoffs, executionId);
   if (handoff === undefined) return undefined;
+  const handoffExecutionId = handoff.execution_id ?? executionId ?? executionSummaryFor(item).id;
   return {
     id: handoff.id,
-    execution_id: executionId,
-    verification_evidence_refs: executionEvidenceRefs(item),
-    comments: handoff.title === undefined ? [] : [handoff.title],
+    execution_id: handoffExecutionId,
+    verification_evidence_refs: handoff.verification_evidence_refs ?? executionEvidenceRefs(item, handoffExecutionId),
+    comments: handoff.comments ?? (handoff.title === undefined ? [] : [handoff.title]),
+    ...(handoff.execution_plan_revision_id === undefined ? {} : { execution_plan_revision_id: handoff.execution_plan_revision_id }),
+    ...(handoff.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: handoff.reviewer_actor_id }),
     ...(handoff.status === undefined ? {} : { status: handoff.status }),
-    ...(handoff.title === undefined ? {} : { summary: handoff.title }),
-    ...(item.affected_surfaces === undefined ? {} : { changed_surfaces: item.affected_surfaces }),
+    ...((handoff.summary ?? handoff.title) === undefined ? {} : { summary: handoff.summary ?? handoff.title }),
+    ...(handoff.changed_surfaces === undefined && item.affected_surfaces === undefined ? {} : { changed_surfaces: handoff.changed_surfaces ?? item.affected_surfaces }),
+    ...(handoff.changes_requested === undefined ? {} : { changes_requested: handoff.changes_requested }),
     ...(handoff.audited_exception === undefined ? {} : { audited_exception: handoff.audited_exception }),
   };
 }
 
-function qaHandoffFor(item: DevelopmentPlanItemProjection, executionId: string): QaHandoffProjection | undefined {
-  const handoff = item.qa_handoffs?.[0];
+function qaHandoffFor(item: DevelopmentPlanItemProjection, executionId?: string): QaHandoffProjection | undefined {
+  const handoff = handoffForExecution(item.qa_handoffs, executionId);
   if (handoff === undefined) return undefined;
+  const handoffExecutionId = handoff.execution_id ?? executionId ?? executionSummaryFor(item).id;
   const developmentPlanId = item.development_plan_ref?.id ?? item.development_plan_id ?? 'unknown-development-plan';
-  const sourceRef = sourceRefForHandoff(item);
-  const executionPlanRevisionRef = executionPlanRevisionRefFor(item);
+  const sourceRef = handoff.source_ref ?? sourceRefForHandoff(item);
+  const executionPlanRevisionRef = handoff.approved_execution_plan_revision_ref ?? executionPlanRevisionRefFor(item);
   return {
     id: handoff.id,
-    execution_id: executionId,
-    development_plan_item_id: item.id,
-    development_plan_item_ref: {
+    execution_id: handoffExecutionId,
+    development_plan_item_id: handoff.development_plan_item_id ?? item.id,
+    development_plan_item_ref: handoff.development_plan_item_ref ?? {
       type: 'development_plan_item' as const,
       id: item.id,
       title: item.title,
       development_plan_id: developmentPlanId,
     },
-    acceptance_criteria: [item.summary ?? 'Plan Item acceptance remains satisfied.'],
-    test_strategy: 'Focused route, editor, review, and QA handoff checks.',
-    verification_evidence_refs: executionEvidenceRefs(item),
-    known_risks: item.risk === undefined ? [] : [item.risk],
+    acceptance_criteria: handoff.acceptance_criteria ?? [item.summary ?? 'Plan Item acceptance remains satisfied.'],
+    test_strategy: handoff.test_strategy ?? 'Focused route, editor, review, and QA handoff checks.',
+    verification_evidence_refs: handoff.verification_evidence_refs ?? executionEvidenceRefs(item, handoffExecutionId),
+    known_risks: handoff.known_risks ?? (item.risk === undefined ? [] : [item.risk]),
     ...(sourceRef === undefined ? {} : { source_ref: sourceRef }),
+    ...(handoff.approved_spec_revision_ref === undefined ? {} : { approved_spec_revision_ref: handoff.approved_spec_revision_ref }),
     ...(executionPlanRevisionRef === undefined ? {} : { approved_execution_plan_revision_ref: executionPlanRevisionRef }),
     ...(handoff.status === undefined ? {} : { status: handoff.status }),
-    ...(item.affected_surfaces === undefined ? {} : { changed_surfaces: item.affected_surfaces }),
-    ...(item.release_impact === undefined ? {} : { release_impact: item.release_impact }),
+    ...(handoff.changed_surfaces === undefined && item.affected_surfaces === undefined ? {} : { changed_surfaces: handoff.changed_surfaces ?? item.affected_surfaces }),
+    ...((handoff.release_impact ?? item.release_impact) === undefined ? {} : { release_impact: handoff.release_impact ?? item.release_impact }),
+    ...(handoff.audited_exception === undefined ? {} : { audited_exception: handoff.audited_exception }),
   };
+}
+
+function handoffForExecution<T extends { execution_id?: string }>(handoffs: T[] | undefined, executionId?: string): T | undefined {
+  if (handoffs === undefined) return undefined;
+  if (executionId !== undefined) {
+    return handoffs.find((handoff) => handoff.execution_id === executionId) ?? handoffs[0];
+  }
+  return handoffs[0];
 }
 
 function sourceRefForHandoff(item: DevelopmentPlanItemProjection): ProductObjectRef | undefined {
@@ -824,8 +863,8 @@ function isCompleteStatus(status: string | undefined): boolean {
   return status === 'approved' || status === 'completed' || status === 'accepted';
 }
 
-function executionEvidenceRefs(item: DevelopmentPlanItemProjection) {
-  const execution = item.executions?.[0];
+function executionEvidenceRefs(item: DevelopmentPlanItemProjection, executionId?: string) {
+  const execution = executionFor(item, executionId);
   return [...(execution?.evidence_refs ?? []), ...(execution?.test_evidence_refs ?? [])];
 }
 

@@ -142,14 +142,48 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const firstSpecRevision = await generateItemSpecDraft(app, plan.id, item.id);
+    const markdown = [
+      '# Saved Spec draft',
+      '',
+      '## Background',
+      '',
+      'The edited Spec background replaces the generated context.',
+      '',
+      '## Goals',
+      '',
+      '- Preserve Markdown-authored goals',
+      '- Feed automation with current structure',
+      '',
+      '## Scope In',
+      '',
+      '- Item-scoped draft saving',
+      '- Structured field synchronization',
+      '',
+      '## Scope Out',
+      '',
+      '- Legacy Work Item artifact editing',
+      '',
+      '## Acceptance Criteria',
+      '',
+      '- Downstream automation reads edited acceptance criteria',
+      '- Reviewers see the same draft content and structure',
+      '',
+      '## Risk Notes',
+      '',
+      '- Markdown sections can be incomplete',
+      '',
+      '## Test Strategy',
+      '',
+      'Run API draft save regression coverage.',
+    ].join('\n');
 
     const savedRevision = (
       await request(server)
         .patch(`/development-plans/${plan.id}/items/${item.id}/spec/draft`)
         .send({
-          markdown: '# Saved Spec draft\n\nPersisted through the item-scoped draft endpoint.',
+          markdown,
           object_ref: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
-          allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
+          allowed_blocks: ['paragraph', 'heading', 'list', 'link', 'image', 'table', 'code_block', 'inline_code'],
           attachment_refs: [],
           validation_version: '2026-05-23',
         })
@@ -159,7 +193,17 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(savedRevision).toMatchObject({
       spec_id: firstSpecRevision.spec_id,
       revision_number: firstSpecRevision.revision_number + 1,
-      content: '# Saved Spec draft\n\nPersisted through the item-scoped draft endpoint.',
+      content: markdown,
+      background: 'The edited Spec background replaces the generated context.',
+      goals: ['Preserve Markdown-authored goals', 'Feed automation with current structure'],
+      scope_in: ['Item-scoped draft saving', 'Structured field synchronization'],
+      scope_out: ['Legacy Work Item artifact editing'],
+      acceptance_criteria: [
+        'Downstream automation reads edited acceptance criteria',
+        'Reviewers see the same draft content and structure',
+      ],
+      risk_notes: ['Markdown sections can be incomplete'],
+      test_strategy_summary: 'Run API draft save regression coverage.',
       attachment_refs: [],
     });
     expect(savedRevision).not.toHaveProperty('structured_document');

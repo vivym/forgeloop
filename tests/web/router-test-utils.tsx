@@ -52,6 +52,7 @@ import { ProjectProvider } from '../../apps/web/src/shared/context/project-conte
 import { RuntimeFlagsProvider } from '../../apps/web/src/shared/context/runtime-flags';
 import { PageHeader, Section } from '../../apps/web/src/shared/layout';
 import { InlineNotice } from '../../apps/web/src/shared/ui';
+import { projectId as fixtureProjectId } from './fixtures/product-data';
 import { installProductApiMock, type ProductApiResponseMap } from './fixtures/product-api-mock';
 
 function ProductNotFoundRoute() {
@@ -140,7 +141,7 @@ export async function renderRoute(
   render(
     <QueryClientProvider client={queryClient}>
       <ActorProvider value={options.actorId ? { actorId: options.actorId } : undefined}>
-        <ProjectProvider value={options.projectId ? { projectId: options.projectId } : undefined}>
+        <ProjectProvider value={{ projectId: options.projectId ?? fixtureProjectId }}>
           <RuntimeFlagsProvider value={{ devToolsEnabled: options.devToolsEnabled ?? false }}>
             <RoutesStub initialEntries={[path]} />
           </RuntimeFlagsProvider>

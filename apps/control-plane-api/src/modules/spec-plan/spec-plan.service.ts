@@ -225,9 +225,10 @@ export class SpecPlanService {
         updated_at: this.now(),
       };
       await repository.saveSpec(nextSpec);
+      const draftSpecFields = specStructuredFieldsFromMarkdown(draftDocument.markdown);
       const revision = await this.saveSpecRevisionWithRepository(repository, nextSpec, {
         ...currentRevision,
-        summary: summaryFromMarkdown(draftDocument.markdown, currentRevision.summary),
+        ...draftSpecFields,
         content: draftDocument.markdown,
         structured_document: {
           ...(currentRevision.structured_document ?? {}),
@@ -1473,4 +1474,119 @@ function summaryFromMarkdown(markdown: string, fallback: string): string {
     .map((line) => line.replace(/^#{1,6}\s+/, '').trim())
     .find((line) => line.length > 0);
   return heading ?? fallback;
+}
+
+type SpecStructuredFields = Pick<
+  SpecRevision,
+  'summary' | 'background' | 'goals' | 'scope_in' | 'scope_out' | 'acceptance_criteria' | 'risk_notes' | 'test_strategy_summary'
+>;
+
+function specStructuredFieldsFromMarkdown(markdown: string): SpecStructuredFields {
+  const sections = markdownSections(markdown);
+  const summary = summaryFromMarkdown(markdown, 'Untitled Spec draft');
+  const fallbackBody = firstMarkdownParagraph(markdown) ?? summary;
+
+  return {
+    summary,
+    background: sectionText(sections, ['background', 'context', 'problem', '背景']) ?? fallbackBody,
+    goals: sectionItems(sections, ['goals', 'goal', 'objectives', '目标']) ?? [summary],
+    scope_in: sectionItems(sections, ['scope in', 'in scope', 'scope', 'included scope', '范围内']) ?? [fallbackBody],
+    scope_out: sectionItems(sections, ['scope out', 'out of scope', 'non goals', 'non-goals', 'exclusions', '范围外']) ?? [],
+    acceptance_criteria: sectionItems(sections, ['acceptance criteria', 'acceptance', 'success criteria', '验收标准']) ?? [fallbackBody],
+    risk_notes: sectionItems(sections, ['risk notes', 'risks', 'risk', 'risks and mitigations', '风险']) ?? [],
+    test_strategy_summary: sectionText(sections, ['test strategy', 'testing', 'validation', 'verification plan', '测试策略']) ?? fallbackBody,
+  };
+}
+
+function markdownSections(markdown: string): Map<string, string[]> {
+  const sections = new Map<string, string[]>();
+  let currentHeading = 'intro';
+  let inCodeFence = false;
+
+  for (const line of markdown.split('\n')) {
+    if (line.trim().startsWith('```')) {
+      inCodeFence = !inCodeFence;
+      sections.set(currentHeading, [...(sections.get(currentHeading) ?? []), line]);
+      continue;
+    }
+
+    const heading = inCodeFence ? undefined : line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/)?.[1];
+    if (heading !== undefined) {
+      currentHeading = normalizeMarkdownHeading(heading);
+      if (!sections.has(currentHeading)) sections.set(currentHeading, []);
+      continue;
+    }
+
+    sections.set(currentHeading, [...(sections.get(currentHeading) ?? []), line]);
+  }
+
+  return sections;
+}
+
+function sectionText(sections: Map<string, string[]>, headings: string[]): string | undefined {
+  const lines = findSectionLines(sections, headings);
+  if (lines === undefined) return undefined;
+  return markdownParagraphs(lines).join('\n\n') || undefined;
+}
+
+function sectionItems(sections: Map<string, string[]>, headings: string[]): string[] | undefined {
+  const lines = findSectionLines(sections, headings);
+  if (lines === undefined) return undefined;
+  const listItems = lines
+    .map((line) => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').replace(/^\[[ xX]\]\s+/, '').trim())
+    .filter((line) => line.length > 0);
+  if (listItems.length > 0) return listItems;
+  const paragraphs = markdownParagraphs(lines);
+  return paragraphs.length > 0 ? paragraphs : undefined;
+}
+
+function findSectionLines(sections: Map<string, string[]>, headings: string[]): string[] | undefined {
+  for (const heading of headings) {
+    const section = sections.get(normalizeMarkdownHeading(heading));
+    if (section !== undefined) return section;
+  }
+  return undefined;
+}
+
+function firstMarkdownParagraph(markdown: string): string | undefined {
+  return markdownParagraphs(markdown.split('\n').filter((line) => !/^#{1,6}\s+/.test(line))).at(0);
+}
+
+function markdownParagraphs(lines: string[]): string[] {
+  const paragraphs: string[] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    const normalized = line.trim();
+    if (normalized.length === 0) {
+      if (current.length > 0) {
+        paragraphs.push(cleanMarkdownText(current.join(' ')));
+        current = [];
+      }
+      continue;
+    }
+    current.push(normalized);
+  }
+
+  if (current.length > 0) paragraphs.push(cleanMarkdownText(current.join(' ')));
+  return paragraphs.filter((paragraph) => paragraph.length > 0);
+}
+
+function cleanMarkdownText(value: string): string {
+  return value
+    .replace(/^>\s*/, '')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[*_`~]/g, '')
+    .trim();
+}
+
+function normalizeMarkdownHeading(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[:：]/g, ' ')
+    .replace(/[^\p{Letter}\p{Number}\s-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }

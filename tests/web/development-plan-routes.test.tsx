@@ -304,6 +304,13 @@ describe('Development Plan routes', () => {
       expect(screen.getByRole('button', { name: /source mode|rich mode/i })).toBeTruthy();
       expect(screen.getByRole('button', { name: /insert image/i })).toBeTruthy();
       expect(screen.getByRole('button', { name: /save/i })).toBeTruthy();
+      if (focus === 'spec') {
+        expect(screen.getByRole('button', { name: /submit spec for review/i })).toBeTruthy();
+        expect(screen.getByRole('button', { name: /approve spec/i })).toBeTruthy();
+      } else {
+        expect(screen.getByRole('button', { name: /submit execution plan for review/i })).toBeTruthy();
+        expect(screen.getByRole('button', { name: /approve execution plan/i })).toBeTruthy();
+      }
       cleanup();
     }
   });
@@ -356,6 +363,7 @@ describe('Development Plan routes', () => {
     await user.click(screen.getByRole('button', { name: /save/i }));
 
     expect(await screen.findByText(/Spec document draft saved/i)).toBeTruthy();
+    expect(screen.getAllByText(/^draft$/i).length).toBeGreaterThan(0);
     expect(draftBodies).toEqual([
       expect.objectContaining({
         markdown: expect.stringContaining('Saved through the route draft endpoint.'),
@@ -621,6 +629,78 @@ describe('Development Plan routes', () => {
     expectButtonDisabled(await noEvidenceScreen.findByRole('button', { name: /^accept qa handoff$/i }));
   });
 
+  it('opens dedicated Review and QA routes from Plan Item gate cards', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+
+    await user.click(await screen.findByRole('button', { name: /^open code review$/i }));
+    expect(await screen.findByRole('heading', { name: /code review handoff/i })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="code-review"]')).toBeTruthy();
+
+    cleanup();
+    const qaScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+    await user.click(await qaScreen.findByRole('button', { name: /^open qa handoff$/i }));
+    expect(await qaScreen.findByRole('heading', { name: /qa handoff/i })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeTruthy();
+  });
+
+  it('preserves execution-scoped handoff evidence on Review and QA item routes', async () => {
+    const completedExecution = {
+      id: 'exec-completed-for-review',
+      title: 'Completed execution for review',
+      status: 'completed',
+      evidence_refs: [{ type: 'execution', id: 'evidence-completed-review', title: 'Completed review evidence' }],
+      test_evidence_refs: [],
+    };
+    const retryExecution = {
+      id: 'exec-retry-not-reviewed',
+      title: 'Retry execution not reviewed',
+      status: 'completed',
+      evidence_refs: [{ type: 'execution', id: 'evidence-retry-wrong', title: 'Retry evidence should not render' }],
+      test_evidence_refs: [],
+    };
+    const item = itemOverride(
+      {
+        boundary_status: 'approved',
+        spec_status: 'approved',
+        execution_plan_status: 'approved',
+        execution_status: 'completed',
+        review_status: 'approved',
+        qa_handoff_status: 'pending',
+      },
+      {
+        executions: [retryExecution, completedExecution],
+        codeReview: {
+          execution_id: completedExecution.id,
+          status: 'approved',
+          verification_evidence_refs: [{ type: 'execution', id: 'evidence-completed-review', title: 'Completed review evidence' }],
+        },
+        qaHandoff: {
+          execution_id: completedExecution.id,
+          verification_evidence_refs: [{ type: 'execution', id: 'evidence-completed-review', title: 'Completed review evidence' }],
+        },
+      },
+    );
+
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/review`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: item,
+      },
+    });
+
+    expect((await screen.findAllByText(/Completed review evidence/i)).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain('Retry evidence should not render');
+    cleanup();
+
+    const qaScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/qa`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: item,
+      },
+    });
+    expect((await qaScreen.findAllByText(/Completed review evidence/i)).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain('Retry evidence should not render');
+  });
+
   it('renders required surface states for Development Plan pages', async () => {
     for (const [route, key] of [
       [`/development-plans/${developmentPlan.id}`, 'Development Plan Page'],
@@ -646,7 +726,9 @@ function itemOverride(
   status: ItemStatusOverride,
   options: {
     codeReview?: Record<string, unknown>;
+    executions?: Array<Record<string, unknown>>;
     execution?: Record<string, unknown>;
+    qaHandoff?: Record<string, unknown>;
   } = {},
 ) {
   return {
@@ -671,13 +753,13 @@ function itemOverride(
     ] : [],
     specs: status.spec_status === 'missing' || status.spec_status === 'not_started' ? [] : [{ id: 'spec-cockpit-command-center', title: 'Spec revision', current_revision_id: 'specrev-cockpit-command-center-v1', approved_revision_id: 'specrev-cockpit-command-center-v1' }],
     execution_plans: status.execution_plan_status === 'missing' || status.execution_plan_status === 'not_started' ? [] : [{ id: 'execution-plan-requirements-database-view', title: 'Execution Plan revision', current_revision_id: 'planrev-requirements-database-view-v1', approved_revision_id: 'planrev-requirements-database-view-v1' }],
-    executions: status.execution_status === 'not_started' ? [] : [{
+    executions: options.executions ?? (status.execution_status === 'not_started' ? [] : [{
       id: 'exec-demo-seed-visual-review',
       title: 'Execution',
       status: status.execution_status ?? developmentPlanItem.execution_status,
       evidence_refs: [{ type: 'execution', id: 'evidence-exec-demo-seed-checks', title: 'Verification evidence' }],
       ...options.execution,
-    }],
+    }]),
     code_review_handoffs: status.review_status === 'approved' || options.codeReview !== undefined
       ? [{ id: 'review-cockpit-requested-changes', title: 'Code review', status: 'approved', ...options.codeReview }]
       : [],
@@ -685,6 +767,7 @@ function itemOverride(
       id: 'qa-requirements-authoring-mdx',
       title: 'QA handoff',
       status: status.qa_handoff_status === 'in_review' ? 'pending' : (status.qa_handoff_status ?? developmentPlanItem.qa_handoff_status),
+      ...options.qaHandoff,
     }],
     href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
   };
