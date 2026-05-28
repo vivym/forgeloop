@@ -7,10 +7,10 @@ import {
   ensureVisualWebServer,
   installMockedProductApi,
   launchVisualBrowser,
-  writeProductArchitectureScreenshotReviewReport,
+  writeProductWorkspaceScreenshotReviewReport,
   startAiNativeProjectManagementFixture,
   type ScreenshotReviewRecord,
-  visualViewportWidths,
+  visualViewports,
 } from './helpers/capture-route-screenshots';
 import { requiredScreenshotRoutes } from '../../apps/web/src/features/product-surfaces/route-contract';
 import { bugListItem, requirementListItem } from '../web/fixtures/product-data';
@@ -41,13 +41,13 @@ describe('AI-native project management visual QA', () => {
         const records: ScreenshotReviewRecord[] = [];
 
         for (const route of aiNativeProjectManagementRoutes) {
-          for (const width of visualViewportWidths) {
-            records.push(await captureRouteScreenshot(page, server.url, route, width));
+          for (const viewport of visualViewports) {
+            records.push(await captureRouteScreenshot(page, server.url, route, viewport));
             await assertNoRenderedBaggage(page, route.path);
           }
         }
 
-        const report = await writeProductArchitectureScreenshotReviewReport(records);
+        const report = await writeProductWorkspaceScreenshotReviewReport(records);
         expect(report.records.every((record) => record.decision === 'pass')).toBe(true);
         expect(new Set(report.records.map((record) => record.route))).toEqual(new Set(requiredScreenshotRoutes.map((route) => route.concretePath)));
         expect(requiredScreenshotRoutes.map((route) => route.concretePath)).toEqual([
@@ -56,37 +56,37 @@ describe('AI-native project management visual QA', () => {
           '/my-work',
           '/initiatives',
           '/initiatives/new',
-          '/initiatives/init-ai-native-rollout',
-          '/initiatives/init-ai-native-rollout/evidence',
+          '/initiatives/init-product-workspace-redesign',
+          '/initiatives/init-product-workspace-redesign/evidence',
           '/requirements',
           '/requirements/new',
-          '/requirements/req-plan-item-governance',
-          '/requirements/req-plan-item-governance/evidence',
+          '/requirements/req-product-workspace-clarity',
+          '/requirements/req-product-workspace-clarity/evidence',
           '/bugs',
           '/bugs/new',
-          '/bugs/bug-execution-review-context',
-          '/bugs/bug-execution-review-context/evidence',
+          '/bugs/bug-plan-item-action-eligibility',
+          '/bugs/bug-plan-item-action-eligibility/evidence',
           '/tech-debt',
           '/tech-debt/new',
-          '/tech-debt/td-retire-workspace-page-template',
-          '/tech-debt/td-retire-workspace-page-template/evidence',
+          '/tech-debt/td-retire-generic-product-page',
+          '/tech-debt/td-retire-generic-product-page/evidence',
           '/development-plans',
           '/development-plans/new',
-          '/development-plans/dp-product-architecture-visual-rebuild',
-          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center',
-          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-development-plan-table-inspector/brainstorming',
-          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center/spec',
-          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-requirements-database-view/execution-plan',
-          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-demo-seed-visual-review/execution',
-          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center/review',
-          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-requirements-database-view/qa',
+          '/development-plans/dp-product-workspace-core-surface-redesign',
+          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility',
+          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-typed-source-boundary/brainstorming',
+          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/spec',
+          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/execution-plan',
+          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-product-workspace-preview-state/execution',
+          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/review',
+          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-qa-shift-left-strategy/qa',
           '/specs-plans',
           '/executions',
-          '/executions/exec-demo-seed-visual-review',
+          '/executions/exec-product-workspace-preview-active',
           '/board',
           '/releases',
-          '/releases/rel-product-architecture-preview',
-          '/releases/rel-product-architecture-preview/evidence',
+          '/releases/rel-product-workspace-preview',
+          '/releases/rel-product-workspace-preview/evidence',
           '/reports',
           '/reports/delivery',
           '/reports/quality',
@@ -94,13 +94,13 @@ describe('AI-native project management visual QA', () => {
           '/reports/observation',
         ]);
         expect(
-          new Set(report.records.map((record) => `${record.route} @ ${record.viewport}`)),
+          new Set(report.records.map((record) => `${record.route} @ ${record.viewport.label}`)),
         ).toEqual(
-          new Set(requiredScreenshotRoutes.flatMap((route) => route.viewports.map((viewport) => `${route.concretePath} @ ${viewport}`))),
+          new Set(requiredScreenshotRoutes.flatMap((route) => route.viewports.map((viewport) => `${route.concretePath} @ ${viewport.label}`))),
         );
         expect(report.records).toHaveLength(requiredScreenshotRoutes.reduce((sum, route) => sum + route.viewports.length, 0));
         expect(report.records.every((record) => record.geometry.horizontalOverflowPx <= 1)).toBe(true);
-        expect(report.records.filter((record) => record.viewport >= 1024).every((record) => (record.geometry.pageHeaderHeight ?? 0) <= 96)).toBe(true);
+        expect(report.records.filter((record) => record.viewport.width >= 1024).every((record) => (record.geometry.pageHeaderHeight ?? 0) <= 96)).toBe(true);
         expect(report.manualReviewChecklist.every((item) => item.decision === 'pass')).toBe(true);
       } finally {
         await browser.close();
@@ -126,10 +126,10 @@ describe('AI-native project management visual QA', () => {
         const manualPlanId = new URL(page.url()).pathname.split('/').at(-1);
         if (manualPlanId === undefined || manualPlanId.length === 0) throw new Error('Manual Development Plan id was not reflected in the URL');
 
-        await page.getByRole('button', { name: /add row/i }).click();
+        await page.getByRole('button', { name: /add plan item/i }).click();
         await page.getByRole('textbox', { name: /plan item title/i }).fill('Manual Plan Item governance row');
         await page.getByRole('textbox', { name: /summary/i }).fill('Validate Plan Item governance states before execution.');
-        await page.getByRole('button', { name: /save row/i }).click();
+        await page.getByRole('button', { name: /save plan item/i }).click();
         await expectPage(page.getByRole('row', { name: /manual plan item governance row/i })).toBeVisible();
 
         await page.goto(`${baseUrl}/bugs/${bugListItem.id}`);
@@ -188,15 +188,16 @@ describe('AI-native project management visual QA', () => {
 
         const developmentPlanId = (await generatedPlan).id;
         const itemId = await fixture.firstPlanItemId(developmentPlanId);
-        await page.goto(`${baseUrl}/development-plans/${developmentPlanId}/items/${itemId}`);
+        await page.goto(`${baseUrl}/development-plans/${developmentPlanId}/items/${itemId}/brainstorming`);
         await page.getByRole('button', { name: /start boundary brainstorming/i }).click();
         await page.getByRole('textbox', { name: /answer boundary question/i }).fill('Keep the change scoped to apps/web and route tests.');
         await page.getByRole('textbox', { name: /decision rationale/i }).fill('The approved boundary is limited to Web IA and route tests.');
         await page.getByRole('button', { name: /answer boundary questions/i }).click();
         await page.getByRole('button', { name: /record boundary decision/i }).click();
         await page.getByRole('button', { name: /approve boundary/i }).click();
-        await expectPage(page.getByText(/approved state/i)).toBeVisible();
+        await expectPage(page.getByText(/boundary approved/i)).toBeVisible();
 
+        await page.goto(`${baseUrl}/development-plans/${developmentPlanId}/items/${itemId}`);
         await page.getByRole('button', { name: /^generate spec$/i }).click();
         await expectPage(page.getByText(/generate spec command completed/i)).toBeVisible();
         await page.getByRole('button', { name: /submit spec for review/i }).click();
@@ -216,7 +217,7 @@ describe('AI-native project management visual QA', () => {
         const startedExecution = (await startExecutionResponse).json() as Promise<{ id: string }>;
         await expectPage(page.getByText(/start execution command completed/i)).toBeVisible();
         await page.getByRole('button', { name: /^interrupt execution$/i }).click();
-        await expectPage(page.getByText(/resumable state/i)).toBeVisible();
+        await expectPage(page.getByRole('button', { name: /^continue execution$/i })).toBeEnabled();
         await page.getByRole('button', { name: /^continue execution$/i }).click();
         await expectPage(page.getByText(/continue execution command completed/i)).toBeVisible();
         const executionId = (await startedExecution).id;
@@ -255,8 +256,9 @@ async function assertNoRenderedBaggage(page: Page, path: string) {
   }
 
   if (path === '/development-plans') {
-    expect(bodyText, `${path} must render active plan workspace affordances`).toContain('Active Development Plans');
-    expect(bodyText, `${path} must keep source links visible`).toMatch(/source links/i);
+    await expectPage(page.locator('[data-primary-work-surface]').first()).toBeVisible();
+    expect(bodyText, `${path} must render active plan workspace metrics`).toMatch(/ACTIVE PLANS/i);
+    expect(bodyText, `${path} must keep typed refs visible`).toMatch(/typed refs/i);
   }
 
   if (path === '/development-plans/new') {

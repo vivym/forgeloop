@@ -182,7 +182,8 @@ export function ReportsIndexRoute() {
 
 function ReplayDevOnlyPanel() {
   return (
-    <ProductPage family="report-insight" heading="Reports Replay Dev Panel">
+    <ProductPage family="report-insight" ariaLabel="Reports Replay Dev Panel">
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Reports Replay Dev Panel</h1>
       <Section title="Report unavailable">
         <InlineNotice title="Lifecycle replay evidence context is available only with dev tools enabled." tone="warning" />
       </Section>
@@ -236,7 +237,8 @@ function ReportWorkspace({
   const suggestedAction = viewModel.suggestedAction?.label ?? viewModel.nextAction;
 
   return (
-    <ProductPage family="report-insight" heading={heading}>
+    <ProductPage family="report-insight" ariaLabel={heading}>
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
       <ReportInsightLayout
         conclusion={
           <div className="grid gap-3">

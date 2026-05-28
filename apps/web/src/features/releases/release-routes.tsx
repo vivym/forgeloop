@@ -15,6 +15,9 @@ type ReadinessEvidenceItem =
   | ReleaseReadinessDetail['package_run_evidence'][number]
   | ReleaseReadinessDetail['observation_evidence'][number];
 
+const releaseScreenReaderSummaryClassName =
+  'pointer-events-none absolute left-0 top-0 m-0 h-px w-px list-none overflow-hidden p-0 whitespace-normal break-words [clip-path:inset(50%)]';
+
 export function ReleasesRoute() {
   const { projectId } = useProjectContext();
   const query = useReleasesQuery({ project_id: projectId, limit: 100 });
@@ -42,17 +45,24 @@ export function ReleasesRoute() {
   ];
 
   return (
-    <ProductPage family="release-readiness" heading="Releases">
+    <ProductPage family="release-readiness" ariaLabel="Releases">
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Releases</h1>
       <ReleaseReadinessLayout
         blockers={
           <div className="grid gap-4">
             <SurfaceStateIndicator label="Release inventory" state={releaseInventorySurfaceState(query.isLoading, query.isError, releases, blockedCount)} />
-            <div className="sr-only">
-              <span>{query.isError ? 'Release inventory could not be loaded.' : `${blockedCount} release approval gate(s) need review.`}</span>
-              <span>{query.isError ? 'Retry release inventory load.' : releases.length === 0 ? 'Create a governed release from ready Plan Items.' : 'Review the highest-risk release readiness row.'}</span>
-              <span>Release owner reviews approval, launch, and rollback state.</span>
-              <span>{query.isLoading ? 'Loading release inventory' : `${releases.length} release(s) in inventory`}</span>
-            </div>
+            <ReleaseScreenReaderSummary
+              items={[
+                query.isError ? 'Release inventory could not be loaded.' : `${blockedCount} release approval gate(s) need review.`,
+                query.isError
+                  ? 'Retry release inventory load.'
+                  : releases.length === 0
+                    ? 'Create a governed release from ready Plan Items.'
+                    : 'Review the highest-risk release readiness row.',
+                'Release owner reviews approval, launch, and rollback state.',
+                query.isLoading ? 'Loading release inventory' : `${releases.length} release(s) in inventory`,
+              ]}
+            />
             <Section
               description="Scope, readiness, risk, approval, release owner. Dense inventory rows keep coverage, gate state, owner role, and next action scannable without opening raw package or Work Item browsers."
               title="Release inventory"
@@ -123,29 +133,30 @@ function ReleaseReadinessWorkspace({
   return (
     <ProductPage
       family="release-readiness"
-      heading="Release Readiness"
-      toolbar={
-        <>
-          <Button disabled={launchAction?.enabled !== true} size="sm" variant="primary">
-            Launch release
-          </Button>
-          <Button disabled={rollbackAction?.enabled !== true} size="sm" variant="secondary">
-            Rollback release
-          </Button>
-        </>
-      }
+      ariaLabel="Release Readiness"
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Release Readiness</h1>
       <ReleaseReadinessLayout
         blockers={
           <div className="grid gap-4">
-            <SurfaceStateIndicator label="Release readiness" state={readiness.ready ? 'approved' : 'blocked'} />
-            <div className="sr-only">
-              <span>{`High-risk changes: ${highRiskSummary(cockpit)}. Approvals: ${approvalSummary(readiness)}.`}</span>
-              <span>{`${disabledReason === undefined ? 'Launch release is available' : `Launch disabled: ${disabledReason}`}. ${rollbackText}.`}</span>
-              <span>{`${viewModel.primaryActorOrRole} owns approval review, launch decision, rollback readiness, and evidence relevance.`}</span>
-              <span>{`Readiness ${readiness.ready ? 'ready' : 'blocked'} for ${readiness.scope_refs.length} scope object(s)`}</span>
-              <span>{`${release.scope_summary ?? 'Release scope unavailable.'} Readiness by Spec, Execution Plan, execution, code review, QA, release blockers, evidence, rollback plan, observation.`}</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button disabled={launchAction?.enabled !== true} size="sm" variant="primary">
+                Launch release
+              </Button>
+              <Button disabled={rollbackAction?.enabled !== true} size="sm" variant="secondary">
+                Rollback release
+              </Button>
             </div>
+            <SurfaceStateIndicator label="Release readiness" state={readiness.ready ? 'approved' : 'blocked'} />
+            <ReleaseScreenReaderSummary
+              items={[
+                `High-risk changes: ${highRiskSummary(cockpit)}. Approvals: ${approvalSummary(readiness)}.`,
+                `${disabledReason === undefined ? 'Launch release is available' : `Launch disabled: ${disabledReason}`}. ${rollbackText}.`,
+                `${viewModel.primaryActorOrRole} owns approval review, launch decision, rollback readiness, and evidence relevance.`,
+                `Readiness ${readiness.ready ? 'ready' : 'blocked'} for ${readiness.scope_refs.length} scope object(s)`,
+                `${release.scope_summary ?? 'Release scope unavailable.'} Readiness by Spec, Execution Plan, execution, code review, QA, release blockers, evidence, rollback plan, observation.`,
+              ]}
+            />
             <Section title={release.title}>
               <CompactMetadata
                 items={[
@@ -214,7 +225,8 @@ function ReleaseEvidenceContent({ releaseId }: { releaseId: string }) {
   const disabledReason = releaseViewModel({ release, readiness }).disabledReason ?? readiness.disabled_reasons[0]?.message;
 
   return (
-    <ProductPage family="release-evidence" heading="Release Evidence">
+    <ProductPage family="release-evidence" ariaLabel="Release Evidence">
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">Release Evidence</h1>
       <ReleaseEvidenceLayout
         evidence={<ReadinessSection readiness={readiness} />}
         rawEvidence={
@@ -227,12 +239,14 @@ function ReleaseEvidenceContent({ releaseId }: { releaseId: string }) {
         summary={
           <div className="grid gap-4">
             <SurfaceStateIndicator label="Release evidence" state={readiness.ready ? 'approved' : 'blocked'} />
-            <div className="sr-only">
-              <span>{disabledReason === undefined ? 'Evidence readiness is clear.' : `Evidence readiness blocked: ${disabledReason}`}</span>
-              <span>{disabledReason === undefined ? 'Review relevant evidence before launch.' : `Resolve evidence relevance blocker: ${disabledReason}`}</span>
-              <span>Release owner validates evidence readiness and relevance with QA, reviewer, and development context.</span>
-              <span>{`Evidence readiness ${readiness.ready ? 'ready' : 'blocked'} across ${evidenceCount(readiness)} evidence requirement(s)`}</span>
-            </div>
+            <ReleaseScreenReaderSummary
+              items={[
+                disabledReason === undefined ? 'Evidence readiness is clear.' : `Evidence readiness blocked: ${disabledReason}`,
+                disabledReason === undefined ? 'Review relevant evidence before launch.' : `Resolve evidence relevance blocker: ${disabledReason}`,
+                'Release owner validates evidence readiness and relevance with QA, reviewer, and development context.',
+                `Evidence readiness ${readiness.ready ? 'ready' : 'blocked'} across ${evidenceCount(readiness)} evidence requirement(s)`,
+              ]}
+            />
             <Section title="Evidence readiness">
               <CompactMetadata
                 items={[
@@ -251,20 +265,32 @@ function ReleaseEvidenceContent({ releaseId }: { releaseId: string }) {
   );
 }
 
+function ReleaseScreenReaderSummary({ items }: { items: string[] }) {
+  return (
+    <ul className={releaseScreenReaderSummaryClassName} data-release-screen-reader-summary>
+      {items.map((item, index) => (
+        <li className="m-0 max-w-px p-0" key={`${index}:${item}`}>
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function TypedScopeSection({ scopeRefs }: { scopeRefs: ObjectRef[] }) {
   const typedScopeRefs = scopeRefs.filter(isReleaseScopeRef);
 
   return (
     <Section title="Typed scope">
-      <div className="grid gap-2 md:grid-cols-2">
+      <div className="grid min-w-0 gap-2">
         {typedScopeRefs.map((ref) => (
           <Link
-            className="flex items-center justify-between gap-3 rounded-card border border-border bg-surface p-3 text-sm hover:border-primary hover:bg-primary-soft"
+            className="flex min-w-0 items-start justify-between gap-3 rounded-card border border-border bg-surface p-3 text-sm hover:border-primary hover:bg-primary-soft"
             key={`${ref.type}:${ref.id}`}
             to={typedObjectHref(ref)}
           >
-            <span className="font-semibold text-text-primary">{objectLabel(ref.type)}</span>
-            <span className="text-text-secondary">{ref.title ?? ref.id}</span>
+            <span className="shrink-0 font-semibold text-text-primary">{objectLabel(ref.type)}</span>
+            <span className="min-w-0 text-right text-text-secondary break-words">{ref.title ?? ref.id}</span>
           </Link>
         ))}
       </div>
@@ -383,7 +409,8 @@ function executionEvidenceHref(item: ReadinessEvidenceItem): string | undefined 
 function ReleaseLoading({ family, heading }: { family: 'release-readiness' | 'release-evidence'; heading: string }) {
   const isEvidence = family === 'release-evidence';
   return (
-    <ProductPage family={family} heading={heading}>
+    <ProductPage family={family} ariaLabel={heading}>
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
       {isEvidence ? (
         <ReleaseEvidenceLayout
           summary={
@@ -410,7 +437,8 @@ function ReleaseLoading({ family, heading }: { family: 'release-readiness' | 're
 function ReleaseUnavailable({ family, heading }: { family: 'release-readiness' | 'release-evidence'; heading: string }) {
   const isEvidence = family === 'release-evidence';
   return (
-    <ProductPage family={family} heading={heading}>
+    <ProductPage family={family} ariaLabel={heading}>
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
       {isEvidence ? (
         <ReleaseEvidenceLayout
           summary={

@@ -36,22 +36,16 @@ interface DevelopmentPlanItemProjection {
 
 export type DevelopmentPlanColumnKey =
   | 'planItem'
-  | 'role'
-  | 'driver'
-  | 'reviewer'
-  | 'risk'
-  | 'dependencyHints'
-  | 'affectedSurface'
-  | 'boundary'
-  | 'spec'
-  | 'executionPlan'
-  | 'execution'
-  | 'review'
-  | 'qa'
-  | 'releaseImpact'
+  | 'typedRefs'
   | 'currentGate'
   | 'gateProgress'
-  | 'qaReviewSummary'
+  | 'risk'
+  | 'driver'
+  | 'role'
+  | 'reviewer'
+  | 'affectedSurfaces'
+  | 'dependencies'
+  | 'releaseImpact'
   | 'nextAction';
 
 export type DevelopmentPlanColumnBreakpoint = 'desktop' | 'tablet' | 'mobile';
@@ -62,36 +56,107 @@ export interface DevelopmentPlanColumnDefinition {
   priority: number;
 }
 
+export interface DevelopmentPlanWorkspaceMetric {
+  label: string;
+  value: string;
+  detail?: string;
+}
+
+export interface DevelopmentPlanWorkspacePlanItemSummary {
+  id: string;
+  title: string;
+  currentGate: string;
+  blocker: string;
+  nextAction: string;
+  typedSourceContext: string[];
+  artifacts: Array<{ label: string; href: string }>;
+  evidenceLinks: Array<{ label: string; href: string }>;
+  gateProgress: ViewModelGate[];
+  risk: string;
+  driver: string;
+  responsibleRole: string;
+  reviewer: string;
+  affectedSurfaces: string;
+  dependencies: string;
+  releaseImpact: string;
+  summary: string;
+}
+
+export interface DevelopmentPlanWorkspacePlanSummary {
+  id: string;
+  title: string;
+  status: string;
+  typedRefs: string[];
+  itemCount: number;
+  blockedCount: number;
+  gateDistribution: string;
+  actors: {
+    drivers: string[];
+    reviewers: string[];
+    responsibleRoles: string[];
+  };
+  risk: string;
+  updatedAt: string;
+  nextAction: string;
+  selectedPlanItem: DevelopmentPlanWorkspacePlanItemSummary;
+}
+
+export interface DevelopmentPlanWorkspaceViewModel {
+  summaryMetrics: DevelopmentPlanWorkspaceMetric[];
+  plans: DevelopmentPlanWorkspacePlanSummary[];
+  selectedPlan?: DevelopmentPlanWorkspacePlanSummary;
+}
+
 export const developmentPlanPlanningColumns: readonly DevelopmentPlanColumnDefinition[] = [
   { key: 'planItem', label: 'Plan Item', priority: 1 },
-  { key: 'role', label: 'Role', priority: 2 },
-  { key: 'driver', label: 'Driver', priority: 11 },
-  { key: 'reviewer', label: 'Reviewer', priority: 12 },
-  { key: 'risk', label: 'Risk', priority: 3 },
-  { key: 'dependencyHints', label: 'Dependency hints', priority: 13 },
-  { key: 'affectedSurface', label: 'Affected surface', priority: 14 },
-  { key: 'boundary', label: 'Boundary', priority: 4 },
-  { key: 'spec', label: 'Spec', priority: 5 },
-  { key: 'executionPlan', label: 'Execution Plan', priority: 6 },
-  { key: 'execution', label: 'Execution', priority: 7 },
-  { key: 'review', label: 'Review', priority: 8 },
-  { key: 'qa', label: 'QA', priority: 9 },
-  { key: 'releaseImpact', label: 'Release impact', priority: 10 },
-  { key: 'currentGate', label: 'Current gate', priority: 4 },
-  { key: 'gateProgress', label: 'Gate progress', priority: 5 },
-  { key: 'qaReviewSummary', label: 'QA / Review', priority: 8 },
-  { key: 'nextAction', label: 'Next action', priority: 1 },
+  { key: 'typedRefs', label: 'Typed refs', priority: 2 },
+  { key: 'currentGate', label: 'Current gate', priority: 3 },
+  { key: 'gateProgress', label: 'Gate progress', priority: 4 },
+  { key: 'risk', label: 'Risk', priority: 5 },
+  { key: 'driver', label: 'Driver', priority: 6 },
+  { key: 'role', label: 'Responsible role', priority: 7 },
+  { key: 'reviewer', label: 'Reviewer', priority: 8 },
+  { key: 'affectedSurfaces', label: 'Affected surfaces', priority: 9 },
+  { key: 'dependencies', label: 'Dependencies', priority: 10 },
+  { key: 'releaseImpact', label: 'Release impact', priority: 11 },
+  { key: 'nextAction', label: 'Next action', priority: 12 },
 ];
 
 export const developmentPlanColumnPriorityByBreakpoint: Record<DevelopmentPlanColumnBreakpoint, readonly DevelopmentPlanColumnKey[]> = {
-  desktop: ['planItem', 'role', 'risk', 'boundary', 'spec', 'executionPlan', 'execution', 'review', 'qa', 'releaseImpact', 'nextAction'],
-  tablet: ['planItem', 'role', 'risk', 'currentGate', 'gateProgress', 'execution', 'qaReviewSummary', 'nextAction'],
-  mobile: ['planItem', 'risk', 'currentGate', 'gateProgress', 'nextAction'],
+  desktop: ['planItem', 'typedRefs', 'currentGate', 'gateProgress', 'risk', 'driver', 'role', 'reviewer', 'affectedSurfaces', 'dependencies', 'releaseImpact', 'nextAction'],
+  tablet: ['planItem', 'typedRefs', 'currentGate', 'gateProgress', 'risk', 'driver', 'role', 'nextAction'],
+  mobile: ['planItem', 'currentGate', 'gateProgress', 'risk', 'nextAction'],
 };
+
+export function developmentPlanWorkspaceViewModel(
+  plans: readonly DevelopmentPlanProjection[],
+  selectedPlanId?: string,
+  selectedPlanItemId?: string,
+): DevelopmentPlanWorkspaceViewModel {
+  const normalizedPlans = plans.map((plan) => normalizePlan(plan, selectedPlanItemId));
+  const selectedPlan = normalizedPlans.find((plan) => plan.id === selectedPlanId) ?? normalizedPlans[0];
+  const totalPlans = normalizedPlans.length;
+  const activePlans = normalizedPlans.filter((plan) => plan.status === 'active').length;
+  const blockedItems = normalizedPlans.reduce((count, plan) => count + plan.blockedCount, 0);
+  const reviewAging = summarizeReviewAging(plans);
+  const executionInProgress = plans.reduce((count, plan) => count + (plan.items ?? []).filter((item) => isActiveExecutionState(item.execution_status)).length, 0);
+
+  return {
+    summaryMetrics: [
+      { label: 'Total plans', value: String(totalPlans) },
+      { label: 'Active plans', value: String(activePlans) },
+      { label: 'Blocked items', value: String(blockedItems) },
+      { label: 'Review aging', value: reviewAging },
+      { label: 'Execution in progress', value: String(executionInProgress) },
+    ],
+    plans: normalizedPlans,
+    ...(selectedPlan === undefined ? {} : { selectedPlan }),
+  };
+}
 
 export function developmentPlanViewModel(plan: DevelopmentPlanProjection): ProductPageViewModel {
   const itemCount = plan.items?.length ?? plan.item_count ?? 0;
-  const blockedCount = plan.blocked_count ?? (plan.items ?? []).filter((item) => gateText(item).includes('blocked')).length;
+  const blockedCount = plan.blocked_count ?? (plan.items ?? []).filter(isBlockedPlanItemProjection).length;
 
   return {
     objectLabel: plan.title ?? plan.id,
@@ -102,12 +167,12 @@ export function developmentPlanViewModel(plan: DevelopmentPlanProjection): Produ
     primaryActorOrRole: 'Product and technical owner',
     riskSignal: blockedCount === 0 ? 'No blocked item signal' : `${blockedCount} blocked item(s)`,
     gateProgress: [
-      { label: 'Source links', state: (plan.source_refs?.length ?? 0) === 0 ? 'unavailable' : 'linked' },
+      { label: 'Typed refs', state: (plan.source_refs?.length ?? 0) === 0 ? 'unavailable' : 'linked' },
       { label: 'Development Plan Items', state: itemCount === 0 ? 'missing' : 'available' },
     ],
     criticalEvidence: [
       {
-        label: 'Source context',
+        label: 'Typed refs',
         state: (plan.source_refs?.length ?? 0) === 0 ? 'unavailable' : 'available',
         compactText: sourceSummary(plan),
       },
@@ -179,19 +244,171 @@ function itemMetadata(item: DevelopmentPlanItemProjection): ViewModelMetadata[] 
   ];
 }
 
+function normalizePlan(plan: DevelopmentPlanProjection, selectedPlanItemId: string | undefined): DevelopmentPlanWorkspacePlanSummary {
+  const items = (plan.items ?? []).map((item) => normalizePlanItem(item, plan));
+  const blockedCount = plan.blocked_count ?? (plan.items ?? []).filter(isBlockedPlanItemProjection).length;
+  const selectedPlanItem = items.find((item) => item.id === selectedPlanItemId) ?? items[0] ?? emptyPlanItem(plan);
+  return {
+    id: plan.id,
+    title: plan.title ?? plan.id,
+    status: plan.status ?? 'Status unavailable',
+    typedRefs: typedRefsForPlan(plan),
+    itemCount: plan.item_count ?? items.length,
+    blockedCount,
+    gateDistribution: gateDistributionFor(items),
+    actors: {
+      drivers: uniqueValues(items.map((item) => item.driver).filter(nonEmpty)),
+      reviewers: uniqueValues(items.map((item) => item.reviewer).filter(nonEmpty)),
+      responsibleRoles: uniqueValues(items.map((item) => item.responsibleRole).filter(nonEmpty)),
+    },
+    risk: highestRisk(items),
+    updatedAt: plan.updated_at === undefined ? 'Timeline unavailable' : `Updated ${plan.updated_at}`,
+    nextAction: selectedPlanItem.nextAction,
+    selectedPlanItem,
+  };
+}
+
+function normalizePlanItem(item: DevelopmentPlanItemProjection, plan: DevelopmentPlanProjection): DevelopmentPlanWorkspacePlanItemSummary {
+  const currentGate = currentPlanItemGate(item);
+  const nextAction = nextGateAction(item);
+  const typedSourceContext = typedSourceContextForPlan(plan);
+  return {
+    id: item.id,
+    title: item.title ?? item.id,
+    currentGate: `${currentGate.label}: ${formatValue(currentGate.state)}`,
+    blocker: blockerLabel(item),
+    nextAction,
+    typedSourceContext,
+    artifacts: planItemArtifacts(plan, item),
+    evidenceLinks: planItemEvidenceLinks(plan, item),
+    gateProgress: itemGateProgress(item),
+    risk: riskLabel(item.risk),
+    driver: item.driver_actor_id ?? 'Unassigned',
+    responsibleRole: item.responsible_role ?? 'Unassigned',
+    reviewer: item.reviewer_actor_id ?? 'Unassigned',
+    affectedSurfaces: summarizeList(item.affected_surfaces),
+    dependencies: summarizeList(item.dependency_hints),
+    releaseImpact: formatValue(item.release_impact),
+    summary: item.summary ?? 'Development Plan Item summary unavailable',
+  };
+}
+
+function planItemArtifacts(plan: DevelopmentPlanProjection, item: DevelopmentPlanItemProjection): Array<{ label: string; href: string }> {
+  const base = `/development-plans/${encodeURIComponent(plan.id)}/items/${encodeURIComponent(item.id)}`;
+  return [
+    { label: 'Boundary', href: `${base}` },
+    { label: 'Spec', href: `${base}/spec` },
+    { label: 'Execution Plan', href: `${base}/execution-plan` },
+    { label: 'Execution', href: `${base}/execution` },
+    { label: 'Review', href: `${base}/review` },
+    { label: 'QA', href: `${base}/qa` },
+  ];
+}
+
+function planItemEvidenceLinks(plan: DevelopmentPlanProjection, item: DevelopmentPlanItemProjection): Array<{ label: string; href: string }> {
+  return [
+    { label: 'Context manifest', href: `/development-plans/${encodeURIComponent(plan.id)}` },
+    { label: 'Typed refs', href: sourceHref(plan.source_refs?.[0]) },
+    { label: 'Plan Item', href: `/development-plans/${encodeURIComponent(plan.id)}/items/${encodeURIComponent(item.id)}` },
+  ];
+}
+
+function typedRefsForPlan(plan: DevelopmentPlanProjection): string[] {
+  return plan.source_refs?.length ? plan.source_refs.map((ref) => ref.title ?? ref.id).filter(nonEmpty) : ['Typed refs unavailable'];
+}
+
+function typedSourceContextForPlan(plan: DevelopmentPlanProjection): string[] {
+  const refs = typedRefsForPlan(plan);
+  return refs.length > 0 ? refs : ['Typed refs unavailable'];
+}
+
+function gateDistributionFor(items: readonly DevelopmentPlanWorkspacePlanItemSummary[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const currentGate = item.currentGate.split(':')[0] ?? 'Unknown';
+    counts.set(currentGate, (counts.get(currentGate) ?? 0) + 1);
+  }
+  const gates = ['Boundary', 'Spec', 'Execution Plan', 'Execution', 'Review', 'QA handoff'];
+  return gates.map((gate) => `${gate} ${counts.get(gate) ?? 0}`).join(' · ');
+}
+
+function highestRisk(items: readonly DevelopmentPlanWorkspacePlanItemSummary[]): string {
+  const order = new Map([['Critical risk', 4], ['High risk', 3], ['Medium risk', 2], ['Low risk', 1]]);
+  const highest = items.reduce((value, item) => Math.max(value, order.get(item.risk) ?? 0), 0);
+  if (highest >= 4) return 'Critical risk';
+  if (highest === 3) return 'High risk';
+  if (highest === 2) return 'Medium risk';
+  if (highest === 1) return 'Low risk';
+  return 'Risk unavailable';
+}
+
+function summarizeReviewAging(plans: readonly DevelopmentPlanProjection[]): string {
+  const reviewQueueCount = plans.reduce((count, plan) => count + (plan.items ?? []).filter((item) => isInProgressGateState(item.review_status)).length, 0);
+  if (reviewQueueCount === 0) return '0 aging';
+  return `${reviewQueueCount} aging`;
+}
+
+function blockerLabel(item: DevelopmentPlanItemProjection): string {
+  if (item.boundary_status !== 'approved') return 'Boundary brainstorming pending';
+  if (item.spec_status !== 'approved') return 'Spec approval pending';
+  if (item.execution_plan_status !== 'approved') return 'Execution Plan approval pending';
+  if (item.execution_status !== 'completed') return 'Execution in progress';
+  if (item.review_status !== 'approved') return 'Code review pending';
+  if (item.qa_handoff_status !== 'approved' && item.qa_handoff_status !== 'accepted') return 'QA handoff pending';
+  return 'Ready';
+}
+
 function nextGateAction(item: DevelopmentPlanItemProjection): string {
   if (item.boundary_status !== 'approved') return 'Complete boundary brainstorming';
   if (item.spec_status !== 'approved') return 'Review Spec';
   if (item.execution_plan_status !== 'approved') return 'Review Execution Plan';
   if (item.execution_status !== 'completed') return 'Supervise execution';
   if (item.review_status !== 'approved') return 'Complete review';
-  if (item.qa_handoff_status !== 'approved') return 'Complete QA handoff';
+  if (item.qa_handoff_status !== 'approved' && item.qa_handoff_status !== 'accepted') return 'Complete QA handoff';
   return 'Prepare release';
+}
+
+function isBlockedPlanItemProjection(item: DevelopmentPlanItemProjection): boolean {
+  return [
+    item.boundary_status,
+    item.spec_status,
+    item.execution_plan_status,
+    item.execution_status,
+    item.review_status,
+    item.qa_handoff_status,
+  ].some(isBlockedGateState);
+}
+
+function isBlockedGateState(state: unknown): boolean {
+  if (typeof state !== 'string') return false;
+  return ['blocked', 'changes_requested', 'failed', 'interrupted'].includes(state);
+}
+
+function emptyPlanItem(plan: DevelopmentPlanProjection): DevelopmentPlanWorkspacePlanItemSummary {
+  return {
+    id: plan.id,
+    title: plan.title ?? plan.id,
+    currentGate: 'Release: Ready',
+    blocker: 'No Plan Items',
+    nextAction: 'Add Plan Item',
+    typedSourceContext: typedSourceContextForPlan(plan),
+    artifacts: [{ label: 'Plan', href: `/development-plans/${encodeURIComponent(plan.id)}` }],
+    evidenceLinks: [],
+    gateProgress: [],
+    risk: 'Risk unavailable',
+    driver: 'Unassigned',
+    responsibleRole: 'Unassigned',
+    reviewer: 'Unassigned',
+    affectedSurfaces: 'Unavailable',
+    dependencies: 'Unavailable',
+    releaseImpact: 'Unavailable',
+    summary: 'Development Plan Item summary unavailable',
+  };
 }
 
 function sourceSummary(plan: DevelopmentPlanProjection): string {
   if (plan.source_refs?.length) return plan.source_refs.map((ref) => ref.title ?? ref.id).join(', ');
-  return 'Source links unavailable';
+  return 'Typed refs unavailable';
 }
 
 function gateText(item: DevelopmentPlanItemProjection): string {
@@ -203,6 +420,16 @@ function isCompleteGateState(state: unknown): boolean {
   return ['accepted', 'approved', 'completed', 'complete', 'ready'].includes(state);
 }
 
+function isInProgressGateState(state: unknown): boolean {
+  if (typeof state !== 'string') return false;
+  return ['running', 'in_progress', 'in review', 'in_review', 'ready'].includes(state);
+}
+
+function isActiveExecutionState(state: unknown): boolean {
+  if (typeof state !== 'string') return false;
+  return ['running', 'in_progress', 'in review', 'in_review'].includes(state);
+}
+
 function riskLabel(risk: string | undefined): string {
   return risk === undefined ? 'Risk unavailable' : `${formatValue(risk)} risk`;
 }
@@ -211,6 +438,31 @@ function summarizeList(values: readonly string[] | undefined): string {
   return values === undefined || values.length === 0 ? 'Unavailable' : values.join(', ');
 }
 
-function formatValue(value: string): string {
+function formatValue(value: string | undefined): string {
+  if (value === undefined) return 'Unavailable';
   return value.replaceAll('_', ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function sourceHref(ref: ProductRef | undefined): string {
+  if (ref === undefined) return '/development-plans';
+  switch (ref.type) {
+    case 'requirement':
+      return `/requirements/${encodeURIComponent(ref.id ?? '')}`;
+    case 'initiative':
+      return `/initiatives/${encodeURIComponent(ref.id ?? '')}`;
+    case 'bug':
+      return `/bugs/${encodeURIComponent(ref.id ?? '')}`;
+    case 'tech_debt':
+      return `/tech-debt/${encodeURIComponent(ref.id ?? '')}`;
+    default:
+      return '/development-plans';
+  }
+}
+
+function uniqueValues(values: readonly string[]): string[] {
+  return [...new Set(values)].filter(nonEmpty);
+}
+
+function nonEmpty(value: string | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }

@@ -95,7 +95,11 @@ export type ExecutionPlanGenerationGateReason =
   | 'spec_not_approved'
   | 'approved_spec_revision_missing'
   | 'approved_spec_revision_not_loaded'
-  | 'spec_revision_not_approved_revision';
+  | 'spec_revision_not_approved_revision'
+  | 'qa_test_owner_missing'
+  | 'testability_note_missing'
+  | 'acceptance_criteria_missing'
+  | 'test_strategy_summary_missing';
 
 export function canGenerateSpecFromPlanItem(input: {
   item: DevelopmentPlanItem;
@@ -119,6 +123,7 @@ export function canGenerateSpecFromPlanItem(input: {
 }
 
 export function canGenerateExecutionPlanFromApprovedSpec(input: {
+  item?: Pick<DevelopmentPlanItem, 'risk' | 'release_impact' | 'affected_surfaces'>;
   spec: Spec;
   specRevision?: SpecRevision;
 }): GateResult<ExecutionPlanGenerationGateReason> {
@@ -134,5 +139,42 @@ export function canGenerateExecutionPlanFromApprovedSpec(input: {
   if (input.specRevision.id !== input.spec.approved_revision_id) {
     return { ok: false, reason: 'spec_revision_not_approved_revision' };
   }
+  if (requiresQaTestStrategy(input.item)) {
+    if (!hasText(input.specRevision.qa_owner_actor_id) && !hasText(input.specRevision.test_owner_actor_id)) {
+      return { ok: false, reason: 'qa_test_owner_missing' };
+    }
+    if (!hasText(input.specRevision.testability_note)) {
+      return { ok: false, reason: 'testability_note_missing' };
+    }
+    if (!hasListItems(input.specRevision.acceptance_criteria)) {
+      return { ok: false, reason: 'acceptance_criteria_missing' };
+    }
+    if (!hasText(input.specRevision.test_strategy_summary)) {
+      return { ok: false, reason: 'test_strategy_summary_missing' };
+    }
+  }
   return { ok: true };
+}
+
+export function requiresQaTestStrategy(
+  item: Pick<DevelopmentPlanItem, 'risk' | 'release_impact' | 'affected_surfaces'> | undefined,
+): boolean {
+  if (item === undefined) return false;
+  const risk = item.risk?.toLowerCase();
+  return (
+    risk === 'medium' ||
+    risk === 'high' ||
+    risk === 'critical' ||
+    item.release_impact === 'release_scoped' ||
+    item.release_impact === 'release_blocking' ||
+    item.affected_surfaces.length > 1
+  );
+}
+
+export function hasText(value: string | undefined): boolean {
+  return value !== undefined && value.trim().length > 0;
+}
+
+function hasListItems(values: readonly string[] | undefined): boolean {
+  return values !== undefined && values.some((value) => value.trim().length > 0);
 }

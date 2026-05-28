@@ -7,14 +7,14 @@ import { useProjectContext } from '../../shared/context/project-context';
 import { Section } from '../../shared/layout';
 import { createNarrativeDocument, ObjectCreateForm } from '../project-management/object-forms';
 import { ObjectDetailLayout } from '../project-management/object-detail-layout';
-import { ObjectList } from '../project-management/object-list';
+import { TypedSourceObjectList } from '../project-management/typed-source-object-list';
 
 export function BugsRoute() {
   const { projectId } = useProjectContext();
   const query = useBugsQuery({ project_id: projectId, limit: 100 });
 
   return (
-    <ObjectList
+    <TypedSourceObjectList
       createHref="/bugs/new"
       detailHref={(item) => `/bugs/${item.id}`}
       emptyMessage="No bugs match the current filters."
@@ -24,6 +24,7 @@ export function BugsRoute() {
       planningHref="/development-plans/new"
       subtitle="Bug triage, repair planning, verification, and regression follow-up."
       title="Bugs"
+      workspaceKind="bug"
     />
   );
 }
@@ -85,7 +86,7 @@ export function NewBugRoute() {
           title: firstLine(values.observed_behavior, 'New bug'),
           goal: values.expected_behavior ?? '',
           success_criteria: splitLines(values.verification_path),
-          priority: 'P0',
+          priority: 'critical',
           risk: values.severity ?? 'high',
           driver_actor_id: values.driver_actor_id ?? actorId,
           intake_context: {

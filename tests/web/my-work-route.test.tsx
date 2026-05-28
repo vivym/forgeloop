@@ -33,7 +33,7 @@ describe('My Work route', () => {
     expect(document.querySelector('[data-testid="next-action"]')).toBeNull();
     expect(document.querySelector('[data-testid="role-responsibility"]')).toBeNull();
     expect(document.querySelector('[data-testid="blocker-risk"]')).toBeNull();
-    expect((await screen.findAllByText(/Needs boundary approval/i))[0]).toBeTruthy();
+    expect((await screen.findAllByText(/Open Development Plan Item/i))[0]).toBeTruthy();
     expect(screen.getByText('Developer attention')).toBeTruthy();
     expect(screen.queryByText('No attention items.')).toBeNull();
     expect(within(screen.getByRole('region', { name: /Selected queue item/i })).getByText(/No shared safe bulk action/i)).toBeTruthy();

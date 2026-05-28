@@ -13,11 +13,10 @@ import {
 import { queryKeys } from '../../shared/api/query-keys';
 import type { ProductObjectRef, SpecRevision } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
-import { CodeReviewLayout, CompactMetadata, DocumentReviewLayout, GateFlowLayout, GateProgress, ProductPage, QaHandoffLayout, Section } from '../../shared/layout';
+import { CodeReviewLayout, CompactMetadata, DocumentReviewLayout, PlanItemGateWorkspace as SharedPlanItemGateWorkspace, ProductPage, QaHandoffLayout, Section } from '../../shared/layout';
 import { ForgeMarkdownEditor, InlineNotice, StatusPill } from '../../shared/ui';
 import { BrainstormingPanel } from '../brainstorming/brainstorming-panel';
 import { CodeReviewHandoffPanel, type CodeReviewHandoffProjection } from '../code-review/code-review-handoff-panel';
-import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import { QaHandoffPanel, type QaHandoffProjection } from '../qa/qa-handoff-panel';
 import {
   BoundarySummaryRevisionHistory,
@@ -85,17 +84,18 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
     <ItemRouteChrome
       {...(evidenceExecutionId === undefined ? {} : { evidenceExecutionId })}
       isError={query.isError}
+      isLoading={query.isLoading}
       isNotFound={itemWithRoutePlan === undefined && !query.isLoading}
       item={itemWithRoutePlan}
-      state={query.isLoading ? 'loading' : query.isError ? 'error' : itemWithRoutePlan === undefined ? 'empty' : itemSurfaceState(itemWithRoutePlan)}
     />
   );
 
   return (
     <ProductPage
       family={pageFamily}
-      heading={itemWithRoutePlan?.title ?? 'Development Plan Item'}
+      ariaLabel={itemWithRoutePlan?.title ?? 'Development Plan Item'}
     >
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{itemWithRoutePlan?.title ?? 'Development Plan Item'}</h1>
       {itemWithRoutePlan ? (
         <DevelopmentPlanItemFocusedLayout
           boundaryRevisions={boundaryRevisions}
@@ -110,7 +110,7 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
           session={session}
         />
       ) : (
-        <GateFlowLayout workspace={routeChrome()} />
+        <SharedPlanItemGateWorkspace workspace={routeChrome()} />
       )}
     </ProductPage>
   );
@@ -119,18 +119,18 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
 function ItemRouteChrome({
   evidenceExecutionId,
   isError,
+  isLoading,
   isNotFound,
   item,
-  state,
 }: {
   evidenceExecutionId?: string;
   isError: boolean;
+  isLoading: boolean;
   isNotFound: boolean;
   item: DevelopmentPlanItemProjection | undefined;
-  state: SurfaceState | undefined;
 }) {
   return (
-    <div className="grid gap-3" data-item-route-chrome="">
+    <div className="grid gap-2" data-item-route-chrome="">
       <div className="flex min-w-0 flex-wrap items-start gap-2">
         {item?.development_plan_ref ? (
           <Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-primary" to={`/development-plans/${item.development_plan_ref.id}`}>
@@ -139,7 +139,7 @@ function ItemRouteChrome({
         ) : null}
         {item ? <EvidenceSideContext compact item={item} {...(evidenceExecutionId === undefined ? {} : { executionId: evidenceExecutionId })} /> : null}
       </div>
-      <SurfaceStateIndicator label="Development Plan Item Detail" state={state} />
+      {isLoading ? <InlineNotice title="Loading Development Plan Item." tone="info" /> : null}
       {isError ? <InlineNotice title="Development Plan Item could not be loaded." tone="danger" /> : null}
       {isNotFound ? <InlineNotice title="Development Plan Item not found." tone="warning" /> : null}
     </div>
@@ -169,18 +169,41 @@ function DevelopmentPlanItemFocusedLayout({
   routeChrome: (evidenceExecutionId?: string) => ReactNode;
   session: BrainstormingSession | undefined;
 }) {
+  const gateRail = <PlanItemGateRail currentGateId={currentGateId} gates={gates} />;
+  const evidenceRail = (
+    <DecisionEvidenceRail
+      boundaryRevisions={boundaryRevisions}
+      currentGateId={currentGateId}
+      gates={gates}
+      item={item}
+      revisions={revisions}
+    />
+  );
+
   if (focus === 'spec' || focus === 'execution-plan') {
-    return <ItemDocumentReviewSurface developmentPlanId={developmentPlanId} focus={focus} item={item} itemId={itemId} routeChrome={routeChrome()} />;
+    return (
+      <SharedPlanItemGateWorkspace
+        evidence={evidenceRail}
+        gateRail={gateRail}
+        workspace={<ItemDocumentReviewSurface developmentPlanId={developmentPlanId} focus={focus} item={item} itemId={itemId} routeChrome={routeChrome()} />}
+      />
+    );
   }
 
   if (focus === 'review') {
     const handoff = codeReviewHandoffFor(item);
     const execution = executionSummaryFor(item, handoff?.execution_id);
     return (
-      <CodeReviewLayout
-        workspace={<div className="grid gap-3">{routeChrome(execution.id)}<CodeReviewHandoffPanel execution={execution} handoff={handoff} /></div>}
-        evidence={<EvidenceSideContext executionId={execution.id} item={item} />}
-        controls={<ReviewDecisionSummary status={handoff?.status ?? item.review_status} />}
+      <SharedPlanItemGateWorkspace
+        evidence={evidenceRail}
+        gateRail={gateRail}
+        workspace={
+          <CodeReviewLayout
+            workspace={<div className="grid gap-3">{routeChrome(execution.id)}<CodeReviewHandoffPanel execution={execution} handoff={handoff} /></div>}
+            evidence={<EvidenceSideContext executionId={execution.id} item={item} />}
+            controls={<ReviewDecisionSummary status={handoff?.status ?? item.review_status} />}
+          />
+        }
       />
     );
   }
@@ -191,22 +214,28 @@ function DevelopmentPlanItemFocusedLayout({
     const execution = executionSummaryFor(item, handoff?.execution_id ?? initialCodeReview?.execution_id);
     const codeReview = codeReviewHandoffFor(item, handoff?.execution_id ?? execution.id);
     return (
-      <QaHandoffLayout
-        workspace={<div className="grid gap-3">{routeChrome(execution.id)}<QaHandoffPanel codeReview={codeReview} execution={execution} handoff={handoff} /></div>}
-        evidence={<EvidenceSideContext executionId={execution.id} item={item} />}
-        controls={<ReviewDecisionSummary status={handoff?.status ?? item.qa_handoff_status} />}
+      <SharedPlanItemGateWorkspace
+        evidence={evidenceRail}
+        gateRail={gateRail}
+        workspace={
+          <QaHandoffLayout
+            workspace={<div className="grid gap-3">{routeChrome(execution.id)}<QaHandoffPanel codeReview={codeReview} execution={execution} handoff={handoff} /></div>}
+            evidence={<EvidenceSideContext executionId={execution.id} item={item} />}
+            controls={<ReviewDecisionSummary status={handoff?.status ?? item.qa_handoff_status} />}
+          />
+        }
       />
     );
   }
 
   return (
-    <GateFlowLayout
-      contextRail={<EvidenceSideContext item={item} />}
+    <SharedPlanItemGateWorkspace
+      evidence={evidenceRail}
+      gateRail={gateRail}
       workspace={
-        <div className="grid gap-4" data-workspace-content="">
+        <div className="grid gap-4" data-gate-workspace="" data-primary-work-surface="" data-workspace-content="">
           {routeChrome()}
-          <FirstViewportContext currentGateId={currentGateId} focus={focus} gates={gates} item={item} />
-          <GateRouteContextSummary currentGateId={currentGateId} gates={gates} item={item} />
+          <PlanItemIdentityRow currentGateId={currentGateId} gates={gates} item={item} />
           <ActiveGateBody
             developmentPlanId={developmentPlanId}
             focus={focus}
@@ -214,25 +243,14 @@ function DevelopmentPlanItemFocusedLayout({
             itemId={itemId}
             session={session}
           />
-          <SupportingGateBodies
-            developmentPlanId={developmentPlanId}
-            focus={focus}
-            item={item}
-            itemId={itemId}
-            session={session}
-          />
-          <PlanItemRevisionHistory revisions={revisions} />
-          <BoundarySummaryRevisionHistory revisions={boundaryRevisions} />
-          <Section title="Evidence timeline">
-            <p className="text-sm text-text-secondary">Evidence remains linked to the approved Spec, Execution Plan, execution, review, and QA gates.</p>
-          </Section>
+          <RevisionDrawer boundaryRevisions={boundaryRevisions} revisions={revisions} />
         </div>
       }
     />
   );
 }
 
-function GateRouteContextSummary({
+function PlanItemIdentityRow({
   currentGateId,
   gates,
   item,
@@ -241,18 +259,170 @@ function GateRouteContextSummary({
   gates: PlanItemGateModel[];
   item: DevelopmentPlanItemProjection;
 }) {
-  const completeCount = gates.filter((gate) => isCompleteStatus(gate.status)).length;
   return (
-    <Section title="Gate progress" variant="subtle">
+    <section className="rounded-card border border-border bg-surface p-3" data-testid="plan-item-identity-row">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-normal text-text-muted">Plan Item gate workspace</p>
+          <p className="mt-1 text-lg font-semibold text-text-primary">{item.title}</p>
+          <p className="mt-1 text-sm text-text-secondary">{item.summary ?? 'Governed Plan Item detail.'}</p>
+        </div>
+        <StatusPill tone="info">{gateLabelFor(gates, currentGateId)}</StatusPill>
+      </div>
       <CompactMetadata
         items={[
-          { label: 'Current gate', value: gateLabelFor(gates, currentGateId) },
-          { label: 'Gate progress', value: `${completeCount} of ${gates.length} gates complete` },
-          { label: 'Next action', value: item.next_action ?? 'Review gate state.' },
-          { label: 'Evidence side context', value: `${executionEvidenceRefs(item).length} execution evidence refs linked` },
+          { label: 'Plan Item Driver', value: item.driver_actor_id ?? 'Unassigned' },
+          { label: 'Responsible role', value: item.responsible_role ?? 'Unassigned' },
+          { label: 'Risk', value: item.risk ?? 'unscored' },
+          { label: 'Typed ref', value: sourceLabel(item) },
+          { label: 'Next action', value: item.next_action ?? 'Review gate state' },
         ]}
       />
-    </Section>
+    </section>
+  );
+}
+
+function PlanItemGateRail({
+  currentGateId,
+  gates,
+}: {
+  currentGateId: PlanItemGateModel['id'] | undefined;
+  gates: PlanItemGateModel[];
+}) {
+  return (
+    <nav aria-label="Plan Item gates" className="grid gap-2 rounded-card border border-border bg-surface p-3" data-testid="gate-rail">
+      {gates.map((gate) => (
+        gate.enabled ? (
+          <Link
+            aria-current={gate.id === currentGateId ? 'step' : undefined}
+            className="grid gap-1 rounded-md border border-border bg-background px-3 py-2 text-sm hover:bg-surface-muted"
+            key={gate.id}
+            to={gate.href}
+          >
+            <span className="font-semibold text-text-primary">{gate.label}</span>
+            <GateStatusText gate={gate} />
+          </Link>
+        ) : (
+          <div
+            aria-disabled="true"
+            className="grid gap-1 rounded-md border border-border bg-background px-3 py-2 text-sm opacity-60"
+            key={gate.id}
+          >
+            <span className="font-semibold text-text-primary">{gate.label}</span>
+            <GateStatusText gate={gate} />
+          </div>
+        )
+      ))}
+    </nav>
+  );
+}
+
+function GateStatusText({ gate }: { gate: PlanItemGateModel }) {
+  const text = gate.enabled ? statusLabel(gate.status) : gate.reason;
+  const activeRuntime = gate.id === 'execution' && (gate.status === 'running' || gate.status === 'interrupted');
+  return (
+    <span
+      className="text-xs text-text-secondary"
+      {...(activeRuntime ? { 'data-runtime-status': '', role: 'status' as const } : {})}
+    >
+      {text}
+    </span>
+  );
+}
+
+function DecisionEvidenceRail({
+  boundaryRevisions,
+  currentGateId,
+  gates,
+  item,
+  revisions,
+}: {
+  boundaryRevisions: BoundarySummaryRevision[];
+  currentGateId: PlanItemGateModel['id'] | undefined;
+  gates: PlanItemGateModel[];
+  item: DevelopmentPlanItemProjection;
+  revisions: DevelopmentPlanItemRevision[];
+}) {
+  return (
+    <aside className="grid gap-3" data-testid="decision-evidence-rail">
+      <Section title="Decision context" variant="subtle">
+        <p className="text-sm text-text-secondary">Decision: {gateLabelFor(gates, currentGateId)} owns the current approval path.</p>
+      </Section>
+      <Section title="Evidence context" variant="subtle">
+        <p className="text-sm text-text-secondary">Evidence: {executionEvidenceRefs(item).length} execution refs linked.</p>
+      </Section>
+      <Section title="Activity context" variant="subtle">
+        <p className="text-sm text-text-secondary">Activity: {revisions.length} item revisions and {boundaryRevisions.length} boundary revisions recorded.</p>
+      </Section>
+      <Section title="Release context" variant="subtle">
+        <ReleaseContextSummary item={item} />
+      </Section>
+    </aside>
+  );
+}
+
+function ReleaseContextSummary({ item }: { item: DevelopmentPlanItemProjection }) {
+  const releaseRefs = item.release_context?.release_refs ?? [];
+  const blockers = item.release_context?.readiness_blockers ?? [];
+  const evidenceRefs = item.release_context?.evidence_refs ?? [];
+  const qaEvidenceRequired = item.release_context?.qa_test_evidence_required === true;
+
+  return (
+    <div className="grid gap-2 text-sm text-text-secondary">
+      <p>Release impact: {item.release_impact ?? 'not recorded'}.</p>
+      {qaEvidenceRequired ? <StatusPill tone="warning">QA/test evidence required</StatusPill> : null}
+      {releaseRefs.length > 0 ? (
+        <div className="grid gap-1">
+          <p className="text-xs font-semibold uppercase tracking-normal text-text-muted">Owning Release</p>
+          {releaseRefs.map((release) => (
+            <Link className="font-semibold text-primary" key={release.id} to={release.href ?? `/releases/${release.id}`}>
+              {release.title ?? release.id}
+            </Link>
+          ))}
+        </div>
+      ) : (
+        <p>No owning Release linked yet.</p>
+      )}
+      {blockers.length > 0 ? (
+        <div className="grid gap-1">
+          <p className="text-xs font-semibold uppercase tracking-normal text-text-muted">Readiness blockers</p>
+          <ul className="grid gap-1">
+            {blockers.map((blocker, index) => (
+              <li key={`${blocker.code ?? 'blocker'}-${index}`}>{blocker.summary ?? blocker.code ?? 'Release blocker recorded.'}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p>No release readiness blockers recorded.</p>
+      )}
+      {evidenceRefs.length > 0 ? (
+        <div className="grid gap-1">
+          <p className="text-xs font-semibold uppercase tracking-normal text-text-muted">QA/test evidence</p>
+          <ul className="grid gap-1">
+            {evidenceRefs.map((evidence) => (
+              <li key={evidence.id}>{evidence.title ?? evidence.summary ?? evidence.id}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p>No release QA/test evidence linked yet.</p>
+      )}
+    </div>
+  );
+}
+
+function RevisionDrawer({
+  boundaryRevisions,
+  revisions,
+}: {
+  boundaryRevisions: BoundarySummaryRevision[];
+  revisions: DevelopmentPlanItemRevision[];
+}) {
+  return (
+    <div className="grid gap-3">
+      <PlanItemRevisionHistory revisions={revisions} />
+      <BoundarySummaryRevisionHistory revisions={boundaryRevisions} />
+    </div>
   );
 }
 
@@ -406,45 +576,6 @@ function ItemRevisionMarkdownEditor({
   );
 }
 
-function FirstViewportContext({
-  currentGateId,
-  focus,
-  gates,
-  item,
-}: {
-  currentGateId: PlanItemGateModel['id'] | undefined;
-  focus: DevelopmentPlanItemFocus;
-  gates: PlanItemGateModel[];
-  item: DevelopmentPlanItemProjection;
-}) {
-  return (
-    <div className="grid gap-3">
-      <p>{focusLabel(focus)}. {item.summary ?? 'Governed row detail.'}</p>
-      <CompactMetadata
-        items={[
-          { label: 'Source', value: sourceLabel(item) },
-          { label: 'Development Plan', value: planLabel(item) },
-          { label: 'Current gate', value: gateLabelFor(gates, currentGateId) },
-          { label: 'Priority summary', value: `${item.priority ?? 'unscored'} priority / ${item.risk ?? 'unscored'} risk` },
-          { label: 'Driver', value: item.driver_actor_id ?? 'Unassigned' },
-          { label: 'Responsible role', value: item.responsible_role ?? 'Unassigned' },
-        ]}
-      />
-      <div className="grid gap-2">
-        <h2 className="text-sm font-semibold text-text-primary">Gate progress</h2>
-        <GateProgress
-          {...(currentGateId === undefined ? {} : { currentGateId })}
-          gates={gates.map((gate) => ({
-            id: gate.id,
-            label: gate.label,
-            status: statusLabel(gate.status),
-          }))}
-        />
-      </div>
-    </div>
-  );
-}
-
 function ActiveGateBody({
   developmentPlanId,
   focus,
@@ -459,37 +590,11 @@ function ActiveGateBody({
   session: BrainstormingSession | undefined;
 }) {
   return (
-    <div data-active-gate-body="">
+    <div data-active-gate-body="" data-testid="active-gate-workspace">
+      <div data-testid="full-gate-body">
       {renderGateBody(focus === 'overview' ? 'overview' : focus, { developmentPlanId, item, itemId, session })}
+      </div>
     </div>
-  );
-}
-
-function SupportingGateBodies({
-  developmentPlanId,
-  focus,
-  item,
-  itemId,
-  session,
-}: {
-  developmentPlanId: string | undefined;
-  focus: DevelopmentPlanItemFocus;
-  item: DevelopmentPlanItemProjection;
-  itemId: string | undefined;
-  session: BrainstormingSession | undefined;
-}) {
-  if (focus !== 'overview') {
-    return <PlanItemGateSummary item={item} />;
-  }
-
-  return (
-    <>
-      {renderGateBody('brainstorming', { developmentPlanId, item, itemId, session })}
-      {renderGateBody('spec', { developmentPlanId, item, itemId, session })}
-      {renderGateBody('execution-plan', { developmentPlanId, item, itemId, session })}
-      {renderGateBody('execution', { developmentPlanId, item, itemId, session })}
-      {renderGateBody('review', { developmentPlanId, item, itemId, session })}
-    </>
   );
 }
 
@@ -595,9 +700,9 @@ function EvidenceSideContext({ compact = false, executionId, item }: { compact?:
 
 function DocumentReviewToolbar({ label, status }: { label: string; status: string | undefined }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
+    <div className="flex min-w-0 items-center gap-2 overflow-x-auto whitespace-nowrap text-sm text-text-secondary">
       <StatusPill tone="info">{statusLabel(status)}</StatusPill>
-      <span>{label} draft save is separate from submit and approve.</span>
+      <span className="shrink-0">{label} draft saves separately from review actions.</span>
     </div>
   );
 }
@@ -825,7 +930,7 @@ function pageFamilyForFocus(focus: DevelopmentPlanItemFocus) {
   if (focus === 'spec' || focus === 'execution-plan') return 'document-review';
   if (focus === 'review') return 'code-review';
   if (focus === 'qa') return 'qa-handoff';
-  return 'gate-flow';
+  return 'gate-workspace';
 }
 
 function currentGateIdFor(item: DevelopmentPlanItemProjection, focus: DevelopmentPlanItemFocus): PlanItemGateModel['id'] {
@@ -883,16 +988,6 @@ function brainstormingSessionFor(item: DevelopmentPlanItemProjection | undefined
   };
 }
 
-function itemSurfaceState(item: DevelopmentPlanItemProjection): 'blocked' | 'approved' | 'running' | 'resumable' | 'stale' | undefined {
-  const statusText = `${item.boundary_status ?? ''} ${item.spec_status ?? ''} ${item.execution_plan_status ?? ''} ${item.execution_status ?? ''}`;
-  if (statusText.includes('blocked')) return 'blocked';
-  if (statusText.includes('stale')) return 'stale';
-  if (statusText.includes('interrupted')) return 'resumable';
-  if (statusText.includes('running')) return 'running';
-  if (item.boundary_status === 'approved') return 'approved';
-  return undefined;
-}
-
 function normalizeItemPlanRef(
   item: DevelopmentPlanItemProjection | undefined,
   routeDevelopmentPlanId: string | undefined,
@@ -916,23 +1011,4 @@ function normalizeItemPlanRef(
     },
     href: itemHref({ ...item, development_plan_id: developmentPlanId }),
   };
-}
-
-function focusLabel(focus: DevelopmentPlanItemFocus): string {
-  switch (focus) {
-    case 'brainstorming':
-      return 'Boundary brainstorming';
-    case 'spec':
-      return 'Spec document';
-    case 'execution-plan':
-      return 'Execution Plan document';
-    case 'execution':
-      return 'Execution supervision';
-    case 'review':
-      return 'Code review handoff';
-    case 'qa':
-      return 'QA handoff';
-    default:
-      return 'Gate overview';
-  }
 }

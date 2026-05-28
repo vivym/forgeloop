@@ -3,7 +3,6 @@ import { productLaneIdSchema, type ProductLaneId } from '@forgeloop/contracts';
 import {
   productLaneQueryKeys,
   resolveLaneFilters,
-  workItemKindByLane,
   type ParsedProductLaneFilters,
   type ProductLaneQueryKey,
 } from '@forgeloop/db';
@@ -125,9 +124,6 @@ export function parseProductLaneQuery(laneId: ProductLaneId, raw: RawQuery): Par
   });
   if (resolved.conflicts.length > 0) {
     throw new BadRequestException({ message: 'Conflicting product lane filters.', conflicts: resolved.conflicts });
-  }
-  if (laneId in workItemKindByLane && resolved.unsupported_filters.includes('execution_owner_actor_id')) {
-    throw new BadRequestException('execution_owner_actor_id is not supported for this product lane.');
   }
   return resolved;
 }

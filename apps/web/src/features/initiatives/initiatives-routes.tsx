@@ -7,14 +7,14 @@ import { useProjectContext } from '../../shared/context/project-context';
 import { Section } from '../../shared/layout';
 import { createNarrativeDocument, ObjectCreateForm } from '../project-management/object-forms';
 import { ObjectDetailLayout } from '../project-management/object-detail-layout';
-import { ObjectList } from '../project-management/object-list';
+import { TypedSourceObjectList } from '../project-management/typed-source-object-list';
 
 export function InitiativesRoute() {
   const { projectId } = useProjectContext();
   const query = useInitiativesQuery({ project_id: projectId, limit: 100 });
 
   return (
-    <ObjectList
+    <TypedSourceObjectList
       createHref="/initiatives/new"
       detailHref={(item) => `/initiatives/${item.id}`}
       emptyMessage="No initiatives match the current filters."
@@ -24,6 +24,7 @@ export function InitiativesRoute() {
       planningHref="/development-plans/new"
       subtitle="Strategic work intake and breakdown readiness."
       title="Initiatives"
+      workspaceKind="initiative"
     />
   );
 }

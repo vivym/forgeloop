@@ -7,8 +7,10 @@ import {
   requiredScreenshotRoutes,
   retiredProductQueryStates,
   retiredProductRoutes,
+  visualViewports,
 } from '../../apps/web/src/features/product-surfaces/route-contract';
 import { productNavigationGroups } from '../../apps/web/src/shared/navigation/product-navigation';
+import { productWorkspacePreviewScenario } from './fixtures/product-data';
 import { duplicateProductRoutePaths, flattenProductRouteConfig } from './helpers/product-route-config';
 
 const expectedProductRoutes = [
@@ -75,43 +77,50 @@ const expectedRetiredSmokeRoutes = [
 
 const expectedScreenshotRoutes = expectedProductRoutes;
 
+const expectedVisualViewports = [
+  { width: 375, height: 812, label: '375x812' },
+  { width: 768, height: 1024, label: '768x1024' },
+  { width: 1280, height: 720, label: '1280x720' },
+  { width: 1440, height: 900, label: '1440x900' },
+] as const;
+
 const expectedConcreteScreenshotRoutes = [
   '/',
   '/cockpit',
   '/my-work',
   '/initiatives',
   '/initiatives/new',
-  '/initiatives/init-ai-native-rollout',
-  '/initiatives/init-ai-native-rollout/evidence',
+  '/initiatives/init-product-workspace-redesign',
+  '/initiatives/init-product-workspace-redesign/evidence',
   '/requirements',
   '/requirements/new',
-  '/requirements/req-plan-item-governance',
-  '/requirements/req-plan-item-governance/evidence',
+  '/requirements/req-product-workspace-clarity',
+  '/requirements/req-product-workspace-clarity/evidence',
   '/bugs',
   '/bugs/new',
-  '/bugs/bug-execution-review-context',
-  '/bugs/bug-execution-review-context/evidence',
+  '/bugs/bug-plan-item-action-eligibility',
+  '/bugs/bug-plan-item-action-eligibility/evidence',
   '/tech-debt',
   '/tech-debt/new',
-  '/tech-debt/td-retire-workspace-page-template',
-  '/tech-debt/td-retire-workspace-page-template/evidence',
+  '/tech-debt/td-retire-generic-product-page',
+  '/tech-debt/td-retire-generic-product-page/evidence',
   '/development-plans',
   '/development-plans/new',
-  '/development-plans/dp-product-architecture-visual-rebuild',
-  '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center',
-  '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-development-plan-table-inspector/brainstorming',
-  '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center/spec',
-  '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-requirements-database-view/execution-plan',
-  '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-demo-seed-visual-review/execution',
-  '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center/review',
-  '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-requirements-database-view/qa',
+  '/development-plans/dp-product-workspace-core-surface-redesign',
+  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility',
+  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-typed-source-boundary/brainstorming',
+  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/spec',
+  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/execution-plan',
+  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-product-workspace-preview-state/execution',
+  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/review',
+  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-qa-shift-left-strategy/qa',
   '/specs-plans',
   '/executions',
-  '/executions/exec-demo-seed-visual-review',
+  '/executions/exec-product-workspace-preview-active',
   '/board',
   '/releases',
-  '/releases/rel-product-architecture-preview',
-  '/releases/rel-product-architecture-preview/evidence',
+  '/releases/rel-product-workspace-preview',
+  '/releases/rel-product-workspace-preview/evidence',
   '/reports',
   '/reports/delivery',
   '/reports/quality',
@@ -120,6 +129,37 @@ const expectedConcreteScreenshotRoutes = [
 ];
 
 describe('product-grade route contract', () => {
+  it('seeds dense product workspace preview data for every route family', () => {
+    expect(productWorkspacePreviewScenario.requirements.map((item) => item.id)).toEqual([
+      'req-product-workspace-clarity',
+      'req-ai-native-delivery-flow',
+      'req-qa-shift-left',
+      'req-release-readiness',
+    ]);
+    expect(productWorkspacePreviewScenario.initiatives.map((item) => item.id)).toEqual([
+      'init-product-workspace-redesign',
+    ]);
+    expect(productWorkspacePreviewScenario.bugs.map((item) => item.id)).toEqual([
+      'bug-plan-item-action-eligibility',
+    ]);
+    expect(productWorkspacePreviewScenario.techDebt.map((item) => item.id)).toEqual([
+      'td-retire-generic-product-page',
+    ]);
+    expect(productWorkspacePreviewScenario.developmentPlans.map((plan) => plan.id)).toEqual([
+      'dp-product-workspace-core-surface-redesign',
+      'dp-release-risk-closure',
+    ]);
+    expect(productWorkspacePreviewScenario.developmentPlanItems.length).toBeGreaterThanOrEqual(8);
+    expect(productWorkspacePreviewScenario.executions.some((execution) => execution.status === 'running')).toBe(true);
+    expect(productWorkspacePreviewScenario.executions.some((execution) => execution.status === 'interrupted')).toBe(true);
+    expect(productWorkspacePreviewScenario.codeReviews.some((review) => review.status === 'changes_requested')).toBe(true);
+    expect(productWorkspacePreviewScenario.qaHandoffs.some((handoff) => handoff.status === 'pending')).toBe(true);
+    expect(productWorkspacePreviewScenario.qaHandoffs.some((handoff) => handoff.status === 'blocked')).toBe(true);
+    expect(productWorkspacePreviewScenario.requirements.some((requirement) => requirement.narrative_markdown.includes('!['))).toBe(true);
+    expect(productWorkspacePreviewScenario.releaseReadiness.ready).toBe(false);
+    expect(productWorkspacePreviewScenario.releaseReadiness.disabled_reasons.length).toBeGreaterThan(0);
+  });
+
   it('covers every required product route family exactly', () => {
     expect(canonicalProductRoutes.map((route) => route.path)).toEqual(expectedProductRoutes);
     expect(requiredScreenshotRoutes.map((route) => route.path)).toEqual(expectedScreenshotRoutes);
@@ -137,7 +177,9 @@ describe('product-grade route contract', () => {
   });
 
   it('requires screenshot fixtures for every route family', () => {
-    expect(requiredScreenshotRoutes.every((route) => route.viewports.join(',') === '1440,1024,768,375')).toBe(true);
+    expect(visualViewports).toEqual(expectedVisualViewports);
+    expect(requiredScreenshotRoutes.every((route) => route.viewports === visualViewports)).toBe(true);
+    expect(requiredScreenshotRoutes.every((route) => route.viewports.map((viewport) => viewport.label).join(',') === '375x812,768x1024,1280x720,1440x900')).toBe(true);
     expect(requiredScreenshotRoutes.every((route) => route.concretePath.length > 0)).toBe(true);
     expect(requiredScreenshotRoutes.map((route) => route.concretePath)).toEqual(expectedConcreteScreenshotRoutes);
   });

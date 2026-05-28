@@ -7,9 +7,18 @@ import { createForgeloopCommandApi } from '../../shared/api/commands';
 import { useDevelopmentPlansQuery } from '../../shared/api/hooks';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
-import { CompactMetadata, DocumentWorkspaceLayout, ProductPage, Section } from '../../shared/layout';
+import {
+  BugWorkspace,
+  CompactMetadata,
+  DocumentWorkspaceLayout,
+  InitiativeWorkspace,
+  ProductPage,
+  RequirementWorkspace,
+  Section,
+  TechDebtWorkspace,
+} from '../../shared/layout';
 import { Button, Dialog, DialogPanel, EvidenceAttachments, ForgeMarkdownEditor, InlineNotice, Select, SegmentedControl, StatusPill, Tabs, Textarea } from '../../shared/ui';
-import { stateFromStatus, SurfaceStateIndicator, type SurfaceState } from './surface-state';
+import { SurfaceStateIndicator } from './surface-state';
 
 export interface ProjectObjectDetail {
   id: string;
@@ -20,7 +29,9 @@ export interface ProjectObjectDetail {
   risk?: string | undefined;
   driver_actor_id?: string | undefined;
   narrative_markdown: string;
+  audit?: { created_at: string; updated_at: string; updated_by_actor_id?: string | undefined } | undefined;
   attachment_refs?: AttachmentRef[] | undefined;
+  evidence_refs?: ProductRelationshipRef[] | undefined;
   relationship_refs?: ProductRelationshipRef[] | undefined;
   release_refs?: Array<{ id: string; title?: string | undefined }> | undefined;
 }
@@ -97,13 +108,19 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   if (isLoading) {
     return (
-      <ProductPage family="source-document" heading={objectLabel}>
-        <DocumentWorkspaceLayout
-          document={
-            <Section aria-label="Source narrative document" title={`${objectLabel} source document`} variant="panel">
-              <SurfaceStateIndicator label={`${objectLabel} Source Object Workspace`} state="loading" />
-              <InlineNotice title={`${objectLabel} is loading.`} tone="info" />
-            </Section>
+      <ProductPage family="source-document" ariaLabel={objectLabel}>
+        <h1 className="mb-3 text-xl font-semibold text-text-primary">{objectLabel}</h1>
+        <TypedDetailShell
+          objectType={objectTypeForLabel(objectLabel)}
+          table={
+            <DocumentWorkspaceLayout
+              document={
+                <Section aria-label={`${objectLabel} narrative document`} title={`${objectLabel} document`} variant="panel">
+                  <SurfaceStateIndicator label={`${objectLabel} Workspace`} state="loading" />
+                  <InlineNotice title={`${objectLabel} is loading.`} tone="info" />
+                </Section>
+              }
+            />
           }
         />
       </ProductPage>
@@ -112,23 +129,32 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   if (error || detail === undefined) {
     return (
-      <ProductPage family="source-document" heading={objectLabel}>
-        <DocumentWorkspaceLayout
-          document={
-            <Section aria-label="Source narrative document" title={`${objectLabel} source document`} variant="panel">
-              <SurfaceStateIndicator label={`${objectLabel} Source Object Workspace`} state={error ? 'error' : 'empty'} />
-              <InlineNotice title={`${objectLabel} was not found.`} tone="warning" />
-            </Section>
+      <ProductPage family="source-document" ariaLabel={objectLabel}>
+        <h1 className="mb-3 text-xl font-semibold text-text-primary">{objectLabel}</h1>
+        <TypedDetailShell
+          objectType={objectTypeForLabel(objectLabel)}
+          table={
+            <DocumentWorkspaceLayout
+              document={
+                <Section aria-label={`${objectLabel} narrative document`} title={`${objectLabel} document`} variant="panel">
+                  <SurfaceStateIndicator label={`${objectLabel} Workspace`} state={error ? 'error' : 'empty'} />
+                  <InlineNotice title={`${objectLabel} was not found.`} tone="warning" />
+                </Section>
+              }
+            />
           }
         />
       </ProductPage>
     );
   }
 
-  const surfaceState = surfaceStateForDetail(detail);
   const sourceRef = sourceObjectRefFor(detail);
-  const evidenceCount = detail.attachment_refs?.length ?? 0;
-  const releaseLabel = detail.release_refs?.[0]?.title ?? detail.release_refs?.[0]?.id ?? 'Not release scoped';
+  const driverLabel = driverLabelFor(detail.ref.type);
+  const evidenceRefs = detail.evidence_refs ?? [];
+  const attachmentRefs = detail.attachment_refs ?? [];
+  const releaseRefs = detail.release_refs ?? [];
+  const evidenceCount = evidenceRefs.length;
+  const releaseLabel = formatReferenceSummary(releaseRefs, 'Not release scoped');
   const stateText = `${objectLabel} ${statusLabel(detail.status)}`;
   const nextActionTitle = developmentPlanItem ? 'Open item-scoped gate' : 'Create planning table';
   const nextActionDescription = developmentPlanItem
@@ -186,7 +212,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
               </Button>
             </DialogPanel>
           }
-          description="Create a table-first Development Plan linked to this source object."
+          description={`Create a table-first Development Plan linked to this ${objectLabel}.`}
           title="Create Development Plan"
         >
           <Button variant="primary">Create Development Plan</Button>
@@ -206,7 +232,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
             )
           }
         >
-          Generate Development Plan
+          Generate Development Plan Draft with AI
         </Button>
         <Dialog
           content={
@@ -231,7 +257,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
                         async () => {
                           await createForgeloopCommandApi().linkSourceObjectToDevelopmentPlan(sourceRef.type, sourceRef.id, selectedDevelopmentPlanId, {
                             actor_id: actorId,
-                            rationale: 'Linked from source object workspace.',
+                            rationale: `Linked from ${objectLabel} workspace.`,
                           });
                           const selectedPlan = availableDevelopmentPlans.find((plan) => plan.id === selectedDevelopmentPlanId);
                           setLinkedDevelopmentPlan({
@@ -249,7 +275,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
               </Button>
             </DialogPanel>
           }
-          description="Link this source object to an existing Development Plan."
+          description={`Link this ${objectLabel} to an existing Development Plan.`}
           open={isLinkPlanOpen}
           title="Link Existing Development Plan"
           onOpenChange={setIsLinkPlanOpen}
@@ -258,29 +284,6 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
             Link Existing Development Plan
           </Button>
         </Dialog>
-        <Button
-          disabled={activeDevelopmentPlan === undefined}
-          onClick={() =>
-            activeDevelopmentPlan === undefined
-              ? undefined
-              : void runAction(
-                  () =>
-                    createForgeloopCommandApi().createDevelopmentPlanItem(activeDevelopmentPlan.id, {
-                      title: `${detail.title} implementation boundary`,
-                      summary: 'Generated from source object workspace.',
-                      responsible_role: 'tech_lead',
-                      ...(detail.driver_actor_id === undefined ? {} : { driver_actor_id: detail.driver_actor_id }),
-                      risk: riskForCommand(detail.risk),
-                      affected_surfaces: [],
-                      dependency_hints: [],
-                      release_impact: 'release_scoped',
-                    }),
-                  'Development Plan row added for boundary brainstorming.',
-                )
-          }
-        >
-          Add Row To Existing Development Plan
-        </Button>
       </div>
       <label className="grid gap-1 text-sm font-semibold text-text-secondary">
         Regeneration feedback
@@ -309,102 +312,118 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
   return (
     <ProductPage
       family="source-document"
-      heading={objectLabel}
-      toolbar={
-        <SegmentedControl
-          ariaLabel="Role lens"
-          options={[
-            { label: 'Product', value: 'product' },
-            { label: 'Tech Lead', value: 'tech-lead' },
-            { label: 'Developer', value: 'developer' },
-            { label: 'QA', value: 'qa' },
-          ]}
-          value={roleLens}
-          onValueChange={setRoleLens}
-        />
-      }
+      ariaLabel={objectLabel}
     >
-      <DocumentWorkspaceLayout
-        document={
-        <Section
-          actions={<StatusPill tone="neutral">{roleLensLabel(roleLens)} lens</StatusPill>}
-          aria-label="Source narrative document"
-          description="Edit the durable source narrative here; downstream Spec and Execution Plan work starts from a Development Plan Item."
-          title={detail.title}
-          variant="panel"
-        >
-          <ForgeMarkdownEditor
-            allowedBlocks={allowedNarrativeBlocks}
-            attachments={detail.attachment_refs ?? []}
-            mode="edit"
-            objectRef={detail.ref}
-            onChange={setMarkdown}
-            onUploadAttachment={(file) =>
-              attachmentApi.uploadAttachment({
-                actorId,
-                file,
-                metadata: sourceNarrativeAttachmentMetadata(detail.ref, file),
-              })
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{objectLabel}</h1>
+      <TypedDetailShell
+        objectType={detail.ref.type}
+        table={
+          <DocumentWorkspaceLayout
+            document={
+              <Section
+                actions={
+                  <div className="flex flex-wrap items-center gap-2">
+                    <SegmentedControl
+                      ariaLabel="Role lens"
+                      options={[
+                        { label: 'Product', value: 'product' },
+                        { label: 'Tech Lead', value: 'tech-lead' },
+                        { label: 'Developer', value: 'developer' },
+                        { label: 'QA', value: 'qa' },
+                      ]}
+                      value={roleLens}
+                      onValueChange={setRoleLens}
+                    />
+                    <StatusPill tone="neutral">{roleLensLabel(roleLens)} lens</StatusPill>
+                  </div>
+                }
+                aria-label={`${objectLabel} narrative document`}
+                description="Edit the durable narrative here; downstream Spec and Execution Plan work starts from a Development Plan Item."
+                title={detail.title}
+                variant="panel"
+              >
+                <ForgeMarkdownEditor
+                  allowedBlocks={allowedNarrativeBlocks}
+                  attachments={detail.attachment_refs ?? []}
+                  mode="edit"
+                  objectRef={detail.ref}
+                  onChange={setMarkdown}
+                  onUploadAttachment={(file) =>
+                    attachmentApi.uploadAttachment({
+                      actorId,
+                      file,
+                      metadata: sourceNarrativeAttachmentMetadata(detail.ref, file),
+                    })
+                  }
+                  validationPolicy={{ validation_version: '2026-05-23' }}
+                  value={markdown}
+                  {...(onSaveNarrative === undefined ? {} : { onSave: onSaveNarrative })}
+                />
+              </Section>
             }
-            validationPolicy={{ validation_version: '2026-05-23' }}
-            value={markdown}
-            {...(onSaveNarrative === undefined ? {} : { onSave: onSaveNarrative })}
+            properties={
+              <div className="grid gap-4">
+                <Section aria-label={`${objectLabel} planning actions`} title={`${objectLabel} planning actions`} variant="subtle">
+                  {actionPanel}
+                </Section>
+                <Section aria-label={`${objectLabel} properties`} title={`${objectLabel} properties`} variant="subtle">
+                  <CompactMetadata
+                    items={[
+                      { label: 'Lifecycle', value: detail.status },
+                      { label: 'Priority', value: detail.priority ?? 'Unscored' },
+                      { label: 'Risk', value: detail.risk ?? 'Unscored' },
+                      { label: driverLabel, value: detail.driver_actor_id ?? 'Unavailable' },
+                      { label: 'Development Plan coverage', value: planningCoverage(detail, 'development_plan') },
+                      { label: 'Plan Item coverage', value: planningCoverage(detail, 'plan_item') },
+                      { label: 'Evidence refs', value: formatReferenceSummary(evidenceRefs, 'No evidence refs') },
+                      { label: 'Attachment refs', value: formatAttachmentSummary(attachmentRefs) },
+                      { label: 'Release refs', value: releaseLabel },
+                      { label: 'Created', value: detail.audit?.created_at ?? 'Unavailable' },
+                      { label: 'Updated', value: detail.audit?.updated_at ?? 'Unavailable' },
+                      { label: 'Updated by', value: detail.audit?.updated_by_actor_id ?? 'Unavailable' },
+                    ]}
+                  />
+                </Section>
+                <Section aria-label="Linked planning" title="Linked planning" variant="subtle">
+                  <div className="grid gap-2 text-sm">
+                    {activeDevelopmentPlan ? (
+                      <Link className="font-semibold text-primary hover:underline" to={relationshipHref(activeDevelopmentPlan)}>
+                        {activeDevelopmentPlan.title ?? 'Open linked Development Plan'}
+                      </Link>
+                    ) : (
+                      <p className="text-text-secondary">No Development Plan linked yet.</p>
+                    )}
+                    {developmentPlanItem ? (
+                      <Link className="font-semibold text-primary hover:underline" to={relationshipHref(developmentPlanItem)}>
+                        Open Development Plan Item In Governance Queue
+                      </Link>
+                    ) : null}
+                  </div>
+                </Section>
+              </div>
+            }
+            attachments={<EvidencePanel detail={detail} objectLabel={objectLabel} />}
           />
-        </Section>
         }
-        properties={
-        <div className="grid gap-4">
-          <Section aria-label="Source object actions" title="Source object actions" variant="subtle">
-            {actionPanel}
-          </Section>
-          <Section aria-label="Source metadata" title="Source metadata" variant="subtle">
-            <CompactMetadata
-              items={[
-                { label: 'Type', value: objectLabel },
-                { label: 'Lifecycle', value: detail.status },
-                { label: 'Risk', value: detail.risk ?? 'Unscored' },
-                { label: 'Driver', value: detail.driver_actor_id ?? 'Unassigned' },
-                { label: 'Release', value: releaseLabel },
-                { label: 'Evidence', value: `${evidenceCount} ${evidenceCount === 1 ? 'attachment' : 'attachments'}` },
-              ]}
-            />
-          </Section>
-          <Section aria-label="Linked planning" title="Linked planning" variant="subtle">
-            <div className="grid gap-2 text-sm">
-              {activeDevelopmentPlan ? (
-                <Link className="font-semibold text-primary hover:underline" to={relationshipHref(activeDevelopmentPlan)}>
-                  {activeDevelopmentPlan.title ?? 'Open linked Development Plan'}
-                </Link>
-              ) : (
-                <p className="text-text-secondary">No Development Plan linked yet.</p>
-              )}
-              {developmentPlanItem ? (
-                <Link className="font-semibold text-primary hover:underline" to={relationshipHref(developmentPlanItem)}>
-                  Open Development Plan Item In Governance Queue
-                </Link>
-              ) : null}
-            </div>
-          </Section>
-        </div>
-        }
-        attachments={<EvidencePanel detail={detail} />}
       />
       <Section title={`${detail.title} · ${statusLabel(detail.status)}`} variant="subtle">
         <div className="grid gap-2 text-sm text-text-secondary md:grid-cols-3">
           <p className="m-0">{stateText}</p>
-          <p className="m-0">{`${roleLensLabel(roleLens)} lens · ${detail.driver_actor_id ?? 'Unassigned driver'}`}</p>
+          <p className="m-0">{`${roleLensLabel(roleLens)} lens · ${driverLabel} ${detail.driver_actor_id ?? 'Unavailable'}`}</p>
           <p className="m-0">{`Risk ${detail.risk ?? 'unscored'} · Evidence ${evidenceCount} · Release ${releaseLabel}`}</p>
         </div>
       </Section>
       <Tabs
-        ariaLabel="Source object sections"
+        ariaLabel={`${objectLabel} sections`}
         items={[
           {
             label: 'Brief',
             value: 'brief',
             content: (
               <Section description="Summary context stays below the action-first workspace." title="Brief">
-                <SurfaceStateIndicator label={`${objectLabel} Source Object Workspace`} state={surfaceState} />
+                <p className="m-0 text-sm text-text-secondary">
+                  {`${objectLabel} narrative and planning context are visible in the workspace above.`}
+                </p>
               </Section>
             ),
           },
@@ -434,7 +453,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
           { label: 'Execution', value: 'execution', content: <GatePlaceholder label="Execution" /> },
           { label: 'QA', value: 'qa', content: <GatePlaceholder label="QA" /> },
           { label: 'Release', value: 'release', content: <GatePlaceholder label="Release" /> },
-          { label: 'Evidence', value: 'evidence', content: <EvidencePanel detail={detail} /> },
+          { label: 'Evidence', value: 'evidence', content: <EvidencePanel detail={detail} objectLabel={objectLabel} /> },
         ]}
       />
       {renderSections?.(detail)}
@@ -446,7 +465,7 @@ function GatePlaceholder({ label }: { label: string }) {
   return (
     <Section title={label}>
       <InlineNotice
-        description="Choose a Development Plan Item to operate this gate. Source objects do not generate downstream artifacts directly."
+        description="Choose a Development Plan Item to operate this gate. Typed source workspaces do not generate downstream artifacts directly."
         title="Item-scoped gate"
         tone="neutral"
       />
@@ -474,16 +493,37 @@ function evidenceCategoryForFile(file: File): AttachmentUploadMetadata['evidence
 
 function readableAttachmentLabel(filename: string): string {
   const trimmed = filename.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim();
-  return trimmed.length > 0 ? trimmed : 'Source narrative attachment';
+  return trimmed.length > 0 ? trimmed : 'Narrative attachment';
 }
 
-function EvidencePanel({ detail }: { detail: ProjectObjectDetail }) {
+function TypedDetailShell({
+  objectType,
+  table,
+}: {
+  objectType: EditableObjectRef['type'];
+  table: ReactNode;
+}) {
+  switch (objectType) {
+    case 'bug':
+      return <BugWorkspace table={table} />;
+    case 'initiative':
+      return <InitiativeWorkspace table={table} />;
+    case 'tech_debt':
+      return <TechDebtWorkspace table={table} />;
+    case 'requirement':
+      return <RequirementWorkspace table={table} />;
+    default:
+      return <RequirementWorkspace table={table} />;
+  }
+}
+
+function EvidencePanel({ detail, objectLabel }: { detail: ProjectObjectDetail; objectLabel: string }) {
   return (
-    <Section title="Evidence attachments">
+    <Section title={`${objectLabel} evidence`}>
       {detail.attachment_refs?.length ? (
         <EvidenceAttachments attachments={detail.attachment_refs} />
       ) : (
-        <p className="text-sm text-text-secondary">No evidence attachments linked.</p>
+        <p className="text-sm text-text-secondary">No evidence linked.</p>
       )}
     </Section>
   );
@@ -527,11 +567,6 @@ function statusLabel(status: string): string {
   return status.replaceAll('/', ' / ');
 }
 
-function surfaceStateForDetail(detail: ProjectObjectDetail): SurfaceState | undefined {
-  if ((detail.relationship_refs ?? []).length === 0) return 'empty';
-  return stateFromStatus(detail.status);
-}
-
 function sourceObjectRefFor(detail: ProjectObjectDetail) {
   if (
     detail.ref.type === 'initiative' ||
@@ -544,7 +579,52 @@ function sourceObjectRefFor(detail: ProjectObjectDetail) {
   return { type: 'requirement', id: detail.ref.id, title: detail.title } as const;
 }
 
-function riskForCommand(risk: string | undefined): 'low' | 'medium' | 'high' | 'critical' {
-  if (risk === 'low' || risk === 'medium' || risk === 'high' || risk === 'critical') return risk;
-  return 'medium';
+function driverLabelFor(type: EditableObjectRef['type']): string {
+  switch (type) {
+    case 'bug':
+      return 'Bug Driver';
+    case 'initiative':
+      return 'Initiative Driver';
+    case 'tech_debt':
+      return 'Tech Debt Driver';
+    case 'requirement':
+      return 'Requirement Driver';
+    default:
+      return 'Driver';
+  }
+}
+
+function objectTypeForLabel(label: string): EditableObjectRef['type'] {
+  switch (label) {
+    case 'Bug':
+      return 'bug';
+    case 'Initiative':
+      return 'initiative';
+    case 'Tech Debt':
+      return 'tech_debt';
+    default:
+      return 'requirement';
+  }
+}
+
+function planningCoverage(detail: ProjectObjectDetail, kind: 'development_plan' | 'plan_item'): string {
+  const coverage = (
+    detail as ProjectObjectDetail & {
+      planning_coverage?: { development_plan_count: number; plan_item_count: number; uncovered: boolean };
+    }
+  ).planning_coverage;
+  if (coverage === undefined) return 'Unavailable';
+  return kind === 'development_plan' ? `${coverage.development_plan_count} linked` : `${coverage.plan_item_count} governed`;
+}
+
+function formatReferenceSummary(refs: readonly { id: string; title?: string | undefined }[], emptyLabel: string): string {
+  if (refs.length === 0) return emptyLabel;
+  const labels = refs.map((ref) => ref.title ?? ref.id);
+  return labels.length === 1 ? labels[0] ?? emptyLabel : `${labels.length} refs: ${labels.join(', ')}`;
+}
+
+function formatAttachmentSummary(attachments: readonly AttachmentRef[]): string {
+  if (attachments.length === 0) return 'No attachment refs';
+  const labels = attachments.map((attachment) => attachment.caption ?? attachment.filename ?? attachment.id);
+  return labels.length === 1 ? labels[0] ?? '1 attachment ref' : `${labels.length} refs: ${labels.join(', ')}`;
 }

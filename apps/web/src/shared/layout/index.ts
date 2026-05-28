@@ -11,6 +11,19 @@ export { ObjectSummary, type ObjectSummaryProps } from './object-summary/object-
 export { PageHeader, type PageHeaderProps } from './page-header/page-header';
 export { PillGroup, type PillGroupProps } from './pill-group/pill-group';
 export {
+  BugWorkspace,
+  CockpitCommandCenter,
+  DevelopmentPlanWorkspace,
+  InitiativeWorkspace,
+  PlanItemGateWorkspace,
+  RequirementWorkspace,
+  TechDebtWorkspace,
+  type CockpitCommandCenterProps,
+  type DevelopmentPlanWorkspaceProps,
+  type PlanItemGateWorkspaceProps,
+  type TypedSourceWorkspaceProps,
+} from './product-workspace-shells';
+export {
   CockpitLayout,
   CodeReviewLayout,
   DatabaseViewLayout,
@@ -36,3 +49,23 @@ export { Section, type SectionProps } from './section/section';
 export { SidebarNav, type SidebarNavItem, type SidebarNavProps } from './sidebar-nav/sidebar-nav';
 export { SplitPane, type SplitPaneProps } from './split-pane/split-pane';
 export { Topbar, type TopbarProps } from './topbar/topbar';
+export {
+  DenseToolbar,
+  DocumentWorkspaceFrame,
+  EvidenceRail,
+  GateRail,
+  InspectorRail,
+  PropertyList,
+  StatusDot,
+  WorkspaceSplitPane,
+  type DenseToolbarProps,
+  type DocumentWorkspaceFrameProps,
+  type EvidenceRailProps,
+  type GateRailProps,
+  type InspectorRailProps,
+  type PropertyListItem,
+  type PropertyListProps,
+  type StatusDotProps,
+  type StatusDotTone,
+  type WorkspaceSplitPaneProps,
+} from './workspace-primitives';

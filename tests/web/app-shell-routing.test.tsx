@@ -102,7 +102,7 @@ describe('React Router product shell', () => {
       'Unsafe Unknown Path',
       'Unsafe Delivery Report Link',
     ]) {
-      expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
+      expect(screen.queryByText(label)).toBeNull();
       expect(screen.queryByRole('link', { name: new RegExp(label, 'i') })).toBeNull();
     }
   });

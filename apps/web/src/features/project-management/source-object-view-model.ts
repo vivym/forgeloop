@@ -1,8 +1,21 @@
-import type { ProductPageViewModel, ViewModelEvidence, ViewModelGate, ViewModelMetadata } from '../product-surfaces/view-model-types';
-
 type SourceRef = { type?: string | undefined; id?: string | undefined; title?: string | undefined; development_plan_id?: string | undefined };
 
-interface SourceObjectProjection {
+interface SourcePlanningCoverage {
+  development_plan_count: number;
+  plan_item_count: number;
+  uncovered: boolean;
+}
+
+interface DownstreamGateSummary {
+  current_gate_counts: Record<string, number>;
+  blocker_count: number;
+}
+
+interface TypedSourceProjection {
+  affected_modules?: readonly string[] | undefined;
+  bug_refs?: readonly SourceRef[] | undefined;
+  business_outcome?: string | undefined;
+  child_refs?: readonly SourceRef[] | undefined;
   id: string;
   ref?: SourceRef | undefined;
   title?: string | undefined;
@@ -11,119 +24,282 @@ interface SourceObjectProjection {
   risk?: string | undefined;
   driver_actor_id?: string | undefined;
   updated_at?: string | undefined;
-  narrative_markdown?: string | undefined;
-  evidence_refs?: readonly SourceRef[] | undefined;
-  attachment_refs?: readonly SourceRef[] | undefined;
-  relationship_refs?: readonly SourceRef[] | undefined;
+  planning_coverage?: SourcePlanningCoverage | undefined;
+  downstream_gate_summary?: DownstreamGateSummary | undefined;
+  last_meaningful_update_at?: string | undefined;
+  next_action?: string | undefined;
   release_refs?: readonly SourceRef[] | undefined;
-  child_refs?: readonly SourceRef[] | undefined;
-  bug_refs?: readonly SourceRef[] | undefined;
+  relationship_refs?: readonly SourceRef[] | undefined;
+  linked_development_plans?: readonly SourceRef[] | undefined;
+  linked_plan_items?: readonly SourceRef[] | undefined;
+  narrative_markdown?: string | undefined;
+  expected_behavior?: string | undefined;
+  milestone_intent?: string | undefined;
+  observed_behavior?: string | undefined;
+  release_coverage?: string | undefined;
+  reproduction_steps?: readonly string[] | undefined;
+  risk_rationale?: string | undefined;
+  severity?: string | undefined;
+  validation_strategy?: string | undefined;
 }
 
-export function sourceObjectListViewModel(source: SourceObjectProjection): ProductPageViewModel {
-  const objectType = objectTypeLabel(source.ref?.type);
-  const relationshipsKnown = source.relationship_refs !== undefined;
-  const linkedPlan = source.relationship_refs?.find((ref) => ref.type === 'development_plan' || ref.type === 'development_plan_item');
-  const evidence = sourceEvidence(source);
+export type TypedSourceWorkspaceColumnField =
+  | 'affectedModules'
+  | 'businessOutcome'
+  | 'childBugs'
+  | 'childRequirements'
+  | 'childTechDebt'
+  | 'expectedBehavior'
+  | 'fixPlanningCoverage'
+  | 'milestoneIntent'
+  | 'observedBehavior'
+  | 'releaseCoverage'
+  | 'remediationPlanningCoverage'
+  | 'reproduction'
+  | 'riskRationale'
+  | 'severity'
+  | 'validationStrategy';
+
+export interface TypedSourceWorkspaceColumn {
+  field: TypedSourceWorkspaceColumnField;
+  header: string;
+  key: string;
+}
+
+export interface TypedSourceWorkspaceDefinition {
+  createLabel: string;
+  degradedSummary: string;
+  detailNoun: string;
+  driverLabel: string;
+  emptyTitle: string;
+  inspectorLabel: string;
+  tableAriaLabel: string;
+  typeSpecificColumns: TypedSourceWorkspaceColumn[];
+}
+
+export interface TypedSourceWorkspaceRow {
+  id: string;
+  title: string;
+  href: string;
+  status: string;
+  priority: string;
+  risk: string;
+  driver: string;
+  affectedModules?: string | undefined;
+  businessOutcome?: string | undefined;
+  childBugs?: string | undefined;
+  childRequirements?: string | undefined;
+  childTechDebt?: string | undefined;
+  developmentPlanCoverage: string;
+  expectedBehavior?: string | undefined;
+  fixPlanningCoverage?: string | undefined;
+  milestoneIntent?: string | undefined;
+  observedBehavior?: string | undefined;
+  planItemCoverage: string;
+  planningCoverageState: 'covered' | 'uncovered' | 'unavailable';
+  downstreamGateSummary: string;
+  nextAction: string;
+  lastMeaningfulUpdate: string;
+  previewSummary: string;
+  releaseCoverage?: string | undefined;
+  releaseLinkState: 'linked' | 'unlinked' | 'unavailable';
+  relatedObjects: string;
+  remediationPlanningCoverage?: string | undefined;
+  reproduction?: string | undefined;
+  riskRationale?: string | undefined;
+  releaseRefs: string;
+  roleFilterState: 'driver present' | 'driver missing';
+  searchText: string;
+  severity?: string | undefined;
+  validationStrategy?: string | undefined;
+}
+
+type TypedSourceAdapter = {
+  definition: TypedSourceWorkspaceDefinition;
+  row: (source: TypedSourceProjection, href: string) => TypedSourceWorkspaceRow;
+};
+
+export const requirementWorkspaceViewModel: TypedSourceAdapter = createTypedSourceAdapter({
+  createLabel: 'Create Requirement',
+  degradedSummary: 'Requirement data is incomplete.',
+  detailNoun: 'Requirement',
+  driverLabel: 'Requirement Driver',
+  emptyTitle: 'No requirements match the current filters.',
+  inspectorLabel: 'Requirement inspector',
+  tableAriaLabel: 'Requirements workspace',
+  typeSpecificColumns: [],
+});
+
+export const initiativeWorkspaceViewModel: TypedSourceAdapter = createTypedSourceAdapter({
+  createLabel: 'Create Initiative',
+  degradedSummary: 'Initiative data is incomplete.',
+  detailNoun: 'Initiative',
+  driverLabel: 'Initiative Driver',
+  emptyTitle: 'No initiatives match the current filters.',
+  inspectorLabel: 'Initiative inspector',
+  tableAriaLabel: 'Initiatives workspace',
+  typeSpecificColumns: [
+    { key: 'business-outcome', header: 'Business outcome', field: 'businessOutcome' },
+    { key: 'milestone-intent', header: 'Milestone intent', field: 'milestoneIntent' },
+    { key: 'child-requirements', header: 'Child Requirements', field: 'childRequirements' },
+    { key: 'child-bugs', header: 'Child Bugs', field: 'childBugs' },
+    { key: 'child-tech-debt', header: 'Child Tech Debt', field: 'childTechDebt' },
+    { key: 'release-coverage', header: 'Release coverage', field: 'releaseCoverage' },
+  ],
+});
+
+export const bugWorkspaceViewModel: TypedSourceAdapter = createTypedSourceAdapter({
+  createLabel: 'Create Bug',
+  degradedSummary: 'Bug data is incomplete.',
+  detailNoun: 'Bug',
+  driverLabel: 'Bug Driver',
+  emptyTitle: 'No bugs match the current filters.',
+  inspectorLabel: 'Bug inspector',
+  tableAriaLabel: 'Bugs workspace',
+  typeSpecificColumns: [
+    { key: 'observed-behavior', header: 'Observed behavior', field: 'observedBehavior' },
+    { key: 'expected-behavior', header: 'Expected behavior', field: 'expectedBehavior' },
+    { key: 'reproduction', header: 'Reproduction', field: 'reproduction' },
+    { key: 'severity', header: 'Severity', field: 'severity' },
+    { key: 'fix-planning-coverage', header: 'Fix planning coverage', field: 'fixPlanningCoverage' },
+  ],
+});
+
+export const techDebtWorkspaceViewModel: TypedSourceAdapter = createTypedSourceAdapter({
+  createLabel: 'Create Tech Debt',
+  degradedSummary: 'Tech Debt data is incomplete.',
+  detailNoun: 'Tech Debt',
+  driverLabel: 'Tech Debt Driver',
+  emptyTitle: 'No tech debt items match the current filters.',
+  inspectorLabel: 'Tech Debt inspector',
+  tableAriaLabel: 'Tech Debt workspace',
+  typeSpecificColumns: [
+    { key: 'affected-modules', header: 'Affected modules', field: 'affectedModules' },
+    { key: 'risk-rationale', header: 'Risk rationale', field: 'riskRationale' },
+    { key: 'validation-strategy', header: 'Validation strategy', field: 'validationStrategy' },
+    { key: 'remediation-planning-coverage', header: 'Remediation planning coverage', field: 'remediationPlanningCoverage' },
+  ],
+});
+
+function createTypedSourceAdapter(definition: TypedSourceWorkspaceDefinition): TypedSourceAdapter {
+  return {
+    definition,
+    row: (source, href) => typedSourceWorkspaceRow(source, href, definition),
+  };
+}
+
+function typedSourceWorkspaceRow(
+  source: TypedSourceProjection,
+  href: string,
+  definition: TypedSourceWorkspaceDefinition,
+): TypedSourceWorkspaceRow {
+  const title = source.title ?? source.ref?.title ?? source.id;
+  const developmentPlanCoverage = source.planning_coverage === undefined
+    ? 'Unavailable'
+    : `${source.planning_coverage.development_plan_count} linked`;
+  const planItemCoverage = source.planning_coverage === undefined
+    ? 'Unavailable'
+    : `${source.planning_coverage.plan_item_count} governed`;
+  const planningCoverageState = source.planning_coverage === undefined
+    ? 'unavailable'
+    : source.planning_coverage.uncovered
+      ? 'uncovered'
+      : 'covered';
+  const downstreamGateSummary = formatDownstreamGateSummary(source.downstream_gate_summary);
+  const nextAction = source.next_action ?? definition.degradedSummary;
+  const lastMeaningfulUpdate = source.last_meaningful_update_at ?? source.updated_at;
+  const releaseLinkState = source.release_refs === undefined ? 'unavailable' : source.release_refs.length > 0 ? 'linked' : 'unlinked';
+  const roleFilterState = source.driver_actor_id === undefined ? 'driver missing' : 'driver present';
+  const typeSpecificFields = typeSpecificRowFields(source);
 
   return {
-    objectLabel: source.title ?? source.id,
-    objectType,
-    currentState: source.status ?? 'State unavailable',
-    nextAction: sourceNextAction(relationshipsKnown, linkedPlan),
-    disabledReason: undefined,
-    primaryActorOrRole: source.driver_actor_id ?? 'Unassigned',
-    riskSignal: riskLabel(source.risk),
-    gateProgress: sourceGateProgress(source, relationshipsKnown, linkedPlan),
-    criticalEvidence: [evidence],
-    secondaryMetadata: sourceMetadata(source),
-    previewSummary: source.narrative_markdown ?? `${objectType} summary unavailable`,
-    timelineSummary: source.updated_at === undefined ? 'Timeline unavailable' : `Updated ${source.updated_at}`,
+    id: source.id,
+    title,
+    href,
+    status: source.status ?? 'Unavailable',
+    priority: source.priority ?? 'Unavailable',
+    risk: source.risk ?? 'Unavailable',
+    driver: source.driver_actor_id ?? 'Unavailable',
+    developmentPlanCoverage,
+    planItemCoverage,
+    planningCoverageState,
+    downstreamGateSummary,
+    nextAction,
+    lastMeaningfulUpdate: lastMeaningfulUpdate === undefined ? 'Unavailable' : `Updated ${lastMeaningfulUpdate}`,
+    previewSummary: source.narrative_markdown ?? nextAction,
+    relatedObjects: relatedObjectCount(source),
+    releaseLinkState,
+    releaseRefs: source.release_refs === undefined ? 'Unavailable' : String(source.release_refs.length),
+    roleFilterState,
+    ...typeSpecificFields,
+    searchText: [
+      title,
+      source.status,
+      source.priority,
+      source.risk,
+      source.driver_actor_id,
+      developmentPlanCoverage,
+      planItemCoverage,
+      downstreamGateSummary,
+      nextAction,
+      lastMeaningfulUpdate,
+      ...Object.values(typeSpecificFields),
+    ]
+      .filter((value): value is string => typeof value === 'string')
+      .join(' ')
+      .toLowerCase(),
   };
 }
 
-function sourceEvidence(source: SourceObjectProjection): ViewModelEvidence {
-  const evidenceCount = uniqueRefCount([...(source.evidence_refs ?? []), ...(source.attachment_refs ?? [])]);
-  if (evidenceCount === 0) {
-    return {
-      label: 'Source evidence',
-      state: 'unavailable',
-      compactText: 'Evidence readiness unavailable',
-      recoveryHref: evidenceHref(source),
-    };
-  }
+function formatDownstreamGateSummary(summary: DownstreamGateSummary | undefined): string {
+  if (summary === undefined) return 'Unavailable';
+  const activeGateCount = Object.values(summary.current_gate_counts).reduce((total, count) => total + count, 0);
+  const blockerText = summary.blocker_count === 1 ? '1 blocker' : `${summary.blocker_count} blockers`;
+  return `${activeGateCount} gates / ${blockerText}`;
+}
+
+function typeSpecificRowFields(source: TypedSourceProjection): Partial<TypedSourceWorkspaceRow> {
+  const planningSummary = source.planning_coverage === undefined
+    ? 'Unavailable'
+    : `${source.planning_coverage.development_plan_count} linked / ${source.planning_coverage.plan_item_count} governed`;
+
   return {
-    label: 'Source evidence',
-    state: 'available',
-    compactText: `${evidenceCount} evidence reference${evidenceCount === 1 ? '' : 's'}`,
-    href: evidenceHref(source),
+    affectedModules: source.affected_modules === undefined ? 'Unavailable' : formatList(source.affected_modules),
+    businessOutcome: source.business_outcome ?? 'Unavailable',
+    childBugs: String(countRefsByType(source.child_refs, 'bug') + countRefsByType(source.bug_refs, 'bug')),
+    childRequirements: String(countRefsByType(source.child_refs, 'requirement')),
+    childTechDebt: String(countRefsByType(source.child_refs, 'tech_debt')),
+    expectedBehavior: source.expected_behavior ?? 'Unavailable',
+    fixPlanningCoverage: planningSummary,
+    milestoneIntent: source.milestone_intent ?? 'Unavailable',
+    observedBehavior: source.observed_behavior ?? 'Unavailable',
+    releaseCoverage: source.release_coverage ?? (source.release_refs === undefined ? 'Unavailable' : `${source.release_refs.length} linked`),
+    remediationPlanningCoverage: planningSummary,
+    reproduction: source.reproduction_steps === undefined ? 'Unavailable' : formatList(source.reproduction_steps),
+    riskRationale: source.risk_rationale ?? 'Unavailable',
+    severity: source.severity ?? source.risk ?? 'Unavailable',
+    validationStrategy: source.validation_strategy ?? 'Unavailable',
   };
 }
 
-function uniqueRefCount(refs: readonly SourceRef[]): number {
-  return new Set(refs.map((ref) => `${ref.type ?? 'ref'}:${ref.id ?? ref.title ?? 'unknown'}`)).size;
-}
-
-function sourceNextAction(relationshipsKnown: boolean, linkedPlan: SourceRef | undefined): string {
-  if (!relationshipsKnown) return 'Open source object to inspect planning state';
-  return linkedPlan === undefined ? 'Create Development Plan from source object' : 'Review linked Development Plan';
-}
-
-function sourceGateProgress(source: SourceObjectProjection, relationshipsKnown: boolean, linkedPlan: SourceRef | undefined): ViewModelGate[] {
-  return [
-    { label: 'Source triage', state: source.status ?? 'unavailable', owner: source.driver_actor_id },
-    {
-      label: 'Development Plan',
-      state: !relationshipsKnown ? 'unknown' : linkedPlan === undefined ? 'missing' : 'linked',
-      href: developmentPlanHref(linkedPlan),
-    },
-  ];
-}
-
-function developmentPlanHref(linkedPlan: SourceRef | undefined): string | undefined {
-  if (linkedPlan?.type === 'development_plan' && linkedPlan.id !== undefined) return `/development-plans/${linkedPlan.id}`;
-  if (linkedPlan?.type === 'development_plan_item' && linkedPlan.development_plan_id !== undefined && linkedPlan.id !== undefined) {
-    return `/development-plans/${linkedPlan.development_plan_id}/items/${linkedPlan.id}`;
+function relatedObjectCount(source: TypedSourceProjection): string {
+  const relationshipRefs = source.relationship_refs ?? [];
+  const planRefs = source.linked_development_plans ?? [];
+  const itemRefs = source.linked_plan_items ?? [];
+  if (
+    source.relationship_refs === undefined ||
+    source.linked_development_plans === undefined ||
+    source.linked_plan_items === undefined
+  ) {
+    return 'Unavailable';
   }
-  return undefined;
+  return String(relationshipRefs.length + planRefs.length + itemRefs.length);
 }
 
-function sourceMetadata(source: SourceObjectProjection): ViewModelMetadata[] {
-  return [
-    { label: 'Priority', value: source.priority ?? 'Unavailable' },
-    { label: 'Related objects', value: relatedObjectCount(source) },
-    { label: 'Release refs', value: source.release_refs === undefined ? 'Unavailable' : String(source.release_refs.length) },
-  ];
+function countRefsByType(refs: readonly SourceRef[] | undefined, type: string): number {
+  return refs?.filter((ref) => ref.type === type).length ?? 0;
 }
 
-function relatedObjectCount(source: SourceObjectProjection): string {
-  if (source.relationship_refs === undefined) return 'Unavailable';
-  return String(source.relationship_refs.length + (source.child_refs?.length ?? 0) + (source.bug_refs?.length ?? 0));
-}
-
-function evidenceHref(source: SourceObjectProjection): string | undefined {
-  const type = source.ref?.type;
-  if (type === 'requirement') return `/requirements/${source.id}/evidence`;
-  if (type === 'initiative') return `/initiatives/${source.id}/evidence`;
-  if (type === 'bug') return `/bugs/${source.id}/evidence`;
-  if (type === 'tech_debt') return `/tech-debt/${source.id}/evidence`;
-  return undefined;
-}
-
-function objectTypeLabel(type: string | undefined): string {
-  const labels: Record<string, string> = {
-    requirement: 'Requirement',
-    bug: 'Bug',
-    tech_debt: 'Tech Debt',
-    initiative: 'Initiative',
-  };
-  return type === undefined ? 'Source Object' : labels[type] ?? formatValue(type);
-}
-
-function riskLabel(risk: string | undefined): string {
-  return risk === undefined ? 'Risk unavailable' : `${formatValue(risk)} risk`;
-}
-
-function formatValue(value: string): string {
-  return value.replaceAll('_', ' ').replaceAll('-', ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+function formatList(values: readonly string[]): string {
+  return values.length === 0 ? 'Unavailable' : values.join(', ');
 }

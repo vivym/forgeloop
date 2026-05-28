@@ -72,7 +72,7 @@ type ItemExecutionPackageContext = {
   specRevision: SpecRevision;
   executionPlan: ExecutionPlanDocument;
   executionPlanRevision: ExecutionPlanRevision;
-  execution: Execution;
+  ownerActorId: string;
 };
 
 export type PublicExecutionPackage = Omit<ExecutionPackage, 'work_item_id'> & { scope_ref: ObjectRef };
@@ -239,7 +239,7 @@ export class ExecutionPackageService {
 
   async createOrReuseItemExecutionPackage(
     repository: DeliveryRepository,
-    context: ItemExecutionPackageContext,
+    context: ItemExecutionPackageContext & { execution?: Execution | undefined },
   ): Promise<ExecutionPackage> {
     const existing = (await repository.listExecutionPackagesForWorkItem(context.workItem.id)).find(
       (executionPackage) =>
@@ -248,10 +248,18 @@ export class ExecutionPackageService {
         executionPackage.generation_key === 'item-execution',
     );
     if (existing !== undefined) {
-      if (existing.execution_id !== context.execution.id) {
+      if (context.execution !== undefined && existing.execution_id !== undefined && existing.execution_id !== context.execution.id) {
         throw new ConflictException('DevelopmentPlanItem already has an execution package for a different Execution');
       }
-      return existing;
+      let reusablePackage = existing.phase === 'draft' ? transitionExecutionPackage(existing, { type: 'mark_ready', at: this.now() }) : existing;
+      if (context.execution !== undefined && reusablePackage.execution_id === undefined) {
+        reusablePackage = { ...reusablePackage, execution_id: context.execution.id, updated_at: this.now() };
+      }
+      validateExecutionPackage(context.project, reusablePackage);
+      if (reusablePackage !== existing) {
+        await repository.saveExecutionPackage(reusablePackage);
+      }
+      return reusablePackage;
     }
 
     const repo = (await repository.listProjectRepos(context.project.id))[0];
@@ -260,7 +268,7 @@ export class ExecutionPackageService {
     }
     const reviewerActorId =
       context.item.reviewer_actor_id ?? context.executionPlan.approved_by_actor_id ?? context.spec.approved_by_actor_id ?? context.workItem.driver_actor_id;
-    const ownerActorId = context.item.driver_actor_id ?? context.workItem.driver_actor_id;
+    const ownerActorId = context.ownerActorId;
     const createdAt = this.now();
     const packagePolicy = this.packagePolicyFromExecutionPlanRevision(context.executionPlanRevision);
     const packagePolicyFields = await defaultPackagePolicyFields(repository, {
@@ -295,7 +303,7 @@ export class ExecutionPackageService {
         at: createdAt,
       }),
       development_plan_item_id: context.item.id,
-      execution_id: context.execution.id,
+      ...(context.execution === undefined ? {} : { execution_id: context.execution.id }),
       execution_plan_id: context.executionPlan.id,
       execution_plan_revision_id: context.executionPlanRevision.id,
       execution_package_set_id: `item-execution:${context.item.id}:${context.executionPlanRevision.id}`,
@@ -306,13 +314,13 @@ export class ExecutionPackageService {
       required_test_gates: [],
       ...packagePolicyFields,
     };
-    const executionPackage = transitionExecutionPackage(draftPackage, { type: 'mark_ready', at: createdAt });
-    validateExecutionPackage(context.project, executionPackage);
-    await repository.saveExecutionPackage(executionPackage);
+    const readyPackage = transitionExecutionPackage(draftPackage, { type: 'mark_ready', at: createdAt });
+    validateExecutionPackage(context.project, readyPackage);
+    await repository.saveExecutionPackage(readyPackage);
     await this.eventWithRepository(
       repository,
       'execution_package',
-      executionPackage.id,
+      readyPackage.id,
       'item_execution_package_created',
       ownerActorId,
       {
@@ -320,7 +328,7 @@ export class ExecutionPackageService {
         execution_plan_revision_id: context.executionPlanRevision.id,
       },
     );
-    return executionPackage;
+    return readyPackage;
   }
 
   private packagePolicyFromExecutionPlanRevision(revision: ExecutionPlanRevision): ExecutionPlanPackagePolicy {
@@ -572,6 +580,7 @@ export class ExecutionPackageService {
         await repository.getExecutionPlanRevision(executionPackage.execution_plan_revision_id),
         `ExecutionPlanRevision ${executionPackage.execution_plan_revision_id}`,
       );
+      this.packagePolicyFromExecutionPlanRevision(executionPlanRevision);
       if (executionPlanRevision.development_plan_item_id !== item.id) {
         stale(`ExecutionPackage ${executionPackage.id} execution plan revision no longer belongs to the item`);
       }

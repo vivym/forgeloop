@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 
-import { Badge, Button, DataTable, StatusPill, type DataTableColumn } from '../../shared/ui';
+import { Button, DataTable, StatusPill, type DataTableColumn } from '../../shared/ui';
 import {
   currentPlanItemGate,
   developmentPlanColumnPriorityByBreakpoint,
   developmentPlanPlanningColumns,
   gateProgressSummary,
-  qaReviewSummary,
   type DevelopmentPlanColumnBreakpoint,
   type DevelopmentPlanColumnKey,
 } from './development-plan-view-model';
@@ -55,7 +54,7 @@ export function DevelopmentPlanTable({
         ariaLabel="Development Plan Items"
         columns={columns}
         density="compact"
-        emptyMessage="No Development Plan rows yet."
+        emptyMessage="No Plan Items yet."
         getRowKey={(item) => item.id}
         rows={items}
         stickyHeader
@@ -66,6 +65,12 @@ export function DevelopmentPlanTable({
   );
 }
 
+export function itemHref(item: DevelopmentPlanItemRow, fallbackDevelopmentPlanId?: string): string {
+  if (item.href !== undefined) return item.href;
+  const developmentPlanId = item.development_plan_id ?? item.object_ref?.development_plan_id ?? item.development_plan_ref?.id ?? fallbackDevelopmentPlanId;
+  return `/development-plans/${encodeURIComponent(developmentPlanId ?? 'unknown-development-plan')}/items/${encodeURIComponent(item.id)}`;
+}
+
 export function formatValue(value: string | undefined): string {
   return value === undefined ? 'Not recorded' : value.replaceAll('_', ' ').replace(/\b\w/g, (match) => match.toUpperCase());
 }
@@ -74,7 +79,7 @@ export function statusTone(status: string | undefined): 'neutral' | 'success' | 
   if (status === 'approved' || status === 'completed' || status === 'accepted') return 'success';
   if (status === 'blocked' || status === 'failed' || status === 'changes_requested') return 'danger';
   if (status === 'running' || status === 'in_progress' || status === 'in_review') return 'info';
-  if (status === 'stale' || status === 'pending' || status === 'interrupted') return 'warning';
+  if (status === 'stale' || status === 'pending' || status === 'interrupted' || status === 'missing') return 'warning';
   return 'neutral';
 }
 
@@ -107,49 +112,32 @@ function cellFor(
   switch (key) {
     case 'planItem':
       return (
-        <Link className="font-semibold text-primary hover:underline" to={itemHref(item)}>
+        <Link className="font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" to={itemHref(item)}>
           {item.title}
         </Link>
       );
-    case 'role':
-      return formatValue(item.responsible_role);
-    case 'driver':
-      return item.driver_actor_id ?? 'Unassigned';
-    case 'reviewer':
-      return item.reviewer_actor_id ?? 'Unassigned';
-    case 'risk':
-      return <RiskBadge risk={item.risk} />;
-    case 'dependencyHints':
-      return summarizeList(item.dependency_hints);
-    case 'affectedSurface':
-      return summarizeList(item.affected_surfaces);
-    case 'boundary':
-      return <GateStatus status={item.boundary_status} />;
-    case 'spec':
-      return <GateStatus status={item.spec_status} />;
-    case 'executionPlan':
-      return <GateStatus status={item.execution_plan_status} />;
-    case 'execution':
-      return <GateStatus status={item.execution_status} />;
-    case 'review':
-      return <GateStatus status={item.review_status} />;
-    case 'qa':
-      return <GateStatus status={item.qa_handoff_status} />;
-    case 'releaseImpact':
-      return formatValue(item.release_impact);
+    case 'typedRefs':
+      return summarizeRefs(item.source_refs);
     case 'currentGate': {
       const gate = currentPlanItemGate(item);
-      return (
-        <span>
-          <span className="sr-only">Current gate </span>
-          {gate.label}: {formatValue(gate.state)}
-        </span>
-      );
+      return `${gate.label}: ${formatValue(gate.state)}`;
     }
     case 'gateProgress':
       return gateProgressSummary(item);
-    case 'qaReviewSummary':
-      return qaReviewSummary(item);
+    case 'risk':
+      return <StatusPill tone={item.risk === 'critical' || item.risk === 'high' ? 'warning' : 'neutral'}>{formatValue(item.risk)}</StatusPill>;
+    case 'driver':
+      return item.driver_actor_id ?? 'Unassigned';
+    case 'role':
+      return formatValue(item.responsible_role);
+    case 'reviewer':
+      return item.reviewer_actor_id ?? 'Unassigned';
+    case 'affectedSurfaces':
+      return summarizeList(item.affected_surfaces);
+    case 'dependencies':
+      return summarizeList(item.dependency_hints);
+    case 'releaseImpact':
+      return formatValue(item.release_impact);
     case 'nextAction':
       return (
         <div className="grid min-w-[12rem] gap-1">
@@ -157,11 +145,11 @@ function cellFor(
           <div className="flex flex-wrap items-center gap-2">
             {onSelectItem === undefined ? null : (
               <Button onClick={() => onSelectItem(item)} size="sm" type="button" variant="ghost">
-                Preview row
+                Preview Plan Item
               </Button>
             )}
-            <Link className="font-semibold text-primary hover:underline" to={itemHref(item)}>
-              Open item
+            <Link className="font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" to={itemHref(item)}>
+              Open Plan Item
             </Link>
           </div>
         </div>
@@ -169,16 +157,9 @@ function cellFor(
   }
 }
 
-function GateStatus({ status }: { status: string | undefined }) {
-  return <StatusPill tone={statusTone(status)}>{formatValue(status)}</StatusPill>;
-}
-
-function RiskBadge({ risk }: { risk: string | undefined }) {
-  return (
-    <Badge tone={risk === 'high' || risk === 'critical' ? 'warning' : 'neutral'}>
-      {formatValue(risk)}
-    </Badge>
-  );
+function summarizeRefs(refs: Array<{ type?: string; id?: string; title?: string }> | undefined): string {
+  if (refs === undefined || refs.length === 0) return 'Typed refs unavailable';
+  return refs.map((ref) => ref.title ?? ref.id).filter((value): value is string => value !== undefined).join(', ');
 }
 
 function summarizeList(values: readonly string[] | undefined): string {
@@ -209,10 +190,4 @@ function columnBreakpointForWidth(width: number): DevelopmentPlanColumnBreakpoin
   if (width >= 1440) return 'desktop';
   if (width >= 1024) return 'tablet';
   return 'mobile';
-}
-
-export function itemHref(item: DevelopmentPlanItemRow, fallbackDevelopmentPlanId?: string): string {
-  if (item.href !== undefined) return item.href;
-  const developmentPlanId = item.development_plan_id ?? item.object_ref?.development_plan_id ?? item.development_plan_ref?.id ?? fallbackDevelopmentPlanId;
-  return `/development-plans/${encodeURIComponent(developmentPlanId ?? 'unknown-development-plan')}/items/${encodeURIComponent(item.id)}`;
 }

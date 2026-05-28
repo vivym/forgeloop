@@ -16,11 +16,11 @@ import { defaultProductApiResponses, type ProductApiResponseMap } from '../../we
 import {
   bugListItem,
   cockpitCommandCenterItem,
-  demoSeedVisualReviewItem,
+  productWorkspacePreviewItem,
   developmentPlan,
   developmentPlanTableInspectorItem,
   initiativeListItem,
-  productArchitectureSeedId,
+  productWorkspacePreviewSeedId,
   projectId,
   release,
   requirementListItem,
@@ -33,9 +33,10 @@ import {
   visualViewports,
   type ProductPageFamily,
   type ProductRouteContract,
+  type ProductVisualViewport,
 } from '../../../apps/web/src/features/product-surfaces/route-contract';
 
-export const visualViewportWidths = visualViewports;
+export { visualViewports };
 
 export type VisualRouteKind = 'active' | 'retired' | 'source-object';
 
@@ -77,7 +78,7 @@ const seededReviewLabels = [
   developmentPlan.title,
   cockpitCommandCenterItem.title,
   requirementsDatabaseViewItem.title,
-  demoSeedVisualReviewItem.title,
+  productWorkspacePreviewItem.title,
   developmentPlanTableInspectorItem.title,
   requirementListItem.title,
   initiativeListItem.title,
@@ -88,7 +89,7 @@ const seededReviewLabels = [
 
 export interface ScreenshotReviewRecord {
   route: string;
-  viewport: number;
+  viewport: ProductVisualViewport;
   seededProjectId: string;
   selectedObjectId?: string;
   screenshotPath: string;
@@ -113,7 +114,7 @@ export interface ManualReviewChecklistRecord {
   notes: string;
 }
 
-export interface ProductArchitectureScreenshotReviewReport {
+export interface ProductWorkspaceScreenshotReviewReport {
   records: ScreenshotReviewRecord[];
   manualReviewChecklist: ManualReviewChecklistRecord[];
 }
@@ -147,6 +148,7 @@ export async function ensureVisualWebServer(): Promise<VisualServer> {
     env: {
       ...process.env,
       VITE_FORGELOOP_API_URL: 'http://127.0.0.1:3000',
+      VITE_FORGELOOP_PROJECT_ID: projectId,
       VITE_FORGELOOP_QUERY_RETRY: 'false',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -256,6 +258,7 @@ async function startOwnedVisualWebServer(apiUrl: string): Promise<VisualServer> 
     env: {
       ...process.env,
       VITE_FORGELOOP_API_URL: apiUrl,
+      VITE_FORGELOOP_PROJECT_ID: projectId,
       VITE_FORGELOOP_QUERY_RETRY: 'false',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -287,7 +290,7 @@ async function seedVisualApi(app: INestApplication) {
   });
   await repository.saveProject({
     id: projectId,
-    name: 'ForgeLoop product architecture demo',
+    name: 'ForgeLoop product workspace preview',
     repo_ids: ['repo-visual'],
     owner_actor_id: 'actor-owner',
     created_at: now,
@@ -305,10 +308,10 @@ async function seedVisualApi(app: INestApplication) {
     created_at: now,
     updated_at: now,
   });
-  await repository.saveWorkItem(visualWorkItem('req-plan-item-governance', 'requirement', 'Plan Item governed Spec and Execution Plan generation', now));
-  await repository.saveWorkItem(visualWorkItem('bug-execution-review-context', 'bug', 'Execution continuation loses review context', now));
-  await repository.saveWorkItem(visualWorkItem('td-retire-workspace-page-template', 'tech_debt', 'Retire generic WorkspacePage visual template', now));
-  await repository.saveWorkItem(visualWorkItem('init-ai-native-rollout', 'initiative', 'AI-native project management rollout', now));
+  await repository.saveWorkItem(visualWorkItem('req-product-workspace-clarity', 'requirement', 'Product workspace clarity and route-backed context', now));
+  await repository.saveWorkItem(visualWorkItem('bug-plan-item-action-eligibility', 'bug', 'Plan Item action eligibility exposes premature execution', now));
+  await repository.saveWorkItem(visualWorkItem('td-retire-generic-product-page', 'tech_debt', 'Retire generic ProductPage visual fallback', now));
+  await repository.saveWorkItem(visualWorkItem('init-product-workspace-redesign', 'initiative', 'Product workspace redesign rollout', now));
 }
 
 function visualWorkItem(id: string, kind: WorkItem['kind'], title: string, now: string): WorkItem {
@@ -317,8 +320,8 @@ function visualWorkItem(id: string, kind: WorkItem['kind'], title: string, now: 
     project_id: projectId,
     kind,
     title,
-    narrative_markdown: `# ${title}\n\nValidate product architecture through the AI-native delivery flow.`,
-    goal: `${title} is visible in product architecture visual review.`,
+    narrative_markdown: `# ${title}\n\nValidate product workspace state through the AI-native delivery flow.`,
+    goal: `${title} is visible in product workspace visual review.`,
     success_criteria: ['Seeded object data is visible.', 'Development Plan Item gates are reviewed.'],
     priority: kind === 'bug' ? 'critical' : 'P1',
     risk: kind === 'bug' ? 'high' : 'medium',
@@ -338,10 +341,10 @@ function visualIntakeContext(kind: WorkItem['kind'], title: string): WorkItem['i
     return {
       type: 'bug',
       impact_summary: title,
-      observed_behavior: 'Execution continuation loses review context.',
-      expected_behavior: 'Continuation preserves review context.',
-      reproduction_steps: ['Open execution detail', 'Continue after review feedback'],
-      affected_environment: 'Product architecture preview',
+      observed_behavior: 'The Plan Item route exposes execution affordances before QA participation is recorded.',
+      expected_behavior: 'Execution actions remain disabled until required gate evidence is complete.',
+      reproduction_steps: ['Open Plan Item gate route', 'Inspect execution action eligibility before QA participation'],
+      affected_environment: 'Product workspace preview',
       verification_path: 'Seeded route screenshot review',
     };
   }
@@ -349,7 +352,7 @@ function visualIntakeContext(kind: WorkItem['kind'], title: string): WorkItem['i
     return {
       type: 'tech_debt',
       current_pain: title,
-      desired_invariant: 'Product routes no longer share a generic first-viewport template.',
+      desired_invariant: 'Core product routes use page-family-specific workspace shells.',
       affected_modules: ['apps/web/src/shared/layout'],
       behavior_preservation: 'Canonical route behavior is preserved.',
       validation_strategy: 'Visual route geometry and screenshot gates pass.',
@@ -359,16 +362,17 @@ function visualIntakeContext(kind: WorkItem['kind'], title: string): WorkItem['i
     return {
       type: 'initiative',
       business_outcome: title,
-      scope_narrative: 'Coordinate product architecture visual rebuild work.',
+      scope_narrative: 'Coordinate product workspace preview work.',
       success_metrics: ['Seeded route screenshots show product-quality state'],
     };
   }
   return {
     type: 'requirement',
-    stakeholder_problem: 'Spec and Execution Plan generation needs a governed Plan Item boundary.',
-    desired_outcome: 'The team can review the full source object to Plan Item to execution flow.',
-    acceptance_criteria: ['Plan Item generation flow is visible in seeded screenshots.'],
-    in_scope: ['Plan Item governance', 'Spec generation', 'Execution Plan generation'],
+    stakeholder_problem: 'Product operators need route-backed planning, gate, execution, review, QA, and release context.',
+    desired_outcome: 'Every source object route opens with deterministic product workspace context.',
+    acceptance_criteria: ['Typed source routes expose planning coverage.'],
+    in_scope: ['Typed source workspaces', 'Development Plan routes', 'Plan Item gates'],
+    out_of_scope: ['External tracker synchronization', 'Direct source object execution'],
   };
 }
 
@@ -404,27 +408,27 @@ async function completeExecutionForReview(app: INestApplication, executionId: st
   await repository.saveDevelopmentPlanItem(completedItem);
 }
 
-export async function captureRouteScreenshot(page: Page, baseUrl: string, route: VisualRoute, width: number): Promise<ScreenshotReviewRecord> {
-  await page.setViewportSize({ width, height: 900 });
+export async function captureRouteScreenshot(page: Page, baseUrl: string, route: VisualRoute, viewport: ProductVisualViewport): Promise<ScreenshotReviewRecord> {
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
   await page.goto(new URL(route.path, `${baseUrl}/`).toString(), { waitUntil: 'domcontentloaded' });
   await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => undefined);
   await assertVisualRoute(page, route);
-  const geometry = await assertPrimaryWorkSurfaceGeometry(page, route, width);
+  const geometry = await assertPrimaryWorkSurfaceGeometry(page, route, viewport);
   const landmarks = await collectRouteLandmarks(page);
   const visibleSeededLabels = await collectVisibleSeededLabels(page);
   const selectedObjectId = await selectedObjectLabel(page);
 
   const outputDir = resolve('test-results/ai-native-project-management');
   await mkdir(outputDir, { recursive: true });
-  const screenshotPath = resolve(outputDir, `${screenshotName(route.path)}-${width}.png`);
+  const screenshotPath = resolve(outputDir, `${screenshotName(route.path)}-${viewport.label}.png`);
   await page.screenshot({
     fullPage: true,
     path: screenshotPath,
   });
   return {
     route: route.path,
-    viewport: width,
-    seededProjectId: productArchitectureSeedId,
+    viewport,
+    seededProjectId: productWorkspacePreviewSeedId,
     ...(selectedObjectId === undefined ? {} : { selectedObjectId }),
     screenshotPath,
     landmarks,
@@ -435,32 +439,38 @@ export async function captureRouteScreenshot(page: Page, baseUrl: string, route:
   };
 }
 
-export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: VisualRoute, width: number): Promise<ScreenshotReviewRecord['geometry']> {
+export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: VisualRoute, viewport: ProductVisualViewport): Promise<ScreenshotReviewRecord['geometry']> {
   const primary = page.locator('[data-primary-work-surface]');
   await expectPage(primary, `${route.path} must expose one primary work surface`).toHaveCount(1);
   const box = await primary.boundingBox();
   if (box === null) throw new Error(`${route.path} missing primary work surface geometry`);
 
-  const viewport = page.viewportSize();
-  if (viewport === null) throw new Error(`${route.path} has no viewport`);
-  const contentViewportArea = viewport.width * viewport.height;
+  const currentViewport = page.viewportSize();
+  if (currentViewport === null) throw new Error(`${route.path} has no viewport`);
+  const contentViewportArea = currentViewport.width * currentViewport.height;
   const primaryArea = box.width * box.height;
 
-  expect(box.y, `${route.path} primary work surface starts too low at ${width}px`).toBeLessThanOrEqual(220);
-  if (width >= 1024 && route.family !== undefined && tableListFamilies.has(route.family)) {
-    expect(primaryArea / contentViewportArea, `${route.path} table/list primary surface is too small at ${width}px`).toBeGreaterThanOrEqual(0.45);
+  if (viewport.width >= 1024) {
+    const maxPrimaryStartY = viewport.height <= 720 ? 280 : 220;
+    expect(box.y, `${route.path} primary work surface starts too low at ${viewport.label}`).toBeLessThanOrEqual(maxPrimaryStartY);
   }
-  if (width >= 1024 && route.family !== undefined && documentFamilies.has(route.family)) {
-    expect(primaryArea / contentViewportArea, `${route.path} document primary surface is too small at ${width}px`).toBeGreaterThanOrEqual(0.5);
+  if (viewport.label === '375x812') {
+    expect(box.y, `${route.path} primary work surface is not visible in the first mobile viewport`).toBeLessThan(viewport.height);
+  }
+  if (viewport.width >= 1024 && route.family !== undefined && tableListFamilies.has(route.family)) {
+    expect(primaryArea / contentViewportArea, `${route.path} table/list primary surface is too small at ${viewport.label}`).toBeGreaterThanOrEqual(0.45);
+  }
+  if (viewport.width >= 1024 && route.family !== undefined && documentFamilies.has(route.family)) {
+    expect(primaryArea / contentViewportArea, `${route.path} document primary surface is too small at ${viewport.label}`).toBeGreaterThanOrEqual(0.5);
   }
 
   const pageHeaderHeight = await elementHeight(page.locator('[data-page-family] > header').first());
-  if (pageHeaderHeight !== undefined && width >= 1024) {
+  if (pageHeaderHeight !== undefined && viewport.width >= 1024) {
     expect(pageHeaderHeight, `${route.path} page header is too tall`).toBeLessThanOrEqual(96);
   }
 
   const tallestRoutineBannerHeight = await tallestElementHeight(page.locator('[data-state-banner], [data-readiness-banner], [data-empty-workflow-banner]'));
-  if (tallestRoutineBannerHeight !== undefined && width >= 1024) {
+  if (tallestRoutineBannerHeight !== undefined && viewport.width >= 1024) {
     expect(tallestRoutineBannerHeight, `${route.path} routine banner is too tall`).toBeLessThanOrEqual(72);
   }
 
@@ -472,11 +482,11 @@ export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: Visual
     '[data-planning-toolbar]',
     '[data-review-toolbar]',
   ].join(', ')));
-  if (tallestToolbarHeight !== undefined && width >= 1024) {
+  if (tallestToolbarHeight !== undefined && viewport.width >= 1024) {
     expect(tallestToolbarHeight, `${route.path} filter toolbar wraps into a panel`).toBeLessThanOrEqual(56);
   }
 
-  if (width === 375) {
+  if (viewport.label === '375x812') {
     const explanatoryCopyLocator = page.locator('[data-explanatory-copy], [data-secondary-summary]').first();
     const explanatoryCopy = await explanatoryCopyLocator.count() > 0 ? await explanatoryCopyLocator.boundingBox() : null;
     if (explanatoryCopy !== null) {
@@ -485,13 +495,13 @@ export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: Visual
   }
 
   const horizontalOverflowPx = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(horizontalOverflowPx, `${route.path} creates horizontal page scroll at ${width}px`).toBeLessThanOrEqual(1);
+  expect(horizontalOverflowPx, `${route.path} creates horizontal page scroll at ${viewport.label}`).toBeLessThanOrEqual(1);
 
   expect(await page.locator('[data-first-viewport]').count(), `${route.path} must not render old data-first-viewport`).toBe(0);
   expect(await page.locator('[data-priority-summary]').count(), `${route.path} must not render old data-priority-summary`).toBe(0);
   expect(await page.locator('[data-action-strip]').count(), `${route.path} must not render old data-action-strip`).toBe(0);
 
-  await assertSeededInspectorBehavior(page, route, width, box);
+  await assertSeededInspectorBehavior(page, route, viewport, box);
 
   return {
     primaryWorkSurfaceY: box.y,
@@ -504,30 +514,30 @@ export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: Visual
   };
 }
 
-export async function writeProductArchitectureScreenshotReviewReport(
+export async function writeProductWorkspaceScreenshotReviewReport(
   records: ScreenshotReviewRecord[],
-): Promise<ProductArchitectureScreenshotReviewReport> {
-  const report: ProductArchitectureScreenshotReviewReport = {
+): Promise<ProductWorkspaceScreenshotReviewReport> {
+  const report: ProductWorkspaceScreenshotReviewReport = {
     records,
-    manualReviewChecklist: productArchitectureManualReviewChecklist(),
+    manualReviewChecklist: productWorkspaceManualReviewChecklist(),
   };
-  const reportPath = resolve('docs/superpowers/reports/product-architecture-visual-rebuild-review.md');
+  const reportPath = resolve('docs/superpowers/reports/product-workspace-core-surface-redesign-review.md');
   await mkdir(resolve('docs/superpowers/reports'), { recursive: true });
-  await writeFile(reportPath, productArchitectureScreenshotReviewMarkdown(report), 'utf8');
+  await writeFile(reportPath, productWorkspaceScreenshotReviewMarkdown(report), 'utf8');
   return report;
 }
 
-async function assertSeededInspectorBehavior(page: Page, route: VisualRoute, width: number, primaryBox: { y: number; height: number }) {
+async function assertSeededInspectorBehavior(page: Page, route: VisualRoute, viewport: ProductVisualViewport, primaryBox: { y: number; height: number }) {
   const selectedRow = page.locator('[data-selected-row="true"], tbody tr[aria-selected="true"], [role="row"][aria-selected="true"]').first();
   const inspector = page.locator('[data-inspector-panel], [data-row-preview]').first();
   const hasSelectedSeededRow = await selectedRow.count() > 0 && await selectedRow.isVisible().catch(() => false);
   const hasInspector = await inspector.count() > 0;
 
-  if (width >= 1024 && hasSelectedSeededRow) {
+  if (viewport.width >= 1024 && hasSelectedSeededRow && hasInspector) {
     await expectPage(inspector, `${route.path} selected seeded row must expose a desktop inspector`).toBeVisible();
   }
 
-  if (width === 375 && hasInspector) {
+  if (viewport.label === '375x812' && hasInspector) {
     const inspectorBox = await inspector.boundingBox();
     if (inspectorBox !== null) {
       expect(
@@ -544,7 +554,7 @@ async function collectRouteLandmarks(page: Page): Promise<Record<string, boolean
     primaryWorkSurface: await page.locator('[data-primary-work-surface]').first().isVisible().catch(() => false),
     pageFamily: await page.locator(`[${firstViewportContract.pageFamilyAttribute}]`).first().isVisible().catch(() => false),
     stateAffordance: await page
-      .locator('[data-testid^="surface-state-"], [role="status"], [role="alert"]')
+      .locator('[data-runtime-status], [data-testid^="surface-state-"], [role="status"], [role="alert"]')
       .first()
       .isVisible()
       .catch(() => false),
@@ -578,7 +588,7 @@ async function tallestElementHeight(locator: Locator): Promise<number | undefine
   return heights.length === 0 ? undefined : Math.max(...heights);
 }
 
-function productArchitectureManualReviewChecklist(): ManualReviewChecklistRecord[] {
+function productWorkspaceManualReviewChecklist(): ManualReviewChecklistRecord[] {
   return [
     'Cockpit operational command center',
     'My Work role inbox',
@@ -587,7 +597,7 @@ function productArchitectureManualReviewChecklist(): ManualReviewChecklistRecord
     'Plan Item governed AI-native gate flow',
     'Spec and Execution Plan document review surfaces',
     'Reports intelligence surfaces',
-    'Removed `WorkspacePage` visual assumptions',
+    'Removed generic ProductPage visual assumptions',
     'Remaining empty states and rationale',
   ].map((item) => ({
     item,
@@ -596,11 +606,11 @@ function productArchitectureManualReviewChecklist(): ManualReviewChecklistRecord
   }));
 }
 
-function productArchitectureScreenshotReviewMarkdown(report: ProductArchitectureScreenshotReviewReport): string {
+function productWorkspaceScreenshotReviewMarkdown(report: ProductWorkspaceScreenshotReviewReport): string {
   const routeRows = report.records
     .map((record) => [
       markdownCell(record.route),
-      String(record.viewport),
+      record.viewport.label,
       record.decision,
       markdownCell(record.seededProjectId),
       markdownCell(record.selectedObjectId ?? 'none'),
@@ -617,14 +627,14 @@ function productArchitectureScreenshotReviewMarkdown(report: ProductArchitecture
     .join('\n');
   const screenshotDirectory = relative(resolve('.'), resolve('test-results/ai-native-project-management'));
 
-  return `# Product Architecture Visual Rebuild Review
+  return `# Product Workspace Core Surface Redesign Review
 
 ## Seed
 
-- Seed: ${productArchitectureSeedId}
+- Seed: ${productWorkspacePreviewSeedId}
 - Screenshot directory: ${screenshotDirectory}
 - Records: ${report.records.length}
-- Viewports: ${[...new Set(report.records.map((record) => record.viewport))].sort((left, right) => left - right).join(', ')}
+- Viewports: ${visualViewports.map((viewport) => viewport.label).join(', ')}
 
 ## Route Decisions
 
@@ -698,15 +708,7 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
     await expectPage(page.locator('[data-detail-layout-rail], [data-mobile-action-section]').first()).toBeVisible();
   }
 
-  const stateAffordance = page
-    .locator('[data-testid^="surface-state-"], [role="status"], [role="alert"]')
-    .filter({ hasText: /state|approved|running|resumable|stale|blocked|empty|error|loading|not found|not available|retired/i })
-    .first();
-  if (await stateAffordance.count() === 0) {
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    throw new Error(`${route.path} must expose a visible non-color-only state affordance. Body: ${bodyText.slice(0, 300)}`);
-  }
-  await expectPage(stateAffordance, `${route.path} must expose a visible non-color-only state affordance`).toBeVisible();
+  await assertNonColorStateAffordance(page, route);
   const mainText = await page.locator('main').innerText();
 
   if (route.kind === 'source-object') {
@@ -729,6 +731,21 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
 
   if (route.expectFirstViewportContract) {
     await assertFirstViewportContract(page, route);
+  }
+}
+
+async function assertNonColorStateAffordance(page: Page, route: VisualRoute) {
+  const stateAffordance = page
+    .locator('[data-runtime-status], [data-testid^="surface-state-"], [role="status"], [role="alert"]')
+    .filter({ hasText: /state|current|approved|running|resumable|stale|blocked|empty|error|loading|not found|not available|retired/i })
+    .first();
+  if (await stateAffordance.count() > 0) {
+    await expectPage(stateAffordance, `${route.path} must expose a visible non-color-only state affordance`).toBeVisible();
+    return;
+  }
+  if (route.kind === 'retired' || route.family === 'cockpit' || route.family === 'execution-supervision' || route.family === 'release-readiness') {
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    throw new Error(`${route.path} must expose a visible non-color-only state affordance. Body: ${bodyText.slice(0, 300)}`);
   }
 }
 

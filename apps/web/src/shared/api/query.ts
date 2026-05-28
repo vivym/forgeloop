@@ -31,7 +31,19 @@ export interface ProjectQuery {
 
 export type ProductRegistryQuery = ListProductQuery;
 export type MyWorkQuery = Pick<ListProductQuery, 'project_id' | 'actor_id' | 'cursor' | 'limit'>;
-export type ProjectManagementListQuery = Pick<ListProductQuery, 'project_id' | 'status' | 'risk' | 'driver_actor_id' | 'cursor' | 'limit'>;
+export type ProjectManagementListQuery = Pick<
+  ListProductQuery,
+  | 'project_id'
+  | 'status'
+  | 'risk'
+  | 'driver_actor_id'
+  | 'execution_owner_actor_id'
+  | 'reviewer_actor_id'
+  | 'qa_owner_actor_id'
+  | 'release_owner_actor_id'
+  | 'cursor'
+  | 'limit'
+>;
 
 const queryString = (params: object = {}) => {
   const searchParams = new URLSearchParams();
@@ -50,6 +62,10 @@ const projectManagementListQueryString = (query: ProjectManagementListQuery) =>
     status: query.status,
     risk: query.risk,
     driver_actor_id: query.driver_actor_id,
+    execution_owner_actor_id: query.execution_owner_actor_id,
+    reviewer_actor_id: query.reviewer_actor_id,
+    qa_owner_actor_id: query.qa_owner_actor_id,
+    release_owner_actor_id: query.release_owner_actor_id,
     cursor: query.cursor,
     limit: query.limit,
   });
@@ -76,6 +92,7 @@ const dashboardResponseSchema = z
     project_id: z.string(),
     sections: z.array(z.record(z.string(), z.unknown())).default([]),
     next_actions: z.array(z.record(z.string(), z.unknown())).default([]),
+    runtime_signals: z.array(z.record(z.string(), z.unknown())).default([]),
     report_links: z.array(z.record(z.string(), z.unknown())).default([]),
     degraded_sources: z.array(z.string()).default([]),
   })

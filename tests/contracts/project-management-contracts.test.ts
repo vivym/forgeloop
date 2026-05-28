@@ -573,61 +573,291 @@ describe('project management typed object contracts', () => {
   });
 
   it('enforces typed refs on object-specific list read models', () => {
+    const now = '2026-05-27T08:00:00.000Z';
+    const planningCoverage = { development_plan_count: 1, plan_item_count: 3, uncovered: false };
+    const downstreamGateSummary = {
+      current_gate_counts: { boundary: 1, spec: 1, execution_plan: 1, execution: 0, code_review: 0, qa: 0, release: 0 },
+      blocker_count: 1,
+    };
+
     const listCases = [
       {
         schema: initiativeListItemSchema,
-        valid: { id: 'init-1', ref: { type: 'initiative', id: 'init-1' }, title: 'Initiative', status: 'active' },
+        valid: {
+          id: 'init-1',
+          ref: { type: 'initiative', id: 'init-1', title: 'Initiative' },
+          title: 'Initiative',
+          status: 'active',
+          priority: 'medium',
+          risk: 'medium',
+          driver_actor_id: 'actor-product',
+          planning_coverage: planningCoverage,
+          downstream_gate_summary: downstreamGateSummary,
+          last_meaningful_update_at: now,
+          next_action: 'Review milestone split',
+          release_refs: [{ type: 'release', id: 'rel-preview', title: 'Preview release' }],
+          business_outcome: 'Coordinate the launch outcome.',
+          updated_at: now,
+        },
         invalid: { id: 'init-1', ref: { type: 'task', id: 'task-1' }, title: 'Initiative', status: 'active' },
       },
       {
         schema: requirementListItemSchema,
-        valid: { id: 'req-1', ref: { type: 'requirement', id: 'req-1' }, title: 'Requirement', status: 'ready' },
+        valid: {
+          id: 'req-checkout-risk',
+          ref: { type: 'requirement', id: 'req-checkout-risk', title: 'Checkout risk controls' },
+          title: 'Checkout risk controls',
+          status: 'ready_for_planning',
+          priority: 'high',
+          risk: 'high',
+          driver_actor_id: 'actor-product',
+          planning_coverage: planningCoverage,
+          downstream_gate_summary: downstreamGateSummary,
+          last_meaningful_update_at: now,
+          next_action: 'Review Spec test strategy',
+          release_refs: [{ type: 'release', id: 'rel-preview', title: 'Preview release' }],
+          updated_at: now,
+        },
         invalid: { id: 'req-1', ref: { type: 'bug', id: 'bug-1' }, title: 'Requirement', status: 'ready' },
       },
       {
         schema: techDebtListItemSchema,
-        valid: { id: 'td-1', ref: { type: 'tech_debt', id: 'td-1' }, title: 'Tech debt', status: 'ready' },
+        valid: {
+          id: 'td-1',
+          ref: { type: 'tech_debt', id: 'td-1', title: 'Tech debt' },
+          title: 'Tech debt',
+          status: 'ready',
+          priority: 'medium',
+          risk: 'medium',
+          driver_actor_id: 'actor-tech',
+          planning_coverage: planningCoverage,
+          downstream_gate_summary: downstreamGateSummary,
+          last_meaningful_update_at: now,
+          next_action: 'Approve remediation plan',
+          release_refs: [{ type: 'release', id: 'rel-preview', title: 'Preview release' }],
+          affected_modules: ['apps/web'],
+          risk_rationale: 'Shared route shell blocks product-specific rendering.',
+          updated_at: now,
+        },
         invalid: { id: 'td-1', ref: { type: 'requirement', id: 'req-1' }, title: 'Tech debt', status: 'ready' },
       },
       {
         schema: bugListItemSchema,
-        valid: { id: 'bug-1', ref: { type: 'bug', id: 'bug-1' }, title: 'Bug', status: 'open' },
+        valid: {
+          id: 'bug-1',
+          ref: { type: 'bug', id: 'bug-1', title: 'Bug' },
+          title: 'Bug',
+          status: 'open',
+          priority: 'high',
+          risk: 'high',
+          driver_actor_id: 'actor-product',
+          planning_coverage: planningCoverage,
+          downstream_gate_summary: downstreamGateSummary,
+          last_meaningful_update_at: now,
+          next_action: 'Reproduce checkout failure',
+          release_refs: [{ type: 'release', id: 'rel-preview', title: 'Preview release' }],
+          severity: 'high',
+          affected_surfaces: ['checkout'],
+          updated_at: now,
+        },
         invalid: { id: 'bug-1', ref: { type: 'release', id: 'release-1' }, title: 'Bug', status: 'open' },
       },
     ] as const;
 
     for (const { schema, valid, invalid } of listCases) {
       expect(schema.parse(valid)).toMatchObject({ ref: valid.ref });
+      expect(() => schema.parse({ ...valid, planning_coverage: undefined })).toThrow();
+      expect(() => schema.parse({ ...valid, downstream_gate_summary: undefined })).toThrow();
+      expect(() => schema.parse({ ...valid, next_action: undefined })).toThrow();
       expect(() => schema.parse(invalid)).toThrow();
     }
   });
 
   it('enforces typed refs on object-specific detail read models', () => {
+    const now = '2026-05-27T08:00:00.000Z';
+    const later = '2026-05-27T08:30:00.000Z';
+    const planning_coverage = { development_plan_count: 1, plan_item_count: 3, uncovered: false };
+    const downstream_gate_summary = {
+      current_gate_counts: { boundary: 1, spec: 1, execution_plan: 1, execution: 0, code_review: 0, qa: 0, release: 0 },
+      blocker_count: 1,
+    };
+    const sharedDetailFields = {
+      priority: 'high',
+      risk: 'high',
+      driver_actor_id: 'actor-product',
+      narrative_markdown: 'Typed source narrative.',
+      planning_coverage,
+      downstream_gate_summary,
+      linked_development_plans: [{ type: 'development_plan', id: 'dp-core', title: 'Core redesign plan' }],
+      linked_plan_items: [{ type: 'development_plan_item', id: 'dpi-core', development_plan_id: 'dp-core', title: 'Requirement workspace' }],
+      evidence_refs: [{ type: 'attachment', id: 'att-1', title: 'Research screenshot' }],
+      attachment_refs: [
+        {
+          id: 'att-1',
+          owner_object_type: 'requirement',
+          owner_object_id: 'req-checkout-risk',
+          linked_object_refs: [{ type: 'requirement', id: 'req-checkout-risk', title: 'Checkout risk controls' }],
+          filename: 'scope.png',
+          content_type: 'image/png',
+          size_bytes: 128,
+          checksum_sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          uploaded_by_actor_id: 'actor-product',
+          created_at: now,
+          evidence_category: 'image',
+          visibility: 'object',
+          safety_status: 'passed',
+          reference_status: 'active',
+        },
+      ],
+      release_refs: [{ type: 'release', id: 'rel-preview', title: 'Preview release' }],
+      audit: { created_at: now, updated_at: later, updated_by_actor_id: 'actor-product' },
+      last_meaningful_update_at: later,
+      next_action: 'Open linked Plan Item',
+      updated_at: later,
+      relationship_refs: [],
+    };
+
     const detailCases = [
       {
         schema: initiativeDetailSchema,
-        valid: { id: 'init-1', ref: { type: 'initiative', id: 'init-1' }, title: 'Initiative', status: 'active' },
+        valid: {
+          ...sharedDetailFields,
+          id: 'init-1',
+          ref: { type: 'initiative', id: 'init-1', title: 'Initiative' },
+          title: 'Initiative',
+          status: 'active',
+          business_outcome: 'Coordinate the product architecture rollout.',
+          milestone_intent: 'Preview launch milestone.',
+          child_refs: [{ type: 'requirement', id: 'req-checkout-risk', title: 'Checkout risk controls' }],
+          release_coverage: 'Preview release contains the critical child source refs.',
+        },
         invalid: { id: 'init-1', ref: { type: 'task', id: 'task-1' }, title: 'Initiative', status: 'active' },
       },
       {
         schema: requirementDetailSchema,
-        valid: { id: 'req-1', ref: { type: 'requirement', id: 'req-1' }, title: 'Requirement', status: 'ready' },
+        valid: {
+          ...sharedDetailFields,
+          id: 'req-checkout-risk',
+          ref: { type: 'requirement', id: 'req-checkout-risk', title: 'Checkout risk controls' },
+          title: 'Checkout risk controls',
+          status: 'ready_for_planning',
+          stakeholder_problem: 'Product needs confidence that risky checkout changes are reviewed before release.',
+          desired_outcome: 'Every release-impacting checkout change carries approved Spec, plan, QA, and release evidence.',
+          acceptance_criteria_summary: 'Risky paths have approved test strategy and QA handoff before release readiness clears.',
+          scope_summary: {
+            in_scope: 'Checkout requirements, delivery plan links, QA evidence, and release blockers.',
+            out_of_scope: 'External Jira sync and retro learning loop.',
+          },
+        },
         invalid: { id: 'req-1', ref: { type: 'release', id: 'release-1' }, title: 'Requirement', status: 'ready' },
       },
       {
         schema: techDebtDetailSchema,
-        valid: { id: 'td-1', ref: { type: 'tech_debt', id: 'td-1' }, title: 'Tech debt', status: 'ready' },
+        valid: {
+          ...sharedDetailFields,
+          id: 'td-1',
+          ref: { type: 'tech_debt', id: 'td-1', title: 'Tech debt' },
+          title: 'Tech debt',
+          status: 'ready',
+          affected_modules: ['apps/web'],
+          risk_rationale: 'Generic shell usage blocks dense typed workspaces.',
+          validation_strategy: 'Run route contract and visual checks.',
+          remediation_intent: 'Replace generic shell usage with typed workspace shells.',
+        },
         invalid: { id: 'td-1', ref: { type: 'bug', id: 'bug-1' }, title: 'Tech debt', status: 'ready' },
       },
       {
         schema: bugDetailSchema,
-        valid: { id: 'bug-1', ref: { type: 'bug', id: 'bug-1' }, title: 'Bug', status: 'open' },
+        valid: {
+          ...sharedDetailFields,
+          id: 'bug-1',
+          ref: { type: 'bug', id: 'bug-1', title: 'Bug' },
+          title: 'Bug',
+          status: 'open',
+          observed_behavior: 'Checkout review context disappears.',
+          expected_behavior: 'Checkout review context persists.',
+          reproduction_steps: ['Open checkout execution', 'Continue after review feedback'],
+          severity: 'high',
+          affected_surfaces: ['checkout'],
+        },
         invalid: { id: 'bug-1', ref: { type: 'initiative', id: 'init-1' }, title: 'Bug', status: 'open' },
       },
     ] as const;
 
     for (const { schema, valid, invalid } of detailCases) {
       expect(schema.parse(valid)).toMatchObject({ ref: valid.ref });
+      expect(() => schema.parse({ ...valid, audit: undefined })).toThrow();
+      expect(() => schema.parse({ ...valid, linked_development_plans: undefined })).toThrow();
+      expect(() => schema.parse({ ...valid, next_action: undefined })).toThrow();
+      expect(() =>
+        schema.parse({
+          ...valid,
+          relationship_refs: [{ type: 'spec', id: 'spec-direct' }],
+        }),
+      ).toThrow();
+      expect(() =>
+        schema.parse({
+          ...valid,
+          relationship_refs: [{ type: 'execution_plan', id: 'plan-direct' }],
+        }),
+      ).toThrow();
+      expect(() =>
+        schema.parse({
+          ...valid,
+          evidence_refs: [{ type: 'spec', id: 'spec-direct-evidence' }],
+        }),
+      ).toThrow();
+      expect(() =>
+        schema.parse({
+          ...valid,
+          evidence_refs: [{ type: 'execution_plan', id: 'plan-direct-evidence' }],
+        }),
+      ).toThrow();
+      expect(() =>
+        schema.parse({
+          ...valid,
+          evidence_refs: [{ type: 'execution', id: 'exec-direct-evidence' }],
+        }),
+      ).toThrow();
+      expect(() =>
+        schema.parse({
+          ...valid,
+          evidence_refs: [{ type: 'release_evidence', id: 'evidence-scope-only', release_id: 'rel-preview' }],
+        }),
+      ).not.toThrow();
+      expect(() =>
+        schema.parse({
+          ...valid,
+          attachment_refs: [
+            {
+              ...sharedDetailFields.attachment_refs[0],
+              linked_object_refs: [{ type: 'spec', id: 'spec-direct-attachment' }],
+            },
+          ],
+        }),
+      ).toThrow();
+      expect(() =>
+        schema.parse({
+          ...valid,
+          attachment_refs: [
+            {
+              ...sharedDetailFields.attachment_refs[0],
+              linked_object_refs: [{ type: 'execution_plan', id: 'plan-direct-attachment' }],
+            },
+          ],
+        }),
+      ).toThrow();
+      expect(() =>
+        schema.parse({
+          ...valid,
+          attachment_refs: [
+            {
+              ...sharedDetailFields.attachment_refs[0],
+              linked_object_refs: [{ type: 'execution', id: 'exec-direct-attachment' }],
+            },
+          ],
+        }),
+      ).toThrow();
       expect(() => schema.parse(invalid)).toThrow();
     }
   });

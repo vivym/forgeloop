@@ -6,12 +6,39 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderRoute } from './router-test-utils';
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import { developmentPlan, developmentPlanItem, requirementListItem } from './fixtures/product-data';
+import { render, screen } from '@testing-library/react';
+import { InspectorRail, WorkspaceSplitPane } from '../../apps/web/src/shared/layout';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe('responsive layout contract', () => {
+  it('keeps workspace split pane single-column by default and responsive when requested', () => {
+    const { rerender } = render(
+      <WorkspaceSplitPane primary={<section>Primary</section>} secondary={<InspectorRail>Inspector</InspectorRail>} />,
+    );
+
+    expect(document.querySelector('[data-workspace-split-pane]')?.className).not.toContain('lg:grid-cols');
+    expect(screen.getByRole('complementary').textContent).toBe('Inspector');
+
+    rerender(
+      <WorkspaceSplitPane
+        minPrimary="wide"
+        primary={<section>Primary</section>}
+        secondary={<InspectorRail>Inspector</InspectorRail>}
+        secondaryWidth="wide"
+      />,
+    );
+
+    const splitPane = document.querySelector('[data-workspace-split-pane]');
+    const splitContent = document.querySelector('[data-workspace-split-content]');
+    expect(splitPane?.className).not.toContain('lg:grid-cols');
+    expect(splitContent?.className).toContain('lg:grid-cols');
+    expect(splitContent?.className).toContain('minmax(28rem,1fr)');
+    expect(splitContent?.className).toContain('24rem');
+  });
+
   it('renders the shell with stable responsive landmarks', async () => {
     const screen = await renderRoute('/my-work');
 
@@ -70,7 +97,7 @@ describe('responsive layout contract', () => {
       expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(developmentPlanItem.title);
     });
     expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(/Current gate|Gate progress/i);
-    expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(/Open item/i);
+    expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(/Open Plan Item/i);
     expect(document.querySelector('[data-table-scroll-container]')?.className).toMatch(/overflow-x-auto/);
     cleanup();
     vi.unstubAllGlobals();

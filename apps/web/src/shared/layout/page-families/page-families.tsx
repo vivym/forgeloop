@@ -110,7 +110,7 @@ export function DocumentWorkspaceLayout({
     <div className={cn('grid gap-4', hasPropertyRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
       <PrimarySurface className="lg:min-h-[80vh] xl:min-h-[90vh]" data-document-surface="">{document}</PrimarySurface>
       {hasPropertyRail ? (
-        <div className="grid content-start gap-3">
+        <div className="grid min-w-0 content-start gap-3">
           {hasProperties ? <div data-property-rail="">{properties}</div> : null}
           {hasAttachments ? <div data-attachment-strip="">{attachments}</div> : null}
         </div>
@@ -136,7 +136,7 @@ export function SourceEvidenceLayout({
     <div className={cn('grid gap-4', hasEvidenceRail ? 'xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)]' : undefined)}>
       <PrimarySurface data-evidence-summary="">{summary}</PrimarySurface>
       {hasEvidenceRail ? (
-        <section className="grid content-start gap-3">
+        <section className="grid min-w-0 content-start gap-3">
           {hasAttachments ? <div data-attachment-list="">{attachments}</div> : null}
           {hasRawDetails ? <div data-raw-evidence-details="">{rawDetails}</div> : null}
         </section>
@@ -191,7 +191,7 @@ export function PlanAuthoringLayout({
     <div className={cn('grid gap-4', hasAuthoringRail ? 'xl:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1fr)]' : undefined)}>
       {sourceContextNode}
       {hasAuthoringRail ? (
-        <section className="grid content-start gap-3">
+        <section className="grid min-w-0 content-start gap-3">
           {hasAiAssist ? <div data-ai-assist-panel="">{aiAssist}</div> : null}
           {previewNode}
         </section>
@@ -382,13 +382,13 @@ export function ReleaseReadinessLayout({
   const hasReadinessRail = hasScope || hasEvidence || hasRolloutPlan;
 
   return (
-    <div className={cn('grid gap-4', hasReadinessRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
+    <div className={cn('grid min-w-0 gap-4', hasReadinessRail ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : undefined)}>
       <PrimarySurface className="lg:min-h-[70vh] xl:min-h-[90vh]" data-readiness-blockers="">{blockers}</PrimarySurface>
       {hasReadinessRail ? (
-        <div className="grid content-start gap-3">
-          {hasScope ? <div data-release-scope="">{scope}</div> : null}
-          {hasEvidence ? <div data-qa-evidence="">{evidence}</div> : null}
-          {hasRolloutPlan ? <div data-rollout-plan="">{rolloutPlan}</div> : null}
+        <div className="grid min-w-0 content-start gap-3">
+          {hasScope ? <div className="min-w-0" data-release-scope="">{scope}</div> : null}
+          {hasEvidence ? <div className="min-w-0" data-qa-evidence="">{evidence}</div> : null}
+          {hasRolloutPlan ? <div className="min-w-0" data-rollout-plan="">{rolloutPlan}</div> : null}
         </div>
       ) : null}
     </div>
@@ -401,12 +401,12 @@ export function ReleaseEvidenceLayout({ evidence, rawEvidence, summary }: { evid
   const hasReleaseEvidenceRail = hasEvidence || hasRawEvidence;
 
   return (
-    <div className={cn('grid gap-4', hasReleaseEvidenceRail ? 'xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)]' : undefined)}>
+    <div className={cn('grid min-w-0 gap-4', hasReleaseEvidenceRail ? 'xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)]' : undefined)}>
       <PrimarySurface data-release-evidence-summary="">{summary}</PrimarySurface>
       {hasReleaseEvidenceRail ? (
-        <section className="grid content-start gap-3">
-          {hasEvidence ? <div data-release-evidence-list="">{evidence}</div> : null}
-          {hasRawEvidence ? <div data-release-raw-evidence="">{rawEvidence}</div> : null}
+        <section className="grid min-w-0 content-start gap-3">
+          {hasEvidence ? <div className="min-w-0" data-release-evidence-list="">{evidence}</div> : null}
+          {hasRawEvidence ? <div className="min-w-0" data-release-raw-evidence="">{rawEvidence}</div> : null}
         </section>
       ) : null}
     </div>

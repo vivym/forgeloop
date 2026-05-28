@@ -61,6 +61,10 @@ export const normalizeProjectManagementListQuery = (query: ProjectManagementList
   ...(query.status === undefined ? {} : { status: query.status }),
   ...(query.risk === undefined ? {} : { risk: query.risk }),
   ...(query.driver_actor_id === undefined ? {} : { driver_actor_id: query.driver_actor_id }),
+  ...(query.execution_owner_actor_id === undefined ? {} : { execution_owner_actor_id: query.execution_owner_actor_id }),
+  ...(query.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: query.reviewer_actor_id }),
+  ...(query.qa_owner_actor_id === undefined ? {} : { qa_owner_actor_id: query.qa_owner_actor_id }),
+  ...(query.release_owner_actor_id === undefined ? {} : { release_owner_actor_id: query.release_owner_actor_id }),
   ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
   ...(query.limit === undefined ? {} : { limit: query.limit }),
 });

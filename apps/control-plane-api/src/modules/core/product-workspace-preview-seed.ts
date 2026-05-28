@@ -1,6 +1,7 @@
 import type { DeliveryRepository } from '@forgeloop/db';
 import type {
   Actor,
+  Attachment,
   CodeReviewHandoff,
   DevelopmentPlan,
   DevelopmentPlanItem,
@@ -26,10 +27,10 @@ import type {
   WorkItem,
 } from '@forgeloop/domain';
 
-export const productArchitectureDemoSeedId = 'project-product-architecture-demo';
+export const productWorkspacePreviewSeedId = 'project-product-workspace-preview';
 
 const now = '2026-05-18T00:00:00.000Z';
-const orgId = 'org-product-architecture-preview';
+const orgId = 'org-product-workspace-preview';
 const ownerActorId = 'actor-owner';
 const reviewerActorId = 'actor-reviewer';
 const techLeadActorId = 'actor-tech-lead';
@@ -37,24 +38,30 @@ const qaActorId = 'actor-qa';
 const releaseOwnerActorId = 'actor-release-owner';
 const executionOwnerActorId = 'actor-execution-owner';
 const repoId = 'forgeloop';
-const developmentPlanId = 'dp-product-architecture-visual-rebuild';
+const developmentPlanId = 'dp-product-workspace-core-surface-redesign';
+const releaseRiskClosureDevelopmentPlanId = 'dp-release-risk-closure';
 
-export async function seedProductArchitectureDemoRepository(repository: DeliveryRepository): Promise<void> {
+export async function seedProductWorkspacePreviewRepository(repository: DeliveryRepository): Promise<void> {
   await repository.saveOrganization(organization);
   for (const actor of actors) {
     await repository.saveActor(actor);
   }
   await repository.saveProject(project);
   await repository.saveProjectRepo(projectRepo);
+  await repository.saveAttachment(requirementFlowAttachment);
 
   for (const workItem of sourceObjects) {
     await repository.saveWorkItem(workItem);
   }
 
-  await repository.saveDevelopmentPlan(developmentPlan);
-  await repository.saveDevelopmentPlanRevision(developmentPlanRevision);
-  for (const sourceLink of developmentPlanSourceLinks) {
-    await repository.saveDevelopmentPlanSourceLink(sourceLink);
+  for (const plan of developmentPlans) {
+    await repository.saveDevelopmentPlan(plan);
+  }
+  for (const revision of developmentPlanRevisions) {
+    await repository.saveDevelopmentPlanRevision(revision);
+  }
+  for (const link of developmentPlanSourceLinks) {
+    await repository.saveDevelopmentPlanSourceLink(link);
   }
   for (const item of developmentPlanItems) {
     await repository.saveDevelopmentPlanItem(item);
@@ -70,9 +77,13 @@ export async function seedProductArchitectureDemoRepository(repository: Delivery
   await repository.saveExecutionPackage(executionPackage);
   await repository.saveRunSession(runSession);
   await repository.saveReviewPacket(reviewPacket);
-  await repository.saveExecution(execution);
+  for (const seededExecution of executions) {
+    await repository.saveExecution(seededExecution);
+  }
   await repository.saveCodeReviewHandoff(codeReviewHandoff);
-  await repository.saveQaHandoff(qaHandoff);
+  for (const handoff of qaHandoffs) {
+    await repository.saveQaHandoff(handoff);
+  }
   await repository.saveRelease(release);
   for (const evidence of releaseEvidences) {
     await repository.saveReleaseEvidence(evidence);
@@ -81,7 +92,7 @@ export async function seedProductArchitectureDemoRepository(repository: Delivery
 
 const organization = {
   id: orgId,
-  name: 'ForgeLoop Product Architecture Preview',
+  name: 'ForgeLoop Product Workspace Preview',
   created_at: now,
   updated_at: now,
 } satisfies Organization;
@@ -96,119 +107,234 @@ const actors = [
 ] satisfies Actor[];
 
 const project = {
-  id: productArchitectureDemoSeedId,
+  id: productWorkspacePreviewSeedId,
   org_id: orgId,
-  key: 'PRODUCT-ARCH',
-  name: 'ForgeLoop product architecture demo',
+  key: 'PRODUCT-WS',
+  name: 'ForgeLoop product workspace preview',
   repo_ids: [repoId],
   created_at: now,
   updated_at: '2026-05-18T00:40:00.000Z',
 } satisfies Project;
 
 const projectRepo = {
-  id: 'project-repo-product-architecture',
+  id: 'project-repo-product-workspace',
   repo_id: repoId,
   org_id: orgId,
-  project_id: productArchitectureDemoSeedId,
+  project_id: productWorkspacePreviewSeedId,
   name: 'forgeloop',
   status: 'active',
   local_path: process.cwd(),
   default_branch: 'main',
-  base_commit_sha: 'product-architecture-demo',
+  base_commit_sha: 'product-workspace-preview',
   created_at: now,
   updated_at: now,
 } satisfies ProjectRepo;
 
 const sourceObjects = [
   sourceWorkItem({
-    id: 'req-plan-item-governance',
+    id: 'req-product-workspace-clarity',
     kind: 'requirement',
-    title: 'Plan Item governed Spec and Execution Plan generation',
+    title: 'Product workspace clarity and route-backed context',
     narrative:
-      'Product teams need a governed path from source object to Development Plan Item, brainstorming, Spec, Execution Plan, execution, review, QA, and release.',
-    priority: 'P0',
+      'Product teams need the workspace to explain what is ready, blocked, and owned from typed source object to release.',
+    priority: 'critical',
     risk: 'medium',
     phase: 'spec',
     intake_context: {
       type: 'requirement',
-      stakeholder_problem: 'Spec and Execution Plan generation needs a governed Plan Item boundary.',
-      desired_outcome: 'The team can review the full source object to Plan Item to execution flow.',
-      acceptance_criteria: ['Plan Item generation flow is visible in seeded screenshots.'],
-      in_scope: ['Plan Item governance', 'Spec generation', 'Execution Plan generation'],
+      stakeholder_problem: 'Product operators need route-backed planning, gate, execution, review, QA, and release context.',
+      desired_outcome: 'Every source object route opens with deterministic product workspace context.',
+      acceptance_criteria: ['Typed source routes expose planning coverage.', 'Plan Item gates expose eligible next actions only.'],
+      in_scope: ['Typed source workspaces', 'Development Plan routes', 'Plan Item gates'],
+      out_of_scope: ['Top-level Task route', 'Direct source object execution'],
     },
     current_spec_id: 'spec-cockpit-command-center',
     current_spec_revision_id: 'specrev-cockpit-command-center-v1',
     current_plan_id: 'plan-requirements-database-view',
     current_plan_revision_id: 'planrev-requirements-database-view-v1',
-    current_release_id: 'rel-product-architecture-preview',
+    current_release_id: 'rel-product-workspace-preview',
     updated_at: '2026-05-18T01:00:00.000Z',
   }),
   sourceWorkItem({
-    id: 'init-ai-native-rollout',
-    kind: 'initiative',
-    title: 'AI-native project management rollout',
+    id: 'req-ai-native-delivery-flow',
+    kind: 'requirement',
+    title: 'AI-native delivery flow from source to release',
     narrative:
-      'Coordinate AI-native project management surfaces across source objects, Plan Items, execution, and release.',
-    priority: 'P1',
+      'The AI-native delivery flow keeps Development Plan and Plan Item gates as the visible bridge between source objects and execution.',
+    priority: 'high',
+    risk: 'medium',
+    phase: 'plan',
+    intake_context: {
+      type: 'requirement',
+      stakeholder_problem: 'Leads need source objects to move through governed plans instead of direct execution shortcuts.',
+      desired_outcome: 'Every delivery path is visible as source object, Development Plan, Plan Item, Spec, Plan, execution, review, QA, and release.',
+      acceptance_criteria: ['Development Plan routes show typed source coverage.', 'Plan Item routes expose gate-specific next actions.'],
+      in_scope: ['AI-native delivery flow', 'Development Plan governance', 'Plan Item gate visibility'],
+      out_of_scope: ['Structured executable task extraction'],
+    },
+    current_release_id: 'rel-product-workspace-preview',
+    updated_at: '2026-05-18T01:05:00.000Z',
+  }),
+  sourceWorkItem({
+    id: 'req-qa-shift-left',
+    kind: 'requirement',
+    title: 'Shift-left QA participation before execution',
+    narrative:
+      'Release-impacting Plan Items need QA strategy and owner participation visible before execution planning is approved.',
+    priority: 'critical',
+    risk: 'high',
+    phase: 'spec',
+    intake_context: {
+      type: 'requirement',
+      stakeholder_problem: 'QA owners cannot assess release risk if test strategy appears only after execution finishes.',
+      desired_outcome: 'Spec review shows QA participation and test strategy before execution planning starts.',
+      acceptance_criteria: ['QA strategy is visible on release-impacting Plan Items.', 'Execution remains gated when QA participation is blocked.'],
+      in_scope: ['Spec review QA strategy', 'QA owner visibility', 'Release-impacting Plan Item gates'],
+      out_of_scope: ['Automated test authoring'],
+    },
+    current_release_id: 'rel-product-workspace-preview',
+    updated_at: '2026-05-18T01:06:00.000Z',
+  }),
+  sourceWorkItem({
+    id: 'req-release-readiness',
+    kind: 'requirement',
+    title: 'Release readiness blocks on missing evidence',
+    narrative:
+      'Release owners need readiness to stay disabled while review, QA, or observation evidence is missing or blocked.',
+    priority: 'critical',
+    risk: 'high',
+    phase: 'release',
+    intake_context: {
+      type: 'requirement',
+      stakeholder_problem: 'Release owners need product-safe blockers when required evidence is absent.',
+      desired_outcome: 'Release readiness shows a clear blocker until QA and observation evidence are accepted.',
+      acceptance_criteria: ['Release readiness is disabled when QA is blocked.', 'Blocked release evidence points back to the Plan Item.'],
+      in_scope: ['Release readiness gates', 'QA evidence blockers', 'Plan Item-scoped release evidence'],
+      out_of_scope: ['Production deployment automation'],
+    },
+    current_release_id: 'rel-product-workspace-preview',
+    updated_at: '2026-05-18T01:07:00.000Z',
+  }),
+  sourceWorkItem({
+    id: 'init-product-workspace-redesign',
+    kind: 'initiative',
+    title: 'Product workspace redesign rollout',
+    narrative:
+      'Coordinate typed source, Development Plan, Plan Item gate, QA, and release route improvements.',
+    priority: 'high',
     risk: 'medium',
     phase: 'triage',
     intake_context: {
       type: 'initiative',
-      business_outcome: 'Coordinate the product architecture rebuild rollout.',
-      scope_narrative: 'Coordinate product architecture visual rebuild work.',
-      success_metrics: ['Seeded route screenshots show product-quality state'],
+      business_outcome: 'Coordinate the product workspace redesign rollout.',
+      scope_narrative: 'Coordinate product workspace preview work across all route families.',
+      success_metrics: ['Seeded route screenshots show product workspace state'],
+      milestone_intent: 'Product workspace preview readiness',
     },
-    current_release_id: 'rel-product-architecture-preview',
+    current_release_id: 'rel-product-workspace-preview',
     updated_at: '2026-05-18T01:01:00.000Z',
   }),
   sourceWorkItem({
-    id: 'td-retire-workspace-page-template',
+    id: 'td-retire-generic-product-page',
     kind: 'tech_debt',
-    title: 'Retire generic WorkspacePage visual template',
-    narrative: 'Generic WorkspacePage composition prevents product-specific density and visual hierarchy.',
-    priority: 'P2',
+    title: 'Retire generic ProductPage visual fallback',
+    narrative: 'Generic ProductPage composition prevents route-specific density, gate context, and visual hierarchy.',
+    priority: 'medium',
     risk: 'medium',
     phase: 'plan',
     intake_context: {
       type: 'tech_debt',
-      current_pain: 'Generic WorkspacePage composition prevents product-specific density and visual hierarchy.',
-      desired_invariant: 'Product routes no longer share a generic first-viewport template.',
+      current_pain: 'Generic ProductPage composition prevents route-specific density and gate context.',
+      desired_invariant: 'Core product routes use page-family-specific workspace shells.',
       affected_modules: ['apps/web/src/shared/layout', 'apps/web/src/features/product-surfaces'],
       behavior_preservation: 'Canonical route behavior is preserved.',
       validation_strategy: 'Visual route geometry and screenshot gates pass.',
     },
-    current_release_id: 'rel-product-architecture-preview',
+    current_release_id: 'rel-product-workspace-preview',
     updated_at: '2026-05-18T01:02:00.000Z',
   }),
   sourceWorkItem({
-    id: 'bug-execution-review-context',
+    id: 'bug-plan-item-action-eligibility',
     kind: 'bug',
-    title: 'Execution continuation loses review context',
-    narrative: 'Continuation must preserve the review context needed by the execution owner and reviewer.',
-    priority: 'P0',
+    title: 'Plan Item action eligibility exposes premature execution',
+    narrative: 'Plan Item actions must remain disabled until required boundary, Spec, Execution Plan, QA, and package evidence is present.',
+    priority: 'critical',
     risk: 'high',
     phase: 'execution',
     intake_context: {
       type: 'bug',
-      impact_summary: 'Continuation loses review context.',
-      observed_behavior: 'Execution continuation opens without the prior review context.',
-      expected_behavior: 'Execution continuation preserves the review context and pending decisions.',
-      reproduction_steps: ['Open the execution detail', 'Continue the running execution after review feedback'],
-      affected_environment: 'Product architecture preview',
+      impact_summary: 'Plan Item actions can appear available before all gate evidence is complete.',
+      observed_behavior: 'The Plan Item route exposes execution affordances before QA participation is recorded.',
+      expected_behavior: 'Execution actions remain disabled until all required gate evidence is complete.',
+      reproduction_steps: ['Open the Plan Item gate route', 'Inspect execution action eligibility before QA participation'],
+      affected_environment: 'Product workspace preview',
       verification_path: 'Seeded route screenshot review',
     },
-    current_release_id: 'rel-product-architecture-preview',
+    current_release_id: 'rel-product-workspace-preview',
     updated_at: '2026-05-18T01:04:00.000Z',
   }),
 ] satisfies WorkItem[];
 
 const sourceRef = {
   type: 'requirement',
-  id: 'req-plan-item-governance',
-  title: 'Plan Item governed Spec and Execution Plan generation',
+  id: 'req-product-workspace-clarity',
+  title: 'Product workspace clarity and route-backed context',
 } as const;
 
-const developmentPlanItems = [
+const aiNativeDeliveryFlowSourceRef = {
+  type: 'requirement',
+  id: 'req-ai-native-delivery-flow',
+  title: 'AI-native delivery flow from source to release',
+} as const;
+
+const qaShiftLeftSourceRef = {
+  type: 'requirement',
+  id: 'req-qa-shift-left',
+  title: 'Shift-left QA participation before execution',
+} as const;
+
+const releaseReadinessSourceRef = {
+  type: 'requirement',
+  id: 'req-release-readiness',
+  title: 'Release readiness blocks on missing evidence',
+} as const;
+
+const bugSourceRef = {
+  type: 'bug',
+  id: 'bug-plan-item-action-eligibility',
+  title: 'Plan Item action eligibility exposes premature execution',
+} as const;
+
+const techDebtSourceRef = {
+  type: 'tech_debt',
+  id: 'td-retire-generic-product-page',
+  title: 'Retire generic ProductPage visual fallback',
+} as const;
+
+const requirementFlowAttachment = {
+  id: 'att-requirement-flow-image',
+  owner_object_type: 'requirement',
+  owner_object_id: sourceRef.id,
+  linked_object_refs: [
+    sourceRef,
+    { type: 'development_plan', id: developmentPlanId, title: 'Product workspace core surface redesign' },
+  ],
+  filename: 'plan-item-generation-flow.png',
+  content_type: 'image/png',
+  size_bytes: 42784,
+  storage_uri: 'memory://product-workspace-preview/plan-item-generation-flow.png',
+  checksum_sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  uploaded_by_actor_id: ownerActorId,
+  created_at: '2026-05-18T01:03:00.000Z',
+  evidence_category: 'image',
+  caption: 'Development Plan and Plan Item generation flow for product workspace review.',
+  alt_text: 'Plan Item generation flow',
+  visibility: 'object',
+  safety_status: 'passed',
+  reference_status: 'active',
+} satisfies Attachment;
+
+const primaryDevelopmentPlanItems = [
   planItem({
     id: 'dpi-cockpit-command-center',
     revision_id: 'dpirev-cockpit-command-center-v1',
@@ -238,10 +364,10 @@ const developmentPlanItems = [
     next_action: 'Use the approved Execution Plan to start database view implementation.',
   }),
   planItem({
-    id: 'dpi-demo-seed-visual-review',
-    revision_id: 'dpirev-demo-seed-visual-review-v1',
-    title: 'Seed demo project state for visual review',
-    summary: 'Seed deterministic product architecture data for visual route review.',
+    id: 'dpi-product-workspace-preview-state',
+    revision_id: 'dpirev-product-workspace-preview-state-v1',
+    title: 'Seed product workspace state for visual review',
+    summary: 'Seed deterministic product workspace data for visual route review.',
     affected_surfaces: ['tests/web/fixtures', 'tests/e2e/helpers', 'scripts'],
     boundary_status: 'approved',
     spec_status: 'approved',
@@ -249,7 +375,7 @@ const developmentPlanItems = [
     execution_status: 'running',
     review_status: 'in_review',
     qa_handoff_status: 'in_review',
-    next_action: 'Resume the execution with seeded visual review data.',
+    next_action: 'Resume the execution with seeded product workspace data.',
   }),
   planItem({
     id: 'dpi-development-plan-table-inspector',
@@ -257,6 +383,7 @@ const developmentPlanItems = [
     title: 'Rewrite Development Plan table and inspector',
     summary: 'Replace the generic table detail with a dense plan table and inspector workflow.',
     affected_surfaces: ['apps/web/src/features/development-plans'],
+    source_ref: techDebtSourceRef,
     boundary_status: 'changes_requested',
     spec_status: 'blocked',
     execution_plan_status: 'blocked',
@@ -265,19 +392,103 @@ const developmentPlanItems = [
     qa_handoff_status: 'missing',
     next_action: 'Unblock the Plan Item boundary before authoring documents.',
   }),
+  planItem({
+    id: 'dpi-typed-source-boundary',
+    revision_id: 'dpirev-typed-source-boundary-v1',
+    title: 'Define typed source workspace boundaries',
+    summary: 'Lock Requirement, Initiative, Bug, and Tech Debt routes to typed source workspaces.',
+    affected_surfaces: ['apps/web/src/features/project-management'],
+    source_ref: aiNativeDeliveryFlowSourceRef,
+    boundary_status: 'approved',
+    spec_status: 'approved',
+    execution_plan_status: 'approved',
+    execution_status: 'completed',
+    review_status: 'approved',
+    qa_handoff_status: 'in_review',
+    next_action: 'Keep source workspace routes aligned with the canonical route contract.',
+  }),
+  planItem({
+    id: 'dpi-plan-item-gate-eligibility',
+    revision_id: 'dpirev-plan-item-gate-eligibility-v1',
+    title: 'Enforce Plan Item action eligibility',
+    summary: 'Disable execution until boundary, Spec, Execution Plan, QA, and package evidence are present.',
+    affected_surfaces: ['apps/web/src/features/development-plans/plan-item-gates.tsx'],
+    source_ref: bugSourceRef,
+    boundary_status: 'approved',
+    spec_status: 'approved',
+    execution_plan_status: 'in_review',
+    execution_status: 'paused',
+    review_status: 'changes_requested',
+    qa_handoff_status: 'blocked',
+    risk: 'high',
+    next_action: 'Resolve action eligibility review changes before execution.',
+  }),
+  planItem({
+    id: 'dpi-qa-shift-left-strategy',
+    revision_id: 'dpirev-qa-shift-left-strategy-v1',
+    title: 'Expose QA strategy before execution planning',
+    summary: 'Make QA owner participation visible before release-impacting execution starts.',
+    affected_surfaces: ['apps/web/src/features/qa'],
+    source_ref: qaShiftLeftSourceRef,
+    boundary_status: 'approved',
+    spec_status: 'in_review',
+    execution_plan_status: 'missing',
+    execution_status: 'not_started',
+    review_status: 'missing',
+    qa_handoff_status: 'in_review',
+    risk: 'high',
+    next_action: 'Review Spec test strategy with QA owner.',
+  }),
 ] satisfies DevelopmentPlanItem[];
+
+const releaseRiskClosureDevelopmentPlanItems = [
+  planItem({
+    development_plan_id: releaseRiskClosureDevelopmentPlanId,
+    id: 'dpi-release-blocker-closure',
+    revision_id: 'dpirev-release-blocker-closure-v1',
+    title: 'Close release blocker evidence',
+    summary: 'Collect QA and observation evidence required for release readiness.',
+    affected_surfaces: ['apps/web/src/features/releases'],
+    source_ref: releaseReadinessSourceRef,
+    boundary_status: 'approved',
+    spec_status: 'approved',
+    execution_plan_status: 'approved',
+    execution_status: 'interrupted',
+    review_status: 'approved',
+    qa_handoff_status: 'blocked',
+    release_impact: 'release_blocking',
+    risk: 'critical',
+    next_action: 'Resume interrupted execution after QA owner resolves blocker.',
+  }),
+] satisfies DevelopmentPlanItem[];
+
+const developmentPlanItems = [...primaryDevelopmentPlanItems, ...releaseRiskClosureDevelopmentPlanItems] satisfies DevelopmentPlanItem[];
 
 const developmentPlan = {
   id: developmentPlanId,
-  project_id: productArchitectureDemoSeedId,
-  revision_id: 'dprev-product-architecture-visual-rebuild-v1',
-  title: 'Project architecture and visual rebuild',
+  project_id: productWorkspacePreviewSeedId,
+  revision_id: 'dprev-product-workspace-core-surface-redesign-v1',
+  title: 'Product workspace core surface redesign',
   status: 'active',
-  source_refs: [sourceRef],
-  items: developmentPlanItems,
+  source_refs: [sourceRef, aiNativeDeliveryFlowSourceRef, qaShiftLeftSourceRef, bugSourceRef, techDebtSourceRef],
+  items: primaryDevelopmentPlanItems,
   created_at: '2026-05-18T00:11:00.000Z',
   updated_at: '2026-05-18T00:19:00.000Z',
 } satisfies DevelopmentPlan;
+
+const releaseRiskClosureDevelopmentPlan = {
+  id: releaseRiskClosureDevelopmentPlanId,
+  project_id: productWorkspacePreviewSeedId,
+  revision_id: 'dprev-release-risk-closure-v1',
+  title: 'Release risk closure',
+  status: 'active',
+  source_refs: [releaseReadinessSourceRef],
+  items: releaseRiskClosureDevelopmentPlanItems,
+  created_at: '2026-05-18T00:34:00.000Z',
+  updated_at: '2026-05-18T00:39:00.000Z',
+} satisfies DevelopmentPlan;
+
+const developmentPlans = [developmentPlan, releaseRiskClosureDevelopmentPlan] satisfies DevelopmentPlan[];
 
 const developmentPlanRevision = {
   id: developmentPlan.revision_id,
@@ -286,7 +497,7 @@ const developmentPlanRevision = {
   title: developmentPlan.title,
   status: developmentPlan.status,
   source_refs: developmentPlan.source_refs,
-  item_refs: developmentPlanItems.map((item) => ({
+  item_refs: developmentPlan.items.map((item) => ({
     id: item.id,
     revision_id: item.revision_id,
     title: item.title,
@@ -296,26 +507,98 @@ const developmentPlanRevision = {
     execution_status: item.execution_status,
   })),
   generation_state: 'draft_generated',
-  change_reason: 'Seed product architecture preview data.',
+  change_reason: 'Seed product workspace preview data.',
   actor_id: techLeadActorId,
   created_at: '2026-05-18T00:19:00.000Z',
 } satisfies DevelopmentPlanRevision;
 
+const releaseRiskClosureDevelopmentPlanRevision = {
+  id: releaseRiskClosureDevelopmentPlan.revision_id,
+  development_plan_id: releaseRiskClosureDevelopmentPlan.id,
+  revision_number: 1,
+  title: releaseRiskClosureDevelopmentPlan.title,
+  status: releaseRiskClosureDevelopmentPlan.status,
+  source_refs: releaseRiskClosureDevelopmentPlan.source_refs,
+  item_refs: releaseRiskClosureDevelopmentPlan.items.map((item) => ({
+    id: item.id,
+    revision_id: item.revision_id,
+    title: item.title,
+    boundary_status: item.boundary_status,
+    spec_status: item.spec_status,
+    execution_plan_status: item.execution_plan_status,
+    execution_status: item.execution_status,
+  })),
+  generation_state: 'draft_generated',
+  change_reason: 'Seed release-risk closure preview data.',
+  actor_id: techLeadActorId,
+  created_at: '2026-05-18T00:39:00.000Z',
+} satisfies DevelopmentPlanRevision;
+
+const developmentPlanRevisions = [
+  developmentPlanRevision,
+  releaseRiskClosureDevelopmentPlanRevision,
+] satisfies DevelopmentPlanRevision[];
+
 const developmentPlanSourceLinks = [
   {
-    id: 'dpsl-product-architecture-requirement',
+    id: 'dpsl-product-workspace-requirement',
     development_plan_id: developmentPlanId,
     source_ref: sourceRef,
     link_type: 'primary',
-    rationale: 'Requirement owns the product architecture preview development plan.',
+    rationale: 'Requirement owns the product workspace preview Development Plan.',
     created_by_actor_id: techLeadActorId,
     created_at: '2026-05-18T00:11:00.000Z',
+  },
+  {
+    id: 'dpsl-ai-native-delivery-flow',
+    development_plan_id: developmentPlanId,
+    source_ref: aiNativeDeliveryFlowSourceRef,
+    link_type: 'related',
+    rationale: 'AI-native delivery flow is implemented through the core workspace plan.',
+    created_by_actor_id: techLeadActorId,
+    created_at: '2026-05-18T00:12:00.000Z',
+  },
+  {
+    id: 'dpsl-qa-shift-left',
+    development_plan_id: developmentPlanId,
+    source_ref: qaShiftLeftSourceRef,
+    link_type: 'related',
+    rationale: 'QA shift-left visibility is part of the Plan Item gate redesign.',
+    created_by_actor_id: techLeadActorId,
+    created_at: '2026-05-18T00:13:00.000Z',
+  },
+  {
+    id: 'dpsl-plan-item-action-eligibility-bug',
+    development_plan_id: developmentPlanId,
+    source_ref: bugSourceRef,
+    link_type: 'related',
+    rationale: 'Action eligibility bug is closed through Plan Item gate enforcement.',
+    created_by_actor_id: techLeadActorId,
+    created_at: '2026-05-18T00:14:00.000Z',
+  },
+  {
+    id: 'dpsl-generic-product-page-tech-debt',
+    development_plan_id: developmentPlanId,
+    source_ref: techDebtSourceRef,
+    link_type: 'related',
+    rationale: 'Generic ProductPage debt is removed by page-family shell work.',
+    created_by_actor_id: techLeadActorId,
+    created_at: '2026-05-18T00:15:00.000Z',
+  },
+  {
+    id: 'dpsl-release-readiness-risk-closure',
+    development_plan_id: releaseRiskClosureDevelopmentPlanId,
+    source_ref: releaseReadinessSourceRef,
+    link_type: 'primary',
+    rationale: 'Release readiness owns the release-risk closure plan.',
+    created_by_actor_id: techLeadActorId,
+    created_at: '2026-05-18T00:34:00.000Z',
   },
 ] satisfies DevelopmentPlanSourceLink[];
 
 const spec = {
   id: 'spec-cockpit-command-center',
-  work_item_id: 'req-plan-item-governance',
+  work_item_id: 'req-product-workspace-clarity',
   development_plan_item_id: 'dpi-cockpit-command-center',
   entity_type: 'spec',
   status: 'approved',
@@ -338,7 +621,7 @@ const specRevision = {
   revision_number: 1,
   summary: 'Cockpit operational command center Spec',
   content: 'The Cockpit should act as an operational command center for AI-native project management.',
-  background: 'The product architecture rebuild replaces generic route shells with purpose-built surfaces.',
+  background: 'The product workspace rebuild replaces generic route shells with purpose-built surfaces.',
   goals: ['Expose operational state density', 'Keep command paths Plan Item governed'],
   scope_in: ['Cockpit information architecture', 'Review-ready fixture data'],
   scope_out: ['Route shell navigation'],
@@ -352,7 +635,7 @@ const specRevision = {
 
 const plan = {
   id: 'plan-requirements-database-view',
-  work_item_id: 'req-plan-item-governance',
+  work_item_id: 'req-product-workspace-clarity',
   development_plan_item_id: 'dpi-requirements-database-view',
   entity_type: 'plan',
   status: 'approved',
@@ -411,19 +694,19 @@ const executionPlanRevision = {
 } satisfies ExecutionPlanRevision;
 
 const executionPackage = {
-  id: 'pkg-demo-seed-visual-review-v1',
-  work_item_id: 'req-plan-item-governance',
-  development_plan_item_id: 'dpi-demo-seed-visual-review',
-  execution_id: 'exec-demo-seed-visual-review',
+  id: 'pkg-product-workspace-preview-v1',
+  work_item_id: 'req-product-workspace-clarity',
+  development_plan_item_id: 'dpi-product-workspace-preview-state',
+  execution_id: 'exec-product-workspace-preview-active',
   spec_id: spec.id,
   spec_revision_id: specRevision.id,
   execution_plan_id: executionPlan.id,
   execution_plan_revision_id: executionPlanRevision.id,
   plan_id: plan.id,
   plan_revision_id: planRevision.id,
-  project_id: productArchitectureDemoSeedId,
+  project_id: productWorkspacePreviewSeedId,
   repo_id: repoId,
-  objective: 'Seed demo project state execution boundary',
+  objective: 'Seed product workspace state execution boundary',
   owner_actor_id: executionOwnerActorId,
   reviewer_actor_id: reviewerActorId,
   qa_owner_actor_id: qaActorId,
@@ -446,16 +729,16 @@ const executionPackage = {
   forbidden_paths: ['apps/control-plane-api/**'],
   source_mutation_policy: 'path_policy_scoped',
   version: 1,
-  last_run_session_id: 'run-demo-seed-visual-review',
-  current_run_session_id: 'run-demo-seed-visual-review',
+  last_run_session_id: 'run-product-workspace-preview',
+  current_run_session_id: 'run-product-workspace-preview',
   current_review_packet_id: 'review-cockpit-requested-changes',
-  current_release_id: 'rel-product-architecture-preview',
+  current_release_id: 'rel-product-workspace-preview',
   created_at: '2026-05-18T00:20:00.000Z',
   updated_at: '2026-05-18T00:22:00.000Z',
 } satisfies ExecutionPackage;
 
 const runSession = {
-  id: 'run-demo-seed-visual-review',
+  id: 'run-product-workspace-preview',
   execution_package_id: executionPackage.id,
   requested_by_actor_id: executionPackage.owner_actor_id,
   status: 'succeeded',
@@ -474,13 +757,13 @@ const runSession = {
   artifacts: [
     {
       kind: 'diff',
-      name: 'product-architecture-demo-seed.diff',
+      name: 'product-workspace-preview-seed.diff',
       content_type: 'text/x-diff',
-      storage_uri: 'memory://product-architecture-demo-seed.diff',
+      storage_uri: 'memory://product-workspace-preview-seed.diff',
     },
   ],
   log_refs: [],
-  summary: 'Demo seed visual review data passed deterministic checks.',
+  summary: 'Product workspace preview data passed deterministic checks.',
   created_at: '2026-05-18T00:24:00.000Z',
   updated_at: '2026-05-18T00:25:00.000Z',
   started_at: '2026-05-18T00:24:00.000Z',
@@ -501,13 +784,13 @@ const reviewPacket = {
   check_result_summary: 'All required product checks passed.',
   self_review: {
     status: 'succeeded',
-    summary: 'Product architecture demo data is seeded, with Cockpit density still under review.',
-    spec_plan_alignment: 'Aligned with the approved product architecture preview documents.',
+    summary: 'Product workspace preview data is seeded, with Cockpit density still under review.',
+    spec_plan_alignment: 'Aligned with the approved product workspace preview documents.',
     test_assessment: 'Focused hook and state checks pass.',
     risk_notes: ['Product Lane fixtures remain contract-shaped'],
     follow_up_questions: [],
   },
-  risk_notes: ['Generic WorkspacePage debt still blocks the final visual rebuild review'],
+  risk_notes: ['Generic ProductPage debt still blocks the final workspace visual review'],
   requested_changes: [
     {
       title: 'Tighten Cockpit information hierarchy',
@@ -524,17 +807,17 @@ const reviewPacket = {
 } satisfies ReviewPacket;
 
 const execution = {
-  id: 'exec-demo-seed-visual-review',
-  development_plan_item_id: 'dpi-demo-seed-visual-review',
+  id: 'exec-product-workspace-preview-active',
+  development_plan_item_id: 'dpi-product-workspace-preview-state',
   execution_plan_revision_id: executionPlanRevision.id,
   approved_spec_revision_id: specRevision.id,
   approved_spec_revision_ref: { type: 'spec_revision', id: specRevision.id, spec_id: spec.id, title: specRevision.summary },
-  ref: { type: 'execution', id: 'exec-demo-seed-visual-review', title: 'Codex worker is seeding visual review data' },
+  ref: { type: 'execution', id: 'exec-product-workspace-preview-active', title: 'Codex worker is rebuilding product workspace preview data' },
   development_plan_item_ref: {
     type: 'development_plan_item',
-    id: 'dpi-demo-seed-visual-review',
+    id: 'dpi-product-workspace-preview-state',
     development_plan_id: developmentPlanId,
-    title: 'Seed demo project state for visual review',
+    title: 'Seed product workspace state for visual review',
   },
   execution_plan_revision_ref: {
     type: 'execution_plan_revision',
@@ -544,18 +827,45 @@ const execution = {
   },
   status: 'running',
   worker_state: 'running',
-  current_step: 'Seeding deterministic product architecture fixture data',
+  current_step: 'Seeding deterministic product workspace fixture data',
   source_ref: sourceRef,
-  evidence_refs: [{ type: 'execution', id: 'evidence-exec-demo-seed-checks', title: 'Demo seed fixture checks' }],
+  evidence_refs: [{ type: 'execution', id: 'evidence-exec-product-workspace-checks', title: 'Product workspace preview fixture checks' }],
   runtime_evidence_refs: [{ type: 'execution_package', id: executionPackage.id, title: executionPackage.objective }],
-  pr_refs: [{ id: 'pr-product-architecture-preview', title: 'Product architecture preview data PR' }],
-  diff_refs: [{ id: 'diff-demo-seed-visual-review', title: 'Demo seed fixture diff' }],
-  test_evidence_refs: [{ id: 'test-demo-seed-visual-review', title: 'Focused demo seed tests' }],
+  pr_refs: [{ id: 'pr-product-workspace-preview', title: 'Product workspace preview data PR' }],
+  diff_refs: [{ id: 'diff-product-workspace-preview', title: 'Product workspace fixture diff' }],
+  test_evidence_refs: [{ id: 'test-product-workspace-preview', title: 'Focused product workspace tests' }],
   interrupt_history: [{ at: '2026-05-18T00:21:00.000Z', reason: 'Paused for review checkpoint' }],
   continuation_history: [{ at: '2026-05-18T00:22:00.000Z', summary: 'Continued after checkpoint' }],
   created_at: '2026-05-18T00:20:00.000Z',
   updated_at: '2026-05-18T00:22:00.000Z',
 } satisfies Execution;
+
+const interruptedExecution = {
+  ...execution,
+  id: 'exec-release-risk-closure-interrupted',
+  development_plan_item_id: 'dpi-release-blocker-closure',
+  ref: {
+    type: 'execution',
+    id: 'exec-release-risk-closure-interrupted',
+    title: 'Release risk closure execution paused for QA evidence',
+  },
+  development_plan_item_ref: {
+    type: 'development_plan_item',
+    id: 'dpi-release-blocker-closure',
+    development_plan_id: releaseRiskClosureDevelopmentPlanId,
+    title: 'Close release blocker evidence',
+  },
+  status: 'interrupted',
+  worker_state: 'interrupted',
+  current_step: 'Waiting for blocked QA handoff evidence before release readiness can proceed',
+  source_ref: releaseReadinessSourceRef,
+  evidence_refs: [{ type: 'execution', id: 'evidence-release-risk-paused', title: 'Release risk closure pause evidence' }],
+  interrupt_history: [{ at: '2026-05-18T00:33:00.000Z', reason: 'Blocked QA handoff requires owner decision' }],
+  continuation_history: [],
+  updated_at: '2026-05-18T00:33:00.000Z',
+} satisfies Execution;
+
+const executions = [execution, interruptedExecution] satisfies Execution[];
 
 const codeReviewHandoff = {
   id: 'review-cockpit-requested-changes',
@@ -598,28 +908,60 @@ const qaHandoff = {
   updated_at: '2026-05-18T00:31:00.000Z',
 } satisfies QaHandoff;
 
+const blockedQaHandoff = {
+  ...qaHandoff,
+  id: 'qa-release-blocker-evidence',
+  ref: {
+    type: 'qa_handoff',
+    id: 'qa-release-blocker-evidence',
+    title: 'QA blocked release evidence acceptance',
+  },
+  execution_id: interruptedExecution.id,
+  source_ref: releaseReadinessSourceRef,
+  development_plan_item_id: 'dpi-release-blocker-closure',
+  development_plan_item_ref: {
+    type: 'development_plan_item',
+    id: 'dpi-release-blocker-closure',
+    development_plan_id: releaseRiskClosureDevelopmentPlanId,
+    title: 'Close release blocker evidence',
+  },
+  status: 'blocked',
+  acceptance_criteria: ['Release blocker evidence includes QA owner sign-off and observation plan'],
+  test_strategy: 'Block release readiness until QA owner accepts release-risk closure evidence.',
+  verification_evidence_refs: [{ type: 'execution', id: interruptedExecution.id, title: interruptedExecution.ref.title }],
+  known_risks: ['Release readiness would overstate confidence without QA sign-off.'],
+  changed_surfaces: ['apps/web/src/features/releases', 'apps/web/src/features/qa'],
+  release_impact: 'release_blocking',
+  blocked_by_actor_id: qaActorId,
+  rationale: 'QA cannot accept release evidence until interrupted execution is resumed.',
+  updated_at: '2026-05-18T00:34:00.000Z',
+} satisfies QaHandoff;
+
+const qaHandoffs = [qaHandoff, blockedQaHandoff] satisfies QaHandoff[];
+
 const release = {
-  id: 'rel-product-architecture-preview',
+  id: 'rel-product-workspace-preview',
   org_id: orgId,
-  project_id: productArchitectureDemoSeedId,
-  title: 'Product architecture preview release',
-  scope_summary: 'Seeded source objects, Plan Items, execution, review, QA, and release data for visual review.',
+  project_id: productWorkspacePreviewSeedId,
+  title: 'Product workspace preview release',
+  scope_summary: 'Seeded source objects, Plan Items, execution, review, QA, and release data for product workspace visual review.',
   release_owner_actor_id: releaseOwnerActorId,
   release_type: 'standard',
   phase: 'approval',
   activity_state: 'idle',
   gate_state: 'awaiting_approval',
   resolution: 'none',
-  work_item_ids: ['req-plan-item-governance', 'bug-execution-review-context', 'td-retire-workspace-page-template'],
+  work_item_ids: sourceObjects.map((workItem) => workItem.id),
   execution_package_ids: [executionPackage.id],
-  rollout_strategy: 'Use seeded data for product architecture visual review before UI layout migrations.',
+  rollout_strategy: 'Use seeded data for product workspace visual review before UI layout migrations.',
   rollback_plan: 'Revert the seeded fixture data and preview script.',
-  observation_plan: 'Watch visual route screenshots for generic template debt.',
+  observation_plan: 'Watch visual route screenshots for generic ProductPage debt.',
   extra: {
     project_management_scope_refs: [
       sourceRef,
-      { type: 'development_plan_item', id: 'dpi-demo-seed-visual-review', development_plan_id: developmentPlanId, title: 'Seed demo project state for visual review' },
-      { type: 'bug', id: 'bug-execution-review-context', title: 'Execution continuation loses review context' },
+      { type: 'development_plan_item', id: 'dpi-product-workspace-preview-state', development_plan_id: developmentPlanId, title: 'Seed product workspace state for visual review' },
+      { type: 'bug', id: 'bug-plan-item-action-eligibility', title: 'Plan Item action eligibility exposes premature execution' },
+      { type: 'development_plan_item', id: 'dpi-release-blocker-closure', development_plan_id: releaseRiskClosureDevelopmentPlanId, title: 'Close release blocker evidence' },
     ],
     current_spec_revision_id: specRevision.id,
     current_plan_revision_id: planRevision.id,
@@ -641,7 +983,7 @@ const releaseEvidences = [
       relationship: 'blocks',
     },
     extra: {
-      scope_ref: { type: 'development_plan_item', id: 'dpi-demo-seed-visual-review', development_plan_id: developmentPlanId, title: 'Seed demo project state for visual review' },
+      scope_ref: { type: 'development_plan_item', id: 'dpi-product-workspace-preview-state', development_plan_id: developmentPlanId, title: 'Seed product workspace state for visual review' },
       authority_type: 'code_review_handoff_approval',
       status: 'approved',
       code_review_handoff_id: codeReviewHandoff.id,
@@ -653,14 +995,14 @@ const releaseEvidences = [
   releaseEvidence({
     id: 'release-evidence-package-run',
     evidence_type: 'test_report',
-    summary: 'Demo seed package run completed with focused checks.',
+    summary: 'Product workspace preview package run completed with focused checks.',
     object_ref: {
       object_type: 'run_session',
       object_id: runSession.id,
       relationship: 'generated_by',
     },
     extra: {
-      scope_ref: { type: 'development_plan_item', id: 'dpi-demo-seed-visual-review', development_plan_id: developmentPlanId, title: 'Seed demo project state for visual review' },
+      scope_ref: { type: 'development_plan_item', id: 'dpi-product-workspace-preview-state', development_plan_id: developmentPlanId, title: 'Seed product workspace state for visual review' },
       evidence_type: 'test_acceptance',
       status: 'passed',
       execution_id: execution.id,
@@ -700,11 +1042,11 @@ function sourceWorkItem(input: {
 }): WorkItem {
   return {
     id: input.id,
-    project_id: productArchitectureDemoSeedId,
+    project_id: productWorkspacePreviewSeedId,
     kind: input.kind,
     title: input.title,
     narrative_markdown: input.narrative,
-    goal: `${input.title} is visible in the product architecture review flow.`,
+    goal: `${input.title} is visible in the product workspace review flow.`,
     success_criteria: ['Seeded product data is visible.', 'Plan Item governed flow is reviewable.'],
     priority: input.priority,
     risk: input.risk,
@@ -727,22 +1069,26 @@ function sourceWorkItem(input: {
 function planItem(input: {
   affected_surfaces: string[];
   boundary_status: DevelopmentPlanItem['boundary_status'];
+  development_plan_id?: string;
   execution_plan_status: DevelopmentPlanItem['execution_plan_status'];
   execution_status: DevelopmentPlanItem['execution_status'];
   id: string;
   next_action: string;
   qa_handoff_status: DevelopmentPlanItem['qa_handoff_status'];
+  release_impact?: DevelopmentPlanItem['release_impact'];
   review_status: DevelopmentPlanItem['review_status'];
   revision_id: string;
+  risk?: DevelopmentPlanItem['risk'];
+  source_ref?: DevelopmentPlanItem['source_ref'];
   spec_status: DevelopmentPlanItem['spec_status'];
   summary: string;
   title: string;
 }): DevelopmentPlanItem {
   return {
     id: input.id,
-    development_plan_id: developmentPlanId,
+    development_plan_id: input.development_plan_id ?? developmentPlanId,
     revision_id: input.revision_id,
-    source_ref: sourceRef,
+    source_ref: input.source_ref ?? sourceRef,
     title: input.title,
     summary: input.summary,
     driver_actor_id: ownerActorId,
@@ -750,7 +1096,7 @@ function planItem(input: {
     reviewer_actor_id: reviewerActorId,
     leader_actor_id: reviewerActorId,
     leader_delegate_actor_ids: [techLeadActorId],
-    risk: input.id === 'dpi-development-plan-table-inspector' ? 'high' : 'medium',
+    risk: input.risk ?? (input.id === 'dpi-development-plan-table-inspector' ? 'high' : 'medium'),
     dependency_hints: ['Task 1 route contracts are committed'],
     affected_surfaces: input.affected_surfaces,
     boundary_status: input.boundary_status,
@@ -759,7 +1105,7 @@ function planItem(input: {
     execution_status: input.execution_status,
     review_status: input.review_status,
     qa_handoff_status: input.qa_handoff_status,
-    release_impact: 'release_scoped',
+    release_impact: input.release_impact ?? 'release_scoped',
     next_action: input.next_action,
     created_at: '2026-05-18T00:18:00.000Z',
     updated_at: '2026-05-18T00:19:00.000Z',
@@ -773,7 +1119,7 @@ function developmentPlanItemRevision(item: DevelopmentPlanItem): DevelopmentPlan
     development_plan_id: item.development_plan_id,
     revision_number: 1,
     snapshot: item,
-    change_reason: 'Seed product architecture preview item.',
+    change_reason: 'Seed product workspace preview item.',
     edited_by_actor_id: techLeadActorId,
     created_at: item.updated_at,
   };
@@ -789,7 +1135,7 @@ function releaseEvidence(input: {
   return {
     id: input.id,
     org_id: orgId,
-    project_id: productArchitectureDemoSeedId,
+    project_id: productWorkspacePreviewSeedId,
     release_id: release.id,
     title: input.summary,
     evidence_type: input.evidence_type,
@@ -799,8 +1145,8 @@ function releaseEvidence(input: {
     redacted: false,
     status: 'current',
     visibility: 'internal',
-    source_type: 'product_architecture_demo_seed',
-    labels: ['product-architecture-demo'],
+    source_type: 'product_workspace_preview_seed',
+    labels: ['product-workspace-preview'],
     created_at: '2026-05-18T00:36:00.000Z',
     created_by_actor_id: ownerActorId,
     updated_at: '2026-05-18T00:36:00.000Z',

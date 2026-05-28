@@ -17,7 +17,7 @@ describe('AI-native My Work, Board, and Reports', () => {
     expect(screen.getByRole('button', { name: /Gate: All/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Risk: All/i })).toBeTruthy();
     expect(screen.getByRole('region', { name: /Selected queue item/i })).toBeTruthy();
-    expect((await screen.findAllByText(/Needs boundary approval/i))[0]).toBeTruthy();
+    expect((await screen.findAllByText(/Open Development Plan Item/i))[0]).toBeTruthy();
     expect(screen.getByRole('link', { name: /open development plan item/i }).getAttribute('href')).toBe(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
@@ -33,14 +33,14 @@ describe('AI-native My Work, Board, and Reports', () => {
     const screen = await renderRoute('/cockpit');
     expect(await screen.findByRole('heading', { name: 'Cockpit' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="cockpit"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-command-strip]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-cockpit-command-strip]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-attention-queue][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-risk-column]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-health-rail]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-risk-readiness-rail]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-runtime-status]')).toBeInstanceOf(HTMLElement);
     for (const label of [
-      'Active and resumable executions',
-      'Spec / Execution Plan review queue',
-      'QA and release readiness attention',
+      'Release blockers, code-review changes, QA, Spec, and Codex continuity',
+      'Release blocker rail',
+      'Active and resumable Codex execution',
     ]) {
       expect(screen.getByRole('heading', { name: label })).toBeTruthy();
     }
@@ -87,7 +87,7 @@ describe('AI-native My Work, Board, and Reports', () => {
   it('renders Board focus context from typed execution links', async () => {
     const screen = await renderRoute(`/board?execution_id=${execution.id}`);
     expect(await screen.findByText(/Focused Execution card/i)).toBeTruthy();
-    expect(await screen.findByText(/Codex worker is seeding visual review data/i)).toBeTruthy();
+    expect(await screen.findByText(/Codex worker is rebuilding product workspace preview data/i)).toBeTruthy();
     expect(screen.queryByText(/Board cards could not be loaded/i)).toBeNull();
     expect(document.querySelector('#main-content')?.textContent ?? '').not.toContain(execution.id);
   });

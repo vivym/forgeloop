@@ -72,7 +72,8 @@ export function ExecutionDetailRoute() {
   );
 
   return (
-    <ProductPage family="execution-supervision" heading={viewModel?.title ?? 'Execution supervision'}>
+    <ProductPage family="execution-supervision" ariaLabel={viewModel?.title ?? 'Execution supervision'}>
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{viewModel?.title ?? 'Execution supervision'}</h1>
       <div className="sr-only">
         {[
           viewModel === undefined

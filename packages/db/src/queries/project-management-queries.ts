@@ -14,8 +14,11 @@ import type {
   RequirementListItem,
   TechDebtDetail,
   TechDebtListItem,
+  TypedSourceAttachmentRef,
+  TypedSourceEvidenceRef,
+  TypedSourceRelationshipRef,
 } from '@forgeloop/contracts';
-import { productObjectRefSchema, releaseReadinessDetailSchema } from '@forgeloop/contracts';
+import { productObjectRefSchema, releaseReadinessDetailSchema, typedSourceRelationshipRefSchema } from '@forgeloop/contracts';
 import type {
   CodeReviewHandoff,
   DevelopmentPlan,
@@ -31,6 +34,7 @@ import type {
   RunSession,
   Spec,
   SpecRevision,
+  Attachment,
   WorkItem,
 } from '@forgeloop/domain';
 
@@ -40,7 +44,24 @@ type WorkItemObjectType = Extract<ObjectRef['type'], 'initiative' | 'requirement
 type MyWorkQueueObjectRef = MyWorkQueueItem['object_ref'];
 type WorkItemPublicRef = Extract<MyWorkQueueObjectRef, { type: WorkItemObjectType }>;
 type TypedWorkItem = WorkItem & { kind: WorkItemObjectType };
-type ProductListQuery = { project_id: string };
+type ProductListQuery = {
+  project_id: string;
+  actor_id?: string | undefined;
+  status?: string | undefined;
+  phase?: string | undefined;
+  gate_state?: string | undefined;
+  resolution?: string | undefined;
+  risk?: string | undefined;
+  driver_actor_id?: string | undefined;
+  execution_owner_actor_id?: string | undefined;
+  reviewer_actor_id?: string | undefined;
+  qa_owner_actor_id?: string | undefined;
+  release_owner_actor_id?: string | undefined;
+  blocked?: boolean | undefined;
+  stale?: boolean | undefined;
+  cursor?: string | undefined;
+  limit?: number | undefined;
+};
 type ReleaseRevisionAuthority = {
   current_spec_revision_id?: string;
   current_plan_revision_id?: string;
@@ -56,6 +77,73 @@ type ExecutionRuntimeEvidenceProjection = {
   workspace_bundle_manifest_digest?: string;
   mounted_task_workspace_digest: string;
   changed_files: string[];
+};
+type DashboardCommandAction = {
+  href: string;
+  id: string;
+  kind:
+    | 'release_blocker'
+    | 'code_review_changes'
+    | 'qa_blocker'
+    | 'missing_execution_plan_approval'
+    | 'missing_spec_approval'
+    | 'resumable_execution'
+    | 'stale_context';
+  label: string;
+  next_action: string;
+  runtime?: { execution_id: string; resumable: boolean; state: string };
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  stage_id: 'boundary' | 'spec' | 'execution_plan' | 'execution' | 'code_review' | 'qa' | 'release';
+  typed_ref: ReturnType<typeof developmentPlanItemRef>;
+};
+type DashboardRuntimeSignal = {
+  execution_id: string;
+  href: string;
+  label: string;
+  resumable: boolean;
+  state: string;
+};
+type TypedSourceProjectionContext = {
+  plans: DevelopmentPlan[];
+  planItems: DevelopmentPlanItemWithPlan[];
+  executionPackages: ExecutionPackage[];
+  executions: ExecutionWithContext[];
+  codeReviewHandoffs: CodeReviewWithContext[];
+  qaHandoffs: QaWithContext[];
+  releases: Release[];
+  attachments: Attachment[];
+  releaseEvidence: ReleaseEvidence[];
+};
+type TypedSourceProjection = {
+  planning_coverage: {
+    development_plan_count: number;
+    plan_item_count: number;
+    uncovered: boolean;
+  };
+  downstream_gate_summary: {
+    current_gate_counts: {
+      boundary: number;
+      spec: number;
+      execution_plan: number;
+      execution: number;
+      code_review: number;
+      qa: number;
+      release: number;
+    };
+    blocker_count: number;
+  };
+  linked_development_plans: Extract<TypedSourceRelationshipRef, { type: 'development_plan' }>[];
+  linked_plan_items: Extract<TypedSourceRelationshipRef, { type: 'development_plan_item' }>[];
+  evidence_refs: TypedSourceEvidenceRef[];
+  attachment_refs: TypedSourceAttachmentRef[];
+  release_refs: Extract<TypedSourceRelationshipRef, { type: 'release' }>[];
+  audit: {
+    created_at: string;
+    updated_at: string;
+    updated_by_actor_id?: string;
+  };
+  last_meaningful_update_at: string;
+  next_action: string;
 };
 
 export async function listMyWorkQueue(
@@ -145,43 +233,71 @@ export async function listMyWorkQueue(
 }
 
 export async function listRequirements(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: RequirementListItem[] }> {
-  return { items: (await typedWorkItems(repository, query.project_id, 'requirement')).map(workItemToRequirementListItem) };
+  const [workItems, context] = await Promise.all([
+    typedWorkItemsForQuery(repository, query, 'requirement'),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return { items: workItems.map((workItem) => workItemToRequirementListItem(workItem, typedSourceProjection(workItem, context))) };
 }
 
 export async function getRequirementDetail(repository: DeliveryRepository, requirementId: string): Promise<RequirementDetail | undefined> {
   const workItem = await typedWorkItemById(repository, requirementId, 'requirement');
-  return workItem === undefined
-    ? undefined
-    : workItemToRequirementDetail(workItem, await sourceRelationshipRefs(repository, workItem));
+  if (workItem === undefined) {
+    return undefined;
+  }
+  const context = await typedSourceProjectionContext(repository, workItem.project_id);
+  return workItemToRequirementDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listInitiatives(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: InitiativeListItem[] }> {
-  return { items: (await typedWorkItems(repository, query.project_id, 'initiative')).map(workItemToInitiativeListItem) };
+  const [workItems, context] = await Promise.all([
+    typedWorkItemsForQuery(repository, query, 'initiative'),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return { items: workItems.map((workItem) => workItemToInitiativeListItem(workItem, typedSourceProjection(workItem, context))) };
 }
 
 export async function getInitiativeDetail(repository: DeliveryRepository, initiativeId: string): Promise<InitiativeDetail | undefined> {
   const workItem = await typedWorkItemById(repository, initiativeId, 'initiative');
-  return workItem === undefined
-    ? undefined
-    : workItemToInitiativeDetail(workItem, await sourceRelationshipRefs(repository, workItem));
+  if (workItem === undefined) {
+    return undefined;
+  }
+  const context = await typedSourceProjectionContext(repository, workItem.project_id);
+  return workItemToInitiativeDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listTechDebt(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: TechDebtListItem[] }> {
-  return { items: (await typedWorkItems(repository, query.project_id, 'tech_debt')).map(workItemToTechDebtListItem) };
+  const [workItems, context] = await Promise.all([
+    typedWorkItemsForQuery(repository, query, 'tech_debt'),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return { items: workItems.map((workItem) => workItemToTechDebtListItem(workItem, typedSourceProjection(workItem, context))) };
 }
 
 export async function getTechDebtDetail(repository: DeliveryRepository, techDebtId: string): Promise<TechDebtDetail | undefined> {
   const workItem = await typedWorkItemById(repository, techDebtId, 'tech_debt');
-  return workItem === undefined ? undefined : workItemToTechDebtDetail(workItem, await sourceRelationshipRefs(repository, workItem));
+  if (workItem === undefined) {
+    return undefined;
+  }
+  const context = await typedSourceProjectionContext(repository, workItem.project_id);
+  return workItemToTechDebtDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listBugs(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: BugListItem[] }> {
-  return { items: (await typedWorkItems(repository, query.project_id, 'bug')).map(workItemToBugListItem) };
+  const [workItems, context] = await Promise.all([
+    typedWorkItemsForQuery(repository, query, 'bug'),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return { items: workItems.map((workItem) => workItemToBugListItem(workItem, typedSourceProjection(workItem, context))) };
 }
 
 export async function getBugDetail(repository: DeliveryRepository, bugId: string): Promise<BugDetail | undefined> {
   const workItem = await typedWorkItemById(repository, bugId, 'bug');
-  return workItem === undefined ? undefined : workItemToBugDetail(workItem, await sourceRelationshipRefs(repository, workItem));
+  if (workItem === undefined) {
+    return undefined;
+  }
+  const context = await typedSourceProjectionContext(repository, workItem.project_id);
+  return workItemToBugDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function getReleaseReadinessDetail(
@@ -256,11 +372,13 @@ export async function getDashboard(
         { label: 'QA accepted', value: qaHandoffs.filter(({ handoff }) => handoff.status === 'accepted').length },
       ]),
     ],
-    next_actions: [
-      { id: 'unblock-items', label: 'Unblock blocked items', href: '/my-work' },
-      { id: 'review-aging-artifacts', label: 'Review aging artifacts', href: '/reports/spec-review-aging' },
-      { id: 'continue-executions', label: 'Continue interrupted executions', href: '/reports/execution-continuation' },
-    ],
+    next_actions: dashboardCommandActions({
+      developmentPlanItems,
+      executions,
+      codeReviews,
+      qaHandoffs,
+    }),
+    runtime_signals: dashboardRuntimeSignals(executions),
     report_links: reportLinks(),
     degraded_sources: [],
   };
@@ -268,15 +386,22 @@ export async function getDashboard(
 
 export async function listDevelopmentPlanProjections(
   repository: DeliveryRepository,
-  query: AiNativeQuery,
+  query: ProductListQuery,
 ): Promise<Record<string, unknown>> {
-  const plans = await repository.listDevelopmentPlans(query.project_id);
+  const [plans, roleContext] = await Promise.all([
+    repository.listDevelopmentPlans(query.project_id),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  const visiblePlans = plans.filter((plan) => developmentPlanMatchesQuery(plan, query, roleContext));
   const rows = await Promise.all(
-    plans.map(async (plan) => {
+    visiblePlans.map(async (plan) => {
       const items = await repository.listDevelopmentPlanItems(plan.id);
       const responsibleRoles = uniqueStrings(items.map((item) => item.responsible_role));
+      const driverActorIds = uniqueStrings(compactStrings(items.map((item) => item.driver_actor_id)));
+      const reviewerActorIds = uniqueStrings(compactStrings(items.map((item) => item.reviewer_actor_id)));
       const gateStates = uniqueStrings(items.map(currentDevelopmentPlanItemGate));
       const risks = uniqueStrings(items.map((item) => item.risk));
+      const releaseImpacts = uniqueStrings(items.map((item) => item.release_impact));
       return {
         id: plan.id,
         object_ref: developmentPlanRef(plan),
@@ -287,10 +412,16 @@ export async function listDevelopmentPlanProjections(
         blocked_count: items.filter(isDevelopmentPlanItemBlocked).length,
         responsible_role: responsibleRoles.length === 1 ? responsibleRoles[0] : 'mixed',
         responsible_roles: responsibleRoles,
+        driver_actor_id: driverActorIds.length === 1 ? driverActorIds[0] : undefined,
+        driver_actor_ids: driverActorIds,
+        reviewer_actor_id: reviewerActorIds.length === 1 ? reviewerActorIds[0] : undefined,
+        reviewer_actor_ids: reviewerActorIds,
         gate_state: gateStates.length === 1 ? gateStates[0] : 'mixed',
         gate_states: gateStates,
         risk: highestRisk(risks),
         risks,
+        release_impact: releaseImpacts.length === 1 ? releaseImpacts[0] : undefined,
+        release_impacts: releaseImpacts,
         href: `/development-plans/${plan.id}`,
         updated_at: plan.updated_at,
       };
@@ -339,7 +470,17 @@ export async function getDevelopmentPlanItemProjection(
   if (plan === undefined || item === undefined || item.development_plan_id !== plan.id) {
     return undefined;
   }
-  const [itemRevisions, boundaryRevisionCandidates, specs, executionPlans, executions, codeReviewHandoffs, qaHandoffs] = await Promise.all([
+  const [
+    itemRevisions,
+    boundaryRevisionCandidates,
+    specs,
+    executionPlans,
+    executions,
+    codeReviewHandoffs,
+    qaHandoffs,
+    executionPackages,
+    releases,
+  ] = await Promise.all([
     repository.listDevelopmentPlanItemRevisions(item.id),
     listBoundarySummaryRevisionsForItem(repository, item.id),
     repository.listSpecs(plan.project_id),
@@ -347,7 +488,11 @@ export async function getDevelopmentPlanItemProjection(
     listExecutionsForProject(repository, plan.project_id),
     listCodeReviewHandoffsForProject(repository, plan.project_id),
     listQaHandoffsForProject(repository, plan.project_id),
+    repository.listExecutionPackages(plan.project_id),
+    repository.listReleases(plan.project_id),
   ]);
+  const releaseEvidence = (await Promise.all(releases.map((release) => repository.listReleaseEvidences(release.id)))).flat();
+  const runtimeBoundary = planItemRuntimeBoundary(item, executionPlans, executionPackages);
   return {
     id: item.id,
     object_ref: developmentPlanItemRef(item),
@@ -359,6 +504,8 @@ export async function getDevelopmentPlanItemProjection(
     driver_actor_id: item.driver_actor_id,
     reviewer_actor_id: item.reviewer_actor_id,
     risk: item.risk,
+    dependency_hints: item.dependency_hints,
+    affected_surfaces: item.affected_surfaces,
     boundary_status: item.boundary_status,
     spec_status: item.spec_status,
     execution_plan_status: item.execution_plan_status,
@@ -369,7 +516,7 @@ export async function getDevelopmentPlanItemProjection(
     next_action: item.next_action,
     revisions: itemRevisions,
     boundary_summary_revisions: boundaryRevisionCandidates,
-    specs: specs.filter((spec) => spec.development_plan_item_id === item.id).map(specQueueRow(repository, plan, item)),
+    specs: await Promise.all(specs.filter((spec) => spec.development_plan_item_id === item.id).map((spec) => specQueueRow(repository, plan, item, spec))),
     execution_plans: await Promise.all(executionPlans.map((executionPlan) => executionPlanQueueRow(repository, plan, item, executionPlan))),
     executions: await Promise.all(
       executions
@@ -382,6 +529,8 @@ export async function getDevelopmentPlanItemProjection(
     qa_handoffs: qaHandoffs
       .filter(({ handoff }) => handoff.development_plan_item_id === item.id)
       .map(({ handoff }) => qaHandoffQueueRow(plan, item, handoff)),
+    runtime_boundary: runtimeBoundary,
+    release_context: planItemReleaseContext(item, runtimeBoundary, executionPackages, releases, releaseEvidence),
     compare_links: {
       item_revisions_href: `/development-plans/${plan.id}/items/${item.id}/revisions/compare`,
       boundary_summary_revisions_href: boundaryRevisionCandidates[0]
@@ -401,7 +550,7 @@ export async function listSpecsExecutionPlans(
   const specs = await repository.listSpecs(query.project_id);
   const rows: Record<string, unknown>[] = [];
   for (const { plan, item } of planItems) {
-    rows.push(...specs.filter((spec) => spec.development_plan_item_id === item.id).map(specQueueRow(repository, plan, item)));
+    rows.push(...await Promise.all(specs.filter((spec) => spec.development_plan_item_id === item.id).map((spec) => specQueueRow(repository, plan, item, spec))));
     for (const executionPlan of await repository.listExecutionPlansForDevelopmentPlanItem(item.id)) {
       rows.push(await executionPlanQueueRow(repository, plan, item, executionPlan));
     }
@@ -569,6 +718,179 @@ async function listQaHandoffsForProject(repository: DeliveryRepository, projectI
   return rows.sort((left, right) => right.handoff.updated_at.localeCompare(left.handoff.updated_at));
 }
 
+function dashboardCommandActions({
+  codeReviews,
+  developmentPlanItems,
+  executions,
+  qaHandoffs,
+}: {
+  codeReviews: readonly CodeReviewWithContext[];
+  developmentPlanItems: readonly DevelopmentPlanItemWithPlan[];
+  executions: readonly ExecutionWithContext[];
+  qaHandoffs: readonly QaWithContext[];
+}): DashboardCommandAction[] {
+  const releaseBlockers = developmentPlanItems
+    .filter(({ item }) => item.release_impact === 'release_blocking' && isDevelopmentPlanItemBlocked(item))
+    .map(({ item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `release-blocker:${item.id}`,
+        item,
+        kind: 'release_blocker',
+        label: item.title,
+        next_action: item.next_action,
+        plan,
+        severity: 'critical',
+        stage_id: 'release',
+      }),
+    );
+  const reviewChanges = codeReviews
+    .filter(({ handoff }) => handoff.status === 'changes_requested')
+    .map(({ handoff, item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `code-review:${handoff.id}`,
+        item,
+        kind: 'code_review_changes',
+        label: handoff.ref.title ?? `${item.title} code review`,
+        next_action: handoff.decision_rationale ?? handoff.summary,
+        plan,
+        severity: 'high',
+        stage_id: 'code_review',
+      }),
+    );
+  const qaBlockers = qaHandoffs
+    .filter(({ handoff }) => handoff.status === 'blocked' || handoff.status === 'pending')
+    .map(({ handoff, item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `qa:${handoff.id}`,
+        item,
+        kind: 'qa_blocker',
+        label: handoff.ref.title ?? `${item.title} QA handoff`,
+        next_action: handoff.rationale ?? handoff.known_risks[0] ?? handoff.test_strategy,
+        plan,
+        severity: handoff.status === 'blocked' ? 'high' : 'medium',
+        stage_id: 'qa',
+      }),
+    );
+  const missingSpecApprovals = developmentPlanItems
+    .filter(({ item }) => item.spec_status === 'blocked' || item.spec_status === 'changes_requested' || item.spec_status === 'in_review')
+    .map(({ item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `spec:${item.id}`,
+        item,
+        kind: 'missing_spec_approval',
+        label: item.title,
+        next_action: item.next_action,
+        plan,
+        severity: item.spec_status === 'in_review' ? 'medium' : 'high',
+        stage_id: 'spec',
+      }),
+    );
+  const missingExecutionPlanApprovals = developmentPlanItems
+    .filter(({ item }) =>
+      item.execution_plan_status === 'blocked' ||
+      item.execution_plan_status === 'changes_requested' ||
+      item.execution_plan_status === 'in_review',
+    )
+    .map(({ item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        id: `execution-plan:${item.id}`,
+        item,
+        kind: 'missing_execution_plan_approval',
+        label: item.title,
+        next_action: item.next_action,
+        plan,
+        severity: item.execution_plan_status === 'in_review' ? 'medium' : 'high',
+        stage_id: 'execution_plan',
+      }),
+    );
+  const resumableExecutions = executions
+    .filter(({ execution }) => execution.status === 'interrupted' || execution.status === 'paused')
+    .map(({ execution, item, plan }) =>
+      dashboardDevelopmentPlanItemAction({
+        href: `/executions/${execution.id}`,
+        id: `execution:${execution.id}`,
+        item,
+        kind: 'resumable_execution',
+        label: execution.ref.title ?? `${item.title} execution`,
+        next_action: execution.current_step ?? executionLastEventSummary(execution),
+        plan,
+        runtime: { execution_id: execution.id, resumable: true, state: execution.status },
+        severity: 'medium',
+        stage_id: 'execution',
+      }),
+    );
+
+  return uniqueDashboardActions([
+    ...releaseBlockers,
+    ...reviewChanges,
+    ...qaBlockers,
+    ...missingSpecApprovals,
+    ...missingExecutionPlanApprovals,
+    ...resumableExecutions,
+  ]).slice(0, 7);
+}
+
+function dashboardRuntimeSignals(executions: readonly ExecutionWithContext[]): DashboardRuntimeSignal[] {
+  return executions
+    .filter(({ execution }) => execution.status === 'interrupted' || execution.status === 'paused' || execution.status === 'running')
+    .map(({ execution, item }) => ({
+      execution_id: execution.id,
+      href: `/executions/${execution.id}`,
+      label: execution.ref.title ?? `${item.title} execution`,
+      resumable: execution.status === 'interrupted' || execution.status === 'paused',
+      state: execution.status,
+    }))
+    .slice(0, 4);
+}
+
+function dashboardDevelopmentPlanItemAction({
+  href,
+  id,
+  item,
+  kind,
+  label,
+  next_action,
+  plan,
+  runtime,
+  severity,
+  stage_id,
+}: {
+  href?: string;
+  id: string;
+  item: DevelopmentPlanItem;
+  kind: DashboardCommandAction['kind'];
+  label: string;
+  next_action: string;
+  plan: DevelopmentPlan;
+  runtime?: DashboardCommandAction['runtime'];
+  severity: DashboardCommandAction['severity'];
+  stage_id: DashboardCommandAction['stage_id'];
+}): DashboardCommandAction {
+  return {
+    href: href ?? `/development-plans/${plan.id}/items/${item.id}`,
+    id,
+    kind,
+    label,
+    next_action,
+    severity,
+    stage_id,
+    typed_ref: developmentPlanItemRef(item),
+    ...(runtime === undefined ? {} : { runtime }),
+  };
+}
+
+function uniqueDashboardActions(actions: readonly DashboardCommandAction[]): DashboardCommandAction[] {
+  const seen = new Set<string>();
+  const uniqueActions: DashboardCommandAction[] = [];
+  for (const action of actions) {
+    const key = `${action.kind}:${action.typed_ref.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueActions.push(action);
+  }
+  return uniqueActions;
+}
+
 async function itemContextFor(
   repository: DeliveryRepository,
   developmentPlanItemId: string,
@@ -636,8 +958,10 @@ function developmentPlanItemQueueRow(plan: DevelopmentPlan, item: DevelopmentPla
   };
 }
 
-function specQueueRow(_repository: DeliveryRepository, plan: DevelopmentPlan, item: DevelopmentPlanItem) {
-  return (spec: Spec) => ({
+async function specQueueRow(repository: DeliveryRepository, plan: DevelopmentPlan, item: DevelopmentPlanItem, spec: Spec): Promise<Record<string, unknown>> {
+  const revisionId = spec.approved_revision_id ?? spec.current_revision_id;
+  const revision = revisionId === undefined ? undefined : await repository.getSpecRevision(revisionId);
+  return {
     id: spec.id,
     object_ref: { type: 'spec' as const, id: spec.id, title: `${item.title} Spec` },
     artifact_type: 'spec',
@@ -650,12 +974,18 @@ function specQueueRow(_repository: DeliveryRepository, plan: DevelopmentPlan, it
     gate_state: spec.gate_state,
     current_revision_id: spec.current_revision_id,
     approved_revision_id: spec.approved_revision_id,
+    acceptance_criteria: revision?.acceptance_criteria,
+    qa_owner_actor_id: revision?.qa_owner_actor_id,
+    test_owner_actor_id: revision?.test_owner_actor_id,
+    testability_note: revision?.testability_note,
+    test_strategy_summary: revision?.test_strategy_summary,
+    risk_scenarios: revision?.risk_scenarios,
     stale: item.spec_status === 'stale',
     blocked: item.spec_status === 'blocked',
     next_action: item.spec_status === 'approved' ? 'generate_execution_plan' : 'review_spec',
     href: `/development-plans/${plan.id}/items/${item.id}`,
     updated_at: spec.updated_at,
-  });
+  };
 }
 
 async function executionPlanQueueRow(
@@ -884,6 +1214,114 @@ function qaHandoffActions(handoff: QaHandoff): Array<Record<string, unknown>> {
       : []),
     inspect,
   ];
+}
+
+function planItemRuntimeBoundary(
+  item: DevelopmentPlanItem,
+  executionPlans: ExecutionPlanDocument[],
+  executionPackages: ExecutionPackage[],
+): Record<string, unknown> | undefined {
+  const approvedRevisionIds = new Set(
+    executionPlans
+      .flatMap((executionPlan) => [executionPlan.approved_revision_id, executionPlan.current_revision_id])
+      .filter((revisionId): revisionId is string => revisionId !== undefined),
+  );
+  const candidates = executionPackages
+    .filter((executionPackage) => executionPackage.development_plan_item_id === item.id)
+    .filter((executionPackage) =>
+      executionPackage.execution_plan_revision_id === undefined || approvedRevisionIds.has(executionPackage.execution_plan_revision_id),
+    )
+    .sort(byUpdatedAtDesc);
+  const runnable = candidates.find(
+    (executionPackage) =>
+      executionPackage.generation_key === 'item-execution' &&
+      executionPackage.phase === 'ready' &&
+      executionPackage.activity_state === 'idle' &&
+      executionPackage.gate_state === 'not_submitted',
+  );
+  const selected = runnable ?? candidates[0];
+  if (selected === undefined) {
+    return undefined;
+  }
+  return {
+    type: 'execution_package' as const,
+    id: selected.id,
+    phase: selected.phase,
+    activity_state: selected.activity_state,
+    gate_state: selected.gate_state,
+    execution_plan_revision_id: selected.execution_plan_revision_id,
+  };
+}
+
+function planItemReleaseContext(
+  item: DevelopmentPlanItem,
+  runtimeBoundary: Record<string, unknown> | undefined,
+  executionPackages: ExecutionPackage[],
+  releases: Release[],
+  releaseEvidence: ReleaseEvidence[],
+): Record<string, unknown> {
+  const packageIds = new Set(
+    executionPackages
+      .filter((executionPackage) => executionPackage.development_plan_item_id === item.id)
+      .map((executionPackage) => executionPackage.id),
+  );
+  const runtimeBoundaryId = stringValue(runtimeBoundary, 'id');
+  if (runtimeBoundaryId !== undefined) {
+    packageIds.add(runtimeBoundaryId);
+  }
+  const linkedReleases = releases
+    .filter((release) => releaseLinksPlanItem(release, item, packageIds))
+    .sort(byUpdatedAtDesc);
+  const linkedReleaseIds = new Set(linkedReleases.map((release) => release.id));
+  const itemEvidence = releaseEvidence
+    .filter((evidence) => linkedReleaseIds.has(evidence.release_id) && releaseEvidenceLinksPlanItem(evidence, item))
+    .sort(byUpdatedAtDesc);
+  return {
+    release_refs: linkedReleases.map((release) => ({
+      type: 'release' as const,
+      id: release.id,
+      title: release.title,
+      href: `/releases/${release.id}`,
+    })),
+    readiness_blockers: linkedReleases.flatMap((release) => releaseBlockerRefs(release, item)),
+    evidence_refs: itemEvidence.map(planItemReleaseEvidenceRef),
+    qa_test_evidence_required: item.release_impact === 'release_scoped' || item.release_impact === 'release_blocking',
+  };
+}
+
+function releaseLinksPlanItem(release: Release, item: DevelopmentPlanItem, packageIds: Set<string>): boolean {
+  if (release.work_item_ids.includes(item.source_ref.id) || release.execution_package_ids.some((packageId) => packageIds.has(packageId))) {
+    return true;
+  }
+  return releaseScopeRefs(release).some((ref) => ref.type === 'development_plan_item' && ref.id === item.id);
+}
+
+function releaseEvidenceLinksPlanItem(evidence: ReleaseEvidence, item: DevelopmentPlanItem): boolean {
+  const scopeRef = evidenceScopeRef(evidence);
+  return scopeRef !== undefined && scopeRef.type === 'development_plan_item' && scopeRef.id === item.id;
+}
+
+function planItemReleaseEvidenceRef(evidence: ReleaseEvidence): Record<string, unknown> {
+  return {
+    ...typedSourceEvidenceRef(evidence),
+    evidence_type: evidence.evidence_type,
+    status: evidence.status,
+    summary: evidence.summary,
+  };
+}
+
+function releaseBlockerRefs(release: Release, item: DevelopmentPlanItem): Array<Record<string, unknown>> {
+  const values = [
+    ...stringArrayValue(release.extra, 'active_blockers'),
+    ...stringArrayValue(release.extra, 'release_blockers'),
+    ...stringArrayValue(release.extra, 'blockers'),
+  ];
+  return values.map((summary, index) => ({
+    code: `release_blocker_${index + 1}`,
+    summary,
+    release_id: release.id,
+    scope_ref: developmentPlanItemRef(item),
+  }));
 }
 
 function developmentPlanItemToMyWorkQueueItem(plan: DevelopmentPlan, item: DevelopmentPlanItem): MyWorkQueueItem {
@@ -1255,9 +1693,9 @@ function latestUpdatedAt(values: string[]): string | undefined {
   return values.sort((left, right) => right.localeCompare(left))[0];
 }
 
-function byUpdatedAtDesc(left: Record<string, unknown>, right: Record<string, unknown>): number {
-  const leftUpdated = typeof left.updated_at === 'string' ? left.updated_at : '';
-  const rightUpdated = typeof right.updated_at === 'string' ? right.updated_at : '';
+function byUpdatedAtDesc(left: unknown, right: unknown): number {
+  const leftUpdated = stringValue(left, 'updated_at') ?? '';
+  const rightUpdated = stringValue(right, 'updated_at') ?? '';
   return rightUpdated.localeCompare(leftUpdated);
 }
 
@@ -1269,6 +1707,14 @@ async function typedWorkItems(repository: DeliveryRepository, projectId: string,
   return (await repository.listWorkItems(projectId)).filter((workItem): workItem is TypedWorkItem => workItem.kind === kind);
 }
 
+async function typedWorkItemsForQuery(repository: DeliveryRepository, query: ProductListQuery, kind: WorkItemObjectType): Promise<TypedWorkItem[]> {
+  const [workItems, context] = await Promise.all([
+    typedWorkItems(repository, query.project_id, kind),
+    typedSourceProjectionContext(repository, query.project_id),
+  ]);
+  return workItems.filter((workItem) => typedWorkItemMatchesQuery(workItem, query, context));
+}
+
 async function typedWorkItemById(
   repository: DeliveryRepository,
   workItemId: string,
@@ -1278,13 +1724,13 @@ async function typedWorkItemById(
   return workItem?.kind === kind ? (workItem as TypedWorkItem) : undefined;
 }
 
-async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: TypedWorkItem): Promise<ProductObjectRef[]> {
-  const sourceRef = { type: workItem.kind, id: workItem.id } as const;
+async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: TypedWorkItem): Promise<TypedSourceRelationshipRef[]> {
+  const sourceRef = sourceRefFor(workItem);
   const sourceLinks = await repository.listDevelopmentPlanSourceLinksForSource(sourceRef);
-  const refs: ProductObjectRef[] = [];
+  const refs: TypedSourceRelationshipRef[] = [];
   const seen = new Set<string>();
 
-  const push = (ref: ProductObjectRef) => {
+  const push = (ref: TypedSourceRelationshipRef) => {
     const key = JSON.stringify(ref);
     if (!seen.has(key)) {
       seen.add(key);
@@ -1300,12 +1746,8 @@ async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: 
     push(developmentPlanRef(plan));
     const items = await repository.listDevelopmentPlanItems(plan.id);
     for (const item of items) {
-      push(developmentPlanItemRef(item));
-      for (const spec of (await repository.listSpecs(workItem.project_id)).filter((candidate) => candidate.development_plan_item_id === item.id)) {
-        push({ type: 'spec', id: spec.id });
-      }
-      for (const executionPlan of await repository.listExecutionPlansForDevelopmentPlanItem(item.id)) {
-        push({ type: 'execution_plan', id: executionPlan.id });
+      if (sourceRefsMatch(item.source_ref, sourceRef)) {
+        push(developmentPlanItemRef(item));
       }
     }
   }
@@ -1313,8 +1755,474 @@ async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: 
   return refs;
 }
 
+async function typedSourceProjectionContext(repository: DeliveryRepository, projectId: string): Promise<TypedSourceProjectionContext> {
+  const [plans, planItems, executionPackages, executions, codeReviewHandoffs, qaHandoffs, releases, workItems] = await Promise.all([
+    repository.listDevelopmentPlans(projectId),
+    listDevelopmentPlanItemsForProject(repository, projectId),
+    repository.listExecutionPackages(projectId),
+    listExecutionsForProject(repository, projectId),
+    listCodeReviewHandoffsForProject(repository, projectId),
+    listQaHandoffsForProject(repository, projectId),
+    repository.listReleases(projectId),
+    repository.listWorkItems(projectId),
+  ]);
+  const releaseEvidence = (await Promise.all(releases.map((release) => repository.listReleaseEvidences(release.id)))).flat();
+  const typedWorkItemRefs = workItems.map((workItem) => sourceRefFor(workItem));
+  const planItemRefs = planItems.map(({ item }) => developmentPlanItemRef(item));
+  const attachmentScopes = [...typedWorkItemRefs, ...planItemRefs];
+  const attachmentRows = await Promise.all(
+    attachmentScopes.map((ref) => repository.listAttachmentsForObject(ref.type, ref.id)),
+  );
+  return {
+    plans,
+    planItems,
+    executionPackages,
+    executions,
+    codeReviewHandoffs,
+    qaHandoffs,
+    releases,
+    releaseEvidence,
+    attachments: uniqueById(attachmentRows.flat()),
+  };
+}
+
+function typedSourceProjection(workItem: TypedWorkItem, context: TypedSourceProjectionContext): TypedSourceProjection {
+  const sourceRef = sourceRefFor(workItem);
+  const linkedDevelopmentPlans = context.plans.filter((plan) => plan.source_refs.some((ref) => sourceRefsMatch(ref, sourceRef)));
+  const linkedDevelopmentPlanIds = new Set(linkedDevelopmentPlans.map((plan) => plan.id));
+  const linkedPlanItems = context.planItems.filter(({ plan, item }) => linkedDevelopmentPlanIds.has(plan.id) && sourceRefsMatch(item.source_ref, sourceRef));
+  const releaseRefs = context.releases.filter((release) => releaseLinksSource(release, workItem, linkedPlanItems, context.executionPackages));
+  const attachmentRefs = context.attachments.filter((attachment) => attachmentLinksSource(attachment, sourceRef, linkedPlanItems));
+  const evidenceRefs = context.releaseEvidence.filter((evidence) => evidenceLinksSource(evidence, sourceRef, attachmentRefs, linkedPlanItems));
+  const updatedValues = [
+    workItem.updated_at,
+    ...linkedDevelopmentPlans.map((plan) => plan.updated_at),
+    ...linkedPlanItems.map(({ item }) => item.updated_at),
+    ...releaseRefs.map((release) => release.updated_at),
+    ...attachmentRefs.map((attachment) => attachment.created_at),
+    ...evidenceRefs.map((evidence) => evidence.updated_at ?? evidence.created_at),
+  ];
+
+  return {
+    planning_coverage: {
+      development_plan_count: linkedDevelopmentPlans.length,
+      plan_item_count: linkedPlanItems.length,
+      uncovered: linkedDevelopmentPlans.length === 0 || linkedPlanItems.length === 0,
+    },
+    downstream_gate_summary: downstreamGateSummary(linkedPlanItems.map(({ item }) => item)),
+    linked_development_plans: linkedDevelopmentPlans.map(developmentPlanRef),
+    linked_plan_items: linkedPlanItems.map(({ item }) => developmentPlanItemRef(item)),
+    evidence_refs: evidenceRefs.map(typedSourceEvidenceRef),
+    attachment_refs: attachmentRefs.map(attachmentPublicRef),
+    release_refs: releaseRefs.map((release) => ({ type: 'release' as const, id: release.id, title: release.title })),
+    audit: {
+      created_at: workItem.created_at,
+      updated_at: workItem.updated_at,
+      ...(workItem.driver_actor_id === undefined ? {} : { updated_by_actor_id: workItem.driver_actor_id }),
+    },
+    last_meaningful_update_at: latestUpdatedAt(updatedValues) ?? workItem.updated_at,
+    next_action: nextSourceAction(linkedPlanItems.map(({ item }) => item), workItem),
+  };
+}
+
+function typedWorkItemMatchesQuery(
+  workItem: TypedWorkItem,
+  query: ProductListQuery,
+  context: TypedSourceProjectionContext,
+): boolean {
+  if (query.status !== undefined && workItem.phase !== query.status) {
+    return false;
+  }
+  if (query.phase !== undefined && workItem.phase !== query.phase) {
+    return false;
+  }
+  if (query.gate_state !== undefined && workItem.gate_state !== query.gate_state) {
+    return false;
+  }
+  if (query.resolution !== undefined && workItem.resolution !== query.resolution) {
+    return false;
+  }
+  if (query.risk !== undefined && workItem.risk !== query.risk) {
+    return false;
+  }
+  if (query.driver_actor_id !== undefined && workItem.driver_actor_id !== query.driver_actor_id) {
+    return false;
+  }
+  if (query.actor_id !== undefined && workItem.driver_actor_id !== query.actor_id) {
+    return false;
+  }
+  return sourceRoleFilterState(workItem, context).matches(query);
+}
+
+function developmentPlanMatchesQuery(
+  plan: DevelopmentPlan,
+  query: ProductListQuery,
+  context: TypedSourceProjectionContext,
+): boolean {
+  if (query.status !== undefined && plan.status !== query.status) {
+    return false;
+  }
+  const planItems = context.planItems.filter(({ plan: candidatePlan }) => candidatePlan.id === plan.id);
+  if (query.phase !== undefined && !planItems.some(({ item }) => currentDevelopmentPlanItemGate(item) === query.phase)) {
+    return false;
+  }
+  if (query.gate_state !== undefined && !planItems.some(({ item }) => currentDevelopmentPlanItemGate(item) === query.gate_state)) {
+    return false;
+  }
+  if (query.risk !== undefined && !planItems.some(({ item }) => item.risk === query.risk)) {
+    return false;
+  }
+  if (query.blocked !== undefined && planItems.some(({ item }) => isDevelopmentPlanItemBlocked(item)) !== query.blocked) {
+    return false;
+  }
+  if (
+    query.stale !== undefined &&
+    planItems.some(({ item }) => item.spec_status === 'stale' || item.execution_plan_status === 'stale' || item.boundary_status === 'stale') !== query.stale
+  ) {
+    return false;
+  }
+  return planRoleFilterState(plan, context).matches(query);
+}
+
+function sourceRoleFilterState(workItem: TypedWorkItem, context: TypedSourceProjectionContext) {
+  const sourceRef = sourceRefFor(workItem);
+  const linkedDevelopmentPlanIds = new Set(
+    context.plans.filter((plan) => plan.source_refs.some((ref) => sourceRefsMatch(ref, sourceRef))).map((plan) => plan.id),
+  );
+  const linkedPlanItems = context.planItems.filter(
+    ({ plan, item }) => linkedDevelopmentPlanIds.has(plan.id) && sourceRefsMatch(item.source_ref, sourceRef),
+  );
+  const linkedPlanItemIds = new Set(linkedPlanItems.map(({ item }) => item.id));
+  const linkedExecutionIds = new Set(
+    context.executions.filter(({ item }) => linkedPlanItemIds.has(item.id)).map(({ execution }) => execution.id),
+  );
+  const linkedReleaseRefs = context.releases.filter((release) => releaseLinksSource(release, workItem, linkedPlanItems, context.executionPackages));
+
+  return roleFilterState({
+    driverActorIds: [workItem.driver_actor_id, ...linkedPlanItems.map(({ item }) => item.driver_actor_id)],
+    executionOwnerActorIds: [
+      ...context.executionPackages
+        .filter(
+          (executionPackage) =>
+            executionPackage.work_item_id === workItem.id ||
+            (executionPackage.development_plan_item_id !== undefined && linkedPlanItemIds.has(executionPackage.development_plan_item_id)),
+        )
+        .map((executionPackage) => executionPackage.owner_actor_id),
+    ],
+    reviewerActorIds: [
+      ...linkedPlanItems.map(({ item }) => item.reviewer_actor_id),
+      ...context.executionPackages
+        .filter(
+          (executionPackage) =>
+            executionPackage.work_item_id === workItem.id ||
+            (executionPackage.development_plan_item_id !== undefined && linkedPlanItemIds.has(executionPackage.development_plan_item_id)),
+        )
+        .map((executionPackage) => executionPackage.reviewer_actor_id),
+      ...context.codeReviewHandoffs
+        .filter(({ handoff, item }) => linkedPlanItemIds.has(item.id) || linkedExecutionIds.has(handoff.execution_id))
+        .map(({ handoff }) => handoff.reviewer_actor_id),
+    ],
+    qaOwnerActorIds: [
+      ...context.executionPackages
+        .filter(
+          (executionPackage) =>
+            executionPackage.work_item_id === workItem.id ||
+            (executionPackage.development_plan_item_id !== undefined && linkedPlanItemIds.has(executionPackage.development_plan_item_id)),
+        )
+        .map((executionPackage) => executionPackage.qa_owner_actor_id),
+      ...context.qaHandoffs
+        .filter(({ item }) => linkedPlanItemIds.has(item.id))
+        .flatMap(({ handoff }) => [handoff.blocked_by_actor_id, handoff.accepted_by_actor_id]),
+    ],
+    releaseOwnerActorIds: linkedReleaseRefs.map((release) => release.release_owner_actor_id ?? release.created_by_actor_id),
+  });
+}
+
+function planRoleFilterState(plan: DevelopmentPlan, context: TypedSourceProjectionContext) {
+  const planItems = context.planItems.filter(({ plan: candidatePlan }) => candidatePlan.id === plan.id);
+  const planItemIds = new Set(planItems.map(({ item }) => item.id));
+  const planPackageIds = new Set(
+    context.executionPackages
+      .filter((executionPackage) => executionPackage.development_plan_item_id !== undefined && planItemIds.has(executionPackage.development_plan_item_id))
+      .map((executionPackage) => executionPackage.id),
+  );
+  const sourceIds = new Set(plan.source_refs.map((sourceRef) => `${sourceRef.type}:${sourceRef.id}`));
+  const sourceLinkedReleaseRefs = context.releases.filter((release) =>
+    release.work_item_ids.some((workItemId) =>
+      plan.source_refs.some((sourceRef) => sourceRef.id === workItemId),
+    ),
+  );
+  const planScopedReleaseRefs = context.releases.filter((release) =>
+    release.execution_package_ids.some((packageId) => planPackageIds.has(packageId)) ||
+    releaseScopeRefs(release).some(
+      (ref) =>
+        (ref.type === 'development_plan_item' && planItemIds.has(ref.id)) ||
+        sourceIds.has(`${ref.type}:${ref.id}`),
+    ),
+  );
+
+  return roleFilterState({
+    driverActorIds: planItems.map(({ item }) => item.driver_actor_id),
+    executionOwnerActorIds: [
+      ...context.executionPackages
+        .filter((executionPackage) => executionPackage.development_plan_item_id !== undefined && planItemIds.has(executionPackage.development_plan_item_id))
+        .map((executionPackage) => executionPackage.owner_actor_id),
+    ],
+    reviewerActorIds: [
+      ...planItems.map(({ item }) => item.reviewer_actor_id),
+      ...context.executionPackages
+        .filter((executionPackage) => executionPackage.development_plan_item_id !== undefined && planItemIds.has(executionPackage.development_plan_item_id))
+        .map((executionPackage) => executionPackage.reviewer_actor_id),
+      ...context.codeReviewHandoffs
+        .filter(({ item }) => planItemIds.has(item.id))
+        .map(({ handoff }) => handoff.reviewer_actor_id),
+    ],
+    qaOwnerActorIds: [
+      ...context.executionPackages
+        .filter((executionPackage) => executionPackage.development_plan_item_id !== undefined && planItemIds.has(executionPackage.development_plan_item_id))
+        .map((executionPackage) => executionPackage.qa_owner_actor_id),
+      ...context.qaHandoffs
+        .filter(({ item }) => planItemIds.has(item.id))
+        .flatMap(({ handoff }) => [handoff.blocked_by_actor_id, handoff.accepted_by_actor_id]),
+    ],
+    releaseOwnerActorIds: [...sourceLinkedReleaseRefs, ...planScopedReleaseRefs].map(
+      (release) => release.release_owner_actor_id ?? release.created_by_actor_id,
+    ),
+  });
+}
+
+function roleFilterState(input: {
+  driverActorIds: Array<string | undefined>;
+  executionOwnerActorIds: Array<string | undefined>;
+  reviewerActorIds: Array<string | undefined>;
+  qaOwnerActorIds: Array<string | undefined>;
+  releaseOwnerActorIds: Array<string | undefined>;
+}) {
+  const driverActorIds = new Set(compactStrings(input.driverActorIds));
+  const executionOwnerActorIds = new Set(compactStrings(input.executionOwnerActorIds));
+  const reviewerActorIds = new Set(compactStrings(input.reviewerActorIds));
+  const qaOwnerActorIds = new Set(compactStrings(input.qaOwnerActorIds));
+  const releaseOwnerActorIds = new Set(compactStrings(input.releaseOwnerActorIds));
+
+  return {
+    matches(query: ProductListQuery): boolean {
+      return (
+        matchesOptionalActor(driverActorIds, query.driver_actor_id) &&
+        matchesOptionalActor(executionOwnerActorIds, query.execution_owner_actor_id) &&
+        matchesOptionalActor(reviewerActorIds, query.reviewer_actor_id) &&
+        matchesOptionalActor(qaOwnerActorIds, query.qa_owner_actor_id) &&
+        matchesOptionalActor(releaseOwnerActorIds, query.release_owner_actor_id)
+      );
+    },
+  };
+}
+
+function compactStrings(values: Array<string | undefined>): string[] {
+  return values.filter((value): value is string => value !== undefined && value.length > 0);
+}
+
+function matchesOptionalActor(actorIds: ReadonlySet<string>, expected: string | undefined): boolean {
+  return expected === undefined || actorIds.has(expected);
+}
+
+function sourceRefFor(workItem: WorkItem): WorkItemPublicRef {
+  return { type: workItemKindToObjectType(workItem.kind), id: workItem.id, title: workItem.title } as WorkItemPublicRef;
+}
+
+function sourceRefsMatch(left: { type: string; id: string }, right: { type: string; id: string }): boolean {
+  return left.type === right.type && left.id === right.id;
+}
+
+function downstreamGateSummary(items: DevelopmentPlanItem[]): TypedSourceProjection['downstream_gate_summary'] {
+  const current_gate_counts = {
+    boundary: 0,
+    spec: 0,
+    execution_plan: 0,
+    execution: 0,
+    code_review: 0,
+    qa: 0,
+    release: 0,
+  };
+  for (const item of items) {
+    current_gate_counts[downstreamGateFor(item)] += 1;
+  }
+  return {
+    current_gate_counts,
+    blocker_count: items.filter(isDevelopmentPlanItemBlocked).length,
+  };
+}
+
+function downstreamGateFor(item: DevelopmentPlanItem): keyof TypedSourceProjection['downstream_gate_summary']['current_gate_counts'] {
+  if (item.boundary_status !== 'approved') return 'boundary';
+  if (item.spec_status !== 'approved') return 'spec';
+  if (item.execution_plan_status !== 'approved') return 'execution_plan';
+  if (item.execution_status !== 'completed') return 'execution';
+  if (item.review_status !== 'approved') return 'code_review';
+  if (item.qa_handoff_status !== 'approved') return 'qa';
+  return 'release';
+}
+
+function nextSourceAction(items: DevelopmentPlanItem[], workItem: WorkItem): string {
+  const priority = [
+    (item: DevelopmentPlanItem) => item.release_impact === 'release_blocking' && isDevelopmentPlanItemBlocked(item),
+    (item: DevelopmentPlanItem) => item.review_status === 'changes_requested' || item.review_status === 'blocked',
+    (item: DevelopmentPlanItem) => item.qa_handoff_status === 'blocked' || item.qa_handoff_status === 'changes_requested',
+    (item: DevelopmentPlanItem) => item.spec_status === 'blocked' || item.spec_status === 'changes_requested',
+    (item: DevelopmentPlanItem) => item.execution_plan_status === 'blocked' || item.execution_plan_status === 'changes_requested',
+    (item: DevelopmentPlanItem) => item.boundary_status === 'changes_requested',
+    (item: DevelopmentPlanItem) => item.spec_status !== 'approved',
+    (item: DevelopmentPlanItem) => item.execution_plan_status !== 'approved',
+    (item: DevelopmentPlanItem) => item.execution_status !== 'completed',
+  ];
+  for (const matcher of priority) {
+    const item = items.find(matcher);
+    if (item !== undefined) {
+      return item.next_action;
+    }
+  }
+  return items[0]?.next_action ?? `Create Development Plan for ${typedSourceLabel(workItem.kind)}`;
+}
+
+function typedSourceLabel(kind: WorkItem['kind']): string {
+  if (kind === 'tech_debt') return 'Tech Debt';
+  return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+}
+
+function releaseLinksSource(
+  release: Release,
+  workItem: WorkItem,
+  items: DevelopmentPlanItemWithPlan[],
+  executionPackages: ExecutionPackage[],
+): boolean {
+  const itemIds = new Set(items.map(({ item }) => item.id));
+  const packageIds = new Set(
+    executionPackages
+      .filter(
+        (executionPackage) =>
+          executionPackage.work_item_id === workItem.id ||
+          (executionPackage.development_plan_item_id !== undefined && itemIds.has(executionPackage.development_plan_item_id)),
+      )
+      .map((executionPackage) => executionPackage.id),
+  );
+  if (release.work_item_ids.includes(workItem.id) || release.id === workItem.current_release_id) {
+    return true;
+  }
+  if (release.execution_package_ids.some((packageId) => packageIds.has(packageId))) {
+    return true;
+  }
+  const scopeRefs = releaseScopeRefs(release);
+  return scopeRefs.some(
+    (ref) =>
+      sourceRefsMatch(ref, sourceRefFor(workItem)) ||
+      items.some(({ item }) => ref.type === 'development_plan_item' && ref.id === item.id),
+  );
+}
+
+function attachmentLinksSource(attachment: Attachment, sourceRef: WorkItemPublicRef, items: DevelopmentPlanItemWithPlan[]): boolean {
+  if (attachment.owner_object_type === sourceRef.type && attachment.owner_object_id === sourceRef.id) {
+    return true;
+  }
+  return attachment.linked_object_refs.some(
+    (ref) =>
+      sourceRefsMatch(ref, sourceRef) ||
+      items.some(({ item }) => ref.type === 'development_plan_item' && ref.id === item.id),
+  );
+}
+
+function evidenceLinksSource(
+  evidence: ReleaseEvidence,
+  sourceRef: WorkItemPublicRef,
+  attachments: Attachment[],
+  items: DevelopmentPlanItemWithPlan[],
+): boolean {
+  const scopeRef = evidenceScopeRef(evidence);
+  if (scopeRef !== undefined && typedSourceRefMatches(scopeRef, sourceRef, items)) {
+    return true;
+  }
+  if (evidence.object_ref !== undefined) {
+    if (evidence.object_ref.object_type === 'work_item' && evidence.object_ref.object_id === sourceRef.id) {
+      return true;
+    }
+  }
+  const attachmentIds = new Set(attachments.map((attachment) => attachment.id));
+  return observationLinks(evidence).some((link) => link.object_type === 'attachment' && attachmentIds.has(link.object_id));
+}
+
+function evidenceScopeRef(evidence: ReleaseEvidence): ObjectRef | undefined {
+  return isRecord(evidence.extra) ? productSafeObjectRef(evidence.extra.scope_ref) : undefined;
+}
+
+function typedSourceRefMatches(ref: ObjectRef, sourceRef: WorkItemPublicRef, items: DevelopmentPlanItemWithPlan[]): boolean {
+  return (
+    sourceRefsMatch(ref, sourceRef) ||
+    items.some(({ item }) => ref.type === 'development_plan_item' && ref.id === item.id)
+  );
+}
+
+function observationLinks(evidence: ReleaseEvidence): Array<{ object_type: string; object_id: string }> {
+  const observation = value(evidence.extra, 'observation');
+  const links = value(observation, 'links');
+  if (!Array.isArray(links)) {
+    return [];
+  }
+  return links.flatMap((link) => {
+    if (!isRecord(link) || typeof link.object_type !== 'string' || typeof link.object_id !== 'string') {
+      return [];
+    }
+    return [{ object_type: link.object_type, object_id: link.object_id }];
+  });
+}
+
+function evidenceAttachmentId(evidence: ReleaseEvidence): string | undefined {
+  return observationLinks(evidence).find((link) => link.object_type === 'attachment')?.object_id;
+}
+
+function typedSourceEvidenceRef(evidence: ReleaseEvidence): TypedSourceEvidenceRef {
+  const attachmentId = evidenceAttachmentId(evidence);
+  if (attachmentId !== undefined) {
+    return { type: 'attachment', id: attachmentId, title: evidence.title ?? evidence.summary };
+  }
+  return { type: 'release_evidence', id: evidence.id, release_id: evidence.release_id, title: evidence.title ?? evidence.summary };
+}
+
+function uniqueById<T extends { id: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    if (seen.has(row.id)) {
+      return false;
+    }
+    seen.add(row.id);
+    return true;
+  });
+}
+
+function attachmentPublicRef(attachment: Attachment): TypedSourceAttachmentRef {
+  return {
+    id: attachment.id,
+    owner_object_type: attachment.owner_object_type,
+    owner_object_id: attachment.owner_object_id,
+    linked_object_refs: attachment.linked_object_refs.filter(isTypedSourceRelationshipRef),
+    filename: attachment.filename,
+    content_type: attachment.content_type,
+    size_bytes: attachment.size_bytes,
+    checksum_sha256: attachment.checksum_sha256,
+    uploaded_by_actor_id: attachment.uploaded_by_actor_id,
+    created_at: attachment.created_at,
+    evidence_category: attachment.evidence_category,
+    ...(attachment.caption === undefined ? {} : { caption: attachment.caption }),
+    ...(attachment.alt_text === undefined ? {} : { alt_text: attachment.alt_text }),
+    visibility: attachment.visibility,
+    safety_status: attachment.safety_status,
+    reference_status: attachment.reference_status,
+  };
+}
+
+function isTypedSourceRelationshipRef(ref: ObjectRef): ref is TypedSourceRelationshipRef {
+  return typedSourceRelationshipRefSchema.safeParse(ref).success;
+}
+
 function workItemRef(workItem: WorkItem): WorkItemPublicRef {
-  return { type: workItemKindToObjectType(workItem.kind), id: workItem.id };
+  return sourceRefFor(workItem);
 }
 
 function workItemHref(workItem: WorkItem): string {
@@ -1349,87 +2257,160 @@ function releaseToMyWorkQueueItem(release: Release): MyWorkQueueItem {
   };
 }
 
-function baseWorkItemListItem(workItem: WorkItem) {
+function baseWorkItemListItem(workItem: WorkItem, projection: TypedSourceProjection) {
   return {
     id: workItem.id,
     ref: workItemRef(workItem),
     title: workItem.title,
-    status: `${workItem.phase}/${workItem.activity_state}/${workItem.gate_state}`,
+    status: workItem.phase,
     priority: workItem.priority,
     risk: workItem.risk,
     driver_actor_id: workItem.driver_actor_id,
+    planning_coverage: projection.planning_coverage,
+    downstream_gate_summary: projection.downstream_gate_summary,
+    last_meaningful_update_at: projection.last_meaningful_update_at,
+    next_action: projection.next_action,
+    release_refs: projection.release_refs,
     updated_at: workItem.updated_at,
   };
 }
 
-function baseWorkItemDetail(workItem: TypedWorkItem) {
+function baseWorkItemDetail(workItem: TypedWorkItem, projection: TypedSourceProjection) {
   return {
-    ...baseWorkItemListItem(workItem),
+    ...baseWorkItemListItem(workItem, projection),
     narrative_markdown: workItem.narrative_markdown,
-    evidence_refs: [],
-    attachment_refs: [],
+    linked_development_plans: projection.linked_development_plans,
+    linked_plan_items: projection.linked_plan_items,
+    evidence_refs: projection.evidence_refs,
+    attachment_refs: projection.attachment_refs,
+    audit: projection.audit,
   };
 }
 
-function workItemToRequirementListItem(workItem: TypedWorkItem): RequirementListItem {
-  return { ...baseWorkItemListItem(workItem), ref: { type: 'requirement', id: workItem.id }, phase: workItem.phase };
+function workItemToRequirementListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): RequirementListItem {
+  return { ...baseWorkItemListItem(workItem, projection), ref: { type: 'requirement', id: workItem.id, title: workItem.title } };
 }
 
-function workItemToRequirementDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): RequirementDetail {
+function workItemToRequirementDetail(
+  workItem: TypedWorkItem,
+  projection: TypedSourceProjection,
+  relationshipRefs: TypedSourceRelationshipRef[],
+): RequirementDetail {
+  const context = workItem.intake_context.type === 'requirement' ? workItem.intake_context : undefined;
   return {
-    ...baseWorkItemDetail(workItem),
-    ref: { type: 'requirement', id: workItem.id },
+    ...baseWorkItemDetail(workItem, projection),
+    ref: { type: 'requirement', id: workItem.id, title: workItem.title },
     relationship_refs: relationshipRefs,
-    bug_refs: [],
-    release_refs: workItem.current_release_id === undefined ? [] : [{ type: 'release', id: workItem.current_release_id }],
+    stakeholder_problem: requiredContextValue(context?.stakeholder_problem, workItem, 'stakeholder problem'),
+    desired_outcome: requiredContextValue(context?.desired_outcome, workItem, 'desired outcome'),
+    acceptance_criteria_summary: requiredContextValue(context?.acceptance_criteria.join(' '), workItem, 'acceptance criteria'),
+    scope_summary: {
+      in_scope: requiredContextValue(context?.in_scope.join(', '), workItem, 'in scope'),
+      out_of_scope: optionalContextSummary(context?.out_of_scope?.join(', '), 'No explicit out-of-scope constraints captured.'),
+    },
   };
 }
 
-function workItemToInitiativeListItem(workItem: TypedWorkItem): InitiativeListItem {
+function workItemToInitiativeListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): InitiativeListItem {
   const context = workItem.intake_context.type === 'initiative' ? workItem.intake_context : undefined;
-  return { ...baseWorkItemListItem(workItem), ref: { type: 'initiative', id: workItem.id }, business_outcome: context?.business_outcome };
-}
-
-function workItemToInitiativeDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): InitiativeDetail {
   return {
-    ...baseWorkItemDetail(workItem),
-    ref: { type: 'initiative', id: workItem.id },
-    relationship_refs: relationshipRefs,
-    child_refs: [],
-    release_refs: workItem.current_release_id === undefined ? [] : [{ type: 'release', id: workItem.current_release_id }],
+    ...baseWorkItemListItem(workItem, projection),
+    ref: { type: 'initiative', id: workItem.id, title: workItem.title },
+    business_outcome: requiredContextValue(context?.business_outcome, workItem, 'business outcome'),
   };
 }
 
-function workItemToTechDebtListItem(workItem: TypedWorkItem): TechDebtListItem {
-  const context = workItem.intake_context.type === 'tech_debt' ? workItem.intake_context : undefined;
-  return { ...baseWorkItemListItem(workItem), ref: { type: 'tech_debt', id: workItem.id }, affected_modules: context?.affected_modules ?? [] };
+function workItemToInitiativeDetail(
+  workItem: TypedWorkItem,
+  projection: TypedSourceProjection,
+  relationshipRefs: TypedSourceRelationshipRef[],
+): InitiativeDetail {
+  const context = workItem.intake_context.type === 'initiative' ? workItem.intake_context : undefined;
+  return {
+    ...baseWorkItemDetail(workItem, projection),
+    ref: { type: 'initiative', id: workItem.id, title: workItem.title },
+    relationship_refs: relationshipRefs,
+    business_outcome: requiredContextValue(context?.business_outcome, workItem, 'business outcome'),
+    milestone_intent: optionalContextSummary(context?.milestone_intent, 'No milestone intent captured yet.'),
+    child_refs: relationshipRefs.filter((ref) => ref.type === 'requirement' || ref.type === 'bug' || ref.type === 'tech_debt'),
+    release_coverage: releaseCoverageText(projection),
+  };
 }
 
-function workItemToTechDebtDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): TechDebtDetail {
+function workItemToTechDebtListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): TechDebtListItem {
   const context = workItem.intake_context.type === 'tech_debt' ? workItem.intake_context : undefined;
   return {
-    ...baseWorkItemDetail(workItem),
-    ref: { type: 'tech_debt', id: workItem.id },
+    ...baseWorkItemListItem(workItem, projection),
+    ref: { type: 'tech_debt', id: workItem.id, title: workItem.title },
+    affected_modules: context?.affected_modules ?? [],
+    risk_rationale: requiredContextValue(context?.current_pain, workItem, 'risk rationale'),
+  };
+}
+
+function workItemToTechDebtDetail(
+  workItem: TypedWorkItem,
+  projection: TypedSourceProjection,
+  relationshipRefs: TypedSourceRelationshipRef[],
+): TechDebtDetail {
+  const context = workItem.intake_context.type === 'tech_debt' ? workItem.intake_context : undefined;
+  return {
+    ...baseWorkItemDetail(workItem, projection),
+    ref: { type: 'tech_debt', id: workItem.id, title: workItem.title },
     relationship_refs: relationshipRefs,
     affected_modules: context?.affected_modules ?? [],
-    validation_strategy: context?.validation_strategy,
+    risk_rationale: requiredContextValue(context?.current_pain, workItem, 'risk rationale'),
+    validation_strategy: requiredContextValue(context?.validation_strategy, workItem, 'validation strategy'),
+    remediation_intent: requiredContextValue(context?.desired_invariant, workItem, 'remediation intent'),
   };
 }
 
-function workItemToBugListItem(workItem: TypedWorkItem): BugListItem {
-  return { ...baseWorkItemListItem(workItem), ref: { type: 'bug', id: workItem.id }, severity: workItem.risk };
-}
-
-function workItemToBugDetail(workItem: TypedWorkItem, relationshipRefs: ProductObjectRef[]): BugDetail {
+function workItemToBugListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): BugListItem {
   const context = workItem.intake_context.type === 'bug' ? workItem.intake_context : undefined;
   return {
-    ...baseWorkItemDetail(workItem),
-    ref: { type: 'bug', id: workItem.id },
-    relationship_refs: relationshipRefs,
-    observed_behavior: context?.observed_behavior,
-    expected_behavior: context?.expected_behavior,
-    reproduction_steps: context?.reproduction_steps ?? [],
+    ...baseWorkItemListItem(workItem, projection),
+    ref: { type: 'bug', id: workItem.id, title: workItem.title },
+    severity: workItem.risk,
+    affected_surfaces: bugAffectedSurfaces(context),
   };
+}
+
+function workItemToBugDetail(workItem: TypedWorkItem, projection: TypedSourceProjection, relationshipRefs: TypedSourceRelationshipRef[]): BugDetail {
+  const context = workItem.intake_context.type === 'bug' ? workItem.intake_context : undefined;
+  return {
+    ...baseWorkItemDetail(workItem, projection),
+    ref: { type: 'bug', id: workItem.id, title: workItem.title },
+    relationship_refs: relationshipRefs,
+    observed_behavior: requiredContextValue(context?.observed_behavior, workItem, 'observed behavior'),
+    expected_behavior: requiredContextValue(context?.expected_behavior, workItem, 'expected behavior'),
+    reproduction_steps: context?.reproduction_steps ?? [],
+    severity: workItem.risk,
+    affected_surfaces: bugAffectedSurfaces(context),
+  };
+}
+
+function requiredContextValue(valueToCheck: string | undefined, workItem: WorkItem, field: string): string {
+  if (valueToCheck !== undefined && valueToCheck.trim().length > 0) {
+    return valueToCheck;
+  }
+  throw new Error(`${workItem.kind} ${workItem.id} is missing required ${field} projection data`);
+}
+
+function optionalContextSummary(valueToCheck: string | undefined, fallback: string): string {
+  return valueToCheck !== undefined && valueToCheck.trim().length > 0 ? valueToCheck : fallback;
+}
+
+function releaseCoverageText(projection: TypedSourceProjection): string {
+  if (projection.release_refs.length === 0) {
+    return 'No release coverage yet.';
+  }
+  return projection.release_refs.map((ref) => ref.title ?? ref.id).join(', ');
+}
+
+function bugAffectedSurfaces(context: Extract<WorkItem['intake_context'], { type: 'bug' }> | undefined): string[] {
+  if (context === undefined) {
+    return [];
+  }
+  return [context.affected_environment, context.suspected_area].filter((valueToCheck): valueToCheck is string => valueToCheck !== undefined);
 }
 
 function releaseScopeRefs(release: Release): ObjectRef[] {
@@ -1786,6 +2767,14 @@ function value(record: unknown, key: string): unknown {
 function stringValue(record: unknown, key: string): string | undefined {
   const maybeValue = value(record, key);
   return typeof maybeValue === 'string' && maybeValue.trim().length > 0 ? maybeValue : undefined;
+}
+
+function stringArrayValue(record: unknown, key: string): string[] {
+  const maybeValues = value(record, key);
+  if (!Array.isArray(maybeValues)) {
+    return [];
+  }
+  return maybeValues.filter((maybeValue): maybeValue is string => typeof maybeValue === 'string' && maybeValue.trim().length > 0);
 }
 
 function objectRefKey(ref: ObjectRef): string {

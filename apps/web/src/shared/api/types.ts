@@ -185,8 +185,6 @@ export const supportedProductLaneSearchParams = [
 export type ProductLaneSearchParam = (typeof supportedProductLaneSearchParams)[number];
 
 const workItemTypeLaneIds = new Set<ProductLaneId>(['requirements', 'bugs', 'tech-debt', 'initiatives']);
-const executionOwnerLaneIds = new Set<ProductLaneId>(['execution-owner']);
-
 export function isWorkItemTypeLane(laneId: ProductLaneId): boolean {
   return workItemTypeLaneIds.has(laneId);
 }
@@ -194,9 +192,6 @@ export function isWorkItemTypeLane(laneId: ProductLaneId): boolean {
 export function isProductLaneSearchParamSupported(laneId: ProductLaneId, key: ProductLaneSearchParam): boolean {
   if (key === 'kind') {
     return !isWorkItemTypeLane(laneId);
-  }
-  if (key === 'execution_owner_actor_id') {
-    return executionOwnerLaneIds.has(laneId);
   }
   return true;
 }
@@ -210,9 +205,7 @@ export function productLaneQueryFromSearchParams(
     project_id: projectId,
     ...stringParam(searchParams, 'actor_id'),
     ...stringParam(searchParams, 'driver_actor_id'),
-    ...(isProductLaneSearchParamSupported(laneId, 'execution_owner_actor_id')
-      ? stringParam(searchParams, 'execution_owner_actor_id')
-      : {}),
+    ...stringParam(searchParams, 'execution_owner_actor_id'),
     ...stringParam(searchParams, 'reviewer_actor_id'),
     ...stringParam(searchParams, 'qa_owner_actor_id'),
     ...stringParam(searchParams, 'release_owner_actor_id'),

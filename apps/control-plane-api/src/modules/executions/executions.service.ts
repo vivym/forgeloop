@@ -22,6 +22,7 @@ import {
   type DevelopmentPlanItemRevision,
   type DevelopmentPlanRevision,
   type Execution,
+  type ExecutionPackage,
   type ExecutionPlanDocument,
   type ExecutionPlanRevision,
   type QaHandoff,
@@ -40,6 +41,7 @@ import { ExecutionPackageService } from '../execution-packages/execution-package
 import { RunControlService } from '../run-control/run-control.service';
 
 type ActorCommand = { actor_id?: string | undefined };
+type StartExecutionCommand = { actor_id: string };
 type ReadyForCodeReviewCommand = ActorCommand & {
   summary: string;
   changed_surfaces: string[];
@@ -70,6 +72,7 @@ type ApprovedExecutionPlanContext = {
   specRevision: SpecRevision;
   executionPlan: ExecutionPlanDocument;
   executionPlanRevision: ExecutionPlanRevision;
+  executionPackage: ExecutionPackage;
 };
 
 @Injectable()
@@ -82,7 +85,7 @@ export class ExecutionsService {
     @Inject(RunControlService) private readonly runControlService: RunControlService,
   ) {}
 
-  async startExecution(developmentPlanId: string, itemId: string, dto: ActorCommand): Promise<Execution> {
+  async startExecution(developmentPlanId: string, itemId: string, dto: StartExecutionCommand): Promise<Execution> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
       const replayedExecution = await this.findReplayableItemExecution(repository, developmentPlanId, itemId);
       if (replayedExecution !== undefined) {
@@ -99,16 +102,15 @@ export class ExecutionsService {
       const execution = this.buildExecution(context, 'running');
       await repository.saveExecution(execution);
 
-      const executionPackage = await this.executionPackageService.createOrReuseItemExecutionPackage(repository, {
-        project: this.requireFound(await repository.getProject(context.plan.project_id), `Project ${context.plan.project_id}`),
-        workItem: context.workItem,
-        item: context.item,
-        spec: context.spec,
-        specRevision: context.specRevision,
-        executionPlan: context.executionPlan,
-        executionPlanRevision: context.executionPlanRevision,
-        execution,
-      });
+      if (context.executionPackage.execution_id !== undefined && context.executionPackage.execution_id !== execution.id) {
+        throw new ConflictException('DevelopmentPlanItem already has an execution package for a different Execution');
+      }
+      const executionPackage = {
+        ...context.executionPackage,
+        execution_id: execution.id,
+        updated_at: this.now(),
+      };
+      await repository.saveExecutionPackage(executionPackage);
 
       const run = await this.runControlService.enqueueRunWithRepository(repository, executionPackage, {
         actorContext: this.actorContextFromExecutionCommand(dto, context),
@@ -538,17 +540,11 @@ export class ExecutionsService {
       executionPlan.approved_revision_id === undefined
         ? undefined
         : await repository.getExecutionPlanRevision(executionPlan.approved_revision_id);
-    const gate = canStartExecutionFromApprovedExecutionPlan({
-      executionPlan,
-      ...(revision === undefined ? {} : { executionPlanRevision: revision }),
-    });
-    if (!gate.ok || executionPlan.current_revision_id !== executionPlan.approved_revision_id) {
-      throw new BadRequestException(
-        `DevelopmentPlanItem ${item.id} cannot start execution: ${gate.ok ? 'approved_execution_plan_revision_not_current' : gate.reason}`,
-      );
-    }
     if (revision === undefined) {
-      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_execution_plan_revision_missing`);
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_execution_plan_revision_not_loaded`);
+    }
+    if (executionPlan.current_revision_id !== executionPlan.approved_revision_id) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_execution_plan_revision_not_current`);
     }
     if (revision.development_plan_item_id !== item.id || revision.execution_plan_id !== executionPlan.id) {
       throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: execution_plan_revision_mismatch`);
@@ -558,17 +554,31 @@ export class ExecutionsService {
       `SpecRevision ${revision.based_on_spec_revision_id}`,
     );
     const spec = this.requireFound(await repository.getSpec(specRevision.spec_id), `Spec ${specRevision.spec_id}`);
-    if (
-      spec.status !== 'approved' ||
-      spec.resolution !== 'approved' ||
-      spec.current_revision_id !== specRevision.id ||
-      spec.approved_revision_id !== specRevision.id
-    ) {
+    if (spec.current_revision_id !== specRevision.id || spec.approved_revision_id !== specRevision.id) {
       throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_spec_not_current`);
     }
     await this.requireApprovedSpecBoundaryChain(item, spec, specRevision, repository);
     const workItem = this.requireFound(await repository.getWorkItem(item.source_ref.id), `${item.source_ref.type} ${item.source_ref.id}`);
-    return { plan, item, workItem, spec, specRevision, executionPlan, executionPlanRevision: revision };
+    const executionPackage = (await repository.listExecutionPackagesForWorkItem(workItem.id)).find(
+      (candidate) =>
+        candidate.development_plan_item_id === item.id &&
+        candidate.execution_plan_id === executionPlan.id &&
+        candidate.execution_plan_revision_id === revision.id &&
+        candidate.generation_key === 'item-execution',
+    );
+    const gate = canStartExecutionFromApprovedExecutionPlan({
+      item,
+      spec,
+      specRevision,
+      executionPlan,
+      executionPlanRevision: revision,
+      ...(executionPackage === undefined ? {} : { executionPackage }),
+    });
+    if (!gate.ok) {
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: ${gate.reason}`);
+    }
+    await this.executionPackageService.assertExecutionPackageGraphStillCurrent(repository, executionPackage!);
+    return { plan, item, workItem, spec, specRevision, executionPlan, executionPlanRevision: revision, executionPackage: executionPackage! };
   }
 
   private async requireCurrentItemRevisionAtApprovedExecutionPlanGate(

@@ -14,7 +14,7 @@ import {
   type RunDurabilityMode,
 } from './control-plane-tokens';
 import { ControlPlaneRuntimeService } from './control-plane-runtime.service';
-import { productArchitectureDemoSeedId, seedProductArchitectureDemoRepository } from './product-architecture-demo-seed';
+import { productWorkspacePreviewSeedId, seedProductWorkspacePreviewRepository } from './product-workspace-preview-seed';
 import { RunExecutionRuntimeConfigService } from './run-execution-runtime-config.service';
 
 const realCodexLaunchTokenEnvelopeSealer: CodexLaunchTokenEnvelopeSealer = {
@@ -39,11 +39,11 @@ export const createControlPlaneRepository = async (env: NodeJS.ProcessEnv = proc
   }
 
   const repository = new InMemoryDeliveryRepository(repositoryOptions);
-  const seedId = env.FORGELOOP_DEMO_SEED_ID?.trim();
-  if (seedId === productArchitectureDemoSeedId) {
-    await seedProductArchitectureDemoRepository(repository);
+  const seedId = env.FORGELOOP_PREVIEW_SEED_ID?.trim();
+  if (seedId === productWorkspacePreviewSeedId) {
+    await seedProductWorkspacePreviewRepository(repository);
   } else if (seedId !== undefined && seedId.length > 0) {
-    throw new Error(`Unsupported FORGELOOP_DEMO_SEED_ID: ${seedId}`);
+    throw new Error(`Unsupported FORGELOOP_PREVIEW_SEED_ID: ${seedId}`);
   }
   return repository;
 };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Spec, SpecRevision } from '@forgeloop/domain';
+import type { ExecutionPackage, Spec, SpecRevision } from '@forgeloop/domain';
 import {
   actorCanActForBoundaryLeader,
   canGenerateExecutionPlanFromApprovedSpec,
@@ -44,8 +44,36 @@ const specRevision = (overrides: Partial<SpecRevision> = {}): SpecRevision => ({
   acceptance_criteria: ['Execution Plan is generated only from loaded approved SpecRevision'],
   risk_notes: [],
   test_strategy_summary: 'Domain gates',
+  qa_owner_actor_id: 'actor-qa',
+  testability_note: 'QA reviewed the acceptance criteria and validation expectations.',
   artifact_refs: [],
   created_at: at,
+  ...overrides,
+});
+
+const releaseScopedItem = (overrides: Partial<DevelopmentPlanItem> = {}): DevelopmentPlanItem => ({
+  id: 'development-plan-item-1',
+  revision_id: 'development-plan-item-revision-1',
+  development_plan_id: 'development-plan-1',
+  source_ref: { type: 'requirement', id: 'requirement-1' },
+  title: 'Release-scoped item',
+  summary: 'Requires QA participation before execution planning.',
+  responsible_role: 'developer',
+  driver_actor_id: 'actor-dev',
+  reviewer_actor_id: 'actor-reviewer',
+  risk: 'medium',
+  dependency_hints: [],
+  affected_surfaces: ['apps/web', 'apps/control-plane-api'],
+  boundary_status: 'approved',
+  spec_status: 'approved',
+  execution_plan_status: 'approved',
+  execution_status: 'not_started',
+  review_status: 'not_started',
+  qa_handoff_status: 'not_started',
+  release_impact: 'release_scoped',
+  next_action: 'start_execution',
+  created_at: at,
+  updated_at: at,
   ...overrides,
 });
 
@@ -98,6 +126,40 @@ const approvedPlanItem = (overrides: Partial<DevelopmentPlanItem> = {}): Develop
   ...overrides,
 });
 
+const runnableExecutionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
+  id: 'execution-package-1',
+  work_item_id: 'requirement-1',
+  development_plan_item_id: 'development-plan-item-1',
+  spec_id: 'spec-1',
+  spec_revision_id: 'spec-revision-1',
+  execution_plan_id: 'execution-plan-1',
+  execution_plan_revision_id: 'execution-plan-revision-1',
+  plan_id: 'execution-plan-1',
+  plan_revision_id: 'execution-plan-revision-1',
+  project_id: 'project-1',
+  repo_id: 'repo-1',
+  objective: 'Implement release-scoped item.',
+  owner_actor_id: 'actor-dev',
+  reviewer_actor_id: 'actor-reviewer',
+  qa_owner_actor_id: 'actor-qa',
+  phase: 'ready',
+  activity_state: 'idle',
+  gate_state: 'not_submitted',
+  resolution: 'none',
+  required_checks: [{ check_id: 'unit', display_name: 'Unit tests', command: 'pnpm test', timeout_seconds: 120, blocks_review: true }],
+  required_test_gates: [{ gate_id: 'qa-strategy', summary: 'Accepted Spec test strategy' }],
+  required_artifact_kinds: ['execution_summary'],
+  allowed_paths: ['apps/**', 'packages/**', 'tests/**'],
+  forbidden_paths: ['packages/db/**'],
+  source_mutation_policy: 'path_policy_scoped',
+  version: 1,
+  generation_key: 'item-execution',
+  manifest_digest: 'execution-plan-revision:execution-plan-revision-1',
+  created_at: at,
+  updated_at: at,
+  ...overrides,
+});
+
 describe('AI-native planning gate helpers', () => {
   it('requires the approved SpecRevision to be loaded before Execution Plan generation', () => {
     expect(canGenerateExecutionPlanFromApprovedSpec({ spec: approvedSpec() })).toEqual({
@@ -110,6 +172,66 @@ describe('AI-native planning gate helpers', () => {
         specRevision: specRevision(),
       }),
     ).toEqual({ ok: true });
+  });
+
+  it('requires QA/Test Owner participation and test strategy fields for release-scoped Execution Plan generation', () => {
+    expect(
+      canGenerateExecutionPlanFromApprovedSpec({
+        item: releaseScopedItem(),
+        spec: approvedSpec(),
+        specRevision: specRevision({ qa_owner_actor_id: undefined }),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'qa_test_owner_missing',
+    });
+    expect(
+      canGenerateExecutionPlanFromApprovedSpec({
+        item: releaseScopedItem(),
+        spec: approvedSpec(),
+        specRevision: specRevision({ testability_note: '' }),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'testability_note_missing',
+    });
+    expect(
+      canGenerateExecutionPlanFromApprovedSpec({
+        item: releaseScopedItem(),
+        spec: approvedSpec(),
+        specRevision: specRevision({ acceptance_criteria: [] }),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'acceptance_criteria_missing',
+    });
+    expect(
+      canGenerateExecutionPlanFromApprovedSpec({
+        item: releaseScopedItem(),
+        spec: approvedSpec(),
+        specRevision: specRevision({ test_strategy_summary: '' }),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'test_strategy_summary_missing',
+    });
+  });
+
+  it('requires QA/Test Owner participation for release-blocking Plan Items even when risk and surface count are low', () => {
+    expect(
+      canGenerateExecutionPlanFromApprovedSpec({
+        item: releaseScopedItem({
+          affected_surfaces: ['apps/web'],
+          release_impact: 'release_blocking',
+          risk: 'low',
+        }),
+        spec: approvedSpec(),
+        specRevision: specRevision({ qa_owner_actor_id: undefined, test_owner_actor_id: undefined }),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'qa_test_owner_missing',
+    });
   });
 
   it('rejects approved Spec gates without an approved revision pointer', () => {
@@ -145,6 +267,70 @@ describe('AI-native planning gate helpers', () => {
       canStartExecutionFromApprovedExecutionPlan({
         executionPlan: approvedExecutionPlan(),
         executionPlanRevision: executionPlanRevision(),
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it('requires approved upstream gates and a runnable internal Execution Package boundary before execution starts', () => {
+    expect(
+      canStartExecutionFromApprovedExecutionPlan({
+        item: releaseScopedItem({ boundary_status: 'pending' }),
+        spec: approvedSpec(),
+        specRevision: specRevision(),
+        executionPlan: approvedExecutionPlan(),
+        executionPlanRevision: executionPlanRevision(),
+        executionPackage: runnableExecutionPackage(),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'boundary_not_approved',
+    });
+    expect(
+      canStartExecutionFromApprovedExecutionPlan({
+        item: releaseScopedItem(),
+        spec: approvedSpec({ status: 'draft', gate_state: 'not_submitted', resolution: 'none' }),
+        specRevision: specRevision(),
+        executionPlan: approvedExecutionPlan(),
+        executionPlanRevision: executionPlanRevision(),
+        executionPackage: runnableExecutionPackage(),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'spec_not_approved',
+    });
+    expect(
+      canStartExecutionFromApprovedExecutionPlan({
+        item: releaseScopedItem(),
+        spec: approvedSpec(),
+        specRevision: specRevision(),
+        executionPlan: approvedExecutionPlan(),
+        executionPlanRevision: executionPlanRevision(),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'execution_package_boundary_missing',
+    });
+    expect(
+      canStartExecutionFromApprovedExecutionPlan({
+        item: releaseScopedItem(),
+        spec: approvedSpec(),
+        specRevision: specRevision(),
+        executionPlan: approvedExecutionPlan(),
+        executionPlanRevision: executionPlanRevision(),
+        executionPackage: runnableExecutionPackage({ phase: 'draft' }),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: 'execution_package_not_runnable',
+    });
+    expect(
+      canStartExecutionFromApprovedExecutionPlan({
+        item: releaseScopedItem(),
+        spec: approvedSpec(),
+        specRevision: specRevision(),
+        executionPlan: approvedExecutionPlan(),
+        executionPlanRevision: executionPlanRevision(),
+        executionPackage: runnableExecutionPackage(),
       }),
     ).toEqual({ ok: true });
   });

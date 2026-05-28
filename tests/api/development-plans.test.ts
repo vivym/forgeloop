@@ -199,6 +199,13 @@ describe('Development Plans API', () => {
         }),
       ]),
     });
+    expect(generated.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: 'Plan product surface changes', driver_actor_id: 'actor-product' }),
+        expect.objectContaining({ title: 'Validate acceptance path', driver_actor_id: 'actor-product' }),
+      ]),
+    );
+    expect(generated.items.every((item: { driver_actor_id?: string }) => item.driver_actor_id === 'actor-product')).toBe(true);
     for (const item of generated.items) {
       await expect(repository.listObjectEvents(item.id, 'development_plan_item')).resolves.toEqual([
         expect.objectContaining({ event_type: 'development_plan_item_created', actor_id: 'actor-product' }),

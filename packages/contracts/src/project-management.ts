@@ -456,19 +456,106 @@ const objectListItemBaseSchema = z
     ref: objectRefSchema,
     title: nonEmpty,
     status: objectLifecycleStatusSchema,
-    priority: nonEmpty.optional(),
-    risk: nonEmpty.optional(),
-    driver_actor_id: nonEmpty.optional(),
-    updated_at: isoDateTimeSchema.optional(),
+    priority: nonEmpty,
+    risk: nonEmpty,
+    driver_actor_id: nonEmpty,
+    updated_at: isoDateTimeSchema,
   })
   .strict();
 
+export const sourcePlanningCoverageSchema = z
+  .object({
+    development_plan_count: z.number().int().nonnegative(),
+    plan_item_count: z.number().int().nonnegative(),
+    uncovered: z.boolean(),
+  })
+  .strict();
+export type SourcePlanningCoverage = z.infer<typeof sourcePlanningCoverageSchema>;
+
+export const downstreamGateSummarySchema = z
+  .object({
+    current_gate_counts: z
+      .object({
+        boundary: z.number().int().nonnegative(),
+        spec: z.number().int().nonnegative(),
+        execution_plan: z.number().int().nonnegative(),
+        execution: z.number().int().nonnegative(),
+        code_review: z.number().int().nonnegative(),
+        qa: z.number().int().nonnegative(),
+        release: z.number().int().nonnegative(),
+      })
+      .strict(),
+    blocker_count: z.number().int().nonnegative(),
+  })
+  .strict();
+export type DownstreamGateSummary = z.infer<typeof downstreamGateSummarySchema>;
+
+export const sourceAuditSchema = z
+  .object({
+    created_at: isoDateTimeSchema,
+    updated_at: isoDateTimeSchema,
+    updated_by_actor_id: nonEmpty.optional(),
+  })
+  .strict();
+export type SourceAudit = z.infer<typeof sourceAuditSchema>;
+
+const sourceListProjectionFieldsSchema = {
+  planning_coverage: sourcePlanningCoverageSchema,
+  downstream_gate_summary: downstreamGateSummarySchema,
+  last_meaningful_update_at: isoDateTimeSchema,
+  next_action: nonEmpty,
+  release_refs: z.array(releaseObjectRefSchema),
+} as const;
+
+const developmentPlanObjectRefSchema = z
+  .object({ type: z.literal('development_plan'), id: nonEmpty, revision_id: nonEmpty.optional(), title: nonEmpty.optional() })
+  .strict();
+const developmentPlanItemObjectRefSchema = z
+  .object({
+    type: z.literal('development_plan_item'),
+    id: nonEmpty,
+    development_plan_id: nonEmpty,
+    revision_id: nonEmpty.optional(),
+    title: nonEmpty.optional(),
+  })
+  .strict();
+const attachmentObjectRefSchema = z.object({ type: z.literal('attachment'), id: nonEmpty, title: nonEmpty.optional() }).strict();
+export const typedSourceReleaseEvidenceRefSchema = z
+  .object({ type: z.literal('release_evidence'), id: nonEmpty, release_id: nonEmpty, title: nonEmpty.optional() })
+  .strict();
+export type TypedSourceReleaseEvidenceRef = z.infer<typeof typedSourceReleaseEvidenceRefSchema>;
+export const typedSourceRelationshipRefSchema = z.discriminatedUnion('type', [
+  initiativeObjectRefSchema,
+  requirementObjectRefSchema,
+  bugObjectRefSchema,
+  techDebtObjectRefSchema,
+  developmentPlanObjectRefSchema,
+  developmentPlanItemObjectRefSchema,
+  releaseObjectRefSchema,
+  attachmentObjectRefSchema,
+]);
+export type TypedSourceRelationshipRef = z.infer<typeof typedSourceRelationshipRefSchema>;
+
+export const typedSourceEvidenceRefSchema = z.discriminatedUnion('type', [attachmentObjectRefSchema, typedSourceReleaseEvidenceRefSchema]);
+export type TypedSourceEvidenceRef = z.infer<typeof typedSourceEvidenceRefSchema>;
+
+export const typedSourceAttachmentRefSchema = attachmentRefSchema
+  .extend({
+    linked_object_refs: z.array(typedSourceRelationshipRefSchema).default([]),
+  })
+  .strict();
+export type TypedSourceAttachmentRef = z.infer<typeof typedSourceAttachmentRefSchema>;
+
 const objectDetailBaseSchema = objectListItemBaseSchema
   .extend({
-    narrative_markdown: z.string().default(''),
-    evidence_refs: z.array(objectRefSchema).default([]),
-    attachment_refs: z.array(attachmentRefSchema).default([]),
-    relationship_refs: z.array(productObjectRefSchema).default([]),
+    ...sourceListProjectionFieldsSchema,
+    narrative_markdown: z.string(),
+    linked_development_plans: z.array(developmentPlanObjectRefSchema),
+    linked_plan_items: z.array(developmentPlanItemObjectRefSchema),
+    evidence_refs: z.array(typedSourceEvidenceRefSchema),
+    attachment_refs: z.array(typedSourceAttachmentRefSchema),
+    audit: sourceAuditSchema,
+    relationship_refs: z.array(typedSourceRelationshipRefSchema),
   })
   .strict();
 
@@ -554,55 +641,67 @@ export type MyWorkQueueItem = z.infer<typeof myWorkQueueItemSchema>;
 
 export const initiativeListItemSchema = objectListItemBaseSchema.extend({
   ref: initiativeObjectRefSchema,
-  business_outcome: nonEmpty.optional(),
+  ...sourceListProjectionFieldsSchema,
+  business_outcome: nonEmpty,
 });
 export type InitiativeListItem = z.infer<typeof initiativeListItemSchema>;
 
 export const initiativeDetailSchema = objectDetailBaseSchema.extend({
   ref: initiativeObjectRefSchema,
-  child_refs: z.array(objectRefSchema).default([]),
-  milestone_intent: nonEmpty.optional(),
-  release_refs: z.array(objectRefSchema).default([]),
+  business_outcome: nonEmpty,
+  milestone_intent: nonEmpty,
+  child_refs: z.array(objectRefSchema),
+  release_coverage: nonEmpty,
 });
 export type InitiativeDetail = z.infer<typeof initiativeDetailSchema>;
 
 export const requirementListItemSchema = objectListItemBaseSchema.extend({
   ref: requirementObjectRefSchema,
-  phase: nonEmpty.optional(),
+  ...sourceListProjectionFieldsSchema,
 });
 export type RequirementListItem = z.infer<typeof requirementListItemSchema>;
 
 export const requirementDetailSchema = objectDetailBaseSchema.extend({
   ref: requirementObjectRefSchema,
-  bug_refs: z.array(objectRefSchema).default([]),
-  release_refs: z.array(objectRefSchema).default([]),
+  stakeholder_problem: nonEmpty,
+  desired_outcome: nonEmpty,
+  acceptance_criteria_summary: nonEmpty,
+  scope_summary: z.object({ in_scope: nonEmpty, out_of_scope: nonEmpty }).strict(),
 });
 export type RequirementDetail = z.infer<typeof requirementDetailSchema>;
 
 export const techDebtListItemSchema = objectListItemBaseSchema.extend({
   ref: techDebtObjectRefSchema,
-  affected_modules: z.array(nonEmpty).default([]),
+  ...sourceListProjectionFieldsSchema,
+  affected_modules: z.array(nonEmpty),
+  risk_rationale: nonEmpty,
 });
 export type TechDebtListItem = z.infer<typeof techDebtListItemSchema>;
 
 export const techDebtDetailSchema = objectDetailBaseSchema.extend({
   ref: techDebtObjectRefSchema,
-  affected_modules: z.array(nonEmpty).default([]),
-  validation_strategy: nonEmpty.optional(),
+  affected_modules: z.array(nonEmpty),
+  risk_rationale: nonEmpty,
+  validation_strategy: nonEmpty,
+  remediation_intent: nonEmpty,
 });
 export type TechDebtDetail = z.infer<typeof techDebtDetailSchema>;
 
 export const bugListItemSchema = objectListItemBaseSchema.extend({
   ref: bugObjectRefSchema,
-  severity: nonEmpty.optional(),
+  ...sourceListProjectionFieldsSchema,
+  severity: nonEmpty,
+  affected_surfaces: z.array(nonEmpty),
 });
 export type BugListItem = z.infer<typeof bugListItemSchema>;
 
 export const bugDetailSchema = objectDetailBaseSchema.extend({
   ref: bugObjectRefSchema,
-  observed_behavior: nonEmpty.optional(),
-  expected_behavior: nonEmpty.optional(),
-  reproduction_steps: z.array(nonEmpty).default([]),
+  observed_behavior: nonEmpty,
+  expected_behavior: nonEmpty,
+  reproduction_steps: z.array(nonEmpty),
+  severity: nonEmpty,
+  affected_surfaces: z.array(nonEmpty),
 });
 export type BugDetail = z.infer<typeof bugDetailSchema>;
 

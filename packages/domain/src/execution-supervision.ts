@@ -5,8 +5,8 @@ import type {
   QaHandoff as ContractQaHandoff,
   ProductObjectRef,
 } from '@forgeloop/contracts';
-import type { GateResult } from './development-plan.js';
-import type { IsoDateTime } from './types.js';
+import { canGenerateExecutionPlanFromApprovedSpec, hasText, type DevelopmentPlanItem, type GateResult } from './development-plan.js';
+import type { ExecutionPackage, IsoDateTime, Spec, SpecRevision } from './types.js';
 
 export interface ExecutionPlanDocument {
   id: string;
@@ -90,15 +90,59 @@ export function auditedExceptionAllowsQaPreparation(input: {
 }
 
 export type ExecutionStartGateReason =
+  | 'boundary_not_approved'
+  | 'spec_not_approved'
+  | 'approved_spec_revision_missing'
+  | 'approved_spec_revision_not_loaded'
+  | 'spec_revision_not_approved_revision'
+  | 'qa_test_owner_missing'
+  | 'testability_note_missing'
+  | 'acceptance_criteria_missing'
+  | 'test_strategy_summary_missing'
   | 'execution_plan_not_approved'
   | 'approved_execution_plan_revision_missing'
   | 'approved_execution_plan_revision_not_loaded'
-  | 'execution_plan_revision_not_approved_revision';
+  | 'execution_plan_revision_not_approved_revision'
+  | 'execution_package_boundary_missing'
+  | 'execution_package_not_runnable'
+  | 'execution_package_scope_mismatch'
+  | 'execution_package_policy_missing';
 
 export function canStartExecutionFromApprovedExecutionPlan(input: {
+  item?: Pick<DevelopmentPlanItem, 'id' | 'boundary_status' | 'spec_status' | 'execution_plan_status' | 'risk' | 'release_impact' | 'affected_surfaces'>;
+  spec?: Spec;
+  specRevision?: SpecRevision;
   executionPlan: ExecutionPlanDocument;
   executionPlanRevision?: ExecutionPlanRevision;
+  executionPackage?: Pick<
+    ExecutionPackage,
+    | 'development_plan_item_id'
+    | 'execution_plan_id'
+    | 'execution_plan_revision_id'
+    | 'spec_revision_id'
+    | 'phase'
+    | 'activity_state'
+    | 'gate_state'
+    | 'required_checks'
+    | 'allowed_paths'
+    | 'qa_owner_actor_id'
+  >;
 }): GateResult<ExecutionStartGateReason> {
+  if (input.item !== undefined && input.item.boundary_status !== 'approved') {
+    return { ok: false, reason: 'boundary_not_approved' };
+  }
+  if (input.spec !== undefined) {
+    const specGate = canGenerateExecutionPlanFromApprovedSpec({
+      ...(input.item === undefined ? {} : { item: input.item }),
+      spec: input.spec,
+      ...(input.specRevision === undefined ? {} : { specRevision: input.specRevision }),
+    });
+    if (!specGate.ok) {
+      return { ok: false, reason: specGate.reason };
+    }
+  } else if (input.item !== undefined && input.item.spec_status !== 'approved') {
+    return { ok: false, reason: 'spec_not_approved' };
+  }
   if (input.executionPlan.status !== 'approved' || input.executionPlan.approved_by_actor_id === undefined) {
     return { ok: false, reason: 'execution_plan_not_approved' };
   }
@@ -110,6 +154,32 @@ export function canStartExecutionFromApprovedExecutionPlan(input: {
   }
   if (input.executionPlanRevision.id !== input.executionPlan.approved_revision_id) {
     return { ok: false, reason: 'execution_plan_revision_not_approved_revision' };
+  }
+  if (input.executionPackage !== undefined) {
+    if (
+      input.executionPackage.development_plan_item_id !== input.executionPlan.development_plan_item_id ||
+      input.executionPackage.execution_plan_id !== input.executionPlan.id ||
+      input.executionPackage.execution_plan_revision_id !== input.executionPlanRevision.id ||
+      (input.specRevision !== undefined && input.executionPackage.spec_revision_id !== input.specRevision.id)
+    ) {
+      return { ok: false, reason: 'execution_package_scope_mismatch' };
+    }
+    if (
+      input.executionPackage.phase !== 'ready' ||
+      input.executionPackage.activity_state !== 'idle' ||
+      input.executionPackage.gate_state !== 'not_submitted'
+    ) {
+      return { ok: false, reason: 'execution_package_not_runnable' };
+    }
+    if (
+      input.executionPackage.required_checks.length === 0 ||
+      input.executionPackage.allowed_paths.length === 0 ||
+      !hasText(input.executionPackage.qa_owner_actor_id)
+    ) {
+      return { ok: false, reason: 'execution_package_policy_missing' };
+    }
+  } else if (input.item !== undefined || input.spec !== undefined) {
+    return { ok: false, reason: 'execution_package_boundary_missing' };
   }
   return { ok: true };
 }

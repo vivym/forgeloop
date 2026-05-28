@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { Link, useBlocker, useInRouterContext, useNavigate } from 'react-router';
 import type { EditableObjectRef, MarkdownBlockKind, MarkdownDocument } from '@forgeloop/contracts';
 
-import { DocumentWorkspaceLayout, ProductPage, Section } from '../../shared/layout';
+import { BugWorkspace, DocumentWorkspaceLayout, InitiativeWorkspace, ProductPage, RequirementWorkspace, Section, TechDebtWorkspace } from '../../shared/layout';
 import { Button, Field, ForgeMarkdownEditor, InlineNotice, Input, Textarea } from '../../shared/ui';
-import { SurfaceStateIndicator } from './surface-state';
 
 type SourceAuthoringObjectType = 'bug' | 'initiative' | 'requirement' | 'tech_debt';
 type SourceAuthoringObjectRef =
@@ -100,7 +99,7 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
   function handleCancelClick(event: MouseEvent<HTMLAnchorElement>) {
     if (!dirty) return;
     event.preventDefault();
-    if (!window.confirm('Discard unsaved source object draft changes?')) return;
+    if (!window.confirm('Discard unsaved draft changes?')) return;
     intentionalExitRef.current = true;
     void navigate(cancelHref);
   }
@@ -108,82 +107,106 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
   const objectLabel = sourceObjectLabel(objectType);
 
   return (
-    <ProductPage family="source-document" heading={title}>
+    <ProductPage family="source-document" ariaLabel={title}>
+      <h1 className="mb-3 text-xl font-semibold text-text-primary">{title}</h1>
       <DiscardChangesPrompt bypassRef={intentionalExitRef} enabled={dirty} />
-      <DocumentWorkspaceLayout
-        document={
-          <form className="grid gap-6" noValidate onSubmit={(event) => void handleSubmit(event)}>
-            <Section aria-label="Structured intake" description={subtitle} title="Structured intake" variant="panel">
-              <div className="grid gap-4 md:grid-cols-2">
-                {fields.map((field) => (
-                  <Field
-                    key={field.name}
-                    error={fieldErrors[field.name]}
-                    label={field.label}
-                    {...(field.input === 'textarea' ? { className: 'md:col-span-2' } : {})}
-                    {...(field.required === undefined ? {} : { required: field.required })}
+      <CreateFormShell
+        objectType={objectType}
+        table={
+          <DocumentWorkspaceLayout
+            document={
+              <form className="grid gap-6" noValidate onSubmit={(event) => void handleSubmit(event)}>
+                <Section aria-label="Structured intake" description={subtitle} title="Structured intake" variant="panel">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {fields.map((field) => (
+                      <Field
+                        key={field.name}
+                        error={fieldErrors[field.name]}
+                        label={field.label}
+                        {...(field.input === 'textarea' ? { className: 'md:col-span-2' } : {})}
+                        {...(field.required === undefined ? {} : { required: field.required })}
+                      >
+                        {field.input === 'textarea' ? (
+                          <Textarea
+                            name={field.name}
+                            required={field.required}
+                            value={fieldValues[field.name] ?? ''}
+                            onChange={(event) => updateField(field.name, event.currentTarget.value)}
+                          />
+                        ) : (
+                          <Input
+                            name={field.name}
+                            required={field.required}
+                            value={fieldValues[field.name] ?? ''}
+                            onChange={(event) => updateField(field.name, event.currentTarget.value)}
+                          />
+                        )}
+                      </Field>
+                    ))}
+                  </div>
+                </Section>
+                <NarrativeDocumentField objectType={objectType} value={narrativeMarkdown} onChange={setNarrativeMarkdown} />
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button type="submit" variant="primary">
+                    Create
+                  </Button>
+                  <Link
+                    className="inline-flex min-h-10 items-center rounded-md border border-border px-4 text-sm font-semibold text-text-primary"
+                    onClick={handleCancelClick}
+                    to={cancelHref}
                   >
-                    {field.input === 'textarea' ? (
-                      <Textarea
-                        name={field.name}
-                        required={field.required}
-                        value={fieldValues[field.name] ?? ''}
-                        onChange={(event) => updateField(field.name, event.currentTarget.value)}
-                      />
-                    ) : (
-                      <Input
-                        name={field.name}
-                        required={field.required}
-                        value={fieldValues[field.name] ?? ''}
-                        onChange={(event) => updateField(field.name, event.currentTarget.value)}
-                      />
-                    )}
-                  </Field>
-                ))}
+                    Cancel
+                  </Link>
+                </div>
+              </form>
+            }
+            properties={
+              <div className="grid gap-3">
+                <Section title="Authoring state" variant="subtle">
+                  <div className="grid gap-3 text-sm text-text-secondary">
+                    <p className="m-0">{dirty ? 'Draft changes not saved' : `Ready to author ${objectLabel} context`}</p>
+                    <p className="m-0">Complete required fields, attach narrative context, then create the {objectLabel}.</p>
+                    <p className="m-0">{`${objectLabel} driver frames ${objectLabel.toLowerCase()} intent; product and technical reviewers consume it through Development Plans.`}</p>
+                    <p className="m-0">
+                      {validationSummary.length > 0 ? `Blocked by ${validationSummary.length} validation issue(s).` : 'No authoring blockers in the draft.'}
+                    </p>
+                  </div>
+                </Section>
+                {dirty ? <InlineNotice title="Draft changes" description="Structured fields or narrative edits are not saved yet." tone="info" /> : null}
+                {validationSummary.length > 0 ? (
+                  <InlineNotice
+                    aria-label="Validation summary"
+                    description={<ul className="list-disc gap-1 pl-5">{validationSummary.map((message) => <li key={message}>{message}</li>)}</ul>}
+                    title="Validation summary"
+                    tone="danger"
+                  />
+                ) : null}
               </div>
-            </Section>
-            <NarrativeDocumentField objectType={objectType} value={narrativeMarkdown} onChange={setNarrativeMarkdown} />
-            <div className="flex flex-wrap items-center gap-3">
-              <Button type="submit" variant="primary">
-                Create
-              </Button>
-              <Link
-                className="inline-flex min-h-10 items-center rounded-md border border-border px-4 text-sm font-semibold text-text-primary"
-                onClick={handleCancelClick}
-                to={cancelHref}
-              >
-                Cancel
-              </Link>
-            </div>
-          </form>
-        }
-        properties={
-          <div className="grid gap-3">
-            <Section title="Authoring state" variant="subtle">
-              <div className="grid gap-3 text-sm text-text-secondary">
-                <SurfaceStateIndicator label={title} state={validationSummary.length > 0 ? 'blocked' : 'approved'} />
-                <p className="m-0">{dirty ? 'Draft changes not saved' : 'Ready to author source context'}</p>
-                <p className="m-0">Complete required fields, attach narrative context, then create the source object.</p>
-                <p className="m-0">{`${objectLabel} driver owns source intent; product and technical reviewers consume it through Development Plans.`}</p>
-                <p className="m-0">
-                  {validationSummary.length > 0 ? `Blocked by ${validationSummary.length} validation issue(s).` : 'No authoring blockers in the draft.'}
-                </p>
-              </div>
-            </Section>
-            {dirty ? <InlineNotice title="Draft changes" description="Structured fields or narrative edits are not saved yet." tone="info" /> : null}
-            {validationSummary.length > 0 ? (
-              <InlineNotice
-                aria-label="Validation summary"
-                description={<ul className="list-disc gap-1 pl-5">{validationSummary.map((message) => <li key={message}>{message}</li>)}</ul>}
-                title="Validation summary"
-                tone="danger"
-              />
-            ) : null}
-          </div>
+            }
+          />
         }
       />
     </ProductPage>
   );
+}
+
+function CreateFormShell({
+  objectType,
+  table,
+}: {
+  objectType: SourceAuthoringObjectType;
+  table: ReactNode;
+}) {
+  switch (objectType) {
+    case 'bug':
+      return <BugWorkspace table={table} />;
+    case 'initiative':
+      return <InitiativeWorkspace table={table} />;
+    case 'tech_debt':
+      return <TechDebtWorkspace table={table} />;
+    case 'requirement':
+      return <RequirementWorkspace table={table} />;
+  }
 }
 
 function sourceObjectLabel(objectType: SourceAuthoringObjectType): string {
@@ -223,11 +246,12 @@ function NarrativeDocumentField({
   onChange: (value: string) => void;
   value: string;
 }) {
+  const objectLabel = sourceObjectLabel(objectType);
   return (
-    <section aria-label="Source narrative document" className="grid gap-3 rounded-md border border-border bg-surface p-4">
+    <section aria-label={`${objectLabel} narrative document`} className="grid gap-3 rounded-md border border-border bg-surface p-4">
       <div className="grid gap-1">
-        <h2 className="text-base font-semibold text-text-primary">Source narrative document</h2>
-        <p className="text-sm text-text-secondary">Author the Markdown source narrative; image evidence becomes available after the source object exists.</p>
+        <h2 className="text-base font-semibold text-text-primary">{objectLabel} narrative document</h2>
+        <p className="text-sm text-text-secondary">Author the Markdown narrative; image evidence becomes available after the {objectLabel} exists.</p>
       </div>
       <ForgeMarkdownEditor
         allowedBlocks={createNarrativeBlocks}
@@ -236,7 +260,7 @@ function NarrativeDocumentField({
         objectRef={draftSourceObjectRef(objectType)}
         onChange={onChange}
         onUploadAttachment={async () => {
-          throw new Error('Image uploads are available after the source object is created.');
+          throw new Error(`Image uploads are available after the ${sourceObjectLabel(objectType)} is created.`);
         }}
         validationPolicy={{ validation_version: '2026-05-23' }}
         value={value}
@@ -275,7 +299,7 @@ function DiscardChangesBlocker({ bypassRef, enabled }: { bypassRef: { current: b
 
   useEffect(() => {
     if (blocker.state !== 'blocked') return;
-    if (window.confirm('Discard unsaved source object draft changes?')) {
+    if (window.confirm('Discard unsaved draft changes?')) {
       bypassRef.current = true;
       blocker.proceed();
       return;

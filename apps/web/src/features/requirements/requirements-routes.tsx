@@ -7,14 +7,14 @@ import { useProjectContext } from '../../shared/context/project-context';
 import { Section } from '../../shared/layout';
 import { createNarrativeDocument, ObjectCreateForm } from '../project-management/object-forms';
 import { ObjectDetailLayout } from '../project-management/object-detail-layout';
-import { ObjectList } from '../project-management/object-list';
+import { TypedSourceObjectList } from '../project-management/typed-source-object-list';
 
 export function RequirementsRoute() {
   const { projectId } = useProjectContext();
   const query = useRequirementsQuery({ project_id: projectId, limit: 100 });
 
   return (
-    <ObjectList
+    <TypedSourceObjectList
       createHref="/requirements/new"
       detailHref={(item) => `/requirements/${item.id}`}
       emptyMessage="No requirements match the current filters."
@@ -24,6 +24,7 @@ export function RequirementsRoute() {
       planningHref="/development-plans/new"
       subtitle="Requirement narratives, specs, plans, and evidence."
       title="Requirements"
+      workspaceKind="requirement"
     />
   );
 }
@@ -48,7 +49,6 @@ export function RequirementDetailRoute() {
             {detail.relationship_refs.map((ref) => (
               <li key={`${ref.type}:${ref.id}`}>{`${formatRelationshipType(ref.type)} ${ref.id}`}</li>
             ))}
-            {detail.bug_refs.map((bug) => <li key={bug.id}>{`Bug ${bug.id}`}</li>)}
           </ul>
         </Section>
       )}

@@ -5,14 +5,17 @@ import type {
   DevelopmentPlan,
   DevelopmentPlanItem,
   Execution,
+  ExecutionPackage,
   ExecutionPlanDocument,
   ExecutionPlanRevision,
   SpecRevision,
   WorkItem,
 } from '@forgeloop/domain';
+import { transitionExecutionPackage } from '@forgeloop/domain';
 
 import { ControlPlaneRuntimeService } from '../../apps/control-plane-api/src/modules/core/control-plane-runtime.service';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DEFAULT_SOURCE_MUTATION_POLICY, defaultPackagePolicyFields } from '../../apps/control-plane-api/src/modules/execution-packages/package-policy-fields';
 import { seedItemScopedSpecPlan } from './item-scoped-artifact-fixtures';
 import { createWorkflowPolicyRepoRoot } from './runtime-policy-repo';
 
@@ -39,6 +42,7 @@ export type ApprovedExecutionPlanSeed = {
   specRevision: SpecRevision;
   executionPlan: ExecutionPlanDocument;
   executionPlanRevision: ExecutionPlanRevision;
+  executionPackage?: ExecutionPackage;
 };
 
 export async function seedApprovedExecutionPlan(
@@ -47,6 +51,7 @@ export async function seedApprovedExecutionPlan(
     executionPlanRevisionSummary?: string;
     executionPlanRevisionContent?: string;
     executionPlanStructuredDocument?: Record<string, unknown>;
+    seedExecutionPackage?: boolean;
   } = {},
 ): Promise<ApprovedExecutionPlanSeed> {
   const server = app.getHttpServer();
@@ -84,6 +89,7 @@ export async function seedApprovedExecutionPlan(
           desired_outcome: 'A Development Plan Item can move through execution, code review, and QA.',
           acceptance_criteria: ['The execution supervision API is item scoped.'],
           in_scope: ['Execution supervision API tests'],
+          out_of_scope: ['Top-level Task routes'],
         },
       })
       .expect(201)
@@ -122,6 +128,18 @@ export async function seedApprovedExecutionPlan(
   };
   await repository.saveExecutionPlan({ ...executionPlan, approved_revision_id: executionPlanRevision.id });
   await repository.saveExecutionPlanRevision(executionPlanRevision);
+  const executionPackage =
+    options.seedExecutionPackage === false
+      ? undefined
+      : await seedRunnableExecutionPackage(repository, runtime, {
+          workItem: seeded.workItem,
+          developmentPlan: seeded.developmentPlan,
+          item: seeded.item,
+          specRevision: seeded.specRevision,
+          executionPlan: { ...executionPlan, approved_revision_id: executionPlanRevision.id },
+          executionPlanRevision,
+          options,
+        });
 
   return {
     workItem: seeded.workItem,
@@ -130,7 +148,100 @@ export async function seedApprovedExecutionPlan(
     specRevision: seeded.specRevision,
     executionPlan: { ...executionPlan, approved_revision_id: executionPlanRevision.id },
     executionPlanRevision,
+    ...(executionPackage === undefined ? {} : { executionPackage }),
   };
+}
+
+async function seedRunnableExecutionPackage(
+  repository: DeliveryRepository,
+  runtime: ControlPlaneRuntimeService,
+  context: Pick<ApprovedExecutionPlanSeed, 'workItem' | 'developmentPlan' | 'item' | 'specRevision' | 'executionPlan' | 'executionPlanRevision'> & {
+    options: {
+      executionPlanRevisionSummary?: string;
+      executionPlanRevisionContent?: string;
+      executionPlanStructuredDocument?: Record<string, unknown>;
+    };
+  },
+): Promise<ExecutionPackage> {
+  const project = await repository.getProject(context.developmentPlan.project_id);
+  if (project === undefined) throw new Error(`Project ${context.developmentPlan.project_id} not found`);
+  const repo = (await repository.listProjectRepos(project.id))[0];
+  if (repo === undefined) throw new Error(`Project ${project.id} has no repo`);
+  const at = runtime.now();
+  const structuredDocument = context.options.executionPlanStructuredDocument;
+  const structuredRequiredChecks = Array.isArray(structuredDocument?.required_checks)
+    ? (structuredDocument.required_checks as ExecutionPackage['required_checks']).map((check) => ({
+        ...check,
+        display_name: check.display_name ?? check.check_id,
+      }))
+    : undefined;
+  const structuredAllowedPaths = Array.isArray(structuredDocument?.allowed_paths)
+    ? (structuredDocument.allowed_paths.filter((entry) => typeof entry === 'string' && entry.trim().length > 0) as string[])
+    : undefined;
+  const structuredForbiddenPaths = Array.isArray(structuredDocument?.forbidden_paths)
+    ? (structuredDocument.forbidden_paths.filter((entry) => typeof entry === 'string' && entry.trim().length > 0) as string[])
+    : undefined;
+  const requiredChecks = structuredRequiredChecks ?? [
+    {
+      check_id: 'focused',
+      display_name: 'Focused verification',
+      command: 'pnpm test',
+      timeout_seconds: 120,
+      blocks_review: true,
+    },
+  ];
+  const allowedPaths = structuredAllowedPaths ?? ['apps/control-plane-api/**', 'apps/web/**', 'packages/domain/**', 'packages/contracts/**', 'tests/**'];
+  const forbiddenPaths = structuredForbiddenPaths ?? ['packages/db/**'];
+  const packagePolicyFields = await defaultPackagePolicyFields(repository, {
+    projectId: project.id,
+    repoId: repo.repo_id,
+    loadedAt: at,
+    requiredChecks,
+    allowedPaths,
+    forbiddenPaths,
+    sourceMutationPolicy: DEFAULT_SOURCE_MUTATION_POLICY,
+  });
+  const executionPackage: ExecutionPackage = {
+    ...transitionExecutionPackage(undefined, {
+      type: 'generate_package',
+      id: runtime.id('execution-package'),
+      work_item_id: context.workItem.id,
+      spec_id: context.specRevision.spec_id,
+      spec_revision_id: context.specRevision.id,
+      plan_id: context.executionPlan.id,
+      plan_revision_id: context.executionPlanRevision.id,
+      project_id: project.id,
+      repo_id: repo.repo_id,
+      objective:
+        context.executionPlanRevision.summary.trim().length > 0
+          ? context.executionPlanRevision.summary
+          : `Execute ${context.item.title}.`,
+      owner_actor_id: executionActorDeveloper,
+      reviewer_actor_id: context.item.reviewer_actor_id ?? executionActorReviewer,
+      qa_owner_actor_id: executionActorQa,
+      required_checks: requiredChecks,
+      required_artifact_kinds: ['execution_summary'],
+      allowed_paths: allowedPaths,
+      forbidden_paths: forbiddenPaths,
+      source_mutation_policy: DEFAULT_SOURCE_MUTATION_POLICY,
+      at,
+    }),
+    development_plan_item_id: context.item.id,
+    execution_plan_id: context.executionPlan.id,
+    execution_plan_revision_id: context.executionPlanRevision.id,
+    execution_package_set_id: `item-execution:${context.item.id}:${context.executionPlanRevision.id}`,
+    generation_key: 'item-execution',
+    package_key: 'default-runtime-package',
+    sequence: 0,
+    manifest_digest: `execution-plan-revision:${context.executionPlanRevision.id}`,
+    phase: 'ready',
+    activity_state: 'idle',
+    gate_state: 'not_submitted',
+    required_test_gates: [{ gate_id: 'qa-strategy', summary: 'Accepted Spec test strategy' }],
+    ...packagePolicyFields,
+  };
+  await repository.saveExecutionPackage(executionPackage);
+  return executionPackage;
 }
 
 export async function seedCompletedExecution(app: INestApplication): Promise<ApprovedExecutionPlanSeed & { execution: Execution }> {

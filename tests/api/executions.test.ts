@@ -221,7 +221,32 @@ describe('Executions API', () => {
     await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
-  it('replays an already-started item revision without enqueueing a second run session', async () => {
+  it('requires an explicit execution actor before persisting Execution Package ownership', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app, { seedExecutionPackage: false });
+    const server = app.getHttpServer();
+
+    await request(server)
+      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+      .send({})
+      .expect(400);
+
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.listExecutionPackages(developmentPlan.project_id)).resolves.toEqual([]);
+  });
+
+  it('rejects execution start when approved document gates have no runnable internal Execution Package boundary', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app, { seedExecutionPackage: false });
+    const server = app.getHttpServer();
+
+    const response = await request(server)
+      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+      .send({ actor_id: executionActorDeveloper })
+      .expect(400);
+
+    expect(response.body.message).toContain('execution_package_boundary_missing');
+  });
+
+  it('does not create a second product Execution for an already-started item revision', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
     const server = app.getHttpServer();
     const firstExecution = (
