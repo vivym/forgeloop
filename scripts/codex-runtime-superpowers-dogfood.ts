@@ -69,11 +69,17 @@ export interface CodexRuntimeBoundaryDogfoodEvidence extends CodexRuntimePhaseDo
 
 export interface CodexRuntimeBoundaryRoundDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
   boundary_brainstorming_session_id: string;
+  ai_turn_count?: number;
+  follow_up_path_covered?: boolean;
+  summary_request_change_path_covered?: boolean;
 }
 
 export interface CodexRuntimeBoundaryRebaseDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
   rebased_session_id: string;
   rebased_boundary_summary_revision_id: string;
+  ai_turn_count?: number;
+  follow_up_path_covered?: boolean;
+  summary_request_change_path_covered?: boolean;
 }
 
 export interface CodexRuntimeAppServerEvidence {
@@ -223,6 +229,15 @@ const assertSha256Digest = (value: string, label: string): asserts value is Sha2
   }
 };
 
+const assertNonEmptySha256Digests = (values: readonly string[], label: string): void => {
+  if (values.length === 0) {
+    throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
+  }
+  for (const value of values) {
+    assertSha256Digest(value, label);
+  }
+};
+
 const assertPublicSafeId = (value: string, label: string): void => {
   if (!publicIdPattern.test(value) || value.includes('..')) {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
@@ -296,19 +311,12 @@ const canonicalPublicDigest = (value: unknown): Sha256Digest =>
 
 const uniqueStrings = (values: readonly string[]): string[] => [...new Set(values)];
 
-const phaseEvidenceFromPublicId = (
-  schemaVersion: string,
-  publicId: string,
-  runtimeJobId?: string,
-): CodexRuntimePhaseDogfoodEvidence => {
-  const runtimeEvidenceId = runtimeJobId ?? publicId;
-  return {
-    output_schema_versions: [schemaVersion],
-    runtime_job_digests: [digestFromPublicId(runtimeEvidenceId)],
-    app_server_evidence_digests: [digestFromPublicId(`app_server:${runtimeEvidenceId}`)],
-    cleanup_status: 'completed',
-  };
-};
+const phaseEvidenceFromObservedRuntimeJob = (schemaVersion: string, runtimeJobId?: string): CodexRuntimePhaseDogfoodEvidence => ({
+  output_schema_versions: [schemaVersion],
+  runtime_job_digests: runtimeJobId === undefined ? [] : [digestFromPublicId(runtimeJobId)],
+  app_server_evidence_digests: [],
+  cleanup_status: 'completed',
+});
 
 const mergeCleanupStatus = (evidence: readonly CodexRuntimePhaseDogfoodEvidence[]): CodexRuntimeDogfoodCleanupStatus =>
   evidence.some((entry) => entry.cleanup_status === 'blocked') ? 'blocked' : 'completed';
@@ -335,6 +343,53 @@ const appServerEvidenceFromPhases = (
   app_server_evidence_digests: phases.flatMap((phase) => phase.app_server_evidence_digests),
   phases: [...phases],
 });
+
+const requireObservedEvidenceForPass = (evidence: CodexRuntimeAppServerEvidence): void => {
+  if (evidence.runtime_job_digests.length === 0 || evidence.app_server_evidence_digests.length === 0) {
+    throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_observed_runtime_evidence_missing', {
+      status: 'BLOCKED',
+      blocker_code: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
+    });
+  }
+  for (const phase of evidence.phases) {
+    if (phase.runtime_job_digests.length === 0 || phase.app_server_evidence_digests.length === 0) {
+      throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_observed_runtime_evidence_missing', {
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
+      });
+    }
+  }
+};
+
+const boundaryCoverageFromEvidence = (
+  evidence: ReadonlyArray<
+    Pick<CodexRuntimeBoundaryRoundDogfoodEvidence, 'ai_turn_count' | 'follow_up_path_covered' | 'summary_request_change_path_covered'>
+  >,
+): {
+  boundaryAiTurnCount: number;
+  followUpPathCovered: boolean;
+  summaryRequestChangePathCovered: boolean;
+} => {
+  if (
+    evidence.some(
+      (entry) =>
+        !Number.isInteger(entry.ai_turn_count) ||
+        entry.ai_turn_count! < 0 ||
+        typeof entry.follow_up_path_covered !== 'boolean' ||
+        typeof entry.summary_request_change_path_covered !== 'boolean',
+    )
+  ) {
+    throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_coverage_evidence_missing', {
+      status: 'BLOCKED',
+      blocker_code: 'codex_runtime_superpowers_boundary_coverage_evidence_missing',
+    });
+  }
+  return {
+    boundaryAiTurnCount: evidence.reduce((sum, entry) => sum + entry.ai_turn_count!, 0),
+    followUpPathCovered: evidence.some((entry) => entry.follow_up_path_covered === true),
+    summaryRequestChangePathCovered: evidence.some((entry) => entry.summary_request_change_path_covered === true),
+  };
+};
 
 const resolveDogfoodRepoHead = (repoPath: string): string => {
   try {
@@ -459,12 +514,12 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
   })) {
     assertPublicSafeId(value, label);
   }
-  for (const digest of report.codex_app_server_evidence.runtime_job_digests) {
-    assertSha256Digest(digest, 'codex_app_server_runtime_job_digest');
-  }
-  for (const digest of report.codex_app_server_evidence.app_server_evidence_digests) {
-    assertSha256Digest(digest, 'codex_app_server_evidence_digest');
-  }
+  assertNonEmptySha256Digests(report.runtime_profile_revision_digests, 'runtime_profile_revision_digest');
+  assertNonEmptySha256Digests(report.credential_binding_version_digests, 'credential_binding_version_digest');
+  assertSha256Digest(report.workspace_bundle_digest, 'workspace_bundle_digest');
+  assertSha256Digest(report.mounted_task_workspace_digest, 'mounted_task_workspace_digest');
+  assertNonEmptySha256Digests(report.codex_app_server_evidence.runtime_job_digests, 'codex_app_server_runtime_job_digest');
+  assertNonEmptySha256Digests(report.codex_app_server_evidence.app_server_evidence_digests, 'codex_app_server_evidence_digest');
   for (const schemaVersion of report.codex_app_server_evidence.output_schema_versions) {
     assertPublicSafeId(schemaVersion, 'codex_app_server_output_schema_version');
   }
@@ -477,12 +532,8 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
     for (const schemaVersion of phase.observed_output_schema_versions) {
       assertPublicSafeId(schemaVersion, 'codex_app_server_phase_observed_schema');
     }
-    for (const digest of phase.runtime_job_digests) {
-      assertSha256Digest(digest, 'codex_app_server_phase_runtime_job_digest');
-    }
-    for (const digest of phase.app_server_evidence_digests) {
-      assertSha256Digest(digest, 'codex_app_server_phase_evidence_digest');
-    }
+    assertNonEmptySha256Digests(phase.runtime_job_digests, 'codex_app_server_phase_runtime_job_digest');
+    assertNonEmptySha256Digests(phase.app_server_evidence_digests, 'codex_app_server_phase_evidence_digest');
   }
   for (const changedFile of report.changed_files) {
     assertPublicSafeChangedFile(changedFile);
@@ -611,6 +662,8 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
     appServerPhase('execution', executionOutputSchemaVersion, [execution]),
   ];
   const codexAppServerEvidence = appServerEvidenceFromPhases(appServerPhases);
+  requireObservedEvidenceForPass(codexAppServerEvidence);
+  const boundaryCoverage = boundaryCoverageFromEvidence([firstBoundaryRound, secondBoundaryRound, rebasedBoundary]);
   const report: CodexRuntimeSuperpowersDogfoodReport = {
     status: 'PASS',
     package_script_command: packageScriptCommand,
@@ -632,9 +685,9 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
       rebased_session_id: rebasedBoundary.rebased_session_id,
       rebased_boundary_summary_revision_id: rebasedBoundary.rebased_boundary_summary_revision_id,
     },
-    boundary_ai_turn_count: firstBoundaryRound.runtime_job_digests.length + secondBoundaryRound.runtime_job_digests.length + rebasedBoundary.runtime_job_digests.length,
-    boundary_follow_up_path_covered: true,
-    boundary_summary_request_change_path_covered: true,
+    boundary_ai_turn_count: boundaryCoverage.boundaryAiTurnCount,
+    boundary_follow_up_path_covered: boundaryCoverage.followUpPathCovered,
+    boundary_summary_request_change_path_covered: boundaryCoverage.summaryRequestChangePathCovered,
     cleanup_status: mergeCleanupStatus([firstBoundaryRound, secondBoundaryRound, rebasedBoundary, spec, executionPlan, execution]),
     changed_files: execution.changed_files,
     report_path: fixedCodexRuntimeSuperpowersDogfoodReportPath,
@@ -1332,7 +1385,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         });
         return {
           boundary_brainstorming_session_id: session.id,
-          ...phaseEvidenceFromPublicId(boundaryOutputSchemaVersion, boundarySession.id, boundarySession.current_round_runtime_job_id),
+          ...phaseEvidenceFromObservedRuntimeJob(boundaryOutputSchemaVersion, boundarySession.current_round_runtime_job_id),
         };
       }
       const sessionId = requireState(boundarySessionId, 'codex_runtime_superpowers_dogfood_boundary_session_missing');
@@ -1355,7 +1408,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       });
       return {
         boundary_brainstorming_session_id: sessionId,
-        ...phaseEvidenceFromPublicId(boundaryOutputSchemaVersion, boundarySession.id, boundarySession.current_round_runtime_job_id),
+        ...phaseEvidenceFromObservedRuntimeJob(boundaryOutputSchemaVersion, boundarySession.current_round_runtime_job_id),
       };
     },
     async answerBoundaryQuestion() {
@@ -1487,11 +1540,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       return {
         rebased_session_id: session.id,
         rebased_boundary_summary_revision_id: revisionId,
-        ...phaseEvidenceFromPublicId(
-          boundaryOutputSchemaVersion,
-          finalBoundarySession.id,
-          finalBoundarySession.current_round_runtime_job_id,
-        ),
+        ...phaseEvidenceFromObservedRuntimeJob(boundaryOutputSchemaVersion, finalBoundarySession.current_round_runtime_job_id),
       };
     },
     async approveBoundarySummary() {
@@ -1545,7 +1594,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       const revisionId = requireState(specRevisionId, 'codex_runtime_superpowers_dogfood_spec_revision_missing');
       return {
         spec_revision_id: revisionId,
-        ...phaseEvidenceFromPublicId(specOutputSchemaVersion, revisionId, runtimeJobId),
+        ...phaseEvidenceFromObservedRuntimeJob(specOutputSchemaVersion, runtimeJobId),
       };
     },
     async generateAndApproveExecutionPlan() {
@@ -1587,7 +1636,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       );
       return {
         execution_plan_revision_id: revisionId,
-        ...phaseEvidenceFromPublicId(executionPlanOutputSchemaVersion, revisionId, runtimeJobId),
+        ...phaseEvidenceFromObservedRuntimeJob(executionPlanOutputSchemaVersion, runtimeJobId),
       };
     },
     async startExecution() {
@@ -1626,7 +1675,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         workspace_bundle_digest: evidence.workspace_bundle_digest,
         mounted_task_workspace_digest: evidence.mounted_task_workspace_digest,
         changed_files: evidence.changed_files,
-        ...phaseEvidenceFromPublicId(executionOutputSchemaVersion, execution.id, runSessionId),
+        ...phaseEvidenceFromObservedRuntimeJob(executionOutputSchemaVersion),
       };
     },
     async writeReport(report, markdown) {
