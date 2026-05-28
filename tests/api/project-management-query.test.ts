@@ -112,6 +112,68 @@ describe('project management query API', () => {
     expect(JSON.stringify(response.body)).not.toContain('"type":"work_item"');
   });
 
+  it('renders optional typed source detail fields with product fallbacks', async () => {
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const requirement: WorkItem = {
+      id: 'req-optional-out-of-scope',
+      project_id: 'project-optional-source',
+      kind: 'requirement',
+      title: 'Optional out-of-scope requirement',
+      narrative_markdown: 'Requirement narrative.',
+      goal: 'Render requirement detail even when out of scope is omitted.',
+      success_criteria: ['Requirement detail renders.'],
+      priority: 'medium',
+      risk: 'medium',
+      driver_actor_id: 'actor-product',
+      intake_context: {
+        type: 'requirement',
+        stakeholder_problem: 'Product forms allow out-of-scope to be omitted.',
+        desired_outcome: 'Requirement detail remains usable.',
+        acceptance_criteria: ['Detail view renders without out-of-scope text.'],
+        in_scope: ['Requirement detail projection'],
+      },
+      phase: 'draft',
+      activity_state: 'idle',
+      gate_state: 'none',
+      resolution: 'none',
+      created_at: '2026-05-28T00:00:00.000Z',
+      updated_at: '2026-05-28T00:00:00.000Z',
+    };
+    const initiative: WorkItem = {
+      id: 'init-optional-milestone',
+      project_id: 'project-optional-source',
+      kind: 'initiative',
+      title: 'Optional milestone initiative',
+      narrative_markdown: 'Initiative narrative.',
+      goal: 'Render initiative detail even when milestone intent is omitted.',
+      success_criteria: ['Initiative detail renders.'],
+      priority: 'medium',
+      risk: 'medium',
+      driver_actor_id: 'actor-product',
+      intake_context: {
+        type: 'initiative',
+        business_outcome: 'Optional initiative forms remain queryable.',
+        scope_narrative: 'No milestone field is provided.',
+        success_metrics: ['Detail view renders'],
+      },
+      phase: 'draft',
+      activity_state: 'idle',
+      gate_state: 'none',
+      resolution: 'none',
+      created_at: '2026-05-28T00:01:00.000Z',
+      updated_at: '2026-05-28T00:01:00.000Z',
+    };
+    await repository.saveWorkItem(requirement);
+    await repository.saveWorkItem(initiative);
+
+    const server = app.getHttpServer();
+    const requirementDetail = await request(server).get(`/query/requirements/${requirement.id}`).expect(200);
+    expect(requirementDetail.body.scope_summary.out_of_scope).toBe('No explicit out-of-scope constraints captured.');
+
+    const initiativeDetail = await request(server).get(`/query/initiatives/${initiative.id}`).expect(200);
+    expect(initiativeDetail.body.milestone_intent).toBe('No milestone intent captured yet.');
+  });
+
   it('projects typed Requirement list and detail fields from stored planning, release, evidence, and attachment data', async () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await seedTypedRequirementProjection(repository);
@@ -306,6 +368,35 @@ describe('project management query API', () => {
       .query({ project_id: 'project-typed-source', release_owner_actor_id: 'actor-release' })
       .expect(200);
     expect(byRelease.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
+
+    await repository.saveRelease({
+      id: 'rel-package-only',
+      org_id: 'org-typed-source',
+      project_id: 'project-typed-source',
+      title: 'Package-only release',
+      phase: 'planning',
+      activity_state: 'idle',
+      gate_state: 'not_started',
+      resolution: 'none',
+      work_item_ids: [],
+      execution_package_ids: ['pkg-dpi-plan'],
+      extra: {},
+      release_owner_actor_id: 'actor-package-release',
+      created_by_actor_id: 'actor-package-release',
+      created_at: '2026-05-27T08:50:00.000Z',
+      updated_at: '2026-05-27T08:50:00.000Z',
+    });
+
+    const byPackageOnlyRelease = await request(server)
+      .get('/query/requirements')
+      .query({ project_id: 'project-typed-source', release_owner_actor_id: 'actor-package-release' })
+      .expect(200);
+    expect(byPackageOnlyRelease.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
+
+    const detailResponse = await request(server).get('/query/requirements/req-checkout-risk').expect(200);
+    expect(detailResponse.body.release_refs).toEqual(
+      expect.arrayContaining([{ type: 'release', id: 'rel-package-only', title: 'Package-only release' }]),
+    );
   });
 
   it('strictly projects all product workspace preview typed source detail routes', async () => {

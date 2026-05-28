@@ -190,7 +190,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^apps\/web\/src\/features\/work-items\/delivery-cockpit\/package-matrix\.tsx$/,
   ];
   const executionPackageOwnerTestPaths = [
-    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|task-scoped-evidence|test-acceptance-gate)\.test\.ts$/,
+    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|spec-plan-service|task-scoped-evidence|test-acceptance-gate)\.test\.ts$/,
     /^tests\/api\/project-management-query\.test\.ts$/,
     /^tests\/db\/(?:automation-repository|codex-runtime-drizzle-concurrency|codex-runtime-repository|release-cockpit-queries|release-replay-queries|repository|task-repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
     /^tests\/db\/repository-contract\.ts$/,

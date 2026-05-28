@@ -1,7 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import type { DeliveryRepository } from '@forgeloop/db';
 import type { AttachmentRef } from '@forgeloop/contracts';
-import type { Attachment } from '@forgeloop/domain';
+import type { Attachment, ExecutionPackage } from '@forgeloop/domain';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,7 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { ProductGenerationResultService } from '../../apps/control-plane-api/src/modules/automation/product-generation-result.service';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { CodexRuntimeService } from '../../apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service';
+import { DEFAULT_SOURCE_MUTATION_POLICY, defaultPackagePolicyFields } from '../../apps/control-plane-api/src/modules/execution-packages/package-policy-fields';
 import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
 import {
   codexCanonicalDigest,
@@ -84,6 +85,30 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400);
+  });
+
+  it('uses the source driver as QA owner fallback when Plan Item actors are omitted', async () => {
+    const { plan, item } = await seedApprovedBoundary(app, {
+      driver_actor_id: undefined,
+      reviewer_actor_id: undefined,
+    });
+    const server = app.getHttpServer();
+
+    const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
+    expect(specRevision.qa_owner_actor_id).toBe(actorProduct);
+
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
+      .send({ actor_id: actorTech })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Spec approved with source driver QA fallback.' })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/generate-draft`)
+      .send({ actor_id: actorTech })
+      .expect(201);
   });
 
   it('rejects legacy direct Boundary approval before Spec generation', async () => {
@@ -472,6 +497,62 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .expect(201);
 
     const executionPlanRevision = await generateItemExecutionPlanDraft(app, plan.id, item.id);
+    const requiredChecks = [
+      {
+        check_id: 'unit',
+        display_name: 'Unit tests',
+        command: 'pnpm test',
+        timeout_seconds: 120,
+        blocks_review: true,
+      },
+    ];
+    const packagePolicyFields = await defaultPackagePolicyFields(repository, {
+      projectId: plan.project_id,
+      repoId: 'repo-1',
+      loadedAt: now,
+      requiredChecks,
+      allowedPaths: ['apps/control-plane-api/**'],
+      forbiddenPaths: ['packages/db/**'],
+      sourceMutationPolicy: DEFAULT_SOURCE_MUTATION_POLICY,
+    });
+    const draftPackage: ExecutionPackage = {
+      id: 'existing-draft-item-execution-package',
+      work_item_id: item.source_ref.id,
+      development_plan_item_id: item.id,
+      spec_id: specRevision.spec_id,
+      spec_revision_id: specRevision.id,
+      execution_plan_id: executionPlanRevision.execution_plan_id,
+      execution_plan_revision_id: executionPlanRevision.id,
+      plan_id: executionPlanRevision.execution_plan_id,
+      plan_revision_id: executionPlanRevision.id,
+      project_id: plan.project_id,
+      repo_id: 'repo-1',
+      objective: 'Existing draft package for approval reuse.',
+      owner_actor_id: actorTech,
+      reviewer_actor_id: actorReviewer,
+      qa_owner_actor_id: actorProduct,
+      phase: 'draft',
+      activity_state: 'idle',
+      gate_state: 'not_submitted',
+      resolution: 'none',
+      required_checks: requiredChecks,
+      required_test_gates: [],
+      required_artifact_kinds: ['execution_summary'],
+      allowed_paths: ['apps/control-plane-api/**'],
+      forbidden_paths: ['packages/db/**'],
+      source_mutation_policy: DEFAULT_SOURCE_MUTATION_POLICY,
+      version: 0,
+      execution_package_set_id: `item-execution:${item.id}:${executionPlanRevision.id}`,
+      generation_key: 'item-execution',
+      package_key: 'default-runtime-package',
+      sequence: 0,
+      manifest_digest: `execution-plan-revision:${executionPlanRevision.id}`,
+      created_at: now,
+      updated_at: now,
+      ...packagePolicyFields,
+    };
+    await repository.saveExecutionPackage(draftPackage);
+
     await request(server)
       .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/submit-for-approval`)
       .send({ actor_id: actorTech })
@@ -484,6 +565,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     await expect(repository.listExecutionPackagesForWorkItem(item.source_ref.id)).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          id: draftPackage.id,
           development_plan_item_id: item.id,
           execution_plan_id: executionPlanRevision.execution_plan_id,
           execution_plan_revision_id: executionPlanRevision.id,
@@ -1759,7 +1841,9 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
 
 type ItemSeedOverrides = Partial<{
   affected_surfaces: string[];
+  driver_actor_id: string;
   release_impact: 'none' | 'release_scoped' | 'release_blocking';
+  reviewer_actor_id: string;
   risk: 'low' | 'medium' | 'high' | 'critical';
 }>;
 

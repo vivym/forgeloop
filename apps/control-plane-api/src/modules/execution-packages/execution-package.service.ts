@@ -251,13 +251,15 @@ export class ExecutionPackageService {
       if (context.execution !== undefined && existing.execution_id !== undefined && existing.execution_id !== context.execution.id) {
         throw new ConflictException('DevelopmentPlanItem already has an execution package for a different Execution');
       }
-      if (context.execution === undefined || existing.execution_id === context.execution.id) {
-        return existing;
+      let reusablePackage = existing.phase === 'draft' ? transitionExecutionPackage(existing, { type: 'mark_ready', at: this.now() }) : existing;
+      if (context.execution !== undefined && reusablePackage.execution_id === undefined) {
+        reusablePackage = { ...reusablePackage, execution_id: context.execution.id, updated_at: this.now() };
       }
-      const linked = { ...existing, execution_id: context.execution.id, updated_at: this.now() };
-      validateExecutionPackage(context.project, linked);
-      await repository.saveExecutionPackage(linked);
-      return linked;
+      validateExecutionPackage(context.project, reusablePackage);
+      if (reusablePackage !== existing) {
+        await repository.saveExecutionPackage(reusablePackage);
+      }
+      return reusablePackage;
     }
 
     const repo = (await repository.listProjectRepos(context.project.id))[0];

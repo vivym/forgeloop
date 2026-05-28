@@ -1844,7 +1844,7 @@ export class SpecPlanService {
     feedback?: string,
   ): Omit<SpecRevision, 'id' | 'spec_id' | 'work_item_id' | 'revision_number' | 'artifact_refs' | 'created_at'> {
     const feedbackLine = feedback === undefined ? '' : `\n\nRegeneration feedback: ${feedback}`;
-    const qaOwnerActorId = item.reviewer_actor_id ?? item.driver_actor_id;
+    const qaOwnerActorId = item.reviewer_actor_id ?? item.driver_actor_id ?? workItem.driver_actor_id;
     return {
       development_plan_item_id: item.id,
       boundary_summary_id: boundary.id,

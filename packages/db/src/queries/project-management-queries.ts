@@ -1791,7 +1791,7 @@ function typedSourceProjection(workItem: TypedWorkItem, context: TypedSourceProj
   const linkedDevelopmentPlans = context.plans.filter((plan) => plan.source_refs.some((ref) => sourceRefsMatch(ref, sourceRef)));
   const linkedDevelopmentPlanIds = new Set(linkedDevelopmentPlans.map((plan) => plan.id));
   const linkedPlanItems = context.planItems.filter(({ plan, item }) => linkedDevelopmentPlanIds.has(plan.id) && sourceRefsMatch(item.source_ref, sourceRef));
-  const releaseRefs = context.releases.filter((release) => releaseLinksSource(release, workItem, linkedPlanItems));
+  const releaseRefs = context.releases.filter((release) => releaseLinksSource(release, workItem, linkedPlanItems, context.executionPackages));
   const attachmentRefs = context.attachments.filter((attachment) => attachmentLinksSource(attachment, sourceRef, linkedPlanItems));
   const evidenceRefs = context.releaseEvidence.filter((evidence) => evidenceLinksSource(evidence, sourceRef, attachmentRefs, linkedPlanItems));
   const updatedValues = [
@@ -1896,7 +1896,7 @@ function sourceRoleFilterState(workItem: TypedWorkItem, context: TypedSourceProj
   const linkedExecutionIds = new Set(
     context.executions.filter(({ item }) => linkedPlanItemIds.has(item.id)).map(({ execution }) => execution.id),
   );
-  const linkedReleaseRefs = context.releases.filter((release) => releaseLinksSource(release, workItem, linkedPlanItems));
+  const linkedReleaseRefs = context.releases.filter((release) => releaseLinksSource(release, workItem, linkedPlanItems, context.executionPackages));
 
   return roleFilterState({
     driverActorIds: [workItem.driver_actor_id, ...linkedPlanItems.map(({ item }) => item.driver_actor_id)],
@@ -1941,6 +1941,11 @@ function sourceRoleFilterState(workItem: TypedWorkItem, context: TypedSourceProj
 function planRoleFilterState(plan: DevelopmentPlan, context: TypedSourceProjectionContext) {
   const planItems = context.planItems.filter(({ plan: candidatePlan }) => candidatePlan.id === plan.id);
   const planItemIds = new Set(planItems.map(({ item }) => item.id));
+  const planPackageIds = new Set(
+    context.executionPackages
+      .filter((executionPackage) => executionPackage.development_plan_item_id !== undefined && planItemIds.has(executionPackage.development_plan_item_id))
+      .map((executionPackage) => executionPackage.id),
+  );
   const sourceIds = new Set(plan.source_refs.map((sourceRef) => `${sourceRef.type}:${sourceRef.id}`));
   const sourceLinkedReleaseRefs = context.releases.filter((release) =>
     release.work_item_ids.some((workItemId) =>
@@ -1948,6 +1953,7 @@ function planRoleFilterState(plan: DevelopmentPlan, context: TypedSourceProjecti
     ),
   );
   const planScopedReleaseRefs = context.releases.filter((release) =>
+    release.execution_package_ids.some((packageId) => planPackageIds.has(packageId)) ||
     releaseScopeRefs(release).some(
       (ref) =>
         (ref.type === 'development_plan_item' && planItemIds.has(ref.id)) ||
@@ -2082,8 +2088,26 @@ function typedSourceLabel(kind: WorkItem['kind']): string {
   return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
 }
 
-function releaseLinksSource(release: Release, workItem: WorkItem, items: DevelopmentPlanItemWithPlan[]): boolean {
+function releaseLinksSource(
+  release: Release,
+  workItem: WorkItem,
+  items: DevelopmentPlanItemWithPlan[],
+  executionPackages: ExecutionPackage[],
+): boolean {
+  const itemIds = new Set(items.map(({ item }) => item.id));
+  const packageIds = new Set(
+    executionPackages
+      .filter(
+        (executionPackage) =>
+          executionPackage.work_item_id === workItem.id ||
+          (executionPackage.development_plan_item_id !== undefined && itemIds.has(executionPackage.development_plan_item_id)),
+      )
+      .map((executionPackage) => executionPackage.id),
+  );
   if (release.work_item_ids.includes(workItem.id) || release.id === workItem.current_release_id) {
+    return true;
+  }
+  if (release.execution_package_ids.some((packageId) => packageIds.has(packageId))) {
     return true;
   }
   const scopeRefs = releaseScopeRefs(release);
@@ -2282,7 +2306,7 @@ function workItemToRequirementDetail(
     acceptance_criteria_summary: requiredContextValue(context?.acceptance_criteria.join(' '), workItem, 'acceptance criteria'),
     scope_summary: {
       in_scope: requiredContextValue(context?.in_scope.join(', '), workItem, 'in scope'),
-      out_of_scope: requiredContextValue(context?.out_of_scope?.join(', '), workItem, 'out of scope'),
+      out_of_scope: optionalContextSummary(context?.out_of_scope?.join(', '), 'No explicit out-of-scope constraints captured.'),
     },
   };
 }
@@ -2307,7 +2331,7 @@ function workItemToInitiativeDetail(
     ref: { type: 'initiative', id: workItem.id, title: workItem.title },
     relationship_refs: relationshipRefs,
     business_outcome: requiredContextValue(context?.business_outcome, workItem, 'business outcome'),
-    milestone_intent: requiredContextValue(context?.milestone_intent, workItem, 'milestone intent'),
+    milestone_intent: optionalContextSummary(context?.milestone_intent, 'No milestone intent captured yet.'),
     child_refs: relationshipRefs.filter((ref) => ref.type === 'requirement' || ref.type === 'bug' || ref.type === 'tech_debt'),
     release_coverage: releaseCoverageText(projection),
   };
@@ -2369,6 +2393,10 @@ function requiredContextValue(valueToCheck: string | undefined, workItem: WorkIt
     return valueToCheck;
   }
   throw new Error(`${workItem.kind} ${workItem.id} is missing required ${field} projection data`);
+}
+
+function optionalContextSummary(valueToCheck: string | undefined, fallback: string): string {
+  return valueToCheck !== undefined && valueToCheck.trim().length > 0 ? valueToCheck : fallback;
 }
 
 function releaseCoverageText(projection: TypedSourceProjection): string {
