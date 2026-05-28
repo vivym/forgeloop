@@ -615,6 +615,19 @@ describe('Codex runtime Superpowers dogfood script', () => {
     ).toThrow(/codex_runtime_superpowers_app_server_phase_evidence_missing/);
   });
 
+  it('blocks PASS orchestration when Boundary follow-up coverage is missing across initial and rebase', async () => {
+    const client = completeDogfoodClientWithPhaseEvidence({
+      boundaryInitial: {
+        follow_up_path_covered: false,
+      },
+    });
+
+    await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_boundary_coverage_missing',
+    });
+    expect(client.writeReport).not.toHaveBeenCalled();
+  });
+
   it('blocks PASS orchestration when observed schemas do not prove the expected phase schema', async () => {
     const client = completeDogfoodClientWithPhaseEvidence({
       boundaryInitial: {
