@@ -36,6 +36,7 @@ export interface CodexRuntimeSuperpowersDogfoodCliConfig {
   boundarySummaryRevisionId?: string;
   noSharedFilesystem: true;
   skipBootstrap: boolean;
+  boundaryMaxAiTurns: number;
   remoteRuntimeJobWaitTimeoutMs?: number;
   remoteRuntimeJobPollIntervalMs?: number;
 }
@@ -300,6 +301,18 @@ const nonNegativeIntEnv = (env: EnvLike, key: string, defaultValue: number): num
   return value;
 };
 
+const positiveIntEnv = (env: EnvLike, key: string, defaultValue: number): number => {
+  const raw = optionalEnv(env, key);
+  if (raw === undefined) {
+    return defaultValue;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${key}_must_be_positive_integer`);
+  }
+  return value;
+};
+
 export const sanitizeCodexRemoteWorkerDogfoodEnv = (
   env: EnvLike = process.env,
   targetKind: 'generation' | 'run_execution' = 'generation',
@@ -503,6 +516,7 @@ export const loadCodexRuntimeSuperpowersDogfoodCliConfig = (
     autoSeedProductSource: optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_CREATE_SOURCE') === '1' || !skipBootstrap,
     noSharedFilesystem: true,
     skipBootstrap,
+    boundaryMaxAiTurns: positiveIntEnv(env, 'FORGELOOP_CODEX_DOGFOOD_BOUNDARY_MAX_AI_TURNS', 8),
     remoteRuntimeJobWaitTimeoutMs: nonNegativeIntEnv(env, 'FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS', 600_000),
     remoteRuntimeJobPollIntervalMs: nonNegativeIntEnv(env, 'FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS', 1_000),
   };
@@ -896,21 +910,31 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     }
     return value;
   };
-	const replaceDogfoodScope = (projectId: string, sourceObjectId: string): void => {
-		config.projectId = projectId;
-		config.sourceObjectId = sourceObjectId;
-		env.FORGELOOP_CODEX_DOGFOOD_PROJECT_ID = projectId;
-		env.FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID = projectId;
-		env.FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID = sourceObjectId;
-		if (config.repoId !== undefined) {
-			env.FORGELOOP_CODEX_DOGFOOD_REPO_ID = config.repoId;
-			env.FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID = config.repoId;
-		}
-	};
+  const replaceDogfoodScope = (projectId: string, sourceObjectId: string): void => {
+    config.projectId = projectId;
+    config.sourceObjectId = sourceObjectId;
+    env.FORGELOOP_CODEX_DOGFOOD_PROJECT_ID = projectId;
+    env.FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID = projectId;
+    env.FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID = sourceObjectId;
+    if (config.repoId !== undefined) {
+      env.FORGELOOP_CODEX_DOGFOOD_REPO_ID = config.repoId;
+      env.FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID = config.repoId;
+    }
+  };
+  type BoundarySessionStatus =
+    | 'draft'
+    | 'ai_turn_running'
+    | 'waiting_for_leader'
+    | 'summary_proposed'
+    | 'approved'
+    | 'changes_requested'
+    | 'stale'
+    | 'cancelled';
+  type BoundaryQuestionProjection = { id: string; status?: string; required?: boolean; answered_by_answer_id?: string };
   type BoundarySessionApiResponse = {
     id: string;
-    status?: string;
-    questions?: Array<{ id: string; status?: string; required?: boolean; answered_by_answer_id?: string }>;
+    status?: BoundarySessionStatus;
+    questions?: BoundaryQuestionProjection[];
     latest_summary_revision_id?: string;
     approved_summary_revision_id?: string;
     current_round_runtime_job_id?: string;
@@ -933,6 +957,9 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     status?: string;
     terminal_status?: string;
     terminal_reason_code?: string;
+    terminal_result_json?: {
+      output_schema_version?: string;
+    };
   };
   type RuntimeJobArtifactProjection = {
     kind?: string;
@@ -1156,6 +1183,25 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     session?.questions?.find(
       (question) => question.answered_by_answer_id === undefined && (question.required === true || question.status === 'open'),
     )?.id;
+  const runtimeJobDigestFromId = (runtimeJobId: string): Sha256Digest => digestFromPublicId(runtimeJobId);
+  const boundaryOutputSchemaVersionsFromRuntimeJob = (runtimeJob: RuntimeJobProjection): string[] =>
+    runtimeJob.terminal_result_json?.output_schema_version === boundaryOutputSchemaVersion ? [boundaryOutputSchemaVersion] : [];
+  const openBoundaryQuestions = (session: BoundarySessionApiResponse | undefined): BoundaryQuestionProjection[] =>
+    session?.questions?.filter(
+      (question) => question.answered_by_answer_id === undefined && (question.required === true || question.status === 'open'),
+    ) ?? [];
+  const boundarySessionStatus = (session: BoundarySessionApiResponse): BoundarySessionStatus => {
+    if (session.status !== undefined) {
+      return session.status;
+    }
+    if (boundarySummaryRevisionIdFromSession(session) !== undefined) {
+      return 'summary_proposed';
+    }
+    if (openBoundaryQuestions(session).length > 0) {
+      return 'waiting_for_leader';
+    }
+    return 'ai_turn_running';
+  };
   const answerBoundaryQuestionById = async (sessionId: string, questionId: string, text: string): Promise<void> => {
     await requestJson(config, `/boundary-brainstorming-sessions/${sessionId}/answers`, {
       method: 'POST',
@@ -1166,6 +1212,17 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       },
     }, fetchDeps);
     cachedBoundarySession = undefined;
+  };
+  const answerOpenBoundaryQuestions = async (session: BoundarySessionApiResponse): Promise<number> => {
+    const questions = openBoundaryQuestions(session);
+    for (const question of questions) {
+      await answerBoundaryQuestionById(
+        session.id,
+        question.id,
+        'Preserve a docs-only dogfood report scope, centralized Codex runtime config/auth distribution, and no shared filesystem worker execution.',
+      );
+    }
+    return questions.length;
   };
   const boundarySummaryRevisionIdFromSession = (session: BoundarySessionApiResponse | undefined): string | undefined =>
     session?.latest_summary_revision_id ?? session?.approved_summary_revision_id;
@@ -1442,159 +1499,158 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       let aiTurnCount = 0;
       let followUpPathCovered = false;
       let summaryRequestChangePathCovered = false;
-      if (mode === 'initial') {
-        const session = await requestJson<{ id: string }>(config, `/development-plans/${planId}/items/${itemId}/boundary-brainstorming`, {
-          method: 'POST',
-          body: {
-            actor_id: config.leaderActorId,
-            leader_actor_id: config.leaderActorId,
-            initial_leader_context_markdown: 'Strict Codex runtime Superpowers dogfood boundary kickoff.',
-          },
-        }, fetchDeps);
-        boundarySessionId = session.id;
-        cachedBoundarySession = undefined;
-        aiTurnCount += 1;
-        await invokeRemoteWorkerUntil({
-          targetKind: 'generation',
-          blockerCode: 'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
-          observe: async () => {
-            const currentSession = await fetchBoundarySession();
-            return openBoundaryQuestionId(currentSession) === undefined ? undefined : currentSession;
-          },
-          runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
-        });
-        const discoveredQuestionId = openBoundaryQuestionId(cachedBoundarySession) ?? openBoundaryQuestionId(await fetchBoundarySession());
-        const questionId = requireState(
-          config.boundaryQuestionId ?? discoveredQuestionId,
-          'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
-        );
-        await answerBoundaryQuestionById(
-          session.id,
-          questionId,
-          'Limit the execution to a docs-only dogfood report and preserve centralized Codex runtime distribution.',
-        );
-        followUpPathCovered = true;
-        await requestJson(config, `/boundary-brainstorming-sessions/${session.id}/continue`, {
-          method: 'POST',
-          body: {
-            actor_id: config.leaderActorId,
-            leader_input_markdown: 'Continue after Leader answers and propose the strict dogfood Boundary Summary.',
-          },
-        }, fetchDeps);
-        cachedBoundarySession = undefined;
-        aiTurnCount += 1;
-        await invokeRemoteWorkerUntil({
-          targetKind: 'generation',
-          blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
-          observe: async () => {
-            const currentSession = await fetchBoundarySession();
-            return boundarySummaryRevisionIdFromSession(currentSession) === undefined ? undefined : currentSession;
-          },
-          runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
-        });
-        const firstSummaryRevisionId = config.boundarySummaryRevisionId ?? (await latestBoundarySummaryRevisionId());
-        await requestBoundarySummaryChanges(session.id, firstSummaryRevisionId);
-        summaryRequestChangePathCovered = true;
-        aiTurnCount += 1;
-        await invokeRemoteWorkerUntil({
-          targetKind: 'generation',
-          blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
-          observe: async () => {
-            const currentSession = await fetchBoundarySession();
-            const revisionId = boundarySummaryRevisionIdFromSession(currentSession);
-            return revisionId === undefined || revisionId === firstSummaryRevisionId ? undefined : currentSession;
-          },
-          runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
-        });
-        boundarySummaryRevisionId = await latestBoundarySummaryRevisionId();
-        const approvedRevisionId = await approveBoundarySummaryRevision(
-          session.id,
-          boundarySummaryRevisionId,
-          'Approve the revised Boundary Summary revision so the stale item-revision gate can be verified.',
-        );
-        return {
-          mode,
-          session_id: session.id,
-          approved_summary_revision_id: approvedRevisionId,
-          ai_turn_count: aiTurnCount,
-          follow_up_path_covered: followUpPathCovered,
-          summary_request_change_path_covered: summaryRequestChangePathCovered,
-          ...unobservedPhaseEvidence(),
-        };
-      }
-
-      const session = await requestJson<{ id: string }>(
-        config,
-        `/development-plans/${planId}/items/${itemId}/boundary-brainstorming/restart`,
-        {
-          method: 'POST',
-          body: {
-            actor_id: config.leaderActorId,
-            leader_actor_id: config.leaderActorId,
-            initial_leader_context_markdown:
-              'Rebase the strict Codex runtime dogfood boundary after the Development Plan Item revision changed; previous Leader answers still apply unless a new blocker exists.',
-          },
-        },
-        fetchDeps,
-      );
+      let summaryChangeRequested = false;
+      const answeredQuestionIds = new Set<string>();
+      const runtimeJobDigests: Sha256Digest[] = [];
+      const outputSchemaVersions: string[] = [];
+      const maxAiTurns = config.boundaryMaxAiTurns ?? 8;
+      const session =
+        mode === 'initial'
+          ? await requestJson<{ id: string }>(config, `/development-plans/${planId}/items/${itemId}/boundary-brainstorming`, {
+              method: 'POST',
+              body: {
+                actor_id: config.leaderActorId,
+                leader_actor_id: config.leaderActorId,
+                initial_leader_context_markdown: 'Strict Codex runtime Superpowers dogfood boundary kickoff.',
+              },
+            }, fetchDeps)
+          : await requestJson<{ id: string }>(
+              config,
+              `/development-plans/${planId}/items/${itemId}/boundary-brainstorming/restart`,
+              {
+                method: 'POST',
+                body: {
+                  actor_id: config.leaderActorId,
+                  leader_actor_id: config.leaderActorId,
+                  initial_leader_context_markdown:
+                    'Rebase the strict Codex runtime dogfood boundary after the Development Plan Item revision changed; previous Leader answers still apply unless a new blocker exists.',
+                },
+              },
+              fetchDeps,
+            );
       boundarySessionId = session.id;
       cachedBoundarySession = undefined;
-      aiTurnCount += 1;
-      const rebaseState = await invokeRemoteWorkerUntil({
-        targetKind: 'generation',
-        blockerCode: 'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
-        observe: async () => {
-          const currentSession = await fetchBoundarySession();
-          const revisionId = boundarySummaryRevisionIdFromSession(currentSession);
-          if (revisionId !== undefined) {
-            return { revisionId };
+
+      const loopLimit = maxAiTurns * 3;
+      for (let iteration = 0; iteration < loopLimit; iteration += 1) {
+        const currentSession = cachedBoundarySession ?? (await fetchBoundarySession());
+        const status = boundarySessionStatus(currentSession);
+
+        if (status === 'ai_turn_running') {
+          if (aiTurnCount >= maxAiTurns) {
+            throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_max_turns_exceeded', {
+              status: 'BLOCKED',
+              blocker_code: 'codex_runtime_superpowers_boundary_max_turns_exceeded',
+            });
           }
-          const questionId = openBoundaryQuestionId(currentSession);
-          return questionId === undefined ? undefined : { questionId };
-        },
-        runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
-      });
-      if ('questionId' in rebaseState) {
-        await answerBoundaryQuestionById(
-          session.id,
-          rebaseState.questionId,
-          'The rebased boundary remains docs-only and must preserve centralized Codex runtime distribution without worker-local configuration.',
-        );
-        followUpPathCovered = true;
-        await requestJson(config, `/boundary-brainstorming-sessions/${session.id}/continue`, {
-          method: 'POST',
-          body: {
-            actor_id: config.leaderActorId,
-            leader_input_markdown: 'Continue after Leader rebase answer and propose the current strict dogfood Boundary Summary.',
-          },
-        }, fetchDeps);
-        cachedBoundarySession = undefined;
-        aiTurnCount += 1;
-        await invokeRemoteWorkerUntil({
-          targetKind: 'generation',
-          blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
-          observe: async () => {
-            const currentSession = await fetchBoundarySession();
-            return boundarySummaryRevisionIdFromSession(currentSession) === undefined ? undefined : currentSession;
-          },
-          runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
+          const runtimeJobId = currentSession.current_round_runtime_job_id;
+          if (runtimeJobId !== undefined) {
+            runtimeJobDigests.push(runtimeJobDigestFromId(runtimeJobId));
+          }
+          aiTurnCount += 1;
+          await invokeRemoteWorkerUntil({
+            targetKind: 'generation',
+            blockerCode: 'codex_runtime_superpowers_dogfood_boundary_state_missing',
+            observe: async () => {
+              const observedSession = await fetchBoundarySession();
+              return observedSession.status === 'ai_turn_running' ? undefined : observedSession;
+            },
+            runtimeJobId: () => runtimeJobId,
+          });
+          if (runtimeJobId !== undefined) {
+            const runtimeJob = await fetchRuntimeJob(runtimeJobId);
+            outputSchemaVersions.push(...boundaryOutputSchemaVersionsFromRuntimeJob(runtimeJob));
+          }
+          continue;
+        }
+
+        if (status === 'waiting_for_leader' || status === 'changes_requested') {
+          const openQuestions = openBoundaryQuestions(currentSession);
+          if (answeredQuestionIds.size > 0 && openQuestions.some((question) => !answeredQuestionIds.has(question.id))) {
+            followUpPathCovered = true;
+          }
+          const answeredCount = await answerOpenBoundaryQuestions(currentSession);
+          if (answeredCount > 0) {
+            for (const question of openQuestions) {
+              answeredQuestionIds.add(question.id);
+            }
+          }
+          await requestJson(config, `/boundary-brainstorming-sessions/${session.id}/continue`, {
+            method: 'POST',
+            body: {
+              actor_id: config.leaderActorId,
+              leader_input_markdown:
+                status === 'changes_requested'
+                  ? 'Continue after requested Boundary Summary changes and keep the strict dogfood boundary current.'
+                  : 'Continue after Leader answers and keep the strict dogfood boundary moving.',
+            },
+          }, fetchDeps);
+          cachedBoundarySession = undefined;
+          continue;
+        }
+
+        if (status === 'summary_proposed') {
+          const revisionId = requireState(
+            boundarySummaryRevisionIdFromSession(currentSession),
+            'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
+          );
+          if (mode === 'initial' && !summaryChangeRequested) {
+            await requestBoundarySummaryChanges(session.id, revisionId);
+            summaryChangeRequested = true;
+            summaryRequestChangePathCovered = true;
+            continue;
+          }
+          const approvedRevisionId = await approveBoundarySummaryRevision(
+            session.id,
+            revisionId,
+            mode === 'initial'
+              ? 'Approve the revised Boundary Summary revision so the stale item-revision gate can be verified.'
+              : 'Approve the strict Codex runtime Superpowers dogfood boundary.',
+          );
+          return {
+            mode,
+            session_id: session.id,
+            approved_summary_revision_id: approvedRevisionId,
+            ai_turn_count: aiTurnCount,
+            follow_up_path_covered: followUpPathCovered,
+            summary_request_change_path_covered: summaryRequestChangePathCovered,
+            output_schema_versions: uniqueStrings(outputSchemaVersions),
+            runtime_job_digests: uniqueStrings(runtimeJobDigests) as Sha256Digest[],
+            app_server_evidence_digests: [],
+            cleanup_status: 'completed',
+          };
+        }
+
+        if (status === 'approved') {
+          const approvedRevisionId = requireState(
+            currentSession.approved_summary_revision_id,
+            'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
+          );
+          boundarySummaryRevisionId = approvedRevisionId;
+          return {
+            mode,
+            session_id: session.id,
+            approved_summary_revision_id: approvedRevisionId,
+            ai_turn_count: aiTurnCount,
+            follow_up_path_covered: followUpPathCovered,
+            summary_request_change_path_covered: summaryRequestChangePathCovered,
+            output_schema_versions: uniqueStrings(outputSchemaVersions),
+            runtime_job_digests: uniqueStrings(runtimeJobDigests) as Sha256Digest[],
+            app_server_evidence_digests: [],
+            cleanup_status: 'completed',
+          };
+        }
+
+        throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_unexpected_state', {
+          status: 'BLOCKED',
+          blocker_code: 'codex_runtime_superpowers_boundary_unexpected_state',
         });
       }
-      const revisionId = await latestBoundarySummaryRevisionId();
-      const approvedRevisionId = await approveBoundarySummaryRevision(
-        session.id,
-        revisionId,
-        'Approve the strict Codex runtime Superpowers dogfood boundary.',
-      );
-      return {
-        mode,
-        session_id: session.id,
-        approved_summary_revision_id: approvedRevisionId,
-        ai_turn_count: aiTurnCount,
-        follow_up_path_covered: followUpPathCovered,
-        summary_request_change_path_covered: summaryRequestChangePathCovered,
-        ...unobservedPhaseEvidence(),
-      };
+
+      throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_loop_exhausted', {
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_boundary_loop_exhausted',
+      });
     },
     async mutateDevelopmentPlanItem() {
       const planId = requireState(developmentPlanId, 'codex_runtime_superpowers_dogfood_plan_missing');
