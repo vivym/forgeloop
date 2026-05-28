@@ -103,7 +103,7 @@ export function TypedSourceObjectList<T extends ProjectObjectListItem>({
   const [roleFilter, setRoleFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [viewMode, setViewMode] = useState<ViewMode>('preview');
+  const [viewMode, setViewMode] = useState<ViewMode>('dense');
   const filteredRows = useMemo(
     () => rows.filter((row) =>
       (driverFilter === 'all' || row.driver === driverFilter) &&

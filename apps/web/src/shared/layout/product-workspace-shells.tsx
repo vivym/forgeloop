@@ -63,10 +63,10 @@ export function CockpitCommandCenter({
       <div className={cn('grid min-w-0 gap-4', hasRail ? 'xl:grid-cols-[minmax(28rem,1fr)_20rem]' : undefined)} data-cockpit-attention-layout="">
         <section className="min-w-0" data-cockpit-attention-queue="">{attentionQueue}</section>
         {hasRail ? (
-          <aside className="grid min-w-0 content-start gap-3" data-cockpit-rail="">
+          <div aria-label="Cockpit rail" className="grid min-w-0 content-start gap-3" data-cockpit-rail="" role="region">
             {hasRiskRail ? riskRail : null}
             {hasRuntimeRail ? runtimeRail : null}
-          </aside>
+          </div>
         ) : null}
       </div>
     </ProductWorkspaceShell>
@@ -115,7 +115,7 @@ export function DevelopmentPlanWorkspace({ inspector, table, toolbar, ...props }
     <ProductWorkspaceShell {...props} data-product-shell="development-plan-workspace">
       {hasToolbar ? <div className="min-w-0 overflow-x-auto" data-development-plan-toolbar="">{toolbar}</div> : null}
       <div
-        className={cn('grid min-w-0 gap-4', hasInspector ? 'lg:grid-cols-[minmax(32rem,1fr)_22rem]' : undefined)}
+        className={cn('grid min-w-0 gap-4', hasInspector ? '2xl:grid-cols-[minmax(32rem,1fr)_22rem]' : undefined)}
         data-development-plan-layout=""
       >
         <section className="min-w-0" data-development-plan-table="">{table}</section>
@@ -142,7 +142,7 @@ export function PlanItemGateWorkspace({
         {hasGateRail ? <aside className="min-w-0" data-plan-item-gate-rail="">{gateRail}</aside> : null}
         <section className="min-w-0" data-plan-item-workspace="">{workspace}</section>
         {hasSideRail ? (
-          <aside className="grid min-w-0 content-start gap-3" data-plan-item-side-rail="">
+          <aside className={cn('grid min-w-0 content-start gap-3', hasGateRail ? 'xl:col-start-2' : undefined)} data-plan-item-side-rail="">
             {hasDocument ? document : null}
             {hasEvidence ? evidence : null}
           </aside>
@@ -153,8 +153,8 @@ export function PlanItemGateWorkspace({
 }
 
 function planItemGateLayoutClass(gateRail: boolean, sideRail: boolean): string | undefined {
-  if (gateRail && sideRail) return 'xl:grid-cols-[18rem_minmax(32rem,1fr)_20rem]';
+  if (gateRail && sideRail) return 'xl:grid-cols-[18rem_minmax(32rem,1fr)] 2xl:grid-cols-[18rem_minmax(32rem,1fr)_20rem]';
   if (gateRail) return 'xl:grid-cols-[18rem_minmax(32rem,1fr)]';
-  if (sideRail) return 'xl:grid-cols-[minmax(32rem,1fr)_20rem]';
+  if (sideRail) return '2xl:grid-cols-[minmax(32rem,1fr)_20rem]';
   return undefined;
 }

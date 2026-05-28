@@ -58,7 +58,7 @@ export function DenseToolbar({ children, className, ...props }: DenseToolbarProp
   return (
     <div
       {...props}
-      className={cn('flex min-w-0 flex-wrap items-center gap-2 overflow-x-auto py-1', className)}
+      className={cn('flex min-w-0 flex-wrap items-center gap-2 overflow-x-auto py-1 lg:flex-nowrap', className)}
       data-dense-toolbar=""
       role="toolbar"
     >

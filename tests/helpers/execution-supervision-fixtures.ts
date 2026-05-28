@@ -138,6 +138,7 @@ export async function seedApprovedExecutionPlan(
           specRevision: seeded.specRevision,
           executionPlan: { ...executionPlan, approved_revision_id: executionPlanRevision.id },
           executionPlanRevision,
+          options,
         });
 
   return {
@@ -154,14 +155,33 @@ export async function seedApprovedExecutionPlan(
 async function seedRunnableExecutionPackage(
   repository: DeliveryRepository,
   runtime: ControlPlaneRuntimeService,
-  context: Pick<ApprovedExecutionPlanSeed, 'workItem' | 'developmentPlan' | 'item' | 'specRevision' | 'executionPlan' | 'executionPlanRevision'>,
+  context: Pick<ApprovedExecutionPlanSeed, 'workItem' | 'developmentPlan' | 'item' | 'specRevision' | 'executionPlan' | 'executionPlanRevision'> & {
+    options: {
+      executionPlanRevisionSummary?: string;
+      executionPlanRevisionContent?: string;
+      executionPlanStructuredDocument?: Record<string, unknown>;
+    };
+  },
 ): Promise<ExecutionPackage> {
   const project = await repository.getProject(context.developmentPlan.project_id);
   if (project === undefined) throw new Error(`Project ${context.developmentPlan.project_id} not found`);
   const repo = (await repository.listProjectRepos(project.id))[0];
   if (repo === undefined) throw new Error(`Project ${project.id} has no repo`);
   const at = runtime.now();
-  const requiredChecks = [
+  const structuredDocument = context.options.executionPlanStructuredDocument;
+  const structuredRequiredChecks = Array.isArray(structuredDocument?.required_checks)
+    ? (structuredDocument.required_checks as ExecutionPackage['required_checks']).map((check) => ({
+        ...check,
+        display_name: check.display_name ?? check.check_id,
+      }))
+    : undefined;
+  const structuredAllowedPaths = Array.isArray(structuredDocument?.allowed_paths)
+    ? (structuredDocument.allowed_paths.filter((entry) => typeof entry === 'string' && entry.trim().length > 0) as string[])
+    : undefined;
+  const structuredForbiddenPaths = Array.isArray(structuredDocument?.forbidden_paths)
+    ? (structuredDocument.forbidden_paths.filter((entry) => typeof entry === 'string' && entry.trim().length > 0) as string[])
+    : undefined;
+  const requiredChecks = structuredRequiredChecks ?? [
     {
       check_id: 'focused',
       display_name: 'Focused verification',
@@ -170,8 +190,8 @@ async function seedRunnableExecutionPackage(
       blocks_review: true,
     },
   ];
-  const allowedPaths = ['apps/control-plane-api/**', 'apps/web/**', 'packages/domain/**', 'packages/contracts/**', 'tests/**'];
-  const forbiddenPaths = ['packages/db/**'];
+  const allowedPaths = structuredAllowedPaths ?? ['apps/control-plane-api/**', 'apps/web/**', 'packages/domain/**', 'packages/contracts/**', 'tests/**'];
+  const forbiddenPaths = structuredForbiddenPaths ?? ['packages/db/**'];
   const packagePolicyFields = await defaultPackagePolicyFields(repository, {
     projectId: project.id,
     repoId: repo.repo_id,
@@ -192,7 +212,10 @@ async function seedRunnableExecutionPackage(
       plan_revision_id: context.executionPlanRevision.id,
       project_id: project.id,
       repo_id: repo.repo_id,
-      objective: `Execute ${context.item.title}.`,
+      objective:
+        context.executionPlanRevision.summary.trim().length > 0
+          ? context.executionPlanRevision.summary
+          : `Execute ${context.item.title}.`,
       owner_actor_id: executionActorDeveloper,
       reviewer_actor_id: context.item.reviewer_actor_id ?? executionActorReviewer,
       qa_owner_actor_id: executionActorQa,

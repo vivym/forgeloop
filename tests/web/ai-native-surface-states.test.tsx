@@ -21,13 +21,9 @@ type SurfaceState = 'loading' | 'empty' | 'error' | 'stale' | 'blocked' | 'appro
 
 describe('AI-native surface states', () => {
   it.each([
-    [`/requirements/${requirementListItem.id}`, 'Source Object Workspace'],
-    ['/cockpit', 'Cockpit'],
     ['/my-work', 'My Work'],
     ['/board', 'Board'],
     ['/reports', 'Reports'],
-    [`/development-plans/${developmentPlan.id}`, 'Development Plan Page'],
-    [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, 'Development Plan Item Detail'],
     ['/specs-plans', 'Document Reviews Queue'],
     ['/executions', 'Executions Queue'],
     [`/executions/${execution.id}`, 'Execution Detail'],
@@ -41,6 +37,35 @@ describe('AI-native surface states', () => {
       expect(document.body.textContent).not.toMatch(/color only status/i);
       cleanup();
     }
+  });
+
+  it.each([
+    [`/requirements/${requirementListItem.id}`, 'Requirement Workspace'],
+    ['/cockpit', 'Cockpit'],
+    [`/development-plans/${developmentPlan.id}`, 'Development Plan Workspace'],
+    [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, 'Plan Item Gate Workspace'],
+  ] as const)('keeps normal-state banners out of the core %s route', async (route) => {
+    for (const state of ['approved', 'running', 'resumable'] as const) {
+      const screen = await renderRoute(route, { apiOverrides: overridesFor(route, state) });
+      expect((await screen.findAllByRole('heading')).length).toBeGreaterThan(0);
+      expect(screen.queryByTestId(`surface-state-${state}`)).toBeNull();
+      cleanup();
+    }
+  });
+
+  it.each([
+    [`/requirements/${requirementListItem.id}`, /Requirement.*loading|Loading state/i, /Requirement.*not found|could not be loaded|Error state/i],
+    ['/cockpit', /Loading Cockpit/i, /Cockpit could not be loaded/i],
+    [`/development-plans/${developmentPlan.id}`, /Loading Development Plan/i, /Development Plan could not be loaded/i],
+    [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, /Loading Development Plan Item/i, /Development Plan Item could not be loaded/i],
+  ] as const)('uses compact loading and error states on the core %s route', async (route, loadingPattern, errorPattern) => {
+    const loadingScreen = await renderRoute(route, { apiOverrides: overridesFor(route, 'loading') });
+    expect((await loadingScreen.findAllByText(loadingPattern)).length).toBeGreaterThan(0);
+    cleanup();
+
+    const errorScreen = await renderRoute(route, { apiOverrides: overridesFor(route, 'error') });
+    expect((await errorScreen.findAllByText(errorPattern)).length).toBeGreaterThan(0);
+    cleanup();
   });
 });
 

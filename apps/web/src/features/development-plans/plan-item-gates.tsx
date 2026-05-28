@@ -647,8 +647,8 @@ function verificationEvidenceFor(execution: NonNullable<DevelopmentPlanItemProje
 function invalidateItem(queryClient: ReturnType<typeof useQueryClient>, developmentPlanId: string | undefined, itemId: string) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: ['development-plans'] }),
-    queryClient.invalidateQueries({ queryKey: ['development-plan', developmentPlanId] }),
-    queryClient.invalidateQueries({ queryKey: ['development-plan-item', developmentPlanId, itemId] }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlan(developmentPlanId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItem(developmentPlanId, itemId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId) }),
     queryClient.invalidateQueries({ queryKey: ['spec-execution-plan-queue'] }),
     queryClient.invalidateQueries({ queryKey: ['executions'] }),

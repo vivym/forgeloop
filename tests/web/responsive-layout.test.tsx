@@ -97,7 +97,7 @@ describe('responsive layout contract', () => {
       expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(developmentPlanItem.title);
     });
     expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(/Current gate|Gate progress/i);
-    expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(/Open item/i);
+    expect(document.querySelector('[data-responsive-card-list]')?.textContent).toMatch(/Open Plan Item/i);
     expect(document.querySelector('[data-table-scroll-container]')?.className).toMatch(/overflow-x-auto/);
     cleanup();
     vi.unstubAllGlobals();

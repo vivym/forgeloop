@@ -84,6 +84,7 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
     <ItemRouteChrome
       {...(evidenceExecutionId === undefined ? {} : { evidenceExecutionId })}
       isError={query.isError}
+      isLoading={query.isLoading}
       isNotFound={itemWithRoutePlan === undefined && !query.isLoading}
       item={itemWithRoutePlan}
     />
@@ -118,11 +119,13 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
 function ItemRouteChrome({
   evidenceExecutionId,
   isError,
+  isLoading,
   isNotFound,
   item,
 }: {
   evidenceExecutionId?: string;
   isError: boolean;
+  isLoading: boolean;
   isNotFound: boolean;
   item: DevelopmentPlanItemProjection | undefined;
 }) {
@@ -136,6 +139,7 @@ function ItemRouteChrome({
         ) : null}
         {item ? <EvidenceSideContext compact item={item} {...(evidenceExecutionId === undefined ? {} : { executionId: evidenceExecutionId })} /> : null}
       </div>
+      {isLoading ? <InlineNotice title="Loading Development Plan Item." tone="info" /> : null}
       {isError ? <InlineNotice title="Development Plan Item could not be loaded." tone="danger" /> : null}
       {isNotFound ? <InlineNotice title="Development Plan Item not found." tone="warning" /> : null}
     </div>
@@ -296,7 +300,7 @@ function PlanItemGateRail({
             to={gate.href}
           >
             <span className="font-semibold text-text-primary">{gate.label}</span>
-            <span className="text-xs text-text-secondary">{statusLabel(gate.status)}</span>
+            <GateStatusText gate={gate} />
           </Link>
         ) : (
           <div
@@ -305,11 +309,24 @@ function PlanItemGateRail({
             key={gate.id}
           >
             <span className="font-semibold text-text-primary">{gate.label}</span>
-            <span className="text-xs text-text-secondary">{gate.reason}</span>
+            <GateStatusText gate={gate} />
           </div>
         )
       ))}
     </nav>
+  );
+}
+
+function GateStatusText({ gate }: { gate: PlanItemGateModel }) {
+  const text = gate.enabled ? statusLabel(gate.status) : gate.reason;
+  const activeRuntime = gate.id === 'execution' && (gate.status === 'running' || gate.status === 'interrupted');
+  return (
+    <span
+      className="text-xs text-text-secondary"
+      {...(activeRuntime ? { 'data-runtime-status': '', role: 'status' as const } : {})}
+    >
+      {text}
+    </span>
   );
 }
 
@@ -683,9 +700,9 @@ function EvidenceSideContext({ compact = false, executionId, item }: { compact?:
 
 function DocumentReviewToolbar({ label, status }: { label: string; status: string | undefined }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
+    <div className="flex min-w-0 items-center gap-2 overflow-x-auto whitespace-nowrap text-sm text-text-secondary">
       <StatusPill tone="info">{statusLabel(status)}</StatusPill>
-      <span>{label} draft save is separate from submit and approve.</span>
+      <span className="shrink-0">{label} draft saves separately from review actions.</span>
     </div>
   );
 }

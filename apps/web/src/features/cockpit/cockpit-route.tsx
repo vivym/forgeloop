@@ -19,10 +19,10 @@ export function CockpitRoute() {
 
   return (
     <section aria-label="Cockpit" className="min-w-0" data-page-family="cockpit">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-normal text-text-secondary">Command center</p>
-          <h1 className="mt-1 text-2xl font-semibold text-text-primary">Cockpit</h1>
+          <h1 className="text-xl font-semibold text-text-primary">Cockpit</h1>
         </div>
         {query.isLoading ? <InlineNotice title="Loading Cockpit." tone="info" /> : null}
         {query.isError ? <InlineNotice title="Cockpit could not be loaded." tone="danger" /> : null}
@@ -55,7 +55,7 @@ function CommandStrip({
   projectId: string;
 }) {
   return (
-    <div className="grid gap-3 rounded-card border border-border bg-surface-subtle p-3 lg:grid-cols-[minmax(12rem,0.8fr)_minmax(12rem,0.8fr)_minmax(14rem,1fr)_auto] lg:items-center">
+    <div className="grid gap-2 rounded-card border border-border bg-surface-subtle p-2 lg:grid-cols-[minmax(10rem,0.7fr)_minmax(10rem,0.7fr)_minmax(14rem,1fr)_auto] lg:items-center">
       <div className="min-w-0">
         <p className="text-xs font-semibold uppercase tracking-normal text-text-secondary">Project</p>
         <p className="truncate text-sm font-semibold text-text-primary">{projectId}</p>
@@ -78,7 +78,7 @@ function CommandStrip({
           Runtime {isError ? 'error' : isLoading ? 'loading' : 'current'}
         </StatusPill>
         <details className="relative">
-          <summary className="cursor-pointer list-none rounded-button border border-border bg-surface px-3 py-2 text-xs font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none">
+          <summary className="cursor-pointer list-none rounded-button border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none">
             Create / action
           </summary>
           <div className="absolute right-0 z-10 mt-2 grid w-44 gap-1 rounded-card border border-border bg-surface p-2 shadow-popover">
@@ -91,7 +91,7 @@ function CommandStrip({
           </div>
         </details>
         <Link
-          className="rounded-button border border-border bg-surface px-3 py-2 text-xs font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none"
+          className="rounded-button border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none"
           to="/my-work"
         >
           Command queue

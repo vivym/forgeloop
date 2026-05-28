@@ -200,7 +200,10 @@ export class DevelopmentPlansService {
       await this.saveSourceLink(plan.id, input.source_ref, 'primary', input.actor_id, undefined, repository);
 
       for (const itemInput of this.generatedItemInputs(input.guidance)) {
-        const item = this.buildDevelopmentPlanItem(plan.id, input.source_ref, itemInput);
+        const item = this.buildDevelopmentPlanItem(plan.id, input.source_ref, {
+          ...itemInput,
+          driver_actor_id: itemInput.driver_actor_id ?? input.actor_id,
+        });
         await repository.saveDevelopmentPlanItem(item);
         await this.saveItemRevision(item, 'ai_draft_generated', input.actor_id, repository);
         await this.appendItemEvent(item.id, 'development_plan_item_created', input.actor_id, { development_plan_id: plan.id }, repository);

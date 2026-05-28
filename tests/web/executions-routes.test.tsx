@@ -34,7 +34,7 @@ describe('Executions routes', () => {
     expect((await screen.findAllByText(/Worker state/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Applying approved Execution Plan/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Last event/i)).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/Product architecture preview data PR/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Product workspace preview data PR/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Allowed action/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByRole('link', { name: /inspect execution/i })).some((link) => link.getAttribute('href') === `/executions/${execution.id}`)).toBe(true);
     expect(document.body.textContent).toMatch(/Continue disabled: execution is still running/i);

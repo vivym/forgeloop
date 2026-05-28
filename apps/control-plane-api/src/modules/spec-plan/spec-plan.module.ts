@@ -4,6 +4,7 @@ import { AuditModule } from '../audit/audit.module';
 import { AttachmentsModule } from '../attachments/attachments.module';
 import { ControlPlaneCoreModule } from '../core/control-plane-core.module';
 import { ProductGenerationRuntimeSchedulerModule } from '../codex-runtime/product-generation-runtime-scheduler.module';
+import { ExecutionPackagesModule } from '../execution-packages/execution-packages.module';
 import { MarkdownModule } from '../markdown/markdown.module';
 import { WorkItemsModule } from '../work-items/work-items.module';
 import { SpecPlanController } from './spec-plan.controller';
@@ -17,6 +18,7 @@ import { SpecPlanService } from './spec-plan.service';
     WorkItemsModule,
     AttachmentsModule,
     MarkdownModule,
+    ExecutionPackagesModule,
   ],
   controllers: [SpecPlanController],
   providers: [SpecPlanService],

@@ -21,6 +21,7 @@ import {
   type CodexRuntimeJob,
   type CodexRuntimeProfileRevision,
 } from '../../packages/domain/src';
+import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const actorProduct = 'actor-product';
 const actorTech = 'actor-tech';
@@ -453,6 +454,51 @@ describe('SpecPlanService item-scoped delivery API', () => {
         }),
       ]),
     );
+  });
+
+  it('creates a runnable internal execution boundary when approving an item Execution Plan', async () => {
+    const { plan, item } = await seedApprovedBoundary(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+
+    const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
+      .send({ actor_id: actorTech })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
+      .expect(201);
+
+    const executionPlanRevision = await generateItemExecutionPlanDraft(app, plan.id, item.id);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/submit-for-approval`)
+      .send({ actor_id: actorTech })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Execution Plan approved.' })
+      .expect(201);
+
+    await expect(repository.listExecutionPackagesForWorkItem(item.source_ref.id)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          development_plan_item_id: item.id,
+          execution_plan_id: executionPlanRevision.execution_plan_id,
+          execution_plan_revision_id: executionPlanRevision.id,
+          generation_key: 'item-execution',
+          phase: 'ready',
+          activity_state: 'idle',
+          gate_state: 'not_submitted',
+          spec_revision_id: specRevision.id,
+        }),
+      ]),
+    );
+    const executionPackages = await repository.listExecutionPackagesForWorkItem(item.source_ref.id);
+    const runtimeBoundary = executionPackages.find((executionPackage) => executionPackage.development_plan_item_id === item.id);
+    expect(runtimeBoundary).toBeDefined();
+    expect(runtimeBoundary).not.toHaveProperty('execution_id');
   });
 
   it('saves item-scoped Execution Plan Markdown drafts as new current revisions', async () => {
@@ -2049,7 +2095,7 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
     .send({
       repo_id: 'repo-1',
       name: 'forgeloop',
-      local_path: '/workspace/forgeloop',
+      local_path: await createWorkflowPolicyRepoRoot(),
       default_branch: 'main',
       base_commit_sha: 'abc123',
     })

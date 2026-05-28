@@ -7,6 +7,7 @@ import {
   requiredScreenshotRoutes,
   retiredProductQueryStates,
   retiredProductRoutes,
+  visualViewports,
 } from '../../apps/web/src/features/product-surfaces/route-contract';
 import { productNavigationGroups } from '../../apps/web/src/shared/navigation/product-navigation';
 import { productWorkspacePreviewScenario } from './fixtures/product-data';
@@ -75,6 +76,13 @@ const expectedRetiredSmokeRoutes = [
 ];
 
 const expectedScreenshotRoutes = expectedProductRoutes;
+
+const expectedVisualViewports = [
+  { width: 375, height: 812, label: '375x812' },
+  { width: 768, height: 1024, label: '768x1024' },
+  { width: 1280, height: 720, label: '1280x720' },
+  { width: 1440, height: 900, label: '1440x900' },
+] as const;
 
 const expectedConcreteScreenshotRoutes = [
   '/',
@@ -169,7 +177,9 @@ describe('product-grade route contract', () => {
   });
 
   it('requires screenshot fixtures for every route family', () => {
-    expect(requiredScreenshotRoutes.every((route) => route.viewports.join(',') === '1440,1024,768,375')).toBe(true);
+    expect(visualViewports).toEqual(expectedVisualViewports);
+    expect(requiredScreenshotRoutes.every((route) => route.viewports === visualViewports)).toBe(true);
+    expect(requiredScreenshotRoutes.every((route) => route.viewports.map((viewport) => viewport.label).join(',') === '375x812,768x1024,1280x720,1440x900')).toBe(true);
     expect(requiredScreenshotRoutes.every((route) => route.concretePath.length > 0)).toBe(true);
     expect(requiredScreenshotRoutes.map((route) => route.concretePath)).toEqual(expectedConcreteScreenshotRoutes);
   });

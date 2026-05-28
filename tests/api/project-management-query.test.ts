@@ -542,7 +542,7 @@ describe('project management query API', () => {
       runtime_boundary: {
         type: 'execution_package',
         id: executionPackage.id,
-        phase: 'ready',
+        phase: 'queued',
         activity_state: 'idle',
         gate_state: 'not_submitted',
         execution_plan_revision_id: executionPlanRevision.id,

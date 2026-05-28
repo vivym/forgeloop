@@ -140,10 +140,10 @@ describe('product-grade layout primitives', () => {
     expect(document.querySelector('[data-typed-source-layout]')?.className).toContain('lg:grid-cols-[minmax(28rem,1fr)_20rem]');
 
     rerender(<DevelopmentPlanWorkspace table={<div>Plan rows</div>} />);
-    expect(document.querySelector('[data-development-plan-layout]')?.className).not.toContain('lg:grid-cols');
+    expect(document.querySelector('[data-development-plan-layout]')?.className).not.toContain('grid-cols');
 
     rerender(<DevelopmentPlanWorkspace inspector={<div>Plan inspector</div>} table={<div>Plan rows</div>} />);
-    expect(document.querySelector('[data-development-plan-layout]')?.className).toContain('lg:grid-cols-[minmax(32rem,1fr)_22rem]');
+    expect(document.querySelector('[data-development-plan-layout]')?.className).toContain('2xl:grid-cols-[minmax(32rem,1fr)_22rem]');
   });
 
   it('does not reserve workspace shell rail columns for empty array slots', () => {
@@ -173,23 +173,25 @@ describe('product-grade layout primitives', () => {
   it('keeps Plan Item workspace in the primary column when optional rails are absent', () => {
     const { rerender } = render(<PlanItemGateWorkspace workspace={<div>Gate workspace</div>} />);
 
-    expect(document.querySelector('[data-plan-item-gate-layout]')?.className).not.toContain('xl:grid-cols');
+    expect(document.querySelector('[data-plan-item-gate-layout]')?.className).not.toContain('grid-cols');
     expect(document.querySelector('[data-plan-item-workspace]')?.textContent).toBe('Gate workspace');
 
     rerender(<PlanItemGateWorkspace gateRail={<div>Gate rail</div>} workspace={<div>Gate workspace</div>} />);
     expect(document.querySelector('[data-plan-item-gate-layout]')?.className).toContain('xl:grid-cols-[18rem_minmax(32rem,1fr)]');
 
     rerender(<PlanItemGateWorkspace evidence={<div>Evidence rail</div>} workspace={<div>Gate workspace</div>} />);
-    expect(document.querySelector('[data-plan-item-gate-layout]')?.className).toContain('xl:grid-cols-[minmax(32rem,1fr)_20rem]');
+    expect(document.querySelector('[data-plan-item-gate-layout]')?.className).toContain('2xl:grid-cols-[minmax(32rem,1fr)_20rem]');
 
     rerender(<PlanItemGateWorkspace evidence={<div>Evidence rail</div>} gateRail={<div>Gate rail</div>} workspace={<div>Gate workspace</div>} />);
-    expect(document.querySelector('[data-plan-item-gate-layout]')?.className).toContain('xl:grid-cols-[18rem_minmax(32rem,1fr)_20rem]');
+    expect(document.querySelector('[data-plan-item-gate-layout]')?.className).toContain('xl:grid-cols-[18rem_minmax(32rem,1fr)]');
+    expect(document.querySelector('[data-plan-item-gate-layout]')?.className).toContain('2xl:grid-cols-[18rem_minmax(32rem,1fr)_20rem]');
+    expect(document.querySelector('[data-plan-item-side-rail]')?.className).toContain('xl:col-start-2');
   });
 
   it('keeps Plan Item workspace single-column for empty array rails', () => {
     render(<PlanItemGateWorkspace document={[]} evidence={[]} gateRail={[]} workspace={<div>Gate workspace</div>} />);
 
-    expect(document.querySelector('[data-plan-item-gate-layout]')?.className).not.toContain('xl:grid-cols');
+    expect(document.querySelector('[data-plan-item-gate-layout]')?.className).not.toContain('grid-cols');
     expect(document.querySelector('[data-plan-item-gate-rail]')).toBeNull();
     expect(document.querySelector('[data-plan-item-side-rail]')).toBeNull();
     expect(document.querySelector('[data-plan-item-workspace]')?.textContent).toBe('Gate workspace');

@@ -20,6 +20,19 @@ export type ProductPageFamily =
   | 'release-evidence'
   | 'report-insight';
 
+export interface ProductVisualViewport {
+  width: number;
+  height: number;
+  label: `${number}x${number}`;
+}
+
+export const visualViewports = [
+  { width: 375, height: 812, label: '375x812' },
+  { width: 768, height: 1024, label: '768x1024' },
+  { width: 1280, height: 720, label: '1280x720' },
+  { width: 1440, height: 900, label: '1440x900' },
+] as const satisfies readonly ProductVisualViewport[];
+
 export interface ProductRouteContract {
   path: string;
   concretePath: string;
@@ -27,7 +40,7 @@ export interface ProductRouteContract {
   family: ProductPageFamily;
   kind: ProductRouteKind;
   heading: RegExp;
-  viewports: readonly [1440, 1024, 768, 375];
+  viewports: typeof visualViewports;
 }
 
 export interface ProductCommandItem {
@@ -37,8 +50,6 @@ export interface ProductCommandItem {
   family: ProductPageFamily;
   kind: Exclude<ProductRouteKind, 'retired'>;
 }
-
-export const visualViewports = [1440, 1024, 768, 375] as const;
 
 const requirementId = 'req-product-workspace-clarity';
 const initiativeId = 'init-product-workspace-redesign';

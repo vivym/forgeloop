@@ -1040,10 +1040,10 @@ function itemOverride(
     }],
     execution_plans: status.execution_plan_status === 'missing' || status.execution_plan_status === 'not_started' ? [] : [{ id: 'execution-plan-requirements-database-view', title: 'Execution Plan revision', current_revision_id: 'planrev-requirements-database-view-v1', approved_revision_id: 'planrev-requirements-database-view-v1' }],
     executions: options.executions ?? (status.execution_status === 'not_started' ? [] : [{
-      id: 'exec-demo-seed-visual-review',
+      id: 'exec-preview-seed-visual-review',
       title: 'Execution',
       status: status.execution_status ?? developmentPlanItem.execution_status,
-      evidence_refs: [{ type: 'execution', id: 'evidence-exec-demo-seed-checks', title: 'Verification evidence' }],
+      evidence_refs: [{ type: 'execution', id: 'evidence-exec-preview-seed-checks', title: 'Verification evidence' }],
       ...options.execution,
     }]),
     runtime_boundary: options.runtimeBoundary === null

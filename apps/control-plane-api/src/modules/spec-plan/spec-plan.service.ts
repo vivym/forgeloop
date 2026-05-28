@@ -50,6 +50,7 @@ import type {
   RevisionCompareQueryDto,
   SubmitForApprovalCommandDto,
 } from '../delivery/dto';
+import { ExecutionPackageService } from '../execution-packages/execution-package.service';
 import { MarkdownDocumentService } from '../markdown/markdown-document.service';
 
 export type PublicSpecPlan = Omit<Spec | Plan, 'work_item_id'> & { scope_ref: ObjectRef };
@@ -88,6 +89,7 @@ export class SpecPlanService {
     private readonly productRuntimeScheduler: ProductGenerationRuntimeSchedulerService,
     @Inject(AttachmentsService) private readonly attachments: AttachmentsService,
     @Inject(MarkdownDocumentService) private readonly markdownDocuments: MarkdownDocumentService,
+    @Inject(ExecutionPackageService) private readonly executionPackages: ExecutionPackageService,
   ) {}
 
   async generateItemSpecRevisionRuntime(
@@ -199,7 +201,7 @@ export class SpecPlanService {
       if ((await this.findItemExecutionPlan(item.id, repository)) !== undefined) {
         throw new ConflictException(`Development Plan Item ${item.id} already has an Execution Plan`);
       }
-      const { spec, specRevision } = await this.requireApprovedItemSpec(item.id, repository);
+      const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
       this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
       await this.requireCurrentItemRevisionAtApprovedSpecGate(item, repository);
       const contextManifest = this.stableProductGenerationContextManifest(
@@ -958,13 +960,14 @@ export class SpecPlanService {
     dto: ApproveArtifactCommandDto,
   ): Promise<ExecutionPlanDocument> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
-      const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
-      await this.requireApprovedItemSpec(item, repository);
+      const { plan, item, workItem } = await this.requirePlanItem(developmentPlanId, itemId, repository);
+      const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
       const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
       if (executionPlan.status !== 'in_review') {
         throw new BadRequestException(`Execution Plan ${executionPlan.id} is not awaiting approval`);
       }
       const currentRevisionId = this.requireExecutionPlanCurrentRevision(executionPlan);
+      const currentRevision = await this.requireItemExecutionPlanRevision(item.id, currentRevisionId, repository);
       const reviewerActorId = this.requireActorId(dto.actor_id);
       const approvedAt = this.now();
       const updated: ExecutionPlanDocument = {
@@ -994,6 +997,17 @@ export class SpecPlanService {
         'approved',
         dto.rationale ?? 'Execution Plan approved.',
       );
+      const project = this.requireFound(await repository.getProject(plan.project_id), `Project ${plan.project_id}`);
+      await this.executionPackages.createOrReuseItemExecutionPackage(repository, {
+        project,
+        workItem,
+        item,
+        spec,
+        specRevision,
+        executionPlan: updated,
+        executionPlanRevision: currentRevision,
+        ownerActorId: item.driver_actor_id ?? workItem.driver_actor_id,
+      });
       return updated;
     });
   }

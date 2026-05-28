@@ -182,6 +182,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^apps\/control-plane-api\/src\/modules\/delivery\/dto\.ts$/,
     /^apps\/web\/src\/features\/execution-packages\//,
     /^packages\/db\/src\/schema\/execution-package\.ts$/,
+    /^packages\/db\/src\/queries\/project-management-queries\.ts$/,
     /^packages\/db\/src\/queries\/work-item-cockpit-queries\.ts$/,
     /^packages\/contracts\/src\/work-item-delivery-readiness\.ts$/,
     /^packages\/workflow\/src\/activities\.ts$/,
@@ -190,11 +191,13 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
   ];
   const executionPackageOwnerTestPaths = [
     /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|task-scoped-evidence|test-acceptance-gate)\.test\.ts$/,
+    /^tests\/api\/project-management-query\.test\.ts$/,
     /^tests\/db\/(?:automation-repository|codex-runtime-drizzle-concurrency|codex-runtime-repository|release-cockpit-queries|release-replay-queries|repository|task-repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
     /^tests\/db\/repository-contract\.ts$/,
     /^tests\/contracts\/work-item-delivery-readiness\.test\.ts$/,
-    /^tests\/domain\/(?:release-gates|release-states|states|validators)\.test\.ts$/,
+    /^tests\/domain\/(?:ai-native-planning-gates|release-gates|release-states|states|validators)\.test\.ts$/,
     /^tests\/helpers\/delivery-runtime-fixtures\.ts$/,
+    /^tests\/helpers\/execution-supervision-fixtures\.ts$/,
     /^tests\/smoke\/(?:delivery-dogfood-script|delivery-dogfood-work-items-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
     /^tests\/web\/(?:api|api-hooks|package-run-product-routes|review-release-product-routes)\.test\.tsx?$/,
     /^tests\/web\/fixtures\/product-(?:api-mock|data)\.ts$/,
@@ -233,7 +236,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
       context,
     );
   const executionPackageOwnerContext =
-    /ExecutionPackage|executionPackage|execution_package|execution-packages|execution_packages|execution-owner|Execution Owner|packageBase|validateExecutionPackage|CreateExecutionPackage|PatchExecutionPackage|package_created|package_edited|cockpitPackage|Package assignee|Package owner|ownerActorId|ownerActorIdValues|context\.workItem\.driver_actor_id|reviewer_actor_id|qa_owner_actor_id|required_checks|required_artifact_kinds|spec_revision_id|plan_revision_id|repo_id/.test(
+    /ExecutionPackage|executionPackage|execution_package|execution-packages|execution_packages|execution-owner|Execution Owner|packageBase|validateExecutionPackage|transitionExecutionPackage|CreateExecutionPackage|PatchExecutionPackage|package_created|package_edited|cockpitPackage|Package assignee|Package owner|ownerActorId|ownerActorIdValues|context\.workItem\.driver_actor_id|reviewer_actor_id|qa_owner_actor_id|required_checks|required_artifact_kinds|spec_revision_id|plan_revision_id|repo_id/.test(
       context,
     );
   const negativeWorkItemOwnerContext =

@@ -4,11 +4,18 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import { describe, expect, it } from 'vitest';
 
 import { firstViewportContract } from '../../apps/web/src/features/product-surfaces/first-viewport-contract';
+import { requiredScreenshotRoutes, visualViewports } from '../../apps/web/src/features/product-surfaces/route-contract';
 import { developmentPlan, developmentPlanItem, execution, release, requirementListItem } from './fixtures/product-data';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 import { renderRoute } from './router-test-utils';
 
 const retiredOwnerLabel = ['Work Item', 'Owner'].join(' ');
+const expectedVisualViewportPairs = [
+  { width: 375, height: 812, label: '375x812' },
+  { width: 768, height: 1024, label: '768x1024' },
+  { width: 1280, height: 720, label: '1280x720' },
+  { width: 1440, height: 900, label: '1440x900' },
+] as const;
 
 function FixturePage() {
   return (
@@ -26,6 +33,12 @@ describe('product-grade first viewport contract', () => {
     render(<FixturePage />);
 
     expectFirstViewportContract(screen, { pageFamily: 'cockpit', heading: /Cockpit/ });
+  });
+
+  it('requires visual acceptance to cover explicit viewport pairs', () => {
+    expect(visualViewports).toEqual(expectedVisualViewportPairs);
+    expect(requiredScreenshotRoutes.every((route) => route.viewports === visualViewports)).toBe(true);
+    expect(requiredScreenshotRoutes.every((route) => route.viewports.some((viewport) => viewport.label === '1280x720'))).toBe(true);
   });
 
   it('requires the Cockpit route to expose the shared first-viewport contract', async () => {
@@ -156,7 +169,7 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
     expect(document.body.textContent).not.toMatch(/source object context|\brow\b|Work Item Owner|owner_actor_id|\bTask\b/);
   });
 
-  it('requires Development Plan Item gate routes to expose gate-flow workspaces', async () => {
+  it('requires Development Plan Item gate routes to expose gate workspaces', async () => {
     for (const route of [
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`,
@@ -165,7 +178,8 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
       const rendered = await renderRoute(route);
 
       expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-      expectFirstViewportContract(rendered, { pageFamily: 'gate-flow', heading: developmentPlanItem.title });
+      expectFirstViewportContract(rendered, { pageFamily: 'gate-workspace', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-product-shell="plan-item-gate-workspace"]')).toBeInstanceOf(HTMLElement);
       expect(document.querySelector('[data-gate-workspace][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(document.querySelector('[data-first-viewport]')).toBeNull();
       expect(document.querySelector('[data-gate-workspace]')?.textContent).toMatch(/Gate progress|Current gate|Evidence side context|Execution supervision/i);

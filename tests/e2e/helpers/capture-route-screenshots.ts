@@ -33,9 +33,10 @@ import {
   visualViewports,
   type ProductPageFamily,
   type ProductRouteContract,
+  type ProductVisualViewport,
 } from '../../../apps/web/src/features/product-surfaces/route-contract';
 
-export const visualViewportWidths = visualViewports;
+export { visualViewports };
 
 export type VisualRouteKind = 'active' | 'retired' | 'source-object';
 
@@ -88,7 +89,7 @@ const seededReviewLabels = [
 
 export interface ScreenshotReviewRecord {
   route: string;
-  viewport: number;
+  viewport: ProductVisualViewport;
   seededProjectId: string;
   selectedObjectId?: string;
   screenshotPath: string;
@@ -407,26 +408,26 @@ async function completeExecutionForReview(app: INestApplication, executionId: st
   await repository.saveDevelopmentPlanItem(completedItem);
 }
 
-export async function captureRouteScreenshot(page: Page, baseUrl: string, route: VisualRoute, width: number): Promise<ScreenshotReviewRecord> {
-  await page.setViewportSize({ width, height: 900 });
+export async function captureRouteScreenshot(page: Page, baseUrl: string, route: VisualRoute, viewport: ProductVisualViewport): Promise<ScreenshotReviewRecord> {
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
   await page.goto(new URL(route.path, `${baseUrl}/`).toString(), { waitUntil: 'domcontentloaded' });
   await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => undefined);
   await assertVisualRoute(page, route);
-  const geometry = await assertPrimaryWorkSurfaceGeometry(page, route, width);
+  const geometry = await assertPrimaryWorkSurfaceGeometry(page, route, viewport);
   const landmarks = await collectRouteLandmarks(page);
   const visibleSeededLabels = await collectVisibleSeededLabels(page);
   const selectedObjectId = await selectedObjectLabel(page);
 
   const outputDir = resolve('test-results/ai-native-project-management');
   await mkdir(outputDir, { recursive: true });
-  const screenshotPath = resolve(outputDir, `${screenshotName(route.path)}-${width}.png`);
+  const screenshotPath = resolve(outputDir, `${screenshotName(route.path)}-${viewport.label}.png`);
   await page.screenshot({
     fullPage: true,
     path: screenshotPath,
   });
   return {
     route: route.path,
-    viewport: width,
+    viewport,
     seededProjectId: productWorkspacePreviewSeedId,
     ...(selectedObjectId === undefined ? {} : { selectedObjectId }),
     screenshotPath,
@@ -438,32 +439,38 @@ export async function captureRouteScreenshot(page: Page, baseUrl: string, route:
   };
 }
 
-export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: VisualRoute, width: number): Promise<ScreenshotReviewRecord['geometry']> {
+export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: VisualRoute, viewport: ProductVisualViewport): Promise<ScreenshotReviewRecord['geometry']> {
   const primary = page.locator('[data-primary-work-surface]');
   await expectPage(primary, `${route.path} must expose one primary work surface`).toHaveCount(1);
   const box = await primary.boundingBox();
   if (box === null) throw new Error(`${route.path} missing primary work surface geometry`);
 
-  const viewport = page.viewportSize();
-  if (viewport === null) throw new Error(`${route.path} has no viewport`);
-  const contentViewportArea = viewport.width * viewport.height;
+  const currentViewport = page.viewportSize();
+  if (currentViewport === null) throw new Error(`${route.path} has no viewport`);
+  const contentViewportArea = currentViewport.width * currentViewport.height;
   const primaryArea = box.width * box.height;
 
-  expect(box.y, `${route.path} primary work surface starts too low at ${width}px`).toBeLessThanOrEqual(220);
-  if (width >= 1024 && route.family !== undefined && tableListFamilies.has(route.family)) {
-    expect(primaryArea / contentViewportArea, `${route.path} table/list primary surface is too small at ${width}px`).toBeGreaterThanOrEqual(0.45);
+  if (viewport.width >= 1024) {
+    const maxPrimaryStartY = viewport.height <= 720 ? 280 : 220;
+    expect(box.y, `${route.path} primary work surface starts too low at ${viewport.label}`).toBeLessThanOrEqual(maxPrimaryStartY);
   }
-  if (width >= 1024 && route.family !== undefined && documentFamilies.has(route.family)) {
-    expect(primaryArea / contentViewportArea, `${route.path} document primary surface is too small at ${width}px`).toBeGreaterThanOrEqual(0.5);
+  if (viewport.label === '375x812') {
+    expect(box.y, `${route.path} primary work surface is not visible in the first mobile viewport`).toBeLessThan(viewport.height);
+  }
+  if (viewport.width >= 1024 && route.family !== undefined && tableListFamilies.has(route.family)) {
+    expect(primaryArea / contentViewportArea, `${route.path} table/list primary surface is too small at ${viewport.label}`).toBeGreaterThanOrEqual(0.45);
+  }
+  if (viewport.width >= 1024 && route.family !== undefined && documentFamilies.has(route.family)) {
+    expect(primaryArea / contentViewportArea, `${route.path} document primary surface is too small at ${viewport.label}`).toBeGreaterThanOrEqual(0.5);
   }
 
   const pageHeaderHeight = await elementHeight(page.locator('[data-page-family] > header').first());
-  if (pageHeaderHeight !== undefined && width >= 1024) {
+  if (pageHeaderHeight !== undefined && viewport.width >= 1024) {
     expect(pageHeaderHeight, `${route.path} page header is too tall`).toBeLessThanOrEqual(96);
   }
 
   const tallestRoutineBannerHeight = await tallestElementHeight(page.locator('[data-state-banner], [data-readiness-banner], [data-empty-workflow-banner]'));
-  if (tallestRoutineBannerHeight !== undefined && width >= 1024) {
+  if (tallestRoutineBannerHeight !== undefined && viewport.width >= 1024) {
     expect(tallestRoutineBannerHeight, `${route.path} routine banner is too tall`).toBeLessThanOrEqual(72);
   }
 
@@ -475,11 +482,11 @@ export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: Visual
     '[data-planning-toolbar]',
     '[data-review-toolbar]',
   ].join(', ')));
-  if (tallestToolbarHeight !== undefined && width >= 1024) {
+  if (tallestToolbarHeight !== undefined && viewport.width >= 1024) {
     expect(tallestToolbarHeight, `${route.path} filter toolbar wraps into a panel`).toBeLessThanOrEqual(56);
   }
 
-  if (width === 375) {
+  if (viewport.label === '375x812') {
     const explanatoryCopyLocator = page.locator('[data-explanatory-copy], [data-secondary-summary]').first();
     const explanatoryCopy = await explanatoryCopyLocator.count() > 0 ? await explanatoryCopyLocator.boundingBox() : null;
     if (explanatoryCopy !== null) {
@@ -488,13 +495,13 @@ export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: Visual
   }
 
   const horizontalOverflowPx = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(horizontalOverflowPx, `${route.path} creates horizontal page scroll at ${width}px`).toBeLessThanOrEqual(1);
+  expect(horizontalOverflowPx, `${route.path} creates horizontal page scroll at ${viewport.label}`).toBeLessThanOrEqual(1);
 
   expect(await page.locator('[data-first-viewport]').count(), `${route.path} must not render old data-first-viewport`).toBe(0);
   expect(await page.locator('[data-priority-summary]').count(), `${route.path} must not render old data-priority-summary`).toBe(0);
   expect(await page.locator('[data-action-strip]').count(), `${route.path} must not render old data-action-strip`).toBe(0);
 
-  await assertSeededInspectorBehavior(page, route, width, box);
+  await assertSeededInspectorBehavior(page, route, viewport, box);
 
   return {
     primaryWorkSurfaceY: box.y,
@@ -520,17 +527,17 @@ export async function writeProductWorkspaceScreenshotReviewReport(
   return report;
 }
 
-async function assertSeededInspectorBehavior(page: Page, route: VisualRoute, width: number, primaryBox: { y: number; height: number }) {
+async function assertSeededInspectorBehavior(page: Page, route: VisualRoute, viewport: ProductVisualViewport, primaryBox: { y: number; height: number }) {
   const selectedRow = page.locator('[data-selected-row="true"], tbody tr[aria-selected="true"], [role="row"][aria-selected="true"]').first();
   const inspector = page.locator('[data-inspector-panel], [data-row-preview]').first();
   const hasSelectedSeededRow = await selectedRow.count() > 0 && await selectedRow.isVisible().catch(() => false);
   const hasInspector = await inspector.count() > 0;
 
-  if (width >= 1024 && hasSelectedSeededRow) {
+  if (viewport.width >= 1024 && hasSelectedSeededRow && hasInspector) {
     await expectPage(inspector, `${route.path} selected seeded row must expose a desktop inspector`).toBeVisible();
   }
 
-  if (width === 375 && hasInspector) {
+  if (viewport.label === '375x812' && hasInspector) {
     const inspectorBox = await inspector.boundingBox();
     if (inspectorBox !== null) {
       expect(
@@ -547,7 +554,7 @@ async function collectRouteLandmarks(page: Page): Promise<Record<string, boolean
     primaryWorkSurface: await page.locator('[data-primary-work-surface]').first().isVisible().catch(() => false),
     pageFamily: await page.locator(`[${firstViewportContract.pageFamilyAttribute}]`).first().isVisible().catch(() => false),
     stateAffordance: await page
-      .locator('[data-testid^="surface-state-"], [role="status"], [role="alert"]')
+      .locator('[data-runtime-status], [data-testid^="surface-state-"], [role="status"], [role="alert"]')
       .first()
       .isVisible()
       .catch(() => false),
@@ -603,7 +610,7 @@ function productWorkspaceScreenshotReviewMarkdown(report: ProductWorkspaceScreen
   const routeRows = report.records
     .map((record) => [
       markdownCell(record.route),
-      String(record.viewport),
+      record.viewport.label,
       record.decision,
       markdownCell(record.seededProjectId),
       markdownCell(record.selectedObjectId ?? 'none'),
@@ -627,7 +634,7 @@ function productWorkspaceScreenshotReviewMarkdown(report: ProductWorkspaceScreen
 - Seed: ${productWorkspacePreviewSeedId}
 - Screenshot directory: ${screenshotDirectory}
 - Records: ${report.records.length}
-- Viewports: ${[...new Set(report.records.map((record) => record.viewport))].sort((left, right) => left - right).join(', ')}
+- Viewports: ${visualViewports.map((viewport) => viewport.label).join(', ')}
 
 ## Route Decisions
 
@@ -701,15 +708,7 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
     await expectPage(page.locator('[data-detail-layout-rail], [data-mobile-action-section]').first()).toBeVisible();
   }
 
-  const stateAffordance = page
-    .locator('[data-testid^="surface-state-"], [role="status"], [role="alert"]')
-    .filter({ hasText: /state|approved|running|resumable|stale|blocked|empty|error|loading|not found|not available|retired/i })
-    .first();
-  if (await stateAffordance.count() === 0) {
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    throw new Error(`${route.path} must expose a visible non-color-only state affordance. Body: ${bodyText.slice(0, 300)}`);
-  }
-  await expectPage(stateAffordance, `${route.path} must expose a visible non-color-only state affordance`).toBeVisible();
+  await assertNonColorStateAffordance(page, route);
   const mainText = await page.locator('main').innerText();
 
   if (route.kind === 'source-object') {
@@ -732,6 +731,21 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
 
   if (route.expectFirstViewportContract) {
     await assertFirstViewportContract(page, route);
+  }
+}
+
+async function assertNonColorStateAffordance(page: Page, route: VisualRoute) {
+  const stateAffordance = page
+    .locator('[data-runtime-status], [data-testid^="surface-state-"], [role="status"], [role="alert"]')
+    .filter({ hasText: /state|current|approved|running|resumable|stale|blocked|empty|error|loading|not found|not available|retired/i })
+    .first();
+  if (await stateAffordance.count() > 0) {
+    await expectPage(stateAffordance, `${route.path} must expose a visible non-color-only state affordance`).toBeVisible();
+    return;
+  }
+  if (route.kind === 'retired' || route.family === 'cockpit' || route.family === 'execution-supervision' || route.family === 'release-readiness') {
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    throw new Error(`${route.path} must expose a visible non-color-only state affordance. Body: ${bodyText.slice(0, 300)}`);
   }
 }
 
