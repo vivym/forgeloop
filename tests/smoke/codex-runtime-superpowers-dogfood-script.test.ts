@@ -1,6 +1,5 @@
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,15 +15,56 @@ import {
   loadCodexRuntimeSuperpowersDogfoodCliConfig,
   renderCodexRuntimeSuperpowersDogfoodBlockerReport,
   renderCodexRuntimeSuperpowersDogfoodReport,
+  resolveDogfoodIsolatedWorktreeConfig,
   runCodexRuntimeSuperpowersDogfood,
   sanitizeCodexRemoteWorkerDogfoodEnv,
   type CodexRuntimeSuperpowersDogfoodCliConfig,
   type CodexRuntimeSuperpowersDogfoodClient,
+  type DogfoodGit,
+  type Sha256Digest,
 } from '../../scripts/codex-runtime-superpowers-dogfood';
 
-const digest = (seed: string): string => `sha256:${createHash('sha256').update(seed).digest('hex')}`;
-const publicDigest = (seed: string): string => `sha256:${createHash('sha256').update(JSON.stringify(seed)).digest('hex')}`;
-const fixedReportPath = 'docs/superpowers/reports/codex-runtime-real-dogfood-pass.md';
+const digest = (seed: string): Sha256Digest => `sha256:${createHash('sha256').update(seed).digest('hex')}`;
+const publicDigest = (seed: string): Sha256Digest => `sha256:${createHash('sha256').update(JSON.stringify(seed)).digest('hex')}`;
+const unsafeDigest = (value: string): Sha256Digest => value as Sha256Digest;
+const fixedReportPath = 'docs/superpowers/reports/codex-runtime-real-dogfood-pass.md' as const;
+const mainCommitSha = 'a'.repeat(40);
+const featureCommitSha = 'b'.repeat(40);
+const previousMainCommitSha = 'c'.repeat(40);
+const isolatedWorktreePath = '/repo/.worktrees/codex-runtime-dogfood-main';
+const dogfoodWorktreeBase = {
+  mode: 'isolated_main_worktree' as const,
+  base_commit_digest: digest('main-worktree-base'),
+};
+
+const strictDogfoodEnv = (overrides?: Record<string, string | undefined>): Record<string, string | undefined> => ({
+  FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
+  FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
+  FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
+  FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'requirement-1',
+  FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+  FORGELOOP_CODEX_DOGFOOD_REPO_PATH: isolatedWorktreePath,
+  FORGELOOP_CODEX_DOGFOOD_REPO_BASE_BRANCH: 'main',
+  FORGELOOP_CODEX_DOGFOOD_REPO_BASE_COMMIT_SHA: mainCommitSha,
+  FORGELOOP_CODEX_DOGFOOD_ISOLATED_WORKTREE: '1',
+  ...overrides,
+});
+
+const makeFakeDogfoodGit = (
+  overrides?: Partial<{
+    currentBranch: string;
+    headSha: string;
+    mainSha: string;
+    registeredWorktreePaths: string[];
+    statusPorcelain: string;
+  }>,
+): DogfoodGit => ({
+  currentBranch: vi.fn(() => overrides?.currentBranch ?? ''),
+  headSha: vi.fn(() => overrides?.headSha ?? mainCommitSha),
+  mainSha: vi.fn(() => overrides?.mainSha ?? mainCommitSha),
+  registeredWorktreePaths: vi.fn(() => overrides?.registeredWorktreePaths ?? ['/repo', isolatedWorktreePath]),
+  statusPorcelain: vi.fn(() => overrides?.statusPorcelain ?? ''),
+});
 
 const boundaryEvidence = {
   mode: 'initial' as const,
@@ -161,6 +201,7 @@ const safeReport = () => ({
   runtime_profile_revision_digests: [digest('a')],
   credential_binding_version_digests: [digest('b')],
   codex_app_server_evidence: codexAppServerEvidence,
+  dogfood_worktree_base: dogfoodWorktreeBase,
   no_shared_filesystem_worker: true as const,
   workspace_bundle_digest: digest('c'),
   mounted_task_workspace_digest: digest('d'),
@@ -175,13 +216,13 @@ const safeReport = () => ({
   boundary_summary_request_change_path_covered: true,
   cleanup_status: 'completed' as const,
   changed_files: [fixedReportPath],
-  report_path: fixedReportPath as const,
+  report_path: fixedReportPath,
 });
 
 type PhaseEvidenceOverride = {
   output_schema_versions?: string[];
-  runtime_job_digests?: string[];
-  app_server_evidence_digests?: string[];
+  runtime_job_digests?: Sha256Digest[];
+  app_server_evidence_digests?: Sha256Digest[];
   cleanup_status?: 'completed' | 'blocked';
   ai_turn_count?: number;
   follow_up_path_covered?: boolean;
@@ -195,6 +236,7 @@ const completeDogfoodClientWithPhaseEvidence = (overrides?: {
   executionPlan?: PhaseEvidenceOverride;
   execution?: PhaseEvidenceOverride;
 }): CodexRuntimeSuperpowersDogfoodClient => ({
+  dogfoodWorktreeBase: vi.fn(() => dogfoodWorktreeBase),
   importCodexRuntime: vi.fn(async () => ({
     runtime_profile_revision_digests: [digest('a')],
     credential_binding_version_digests: [digest('b')],
@@ -219,8 +261,8 @@ const completeDogfoodClientWithPhaseEvidence = (overrides?: {
   ),
   mutateDevelopmentPlanItem: vi.fn(async () => undefined),
   assertStaleBoundaryBlocksSpecGeneration: vi.fn(async () => ({
-    blocked: true,
-    blocker_code: 'STALE_BOUNDARY_SUMMARY',
+    blocked: true as const,
+    blocker_code: 'STALE_BOUNDARY_SUMMARY' as const,
   })),
   generateAndApproveSpec: vi.fn(async () => ({
     ...specEvidence,
@@ -261,8 +303,11 @@ const boundaryHttpClientConfig = (
   leaderActorId: 'actor-leader',
   reviewerActorId: 'actor-reviewer',
   repoId: 'repo-1',
-  repoLocalPath: '/repo/current',
-  repoBaseCommitSha: 'abc123',
+  repoLocalPath: isolatedWorktreePath,
+  repoBaseCommitSha: mainCommitSha,
+  repoBaseBranch: 'main',
+  isolatedWorktree: true,
+  dogfood_worktree_base: dogfoodWorktreeBase,
   noSharedFilesystem: true,
   skipBootstrap: true,
   remoteRuntimeJobWaitTimeoutMs: 100,
@@ -355,6 +400,10 @@ describe('Codex runtime Superpowers dogfood script', () => {
   it('orchestrates the strict product loop through central config/auth and no-shared-filesystem execution', async () => {
     const calls: string[] = [];
     const client: CodexRuntimeSuperpowersDogfoodClient = {
+      dogfoodWorktreeBase: vi.fn(() => {
+        calls.push('dogfoodWorktreeBase');
+        return dogfoodWorktreeBase;
+      }),
       importCodexRuntime: vi.fn(async () => {
         calls.push('importCodexRuntime');
         return {
@@ -397,7 +446,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       }),
       assertStaleBoundaryBlocksSpecGeneration: vi.fn(async () => {
         calls.push('assertStaleBoundaryBlocksSpecGeneration');
-        return { blocked: true, blocker_code: 'STALE_BOUNDARY_SUMMARY' };
+        return { blocked: true as const, blocker_code: 'STALE_BOUNDARY_SUMMARY' as const };
       }),
       generateAndApproveSpec: vi.fn(async () => {
         calls.push('generateAndApproveSpec');
@@ -420,6 +469,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     const result = await runCodexRuntimeSuperpowersDogfood({ client });
 
     expect(calls).toEqual([
+      'dogfoodWorktreeBase',
       'seedSourceAndDevelopmentPlanItem',
       'importCodexRuntime',
       'smokeGenerationWorker',
@@ -449,6 +499,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
         rebased_boundary_summary_revision_id: 'boundary-summary-revision-rebased',
       },
       package_script_command: 'pnpm dogfood:codex-runtime:superpowers',
+      dogfood_worktree_base: dogfoodWorktreeBase,
       codex_app_server_evidence: expect.objectContaining({
         mode: 'dockerized_app_server',
         output_schema_versions: expect.arrayContaining([
@@ -482,6 +533,9 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(markdown).toContain('Codex output schemas: boundary_round_result.v1, spec_revision.v1, execution_plan_revision.v1, codex_run_execution_result.v1');
     expect(markdown).toContain('Phase boundary_initial: expected_schema=boundary_round_result.v1 observed_schemas=boundary_round_result.v1');
     expect(markdown).toContain('Phase spec: expected_schema=spec_revision.v1 observed_schemas=spec_revision.v1');
+    expect(markdown).toContain(
+      `Dogfood worktree base: mode=isolated_main_worktree base_commit_digest=${dogfoodWorktreeBase.base_commit_digest}`,
+    );
     expect(markdown).toContain('Boundary AI turns: 4');
     expect(markdown).toContain('Follow-up path covered: true');
     expect(markdown).toContain('Summary request-change path covered: true');
@@ -511,28 +565,48 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(() =>
       renderCodexRuntimeSuperpowersDogfoodReport({
         ...report,
-        runtime_profile_revision_digests: ['runtime-profile-revision-1'],
+        runtime_profile_revision_digests: [unsafeDigest('runtime-profile-revision-1')],
       }),
     ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
 
     expect(() =>
       renderCodexRuntimeSuperpowersDogfoodReport({
         ...report,
-        credential_binding_version_digests: ['sha256:not-a-real-digest'],
+        credential_binding_version_digests: [unsafeDigest('sha256:not-a-real-digest')],
       }),
     ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
 
     expect(() =>
       renderCodexRuntimeSuperpowersDogfoodReport({
         ...report,
-        workspace_bundle_digest: 'workspace-bundle-1',
+        workspace_bundle_digest: unsafeDigest('workspace-bundle-1'),
       }),
     ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
 
     expect(() =>
       renderCodexRuntimeSuperpowersDogfoodReport({
         ...report,
-        mounted_task_workspace_digest: 'sha256:not-a-real-digest',
+        mounted_task_workspace_digest: unsafeDigest('sha256:not-a-real-digest'),
+      }),
+    ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
+
+    expect(() =>
+      renderCodexRuntimeSuperpowersDogfoodReport({
+        ...report,
+        dogfood_worktree_base: {
+          ...report.dogfood_worktree_base,
+          mode: 'current_feature_worktree' as 'isolated_main_worktree',
+        },
+      }),
+    ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
+
+    expect(() =>
+      renderCodexRuntimeSuperpowersDogfoodReport({
+        ...report,
+        dogfood_worktree_base: {
+          ...report.dogfood_worktree_base,
+          base_commit_digest: unsafeDigest('sha256:not-a-real-digest'),
+        },
       }),
     ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
 
@@ -561,7 +635,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
         ...report,
         codex_app_server_evidence: {
           ...report.codex_app_server_evidence,
-          runtime_job_digests: ['http://127.0.0.1:1234'],
+          runtime_job_digests: [unsafeDigest('http://127.0.0.1:1234')],
         },
       }),
     ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
@@ -571,7 +645,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
         ...report,
         codex_app_server_evidence: {
           ...report.codex_app_server_evidence,
-          runtime_job_digests: ['/tmp/runtime-job-1'],
+          runtime_job_digests: [unsafeDigest('/tmp/runtime-job-1')],
         },
       }),
     ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
@@ -581,7 +655,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
         ...report,
         codex_app_server_evidence: {
           ...report.codex_app_server_evidence,
-          app_server_evidence_digests: ['container-123'],
+          app_server_evidence_digests: [unsafeDigest('container-123')],
         },
       }),
     ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
@@ -637,6 +711,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       cleanup_status: 'completed' as const,
     };
     const client: CodexRuntimeSuperpowersDogfoodClient = {
+      dogfoodWorktreeBase: vi.fn(() => dogfoodWorktreeBase),
       importCodexRuntime: vi.fn(async () => ({
         runtime_profile_revision_digests: [digest('a')],
         credential_binding_version_digests: [digest('b')],
@@ -660,8 +735,8 @@ describe('Codex runtime Superpowers dogfood script', () => {
       })),
       mutateDevelopmentPlanItem: vi.fn(async () => undefined),
       assertStaleBoundaryBlocksSpecGeneration: vi.fn(async () => ({
-        blocked: true,
-        blocker_code: 'STALE_BOUNDARY_SUMMARY',
+        blocked: true as const,
+        blocker_code: 'STALE_BOUNDARY_SUMMARY' as const,
       })),
       generateAndApproveSpec: vi.fn(async () => ({
         spec_revision_id: 'spec-revision-1',
@@ -757,6 +832,9 @@ describe('Codex runtime Superpowers dogfood script', () => {
 
     await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_boundary_coverage_missing',
+      report: {
+        dogfood_worktree_base: dogfoodWorktreeBase,
+      },
     });
     expect(client.writeReport).not.toHaveBeenCalled();
   });
@@ -863,6 +941,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       status: 'BLOCKED',
       blocker_code: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
       cleanup_status: 'blocked',
+      dogfood_worktree_base: dogfoodWorktreeBase,
       codex_app_server_evidence: {
         phases: [
           {
@@ -880,6 +959,9 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(markdown).toContain(
       `Phase spec: expected_schema=spec_revision.v1 observed_schemas=spec_revision.v1 cleanup=completed runtime_jobs=${digest('spec-a')} app_server=${digest('spec-app-server-a')}`,
     );
+    expect(markdown).toContain(
+      `Dogfood worktree base: mode=isolated_main_worktree base_commit_digest=${dogfoodWorktreeBase.base_commit_digest}`,
+    );
     expect(markdown).toContain('Cleanup status: blocked');
     expect(markdown).not.toContain('/Users/');
     expect(markdown).not.toContain('/tmp/');
@@ -894,13 +976,24 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(() =>
       renderCodexRuntimeSuperpowersDogfoodBlockerReport({
         status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_dogfood_worktree_dirty',
+        dogfood_worktree_base: {
+          ...dogfoodWorktreeBase,
+          base_commit_digest: unsafeDigest('sha256:not-a-real-digest'),
+        },
+      }),
+    ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
+
+    expect(() =>
+      renderCodexRuntimeSuperpowersDogfoodBlockerReport({
+        status: 'BLOCKED',
         blocker_code: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
         cleanup_status: 'completed',
         codex_app_server_evidence: {
           phases: [
             {
               ...codexAppServerEvidence.phases[0],
-              runtime_job_digests: ['/tmp/runtime-job-1'],
+              runtime_job_digests: [unsafeDigest('/tmp/runtime-job-1')],
             },
           ],
         },
@@ -916,7 +1009,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
           phases: [
             {
               ...codexAppServerEvidence.phases[0],
-              app_server_evidence_digests: ['container-123'],
+              app_server_evidence_digests: [unsafeDigest('container-123')],
             },
           ],
         },
@@ -941,94 +1034,158 @@ describe('Codex runtime Superpowers dogfood script', () => {
   });
 
   it('does not require pre-known Boundary summary revision ids in CLI config', () => {
-    const config = loadCodexRuntimeSuperpowersDogfoodCliConfig({
-      FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
-      FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
+    const config = loadCodexRuntimeSuperpowersDogfoodCliConfig(
+      strictDogfoodEnv({
       FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID: 'profile-generation',
       FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID: 'binding-generation',
       FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID: 'profile-run',
       FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID: 'binding-run',
-      FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
       FORGELOOP_CODEX_DOGFOOD_REPO_ID: 'repo-1',
-      FORGELOOP_CODEX_DOGFOOD_REPO_PATH: '/repo/current',
-      FORGELOOP_CODEX_DOGFOOD_REPO_BASE_COMMIT_SHA: 'abc123',
-      FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'requirement-1',
-      FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
-    });
+      }),
+      makeFakeDogfoodGit(),
+    );
 
     expect(config.boundarySummaryRevisionId).toBeUndefined();
     expect(config.repoId).toBe('repo-1');
-    expect(config.repoLocalPath).toBe('/repo/current');
-    expect(config.repoBaseCommitSha).toBe('abc123');
+    expect(config.repoLocalPath).toBe(isolatedWorktreePath);
+    expect(config.repoBaseCommitSha).toBe(mainCommitSha);
   });
 
   it('loads bounded Boundary dogfood loop settings from env', () => {
-    const config = loadCodexRuntimeSuperpowersDogfoodCliConfig({
-      FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
-      FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
-      FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
-      FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'requirement-1',
-      FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
-      FORGELOOP_CODEX_DOGFOOD_BOUNDARY_MAX_AI_TURNS: '6',
-    });
+    const config = loadCodexRuntimeSuperpowersDogfoodCliConfig(
+      strictDogfoodEnv({ FORGELOOP_CODEX_DOGFOOD_BOUNDARY_MAX_AI_TURNS: '6' }),
+      makeFakeDogfoodGit(),
+    );
 
     expect(config.boundaryMaxAiTurns).toBe(6);
   });
 
   it('defaults the bounded Boundary dogfood loop to 8 AI turns', () => {
-    const config = loadCodexRuntimeSuperpowersDogfoodCliConfig({
-      FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
-      FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
-      FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
-      FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'requirement-1',
-      FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
-    });
+    const config = loadCodexRuntimeSuperpowersDogfoodCliConfig(strictDogfoodEnv(), makeFakeDogfoodGit());
 
     expect(config.boundaryMaxAiTurns).toBe(8);
   });
 
   it('rejects a zero Boundary dogfood loop max AI turn setting', () => {
     expect(() =>
-      loadCodexRuntimeSuperpowersDogfoodCliConfig({
-        FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
-        FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
-        FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
-        FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'requirement-1',
-        FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
-        FORGELOOP_CODEX_DOGFOOD_BOUNDARY_MAX_AI_TURNS: '0',
-      }),
+      loadCodexRuntimeSuperpowersDogfoodCliConfig(
+        strictDogfoodEnv({ FORGELOOP_CODEX_DOGFOOD_BOUNDARY_MAX_AI_TURNS: '0' }),
+        makeFakeDogfoodGit(),
+      ),
     ).toThrow(/FORGELOOP_CODEX_DOGFOOD_BOUNDARY_MAX_AI_TURNS_must_be_positive_integer/);
   });
 
-  it('defaults the dogfood repo base commit to the current repository HEAD', () => {
-    const tempDir = mkdtempSync(join(tmpdir(), 'forgeloop-dogfood-base-'));
-    const previousCwd = process.cwd();
+  it('requires an isolated dogfood worktree based on main', () => {
+    expect(() =>
+      resolveDogfoodIsolatedWorktreeConfig(
+        {
+          FORGELOOP_CODEX_DOGFOOD_REPO_PATH: process.cwd(),
+          FORGELOOP_CODEX_DOGFOOD_REPO_BASE_BRANCH: 'main',
+          FORGELOOP_CODEX_DOGFOOD_ISOLATED_WORKTREE: '0',
+        },
+        makeFakeDogfoodGit({
+          currentBranch: 'feature/codex-runtime-real-dogfood-pass',
+          headSha: featureCommitSha,
+          registeredWorktreePaths: [process.cwd()],
+        }),
+      ),
+    ).toThrow(/codex_runtime_superpowers_dogfood_isolated_worktree_missing/);
+  });
+
+  it('rejects an env-flagged worktree when git says it is on a feature branch', () => {
+    expect(() =>
+      resolveDogfoodIsolatedWorktreeConfig(
+        strictDogfoodEnv(),
+        makeFakeDogfoodGit({
+          currentBranch: 'feature/codex-runtime-real-dogfood-pass',
+          headSha: featureCommitSha,
+        }),
+      ),
+    ).toThrow(/codex_runtime_superpowers_dogfood_not_based_on_main/);
+  });
+
+  it('rejects an env-flagged worktree that is not registered as a git worktree', () => {
+    expect(() =>
+      resolveDogfoodIsolatedWorktreeConfig(
+        strictDogfoodEnv(),
+        makeFakeDogfoodGit({
+          registeredWorktreePaths: ['/repo/other-worktree'],
+        }),
+      ),
+    ).toThrow(/codex_runtime_superpowers_dogfood_isolated_worktree_missing/);
+  });
+
+  it('rejects an env-flagged primary worktree even when it is clean and detached at main', () => {
+    expect(() =>
+      resolveDogfoodIsolatedWorktreeConfig(
+        strictDogfoodEnv({ FORGELOOP_CODEX_DOGFOOD_REPO_PATH: '/repo' }),
+        makeFakeDogfoodGit({
+          registeredWorktreePaths: ['/repo', isolatedWorktreePath],
+        }),
+      ),
+    ).toThrow(/codex_runtime_superpowers_dogfood_isolated_worktree_missing/);
+  });
+
+  it('rejects an env-provided repo base commit that does not match local main', () => {
+    let blocker: unknown;
     try {
-      execFileSync('git', ['init'], { cwd: tempDir });
-      writeFileSync(join(tempDir, 'README.md'), '# Dogfood repo\n');
-      execFileSync('git', ['add', 'README.md'], { cwd: tempDir });
-      execFileSync('git', ['-c', 'user.name=Dogfood Test', '-c', 'user.email=dogfood@example.test', 'commit', '-m', 'initial'], {
-        cwd: tempDir,
-      });
-      const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tempDir, encoding: 'utf8' }).trim();
-
-      process.chdir(tempDir);
-      const config = loadCodexRuntimeSuperpowersDogfoodCliConfig({
-        FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
-        FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
-        FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
-        FORGELOOP_CODEX_DOGFOOD_REPO_ID: 'repo-1',
-        FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'requirement-1',
-        FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
-      });
-
-      expect(realpathSync(config.repoLocalPath!)).toBe(realpathSync(tempDir));
-      expect(config.repoBaseCommitSha).toBe(head);
-      expect(config.repoBaseCommitSha).toMatch(/^[0-9a-f]{40}$/);
-    } finally {
-      process.chdir(previousCwd);
-      rmSync(tempDir, { recursive: true, force: true });
+      resolveDogfoodIsolatedWorktreeConfig(
+        strictDogfoodEnv({ FORGELOOP_CODEX_DOGFOOD_REPO_BASE_COMMIT_SHA: previousMainCommitSha }),
+        makeFakeDogfoodGit(),
+      );
+    } catch (error) {
+      blocker = error;
     }
+
+    expect(blocker).toBeInstanceOf(CodexRuntimeSuperpowersDogfoodBlocker);
+    expect(blocker).toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_dogfood_not_based_on_main',
+      report: {
+        dogfood_worktree_base: {
+          mode: 'isolated_main_worktree',
+          base_commit_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
+    });
+  });
+
+  it('rejects an env-flagged main worktree when it is dirty', () => {
+    let blocker: unknown;
+    try {
+      resolveDogfoodIsolatedWorktreeConfig(
+        strictDogfoodEnv(),
+        makeFakeDogfoodGit({
+          statusPorcelain: ` M ${fixedReportPath}\n`,
+        }),
+      );
+    } catch (error) {
+      blocker = error;
+    }
+
+    expect(blocker).toBeInstanceOf(CodexRuntimeSuperpowersDogfoodBlocker);
+    expect(blocker).toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_dogfood_worktree_dirty',
+      report: {
+        dogfood_worktree_base: {
+          mode: 'isolated_main_worktree',
+          base_commit_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
+    });
+  });
+
+  it('accepts an explicit clean detached isolated worktree at main head', () => {
+    const config = resolveDogfoodIsolatedWorktreeConfig(strictDogfoodEnv(), makeFakeDogfoodGit());
+
+    expect(config.repoBaseBranch).toBe('main');
+    expect(config.isolatedWorktree).toBe(true);
+    expect(config.repoLocalPath).toBe(isolatedWorktreePath);
+    expect(config.repoBaseCommitSha).toBe(mainCommitSha);
+    expect(config.repoBaseCommitSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(config.dogfood_worktree_base).toMatchObject({
+      mode: 'isolated_main_worktree',
+      base_commit_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
   });
 
   it('auto-seeds the product source before runtime bootstrap in strict dogfood mode', async () => {
@@ -1059,21 +1216,12 @@ describe('Codex runtime Superpowers dogfood script', () => {
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
+      boundaryHttpClientConfig({
         projectId: 'project-placeholder',
-        sourceObjectType: 'requirement',
         sourceObjectId: 'source-placeholder',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        repoId: 'repo-1',
-        repoLocalPath: '/repo/current',
-        repoBaseCommitSha: 'abc123',
-        noSharedFilesystem: true,
         skipBootstrap: false,
         autoSeedProductSource: true,
-      },
+      }),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         runBootstrapImport: async (patch) => {
@@ -1126,21 +1274,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       ),
     );
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-      },
+      boundaryHttpClientConfig(),
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     );
 
@@ -1338,27 +1472,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        repoId: 'repo-1',
-        repoLocalPath: '/repo/current',
-        repoBaseCommitSha: 'abc123',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-        remoteRuntimeJobWaitTimeoutMs: 100,
-        remoteRuntimeJobPollIntervalMs: 0,
-        boundaryMaxAiTurns: 6,
-      },
+      boundaryHttpClientConfig(),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         env: {
@@ -1722,23 +1836,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-        remoteRuntimeJobWaitTimeoutMs: 100,
-        remoteRuntimeJobPollIntervalMs: 0,
-      },
+      boundaryHttpClientConfig(),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         runRemoteWorkerOnce: async (targetKind) => {
@@ -1806,23 +1904,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-        remoteRuntimeJobWaitTimeoutMs: 60_000,
-        remoteRuntimeJobPollIntervalMs: 0,
-      },
+      boundaryHttpClientConfig({ remoteRuntimeJobWaitTimeoutMs: 60_000 }),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         env: {
@@ -1882,23 +1964,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-        remoteRuntimeJobWaitTimeoutMs: 5,
-        remoteRuntimeJobPollIntervalMs: 0,
-      },
+      boundaryHttpClientConfig({ remoteRuntimeJobWaitTimeoutMs: 5 }),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         runRemoteWorkerOnce: async () => new Promise<void>(() => undefined),
@@ -1930,21 +1996,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     });
     const workerCalls: string[] = [];
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-      },
+      boundaryHttpClientConfig(),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         runRemoteWorkerOnce: async (targetKind) => {
@@ -1979,21 +2031,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     });
     const workerCalls: string[] = [];
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-      },
+      boundaryHttpClientConfig(),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         runRemoteWorkerOnce: async (targetKind) => {
@@ -2344,23 +2382,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-        remoteRuntimeJobWaitTimeoutMs: 60_000,
-        remoteRuntimeJobPollIntervalMs: 0,
-      },
+      boundaryHttpClientConfig({ remoteRuntimeJobWaitTimeoutMs: 60_000 }),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         env: {
@@ -2417,23 +2439,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-        remoteRuntimeJobWaitTimeoutMs: 60_000,
-        remoteRuntimeJobPollIntervalMs: 0,
-      },
+      boundaryHttpClientConfig({ remoteRuntimeJobWaitTimeoutMs: 60_000 }),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         env: {
@@ -2525,21 +2531,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     });
     const workerCalls: string[] = [];
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-      },
+      boundaryHttpClientConfig(),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         env: {
@@ -2604,23 +2596,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-        remoteRuntimeJobWaitTimeoutMs: 20,
-        remoteRuntimeJobPollIntervalMs: 0,
-      },
+      boundaryHttpClientConfig({ remoteRuntimeJobWaitTimeoutMs: 20 }),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         runRemoteWorkerOnce: async () => undefined,
@@ -2685,23 +2661,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
-      {
-        controlPlaneUrl: 'http://control-plane.invalid',
-        actorId: 'actor-setup',
-        generationRuntimeProfileId: 'profile-generation',
-        generationCredentialBindingId: 'binding-generation',
-        runExecutionRuntimeProfileId: 'profile-run',
-        runExecutionCredentialBindingId: 'binding-run',
-        projectId: 'project-1',
-        sourceObjectType: 'requirement',
-        sourceObjectId: 'requirement-1',
-        leaderActorId: 'actor-leader',
-        reviewerActorId: 'actor-reviewer',
-        noSharedFilesystem: true,
-        skipBootstrap: true,
-        remoteRuntimeJobWaitTimeoutMs: 60_000,
-        remoteRuntimeJobPollIntervalMs: 0,
-      },
+      boundaryHttpClientConfig({ remoteRuntimeJobWaitTimeoutMs: 60_000 }),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
         env: {

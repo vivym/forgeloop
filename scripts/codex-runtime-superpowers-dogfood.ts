@@ -31,6 +31,12 @@ export interface CodexRuntimeSuperpowersDogfoodCliConfig {
   repoId?: string;
   repoLocalPath?: string;
   repoBaseCommitSha?: string;
+  repoBaseBranch: 'main';
+  isolatedWorktree: true;
+  dogfood_worktree_base: {
+    mode: 'isolated_main_worktree';
+    base_commit_digest: Sha256Digest;
+  };
   autoSeedProductSource?: boolean;
   boundarySummaryRevisionId?: string;
   noSharedFilesystem: true;
@@ -39,6 +45,15 @@ export interface CodexRuntimeSuperpowersDogfoodCliConfig {
   remoteRuntimeJobWaitTimeoutMs?: number;
   remoteRuntimeJobPollIntervalMs?: number;
 }
+
+type DogfoodWorktreeBase = CodexRuntimeSuperpowersDogfoodCliConfig['dogfood_worktree_base'];
+type DogfoodIsolatedWorktreeConfig = Pick<
+  CodexRuntimeSuperpowersDogfoodCliConfig,
+  'repoBaseBranch' | 'isolatedWorktree' | 'dogfood_worktree_base'
+> & {
+  repoLocalPath: string;
+  repoBaseCommitSha: string;
+};
 
 export interface CodexRuntimeImportEvidence {
   runtime_profile_revision_digests: Sha256Digest[];
@@ -111,6 +126,10 @@ export interface CodexRuntimeSuperpowersDogfoodReport {
   runtime_profile_revision_digests: Sha256Digest[];
   credential_binding_version_digests: Sha256Digest[];
   codex_app_server_evidence: CodexRuntimeAppServerEvidence;
+  dogfood_worktree_base: {
+    mode: 'isolated_main_worktree';
+    base_commit_digest: Sha256Digest;
+  };
   no_shared_filesystem_worker: true;
   workspace_bundle_digest: Sha256Digest;
   mounted_task_workspace_digest: Sha256Digest;
@@ -147,6 +166,10 @@ export interface CodexRuntimeSuperpowersDogfoodBlockerReport {
   run_session_id?: string;
   run_session_status?: string;
   run_session_failure_reason?: string;
+  dogfood_worktree_base?: {
+    mode: 'isolated_main_worktree';
+    base_commit_digest: Sha256Digest;
+  };
 }
 
 export interface CodexRuntimeSuperpowersDogfoodHttpClientDeps {
@@ -166,6 +189,7 @@ export class CodexRuntimeSuperpowersDogfoodBlocker extends Error {
 }
 
 export interface CodexRuntimeSuperpowersDogfoodClient {
+  dogfoodWorktreeBase: () => CodexRuntimeSuperpowersDogfoodCliConfig['dogfood_worktree_base'];
   importCodexRuntime: () => Promise<CodexRuntimeImportEvidence>;
   smokeGenerationWorker: () => Promise<void>;
   startNoSharedFilesystemRunWorker: () => Promise<void>;
@@ -210,43 +234,43 @@ const assertPublicSafeReport = (markdown: string): void => {
   }
 };
 
-const assertSha256Digest = (value: string, label: string): asserts value is Sha256Digest => {
+function assertSha256Digest(value: string, label: string): asserts value is Sha256Digest {
   if (!/^sha256:[a-f0-9]{64}$/.test(value)) {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
   }
-};
+}
 
-const assertNonEmptySha256Digests = (values: readonly string[], label: string): void => {
+function assertNonEmptySha256Digests(values: readonly string[], label: string): void {
   if (values.length === 0) {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
   }
   for (const value of values) {
     assertSha256Digest(value, label);
   }
-};
+}
 
-const assertPublicSafeId = (value: string, label: string): void => {
+function assertPublicSafeId(value: string, label: string): void {
   if (!publicIdPattern.test(value) || value.includes('..')) {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
   }
-};
+}
 
-const assertPublicSafeChangedFile = (value: string): void => {
+function assertPublicSafeChangedFile(value: string): void {
   if (!publicChangedFilePattern.test(value) || value.includes('..') || value.startsWith('/') || value.includes('://')) {
     throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:changed_file');
   }
-};
+}
 
-const assertPublicSafeCleanupStatus = (value: string, label: string): asserts value is CodexRuntimeDogfoodCleanupStatus => {
+function assertPublicSafeCleanupStatus(value: string, label: string): asserts value is CodexRuntimeDogfoodCleanupStatus {
   if (value !== 'completed' && value !== 'blocked') {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
   }
-};
+}
 
-const assertPublicSafeCodexAppServerPhaseEvidence = (
+function assertPublicSafeCodexAppServerPhaseEvidence(
   phase: CodexRuntimeDogfoodPhaseEvidence,
   options: { requireEvidenceDigests: boolean },
-): void => {
+): void {
   assertPublicSafeId(phase.phase, 'codex_app_server_phase');
   assertPublicSafeId(phase.expected_output_schema_version, 'codex_app_server_phase_schema');
   assertPublicSafeCleanupStatus(phase.cleanup_status, 'codex_app_server_phase_cleanup_status');
@@ -264,10 +288,24 @@ const assertPublicSafeCodexAppServerPhaseEvidence = (
   for (const digest of phase.app_server_evidence_digests) {
     assertSha256Digest(digest, 'codex_app_server_phase_evidence_digest');
   }
-};
+}
 
 const renderCodexAppServerPhaseEvidenceLine = (phase: CodexRuntimeDogfoodPhaseEvidence): string =>
   `- Phase ${phase.phase}: expected_schema=${phase.expected_output_schema_version} observed_schemas=${phase.observed_output_schema_versions.join(', ')} cleanup=${phase.cleanup_status} runtime_jobs=${phase.runtime_job_digests.join(', ')} app_server=${phase.app_server_evidence_digests.join(', ')}`;
+
+const withDogfoodWorktreeBase = (
+  report: CodexRuntimeSuperpowersDogfoodBlockerReport,
+  dogfoodWorktreeBase: DogfoodWorktreeBase,
+): CodexRuntimeSuperpowersDogfoodBlockerReport => ({
+  ...report,
+  dogfood_worktree_base: report.dogfood_worktree_base ?? dogfoodWorktreeBase,
+});
+
+const withDogfoodWorktreeBaseBlocker = (
+  error: CodexRuntimeSuperpowersDogfoodBlocker,
+  dogfoodWorktreeBase: DogfoodWorktreeBase,
+): CodexRuntimeSuperpowersDogfoodBlocker =>
+  new CodexRuntimeSuperpowersDogfoodBlocker(error.blockerCode, withDogfoodWorktreeBase(error.report, dogfoodWorktreeBase));
 
 const assertBoundaryCoverageEvidence = (boundary: CodexRuntimeBoundaryDogfoodEvidence): void => {
   if (
@@ -443,27 +481,9 @@ export const deriveCodexAppServerEvidence = (phases: CodexRuntimeDogfoodPhaseEvi
   };
 };
 
-const resolveDogfoodRepoHead = (repoPath: string): string => {
-  try {
-    const head = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
-      cwd: repoPath,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (/^[0-9a-f]{40}$/.test(head)) {
-      return head;
-    }
-  } catch {
-    // Fall through to a public-safe blocker below.
-  }
-  throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_dogfood_repo_head_unavailable', {
-    status: 'BLOCKED',
-    blocker_code: 'codex_runtime_superpowers_dogfood_repo_head_unavailable',
-  });
-};
-
 export const loadCodexRuntimeSuperpowersDogfoodCliConfig = (
   env: EnvLike = process.env,
+  git: DogfoodGit = shellDogfoodGit,
 ): CodexRuntimeSuperpowersDogfoodCliConfig => {
   const requiredKeys = [
     'FORGELOOP_CONTROL_PLANE_URL',
@@ -487,8 +507,7 @@ export const loadCodexRuntimeSuperpowersDogfoodCliConfig = (
     });
   }
   const repoId = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_ID');
-  const repoLocalPath = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_PATH') ?? process.cwd();
-  const repoBaseCommitSha = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_BASE_COMMIT_SHA') ?? resolveDogfoodRepoHead(repoLocalPath);
+  const dogfoodWorktreeConfig = resolveDogfoodIsolatedWorktreeConfig(env, git);
   const boundarySummaryRevisionId = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_BOUNDARY_SUMMARY_REVISION_ID');
   const skipBootstrap = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_SKIP_BOOTSTRAP') === '1';
   const config: CodexRuntimeSuperpowersDogfoodCliConfig = {
@@ -504,8 +523,11 @@ export const loadCodexRuntimeSuperpowersDogfoodCliConfig = (
     leaderActorId: optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_LEADER_ACTOR_ID') ?? optionalEnv(env, 'FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID')!,
     reviewerActorId:
       optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REVIEWER_ACTOR_ID') ?? optionalEnv(env, 'FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID')!,
-    repoLocalPath,
-    repoBaseCommitSha,
+    repoLocalPath: dogfoodWorktreeConfig.repoLocalPath,
+    repoBaseCommitSha: dogfoodWorktreeConfig.repoBaseCommitSha,
+    repoBaseBranch: dogfoodWorktreeConfig.repoBaseBranch,
+    isolatedWorktree: dogfoodWorktreeConfig.isolatedWorktree,
+    dogfood_worktree_base: dogfoodWorktreeConfig.dogfood_worktree_base,
     autoSeedProductSource: optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_CREATE_SOURCE') === '1' || !skipBootstrap,
     noSharedFilesystem: true,
     skipBootstrap,
@@ -576,6 +598,10 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
   for (const changedFile of report.changed_files) {
     assertPublicSafeChangedFile(changedFile);
   }
+  if (report.dogfood_worktree_base.mode !== 'isolated_main_worktree') {
+    throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:dogfood_worktree_base_mode');
+  }
+  assertSha256Digest(report.dogfood_worktree_base.base_commit_digest, 'dogfood_worktree_base_commit_digest');
   const lines = [
     '# Codex Runtime Superpowers Dogfood',
     '',
@@ -594,6 +620,7 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
     `- Codex runtime job digests: ${report.codex_app_server_evidence.runtime_job_digests.join(', ')}`,
     `- Codex app-server evidence digests: ${report.codex_app_server_evidence.app_server_evidence_digests.join(', ')}`,
     ...report.codex_app_server_evidence.phases.map(renderCodexAppServerPhaseEvidenceLine),
+    `- Dogfood worktree base: mode=${report.dogfood_worktree_base.mode} base_commit_digest=${report.dogfood_worktree_base.base_commit_digest}`,
     `- No shared filesystem worker: ${String(report.no_shared_filesystem_worker)}`,
     `- Runtime evidence: workspace_bundle_digest=${report.workspace_bundle_digest} mounted_task_workspace_digest=${report.mounted_task_workspace_digest}`,
     [
@@ -644,6 +671,12 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
   if (report.cleanup_status !== undefined) {
     assertPublicSafeCleanupStatus(report.cleanup_status, 'cleanup_status');
   }
+  if (report.dogfood_worktree_base !== undefined) {
+    if (report.dogfood_worktree_base.mode !== 'isolated_main_worktree') {
+      throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:dogfood_worktree_base_mode');
+    }
+    assertSha256Digest(report.dogfood_worktree_base.base_commit_digest, 'dogfood_worktree_base_commit_digest');
+  }
   for (const phase of report.codex_app_server_evidence?.phases ?? []) {
     assertPublicSafeCodexAppServerPhaseEvidence(phase, { requireEvidenceDigests: false });
   }
@@ -671,6 +704,11 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
     ...(report.run_session_status === undefined ? [] : [`- Run session status: ${report.run_session_status}`]),
     ...(report.run_session_failure_reason === undefined ? [] : [`- Run session failure reason: ${report.run_session_failure_reason}`]),
     ...(report.cleanup_status === undefined ? [] : [`- Cleanup status: ${report.cleanup_status}`]),
+    ...(report.dogfood_worktree_base === undefined
+      ? []
+      : [
+          `- Dogfood worktree base: mode=${report.dogfood_worktree_base.mode} base_commit_digest=${report.dogfood_worktree_base.base_commit_digest}`,
+        ]),
     ...(report.codex_app_server_evidence?.phases ?? []).map(renderCodexAppServerPhaseEvidenceLine),
     '',
   ];
@@ -682,67 +720,76 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
 export const runCodexRuntimeSuperpowersDogfood = async (input: {
   client: CodexRuntimeSuperpowersDogfoodClient;
 }): Promise<{ report: CodexRuntimeSuperpowersDogfoodReport; reportPath: string }> => {
-  const seed = await input.client.seedSourceAndDevelopmentPlanItem();
-  const importedRuntime = await input.client.importCodexRuntime();
-  await input.client.smokeGenerationWorker();
-  await input.client.startNoSharedFilesystemRunWorker();
-  const initialBoundary = await input.client.completeBoundaryBrainstorming('initial');
-  await input.client.mutateDevelopmentPlanItem();
-  const staleBoundaryCheck = await input.client.assertStaleBoundaryBlocksSpecGeneration();
-  const rebasedBoundary = await input.client.completeBoundaryBrainstorming('rebase');
-  assertBoundaryCoverageEvidence(initialBoundary);
-  assertBoundaryCoverageEvidence(rebasedBoundary);
-  const spec = await input.client.generateAndApproveSpec();
-  const executionPlan = await input.client.generateAndApproveExecutionPlan();
-  const execution = await input.client.startExecution();
-  const boundaryAiTurnCount = initialBoundary.ai_turn_count + rebasedBoundary.ai_turn_count;
-  const followUpCovered = initialBoundary.follow_up_path_covered || rebasedBoundary.follow_up_path_covered;
-  const requestChangeCovered =
-    initialBoundary.summary_request_change_path_covered || rebasedBoundary.summary_request_change_path_covered;
-  if (!followUpCovered || !requestChangeCovered) {
-    throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_coverage_missing', {
-      status: 'BLOCKED',
-      blocker_code: 'codex_runtime_superpowers_boundary_coverage_missing',
+  const dogfoodWorktreeBase = input.client.dogfoodWorktreeBase();
+  try {
+    const seed = await input.client.seedSourceAndDevelopmentPlanItem();
+    const importedRuntime = await input.client.importCodexRuntime();
+    await input.client.smokeGenerationWorker();
+    await input.client.startNoSharedFilesystemRunWorker();
+    const initialBoundary = await input.client.completeBoundaryBrainstorming('initial');
+    await input.client.mutateDevelopmentPlanItem();
+    const staleBoundaryCheck = await input.client.assertStaleBoundaryBlocksSpecGeneration();
+    const rebasedBoundary = await input.client.completeBoundaryBrainstorming('rebase');
+    assertBoundaryCoverageEvidence(initialBoundary);
+    assertBoundaryCoverageEvidence(rebasedBoundary);
+    const spec = await input.client.generateAndApproveSpec();
+    const executionPlan = await input.client.generateAndApproveExecutionPlan();
+    const execution = await input.client.startExecution();
+    const boundaryAiTurnCount = initialBoundary.ai_turn_count + rebasedBoundary.ai_turn_count;
+    const followUpCovered = initialBoundary.follow_up_path_covered || rebasedBoundary.follow_up_path_covered;
+    const requestChangeCovered =
+      initialBoundary.summary_request_change_path_covered || rebasedBoundary.summary_request_change_path_covered;
+    if (!followUpCovered || !requestChangeCovered) {
+      throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_coverage_missing', {
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_boundary_coverage_missing',
+      });
+    }
+    const codexAppServerPhases = collectCodexAppServerPhaseEvidence({
+      boundary: [initialBoundary, rebasedBoundary],
+      spec,
+      executionPlan,
+      execution,
     });
+    const codexAppServerEvidence = deriveCodexAppServerEvidence(codexAppServerPhases);
+    const report: CodexRuntimeSuperpowersDogfoodReport = {
+      status: 'PASS',
+      package_script_command: packageScriptCommand,
+      development_plan_item_id: seed.development_plan_item_id,
+      boundary_brainstorming_session_id: rebasedBoundary.session_id,
+      boundary_summary_revision_id: rebasedBoundary.approved_summary_revision_id,
+      spec_revision_id: spec.spec_revision_id,
+      execution_plan_revision_id: executionPlan.execution_plan_revision_id,
+      execution_id: execution.execution_id,
+      runtime_profile_revision_digests: importedRuntime.runtime_profile_revision_digests,
+      credential_binding_version_digests: importedRuntime.credential_binding_version_digests,
+      codex_app_server_evidence: codexAppServerEvidence,
+      dogfood_worktree_base: dogfoodWorktreeBase,
+      no_shared_filesystem_worker: true,
+      workspace_bundle_digest: execution.workspace_bundle_digest,
+      mounted_task_workspace_digest: execution.mounted_task_workspace_digest,
+      stale_boundary_negative_check: {
+        blocked: staleBoundaryCheck.blocked,
+        blocker_code: staleBoundaryCheck.blocker_code,
+        rebased_session_id: rebasedBoundary.session_id,
+        rebased_boundary_summary_revision_id: rebasedBoundary.approved_summary_revision_id,
+      },
+      boundary_ai_turn_count: boundaryAiTurnCount,
+      boundary_follow_up_path_covered: followUpCovered,
+      boundary_summary_request_change_path_covered: requestChangeCovered,
+      cleanup_status: codexAppServerEvidence.phases.every((phase) => phase.cleanup_status === 'completed') ? 'completed' : 'blocked',
+      changed_files: execution.changed_files,
+      report_path: fixedCodexRuntimeSuperpowersDogfoodReportPath,
+    };
+    const markdown = renderCodexRuntimeSuperpowersDogfoodReport(report);
+    const written = await input.client.writeReport(report, markdown);
+    return { report, reportPath: written.report_path };
+  } catch (error) {
+    if (error instanceof CodexRuntimeSuperpowersDogfoodBlocker) {
+      throw withDogfoodWorktreeBaseBlocker(error, dogfoodWorktreeBase);
+    }
+    throw error;
   }
-  const codexAppServerPhases = collectCodexAppServerPhaseEvidence({
-    boundary: [initialBoundary, rebasedBoundary],
-    spec,
-    executionPlan,
-    execution,
-  });
-  const codexAppServerEvidence = deriveCodexAppServerEvidence(codexAppServerPhases);
-  const report: CodexRuntimeSuperpowersDogfoodReport = {
-    status: 'PASS',
-    package_script_command: packageScriptCommand,
-    development_plan_item_id: seed.development_plan_item_id,
-    boundary_brainstorming_session_id: rebasedBoundary.session_id,
-    boundary_summary_revision_id: rebasedBoundary.approved_summary_revision_id,
-    spec_revision_id: spec.spec_revision_id,
-    execution_plan_revision_id: executionPlan.execution_plan_revision_id,
-    execution_id: execution.execution_id,
-    runtime_profile_revision_digests: importedRuntime.runtime_profile_revision_digests,
-    credential_binding_version_digests: importedRuntime.credential_binding_version_digests,
-    codex_app_server_evidence: codexAppServerEvidence,
-    no_shared_filesystem_worker: true,
-    workspace_bundle_digest: execution.workspace_bundle_digest,
-    mounted_task_workspace_digest: execution.mounted_task_workspace_digest,
-    stale_boundary_negative_check: {
-      blocked: staleBoundaryCheck.blocked,
-      blocker_code: staleBoundaryCheck.blocker_code,
-      rebased_session_id: rebasedBoundary.session_id,
-      rebased_boundary_summary_revision_id: rebasedBoundary.approved_summary_revision_id,
-    },
-    boundary_ai_turn_count: boundaryAiTurnCount,
-    boundary_follow_up_path_covered: followUpCovered,
-    boundary_summary_request_change_path_covered: requestChangeCovered,
-    cleanup_status: codexAppServerEvidence.phases.every((phase) => phase.cleanup_status === 'completed') ? 'completed' : 'blocked',
-    changed_files: execution.changed_files,
-    report_path: fixedCodexRuntimeSuperpowersDogfoodReportPath,
-  };
-  const markdown = renderCodexRuntimeSuperpowersDogfoodReport(report);
-  const written = await input.client.writeReport(report, markdown);
-  return { report, reportPath: written.report_path };
 };
 
 export class FilesystemCodexRuntimeSuperpowersDogfoodReporter {
@@ -805,7 +852,7 @@ const signedAutomationHeaders = (
   if (secret === undefined) {
     return undefined;
   }
-  return signAutomationRequest({
+  const headers = signAutomationRequest({
     method: 'GET',
     pathAndQuery,
     rawBody: '',
@@ -815,6 +862,7 @@ const signedAutomationHeaders = (
     timestamp: new Date().toISOString(),
     secret,
   });
+  return { ...headers };
 };
 
 const digestFromPublicId = (value: string): Sha256Digest => canonicalPublicDigest(value);
@@ -823,6 +871,98 @@ const stableUuidFromDigest = (input: Record<string, unknown>): string => {
   const hex = codexCanonicalDigest(input).slice('sha256:'.length);
   const variant = (8 + (Number.parseInt(hex[16]!, 16) % 4)).toString(16);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
+
+export interface DogfoodGit {
+  statusPorcelain(repoPath: string): string;
+  currentBranch(repoPath: string): string;
+  headSha(repoPath: string): string;
+  mainSha(repoPath: string): string;
+  registeredWorktreePaths(repoPath: string): string[];
+}
+
+const shellGit = (repoPath: string, args: string[]): string =>
+  execFileSync('git', ['-C', repoPath, ...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+
+const shellDogfoodGit: DogfoodGit = {
+  statusPorcelain: (repoPath) => shellGit(repoPath, ['status', '--porcelain=v1']),
+  currentBranch: (repoPath) => shellGit(repoPath, ['branch', '--show-current']),
+  headSha: (repoPath) => shellGit(repoPath, ['rev-parse', '--verify', 'HEAD']),
+  mainSha: (repoPath) => shellGit(repoPath, ['rev-parse', '--verify', 'main']),
+  registeredWorktreePaths: (repoPath) => {
+    const output = shellGit(repoPath, ['worktree', 'list', '--porcelain']);
+    return output
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => line.slice('worktree '.length));
+  },
+};
+
+const assertGitSha = (value: string, code: string): string => {
+  if (/^[0-9a-f]{40}$/.test(value)) {
+    return value;
+  }
+  throw new CodexRuntimeSuperpowersDogfoodBlocker(code, { status: 'BLOCKED', blocker_code: code });
+};
+
+const isolatedWorktreeBlocker = (code: string): CodexRuntimeSuperpowersDogfoodBlocker =>
+  new CodexRuntimeSuperpowersDogfoodBlocker(code, {
+    status: 'BLOCKED',
+    blocker_code: code,
+  });
+
+const dogfoodWorktreeBaseFromMainSha = (mainSha: string): DogfoodWorktreeBase => ({
+  mode: 'isolated_main_worktree',
+  base_commit_digest: canonicalPublicDigest({ repoBaseBranch: 'main', repoBaseCommitSha: mainSha }),
+});
+
+const isolatedWorktreeBlockerWithMainSha = (code: string, mainSha: string): CodexRuntimeSuperpowersDogfoodBlocker =>
+  new CodexRuntimeSuperpowersDogfoodBlocker(code, {
+    status: 'BLOCKED',
+    blocker_code: code,
+    dogfood_worktree_base: dogfoodWorktreeBaseFromMainSha(mainSha),
+  });
+
+export const resolveDogfoodIsolatedWorktreeConfig = (
+  env: EnvLike = process.env,
+  git: DogfoodGit = shellDogfoodGit,
+): DogfoodIsolatedWorktreeConfig => {
+  const repoLocalPath = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_PATH') ?? process.cwd();
+  const repoBaseBranch = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_BASE_BRANCH') ?? 'main';
+  const isolatedWorktree = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_ISOLATED_WORKTREE') === '1';
+  if (repoBaseBranch !== 'main' || !isolatedWorktree) {
+    throw isolatedWorktreeBlocker('codex_runtime_superpowers_dogfood_isolated_worktree_missing');
+  }
+
+  const resolvedRepoLocalPath = resolve(repoLocalPath);
+  const registeredWorktreePaths = git.registeredWorktreePaths(repoLocalPath).map((path) => resolve(path));
+  const linkedWorktreePaths = registeredWorktreePaths.slice(1);
+  if (!linkedWorktreePaths.includes(resolvedRepoLocalPath)) {
+    throw isolatedWorktreeBlocker('codex_runtime_superpowers_dogfood_isolated_worktree_missing');
+  }
+
+  const currentBranch = git.currentBranch(repoLocalPath);
+  const headSha = assertGitSha(git.headSha(repoLocalPath), 'codex_runtime_superpowers_dogfood_repo_head_unavailable');
+  const mainSha = assertGitSha(git.mainSha(repoLocalPath), 'codex_runtime_superpowers_dogfood_main_head_unavailable');
+  if (git.statusPorcelain(repoLocalPath) !== '') {
+    throw isolatedWorktreeBlockerWithMainSha('codex_runtime_superpowers_dogfood_worktree_dirty', mainSha);
+  }
+
+  const repoBaseCommitSha = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_BASE_COMMIT_SHA') ?? headSha;
+  if (currentBranch !== '' || headSha !== mainSha || repoBaseCommitSha !== mainSha) {
+    throw isolatedWorktreeBlockerWithMainSha('codex_runtime_superpowers_dogfood_not_based_on_main', mainSha);
+  }
+
+  return {
+    repoLocalPath,
+    repoBaseBranch: 'main',
+    repoBaseCommitSha: mainSha,
+    isolatedWorktree: true,
+    dogfood_worktree_base: dogfoodWorktreeBaseFromMainSha(mainSha),
+  };
 };
 
 const assertPublicSafeReason = (value: string): boolean => publicIdPattern.test(value) && !value.includes('..');
@@ -1433,6 +1573,9 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
   };
 
   return {
+    dogfoodWorktreeBase() {
+      return config.dogfood_worktree_base;
+    },
 		async importCodexRuntime() {
 			if (!config.skipBootstrap) {
 				const summary = await invokeBootstrapImport({
