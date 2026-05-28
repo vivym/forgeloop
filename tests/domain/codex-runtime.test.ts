@@ -79,6 +79,24 @@ const digestA = `sha256:${'a'.repeat(64)}`;
 const digestB = `sha256:${'b'.repeat(64)}`;
 const digestC = `sha256:${'c'.repeat(64)}`;
 
+const runtimeEvidence = (overrides: Partial<CodexDockerRuntimeEvidence> = {}): CodexDockerRuntimeEvidence => ({
+  runtime_profile_id: 'profile-1',
+  runtime_profile_revision_id: 'profile-revision-1',
+  runtime_profile_digest: digestA,
+  runtime_target_kind: 'run_execution',
+  source_access_mode: 'path_policy_scoped',
+  environment: 'test',
+  launch_lease_id: 'lease-1',
+  worker_id: 'worker-1',
+  docker_image_digest: digestB,
+  container_id_digest: digestC,
+  app_server_effective_config_digest: digestA,
+  docker_policy_self_check_digest: digestB,
+  app_server_attempted: true,
+  selected_execution_mode: 'app_server',
+  ...overrides,
+});
+
 class NonJsonFixture {
   constructor(readonly value: string) {}
 }
@@ -789,6 +807,7 @@ describe('codex runtime domain contracts', () => {
   it('allows public-safe run-execution terminal result changed files and display summaries', () => {
     const runExecutionResult = {
       task_kind: 'run_execution',
+      output_schema_version: 'codex_run_execution_result.v1',
       execution_package_id: 'package-1',
       execution_package_version: 3,
       run_session_id: 'run-session-1',
@@ -847,6 +866,51 @@ describe('codex runtime domain contracts', () => {
     } satisfies CodexRunExecutionRuntimeJobResult;
 
     expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
+  });
+
+  it('accepts run-execution terminal schema and public-safe app-server runtime evidence', () => {
+    const runExecutionResult = {
+      task_kind: 'run_execution',
+      output_schema_version: 'codex_run_execution_result.v1',
+      execution_package_id: 'package-1',
+      execution_package_version: 3,
+      run_session_id: 'run-session-1',
+      workspace_bundle_digest: digestA,
+      workspace_bundle_manifest_digest: digestB,
+      mounted_task_workspace_digest: digestC,
+      changed_files: ['docs/runtime-report.md'],
+      check_results: [],
+      execution_artifacts: [],
+      runtime_evidence: runtimeEvidence(),
+      public_summary: 'Run execution completed with public-safe app-server evidence.',
+    } as unknown as CodexRunExecutionRuntimeJobResult;
+
+    expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
+  });
+
+  it('rejects run-execution terminal runtime evidence without app-server execution mode', () => {
+    const runExecutionResult = {
+      task_kind: 'run_execution',
+      output_schema_version: 'codex_run_execution_result.v1',
+      execution_package_id: 'package-1',
+      execution_package_version: 3,
+      run_session_id: 'run-session-1',
+      workspace_bundle_digest: digestA,
+      workspace_bundle_manifest_digest: digestB,
+      mounted_task_workspace_digest: digestC,
+      changed_files: [],
+      check_results: [],
+      execution_artifacts: [],
+      runtime_evidence: runtimeEvidence({
+        selected_execution_mode: 'cli_fallback' as CodexDockerRuntimeEvidence['selected_execution_mode'],
+      }),
+      public_summary: 'Run execution completed with fallback evidence.',
+    } as unknown as CodexRunExecutionRuntimeJobResult;
+
+    expectDomainErrorCode(
+      () => validateCodexRuntimeJobTerminalResult(runExecutionResult),
+      'codex_docker_runtime_evidence_unsafe',
+    );
   });
 
   it('rejects public route-looking paths in run-execution terminal summaries', () => {

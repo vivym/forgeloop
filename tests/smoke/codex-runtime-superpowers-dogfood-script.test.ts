@@ -78,6 +78,23 @@ const executionEvidence = {
   cleanup_status: 'completed' as const,
 };
 
+const runtimeAppServerEvidence = {
+  app_server_attempted: true,
+  selected_execution_mode: 'app_server',
+  runtime_profile_id: 'profile-runtime',
+  runtime_profile_revision_id: 'profile-runtime-revision',
+  runtime_profile_digest: digest('runtime-profile'),
+  runtime_target_kind: 'generation',
+  source_access_mode: 'artifact_only',
+  environment: 'test',
+  launch_lease_id: 'launch-lease-1',
+  worker_id: 'worker-1',
+  docker_image_digest: digest('docker-image'),
+  container_id_digest: digest('container-id'),
+  app_server_effective_config_digest: digest('effective-config'),
+  docker_policy_self_check_digest: digest('policy-self-check'),
+};
+
 const codexAppServerEvidence = {
   mode: 'dockerized_app_server' as const,
   output_schema_versions: [
@@ -295,7 +312,10 @@ const createBoundaryStateLoopClient = (input: {
           id: runtimeJobId,
           status: 'terminal',
           terminal_status: 'succeeded',
-          terminal_result_json: { output_schema_version: 'boundary_round_result.v1' },
+          terminal_result_json: {
+            output_schema_version: 'boundary_round_result.v1',
+            runtime_evidence: runtimeAppServerEvidence,
+          },
         },
       });
     }
@@ -1289,7 +1309,10 @@ describe('Codex runtime Superpowers dogfood script', () => {
             id: runtimeJobId,
             status: 'terminal',
             terminal_status: 'succeeded',
-            terminal_result_json: { output_schema_version: 'boundary_round_result.v1' },
+            terminal_result_json: {
+              output_schema_version: 'boundary_round_result.v1',
+              runtime_evidence: runtimeAppServerEvidence,
+            },
           },
         });
       }
@@ -1359,7 +1382,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       follow_up_path_covered: true,
       summary_request_change_path_covered: true,
       runtime_job_digests: runtimeJobIds.map(publicDigest),
-      app_server_evidence_digests: [],
+      app_server_evidence_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
       cleanup_status: 'completed',
     });
     expect(initialBoundary.output_schema_versions).toEqual(['boundary_round_result.v1']);
@@ -1986,6 +2009,310 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(workerCalls).toEqual([]);
   });
 
+  it('returns Spec runtime job schema, app-server evidence, and runtime job digest from runtime projection', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const parsedUrl = new URL(String(url));
+      const path = parsedUrl.pathname;
+      const method = init?.method ?? 'GET';
+
+      if (method === 'POST' && path === '/development-plans') {
+        return jsonResponse({ id: 'development-plan-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items') {
+        return jsonResponse({ id: 'item-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec-revisions/generate') {
+        return jsonResponse({ action_run: { id: 'action-run-spec' }, runtime_job: { id: 'runtime-job-spec' } });
+      }
+      if (method === 'GET' && path === '/query/development-plans/development-plan-1/items/item-1') {
+        return jsonResponse({ specs: [{ current_revision_id: 'spec-revision-1' }] });
+      }
+      if (method === 'GET' && path === '/internal/codex-runtime/runtime-jobs/runtime-job-spec') {
+        return jsonResponse({
+          runtime_job: {
+            id: 'runtime-job-spec',
+            status: 'terminal',
+            terminal_status: 'succeeded',
+            input: {
+              schema_version: 'codex_generation_workload.v1',
+              output_schema_version: 'spec_revision.v1',
+            },
+            terminal_result_json: {
+              output_schema_version: 'spec_revision.v1',
+              runtime_evidence: runtimeAppServerEvidence,
+            },
+          },
+          artifacts: [
+            {
+              kind: 'generated_payload',
+              metadata_json: {
+                output_schema_version: 'spec_revision.v1',
+                generated_payload: { schema_version: 'spec_revision.v1' },
+              },
+            },
+          ],
+        });
+      }
+      if (method === 'GET' && path === '/internal/automation/runtime-snapshot') {
+        return jsonResponse({ recent_action_runs: [{ id: 'action-run-spec', status: 'succeeded' }] });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec/submit-for-approval') {
+        return jsonResponse({ id: 'spec-revision-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec/approve') {
+        return jsonResponse({ id: 'spec-revision-1' });
+      }
+      throw new Error(`unexpected request ${method} ${path}`);
+    });
+    const client = createCodexRuntimeSuperpowersDogfoodHttpClient(boundaryHttpClientConfig(), {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      env: {
+        FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'test-secret',
+        FORGELOOP_AUTOMATION_ACTOR_ID: 'automation-actor',
+        FORGELOOP_AUTOMATION_DAEMON_IDENTITY: 'automation-daemon',
+      },
+      runRemoteWorkerOnce: async () => undefined,
+    });
+
+    await client.seedSourceAndDevelopmentPlanItem();
+
+    await expect(client.generateAndApproveSpec()).resolves.toMatchObject({
+      spec_revision_id: 'spec-revision-1',
+      output_schema_versions: ['spec_revision.v1'],
+      app_server_evidence_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
+      runtime_job_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
+      cleanup_status: 'completed',
+    });
+  });
+
+  it('returns Execution Plan runtime job schema, app-server evidence, and runtime job digest from runtime projection', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const parsedUrl = new URL(String(url));
+      const path = parsedUrl.pathname;
+      const method = init?.method ?? 'GET';
+
+      if (method === 'POST' && path === '/development-plans') {
+        return jsonResponse({ id: 'development-plan-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items') {
+        return jsonResponse({ id: 'item-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/execution-plan-revisions/generate') {
+        return jsonResponse({ action_run: { id: 'action-run-plan' }, runtime_job: { id: 'runtime-job-plan' } });
+      }
+      if (method === 'GET' && path === '/query/development-plans/development-plan-1/items/item-1') {
+        return jsonResponse({ execution_plans: [{ current_revision_id: 'execution-plan-revision-1' }] });
+      }
+      if (method === 'GET' && path === '/internal/codex-runtime/runtime-jobs/runtime-job-plan') {
+        return jsonResponse({
+          runtime_job: {
+            id: 'runtime-job-plan',
+            status: 'terminal',
+            terminal_status: 'succeeded',
+            input: {
+              schema_version: 'codex_generation_workload.v1',
+              output_schema_version: 'execution_plan_revision.v1',
+            },
+            terminal_result_json: {
+              output_schema_version: 'execution_plan_revision.v1',
+              runtime_evidence: runtimeAppServerEvidence,
+            },
+          },
+          artifacts: [
+            {
+              kind: 'generated_payload',
+              metadata_json: {
+                output_schema_version: 'execution_plan_revision.v1',
+                generated_payload: { schema_version: 'execution_plan_revision.v1' },
+              },
+            },
+          ],
+        });
+      }
+      if (method === 'GET' && path === '/internal/automation/runtime-snapshot') {
+        return jsonResponse({ recent_action_runs: [{ id: 'action-run-plan', status: 'succeeded' }] });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/execution-plan/submit-for-approval') {
+        return jsonResponse({ id: 'execution-plan-revision-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/execution-plan/approve') {
+        return jsonResponse({ id: 'execution-plan-revision-1' });
+      }
+      throw new Error(`unexpected request ${method} ${path}`);
+    });
+    const client = createCodexRuntimeSuperpowersDogfoodHttpClient(boundaryHttpClientConfig(), {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      env: {
+        FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'test-secret',
+        FORGELOOP_AUTOMATION_ACTOR_ID: 'automation-actor',
+        FORGELOOP_AUTOMATION_DAEMON_IDENTITY: 'automation-daemon',
+      },
+      runRemoteWorkerOnce: async () => undefined,
+    });
+
+    await client.seedSourceAndDevelopmentPlanItem();
+
+    await expect(client.generateAndApproveExecutionPlan()).resolves.toMatchObject({
+      execution_plan_revision_id: 'execution-plan-revision-1',
+      output_schema_versions: ['execution_plan_revision.v1'],
+      app_server_evidence_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
+      runtime_job_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
+      cleanup_status: 'completed',
+    });
+  });
+
+  it('marks generation runtime cleanup failure evidence as blocked and rejects unsafe cleanup summaries', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const parsedUrl = new URL(String(url));
+      const path = parsedUrl.pathname;
+      const method = init?.method ?? 'GET';
+
+      if (method === 'POST' && path === '/development-plans') {
+        return jsonResponse({ id: 'development-plan-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items') {
+        return jsonResponse({ id: 'item-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec-revisions/generate') {
+        return jsonResponse({ action_run: { id: 'action-run-cleanup' }, runtime_job: { id: 'runtime-job-cleanup' } });
+      }
+      if (method === 'GET' && path === '/query/development-plans/development-plan-1/items/item-1') {
+        return jsonResponse({ specs: [{ current_revision_id: 'spec-revision-1' }] });
+      }
+      if (method === 'GET' && path === '/internal/codex-runtime/runtime-jobs/runtime-job-cleanup') {
+        return jsonResponse({
+          runtime_job: {
+            id: 'runtime-job-cleanup',
+            status: 'terminal',
+            terminal_status: 'succeeded',
+            input: { output_schema_version: 'spec_revision.v1' },
+            terminal_result_json: {
+              output_schema_version: 'spec_revision.v1',
+              runtime_evidence: runtimeAppServerEvidence,
+            },
+          },
+          artifacts: [
+            {
+              kind: 'cleanup_failure_evidence',
+              metadata_json: {
+                reason_code: 'codex_runtime_cleanup_failed',
+                public_summary: 'Remote Codex app-server cleanup failed after generation.',
+              },
+            },
+          ],
+        });
+      }
+      if (method === 'GET' && path === '/internal/automation/runtime-snapshot') {
+        return jsonResponse({ recent_action_runs: [{ id: 'action-run-cleanup', status: 'succeeded' }] });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec/submit-for-approval') {
+        return jsonResponse({ id: 'spec-revision-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec/approve') {
+        return jsonResponse({ id: 'spec-revision-1' });
+      }
+      throw new Error(`unexpected request ${method} ${path}`);
+    });
+    const client = createCodexRuntimeSuperpowersDogfoodHttpClient(boundaryHttpClientConfig(), {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      env: {
+        FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'test-secret',
+        FORGELOOP_AUTOMATION_ACTOR_ID: 'automation-actor',
+        FORGELOOP_AUTOMATION_DAEMON_IDENTITY: 'automation-daemon',
+      },
+      runRemoteWorkerOnce: async () => undefined,
+    });
+
+    await client.seedSourceAndDevelopmentPlanItem();
+    const result = await client.generateAndApproveSpec();
+
+    expect(result).toMatchObject({
+      spec_revision_id: 'spec-revision-1',
+      output_schema_versions: ['spec_revision.v1'],
+      runtime_job_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
+      app_server_evidence_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
+      cleanup_status: 'blocked',
+    });
+    expect(() =>
+      deriveCodexAppServerEvidence(
+        collectCodexAppServerPhaseEvidence({
+          boundary: [boundaryEvidence, boundaryRebaseEvidence],
+          spec: result,
+          executionPlan: executionPlanEvidence,
+          execution: executionEvidence,
+        }),
+      ),
+    ).toThrow(/codex_runtime_superpowers_app_server_phase_evidence_missing/);
+  });
+
+  it('rejects unsafe runtime cleanup failure summaries before reporting phase evidence', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const parsedUrl = new URL(String(url));
+      const path = parsedUrl.pathname;
+      const method = init?.method ?? 'GET';
+
+      if (method === 'POST' && path === '/development-plans') {
+        return jsonResponse({ id: 'development-plan-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items') {
+        return jsonResponse({ id: 'item-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec-revisions/generate') {
+        return jsonResponse({ action_run: { id: 'action-run-unsafe-cleanup' }, runtime_job: { id: 'runtime-job-unsafe-cleanup' } });
+      }
+      if (method === 'GET' && path === '/query/development-plans/development-plan-1/items/item-1') {
+        return jsonResponse({ specs: [{ current_revision_id: 'spec-revision-1' }] });
+      }
+      if (method === 'GET' && path === '/internal/codex-runtime/runtime-jobs/runtime-job-unsafe-cleanup') {
+        return jsonResponse({
+          runtime_job: {
+            id: 'runtime-job-unsafe-cleanup',
+            status: 'terminal',
+            terminal_status: 'succeeded',
+            input: { output_schema_version: 'spec_revision.v1' },
+            terminal_result_json: {
+              output_schema_version: 'spec_revision.v1',
+              runtime_evidence: runtimeAppServerEvidence,
+            },
+          },
+          artifacts: [
+            {
+              kind: 'cleanup_failure_evidence',
+              metadata_json: {
+                reason_code: 'codex_runtime_cleanup_failed',
+                public_summary: 'Cleanup failed for /tmp/private container-123 config.toml.',
+              },
+            },
+          ],
+        });
+      }
+      if (method === 'GET' && path === '/internal/automation/runtime-snapshot') {
+        return jsonResponse({ recent_action_runs: [{ id: 'action-run-unsafe-cleanup', status: 'succeeded' }] });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec/submit-for-approval') {
+        return jsonResponse({ id: 'spec-revision-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec/approve') {
+        return jsonResponse({ id: 'spec-revision-1' });
+      }
+      throw new Error(`unexpected request ${method} ${path}`);
+    });
+    const client = createCodexRuntimeSuperpowersDogfoodHttpClient(boundaryHttpClientConfig(), {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      env: {
+        FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'test-secret',
+        FORGELOOP_AUTOMATION_ACTOR_ID: 'automation-actor',
+        FORGELOOP_AUTOMATION_DAEMON_IDENTITY: 'automation-daemon',
+      },
+      runRemoteWorkerOnce: async () => undefined,
+    });
+
+    await client.seedSourceAndDevelopmentPlanItem();
+    await expect(client.generateAndApproveSpec()).rejects.toThrow(
+      /codex_runtime_superpowers_dogfood_report_unsafe:cleanup_failure_public_summary/,
+    );
+  });
+
   it('does not let a stale Spec projection mask a failed runtime job', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const parsedUrl = new URL(String(url));
@@ -2128,7 +2455,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     });
   });
 
-  it('blocks execution when runtime job evidence cannot be observed from the run result projection yet', async () => {
+  it('returns Execution runtime job schema, app-server evidence, and runtime job digest from derived runtime job projection', async () => {
     const requests: Array<{ method: string; path: string }> = [];
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const parsedUrl = new URL(String(url));
@@ -2169,6 +2496,31 @@ describe('Codex runtime Superpowers dogfood script', () => {
       if (method === 'GET' && path === '/run-sessions/run-session-1') {
         return jsonResponse({ id: 'run-session-1', status: 'running' });
       }
+      if (method === 'GET' && path === '/execution-packages/execution-package-1') {
+        return jsonResponse({ id: 'execution-package-1', version: 7 });
+      }
+      if (method === 'GET' && path === '/internal/codex-runtime/runtime-jobs/1976ff6d-d61e-47ea-8073-4d8bad9e1e24') {
+        return jsonResponse({
+          runtime_job: {
+            id: '1976ff6d-d61e-47ea-8073-4d8bad9e1e24',
+            status: 'terminal',
+            terminal_status: 'succeeded',
+            input: {
+              schema_version: 'codex_run_execution_workload.v1',
+              output_schema_version: 'codex_run_execution_result.v1',
+            },
+            terminal_result_json: {
+              output_schema_version: 'codex_run_execution_result.v1',
+              runtime_evidence: {
+                ...runtimeAppServerEvidence,
+                runtime_target_kind: 'run_execution',
+                source_access_mode: 'path_policy_scoped',
+              },
+            },
+          },
+          artifacts: [],
+        });
+      }
       throw new Error(`unexpected request ${method} ${path}`);
     });
     const workerCalls: string[] = [];
@@ -2190,6 +2542,11 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
+        env: {
+          FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'test-secret',
+          FORGELOOP_AUTOMATION_ACTOR_ID: 'automation-actor',
+          FORGELOOP_AUTOMATION_DAEMON_IDENTITY: 'automation-daemon',
+        },
         runRemoteWorkerOnce: async () => {
           workerCalls.push('worker');
         },
@@ -2197,18 +2554,24 @@ describe('Codex runtime Superpowers dogfood script', () => {
     );
 
     await client.seedSourceAndDevelopmentPlanItem();
-    await expect(client.startExecution()).rejects.toMatchObject({
-      blockerCode: 'codex_runtime_superpowers_execution_runtime_job_evidence_missing',
+    await expect(client.startExecution()).resolves.toMatchObject({
+      execution_id: 'execution-1',
+      workspace_bundle_digest: digest('w'),
+      mounted_task_workspace_digest: digest('m'),
+      changed_files: ['docs/superpowers/reports/codex-runtime-superpowers-dogfood.md'],
+      output_schema_versions: ['codex_run_execution_result.v1'],
+      app_server_evidence_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
+      runtime_job_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
+      cleanup_status: 'completed',
     });
 
     expect(workerCalls).toEqual(['worker']);
-    expect(requests).toEqual([
-      { method: 'POST', path: '/development-plans' },
-      { method: 'POST', path: '/development-plans/development-plan-1/items' },
-      { method: 'POST', path: '/development-plans/development-plan-1/items/item-1/execution/start' },
-      { method: 'GET', path: '/query/development-plans/development-plan-1/items/item-1' },
-      { method: 'GET', path: '/run-sessions/run-session-1' },
-    ]);
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        { method: 'GET', path: '/execution-packages/execution-package-1' },
+        { method: 'GET', path: '/internal/codex-runtime/runtime-jobs/1976ff6d-d61e-47ea-8073-4d8bad9e1e24' },
+      ]),
+    );
   });
 
   it('blocks execution dogfood when worker runtime evidence is still missing after polling', async () => {

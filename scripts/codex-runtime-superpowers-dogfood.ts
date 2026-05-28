@@ -355,13 +355,8 @@ const canonicalPublicDigest = (value: unknown): Sha256Digest =>
   `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`;
 
 const uniqueStrings = (values: readonly string[]): string[] => [...new Set(values)];
-
-const unobservedPhaseEvidence = (): CodexRuntimePhaseDogfoodEvidence => ({
-  output_schema_versions: [],
-  runtime_job_digests: [],
-  app_server_evidence_digests: [],
-  cleanup_status: 'completed',
-});
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
 
 export const collectCodexAppServerPhaseEvidence = (input: {
   boundary: CodexRuntimeBoundaryDogfoodEvidence[];
@@ -952,14 +947,27 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     status?: string;
     terminal_status?: string;
     terminal_reason_code?: string;
+    input?: {
+      schema_version?: unknown;
+      output_schema_version?: unknown;
+    };
     terminal_result_json?: {
-      output_schema_version?: string;
+      output_schema_version?: unknown;
+      runtime_evidence?: unknown;
     };
   };
   type RuntimeJobArtifactProjection = {
     kind?: string;
     metadata_json?: {
       failure_subcode?: string;
+      reason_code?: string;
+      public_summary?: string;
+      output_schema_version?: unknown;
+      generated_payload?: {
+        schema_version?: unknown;
+        runtime_evidence?: unknown;
+      };
+      runtime_evidence?: unknown;
     };
   };
   type AutomationActionRunProjection = {
@@ -1047,6 +1055,64 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
   const runtimeJobFailureSubcode = (artifacts: readonly RuntimeJobArtifactProjection[]): string | undefined => {
     const subcode = artifacts.find((artifact) => artifact.kind === 'startup_failure_evidence')?.metadata_json?.failure_subcode;
     return subcode === undefined || !publicIdPattern.test(subcode) ? undefined : subcode;
+  };
+  const publicSchemaVersion = (value: unknown): string | undefined =>
+    typeof value === 'string' && publicIdPattern.test(value) ? value : undefined;
+  const runtimeJobOutputSchemaVersions = async (runtimeJobId: string): Promise<string[]> => {
+    const diagnostic = await fetchRuntimeJobWithArtifacts(runtimeJobId);
+    const versions = [
+      diagnostic.runtime_job.input?.output_schema_version,
+      diagnostic.runtime_job.terminal_result_json?.output_schema_version,
+      ...diagnostic.artifacts.flatMap((artifact) => [
+        artifact.metadata_json?.output_schema_version,
+        artifact.metadata_json?.generated_payload?.schema_version,
+      ]),
+    ]
+      .map(publicSchemaVersion)
+      .filter((value): value is string => value !== undefined);
+    return uniqueStrings(versions);
+  };
+  const appServerEvidenceDigest = (candidate: unknown): Sha256Digest | undefined => {
+    if (
+      !isPlainRecord(candidate) ||
+      candidate.app_server_attempted !== true ||
+      candidate.selected_execution_mode !== 'app_server'
+    ) {
+      return undefined;
+    }
+    return codexCanonicalDigest(candidate) as Sha256Digest;
+  };
+  const runtimeJobAppServerEvidenceDigests = async (runtimeJobId: string): Promise<Sha256Digest[]> => {
+    const diagnostic = await fetchRuntimeJobWithArtifacts(runtimeJobId);
+    const digests = [
+      diagnostic.runtime_job.terminal_result_json?.runtime_evidence,
+      ...diagnostic.artifacts.flatMap((artifact) => [
+        artifact.metadata_json?.runtime_evidence,
+        artifact.metadata_json?.generated_payload?.runtime_evidence,
+      ]),
+    ]
+      .map(appServerEvidenceDigest)
+      .filter((value): value is Sha256Digest => value !== undefined);
+    return uniqueStrings(digests) as Sha256Digest[];
+  };
+  const runtimeJobCleanupStatus = async (runtimeJobId: string): Promise<CodexRuntimeDogfoodCleanupStatus> => {
+    const diagnostic = await fetchRuntimeJobWithArtifacts(runtimeJobId);
+    const cleanupFailures = diagnostic.artifacts.filter((artifact) => artifact.kind === 'cleanup_failure_evidence');
+    for (const artifact of cleanupFailures) {
+      const reasonCode = String(artifact.metadata_json?.reason_code ?? 'codex_runtime_cleanup_failed');
+      assertPublicSafeId(reasonCode, 'cleanup_failure_reason_code');
+      const publicSummary = artifact.metadata_json?.public_summary;
+      if (
+        typeof publicSummary === 'string' &&
+        (/\/Users\/|\/tmp\/|~\/\.codex|127\.0\.0\.1|localhost|container-[A-Za-z0-9_-]+|auth\.json|config\.toml/.test(
+          publicSummary,
+        ) ||
+          publicSummary.includes('://'))
+      ) {
+        throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:cleanup_failure_public_summary');
+      }
+    }
+    return cleanupFailures.length === 0 ? 'completed' : 'blocked';
   };
   const inspectRuntimeJob = async (runtimeJobId: string | undefined): Promise<{ terminalSucceeded: boolean }> => {
     if (runtimeJobId === undefined) {
@@ -1498,6 +1564,8 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       const answeredQuestionIds = new Set<string>();
       const runtimeJobDigests: Sha256Digest[] = [];
       const outputSchemaVersions: string[] = [];
+      const appServerEvidenceDigests: Sha256Digest[] = [];
+      const cleanupStatuses: CodexRuntimeDogfoodCleanupStatus[] = [];
       const maxAiTurns = config.boundaryMaxAiTurns ?? 8;
       const session =
         mode === 'initial'
@@ -1555,6 +1623,8 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
           if (runtimeJobId !== undefined) {
             const runtimeJob = await fetchRuntimeJob(runtimeJobId);
             outputSchemaVersions.push(...boundaryOutputSchemaVersionsFromRuntimeJob(runtimeJob));
+            appServerEvidenceDigests.push(...(await runtimeJobAppServerEvidenceDigests(runtimeJobId)));
+            cleanupStatuses.push(await runtimeJobCleanupStatus(runtimeJobId));
           }
           continue;
         }
@@ -1611,8 +1681,8 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
             summary_request_change_path_covered: summaryRequestChangePathCovered,
             output_schema_versions: uniqueStrings(outputSchemaVersions),
             runtime_job_digests: uniqueStrings(runtimeJobDigests) as Sha256Digest[],
-            app_server_evidence_digests: [],
-            cleanup_status: 'completed',
+            app_server_evidence_digests: uniqueStrings(appServerEvidenceDigests) as Sha256Digest[],
+            cleanup_status: cleanupStatuses.includes('blocked') ? 'blocked' : 'completed',
           };
         }
 
@@ -1637,8 +1707,8 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
             summary_request_change_path_covered: summaryRequestChangePathCovered,
             output_schema_versions: uniqueStrings(outputSchemaVersions),
             runtime_job_digests: uniqueStrings(runtimeJobDigests) as Sha256Digest[],
-            app_server_evidence_digests: [],
-            cleanup_status: 'completed',
+            app_server_evidence_digests: uniqueStrings(appServerEvidenceDigests) as Sha256Digest[],
+            cleanup_status: cleanupStatuses.includes('blocked') ? 'blocked' : 'completed',
           };
         }
 
@@ -1727,7 +1797,10 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       const revisionId = requireState(specRevisionId, 'codex_runtime_superpowers_dogfood_spec_revision_missing');
       return {
         spec_revision_id: revisionId,
-        ...unobservedPhaseEvidence(),
+        output_schema_versions: await runtimeJobOutputSchemaVersions(runtimeJobId),
+        app_server_evidence_digests: await runtimeJobAppServerEvidenceDigests(runtimeJobId),
+        runtime_job_digests: [runtimeJobDigestFromId(runtimeJobId)],
+        cleanup_status: await runtimeJobCleanupStatus(runtimeJobId),
       };
     },
     async generateAndApproveExecutionPlan() {
@@ -1769,7 +1842,10 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       );
       return {
         execution_plan_revision_id: revisionId,
-        ...unobservedPhaseEvidence(),
+        output_schema_versions: await runtimeJobOutputSchemaVersions(runtimeJobId),
+        app_server_evidence_digests: await runtimeJobAppServerEvidenceDigests(runtimeJobId),
+        runtime_job_digests: [runtimeJobDigestFromId(runtimeJobId)],
+        cleanup_status: await runtimeJobCleanupStatus(runtimeJobId),
       };
     },
     async startExecution() {
@@ -1796,17 +1872,24 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         execution.runtime_evidence_refs?.find((ref) => ref.type === 'execution_package' && typeof ref.id === 'string')?.id,
         'codex_runtime_superpowers_execution_package_missing',
       );
-      await invokeRemoteWorkerUntil({
+      const runtimeEvidence = await invokeRemoteWorkerUntil({
         targetKind: 'run_execution',
         blockerCode: 'codex_runtime_superpowers_execution_runtime_evidence_missing',
         observe: () => fetchExecutionRuntimeEvidence(execution.id),
         runSessionId: () => runSessionId,
         executionPackageId: () => executionPackageId,
       });
-      throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_execution_runtime_job_evidence_missing', {
-        status: 'BLOCKED',
-        blocker_code: 'codex_runtime_superpowers_execution_runtime_job_evidence_missing',
-      });
+      const runtimeJobId = await runtimeJobIdForRunExecution(executionPackageId, runSessionId);
+      return {
+        execution_id: execution.id,
+        workspace_bundle_digest: runtimeEvidence.workspace_bundle_digest,
+        mounted_task_workspace_digest: runtimeEvidence.mounted_task_workspace_digest,
+        changed_files: runtimeEvidence.changed_files,
+        output_schema_versions: runtimeJobId === undefined ? [] : await runtimeJobOutputSchemaVersions(runtimeJobId),
+        app_server_evidence_digests: runtimeJobId === undefined ? [] : await runtimeJobAppServerEvidenceDigests(runtimeJobId),
+        runtime_job_digests: runtimeJobId === undefined ? [] : [runtimeJobDigestFromId(runtimeJobId)],
+        cleanup_status: runtimeJobId === undefined ? 'blocked' : await runtimeJobCleanupStatus(runtimeJobId),
+      };
     },
     async writeReport(report, markdown) {
       return new FilesystemCodexRuntimeSuperpowersDogfoodReporter().write(report, markdown);

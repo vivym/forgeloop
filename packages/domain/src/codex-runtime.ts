@@ -410,6 +410,7 @@ export interface WorkspaceBundleV1 {
 
 export interface CodexRunExecutionRuntimeJobResult {
   task_kind: 'run_execution';
+  output_schema_version: 'codex_run_execution_result.v1';
   execution_package_id: string;
   execution_package_version: number;
   run_session_id: string;
@@ -436,6 +437,7 @@ export interface CodexRunExecutionRuntimeJobResult {
     digest?: string;
     internal_ref?: string;
   }>;
+  runtime_evidence?: CodexDockerRuntimeEvidence;
   public_summary: string;
 }
 
@@ -1548,6 +1550,7 @@ const codexRunExecutionPatchArtifactKeys = new Set(['content_type', 'digest', 'i
 const codexRunExecutionCheckResultKeys = new Set(['name', 'status', 'summary', 'output_digest', 'output_internal_ref']);
 const codexRunExecutionRuntimeJobResultKeys = new Set([
   'task_kind',
+  'output_schema_version',
   'execution_package_id',
   'execution_package_version',
   'run_session_id',
@@ -1558,6 +1561,7 @@ const codexRunExecutionRuntimeJobResultKeys = new Set([
   'patch_artifact',
   'check_results',
   'execution_artifacts',
+  'runtime_evidence',
   'public_summary',
 ]);
 
@@ -1872,6 +1876,9 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
   if (input.task_kind !== 'run_execution') {
     throw unsafeCodexRuntimePublicValue('Codex run-execution terminal result task_kind is invalid.');
   }
+  if (input.output_schema_version !== 'codex_run_execution_result.v1') {
+    throw unsafeCodexRuntimePublicValue('Codex run-execution terminal result output_schema_version is invalid.');
+  }
   requireCodexRuntimeResultString(input, 'execution_package_id');
   requireCodexRuntimeResultInteger(input, 'execution_package_version');
   requireCodexRuntimeResultString(input, 'run_session_id');
@@ -1914,6 +1921,9 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
   requireCodexRuntimeResultArray(input, 'execution_artifacts').forEach((artifact) =>
     requireCodexRuntimeArtifact(artifact, 'execution_artifacts'),
   );
+  if (input.runtime_evidence !== undefined) {
+    validateCodexDockerRuntimeEvidence(input.runtime_evidence);
+  }
   requireCodexRuntimeResultString(input, 'public_summary');
   return input as unknown as CodexRunExecutionRuntimeJobResult;
 };
@@ -2037,7 +2047,7 @@ export const validateCodexRuntimeJobTerminalResult = (
       ? requireCodexRunExecutionRuntimeJobResult(input)
       : requireCodexGenerationRuntimeJobResult(input);
   const omittedPublicSafeKeys = new Set<string>([
-    ...(input.task_kind !== 'run_execution' && input.runtime_evidence !== undefined ? ['runtime_evidence'] : []),
+    ...(input.runtime_evidence !== undefined ? ['runtime_evidence'] : []),
     ...(productGenerationTaskKindSet.has(String(input.task_kind)) ? ['generated_payload'] : []),
   ]);
   const publicSafeInput =
