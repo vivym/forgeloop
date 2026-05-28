@@ -157,6 +157,97 @@ const safeReport = () => ({
   report_path: fixedReportPath as const,
 });
 
+type PhaseEvidenceOverride = {
+  output_schema_versions?: string[];
+  runtime_job_digests?: string[];
+  app_server_evidence_digests?: string[];
+  cleanup_status?: 'completed' | 'blocked';
+  ai_turn_count?: number;
+  follow_up_path_covered?: boolean;
+  summary_request_change_path_covered?: boolean;
+};
+
+const completeDogfoodClientWithPhaseEvidence = (overrides?: {
+  boundaryInitial?: PhaseEvidenceOverride;
+  boundarySecond?: PhaseEvidenceOverride;
+  boundaryRebase?: PhaseEvidenceOverride;
+  spec?: PhaseEvidenceOverride;
+  executionPlan?: PhaseEvidenceOverride;
+  execution?: PhaseEvidenceOverride;
+}): CodexRuntimeSuperpowersDogfoodClient => ({
+  importCodexRuntime: vi.fn(async () => ({
+    runtime_profile_revision_digests: [digest('a')],
+    credential_binding_version_digests: [digest('b')],
+  })),
+  smokeGenerationWorker: vi.fn(async () => undefined),
+  startNoSharedFilesystemRunWorker: vi.fn(async () => undefined),
+  seedSourceAndDevelopmentPlanItem: vi.fn(async () => ({
+    source_object_id: 'requirement-1',
+    development_plan_id: 'development-plan-1',
+    development_plan_item_id: 'item-1',
+  })),
+  runBoundaryBrainstormingRound: vi.fn(async (roundNumber: number) => {
+    const evidence =
+      roundNumber === 1
+        ? {
+            boundary_brainstorming_session_id: 'boundary-session-1',
+            ai_turn_count: 1,
+            follow_up_path_covered: false,
+            summary_request_change_path_covered: false,
+            output_schema_versions: ['boundary_round_result.v1'],
+            runtime_job_digests: [digest('boundary-runtime-job-a')],
+            app_server_evidence_digests: [digest('boundary-app-server-a')],
+            cleanup_status: 'completed' as const,
+            ...overrides?.boundaryInitial,
+          }
+        : {
+            boundary_brainstorming_session_id: 'boundary-session-2',
+            ai_turn_count: 2,
+            follow_up_path_covered: true,
+            summary_request_change_path_covered: true,
+            output_schema_versions: ['boundary_round_result.v1'],
+            runtime_job_digests: [digest('boundary-runtime-job-b')],
+            app_server_evidence_digests: [digest('boundary-app-server-b')],
+            cleanup_status: 'completed' as const,
+            ...overrides?.boundarySecond,
+          };
+    return evidence;
+  }),
+  answerBoundaryQuestion: vi.fn(async () => undefined),
+  proposeBoundarySummary: vi.fn(async () => ({ boundary_summary_revision_id: 'boundary-summary-revision-1' })),
+  mutateDevelopmentPlanItem: vi.fn(async () => undefined),
+  assertStaleBoundaryBlocksSpecGeneration: vi.fn(async () => ({
+    blocked: true,
+    blocker_code: 'STALE_BOUNDARY_SUMMARY',
+  })),
+  rebaseBoundaryBrainstorming: vi.fn(async () => ({
+    rebased_session_id: 'boundary-session-rebased',
+    rebased_boundary_summary_revision_id: 'boundary-summary-revision-rebased',
+    ai_turn_count: 1,
+    follow_up_path_covered: false,
+    summary_request_change_path_covered: false,
+    output_schema_versions: ['boundary_round_result.v1'],
+    runtime_job_digests: [digest('boundary-rebase-runtime-job-a')],
+    app_server_evidence_digests: [digest('boundary-rebase-app-server-a')],
+    cleanup_status: 'completed',
+    ...overrides?.boundaryRebase,
+  })),
+  approveBoundarySummary: vi.fn(async () => ({ boundary_summary_revision_id: 'boundary-summary-revision-rebased' })),
+  generateAndApproveSpec: vi.fn(async () => ({
+    ...specEvidence,
+    ...overrides?.spec,
+  })),
+  generateAndApproveExecutionPlan: vi.fn(async () => ({
+    ...executionPlanEvidence,
+    ...overrides?.executionPlan,
+  })),
+  startExecution: vi.fn(async () => ({
+    ...executionEvidence,
+    ...overrides?.execution,
+  })),
+  writeReport: vi.fn(async () => ({ report_path: fixedReportPath })),
+});
+
 describe('Codex runtime Superpowers dogfood script', () => {
   it('orchestrates the strict product loop through central config/auth and no-shared-filesystem execution', async () => {
     const calls: string[] = [];
@@ -460,7 +551,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
 
   it('blocks PASS orchestration when current fixed-round methods lack observed runtime evidence', async () => {
     const emptyEvidence = {
-      output_schema_versions: ['boundary_round_result.v1'],
+      output_schema_versions: [],
       runtime_job_digests: [],
       app_server_evidence_digests: [],
       cleanup_status: 'completed' as const,
@@ -520,6 +611,51 @@ describe('Codex runtime Superpowers dogfood script', () => {
       })),
       writeReport: vi.fn(async () => ({ report_path: fixedReportPath })),
     };
+
+    await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
+    });
+    expect(client.writeReport).not.toHaveBeenCalled();
+  });
+
+  it('blocks PASS orchestration when observed schemas do not prove the expected phase schema', async () => {
+    const client = completeDogfoodClientWithPhaseEvidence({
+      boundaryInitial: {
+        output_schema_versions: ['unexpected_schema.v1'],
+      },
+      boundarySecond: {
+        output_schema_versions: ['unexpected_schema.v1'],
+      },
+    });
+
+    await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
+    });
+    expect(client.writeReport).not.toHaveBeenCalled();
+  });
+
+  it('blocks PASS orchestration when a phase has no observed schema versions', async () => {
+    const client = completeDogfoodClientWithPhaseEvidence({
+      boundaryInitial: {
+        output_schema_versions: [],
+      },
+      boundarySecond: {
+        output_schema_versions: [],
+      },
+    });
+
+    await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
+    });
+    expect(client.writeReport).not.toHaveBeenCalled();
+  });
+
+  it('blocks PASS orchestration when a phase cleanup did not complete', async () => {
+    const client = completeDogfoodClientWithPhaseEvidence({
+      spec: {
+        cleanup_status: 'blocked',
+      },
+    });
 
     await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
@@ -899,17 +1035,20 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(rebaseEvidence).toMatchObject({
       rebased_session_id: 'boundary-session-2',
       rebased_boundary_summary_revision_id: 'boundary-summary-revision-2',
-      output_schema_versions: ['boundary_round_result.v1'],
+      output_schema_versions: [],
       cleanup_status: 'completed',
     });
     expect([
+      firstBoundaryRound.output_schema_versions,
       firstBoundaryRound.runtime_job_digests,
       firstBoundaryRound.app_server_evidence_digests,
+      secondBoundaryRound.output_schema_versions,
       secondBoundaryRound.runtime_job_digests,
       secondBoundaryRound.app_server_evidence_digests,
+      rebaseEvidence.output_schema_versions,
       rebaseEvidence.runtime_job_digests,
       rebaseEvidence.app_server_evidence_digests,
-    ]).toEqual([[], [], [], [], [], []]);
+    ]).toEqual([[], [], [], [], [], [], [], [], []]);
 
     expect(workerCalls).toEqual(['worker', 'worker', 'worker', 'worker']);
     expect(requests).toEqual(
@@ -1407,7 +1546,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     });
   });
 
-  it('reads execution evidence from the Development Plan Item projection after the worker applies the run result', async () => {
+  it('blocks execution when runtime job evidence cannot be observed from the run result projection yet', async () => {
     const requests: Array<{ method: string; path: string }> = [];
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const parsedUrl = new URL(String(url));
@@ -1476,15 +1615,8 @@ describe('Codex runtime Superpowers dogfood script', () => {
     );
 
     await client.seedSourceAndDevelopmentPlanItem();
-    await expect(client.startExecution()).resolves.toMatchObject({
-      execution_id: 'execution-1',
-      workspace_bundle_digest: digest('w'),
-      mounted_task_workspace_digest: digest('m'),
-      changed_files: ['docs/superpowers/reports/codex-runtime-superpowers-dogfood.md'],
-      output_schema_versions: ['codex_run_execution_result.v1'],
-      runtime_job_digests: [],
-      app_server_evidence_digests: [],
-      cleanup_status: 'completed',
+    await expect(client.startExecution()).rejects.toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_execution_runtime_job_evidence_missing',
     });
 
     expect(workerCalls).toEqual(['worker']);

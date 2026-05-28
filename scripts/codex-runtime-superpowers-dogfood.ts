@@ -311,9 +311,9 @@ const canonicalPublicDigest = (value: unknown): Sha256Digest =>
 
 const uniqueStrings = (values: readonly string[]): string[] => [...new Set(values)];
 
-const phaseEvidenceFromObservedRuntimeJob = (schemaVersion: string, runtimeJobId?: string): CodexRuntimePhaseDogfoodEvidence => ({
-  output_schema_versions: [schemaVersion],
-  runtime_job_digests: runtimeJobId === undefined ? [] : [digestFromPublicId(runtimeJobId)],
+const unobservedPhaseEvidence = (): CodexRuntimePhaseDogfoodEvidence => ({
+  output_schema_versions: [],
+  runtime_job_digests: [],
   app_server_evidence_digests: [],
   cleanup_status: 'completed',
 });
@@ -345,18 +345,24 @@ const appServerEvidenceFromPhases = (
 });
 
 const requireObservedEvidenceForPass = (evidence: CodexRuntimeAppServerEvidence): void => {
-  if (evidence.runtime_job_digests.length === 0 || evidence.app_server_evidence_digests.length === 0) {
+  const throwMissingEvidence = (): never => {
     throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_observed_runtime_evidence_missing', {
       status: 'BLOCKED',
       blocker_code: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
     });
+  };
+  if (evidence.runtime_job_digests.length === 0 || evidence.app_server_evidence_digests.length === 0) {
+    throwMissingEvidence();
   }
   for (const phase of evidence.phases) {
-    if (phase.runtime_job_digests.length === 0 || phase.app_server_evidence_digests.length === 0) {
-      throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_observed_runtime_evidence_missing', {
-        status: 'BLOCKED',
-        blocker_code: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
-      });
+    if (
+      phase.observed_output_schema_versions.length === 0 ||
+      !phase.observed_output_schema_versions.includes(phase.expected_output_schema_version) ||
+      phase.runtime_job_digests.length === 0 ||
+      phase.app_server_evidence_digests.length === 0 ||
+      phase.cleanup_status !== 'completed'
+    ) {
+      throwMissingEvidence();
     }
   }
 };
@@ -1374,7 +1380,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         }, fetchDeps);
         boundarySessionId = session.id;
         cachedBoundarySession = undefined;
-        const boundarySession = await invokeRemoteWorkerUntil({
+        await invokeRemoteWorkerUntil({
           targetKind: 'generation',
           blockerCode: 'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
           observe: async () => {
@@ -1385,7 +1391,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         });
         return {
           boundary_brainstorming_session_id: session.id,
-          ...phaseEvidenceFromObservedRuntimeJob(boundaryOutputSchemaVersion, boundarySession.current_round_runtime_job_id),
+          ...unobservedPhaseEvidence(),
         };
       }
       const sessionId = requireState(boundarySessionId, 'codex_runtime_superpowers_dogfood_boundary_session_missing');
@@ -1397,7 +1403,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         },
       }, fetchDeps);
       cachedBoundarySession = undefined;
-      const boundarySession = await invokeRemoteWorkerUntil({
+      await invokeRemoteWorkerUntil({
         targetKind: 'generation',
         blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
         observe: async () => {
@@ -1408,7 +1414,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       });
       return {
         boundary_brainstorming_session_id: sessionId,
-        ...phaseEvidenceFromObservedRuntimeJob(boundaryOutputSchemaVersion, boundarySession.current_round_runtime_job_id),
+        ...unobservedPhaseEvidence(),
       };
     },
     async answerBoundaryQuestion() {
@@ -1536,11 +1542,10 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         });
       }
       const revisionId = await latestBoundarySummaryRevisionId();
-      const finalBoundarySession = cachedBoundarySession ?? (await fetchBoundarySession());
       return {
         rebased_session_id: session.id,
         rebased_boundary_summary_revision_id: revisionId,
-        ...phaseEvidenceFromObservedRuntimeJob(boundaryOutputSchemaVersion, finalBoundarySession.current_round_runtime_job_id),
+        ...unobservedPhaseEvidence(),
       };
     },
     async approveBoundarySummary() {
@@ -1594,7 +1599,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       const revisionId = requireState(specRevisionId, 'codex_runtime_superpowers_dogfood_spec_revision_missing');
       return {
         spec_revision_id: revisionId,
-        ...phaseEvidenceFromObservedRuntimeJob(specOutputSchemaVersion, runtimeJobId),
+        ...unobservedPhaseEvidence(),
       };
     },
     async generateAndApproveExecutionPlan() {
@@ -1636,7 +1641,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       );
       return {
         execution_plan_revision_id: revisionId,
-        ...phaseEvidenceFromObservedRuntimeJob(executionPlanOutputSchemaVersion, runtimeJobId),
+        ...unobservedPhaseEvidence(),
       };
     },
     async startExecution() {
@@ -1663,20 +1668,17 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         execution.runtime_evidence_refs?.find((ref) => ref.type === 'execution_package' && typeof ref.id === 'string')?.id,
         'codex_runtime_superpowers_execution_package_missing',
       );
-      const evidence = await invokeRemoteWorkerUntil({
+      await invokeRemoteWorkerUntil({
         targetKind: 'run_execution',
         blockerCode: 'codex_runtime_superpowers_execution_runtime_evidence_missing',
         observe: () => fetchExecutionRuntimeEvidence(execution.id),
         runSessionId: () => runSessionId,
         executionPackageId: () => executionPackageId,
       });
-      return {
-        execution_id: execution.id,
-        workspace_bundle_digest: evidence.workspace_bundle_digest,
-        mounted_task_workspace_digest: evidence.mounted_task_workspace_digest,
-        changed_files: evidence.changed_files,
-        ...phaseEvidenceFromObservedRuntimeJob(executionOutputSchemaVersion),
-      };
+      throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_execution_runtime_job_evidence_missing', {
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_execution_runtime_job_evidence_missing',
+      });
     },
     async writeReport(report, markdown) {
       return new FilesystemCodexRuntimeSuperpowersDogfoodReporter().write(report, markdown);
