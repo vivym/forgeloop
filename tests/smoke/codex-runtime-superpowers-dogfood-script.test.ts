@@ -920,7 +920,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
   });
 
-  it('does not require pre-known Boundary question or summary revision ids in CLI config', () => {
+  it('does not require pre-known Boundary summary revision ids in CLI config', () => {
     const config = loadCodexRuntimeSuperpowersDogfoodCliConfig({
       FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
       FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
@@ -936,7 +936,6 @@ describe('Codex runtime Superpowers dogfood script', () => {
       FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
     });
 
-    expect(config.boundaryQuestionId).toBeUndefined();
     expect(config.boundarySummaryRevisionId).toBeUndefined();
     expect(config.repoId).toBe('repo-1');
     expect(config.repoLocalPath).toBe('/repo/current');
@@ -1271,6 +1270,12 @@ describe('Codex runtime Superpowers dogfood script', () => {
       if (method === 'POST' && path === '/development-plans/development-plan-1/items') {
         return jsonResponse({ id: 'item-1' });
       }
+      if (method === 'PATCH' && path === '/development-plans/development-plan-1/items/item-1') {
+        return jsonResponse({ id: 'item-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/spec-revisions/generate') {
+        return jsonResponse({ code: 'stale_boundary_summary_revision' }, 400);
+      }
       if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/boundary-brainstorming') {
         return jsonResponse({ id: 'boundary-session-1' });
       }
@@ -1284,6 +1289,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
             id: runtimeJobId,
             status: 'terminal',
             terminal_status: 'succeeded',
+            terminal_result_json: { output_schema_version: 'boundary_round_result.v1' },
           },
         });
       }
@@ -1356,16 +1362,27 @@ describe('Codex runtime Superpowers dogfood script', () => {
       app_server_evidence_digests: [],
       cleanup_status: 'completed',
     });
-    expect(initialBoundary.output_schema_versions).not.toContain('codex_run_execution_result.v1');
+    expect(initialBoundary.output_schema_versions).toEqual(['boundary_round_result.v1']);
+    await client.mutateDevelopmentPlanItem();
+    await expect(client.assertStaleBoundaryBlocksSpecGeneration()).resolves.toEqual({
+      blocked: true,
+      blocker_code: 'STALE_BOUNDARY_SUMMARY',
+    });
 
     expect(workerCalls).toEqual(['generation', 'generation', 'generation', 'generation']);
     const requestOrder = requests.map((request) => `${request.method} ${request.path}`);
+    const boundaryApproveRequest =
+      'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/summary-2/approve';
+    const staleItemPatchRequest = 'PATCH /development-plans/development-plan-1/items/item-1';
+    const staleSpecGenerateRequest = 'POST /development-plans/development-plan-1/items/item-1/spec-revisions/generate';
     expect(requestOrder).toContain(
       'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/summary-1/request-changes',
     );
-    expect(requestOrder).toContain(
-      'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/summary-2/approve',
-    );
+    expect(requestOrder).toContain(boundaryApproveRequest);
+    expect(requestOrder).toContain(staleItemPatchRequest);
+    expect(requestOrder).toContain(staleSpecGenerateRequest);
+    expect(requestOrder.indexOf(boundaryApproveRequest)).toBeLessThan(requestOrder.indexOf(staleItemPatchRequest));
+    expect(requestOrder.indexOf(staleItemPatchRequest)).toBeLessThan(requestOrder.indexOf(staleSpecGenerateRequest));
     expect(
       requestOrder.filter(
         (request) =>

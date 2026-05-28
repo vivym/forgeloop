@@ -32,7 +32,6 @@ export interface CodexRuntimeSuperpowersDogfoodCliConfig {
   repoLocalPath?: string;
   repoBaseCommitSha?: string;
   autoSeedProductSource?: boolean;
-  boundaryQuestionId?: string;
   boundarySummaryRevisionId?: string;
   noSharedFilesystem: true;
   skipBootstrap: boolean;
@@ -495,7 +494,6 @@ export const loadCodexRuntimeSuperpowersDogfoodCliConfig = (
   const repoId = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_ID');
   const repoLocalPath = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_PATH') ?? process.cwd();
   const repoBaseCommitSha = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_BASE_COMMIT_SHA') ?? resolveDogfoodRepoHead(repoLocalPath);
-  const boundaryQuestionId = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_BOUNDARY_QUESTION_ID');
   const boundarySummaryRevisionId = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_BOUNDARY_SUMMARY_REVISION_ID');
   const skipBootstrap = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_SKIP_BOOTSTRAP') === '1';
   const config: CodexRuntimeSuperpowersDogfoodCliConfig = {
@@ -538,9 +536,6 @@ export const loadCodexRuntimeSuperpowersDogfoodCliConfig = (
   }
   if (runExecutionCredentialBindingId !== undefined) {
     config.runExecutionCredentialBindingId = runExecutionCredentialBindingId;
-  }
-  if (boundaryQuestionId !== undefined) {
-    config.boundaryQuestionId = boundaryQuestionId;
   }
   if (boundarySummaryRevisionId !== undefined) {
     config.boundarySummaryRevisionId = boundarySummaryRevisionId;
