@@ -339,7 +339,7 @@ describe('project management query API', () => {
   });
 
   it('projects AI-native planning, artifact, execution, review, QA, dashboard, board, and report queues', async () => {
-    const { developmentPlan, item, workItem, specRevision, executionPlanRevision, execution, review, qa } = await seedExecutionReviewAndQa(app);
+    const { developmentPlan, item, workItem, specRevision, executionPlanRevision, executionPackage, execution, review, qa } = await seedExecutionReviewAndQa(app);
     const server = app.getHttpServer();
     const query = { project_id: developmentPlan.project_id };
 
@@ -433,6 +433,75 @@ describe('project management query API', () => {
       items: [expect.objectContaining({ object_ref: expect.objectContaining({ type: 'development_plan_item', id: item.id }) })],
     });
 
+    if (executionPackage === undefined) {
+      throw new Error('Expected seedExecutionReviewAndQa to create a runnable Execution Package.');
+    }
+    await repository.saveRelease({
+      id: 'rel-item-supervision-release',
+      org_id: 'org-ai-native',
+      project_id: developmentPlan.project_id,
+      title: 'Item supervision release',
+      phase: 'approval',
+      activity_state: 'blocked',
+      gate_state: 'awaiting_approval',
+      resolution: 'none',
+      work_item_ids: [workItem.id],
+      execution_package_ids: [executionPackage.id],
+      release_owner_actor_id: 'actor-release',
+      extra: {
+        active_blockers: ['QA acceptance evidence required before release inclusion.'],
+        current_spec_revision_id: specRevision.id,
+        current_plan_revision_id: executionPlanRevision.id,
+        project_management_scope_refs: [
+          { type: 'development_plan_item', id: item.id, development_plan_id: developmentPlan.id, title: item.title },
+        ],
+      },
+      created_by_actor_id: 'actor-release',
+      created_at: '2026-05-28T00:10:00.000Z',
+      updated_at: '2026-05-28T00:10:00.000Z',
+    });
+    await repository.saveReleaseEvidence({
+      id: 'evidence-item-review-approved',
+      org_id: 'org-ai-native',
+      project_id: developmentPlan.project_id,
+      release_id: 'rel-item-supervision-release',
+      title: 'Approved code review evidence',
+      evidence_type: 'review_packet',
+      summary: 'Code review handoff approved for the Plan Item release scope.',
+      extra: {
+        authority_type: 'code_review_handoff_approval',
+        code_review_handoff_id: review.id,
+        scope_ref: { type: 'development_plan_item', id: item.id, development_plan_id: developmentPlan.id, title: item.title },
+        spec_revision_id: specRevision.id,
+        plan_revision_id: executionPlanRevision.id,
+        status: 'approved',
+      },
+      redacted: false,
+      status: 'current',
+      created_at: '2026-05-28T00:11:00.000Z',
+      created_by_actor_id: executionActorReviewer,
+    });
+    await repository.saveReleaseEvidence({
+      id: 'evidence-item-test-passed',
+      org_id: 'org-ai-native',
+      project_id: developmentPlan.project_id,
+      release_id: 'rel-item-supervision-release',
+      title: 'Passed QA acceptance evidence',
+      evidence_type: 'test_report',
+      summary: 'QA acceptance passed for the Plan Item release scope.',
+      extra: {
+        evidence_type: 'test_acceptance',
+        scope_ref: { type: 'development_plan_item', id: item.id, development_plan_id: developmentPlan.id, title: item.title },
+        spec_revision_id: specRevision.id,
+        plan_revision_id: executionPlanRevision.id,
+        status: 'passed',
+      },
+      redacted: false,
+      status: 'current',
+      created_at: '2026-05-28T00:12:00.000Z',
+      created_by_actor_id: executionActorQa,
+    });
+
     const itemDetail = await request(server).get(`/query/development-plans/${developmentPlan.id}/items/${item.id}`).expect(200);
     expect(itemDetail.body).toMatchObject({
       object_ref: expect.objectContaining({ type: 'development_plan_item', id: item.id, development_plan_id: developmentPlan.id }),
@@ -443,6 +512,10 @@ describe('project management query API', () => {
         expect.objectContaining({
           current_revision_id: specRevision.id,
           approved_revision_id: specRevision.id,
+          qa_owner_actor_id: expect.any(String),
+          testability_note: expect.any(String),
+          acceptance_criteria: expect.arrayContaining(['Execution starts only from an approved item Execution Plan.']),
+          test_strategy_summary: expect.any(String),
         }),
       ]),
       execution_plans: expect.arrayContaining([
@@ -466,6 +539,46 @@ describe('project management query API', () => {
       compare_links: expect.objectContaining({
         item_revisions_href: `/development-plans/${developmentPlan.id}/items/${item.id}/revisions/compare`,
       }),
+      runtime_boundary: {
+        type: 'execution_package',
+        id: executionPackage.id,
+        phase: 'ready',
+        activity_state: 'idle',
+        gate_state: 'not_submitted',
+        execution_plan_revision_id: executionPlanRevision.id,
+      },
+      release_context: {
+        release_refs: [
+          {
+            type: 'release',
+            id: 'rel-item-supervision-release',
+            title: 'Item supervision release',
+            href: '/releases/rel-item-supervision-release',
+          },
+        ],
+        readiness_blockers: [
+          expect.objectContaining({ summary: 'QA acceptance evidence required before release inclusion.' }),
+        ],
+        evidence_refs: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'release_evidence',
+            id: 'evidence-item-review-approved',
+            release_id: 'rel-item-supervision-release',
+            title: 'Approved code review evidence',
+            evidence_type: 'review_packet',
+            status: 'current',
+          }),
+          expect.objectContaining({
+            type: 'release_evidence',
+            id: 'evidence-item-test-passed',
+            release_id: 'rel-item-supervision-release',
+            title: 'Passed QA acceptance evidence',
+            evidence_type: 'test_report',
+            status: 'current',
+          }),
+        ]),
+        qa_test_evidence_required: true,
+      },
     });
 
     const specsAndExecutionPlans = await request(server).get('/query/specs-execution-plans').query(query).expect(200);

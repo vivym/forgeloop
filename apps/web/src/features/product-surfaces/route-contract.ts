@@ -8,6 +8,7 @@ export type ProductPageFamily =
   | 'source-evidence'
   | 'planning-table'
   | 'plan-authoring'
+  | 'gate-workspace'
   | 'gate-flow'
   | 'document-review'
   | 'code-review'
@@ -114,14 +115,14 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
     '/development-plans/:id/items/:itemId',
     `/development-plans/${developmentPlanId}/items/${reviewItemId}`,
     'Development Plan Item',
-    'gate-flow',
+    'gate-workspace',
     actionEligibilityItemHeading,
   ),
   productRoute(
     '/development-plans/:id/items/:itemId/brainstorming',
     `/development-plans/${developmentPlanId}/items/${boundaryItemId}/brainstorming`,
     'Boundary Brainstorming',
-    'gate-flow',
+    'gate-workspace',
     typedSourceBoundaryItemHeading,
   ),
   productRoute(

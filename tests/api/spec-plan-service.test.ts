@@ -129,6 +129,72 @@ describe('SpecPlanService item-scoped delivery API', () => {
       });
   });
 
+  it('rejects Execution Plan generation when required QA and test strategy evidence is missing from approved Spec', async () => {
+    const { plan, item } = await seedApprovedBoundary(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+
+    const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
+      .send({ actor_id: actorTech })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Spec approved without QA evidence.' })
+      .expect(201);
+    await repository.saveSpecRevision({
+      ...specRevision,
+      qa_owner_actor_id: undefined,
+      testability_note: '',
+      acceptance_criteria: [],
+      test_strategy_summary: '',
+    });
+
+    const response = await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/generate-draft`)
+      .send({ actor_id: actorTech })
+      .expect(400);
+
+    expect(response.body.message).toContain('qa_test_owner_missing');
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ execution_plan_status: 'missing' });
+  });
+
+  it('requires QA and test strategy evidence for release-blocking Plan Items even when risk and surface count are low', async () => {
+    const { plan, item } = await seedApprovedBoundary(app, {
+      affected_surfaces: ['apps/web'],
+      release_impact: 'release_blocking',
+      risk: 'low',
+    });
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+
+    const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
+      .send({ actor_id: actorTech })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Spec approved without QA evidence.' })
+      .expect(201);
+    await repository.saveSpecRevision({
+      ...specRevision,
+      qa_owner_actor_id: undefined,
+      test_owner_actor_id: undefined,
+      testability_note: '',
+      acceptance_criteria: [],
+      test_strategy_summary: '',
+    });
+
+    const response = await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/generate-draft`)
+      .send({ actor_id: actorTech })
+      .expect(400);
+
+    expect(response.body.message).toContain('qa_test_owner_missing');
+  });
+
   it('supports submit, request changes, regenerate, compare, submit, and approve for Spec reviews', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
@@ -1536,8 +1602,8 @@ async function generateItemExecutionPlanDraft(app: INestApplication, development
   ).body;
 }
 
-async function seedApprovedBoundary(app: INestApplication) {
-  const seeded = await seedDevelopmentPlanItem(app);
+async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSeedOverrides = {}) {
+  const seeded = await seedDevelopmentPlanItem(app, itemOverrides);
   const server = app.getHttpServer();
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const codexRuntimeService = app.get(CodexRuntimeService);
@@ -1645,7 +1711,13 @@ async function seedApprovedBoundary(app: INestApplication) {
   return { ...seeded, session: approved, boundary: boundary! };
 }
 
-async function seedDevelopmentPlanItem(app: INestApplication) {
+type ItemSeedOverrides = Partial<{
+  affected_surfaces: string[];
+  release_impact: 'none' | 'release_scoped' | 'release_blocking';
+  risk: 'low' | 'medium' | 'high' | 'critical';
+}>;
+
+async function seedDevelopmentPlanItem(app: INestApplication, itemOverrides: ItemSeedOverrides = {}) {
   const { project, workItem } = await createProjectRepoWorkItem(app);
   const server = app.getHttpServer();
   const plan = (
@@ -1672,6 +1744,7 @@ async function seedDevelopmentPlanItem(app: INestApplication) {
         dependency_hints: [],
         affected_surfaces: ['apps/control-plane-api', 'apps/web'],
         release_impact: 'release_scoped',
+        ...itemOverrides,
       })
       .expect(201)
   ).body;

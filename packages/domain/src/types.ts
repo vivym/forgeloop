@@ -204,6 +204,10 @@ export interface SpecRevision {
   acceptance_criteria: string[];
   risk_notes: string[];
   test_strategy_summary: string;
+  qa_owner_actor_id?: string;
+  test_owner_actor_id?: string;
+  testability_note?: string;
+  risk_scenarios?: string[];
   structured_document?: Record<string, unknown>;
   author_actor_id?: string;
   artifact_refs: ArtifactRef[];

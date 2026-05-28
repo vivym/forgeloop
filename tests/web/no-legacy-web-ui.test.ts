@@ -252,4 +252,14 @@ describe('no legacy Web UI baggage', () => {
     expect(activeDevelopmentPlanText()).not.toMatch(/\b(?:add|save|preview|generate missing|regenerate missing|new) rows?\b/i);
     expect(activeDevelopmentPlanText()).not.toMatch(/normal loaded|normal approved|approved state|Development Plan Page/i);
   });
+
+  it('does not keep legacy Plan Item gate route chrome or raw runtime navigation labels', () => {
+    const source = activeDevelopmentPlanText();
+
+    expect(source).not.toMatch(/Development Plan Item Detail/i);
+    expect(source.match(/Gate progress/g) ?? []).toHaveLength(1);
+    expect(source).not.toMatch(/source object context/i);
+    expect(source).not.toMatch(/>\s*(?:Package|Run|Trace)\s*</);
+    expect(source).not.toMatch(/Open (?:Package|Run|Trace)\b|(?:Package|Run|Trace) unavailable\b/);
+  });
 });

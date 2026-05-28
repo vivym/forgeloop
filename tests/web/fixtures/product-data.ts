@@ -512,8 +512,8 @@ export const executionPackage = {
   reviewer_actor_id: 'actor-reviewer',
   qa_owner_actor_id: 'actor-qa',
   phase: 'ready',
-  activity_state: 'active',
-  gate_state: 'open',
+  activity_state: 'idle',
+  gate_state: 'not_submitted',
   resolution: 'unresolved',
   required_checks: [
     {

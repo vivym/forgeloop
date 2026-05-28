@@ -397,8 +397,8 @@ export async function listDevelopmentPlanProjections(
     visiblePlans.map(async (plan) => {
       const items = await repository.listDevelopmentPlanItems(plan.id);
       const responsibleRoles = uniqueStrings(items.map((item) => item.responsible_role));
-      const driverActorIds = uniqueStrings(items.map((item) => item.driver_actor_id));
-      const reviewerActorIds = uniqueStrings(items.map((item) => item.reviewer_actor_id));
+      const driverActorIds = uniqueStrings(compactStrings(items.map((item) => item.driver_actor_id)));
+      const reviewerActorIds = uniqueStrings(compactStrings(items.map((item) => item.reviewer_actor_id)));
       const gateStates = uniqueStrings(items.map(currentDevelopmentPlanItemGate));
       const risks = uniqueStrings(items.map((item) => item.risk));
       const releaseImpacts = uniqueStrings(items.map((item) => item.release_impact));
@@ -470,7 +470,17 @@ export async function getDevelopmentPlanItemProjection(
   if (plan === undefined || item === undefined || item.development_plan_id !== plan.id) {
     return undefined;
   }
-  const [itemRevisions, boundaryRevisionCandidates, specs, executionPlans, executions, codeReviewHandoffs, qaHandoffs] = await Promise.all([
+  const [
+    itemRevisions,
+    boundaryRevisionCandidates,
+    specs,
+    executionPlans,
+    executions,
+    codeReviewHandoffs,
+    qaHandoffs,
+    executionPackages,
+    releases,
+  ] = await Promise.all([
     repository.listDevelopmentPlanItemRevisions(item.id),
     listBoundarySummaryRevisionsForItem(repository, item.id),
     repository.listSpecs(plan.project_id),
@@ -478,7 +488,11 @@ export async function getDevelopmentPlanItemProjection(
     listExecutionsForProject(repository, plan.project_id),
     listCodeReviewHandoffsForProject(repository, plan.project_id),
     listQaHandoffsForProject(repository, plan.project_id),
+    repository.listExecutionPackages(plan.project_id),
+    repository.listReleases(plan.project_id),
   ]);
+  const releaseEvidence = (await Promise.all(releases.map((release) => repository.listReleaseEvidences(release.id)))).flat();
+  const runtimeBoundary = planItemRuntimeBoundary(item, executionPlans, executionPackages);
   return {
     id: item.id,
     object_ref: developmentPlanItemRef(item),
@@ -490,6 +504,8 @@ export async function getDevelopmentPlanItemProjection(
     driver_actor_id: item.driver_actor_id,
     reviewer_actor_id: item.reviewer_actor_id,
     risk: item.risk,
+    dependency_hints: item.dependency_hints,
+    affected_surfaces: item.affected_surfaces,
     boundary_status: item.boundary_status,
     spec_status: item.spec_status,
     execution_plan_status: item.execution_plan_status,
@@ -500,7 +516,7 @@ export async function getDevelopmentPlanItemProjection(
     next_action: item.next_action,
     revisions: itemRevisions,
     boundary_summary_revisions: boundaryRevisionCandidates,
-    specs: specs.filter((spec) => spec.development_plan_item_id === item.id).map(specQueueRow(repository, plan, item)),
+    specs: await Promise.all(specs.filter((spec) => spec.development_plan_item_id === item.id).map((spec) => specQueueRow(repository, plan, item, spec))),
     execution_plans: await Promise.all(executionPlans.map((executionPlan) => executionPlanQueueRow(repository, plan, item, executionPlan))),
     executions: await Promise.all(
       executions
@@ -513,6 +529,8 @@ export async function getDevelopmentPlanItemProjection(
     qa_handoffs: qaHandoffs
       .filter(({ handoff }) => handoff.development_plan_item_id === item.id)
       .map(({ handoff }) => qaHandoffQueueRow(plan, item, handoff)),
+    runtime_boundary: runtimeBoundary,
+    release_context: planItemReleaseContext(item, runtimeBoundary, executionPackages, releases, releaseEvidence),
     compare_links: {
       item_revisions_href: `/development-plans/${plan.id}/items/${item.id}/revisions/compare`,
       boundary_summary_revisions_href: boundaryRevisionCandidates[0]
@@ -532,7 +550,7 @@ export async function listSpecsExecutionPlans(
   const specs = await repository.listSpecs(query.project_id);
   const rows: Record<string, unknown>[] = [];
   for (const { plan, item } of planItems) {
-    rows.push(...specs.filter((spec) => spec.development_plan_item_id === item.id).map(specQueueRow(repository, plan, item)));
+    rows.push(...await Promise.all(specs.filter((spec) => spec.development_plan_item_id === item.id).map((spec) => specQueueRow(repository, plan, item, spec))));
     for (const executionPlan of await repository.listExecutionPlansForDevelopmentPlanItem(item.id)) {
       rows.push(await executionPlanQueueRow(repository, plan, item, executionPlan));
     }
@@ -854,10 +872,10 @@ function dashboardDevelopmentPlanItemAction({
     kind,
     label,
     next_action,
-    runtime,
     severity,
     stage_id,
     typed_ref: developmentPlanItemRef(item),
+    ...(runtime === undefined ? {} : { runtime }),
   };
 }
 
@@ -940,8 +958,10 @@ function developmentPlanItemQueueRow(plan: DevelopmentPlan, item: DevelopmentPla
   };
 }
 
-function specQueueRow(_repository: DeliveryRepository, plan: DevelopmentPlan, item: DevelopmentPlanItem) {
-  return (spec: Spec) => ({
+async function specQueueRow(repository: DeliveryRepository, plan: DevelopmentPlan, item: DevelopmentPlanItem, spec: Spec): Promise<Record<string, unknown>> {
+  const revisionId = spec.approved_revision_id ?? spec.current_revision_id;
+  const revision = revisionId === undefined ? undefined : await repository.getSpecRevision(revisionId);
+  return {
     id: spec.id,
     object_ref: { type: 'spec' as const, id: spec.id, title: `${item.title} Spec` },
     artifact_type: 'spec',
@@ -954,12 +974,18 @@ function specQueueRow(_repository: DeliveryRepository, plan: DevelopmentPlan, it
     gate_state: spec.gate_state,
     current_revision_id: spec.current_revision_id,
     approved_revision_id: spec.approved_revision_id,
+    acceptance_criteria: revision?.acceptance_criteria,
+    qa_owner_actor_id: revision?.qa_owner_actor_id,
+    test_owner_actor_id: revision?.test_owner_actor_id,
+    testability_note: revision?.testability_note,
+    test_strategy_summary: revision?.test_strategy_summary,
+    risk_scenarios: revision?.risk_scenarios,
     stale: item.spec_status === 'stale',
     blocked: item.spec_status === 'blocked',
     next_action: item.spec_status === 'approved' ? 'generate_execution_plan' : 'review_spec',
     href: `/development-plans/${plan.id}/items/${item.id}`,
     updated_at: spec.updated_at,
-  });
+  };
 }
 
 async function executionPlanQueueRow(
@@ -1188,6 +1214,114 @@ function qaHandoffActions(handoff: QaHandoff): Array<Record<string, unknown>> {
       : []),
     inspect,
   ];
+}
+
+function planItemRuntimeBoundary(
+  item: DevelopmentPlanItem,
+  executionPlans: ExecutionPlanDocument[],
+  executionPackages: ExecutionPackage[],
+): Record<string, unknown> | undefined {
+  const approvedRevisionIds = new Set(
+    executionPlans
+      .flatMap((executionPlan) => [executionPlan.approved_revision_id, executionPlan.current_revision_id])
+      .filter((revisionId): revisionId is string => revisionId !== undefined),
+  );
+  const candidates = executionPackages
+    .filter((executionPackage) => executionPackage.development_plan_item_id === item.id)
+    .filter((executionPackage) =>
+      executionPackage.execution_plan_revision_id === undefined || approvedRevisionIds.has(executionPackage.execution_plan_revision_id),
+    )
+    .sort(byUpdatedAtDesc);
+  const runnable = candidates.find(
+    (executionPackage) =>
+      executionPackage.generation_key === 'item-execution' &&
+      executionPackage.phase === 'ready' &&
+      executionPackage.activity_state === 'idle' &&
+      executionPackage.gate_state === 'not_submitted',
+  );
+  const selected = runnable ?? candidates[0];
+  if (selected === undefined) {
+    return undefined;
+  }
+  return {
+    type: 'execution_package' as const,
+    id: selected.id,
+    phase: selected.phase,
+    activity_state: selected.activity_state,
+    gate_state: selected.gate_state,
+    execution_plan_revision_id: selected.execution_plan_revision_id,
+  };
+}
+
+function planItemReleaseContext(
+  item: DevelopmentPlanItem,
+  runtimeBoundary: Record<string, unknown> | undefined,
+  executionPackages: ExecutionPackage[],
+  releases: Release[],
+  releaseEvidence: ReleaseEvidence[],
+): Record<string, unknown> {
+  const packageIds = new Set(
+    executionPackages
+      .filter((executionPackage) => executionPackage.development_plan_item_id === item.id)
+      .map((executionPackage) => executionPackage.id),
+  );
+  const runtimeBoundaryId = stringValue(runtimeBoundary, 'id');
+  if (runtimeBoundaryId !== undefined) {
+    packageIds.add(runtimeBoundaryId);
+  }
+  const linkedReleases = releases
+    .filter((release) => releaseLinksPlanItem(release, item, packageIds))
+    .sort(byUpdatedAtDesc);
+  const linkedReleaseIds = new Set(linkedReleases.map((release) => release.id));
+  const itemEvidence = releaseEvidence
+    .filter((evidence) => linkedReleaseIds.has(evidence.release_id) && releaseEvidenceLinksPlanItem(evidence, item))
+    .sort(byUpdatedAtDesc);
+  return {
+    release_refs: linkedReleases.map((release) => ({
+      type: 'release' as const,
+      id: release.id,
+      title: release.title,
+      href: `/releases/${release.id}`,
+    })),
+    readiness_blockers: linkedReleases.flatMap((release) => releaseBlockerRefs(release, item)),
+    evidence_refs: itemEvidence.map(planItemReleaseEvidenceRef),
+    qa_test_evidence_required: item.release_impact === 'release_scoped' || item.release_impact === 'release_blocking',
+  };
+}
+
+function releaseLinksPlanItem(release: Release, item: DevelopmentPlanItem, packageIds: Set<string>): boolean {
+  if (release.work_item_ids.includes(item.source_ref.id) || release.execution_package_ids.some((packageId) => packageIds.has(packageId))) {
+    return true;
+  }
+  return releaseScopeRefs(release).some((ref) => ref.type === 'development_plan_item' && ref.id === item.id);
+}
+
+function releaseEvidenceLinksPlanItem(evidence: ReleaseEvidence, item: DevelopmentPlanItem): boolean {
+  const scopeRef = evidenceScopeRef(evidence);
+  return scopeRef !== undefined && scopeRef.type === 'development_plan_item' && scopeRef.id === item.id;
+}
+
+function planItemReleaseEvidenceRef(evidence: ReleaseEvidence): Record<string, unknown> {
+  return {
+    ...typedSourceEvidenceRef(evidence),
+    evidence_type: evidence.evidence_type,
+    status: evidence.status,
+    summary: evidence.summary,
+  };
+}
+
+function releaseBlockerRefs(release: Release, item: DevelopmentPlanItem): Array<Record<string, unknown>> {
+  const values = [
+    ...stringArrayValue(release.extra, 'active_blockers'),
+    ...stringArrayValue(release.extra, 'release_blockers'),
+    ...stringArrayValue(release.extra, 'blockers'),
+  ];
+  return values.map((summary, index) => ({
+    code: `release_blocker_${index + 1}`,
+    summary,
+    release_id: release.id,
+    scope_ref: developmentPlanItemRef(item),
+  }));
 }
 
 function developmentPlanItemToMyWorkQueueItem(plan: DevelopmentPlan, item: DevelopmentPlanItem): MyWorkQueueItem {
@@ -1559,9 +1693,9 @@ function latestUpdatedAt(values: string[]): string | undefined {
   return values.sort((left, right) => right.localeCompare(left))[0];
 }
 
-function byUpdatedAtDesc(left: Record<string, unknown>, right: Record<string, unknown>): number {
-  const leftUpdated = typeof left.updated_at === 'string' ? left.updated_at : '';
-  const rightUpdated = typeof right.updated_at === 'string' ? right.updated_at : '';
+function byUpdatedAtDesc(left: unknown, right: unknown): number {
+  const leftUpdated = stringValue(left, 'updated_at') ?? '';
+  const rightUpdated = stringValue(right, 'updated_at') ?? '';
   return rightUpdated.localeCompare(leftUpdated);
 }
 
@@ -2605,6 +2739,14 @@ function value(record: unknown, key: string): unknown {
 function stringValue(record: unknown, key: string): string | undefined {
   const maybeValue = value(record, key);
   return typeof maybeValue === 'string' && maybeValue.trim().length > 0 ? maybeValue : undefined;
+}
+
+function stringArrayValue(record: unknown, key: string): string[] {
+  const maybeValues = value(record, key);
+  if (!Array.isArray(maybeValues)) {
+    return [];
+  }
+  return maybeValues.filter((maybeValue): maybeValue is string => typeof maybeValue === 'string' && maybeValue.trim().length > 0);
 }
 
 function objectRefKey(ref: ObjectRef): string {

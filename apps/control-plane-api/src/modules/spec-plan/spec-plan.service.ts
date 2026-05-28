@@ -729,7 +729,7 @@ export class SpecPlanService {
       if ((await this.findItemExecutionPlan(item.id, repository)) !== undefined) {
         throw new ConflictException(`Development Plan Item ${item.id} already has an Execution Plan`);
       }
-      const { spec, specRevision } = await this.requireApprovedItemSpec(item.id, repository);
+      const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
       this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
       await this.requireCurrentItemRevisionAtApprovedSpecGate(item, repository);
       const contextManifest = await this.buildItemContextManifest(
@@ -802,8 +802,7 @@ export class SpecPlanService {
       if (executionPlan.status === 'approved') {
         throw new ConflictException(`Approved Execution Plan ${executionPlan.id} cannot be regenerated`);
       }
-      const { specRevision } = await this.requireApprovedItemSpec(item.id, repository);
-      const spec = await this.requireItemSpec(item.id, repository);
+      const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
       this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
       const contextManifest = await this.buildItemContextManifest(
         {
@@ -930,6 +929,7 @@ export class SpecPlanService {
   ): Promise<ExecutionPlanDocument> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
       const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
+      await this.requireApprovedItemSpec(item, repository);
       const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
       const revisionId = this.requireExecutionPlanCurrentRevision(executionPlan);
       await this.requireRevisionNotRejected(revisionId, 'execution_plan_revision', repository);
@@ -959,6 +959,7 @@ export class SpecPlanService {
   ): Promise<ExecutionPlanDocument> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
       const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
+      await this.requireApprovedItemSpec(item, repository);
       const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
       if (executionPlan.status !== 'in_review') {
         throw new BadRequestException(`Execution Plan ${executionPlan.id} is not awaiting approval`);
@@ -1405,9 +1406,10 @@ export class SpecPlanService {
   }
 
   private async requireApprovedItemSpec(
-    itemId: string,
+    item: DevelopmentPlanItem,
     repository: DeliveryRepository,
   ): Promise<{ spec: Spec; specRevision: SpecRevision }> {
+    const itemId = item.id;
     const spec = await this.findItemSpec(itemId, repository);
     if (spec === undefined) {
       throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Execution Plan: spec_not_approved`);
@@ -1415,6 +1417,7 @@ export class SpecPlanService {
     const approvedRevisionId = spec.approved_revision_id;
     const specRevision = approvedRevisionId === undefined ? undefined : await repository.getSpecRevision(approvedRevisionId);
     const gate = canGenerateExecutionPlanFromApprovedSpec({
+      item,
       spec,
       ...(specRevision === undefined ? {} : { specRevision }),
     });
@@ -1827,6 +1830,7 @@ export class SpecPlanService {
     feedback?: string,
   ): Omit<SpecRevision, 'id' | 'spec_id' | 'work_item_id' | 'revision_number' | 'artifact_refs' | 'created_at'> {
     const feedbackLine = feedback === undefined ? '' : `\n\nRegeneration feedback: ${feedback}`;
+    const qaOwnerActorId = item.reviewer_actor_id ?? item.driver_actor_id;
     return {
       development_plan_item_id: item.id,
       boundary_summary_id: boundary.id,
@@ -1847,6 +1851,9 @@ export class SpecPlanService {
       acceptance_criteria: [...workItem.success_criteria],
       risk_notes: [workItem.risk, ...item.dependency_hints],
       test_strategy_summary: 'Validate item-scoped Spec gate behavior with API and contract tests.',
+      ...(qaOwnerActorId === undefined ? {} : { qa_owner_actor_id: qaOwnerActorId }),
+      testability_note: `QA/Test Owner must validate ${item.title} against acceptance criteria before execution planning.`,
+      risk_scenarios: item.dependency_hints.length > 0 ? item.dependency_hints : [`${item.risk} risk Plan Item requires focused validation.`],
       structured_document: {
         generated_by: 'mock_item_spec_draft_adapter',
         development_plan_item_id: item.id,
@@ -2009,6 +2016,10 @@ export class SpecPlanService {
       acceptance_criteria: input.acceptance_criteria,
       risk_notes: input.risk_notes,
       test_strategy_summary: input.test_strategy_summary,
+      ...(input.qa_owner_actor_id !== undefined ? { qa_owner_actor_id: input.qa_owner_actor_id } : {}),
+      ...(input.test_owner_actor_id !== undefined ? { test_owner_actor_id: input.test_owner_actor_id } : {}),
+      ...(input.testability_note !== undefined ? { testability_note: input.testability_note } : {}),
+      ...(input.risk_scenarios !== undefined ? { risk_scenarios: input.risk_scenarios } : {}),
       ...(input.structured_document !== undefined ? { structured_document: input.structured_document } : {}),
       ...(input.author_actor_id !== undefined ? { author_actor_id: input.author_actor_id } : {}),
       artifact_refs: [],
