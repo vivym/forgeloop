@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -698,6 +698,49 @@ describe('Codex runtime Superpowers dogfood script', () => {
           renderCodexRuntimeSuperpowersDogfoodReport(report),
         ),
       ).rejects.toThrow(/execution_id_invalid/);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('writes public-safe BLOCKED reports to the fixed dogfood report path', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-dogfood-blocked-report-'));
+    try {
+      const markdown = renderCodexRuntimeSuperpowersDogfoodBlockerReport({
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_boundary_max_turns_exceeded',
+        cleanup_status: 'blocked',
+        dogfood_worktree_base: dogfoodWorktreeBase,
+        codex_app_server_evidence: {
+          phases: [
+            {
+              phase: 'boundary_initial',
+              expected_output_schema_version: 'boundary_round_result.v1',
+              observed_output_schema_versions: ['boundary_round_result.v1'],
+              runtime_job_digests: [digest('boundary-runtime-job')],
+              app_server_evidence_digests: [digest('boundary-app-server')],
+              cleanup_status: 'blocked',
+            },
+          ],
+        },
+      });
+
+      const written = await new FilesystemCodexRuntimeSuperpowersDogfoodReporter(tempRoot).writeMarkdown(markdown);
+
+      expect(written.report_path).toBe(fixedReportPath);
+      const writtenPath = join(tempRoot, fixedReportPath);
+      expect(existsSync(writtenPath)).toBe(true);
+      const writtenMarkdown = readFileSync(writtenPath, 'utf8');
+      expect(writtenMarkdown).toContain('Status: BLOCKED');
+      expect(writtenMarkdown).toContain('Strict blocker: codex_runtime_superpowers_boundary_max_turns_exceeded');
+      expect(writtenMarkdown).toContain('Cleanup status: blocked');
+      expect(writtenMarkdown).toContain('Phase boundary_initial');
+      expect(writtenMarkdown).not.toContain('/Users/');
+      expect(writtenMarkdown).not.toContain('/tmp/');
+      expect(writtenMarkdown).not.toContain('127.0.0.1');
+      expect(writtenMarkdown).not.toContain('localhost');
+      expect(writtenMarkdown).not.toContain('auth.json');
+      expect(writtenMarkdown).not.toContain('config.toml');
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

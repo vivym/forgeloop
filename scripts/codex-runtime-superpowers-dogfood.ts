@@ -797,6 +797,11 @@ export class FilesystemCodexRuntimeSuperpowersDogfoodReporter {
 
   async write(report: CodexRuntimeSuperpowersDogfoodReport, markdown: string): Promise<{ report_path: string }> {
     assertPublicSafeId(report.execution_id, 'execution_id_invalid');
+    return this.writeMarkdown(markdown);
+  }
+
+  async writeMarkdown(markdown: string): Promise<{ report_path: string }> {
+    assertPublicSafeReport(markdown);
     const reportPath = fixedCodexRuntimeSuperpowersDogfoodReportPath;
     const absolutePath = resolve(this.rootDir, reportPath);
     await mkdir(dirname(absolutePath), { recursive: true });
@@ -2053,16 +2058,18 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error: unknown) => {
+    .catch(async (error: unknown) => {
       if (error instanceof CodexRuntimeSuperpowersDogfoodBlocker) {
-        console.error(renderCodexRuntimeSuperpowersDogfoodBlockerReport(error.report));
+        const markdown = renderCodexRuntimeSuperpowersDogfoodBlockerReport(error.report);
+        await new FilesystemCodexRuntimeSuperpowersDogfoodReporter().writeMarkdown(markdown);
+        console.error(markdown);
       } else {
-        console.error(
-          renderCodexRuntimeSuperpowersDogfoodBlockerReport({
-            status: 'BLOCKED',
-            blocker_code: 'codex_runtime_superpowers_dogfood_failed',
-          }),
-        );
+        const markdown = renderCodexRuntimeSuperpowersDogfoodBlockerReport({
+          status: 'BLOCKED',
+          blocker_code: 'codex_runtime_superpowers_dogfood_failed',
+        });
+        await new FilesystemCodexRuntimeSuperpowersDogfoodReporter().writeMarkdown(markdown);
+        console.error(markdown);
       }
       process.exitCode = 1;
     });
