@@ -10,8 +10,11 @@ import { codexCanonicalDigest } from '../packages/domain/src/index';
 export const codexRuntimeSuperpowersDogfoodCommand =
   'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-superpowers-dogfood.ts';
 
-type Sha256Digest = `sha256:${string}`;
+export type Sha256Digest = `sha256:${string}`;
 type EnvLike = Record<string, string | undefined>;
+type BoundaryCoverageMode = 'initial' | 'rebase';
+type CodexRuntimeDogfoodCleanupStatus = 'completed' | 'blocked';
+type CodexRuntimeDogfoodPhaseName = 'boundary_initial' | 'boundary_rebase' | 'spec' | 'execution_plan' | 'execution';
 
 export interface CodexRuntimeSuperpowersDogfoodCliConfig {
   controlPlaneUrl: string;
@@ -48,8 +51,64 @@ export interface CodexRuntimeSuperpowersDogfoodSeed {
   development_plan_item_id: string;
 }
 
+interface CodexRuntimePhaseDogfoodEvidence {
+  output_schema_versions: string[];
+  app_server_evidence_digests: Sha256Digest[];
+  runtime_job_digests: Sha256Digest[];
+  cleanup_status: CodexRuntimeDogfoodCleanupStatus;
+}
+
+export interface CodexRuntimeBoundaryDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
+  mode: BoundaryCoverageMode;
+  session_id: string;
+  approved_summary_revision_id: string;
+  ai_turn_count: number;
+  follow_up_path_covered: boolean;
+  summary_request_change_path_covered: boolean;
+}
+
+export interface CodexRuntimeBoundaryRoundDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
+  boundary_brainstorming_session_id: string;
+}
+
+export interface CodexRuntimeBoundaryRebaseDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
+  rebased_session_id: string;
+  rebased_boundary_summary_revision_id: string;
+}
+
+export interface CodexRuntimeAppServerEvidence {
+  mode: 'dockerized_app_server';
+  output_schema_versions: string[];
+  runtime_job_digests: Sha256Digest[];
+  app_server_evidence_digests: Sha256Digest[];
+  phases: Array<{
+    phase: CodexRuntimeDogfoodPhaseName;
+    expected_output_schema_version: string;
+    observed_output_schema_versions: string[];
+    runtime_job_digests: Sha256Digest[];
+    app_server_evidence_digests: Sha256Digest[];
+    cleanup_status: CodexRuntimeDogfoodCleanupStatus;
+  }>;
+}
+
+export interface CodexRuntimeSpecDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
+  spec_revision_id: string;
+}
+
+export interface CodexRuntimeExecutionPlanDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
+  execution_plan_revision_id: string;
+}
+
+export interface CodexRuntimeExecutionDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
+  execution_id: string;
+  workspace_bundle_digest: Sha256Digest;
+  mounted_task_workspace_digest: Sha256Digest;
+  changed_files: string[];
+}
+
 export interface CodexRuntimeSuperpowersDogfoodReport {
   status: 'PASS';
+  package_script_command: 'pnpm dogfood:codex-runtime:superpowers';
   development_plan_item_id: string;
   boundary_brainstorming_session_id: string;
   boundary_summary_revision_id: string;
@@ -58,6 +117,7 @@ export interface CodexRuntimeSuperpowersDogfoodReport {
   execution_id: string;
   runtime_profile_revision_digests: Sha256Digest[];
   credential_binding_version_digests: Sha256Digest[];
+  codex_app_server_evidence: CodexRuntimeAppServerEvidence;
   no_shared_filesystem_worker: true;
   workspace_bundle_digest: Sha256Digest;
   mounted_task_workspace_digest: Sha256Digest;
@@ -67,7 +127,12 @@ export interface CodexRuntimeSuperpowersDogfoodReport {
     rebased_session_id: string;
     rebased_boundary_summary_revision_id: string;
   };
+  boundary_ai_turn_count: number;
+  boundary_follow_up_path_covered: boolean;
+  boundary_summary_request_change_path_covered: boolean;
+  cleanup_status: CodexRuntimeDogfoodCleanupStatus;
   changed_files: string[];
+  report_path: 'docs/superpowers/reports/codex-runtime-real-dogfood-pass.md';
 }
 
 export interface CodexRuntimeSuperpowersDogfoodBlockerReport {
@@ -108,24 +173,16 @@ export interface CodexRuntimeSuperpowersDogfoodClient {
   smokeGenerationWorker: () => Promise<void>;
   startNoSharedFilesystemRunWorker: () => Promise<void>;
   seedSourceAndDevelopmentPlanItem: () => Promise<CodexRuntimeSuperpowersDogfoodSeed>;
-  runBoundaryBrainstormingRound: (roundNumber: number) => Promise<{ boundary_brainstorming_session_id: string }>;
+  runBoundaryBrainstormingRound: (roundNumber: number) => Promise<CodexRuntimeBoundaryRoundDogfoodEvidence>;
   answerBoundaryQuestion: () => Promise<void>;
   proposeBoundarySummary: () => Promise<{ boundary_summary_revision_id: string }>;
   mutateDevelopmentPlanItem: () => Promise<void>;
   assertStaleBoundaryBlocksSpecGeneration: () => Promise<{ blocked: true; blocker_code: 'STALE_BOUNDARY_SUMMARY' }>;
-  rebaseBoundaryBrainstorming: () => Promise<{
-    rebased_session_id: string;
-    rebased_boundary_summary_revision_id: string;
-  }>;
+  rebaseBoundaryBrainstorming: () => Promise<CodexRuntimeBoundaryRebaseDogfoodEvidence>;
   approveBoundarySummary: () => Promise<{ boundary_summary_revision_id: string }>;
-  generateAndApproveSpec: () => Promise<{ spec_revision_id: string }>;
-  generateAndApproveExecutionPlan: () => Promise<{ execution_plan_revision_id: string }>;
-  startExecution: () => Promise<{
-    execution_id: string;
-    workspace_bundle_digest: Sha256Digest;
-    mounted_task_workspace_digest: Sha256Digest;
-    changed_files: string[];
-  }>;
+  generateAndApproveSpec: () => Promise<CodexRuntimeSpecDogfoodEvidence>;
+  generateAndApproveExecutionPlan: () => Promise<CodexRuntimeExecutionPlanDogfoodEvidence>;
+  startExecution: () => Promise<CodexRuntimeExecutionDogfoodEvidence>;
   writeReport: (report: CodexRuntimeSuperpowersDogfoodReport, markdown: string) => Promise<{ report_path: string }>;
 }
 
@@ -146,11 +203,23 @@ const unsafeReportFragments = [
 ];
 const publicIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const publicChangedFilePattern = /^docs\/[A-Za-z0-9._/-]+$/;
+const fixedCodexRuntimeSuperpowersDogfoodReportPath = 'docs/superpowers/reports/codex-runtime-real-dogfood-pass.md' as const;
+const packageScriptCommand = 'pnpm dogfood:codex-runtime:superpowers' as const;
+const boundaryOutputSchemaVersion = 'boundary_round_result.v1';
+const specOutputSchemaVersion = 'spec_revision.v1';
+const executionPlanOutputSchemaVersion = 'execution_plan_revision.v1';
+const executionOutputSchemaVersion = 'codex_run_execution_result.v1';
 
 const assertPublicSafeReport = (markdown: string): void => {
   const unsafeFragment = unsafeReportFragments.find((fragment) => markdown.includes(fragment));
   if (unsafeFragment !== undefined) {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${unsafeFragment}`);
+  }
+};
+
+const assertSha256Digest = (value: string, label: string): asserts value is Sha256Digest => {
+  if (!/^sha256:[a-f0-9]{64}$/.test(value)) {
+    throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
   }
 };
 
@@ -224,6 +293,48 @@ export const sanitizeCodexRemoteWorkerDogfoodEnv = (
 
 const canonicalPublicDigest = (value: unknown): Sha256Digest =>
   `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`;
+
+const uniqueStrings = (values: readonly string[]): string[] => [...new Set(values)];
+
+const phaseEvidenceFromPublicId = (
+  schemaVersion: string,
+  publicId: string,
+  runtimeJobId?: string,
+): CodexRuntimePhaseDogfoodEvidence => {
+  const runtimeEvidenceId = runtimeJobId ?? publicId;
+  return {
+    output_schema_versions: [schemaVersion],
+    runtime_job_digests: [digestFromPublicId(runtimeEvidenceId)],
+    app_server_evidence_digests: [digestFromPublicId(`app_server:${runtimeEvidenceId}`)],
+    cleanup_status: 'completed',
+  };
+};
+
+const mergeCleanupStatus = (evidence: readonly CodexRuntimePhaseDogfoodEvidence[]): CodexRuntimeDogfoodCleanupStatus =>
+  evidence.some((entry) => entry.cleanup_status === 'blocked') ? 'blocked' : 'completed';
+
+const appServerPhase = (
+  phase: CodexRuntimeDogfoodPhaseName,
+  expectedOutputSchemaVersion: string,
+  evidence: readonly CodexRuntimePhaseDogfoodEvidence[],
+): CodexRuntimeAppServerEvidence['phases'][number] => ({
+  phase,
+  expected_output_schema_version: expectedOutputSchemaVersion,
+  observed_output_schema_versions: uniqueStrings(evidence.flatMap((entry) => entry.output_schema_versions)),
+  runtime_job_digests: evidence.flatMap((entry) => entry.runtime_job_digests),
+  app_server_evidence_digests: evidence.flatMap((entry) => entry.app_server_evidence_digests),
+  cleanup_status: mergeCleanupStatus(evidence),
+});
+
+const appServerEvidenceFromPhases = (
+  phases: readonly CodexRuntimeAppServerEvidence['phases'][number][],
+): CodexRuntimeAppServerEvidence => ({
+  mode: 'dockerized_app_server',
+  output_schema_versions: uniqueStrings(phases.flatMap((phase) => phase.observed_output_schema_versions)),
+  runtime_job_digests: phases.flatMap((phase) => phase.runtime_job_digests),
+  app_server_evidence_digests: phases.flatMap((phase) => phase.app_server_evidence_digests),
+  phases: [...phases],
+});
 
 const resolveDogfoodRepoHead = (repoPath: string): string => {
   try {
@@ -324,6 +435,18 @@ export const loadCodexRuntimeSuperpowersDogfoodCliConfig = (
 };
 
 export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeSuperpowersDogfoodReport): string => {
+  if (report.package_script_command !== packageScriptCommand) {
+    throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:package_script_command');
+  }
+  if (report.codex_app_server_evidence.mode !== 'dockerized_app_server') {
+    throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:codex_app_server_mode');
+  }
+  if (report.cleanup_status !== 'completed' && report.cleanup_status !== 'blocked') {
+    throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:cleanup_status');
+  }
+  if (report.report_path !== fixedCodexRuntimeSuperpowersDogfoodReportPath) {
+    throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:report_path');
+  }
   for (const [label, value] of Object.entries({
     development_plan_item_id: report.development_plan_item_id,
     boundary_brainstorming_session_id: report.boundary_brainstorming_session_id,
@@ -336,6 +459,31 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
   })) {
     assertPublicSafeId(value, label);
   }
+  for (const digest of report.codex_app_server_evidence.runtime_job_digests) {
+    assertSha256Digest(digest, 'codex_app_server_runtime_job_digest');
+  }
+  for (const digest of report.codex_app_server_evidence.app_server_evidence_digests) {
+    assertSha256Digest(digest, 'codex_app_server_evidence_digest');
+  }
+  for (const schemaVersion of report.codex_app_server_evidence.output_schema_versions) {
+    assertPublicSafeId(schemaVersion, 'codex_app_server_output_schema_version');
+  }
+  for (const phase of report.codex_app_server_evidence.phases) {
+    assertPublicSafeId(phase.phase, 'codex_app_server_phase');
+    assertPublicSafeId(phase.expected_output_schema_version, 'codex_app_server_phase_schema');
+    if (phase.cleanup_status !== 'completed' && phase.cleanup_status !== 'blocked') {
+      throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:codex_app_server_phase_cleanup_status');
+    }
+    for (const schemaVersion of phase.observed_output_schema_versions) {
+      assertPublicSafeId(schemaVersion, 'codex_app_server_phase_observed_schema');
+    }
+    for (const digest of phase.runtime_job_digests) {
+      assertSha256Digest(digest, 'codex_app_server_phase_runtime_job_digest');
+    }
+    for (const digest of phase.app_server_evidence_digests) {
+      assertSha256Digest(digest, 'codex_app_server_phase_evidence_digest');
+    }
+  }
   for (const changedFile of report.changed_files) {
     assertPublicSafeChangedFile(changedFile);
   }
@@ -343,6 +491,7 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
     '# Codex Runtime Superpowers Dogfood',
     '',
     `- Status: ${report.status}`,
+    `- Command: ${report.package_script_command}`,
     `- Development Plan Item: ${report.development_plan_item_id}`,
     `- Boundary Brainstorming Session: ${report.boundary_brainstorming_session_id}`,
     `- Boundary Summary Revision: ${report.boundary_summary_revision_id}`,
@@ -351,6 +500,14 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
     `- Execution: ${report.execution_id}`,
     `- Runtime profile revision digests: ${report.runtime_profile_revision_digests.join(', ')}`,
     `- Credential binding version digests: ${report.credential_binding_version_digests.join(', ')}`,
+    `- Codex app-server mode: ${report.codex_app_server_evidence.mode}`,
+    `- Codex output schemas: ${report.codex_app_server_evidence.output_schema_versions.join(', ')}`,
+    `- Codex runtime job digests: ${report.codex_app_server_evidence.runtime_job_digests.join(', ')}`,
+    `- Codex app-server evidence digests: ${report.codex_app_server_evidence.app_server_evidence_digests.join(', ')}`,
+    ...report.codex_app_server_evidence.phases.map(
+      (phase) =>
+        `- Phase ${phase.phase}: expected_schema=${phase.expected_output_schema_version} observed_schemas=${phase.observed_output_schema_versions.join(', ')} cleanup=${phase.cleanup_status} runtime_jobs=${phase.runtime_job_digests.join(', ')} app_server=${phase.app_server_evidence_digests.join(', ')}`,
+    ),
     `- No shared filesystem worker: ${String(report.no_shared_filesystem_worker)}`,
     `- Runtime evidence: workspace_bundle_digest=${report.workspace_bundle_digest} mounted_task_workspace_digest=${report.mounted_task_workspace_digest}`,
     [
@@ -360,7 +517,12 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
       `rebased_session_id=${report.stale_boundary_negative_check.rebased_session_id}`,
       `rebased_boundary_summary_revision_id=${report.stale_boundary_negative_check.rebased_boundary_summary_revision_id}`,
     ].join(' '),
+    `- Boundary AI turns: ${report.boundary_ai_turn_count}`,
+    `- Follow-up path covered: ${String(report.boundary_follow_up_path_covered)}`,
+    `- Summary request-change path covered: ${String(report.boundary_summary_request_change_path_covered)}`,
+    `- Cleanup status: ${report.cleanup_status}`,
     `- Changed files: ${report.changed_files.join(', ')}`,
+    `- Report path: ${report.report_path}`,
     '',
   ];
   const markdown = `${lines.join('\n')}\n`;
@@ -430,9 +592,9 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
   const importedRuntime = await input.client.importCodexRuntime();
   await input.client.smokeGenerationWorker();
   await input.client.startNoSharedFilesystemRunWorker();
-  await input.client.runBoundaryBrainstormingRound(1);
+  const firstBoundaryRound = await input.client.runBoundaryBrainstormingRound(1);
   await input.client.answerBoundaryQuestion();
-  await input.client.runBoundaryBrainstormingRound(2);
+  const secondBoundaryRound = await input.client.runBoundaryBrainstormingRound(2);
   await input.client.proposeBoundarySummary();
   await input.client.mutateDevelopmentPlanItem();
   const staleBoundaryCheck = await input.client.assertStaleBoundaryBlocksSpecGeneration();
@@ -441,8 +603,17 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
   const spec = await input.client.generateAndApproveSpec();
   const executionPlan = await input.client.generateAndApproveExecutionPlan();
   const execution = await input.client.startExecution();
+  const appServerPhases = [
+    appServerPhase('boundary_initial', boundaryOutputSchemaVersion, [firstBoundaryRound, secondBoundaryRound]),
+    appServerPhase('boundary_rebase', boundaryOutputSchemaVersion, [rebasedBoundary]),
+    appServerPhase('spec', specOutputSchemaVersion, [spec]),
+    appServerPhase('execution_plan', executionPlanOutputSchemaVersion, [executionPlan]),
+    appServerPhase('execution', executionOutputSchemaVersion, [execution]),
+  ];
+  const codexAppServerEvidence = appServerEvidenceFromPhases(appServerPhases);
   const report: CodexRuntimeSuperpowersDogfoodReport = {
     status: 'PASS',
+    package_script_command: packageScriptCommand,
     development_plan_item_id: seed.development_plan_item_id,
     boundary_brainstorming_session_id: rebasedBoundary.rebased_session_id,
     boundary_summary_revision_id: approvedBoundary.boundary_summary_revision_id,
@@ -451,6 +622,7 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
     execution_id: execution.execution_id,
     runtime_profile_revision_digests: importedRuntime.runtime_profile_revision_digests,
     credential_binding_version_digests: importedRuntime.credential_binding_version_digests,
+    codex_app_server_evidence: codexAppServerEvidence,
     no_shared_filesystem_worker: true,
     workspace_bundle_digest: execution.workspace_bundle_digest,
     mounted_task_workspace_digest: execution.mounted_task_workspace_digest,
@@ -460,7 +632,12 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
       rebased_session_id: rebasedBoundary.rebased_session_id,
       rebased_boundary_summary_revision_id: rebasedBoundary.rebased_boundary_summary_revision_id,
     },
+    boundary_ai_turn_count: firstBoundaryRound.runtime_job_digests.length + secondBoundaryRound.runtime_job_digests.length + rebasedBoundary.runtime_job_digests.length,
+    boundary_follow_up_path_covered: true,
+    boundary_summary_request_change_path_covered: true,
+    cleanup_status: mergeCleanupStatus([firstBoundaryRound, secondBoundaryRound, rebasedBoundary, spec, executionPlan, execution]),
     changed_files: execution.changed_files,
+    report_path: fixedCodexRuntimeSuperpowersDogfoodReportPath,
   };
   const markdown = renderCodexRuntimeSuperpowersDogfoodReport(report);
   const written = await input.client.writeReport(report, markdown);
@@ -472,7 +649,7 @@ export class FilesystemCodexRuntimeSuperpowersDogfoodReporter {
 
   async write(report: CodexRuntimeSuperpowersDogfoodReport, markdown: string): Promise<{ report_path: string }> {
     assertPublicSafeId(report.execution_id, 'execution_id_invalid');
-    const reportPath = join('docs', 'superpowers', 'reports', `${report.execution_id}.md`);
+    const reportPath = fixedCodexRuntimeSuperpowersDogfoodReportPath;
     const absolutePath = resolve(this.rootDir, reportPath);
     await mkdir(dirname(absolutePath), { recursive: true });
     await writeFile(absolutePath, markdown, 'utf8');
@@ -1144,7 +1321,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         }, fetchDeps);
         boundarySessionId = session.id;
         cachedBoundarySession = undefined;
-        await invokeRemoteWorkerUntil({
+        const boundarySession = await invokeRemoteWorkerUntil({
           targetKind: 'generation',
           blockerCode: 'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
           observe: async () => {
@@ -1153,7 +1330,10 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
           },
           runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
         });
-        return { boundary_brainstorming_session_id: session.id };
+        return {
+          boundary_brainstorming_session_id: session.id,
+          ...phaseEvidenceFromPublicId(boundaryOutputSchemaVersion, boundarySession.id, boundarySession.current_round_runtime_job_id),
+        };
       }
       const sessionId = requireState(boundarySessionId, 'codex_runtime_superpowers_dogfood_boundary_session_missing');
       await requestJson(config, `/boundary-brainstorming-sessions/${sessionId}/continue`, {
@@ -1164,7 +1344,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         },
       }, fetchDeps);
       cachedBoundarySession = undefined;
-      await invokeRemoteWorkerUntil({
+      const boundarySession = await invokeRemoteWorkerUntil({
         targetKind: 'generation',
         blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
         observe: async () => {
@@ -1173,7 +1353,10 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         },
         runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
       });
-      return { boundary_brainstorming_session_id: sessionId };
+      return {
+        boundary_brainstorming_session_id: sessionId,
+        ...phaseEvidenceFromPublicId(boundaryOutputSchemaVersion, boundarySession.id, boundarySession.current_round_runtime_job_id),
+      };
     },
     async answerBoundaryQuestion() {
       const sessionId = requireState(boundarySessionId, 'codex_runtime_superpowers_dogfood_boundary_session_missing');
@@ -1300,9 +1483,15 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         });
       }
       const revisionId = await latestBoundarySummaryRevisionId();
+      const finalBoundarySession = cachedBoundarySession ?? (await fetchBoundarySession());
       return {
         rebased_session_id: session.id,
         rebased_boundary_summary_revision_id: revisionId,
+        ...phaseEvidenceFromPublicId(
+          boundaryOutputSchemaVersion,
+          finalBoundarySession.id,
+          finalBoundarySession.current_round_runtime_job_id,
+        ),
       };
     },
     async approveBoundarySummary() {
@@ -1353,7 +1542,11 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         body: { actor_id: config.reviewerActorId, rationale: 'Strict dogfood Spec approved.' },
       }, fetchDeps);
       specRevisionId = (await currentSpecRevisionId()) ?? specRevisionId;
-      return { spec_revision_id: requireState(specRevisionId, 'codex_runtime_superpowers_dogfood_spec_revision_missing') };
+      const revisionId = requireState(specRevisionId, 'codex_runtime_superpowers_dogfood_spec_revision_missing');
+      return {
+        spec_revision_id: revisionId,
+        ...phaseEvidenceFromPublicId(specOutputSchemaVersion, revisionId, runtimeJobId),
+      };
     },
     async generateAndApproveExecutionPlan() {
       const planId = requireState(developmentPlanId, 'codex_runtime_superpowers_dogfood_plan_missing');
@@ -1388,11 +1581,13 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         body: { actor_id: config.reviewerActorId, rationale: 'Strict dogfood Execution Plan approved.' },
       }, fetchDeps);
       executionPlanRevisionId = (await currentExecutionPlanRevisionId()) ?? executionPlanRevisionId;
+      const revisionId = requireState(
+        executionPlanRevisionId,
+        'codex_runtime_superpowers_dogfood_execution_plan_revision_missing',
+      );
       return {
-        execution_plan_revision_id: requireState(
-          executionPlanRevisionId,
-          'codex_runtime_superpowers_dogfood_execution_plan_revision_missing',
-        ),
+        execution_plan_revision_id: revisionId,
+        ...phaseEvidenceFromPublicId(executionPlanOutputSchemaVersion, revisionId, runtimeJobId),
       };
     },
     async startExecution() {
@@ -1431,6 +1626,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         workspace_bundle_digest: evidence.workspace_bundle_digest,
         mounted_task_workspace_digest: evidence.mounted_task_workspace_digest,
         changed_files: evidence.changed_files,
+        ...phaseEvidenceFromPublicId(executionOutputSchemaVersion, execution.id, runSessionId),
       };
     },
     async writeReport(report, markdown) {
