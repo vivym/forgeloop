@@ -18,6 +18,9 @@ import { BrainstormingService } from '../brainstorming/brainstorming.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import { SpecPlanService } from '../spec-plan/spec-plan.service';
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
 export type ProductGenerationResultApplyOutcome =
   | { applied: true }
   | {
@@ -75,11 +78,12 @@ export class ProductGenerationResultService {
     let outcome: ProductGenerationResultApplyOutcome;
     switch (terminalResult.task_kind) {
       case 'boundary_brainstorming_round': {
-        if (this.generatedPayloadIsArtifactRef(terminalResult.generated_payload)) {
+        const generatedPayload = await this.resolveGeneratedPayload(input.runtimeJobId, terminalResult);
+        if (generatedPayload === undefined) {
           outcome = { applied: false, reason: 'unsupported_generated_payload_ref' };
           break;
         }
-        const generated = this.validatePayload(() => validateBoundaryRoundRuntimeResult(terminalResult.generated_payload));
+        const generated = this.validatePayload(() => validateBoundaryRoundRuntimeResult(generatedPayload));
         if (generated === undefined) {
           outcome = { applied: false, reason: 'public_unsafe_payload' };
           break;
@@ -92,11 +96,12 @@ export class ProductGenerationResultService {
         break;
       }
       case 'development_plan_item_spec_revision': {
-        if (this.generatedPayloadIsArtifactRef(terminalResult.generated_payload)) {
+        const generatedPayload = await this.resolveGeneratedPayload(input.runtimeJobId, terminalResult);
+        if (generatedPayload === undefined) {
           outcome = { applied: false, reason: 'unsupported_generated_payload_ref' };
           break;
         }
-        const generated = this.validatePayload(() => validateGeneratedSpecRevision(terminalResult.generated_payload));
+        const generated = this.validatePayload(() => validateGeneratedSpecRevision(generatedPayload));
         if (generated === undefined) {
           outcome = { applied: false, reason: 'public_unsafe_payload' };
           break;
@@ -110,11 +115,12 @@ export class ProductGenerationResultService {
         break;
       }
       case 'development_plan_item_execution_plan_revision': {
-        if (this.generatedPayloadIsArtifactRef(terminalResult.generated_payload)) {
+        const generatedPayload = await this.resolveGeneratedPayload(input.runtimeJobId, terminalResult);
+        if (generatedPayload === undefined) {
           outcome = { applied: false, reason: 'unsupported_generated_payload_ref' };
           break;
         }
-        const generated = this.validatePayload(() => validateGeneratedExecutionPlanRevision(terminalResult.generated_payload));
+        const generated = this.validatePayload(() => validateGeneratedExecutionPlanRevision(generatedPayload));
         if (generated === undefined) {
           outcome = { applied: false, reason: 'public_unsafe_payload' };
           break;
@@ -169,6 +175,50 @@ export class ProductGenerationResultService {
 
   private generatedPayloadIsArtifactRef(payload: Record<string, unknown>): boolean {
     return payload.schema_version === 'generated_payload_ref.v1';
+  }
+
+  private async resolveGeneratedPayload(
+    runtimeJobId: string,
+    terminalResult: CodexGenerationRuntimeJobResult,
+  ): Promise<Record<string, unknown> | undefined> {
+    if (!this.generatedPayloadIsArtifactRef(terminalResult.generated_payload)) {
+      return terminalResult.generated_payload;
+    }
+    const ref = this.generatedPayloadArtifactRef(terminalResult.generated_payload, terminalResult.generated_payload_digest);
+    if (ref === undefined) {
+      return undefined;
+    }
+    const artifact = (await this.repository.listCodexRuntimeJobArtifacts({ runtime_job_id: runtimeJobId })).find(
+      (candidate) =>
+        candidate.kind === 'generated_payload' &&
+        candidate.content_type === 'application/json' &&
+        candidate.digest === terminalResult.generated_payload_digest &&
+        candidate.internal_ref === ref.internal_ref,
+    );
+    const generatedPayload = artifact?.metadata_json.generated_payload;
+    if (!isRecord(generatedPayload) || codexCanonicalDigest(generatedPayload) !== terminalResult.generated_payload_digest) {
+      return undefined;
+    }
+    return generatedPayload;
+  }
+
+  private generatedPayloadArtifactRef(
+    payload: Record<string, unknown>,
+    expectedDigest: string,
+  ): { internal_ref: string } | undefined {
+    if (!isRecord(payload.artifact)) {
+      return undefined;
+    }
+    const artifact = payload.artifact;
+    if (
+      artifact.kind !== 'generated_payload' ||
+      artifact.content_type !== 'application/json' ||
+      artifact.digest !== expectedDigest ||
+      typeof artifact.internal_ref !== 'string'
+    ) {
+      return undefined;
+    }
+    return { internal_ref: artifact.internal_ref };
   }
 
   private now(): string {

@@ -794,7 +794,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     });
   });
 
-  it('fails product generation explicitly when the generated payload is only an unsupported artifact ref', async () => {
+  it('fails product generation explicitly when the generated payload artifact ref has no stored payload', async () => {
     const { plan, item, boundary } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
@@ -880,6 +880,95 @@ describe('SpecPlanService item-scoped delivery API', () => {
       status: 'failed',
       retryable: false,
       result_json: { product_generation_result: 'unsupported_generated_payload_ref' },
+    });
+  });
+
+  it('applies product generation from an uploaded generated payload artifact ref', async () => {
+    const { plan, item, boundary } = await seedApprovedBoundary(app);
+    await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const resultWriter = app.get(ProductGenerationResultService);
+
+    const actionResponse = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
+        .send({ actor_id: actorTech })
+        .expect(201)
+    ).body;
+    const runtimeJob = actionResponse.runtime_job;
+    const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, runtimeJob, 'payload-ref-success');
+    const generated = generatedSpecRevision(item.id, boundary.revision_id);
+    const generatedPayloadDigest = codexCanonicalDigest(generated);
+    const artifactId = 'generated-payload-ref-success';
+    const internalRef = `artifact://codex-runtime-jobs/${runtimeJob.id}/artifacts/${artifactId}`;
+    const artifact = {
+      kind: 'generated_payload',
+      name: 'generated-spec.json',
+      content_type: 'application/json',
+      digest: generatedPayloadDigest,
+      internal_ref: internalRef,
+    };
+    await repository.createCodexRuntimeJobArtifact({
+      runtime_job_id: runtimeJob.id,
+      worker_id: runtimeJob.worker_id,
+      worker_session_token: sessionToken,
+      nonce: 'payload-ref-success-artifact',
+      nonce_timestamp: terminalAt,
+      artifact_id: artifactId,
+      artifact_idempotency_key: artifactId,
+      ...artifact,
+      size_bytes: 70_000,
+      metadata_json: { generated_payload: generated },
+      request_digest: digest('payload-ref-success-artifact'),
+      replay_protection: {
+        method: 'POST',
+        path: `/test/product-generation-runtime/${runtimeJob.id}/payload-ref-success/artifact`,
+        body_digest: digest('payload-ref-success-artifact-body'),
+      },
+      now: terminalAt,
+    });
+    const terminalResult = {
+      ...generationTerminalResult('development_plan_item_spec_revision', generated),
+      generated_payload: {
+        schema_version: 'generated_payload_ref.v1',
+        artifact,
+      },
+      generated_payload_digest: generatedPayloadDigest,
+      generation_artifacts: [artifact],
+    };
+    await repository.terminalizeCodexRuntimeJob({
+      runtime_job_id: runtimeJob.id,
+      launch_lease_id: runtimeJob.launch_lease_id,
+      worker_id: runtimeJob.worker_id,
+      worker_session_token: sessionToken,
+      nonce: 'payload-ref-success-terminal',
+      nonce_timestamp: terminalAt,
+      terminal_status: 'succeeded',
+      reason_code: 'completed',
+      terminal_result_json: terminalResult as unknown as Record<string, unknown>,
+      idempotency_key: 'payload-ref-success-terminal',
+      request_digest: digest('payload-ref-success-terminal'),
+      replay_protection: {
+        method: 'POST',
+        path: `/test/product-generation-runtime/${runtimeJob.id}/payload-ref-success/terminal`,
+        body_digest: digest('payload-ref-success-terminal-body'),
+      },
+      now: terminalAt,
+    });
+
+    await expect(
+      resultWriter.handleGenerationRuntimeTerminal({
+        runtimeJobId: runtimeJob.id,
+        actionRunId: actionResponse.action_run.id,
+        terminalResult,
+      }),
+    ).resolves.toEqual({ applied: true });
+    const [spec] = await repository.listSpecs();
+    expect(spec).toMatchObject({ development_plan_item_id: item.id, status: 'draft' });
+    await expect(repository.getAutomationActionRun(actionResponse.action_run.id)).resolves.toMatchObject({
+      status: 'succeeded',
+      result_json: { product_generation_result: 'applied' },
     });
   });
 

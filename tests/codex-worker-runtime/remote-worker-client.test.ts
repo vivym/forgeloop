@@ -778,6 +778,8 @@ describe('remote codex worker client', () => {
       runExecutionMaterialization(),
       expect.objectContaining({ workerSessionToken: 'session-1', terminalizeLaunchLeaseOnClose: false, originalWorkspacePath: expect.any(String) }),
     );
+    const [, startOptions] = launcher.startFromMaterialization.mock.calls[0]!;
+    const jobRoot = String(startOptions.taskWorkspaceRoot);
     expect(driverInputs).toEqual(['/workspace']);
     expect(driverObjectives).toEqual(['Implement the package and report changed files.']);
     expect(uploadedArtifacts.map((entry) => entry.kind)).toContain('run_execution_patch');
@@ -805,7 +807,8 @@ describe('remote codex worker client', () => {
     });
     expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-run-secret');
     expect(JSON.stringify(terminalized[0])).not.toContain(workerTempRoot);
-    await expect(stat(join(workerTempRoot, 'runtime-job-run-1'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(jobRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(workerTempRoot, 'runtime-job-run-1'))).resolves.toMatchObject({ mode: expect.any(Number) });
   });
 
   it('rejects forbidden symlink changes from the default run-execution collector', async () => {
@@ -2441,6 +2444,7 @@ describe('remote codex worker client', () => {
   it('uses a generated payload artifact ref for oversized generation results', async () => {
     let sealedEnvelope: SealedEnvelope | undefined;
     const terminalized: Record<string, unknown>[] = [];
+    const uploadedArtifacts: Record<string, unknown>[] = [];
     const worker = createRemoteCodexWorkerClient({
       workerId: 'worker-1',
       workerIdentity: 'remote-dev',
@@ -2477,15 +2481,18 @@ describe('remote codex worker client', () => {
         fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
-        uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
-          artifact: {
-            kind: input.kind,
-            name: input.name,
-            content_type: input.content_type,
-            digest: input.digest,
-            internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
-          },
-        }),
+        uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          uploadedArtifacts.push(input);
+          return {
+            artifact: {
+              kind: input.kind,
+              name: input.name,
+              content_type: input.content_type,
+              digest: input.digest,
+              internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+            },
+          };
+        },
         terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
           terminalized.push(input);
           return {};
@@ -2529,6 +2536,11 @@ describe('remote codex worker client', () => {
           kind: 'generated_payload',
           internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
         },
+      },
+    });
+    expect(uploadedArtifacts.find((artifact) => artifact.kind === 'generated_payload')).toMatchObject({
+      metadata_json: {
+        generated_payload: expect.objectContaining({ content: 'x'.repeat(70_000) }),
       },
     });
     expect(JSON.stringify(terminalized[0]?.terminal_result_json)).not.toContain('x'.repeat(100));

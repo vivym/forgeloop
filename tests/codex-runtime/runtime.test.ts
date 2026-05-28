@@ -305,6 +305,10 @@ describe('createCodexGenerationRuntime', () => {
       context: {
         development_plan_item: { id: 'item-1' },
         approved_spec_revision: { id: 'spec-revision-1' },
+        path_policy: {
+          allowed_paths: ['packages/codex-runtime/src/**'],
+          forbidden_paths: ['packages/db/migrations/**'],
+        },
       },
     });
 
@@ -312,8 +316,10 @@ describe('createCodexGenerationRuntime', () => {
     const promptText = Array.isArray(turnInput) && typeof turnInput[0]?.text === 'string' ? turnInput[0].text : '';
     expect(promptText).toContain('"based_on_spec_revision_id": "spec-revision-1"');
     expect(promptText).not.toContain('"based_on_spec_revision_id": "approved-spec-revision-id"');
-    expect(promptText).toContain('"docs/**"');
-    expect(promptText).not.toContain('"docs/superpowers/reports"');
+    expect(promptText).toContain('"packages/codex-runtime/src/**"');
+    expect(promptText).toContain('"packages/db/migrations/**"');
+    expect(promptText).not.toContain('"docs/**"');
+    expect(promptText).not.toContain('"apps"');
     expect(promptText).toContain('"timeout_seconds": 120');
     expect(promptText).not.toContain('"timeout_seconds": 600');
     const contractText = promptText.slice(promptText.indexOf('Output schema contract:'));

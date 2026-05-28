@@ -697,6 +697,7 @@ export class BrainstormingService {
             session,
             revision,
             rounds,
+            questions,
             questionAnswerSnapshot,
             decisionSnapshot,
           });
@@ -1372,6 +1373,7 @@ export class BrainstormingService {
     session: BrainstormingSession;
     revision: BoundarySummaryRevision;
     rounds: BoundaryRoundRecord[];
+    questions: BoundaryQuestionRecord[];
     questionAnswerSnapshot: Array<{ question_id: string; answer_id: string; text: string }>;
     decisionSnapshot: Array<{ decision_id: string; text: string; rationale?: string }>;
   }): void {
@@ -1389,7 +1391,10 @@ export class BrainstormingService {
     ) {
       throw new ConflictException('Boundary Summary approval requires round-backed context evidence');
     }
-    if (input.questionAnswerSnapshot.length === 0 || input.decisionSnapshot.length === 0) {
+    const hasWaivedRequiredQuestionEvidence = input.questions.some(
+      (question) => question.required && question.status !== 'superseded' && question.waived_by_decision_id !== undefined,
+    );
+    if ((!hasWaivedRequiredQuestionEvidence && input.questionAnswerSnapshot.length === 0) || input.decisionSnapshot.length === 0) {
       throw new ConflictException('Boundary Summary approval requires question and decision evidence');
     }
   }

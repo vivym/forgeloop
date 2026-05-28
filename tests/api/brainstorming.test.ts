@@ -475,6 +475,59 @@ describe('Boundary Brainstorming API', () => {
     );
   });
 
+  it('approves a proposed Boundary Summary when every required question is waived by an accepted decision', async () => {
+    const { plan, item } = await seedDevelopmentPlanItem(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const session = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
+        .send({ actor_id: 'actor-leader', leader_actor_id: 'actor-leader' })
+        .expect(201)
+    ).body;
+
+    let rounds = await repository.listBoundaryRounds(session.id);
+    await terminalizeBoundaryRound(app, repository, rounds[0], {
+      schema_version: 'boundary_round_result.v1',
+      session_id: session.id,
+      round_id: rounds[0].id,
+      questions: [{ text: 'Can the implementation scope question be waived?', required: true }],
+      proposed_decisions: [],
+      needs_leader_input: true,
+      public_summary: 'Boundary question generated.',
+    });
+    const [question] = await repository.listBoundaryQuestions(session.id);
+    await request(server)
+      .post(`/boundary-brainstorming-sessions/${session.id}/decisions`)
+      .send({
+        text: 'Waive the required question because the approved PRD already fixes the implementation scope.',
+        actor_id: 'actor-leader',
+        waived_question_id: question!.id,
+      })
+      .expect(201);
+    await request(server)
+      .post(`/boundary-brainstorming-sessions/${session.id}/continue`)
+      .send({ actor_id: 'actor-leader', leader_input_markdown: 'Propose the Boundary Summary after the waiver.' })
+      .expect(201);
+    rounds = await repository.listBoundaryRounds(session.id);
+    await terminalizeBoundaryRound(app, repository, rounds[1], {
+      schema_version: 'boundary_round_result.v1',
+      session_id: session.id,
+      round_id: rounds[1].id,
+      questions: [],
+      proposed_decisions: [],
+      summary_proposal: boundarySummaryProposal(),
+      needs_leader_input: false,
+      public_summary: 'Boundary Summary proposed.',
+    });
+    const proposal = await latestBoundarySummaryRevision(repository, session.id);
+
+    await request(server)
+      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${proposal.id}/approve`)
+      .send({ actor_id: 'actor-leader' })
+      .expect(201);
+  });
+
   it('applies boundary round terminal results only while the action-run precondition is still current', async () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();

@@ -156,6 +156,30 @@ const stringFromPath = (value: Record<string, unknown>, path: readonly string[])
 const contextString = (context: Record<string, unknown>, paths: readonly (readonly string[])[], fallback: string): string =>
   paths.map((path) => stringFromPath(context, path)).find((value): value is string => value !== undefined) ?? fallback;
 
+const stringArrayFromPath = (value: Record<string, unknown>, path: readonly string[]): string[] | undefined => {
+  let current: Record<string, unknown> | undefined = value;
+  for (const [index, key] of path.entries()) {
+    if (current === undefined) {
+      return undefined;
+    }
+    const entry = current[key];
+    if (index === path.length - 1) {
+      if (!Array.isArray(entry) || !entry.every((item): item is string => typeof item === 'string' && item.trim().length > 0)) {
+        return undefined;
+      }
+      return entry;
+    }
+    current = nestedRecord(current, key);
+  }
+  return undefined;
+};
+
+const contextStringArray = (
+  context: Record<string, unknown>,
+  paths: readonly (readonly string[])[],
+  fallback: string[],
+): string[] => paths.map((path) => stringArrayFromPath(context, path)).find((value): value is string[] => value !== undefined) ?? fallback;
+
 const outputSchemaContract = (
   taskKind: CodexGenerationTaskKind,
   outputSchemaVersion: string,
@@ -263,6 +287,16 @@ const outputSchemaContract = (
       [['approved_spec_revision_id'], ['approved_spec_revision', 'id'], ['context_manifest', 'approved_spec_revision_id']],
       'approved-spec-revision-id',
     );
+    const allowedPaths = contextStringArray(
+      context,
+      [['path_policy', 'allowed_paths'], ['execution_plan_path_policy', 'allowed_paths'], ['allowed_paths']],
+      ['**'],
+    );
+    const forbiddenPaths = contextStringArray(
+      context,
+      [['path_policy', 'forbidden_paths'], ['execution_plan_path_policy', 'forbidden_paths'], ['forbidden_paths']],
+      [],
+    );
     return [
       'Return exactly the JSON object below. Use the concrete id values shown here. Do not rewrite field values. Never return placeholder text, null arrays, Markdown fences, or extra keys.',
       JSON.stringify(
@@ -274,8 +308,8 @@ const outputSchemaContract = (
           content_markdown: '## Execution Plan\n\nImplement the approved Spec with focused verification.',
           implementation_sequence: ['Update the scoped runtime code path', 'Run focused verification'],
           validation_strategy: ['Run targeted tests and strict dogfood'],
-          allowed_paths: ['docs/**'],
-          forbidden_paths: ['apps'],
+          allowed_paths: allowedPaths,
+          forbidden_paths: forbiddenPaths,
           required_checks: [
             {
               check_id: 'focused-tests',

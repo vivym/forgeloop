@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readdir, readFile, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import {
   codexCanonicalDigest,
@@ -963,6 +963,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         metadata: {
           task_kind: result.taskKind,
           output_schema_version: result.outputSchemaVersion,
+          generated_payload: result.generated,
         },
       }),
       jsonRuntimeJobArtifactUpload({
@@ -1280,7 +1281,6 @@ const cleanupRunExecutionWorkspace = async (workspace: WorkspaceBundleUnpackResu
     return;
   }
   await rm(workspace.jobRoot, { recursive: true, force: true });
-  await rm(dirname(workspace.jobRoot), { recursive: true, force: true }).catch(() => undefined);
 };
 
 const sha256 = (bytes: Uint8Array | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;

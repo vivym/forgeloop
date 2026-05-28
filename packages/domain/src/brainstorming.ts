@@ -43,9 +43,9 @@ interface LegacyBoundarySummaryRevision {
 export type BoundarySummaryRevision = ContractBoundarySummaryRevision | LegacyBoundarySummaryRevision;
 
 export const actorCanActForBoundaryLeader = (
-  session: Pick<BrainstormingSession, 'leader_actor_id' | 'leader_delegate_actor_ids'>,
+  session: Pick<BrainstormingSession, 'leader_actor_id'> & { leader_delegate_actor_ids?: string[] | undefined },
   actorId: string,
-): boolean => session.leader_actor_id === actorId || session.leader_delegate_actor_ids.includes(actorId);
+): boolean => session.leader_actor_id === actorId || (session.leader_delegate_actor_ids ?? []).includes(actorId);
 
 export const requiredBoundaryQuestionsClosed = (input: {
   questions: BoundaryQuestion[];

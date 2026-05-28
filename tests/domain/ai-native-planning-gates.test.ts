@@ -185,6 +185,7 @@ describe('AI-native planning gate helpers', () => {
     expect(actorCanActForBoundaryLeader(session, 'actor-leader')).toBe(true);
     expect(actorCanActForBoundaryLeader(session, 'actor-delegate')).toBe(true);
     expect(actorCanActForBoundaryLeader(session, 'actor-driver')).toBe(false);
+    expect(actorCanActForBoundaryLeader({ leader_actor_id: 'legacy-leader' }, 'actor-delegate')).toBe(false);
   });
 
   it('requires required Boundary questions to be answered or explicitly waived by accepted Leader decisions', () => {
