@@ -11,6 +11,8 @@ import {
   FilesystemCodexRuntimeSuperpowersDogfoodReporter,
   codexRuntimeSuperpowersDogfoodCommand,
   createCodexRuntimeSuperpowersDogfoodHttpClient,
+  collectCodexAppServerPhaseEvidence,
+  deriveCodexAppServerEvidence,
   loadCodexRuntimeSuperpowersDogfoodCliConfig,
   renderCodexRuntimeSuperpowersDogfoodBlockerReport,
   renderCodexRuntimeSuperpowersDogfoodReport,
@@ -169,7 +171,6 @@ type PhaseEvidenceOverride = {
 
 const completeDogfoodClientWithPhaseEvidence = (overrides?: {
   boundaryInitial?: PhaseEvidenceOverride;
-  boundarySecond?: PhaseEvidenceOverride;
   boundaryRebase?: PhaseEvidenceOverride;
   spec?: PhaseEvidenceOverride;
   executionPlan?: PhaseEvidenceOverride;
@@ -186,53 +187,22 @@ const completeDogfoodClientWithPhaseEvidence = (overrides?: {
     development_plan_id: 'development-plan-1',
     development_plan_item_id: 'item-1',
   })),
-  runBoundaryBrainstormingRound: vi.fn(async (roundNumber: number) => {
-    const evidence =
-      roundNumber === 1
-        ? {
-            boundary_brainstorming_session_id: 'boundary-session-1',
-            ai_turn_count: 1,
-            follow_up_path_covered: false,
-            summary_request_change_path_covered: false,
-            output_schema_versions: ['boundary_round_result.v1'],
-            runtime_job_digests: [digest('boundary-runtime-job-a')],
-            app_server_evidence_digests: [digest('boundary-app-server-a')],
-            cleanup_status: 'completed' as const,
-            ...overrides?.boundaryInitial,
-          }
-        : {
-            boundary_brainstorming_session_id: 'boundary-session-2',
-            ai_turn_count: 2,
-            follow_up_path_covered: true,
-            summary_request_change_path_covered: true,
-            output_schema_versions: ['boundary_round_result.v1'],
-            runtime_job_digests: [digest('boundary-runtime-job-b')],
-            app_server_evidence_digests: [digest('boundary-app-server-b')],
-            cleanup_status: 'completed' as const,
-            ...overrides?.boundarySecond,
-          };
-    return evidence;
-  }),
-  answerBoundaryQuestion: vi.fn(async () => undefined),
-  proposeBoundarySummary: vi.fn(async () => ({ boundary_summary_revision_id: 'boundary-summary-revision-1' })),
+  completeBoundaryBrainstorming: vi.fn(async (mode: 'initial' | 'rebase') =>
+    mode === 'initial'
+      ? {
+          ...boundaryEvidence,
+          ...overrides?.boundaryInitial,
+        }
+      : {
+          ...boundaryRebaseEvidence,
+          ...overrides?.boundaryRebase,
+        },
+  ),
   mutateDevelopmentPlanItem: vi.fn(async () => undefined),
   assertStaleBoundaryBlocksSpecGeneration: vi.fn(async () => ({
     blocked: true,
     blocker_code: 'STALE_BOUNDARY_SUMMARY',
   })),
-  rebaseBoundaryBrainstorming: vi.fn(async () => ({
-    rebased_session_id: 'boundary-session-rebased',
-    rebased_boundary_summary_revision_id: 'boundary-summary-revision-rebased',
-    ai_turn_count: 1,
-    follow_up_path_covered: false,
-    summary_request_change_path_covered: false,
-    output_schema_versions: ['boundary_round_result.v1'],
-    runtime_job_digests: [digest('boundary-rebase-runtime-job-a')],
-    app_server_evidence_digests: [digest('boundary-rebase-app-server-a')],
-    cleanup_status: 'completed',
-    ...overrides?.boundaryRebase,
-  })),
-  approveBoundarySummary: vi.fn(async () => ({ boundary_summary_revision_id: 'boundary-summary-revision-rebased' })),
   generateAndApproveSpec: vi.fn(async () => ({
     ...specEvidence,
     ...overrides?.spec,
@@ -269,26 +239,25 @@ describe('Codex runtime Superpowers dogfood script', () => {
         calls.push('seedSourceAndDevelopmentPlanItem');
         return { source_object_id: 'requirement-1', development_plan_id: 'development-plan-1', development_plan_item_id: 'item-1' };
       }),
-      runBoundaryBrainstormingRound: vi.fn(async (roundNumber: number) => {
-        calls.push(`runBoundaryBrainstormingRound:${roundNumber}`);
+      completeBoundaryBrainstorming: vi.fn(async (mode: 'initial' | 'rebase') => {
+        calls.push(`completeBoundaryBrainstorming:${mode}`);
         return {
-          boundary_brainstorming_session_id: `boundary-session-${roundNumber}`,
-          ai_turn_count: roundNumber === 1 ? 1 : 2,
-          follow_up_path_covered: roundNumber === 2,
-          summary_request_change_path_covered: roundNumber === 2,
+          mode,
+          session_id: mode === 'initial' ? 'boundary-session-initial' : 'boundary-session-rebased',
+          approved_summary_revision_id:
+            mode === 'initial' ? 'boundary-summary-revision-initial' : 'boundary-summary-revision-rebased',
+          ai_turn_count: mode === 'initial' ? 3 : 2,
+          follow_up_path_covered: mode === 'initial',
+          summary_request_change_path_covered: mode === 'initial',
           output_schema_versions: boundaryEvidence.output_schema_versions,
           app_server_evidence_digests:
-            roundNumber === 1 ? [digest('boundary-app-server-a')] : [digest('boundary-app-server-b'), digest('boundary-app-server-c')],
-          runtime_job_digests: roundNumber === 1 ? [digest('boundary-a')] : [digest('boundary-b'), digest('boundary-c')],
+            mode === 'initial' ? [digest('boundary-initial-app-server')] : [digest('boundary-rebase-app-server')],
+          runtime_job_digests:
+            mode === 'initial'
+              ? [digest('boundary-initial-a'), digest('boundary-initial-b'), digest('boundary-initial-c')]
+              : [digest('boundary-rebase-a'), digest('boundary-rebase-b')],
           cleanup_status: 'completed' as const,
         };
-      }),
-      answerBoundaryQuestion: vi.fn(async () => {
-        calls.push('answerBoundaryQuestion');
-      }),
-      proposeBoundarySummary: vi.fn(async () => {
-        calls.push('proposeBoundarySummary');
-        return { boundary_summary_revision_id: 'boundary-summary-revision-1' };
       }),
       mutateDevelopmentPlanItem: vi.fn(async () => {
         calls.push('mutateDevelopmentPlanItem');
@@ -296,24 +265,6 @@ describe('Codex runtime Superpowers dogfood script', () => {
       assertStaleBoundaryBlocksSpecGeneration: vi.fn(async () => {
         calls.push('assertStaleBoundaryBlocksSpecGeneration');
         return { blocked: true, blocker_code: 'STALE_BOUNDARY_SUMMARY' };
-      }),
-      rebaseBoundaryBrainstorming: vi.fn(async () => {
-        calls.push('rebaseBoundaryBrainstorming');
-        return {
-          rebased_session_id: 'boundary-session-rebased',
-          rebased_boundary_summary_revision_id: 'boundary-summary-revision-rebased',
-          ai_turn_count: 1,
-          follow_up_path_covered: false,
-          summary_request_change_path_covered: false,
-          output_schema_versions: boundaryRebaseEvidence.output_schema_versions,
-          app_server_evidence_digests: boundaryRebaseEvidence.app_server_evidence_digests,
-          runtime_job_digests: boundaryRebaseEvidence.runtime_job_digests,
-          cleanup_status: 'completed' as const,
-        };
-      }),
-      approveBoundarySummary: vi.fn(async () => {
-        calls.push('approveBoundarySummary');
-        return { boundary_summary_revision_id: 'boundary-summary-revision-rebased' };
       }),
       generateAndApproveSpec: vi.fn(async () => {
         calls.push('generateAndApproveSpec');
@@ -340,14 +291,10 @@ describe('Codex runtime Superpowers dogfood script', () => {
       'importCodexRuntime',
       'smokeGenerationWorker',
       'startNoSharedFilesystemRunWorker',
-      'runBoundaryBrainstormingRound:1',
-      'answerBoundaryQuestion',
-      'runBoundaryBrainstormingRound:2',
-      'proposeBoundarySummary',
+      'completeBoundaryBrainstorming:initial',
       'mutateDevelopmentPlanItem',
       'assertStaleBoundaryBlocksSpecGeneration',
-      'rebaseBoundaryBrainstorming',
-      'approveBoundarySummary',
+      'completeBoundaryBrainstorming:rebase',
       'generateAndApproveSpec',
       'generateAndApproveExecutionPlan',
       'startExecution',
@@ -378,7 +325,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
           'codex_run_execution_result.v1',
         ]),
       }),
-      boundary_ai_turn_count: 4,
+      boundary_ai_turn_count: 5,
       boundary_follow_up_path_covered: true,
       boundary_summary_request_change_path_covered: true,
       cleanup_status: 'completed',
@@ -549,7 +496,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     }
   });
 
-  it('blocks PASS orchestration when current fixed-round methods lack observed runtime evidence', async () => {
+  it('blocks PASS orchestration when phase methods lack observed runtime evidence', async () => {
     const emptyEvidence = {
       output_schema_versions: [],
       runtime_job_digests: [],
@@ -568,23 +515,21 @@ describe('Codex runtime Superpowers dogfood script', () => {
         development_plan_id: 'development-plan-1',
         development_plan_item_id: 'item-1',
       })),
-      runBoundaryBrainstormingRound: vi.fn(async (roundNumber: number) => ({
-        boundary_brainstorming_session_id: `boundary-session-${roundNumber}`,
+      completeBoundaryBrainstorming: vi.fn(async (mode: 'initial' | 'rebase') => ({
+        mode,
+        session_id: mode === 'initial' ? 'boundary-session-initial' : 'boundary-session-rebased',
+        approved_summary_revision_id:
+          mode === 'initial' ? 'boundary-summary-revision-initial' : 'boundary-summary-revision-rebased',
+        ai_turn_count: mode === 'initial' ? 3 : 2,
+        follow_up_path_covered: mode === 'initial',
+        summary_request_change_path_covered: mode === 'initial',
         ...emptyEvidence,
       })),
-      answerBoundaryQuestion: vi.fn(async () => undefined),
-      proposeBoundarySummary: vi.fn(async () => ({ boundary_summary_revision_id: 'boundary-summary-revision-1' })),
       mutateDevelopmentPlanItem: vi.fn(async () => undefined),
       assertStaleBoundaryBlocksSpecGeneration: vi.fn(async () => ({
         blocked: true,
         blocker_code: 'STALE_BOUNDARY_SUMMARY',
       })),
-      rebaseBoundaryBrainstorming: vi.fn(async () => ({
-        rebased_session_id: 'boundary-session-rebased',
-        rebased_boundary_summary_revision_id: 'boundary-summary-revision-rebased',
-        ...emptyEvidence,
-      })),
-      approveBoundarySummary: vi.fn(async () => ({ boundary_summary_revision_id: 'boundary-summary-revision-rebased' })),
       generateAndApproveSpec: vi.fn(async () => ({
         spec_revision_id: 'spec-revision-1',
         output_schema_versions: ['spec_revision.v1'],
@@ -613,9 +558,61 @@ describe('Codex runtime Superpowers dogfood script', () => {
     };
 
     await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
-      blockerCode: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
+      blockerCode: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
     });
     expect(client.writeReport).not.toHaveBeenCalled();
+  });
+
+  it('blocks app-server evidence derivation when required phase evidence is absent or incomplete', () => {
+    expect(() =>
+      deriveCodexAppServerEvidence(
+        collectCodexAppServerPhaseEvidence({
+          boundary: [{ ...boundaryEvidence, app_server_evidence_digests: [] }],
+          spec: { ...specEvidence, app_server_evidence_digests: [] },
+          executionPlan: { ...executionPlanEvidence, app_server_evidence_digests: [] },
+          execution: { ...executionEvidence, app_server_evidence_digests: [] },
+        }),
+      ),
+    ).toThrow(/codex_runtime_superpowers_app_server_phase_evidence_missing/);
+
+    expect(() =>
+      deriveCodexAppServerEvidence(
+        collectCodexAppServerPhaseEvidence({
+          boundary: [
+            boundaryEvidence,
+            {
+              ...boundaryEvidence,
+              mode: 'rebase' as const,
+              session_id: 'boundary-session-rebased',
+              approved_summary_revision_id: 'boundary-summary-revision-rebased',
+              runtime_job_digests: [],
+            },
+          ],
+          spec: specEvidence,
+          executionPlan: executionPlanEvidence,
+          execution: executionEvidence,
+        }),
+      ),
+    ).toThrow(/codex_runtime_superpowers_app_server_phase_evidence_missing/);
+
+    expect(() =>
+      deriveCodexAppServerEvidence(
+        collectCodexAppServerPhaseEvidence({
+          boundary: [
+            boundaryEvidence,
+            {
+              ...boundaryEvidence,
+              mode: 'rebase' as const,
+              session_id: 'boundary-session-rebased',
+              approved_summary_revision_id: 'boundary-summary-revision-rebased',
+            },
+          ],
+          spec: { ...specEvidence, cleanup_status: 'blocked' },
+          executionPlan: executionPlanEvidence,
+          execution: executionEvidence,
+        }),
+      ),
+    ).toThrow(/codex_runtime_superpowers_app_server_phase_evidence_missing/);
   });
 
   it('blocks PASS orchestration when observed schemas do not prove the expected phase schema', async () => {
@@ -623,13 +620,13 @@ describe('Codex runtime Superpowers dogfood script', () => {
       boundaryInitial: {
         output_schema_versions: ['unexpected_schema.v1'],
       },
-      boundarySecond: {
+      boundaryRebase: {
         output_schema_versions: ['unexpected_schema.v1'],
       },
     });
 
     await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
-      blockerCode: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
+      blockerCode: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
     });
     expect(client.writeReport).not.toHaveBeenCalled();
   });
@@ -639,13 +636,13 @@ describe('Codex runtime Superpowers dogfood script', () => {
       boundaryInitial: {
         output_schema_versions: [],
       },
-      boundarySecond: {
+      boundaryRebase: {
         output_schema_versions: [],
       },
     });
 
     await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
-      blockerCode: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
+      blockerCode: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
     });
     expect(client.writeReport).not.toHaveBeenCalled();
   });
@@ -658,7 +655,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     });
 
     await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
-      blockerCode: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
+      blockerCode: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
     });
     expect(client.writeReport).not.toHaveBeenCalled();
   });
@@ -919,6 +916,21 @@ describe('Codex runtime Superpowers dogfood script', () => {
         latest_summary_revision_id: 'boundary-summary-revision-1',
         questions: [{ id: 'question-1', status: 'answered', required: true, answered_by_answer_id: 'answer-1' }],
       },
+      {
+        id: 'boundary-session-1',
+        latest_summary_revision_id: 'boundary-summary-revision-1-revised',
+        questions: [{ id: 'question-1', status: 'answered', required: true, answered_by_answer_id: 'answer-1' }],
+      },
+      {
+        id: 'boundary-session-1',
+        latest_summary_revision_id: 'boundary-summary-revision-1-revised',
+        questions: [{ id: 'question-1', status: 'answered', required: true, answered_by_answer_id: 'answer-1' }],
+      },
+      {
+        id: 'boundary-session-1',
+        latest_summary_revision_id: 'boundary-summary-revision-1-revised',
+        questions: [{ id: 'question-1', status: 'answered', required: true, answered_by_answer_id: 'answer-1' }],
+      },
     ];
     const boundarySession2OpenQuestion = {
       id: 'boundary-session-2',
@@ -981,6 +993,33 @@ describe('Codex runtime Superpowers dogfood script', () => {
       if (method === 'POST' && path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/approve') {
         return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1' });
       }
+      if (
+        method === 'POST' &&
+        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/request-changes'
+      ) {
+        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1' });
+      }
+      if (
+        method === 'POST' &&
+        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1-revised/approve'
+      ) {
+        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1-revised' });
+      }
+      if (
+        method === 'POST' &&
+        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/request-changes'
+      ) {
+        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1' });
+      }
+      if (
+        method === 'POST' &&
+        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1-revised/approve'
+      ) {
+        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1-revised' });
+      }
+      if (method === 'POST' && path === '/boundary-brainstorming-sessions/boundary-session-2/summary-revisions/boundary-summary-revision-2/approve') {
+        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-2' });
+      }
       if (method === 'PATCH' && path === '/development-plans/development-plan-1/items/item-1') {
         return jsonResponse({ id: 'item-1', revision_id: 'item-revision-2' });
       }
@@ -1022,35 +1061,68 @@ describe('Codex runtime Superpowers dogfood script', () => {
     );
 
     await client.seedSourceAndDevelopmentPlanItem();
-    const firstBoundaryRound = await client.runBoundaryBrainstormingRound(1);
-    await client.answerBoundaryQuestion();
-    const secondBoundaryRound = await client.runBoundaryBrainstormingRound(2);
-    expect(await client.proposeBoundarySummary()).toEqual({ boundary_summary_revision_id: 'boundary-summary-revision-1' });
+    const initialBoundary = await client.completeBoundaryBrainstorming('initial');
+    expect(initialBoundary).toMatchObject({
+      mode: 'initial',
+      session_id: 'boundary-session-1',
+      approved_summary_revision_id: 'boundary-summary-revision-1-revised',
+      ai_turn_count: 3,
+      follow_up_path_covered: true,
+      summary_request_change_path_covered: true,
+      output_schema_versions: [],
+      cleanup_status: 'completed',
+    });
     await client.mutateDevelopmentPlanItem();
     await expect(client.assertStaleBoundaryBlocksSpecGeneration()).resolves.toEqual({
       blocked: true,
       blocker_code: 'STALE_BOUNDARY_SUMMARY',
     });
-    const rebaseEvidence = await client.rebaseBoundaryBrainstorming();
+    const rebaseEvidence = await client.completeBoundaryBrainstorming('rebase');
     expect(rebaseEvidence).toMatchObject({
-      rebased_session_id: 'boundary-session-2',
-      rebased_boundary_summary_revision_id: 'boundary-summary-revision-2',
+      mode: 'rebase',
+      session_id: 'boundary-session-2',
+      approved_summary_revision_id: 'boundary-summary-revision-2',
       output_schema_versions: [],
       cleanup_status: 'completed',
     });
     expect([
-      firstBoundaryRound.output_schema_versions,
-      firstBoundaryRound.runtime_job_digests,
-      firstBoundaryRound.app_server_evidence_digests,
-      secondBoundaryRound.output_schema_versions,
-      secondBoundaryRound.runtime_job_digests,
-      secondBoundaryRound.app_server_evidence_digests,
+      initialBoundary.output_schema_versions,
+      initialBoundary.runtime_job_digests,
+      initialBoundary.app_server_evidence_digests,
       rebaseEvidence.output_schema_versions,
       rebaseEvidence.runtime_job_digests,
       rebaseEvidence.app_server_evidence_digests,
-    ]).toEqual([[], [], [], [], [], [], [], [], []]);
+    ]).toEqual([[], [], [], [], [], []]);
 
-    expect(workerCalls).toEqual(['worker', 'worker', 'worker', 'worker']);
+    expect(workerCalls).toEqual(['worker', 'worker', 'worker', 'worker', 'worker']);
+    const requestOrder = requests.map((request) => `${request.method} ${request.path}`);
+    expect(requestOrder).toContain(
+      'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/request-changes',
+    );
+    expect(requestOrder).toContain(
+      'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1-revised/approve',
+    );
+    expect(
+      requestOrder.filter(
+        (request) =>
+          request.startsWith('POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/') &&
+          request.endsWith('/approve'),
+      ),
+    ).toHaveLength(1);
+    expect(
+      requestOrder.indexOf(
+        'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/request-changes',
+      ),
+    ).toBeLessThan(
+      requestOrder.indexOf(
+        'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1-revised/approve',
+      ),
+    );
+    expect(
+      requestOrder.indexOf(
+        'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1-revised/approve',
+      ),
+    ).toBeLessThan(requestOrder.indexOf('PATCH /development-plans/development-plan-1/items/item-1'));
     expect(requests).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1060,7 +1132,11 @@ describe('Codex runtime Superpowers dogfood script', () => {
         }),
         expect.objectContaining({
           method: 'POST',
-          path: '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/approve',
+          path: '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/request-changes',
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1-revised/approve',
         }),
         expect.objectContaining({
           method: 'PATCH',
@@ -1083,6 +1159,10 @@ describe('Codex runtime Superpowers dogfood script', () => {
           method: 'POST',
           path: '/boundary-brainstorming-sessions/boundary-session-2/continue',
         }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/boundary-brainstorming-sessions/boundary-session-2/summary-revisions/boundary-summary-revision-2/approve',
+        }),
       ]),
     );
   });
@@ -1100,6 +1180,16 @@ describe('Codex runtime Superpowers dogfood script', () => {
         id: 'boundary-session-1',
         status: 'waiting_for_leader',
         questions: [{ id: 'question-1', status: 'open', required: true }],
+      },
+      {
+        id: 'boundary-session-1',
+        latest_summary_revision_id: 'boundary-summary-revision-1',
+        questions: [{ id: 'question-1', status: 'answered', required: true, answered_by_answer_id: 'answer-1' }],
+      },
+      {
+        id: 'boundary-session-1',
+        latest_summary_revision_id: 'boundary-summary-revision-1-revised',
+        questions: [{ id: 'question-1', status: 'answered', required: true, answered_by_answer_id: 'answer-1' }],
       },
     ];
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -1123,6 +1213,24 @@ describe('Codex runtime Superpowers dogfood script', () => {
       }
       if (method === 'POST' && path === '/boundary-brainstorming-sessions/boundary-session-1/answers') {
         return jsonResponse({ id: 'answer-1' });
+      }
+      if (method === 'POST' && path === '/boundary-brainstorming-sessions/boundary-session-1/continue') {
+        return jsonResponse({ id: 'boundary-session-1' });
+      }
+      if (method === 'POST' && path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/approve') {
+        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1' });
+      }
+      if (
+        method === 'POST' &&
+        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/request-changes'
+      ) {
+        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1' });
+      }
+      if (
+        method === 'POST' &&
+        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1-revised/approve'
+      ) {
+        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1-revised' });
       }
       throw new Error(`unexpected request ${method} ${path}`);
     });
@@ -1153,16 +1261,19 @@ describe('Codex runtime Superpowers dogfood script', () => {
     );
 
     await client.seedSourceAndDevelopmentPlanItem();
-    await client.runBoundaryBrainstormingRound(1);
-    await client.answerBoundaryQuestion();
+    await client.completeBoundaryBrainstorming('initial');
 
-    expect(workerCalls).toEqual(['generation', 'generation']);
+    expect(workerCalls).toEqual(['generation', 'generation', 'generation', 'generation']);
     expect(requests).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           method: 'POST',
           path: '/boundary-brainstorming-sessions/boundary-session-1/answers',
           body: expect.objectContaining({ question_id: 'question-1' }),
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/request-changes',
         }),
       ]),
     );
@@ -1239,7 +1350,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     );
 
     await client.seedSourceAndDevelopmentPlanItem();
-    await expect(client.runBoundaryBrainstormingRound(1)).rejects.toMatchObject({
+    await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_runtime_job_failed',
       report: {
         runtime_job_id: 'runtime-job-1',
@@ -1301,7 +1412,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     );
 
     await client.seedSourceAndDevelopmentPlanItem();
-    await expect(client.runBoundaryBrainstormingRound(1)).rejects.toMatchObject({
+    await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_remote_worker_invocation_timed_out',
     });
   });

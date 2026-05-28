@@ -67,19 +67,13 @@ export interface CodexRuntimeBoundaryDogfoodEvidence extends CodexRuntimePhaseDo
   summary_request_change_path_covered: boolean;
 }
 
-export interface CodexRuntimeBoundaryRoundDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
-  boundary_brainstorming_session_id: string;
-  ai_turn_count?: number;
-  follow_up_path_covered?: boolean;
-  summary_request_change_path_covered?: boolean;
-}
-
-export interface CodexRuntimeBoundaryRebaseDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
-  rebased_session_id: string;
-  rebased_boundary_summary_revision_id: string;
-  ai_turn_count?: number;
-  follow_up_path_covered?: boolean;
-  summary_request_change_path_covered?: boolean;
+export interface CodexRuntimeDogfoodPhaseEvidence {
+  phase: CodexRuntimeDogfoodPhaseName;
+  expected_output_schema_version: string;
+  observed_output_schema_versions: string[];
+  runtime_job_digests: Sha256Digest[];
+  app_server_evidence_digests: Sha256Digest[];
+  cleanup_status: CodexRuntimeDogfoodCleanupStatus;
 }
 
 export interface CodexRuntimeAppServerEvidence {
@@ -87,14 +81,7 @@ export interface CodexRuntimeAppServerEvidence {
   output_schema_versions: string[];
   runtime_job_digests: Sha256Digest[];
   app_server_evidence_digests: Sha256Digest[];
-  phases: Array<{
-    phase: CodexRuntimeDogfoodPhaseName;
-    expected_output_schema_version: string;
-    observed_output_schema_versions: string[];
-    runtime_job_digests: Sha256Digest[];
-    app_server_evidence_digests: Sha256Digest[];
-    cleanup_status: CodexRuntimeDogfoodCleanupStatus;
-  }>;
+  phases: CodexRuntimeDogfoodPhaseEvidence[];
 }
 
 export interface CodexRuntimeSpecDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
@@ -144,6 +131,10 @@ export interface CodexRuntimeSuperpowersDogfoodReport {
 export interface CodexRuntimeSuperpowersDogfoodBlockerReport {
   status: 'BLOCKED';
   blocker_code: string;
+  cleanup_status?: CodexRuntimeDogfoodCleanupStatus;
+  codex_app_server_evidence?: {
+    phases: CodexRuntimeDogfoodPhaseEvidence[];
+  };
   missing_env?: string[];
   product_api_status?: number;
   product_api_reason?: string;
@@ -179,13 +170,9 @@ export interface CodexRuntimeSuperpowersDogfoodClient {
   smokeGenerationWorker: () => Promise<void>;
   startNoSharedFilesystemRunWorker: () => Promise<void>;
   seedSourceAndDevelopmentPlanItem: () => Promise<CodexRuntimeSuperpowersDogfoodSeed>;
-  runBoundaryBrainstormingRound: (roundNumber: number) => Promise<CodexRuntimeBoundaryRoundDogfoodEvidence>;
-  answerBoundaryQuestion: () => Promise<void>;
-  proposeBoundarySummary: () => Promise<{ boundary_summary_revision_id: string }>;
+  completeBoundaryBrainstorming: (mode: 'initial' | 'rebase') => Promise<CodexRuntimeBoundaryDogfoodEvidence>;
   mutateDevelopmentPlanItem: () => Promise<void>;
   assertStaleBoundaryBlocksSpecGeneration: () => Promise<{ blocked: true; blocker_code: 'STALE_BOUNDARY_SUMMARY' }>;
-  rebaseBoundaryBrainstorming: () => Promise<CodexRuntimeBoundaryRebaseDogfoodEvidence>;
-  approveBoundarySummary: () => Promise<{ boundary_summary_revision_id: string }>;
   generateAndApproveSpec: () => Promise<CodexRuntimeSpecDogfoodEvidence>;
   generateAndApproveExecutionPlan: () => Promise<CodexRuntimeExecutionPlanDogfoodEvidence>;
   startExecution: () => Promise<CodexRuntimeExecutionDogfoodEvidence>;
@@ -318,82 +305,88 @@ const unobservedPhaseEvidence = (): CodexRuntimePhaseDogfoodEvidence => ({
   cleanup_status: 'completed',
 });
 
-const mergeCleanupStatus = (evidence: readonly CodexRuntimePhaseDogfoodEvidence[]): CodexRuntimeDogfoodCleanupStatus =>
-  evidence.some((entry) => entry.cleanup_status === 'blocked') ? 'blocked' : 'completed';
+export const collectCodexAppServerPhaseEvidence = (input: {
+  boundary: CodexRuntimeBoundaryDogfoodEvidence[];
+  spec: CodexRuntimeSpecDogfoodEvidence;
+  executionPlan: CodexRuntimeExecutionPlanDogfoodEvidence;
+  execution: CodexRuntimeExecutionDogfoodEvidence;
+}): CodexRuntimeDogfoodPhaseEvidence[] =>
+  [
+    {
+      phase: 'boundary_initial' as const,
+      expected_output_schema_version: boundaryOutputSchemaVersion,
+      evidence: input.boundary.find((boundary) => boundary.mode === 'initial'),
+    },
+    {
+      phase: 'boundary_rebase' as const,
+      expected_output_schema_version: boundaryOutputSchemaVersion,
+      evidence: input.boundary.find((boundary) => boundary.mode === 'rebase'),
+    },
+    { phase: 'spec' as const, expected_output_schema_version: specOutputSchemaVersion, evidence: input.spec },
+    {
+      phase: 'execution_plan' as const,
+      expected_output_schema_version: executionPlanOutputSchemaVersion,
+      evidence: input.executionPlan,
+    },
+    { phase: 'execution' as const, expected_output_schema_version: executionOutputSchemaVersion, evidence: input.execution },
+  ].map((phase) => {
+    const evidence = phase.evidence;
+    if (evidence === undefined) {
+      throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_app_server_phase_evidence_missing', {
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
+      });
+    }
+    return {
+      phase: phase.phase,
+      expected_output_schema_version: phase.expected_output_schema_version,
+      observed_output_schema_versions: evidence.output_schema_versions,
+      runtime_job_digests: evidence.runtime_job_digests,
+      app_server_evidence_digests: evidence.app_server_evidence_digests,
+      cleanup_status: evidence.cleanup_status,
+    };
+  });
 
-const appServerPhase = (
-  phase: CodexRuntimeDogfoodPhaseName,
-  expectedOutputSchemaVersion: string,
-  evidence: readonly CodexRuntimePhaseDogfoodEvidence[],
-): CodexRuntimeAppServerEvidence['phases'][number] => ({
-  phase,
-  expected_output_schema_version: expectedOutputSchemaVersion,
-  observed_output_schema_versions: uniqueStrings(evidence.flatMap((entry) => entry.output_schema_versions)),
-  runtime_job_digests: evidence.flatMap((entry) => entry.runtime_job_digests),
-  app_server_evidence_digests: evidence.flatMap((entry) => entry.app_server_evidence_digests),
-  cleanup_status: mergeCleanupStatus(evidence),
-});
-
-const appServerEvidenceFromPhases = (
-  phases: readonly CodexRuntimeAppServerEvidence['phases'][number][],
-): CodexRuntimeAppServerEvidence => ({
-  mode: 'dockerized_app_server',
-  output_schema_versions: uniqueStrings(phases.flatMap((phase) => phase.observed_output_schema_versions)),
-  runtime_job_digests: phases.flatMap((phase) => phase.runtime_job_digests),
-  app_server_evidence_digests: phases.flatMap((phase) => phase.app_server_evidence_digests),
-  phases: [...phases],
-});
-
-const requireObservedEvidenceForPass = (evidence: CodexRuntimeAppServerEvidence): void => {
-  const throwMissingEvidence = (): never => {
-    throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_observed_runtime_evidence_missing', {
-      status: 'BLOCKED',
-      blocker_code: 'codex_runtime_superpowers_observed_runtime_evidence_missing',
-    });
-  };
-  if (evidence.runtime_job_digests.length === 0 || evidence.app_server_evidence_digests.length === 0) {
-    throwMissingEvidence();
-  }
-  for (const phase of evidence.phases) {
-    if (
-      phase.observed_output_schema_versions.length === 0 ||
-      !phase.observed_output_schema_versions.includes(phase.expected_output_schema_version) ||
+export const deriveCodexAppServerEvidence = (phases: CodexRuntimeDogfoodPhaseEvidence[]): CodexRuntimeAppServerEvidence => {
+  const invalidPhase = phases.find(
+    (phase) =>
       phase.runtime_job_digests.length === 0 ||
       phase.app_server_evidence_digests.length === 0 ||
-      phase.cleanup_status !== 'completed'
-    ) {
-      throwMissingEvidence();
-    }
-  }
-};
+      !phase.observed_output_schema_versions.includes(phase.expected_output_schema_version) ||
+      phase.cleanup_status !== 'completed',
+  );
 
-const boundaryCoverageFromEvidence = (
-  evidence: ReadonlyArray<
-    Pick<CodexRuntimeBoundaryRoundDogfoodEvidence, 'ai_turn_count' | 'follow_up_path_covered' | 'summary_request_change_path_covered'>
-  >,
-): {
-  boundaryAiTurnCount: number;
-  followUpPathCovered: boolean;
-  summaryRequestChangePathCovered: boolean;
-} => {
-  if (
-    evidence.some(
-      (entry) =>
-        !Number.isInteger(entry.ai_turn_count) ||
-        entry.ai_turn_count! < 0 ||
-        typeof entry.follow_up_path_covered !== 'boolean' ||
-        typeof entry.summary_request_change_path_covered !== 'boolean',
-    )
-  ) {
-    throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_coverage_evidence_missing', {
+  if (invalidPhase !== undefined) {
+    throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_app_server_phase_evidence_missing', {
       status: 'BLOCKED',
-      blocker_code: 'codex_runtime_superpowers_boundary_coverage_evidence_missing',
+      blocker_code: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
+      cleanup_status: invalidPhase.cleanup_status === 'blocked' ? 'blocked' : 'completed',
+      codex_app_server_evidence: {
+        phases,
+      },
     });
   }
+
+  const runtimeJobDigests = phases.flatMap((phase) => phase.runtime_job_digests);
+  const appServerEvidenceDigests = phases.flatMap((phase) => phase.app_server_evidence_digests);
+  const outputSchemaVersions = phases.flatMap((phase) => phase.observed_output_schema_versions);
+
+  if (runtimeJobDigests.length === 0 || outputSchemaVersions.length === 0 || appServerEvidenceDigests.length === 0) {
+    throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_app_server_evidence_missing', {
+      status: 'BLOCKED',
+      blocker_code: 'codex_runtime_superpowers_app_server_evidence_missing',
+    });
+  }
+
   return {
-    boundaryAiTurnCount: evidence.reduce((sum, entry) => sum + entry.ai_turn_count!, 0),
-    followUpPathCovered: evidence.some((entry) => entry.follow_up_path_covered === true),
-    summaryRequestChangePathCovered: evidence.some((entry) => entry.summary_request_change_path_covered === true),
+    mode: 'dockerized_app_server',
+    output_schema_versions: uniqueStrings(outputSchemaVersions),
+    runtime_job_digests: uniqueStrings(runtimeJobDigests) as Sha256Digest[],
+    app_server_evidence_digests: uniqueStrings(appServerEvidenceDigests) as Sha256Digest[],
+    phases: phases.map((phase) => ({
+      ...phase,
+      cleanup_status: 'completed' as const,
+    })),
   };
 };
 
@@ -649,33 +642,36 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
   const importedRuntime = await input.client.importCodexRuntime();
   await input.client.smokeGenerationWorker();
   await input.client.startNoSharedFilesystemRunWorker();
-  const firstBoundaryRound = await input.client.runBoundaryBrainstormingRound(1);
-  await input.client.answerBoundaryQuestion();
-  const secondBoundaryRound = await input.client.runBoundaryBrainstormingRound(2);
-  await input.client.proposeBoundarySummary();
+  const initialBoundary = await input.client.completeBoundaryBrainstorming('initial');
   await input.client.mutateDevelopmentPlanItem();
   const staleBoundaryCheck = await input.client.assertStaleBoundaryBlocksSpecGeneration();
-  const rebasedBoundary = await input.client.rebaseBoundaryBrainstorming();
-  const approvedBoundary = await input.client.approveBoundarySummary();
+  const rebasedBoundary = await input.client.completeBoundaryBrainstorming('rebase');
   const spec = await input.client.generateAndApproveSpec();
   const executionPlan = await input.client.generateAndApproveExecutionPlan();
   const execution = await input.client.startExecution();
-  const appServerPhases = [
-    appServerPhase('boundary_initial', boundaryOutputSchemaVersion, [firstBoundaryRound, secondBoundaryRound]),
-    appServerPhase('boundary_rebase', boundaryOutputSchemaVersion, [rebasedBoundary]),
-    appServerPhase('spec', specOutputSchemaVersion, [spec]),
-    appServerPhase('execution_plan', executionPlanOutputSchemaVersion, [executionPlan]),
-    appServerPhase('execution', executionOutputSchemaVersion, [execution]),
-  ];
-  const codexAppServerEvidence = appServerEvidenceFromPhases(appServerPhases);
-  requireObservedEvidenceForPass(codexAppServerEvidence);
-  const boundaryCoverage = boundaryCoverageFromEvidence([firstBoundaryRound, secondBoundaryRound, rebasedBoundary]);
+  const boundaryAiTurnCount = initialBoundary.ai_turn_count + rebasedBoundary.ai_turn_count;
+  const followUpCovered = initialBoundary.follow_up_path_covered || rebasedBoundary.follow_up_path_covered;
+  const requestChangeCovered =
+    initialBoundary.summary_request_change_path_covered || rebasedBoundary.summary_request_change_path_covered;
+  if (!followUpCovered || !requestChangeCovered) {
+    throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_coverage_missing', {
+      status: 'BLOCKED',
+      blocker_code: 'codex_runtime_superpowers_boundary_coverage_missing',
+    });
+  }
+  const codexAppServerPhases = collectCodexAppServerPhaseEvidence({
+    boundary: [initialBoundary, rebasedBoundary],
+    spec,
+    executionPlan,
+    execution,
+  });
+  const codexAppServerEvidence = deriveCodexAppServerEvidence(codexAppServerPhases);
   const report: CodexRuntimeSuperpowersDogfoodReport = {
     status: 'PASS',
     package_script_command: packageScriptCommand,
     development_plan_item_id: seed.development_plan_item_id,
-    boundary_brainstorming_session_id: rebasedBoundary.rebased_session_id,
-    boundary_summary_revision_id: approvedBoundary.boundary_summary_revision_id,
+    boundary_brainstorming_session_id: rebasedBoundary.session_id,
+    boundary_summary_revision_id: rebasedBoundary.approved_summary_revision_id,
     spec_revision_id: spec.spec_revision_id,
     execution_plan_revision_id: executionPlan.execution_plan_revision_id,
     execution_id: execution.execution_id,
@@ -688,13 +684,13 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
     stale_boundary_negative_check: {
       blocked: staleBoundaryCheck.blocked,
       blocker_code: staleBoundaryCheck.blocker_code,
-      rebased_session_id: rebasedBoundary.rebased_session_id,
-      rebased_boundary_summary_revision_id: rebasedBoundary.rebased_boundary_summary_revision_id,
+      rebased_session_id: rebasedBoundary.session_id,
+      rebased_boundary_summary_revision_id: rebasedBoundary.approved_summary_revision_id,
     },
-    boundary_ai_turn_count: boundaryCoverage.boundaryAiTurnCount,
-    boundary_follow_up_path_covered: boundaryCoverage.followUpPathCovered,
-    boundary_summary_request_change_path_covered: boundaryCoverage.summaryRequestChangePathCovered,
-    cleanup_status: mergeCleanupStatus([firstBoundaryRound, secondBoundaryRound, rebasedBoundary, spec, executionPlan, execution]),
+    boundary_ai_turn_count: boundaryAiTurnCount,
+    boundary_follow_up_path_covered: followUpCovered,
+    boundary_summary_request_change_path_covered: requestChangeCovered,
+    cleanup_status: codexAppServerEvidence.phases.every((phase) => phase.cleanup_status === 'completed') ? 'completed' : 'blocked',
     changed_files: execution.changed_files,
     report_path: fixedCodexRuntimeSuperpowersDogfoodReportPath,
   };
@@ -1137,6 +1133,38 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     boundarySummaryRevisionId = requireState(revisionId, 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing');
     return boundarySummaryRevisionId;
   };
+  const approveBoundarySummaryRevision = async (sessionId: string, revisionId: string, finalDecision: string): Promise<string> => {
+    const approved = await requestJson<{ id?: string; revision_id?: string; boundary_summary_revision_id?: string }>(
+      config,
+      `/boundary-brainstorming-sessions/${sessionId}/summary-revisions/${revisionId}/approve`,
+      {
+        method: 'POST',
+        body: {
+          actor_id: config.leaderActorId,
+          final_decision: finalDecision,
+        },
+      },
+      fetchDeps,
+    );
+    boundarySummaryRevisionId = approved.boundary_summary_revision_id ?? approved.id ?? approved.revision_id ?? revisionId;
+    return boundarySummaryRevisionId;
+  };
+  const requestBoundarySummaryChanges = async (sessionId: string, revisionId: string): Promise<void> => {
+    await requestJson(
+      config,
+      `/boundary-brainstorming-sessions/${sessionId}/summary-revisions/${revisionId}/request-changes`,
+      {
+        method: 'POST',
+        body: {
+          actor_id: config.leaderActorId,
+          feedback_markdown:
+            'Revise the Boundary Summary to explicitly cover Codex-led follow-up evidence, centralized config/auth distribution, no-shared-filesystem execution, and docs-only mutation constraints.',
+        },
+      },
+      fetchDeps,
+    );
+    cachedBoundarySession = undefined;
+  };
   const fetchDevelopmentPlanItemProjection = async (): Promise<DevelopmentPlanItemProjection> => {
     const planId = requireState(developmentPlanId, 'codex_runtime_superpowers_dogfood_plan_missing');
     const itemId = requireState(developmentPlanItemId, 'codex_runtime_superpowers_dogfood_item_missing');
@@ -1366,10 +1394,13 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         development_plan_item_id: item.id,
       };
     },
-    async runBoundaryBrainstormingRound(roundNumber) {
+    async completeBoundaryBrainstorming(mode) {
       const planId = requireState(developmentPlanId, 'codex_runtime_superpowers_dogfood_plan_missing');
       const itemId = requireState(developmentPlanItemId, 'codex_runtime_superpowers_dogfood_item_missing');
-      if (roundNumber === 1) {
+      let aiTurnCount = 0;
+      let followUpPathCovered = false;
+      let summaryRequestChangePathCovered = false;
+      if (mode === 'initial') {
         const session = await requestJson<{ id: string }>(config, `/development-plans/${planId}/items/${itemId}/boundary-brainstorming`, {
           method: 'POST',
           body: {
@@ -1380,6 +1411,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         }, fetchDeps);
         boundarySessionId = session.id;
         cachedBoundarySession = undefined;
+        aiTurnCount += 1;
         await invokeRemoteWorkerUntil({
           targetKind: 'generation',
           blockerCode: 'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
@@ -1389,69 +1421,143 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
           },
           runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
         });
+        const discoveredQuestionId = openBoundaryQuestionId(cachedBoundarySession) ?? openBoundaryQuestionId(await fetchBoundarySession());
+        const questionId = requireState(
+          config.boundaryQuestionId ?? discoveredQuestionId,
+          'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
+        );
+        await answerBoundaryQuestionById(
+          session.id,
+          questionId,
+          'Limit the execution to a docs-only dogfood report and preserve centralized Codex runtime distribution.',
+        );
+        followUpPathCovered = true;
+        await requestJson(config, `/boundary-brainstorming-sessions/${session.id}/continue`, {
+          method: 'POST',
+          body: {
+            actor_id: config.leaderActorId,
+            leader_input_markdown: 'Continue after Leader answers and propose the strict dogfood Boundary Summary.',
+          },
+        }, fetchDeps);
+        cachedBoundarySession = undefined;
+        aiTurnCount += 1;
+        await invokeRemoteWorkerUntil({
+          targetKind: 'generation',
+          blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
+          observe: async () => {
+            const currentSession = await fetchBoundarySession();
+            return boundarySummaryRevisionIdFromSession(currentSession) === undefined ? undefined : currentSession;
+          },
+          runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
+        });
+        const firstSummaryRevisionId = config.boundarySummaryRevisionId ?? (await latestBoundarySummaryRevisionId());
+        await requestBoundarySummaryChanges(session.id, firstSummaryRevisionId);
+        summaryRequestChangePathCovered = true;
+        aiTurnCount += 1;
+        await invokeRemoteWorkerUntil({
+          targetKind: 'generation',
+          blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
+          observe: async () => {
+            const currentSession = await fetchBoundarySession();
+            const revisionId = boundarySummaryRevisionIdFromSession(currentSession);
+            return revisionId === undefined || revisionId === firstSummaryRevisionId ? undefined : currentSession;
+          },
+          runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
+        });
+        boundarySummaryRevisionId = await latestBoundarySummaryRevisionId();
+        const approvedRevisionId = await approveBoundarySummaryRevision(
+          session.id,
+          boundarySummaryRevisionId,
+          'Approve the revised Boundary Summary revision so the stale item-revision gate can be verified.',
+        );
         return {
-          boundary_brainstorming_session_id: session.id,
+          mode,
+          session_id: session.id,
+          approved_summary_revision_id: approvedRevisionId,
+          ai_turn_count: aiTurnCount,
+          follow_up_path_covered: followUpPathCovered,
+          summary_request_change_path_covered: summaryRequestChangePathCovered,
           ...unobservedPhaseEvidence(),
         };
       }
-      const sessionId = requireState(boundarySessionId, 'codex_runtime_superpowers_dogfood_boundary_session_missing');
-      await requestJson(config, `/boundary-brainstorming-sessions/${sessionId}/continue`, {
-        method: 'POST',
-        body: {
-          actor_id: config.leaderActorId,
-          leader_input_markdown: 'Continue after Leader answers and propose the strict dogfood Boundary Summary.',
-        },
-      }, fetchDeps);
-      cachedBoundarySession = undefined;
-      await invokeRemoteWorkerUntil({
-        targetKind: 'generation',
-        blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
-        observe: async () => {
-          const currentSession = await fetchBoundarySession();
-          return boundarySummaryRevisionIdFromSession(currentSession) === undefined ? undefined : currentSession;
-        },
-        runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
-      });
-      return {
-        boundary_brainstorming_session_id: sessionId,
-        ...unobservedPhaseEvidence(),
-      };
-    },
-    async answerBoundaryQuestion() {
-      const sessionId = requireState(boundarySessionId, 'codex_runtime_superpowers_dogfood_boundary_session_missing');
-      const discoveredQuestionId = openBoundaryQuestionId(cachedBoundarySession) ?? openBoundaryQuestionId(await fetchBoundarySession());
-      const questionId = requireState(
-        config.boundaryQuestionId ?? discoveredQuestionId,
-        'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
-      );
-      await answerBoundaryQuestionById(
-        sessionId,
-        questionId,
-        'Limit the execution to a docs-only dogfood report and preserve centralized Codex runtime distribution.',
-      );
-    },
-    async proposeBoundarySummary() {
-      boundarySummaryRevisionId = config.boundarySummaryRevisionId ?? (await latestBoundarySummaryRevisionId());
-      return { boundary_summary_revision_id: boundarySummaryRevisionId };
-    },
-    async mutateDevelopmentPlanItem() {
-      const planId = requireState(developmentPlanId, 'codex_runtime_superpowers_dogfood_plan_missing');
-      const itemId = requireState(developmentPlanItemId, 'codex_runtime_superpowers_dogfood_item_missing');
-      const sessionId = requireState(boundarySessionId, 'codex_runtime_superpowers_dogfood_boundary_session_missing');
-      const revisionId = requireState(boundarySummaryRevisionId, 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing');
-      const approved = await requestJson<{ id?: string; revision_id?: string; boundary_summary_revision_id?: string }>(
+
+      const session = await requestJson<{ id: string }>(
         config,
-        `/boundary-brainstorming-sessions/${sessionId}/summary-revisions/${revisionId}/approve`,
+        `/development-plans/${planId}/items/${itemId}/boundary-brainstorming/restart`,
         {
           method: 'POST',
           body: {
             actor_id: config.leaderActorId,
-            final_decision: 'Approve the first Boundary Summary revision so the stale item-revision gate can be verified.',
+            leader_actor_id: config.leaderActorId,
+            initial_leader_context_markdown:
+              'Rebase the strict Codex runtime dogfood boundary after the Development Plan Item revision changed; previous Leader answers still apply unless a new blocker exists.',
           },
         },
         fetchDeps,
       );
-      boundarySummaryRevisionId = approved.boundary_summary_revision_id ?? approved.id ?? approved.revision_id ?? revisionId;
+      boundarySessionId = session.id;
+      cachedBoundarySession = undefined;
+      aiTurnCount += 1;
+      const rebaseState = await invokeRemoteWorkerUntil({
+        targetKind: 'generation',
+        blockerCode: 'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
+        observe: async () => {
+          const currentSession = await fetchBoundarySession();
+          const revisionId = boundarySummaryRevisionIdFromSession(currentSession);
+          if (revisionId !== undefined) {
+            return { revisionId };
+          }
+          const questionId = openBoundaryQuestionId(currentSession);
+          return questionId === undefined ? undefined : { questionId };
+        },
+        runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
+      });
+      if ('questionId' in rebaseState) {
+        await answerBoundaryQuestionById(
+          session.id,
+          rebaseState.questionId,
+          'The rebased boundary remains docs-only and must preserve centralized Codex runtime distribution without worker-local configuration.',
+        );
+        followUpPathCovered = true;
+        await requestJson(config, `/boundary-brainstorming-sessions/${session.id}/continue`, {
+          method: 'POST',
+          body: {
+            actor_id: config.leaderActorId,
+            leader_input_markdown: 'Continue after Leader rebase answer and propose the current strict dogfood Boundary Summary.',
+          },
+        }, fetchDeps);
+        cachedBoundarySession = undefined;
+        aiTurnCount += 1;
+        await invokeRemoteWorkerUntil({
+          targetKind: 'generation',
+          blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
+          observe: async () => {
+            const currentSession = await fetchBoundarySession();
+            return boundarySummaryRevisionIdFromSession(currentSession) === undefined ? undefined : currentSession;
+          },
+          runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
+        });
+      }
+      const revisionId = await latestBoundarySummaryRevisionId();
+      const approvedRevisionId = await approveBoundarySummaryRevision(
+        session.id,
+        revisionId,
+        'Approve the strict Codex runtime Superpowers dogfood boundary.',
+      );
+      return {
+        mode,
+        session_id: session.id,
+        approved_summary_revision_id: approvedRevisionId,
+        ai_turn_count: aiTurnCount,
+        follow_up_path_covered: followUpPathCovered,
+        summary_request_change_path_covered: summaryRequestChangePathCovered,
+        ...unobservedPhaseEvidence(),
+      };
+    },
+    async mutateDevelopmentPlanItem() {
+      const planId = requireState(developmentPlanId, 'codex_runtime_superpowers_dogfood_plan_missing');
+      const itemId = requireState(developmentPlanItemId, 'codex_runtime_superpowers_dogfood_item_missing');
+      requireState(boundarySummaryRevisionId, 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing');
       await requestJson(config, `/development-plans/${planId}/items/${itemId}`, {
         method: 'PATCH',
         body: {
@@ -1488,83 +1594,6 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         });
       }
       return { blocked: true, blocker_code: 'STALE_BOUNDARY_SUMMARY' };
-    },
-    async rebaseBoundaryBrainstorming() {
-      const planId = requireState(developmentPlanId, 'codex_runtime_superpowers_dogfood_plan_missing');
-      const itemId = requireState(developmentPlanItemId, 'codex_runtime_superpowers_dogfood_item_missing');
-      const session = await requestJson<{ id: string }>(config, `/development-plans/${planId}/items/${itemId}/boundary-brainstorming/restart`, {
-        method: 'POST',
-        body: {
-          actor_id: config.leaderActorId,
-          leader_actor_id: config.leaderActorId,
-          initial_leader_context_markdown:
-            'Rebase the strict Codex runtime dogfood boundary after the Development Plan Item revision changed; previous Leader answers still apply unless a new blocker exists.',
-        },
-      }, fetchDeps);
-      boundarySessionId = session.id;
-      cachedBoundarySession = undefined;
-      const rebaseState = await invokeRemoteWorkerUntil({
-        targetKind: 'generation',
-        blockerCode: 'codex_runtime_superpowers_dogfood_boundary_question_id_missing',
-        observe: async () => {
-          const currentSession = await fetchBoundarySession();
-          const revisionId = boundarySummaryRevisionIdFromSession(currentSession);
-          if (revisionId !== undefined) {
-            return { revisionId };
-          }
-          const questionId = openBoundaryQuestionId(currentSession);
-          return questionId === undefined ? undefined : { questionId };
-        },
-        runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
-      });
-      if ('questionId' in rebaseState) {
-        await answerBoundaryQuestionById(
-          session.id,
-          rebaseState.questionId,
-          'The rebased boundary remains docs-only and must preserve centralized Codex runtime distribution without worker-local configuration.',
-        );
-        await requestJson(config, `/boundary-brainstorming-sessions/${session.id}/continue`, {
-          method: 'POST',
-          body: {
-            actor_id: config.leaderActorId,
-            leader_input_markdown: 'Continue after Leader rebase answer and propose the current strict dogfood Boundary Summary.',
-          },
-        }, fetchDeps);
-        cachedBoundarySession = undefined;
-        await invokeRemoteWorkerUntil({
-          targetKind: 'generation',
-          blockerCode: 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',
-          observe: async () => {
-            const currentSession = await fetchBoundarySession();
-            return boundarySummaryRevisionIdFromSession(currentSession) === undefined ? undefined : currentSession;
-          },
-          runtimeJobId: () => cachedBoundarySession?.current_round_runtime_job_id,
-        });
-      }
-      const revisionId = await latestBoundarySummaryRevisionId();
-      return {
-        rebased_session_id: session.id,
-        rebased_boundary_summary_revision_id: revisionId,
-        ...unobservedPhaseEvidence(),
-      };
-    },
-    async approveBoundarySummary() {
-      const sessionId = requireState(boundarySessionId, 'codex_runtime_superpowers_dogfood_boundary_session_missing');
-      const revisionId = requireState(boundarySummaryRevisionId, 'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing');
-      const approved = await requestJson<{ id?: string; revision_id?: string; boundary_summary_revision_id?: string }>(
-        config,
-        `/boundary-brainstorming-sessions/${sessionId}/summary-revisions/${revisionId}/approve`,
-        {
-          method: 'POST',
-          body: {
-            actor_id: config.leaderActorId,
-            final_decision: 'Approve the strict Codex runtime Superpowers dogfood boundary.',
-          },
-        },
-        fetchDeps,
-      );
-      boundarySummaryRevisionId = approved.boundary_summary_revision_id ?? approved.id ?? approved.revision_id ?? revisionId;
-      return { boundary_summary_revision_id: boundarySummaryRevisionId };
     },
     async generateAndApproveSpec() {
       const planId = requireState(developmentPlanId, 'codex_runtime_superpowers_dogfood_plan_missing');
