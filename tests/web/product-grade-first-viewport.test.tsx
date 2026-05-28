@@ -122,8 +122,12 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
 
     expect(await rendered.findByRole('heading', { name: 'Development Plans' })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'planning-table', heading: 'Development Plans' });
+    expect(document.querySelector('[data-product-shell="development-plan-workspace"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-development-plan-summary-bar]')?.textContent).toMatch(/total plans|active plans|blocked items|review aging|execution in progress/i);
+    expect(document.querySelector('[data-development-plan-toolbar]')?.textContent).toMatch(/source type|role|driver|reviewer|gate|risk|release impact|status/i);
     expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-first-viewport]')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/source object context|\brow\b/i);
   });
 
   it('requires Development Plan authoring to expose source-context planning controls before downstream artifacts', async () => {
@@ -142,10 +146,14 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
 
     expect(await rendered.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'planning-table', heading: developmentPlan.title });
+    expect(document.querySelector('[data-product-shell="development-plan-workspace"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(rendered.getByRole('button', { name: /ai generate missing plan items/i })).toBeTruthy();
+    expect(rendered.getByRole('button', { name: /regenerate with guidance/i })).toBeTruthy();
+    expect(rendered.getByRole('region', { name: /selected plan item inspector/i })).toBeTruthy();
     expect(document.querySelector('[data-first-viewport]')).toBeNull();
     expect(document.querySelector('[data-plan-items-table]')?.textContent).toMatch(/Plan Item|gate|Resolve Spec review comments/i);
-    expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b/);
+    expect(document.body.textContent).not.toMatch(/source object context|\brow\b|Work Item Owner|owner_actor_id|\bTask\b/);
   });
 
   it('requires Development Plan Item gate routes to expose gate-flow workspaces', async () => {

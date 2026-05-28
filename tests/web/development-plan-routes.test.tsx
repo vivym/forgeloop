@@ -15,21 +15,23 @@ describe('Development Plan routes', () => {
     expect(await screen.findByRole('heading', { name: 'Development Plans' })).toBeTruthy();
     expectFirstViewportContract(screen, { pageFamily: 'planning-table', heading: 'Development Plans' });
     expect(document.querySelector('[data-page-family="planning-table"]')).toBeTruthy();
+    expect(document.querySelector('[data-product-shell="development-plan-workspace"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-development-plan-summary-bar]')?.textContent).toMatch(/total plans|active plans|blocked items|review aging|execution in progress/i);
     expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeTruthy();
     expect(screen.getByRole('table', { name: /active development plans/i })).toBeTruthy();
-    for (const column of ['Development Plan', 'Source links', 'Plan items', 'Role', 'Gate', 'Risk', 'Status']) {
+    for (const column of ['Development Plan', 'Typed refs', 'Plan Items', 'Responsible roles', 'Gate distribution', 'Risk', 'Status']) {
       expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
     }
-    for (const filter of ['Source type', 'Role', 'Gate', 'Risk', 'Status']) {
+    for (const filter of ['Source type', 'Role', 'Driver', 'Reviewer', 'Gate', 'Risk', 'Release impact', 'Status']) {
       expect(screen.getByRole('combobox', { name: filter })).toBeTruthy();
     }
     expect(screen.getByRole('link', { name: /create development plan/i }).getAttribute('href')).toBe('/development-plans/new');
     expect(screen.getByRole('link', { name: /generate with ai assistance/i }).getAttribute('href')).toBe('/development-plans/new');
-    expect(await screen.findByText(/1 active plan/i)).toBeTruthy();
-    expect(screen.getAllByText(/1 blocked/i).length).toBeGreaterThan(0);
-    expect((await screen.findByRole('link', { name: /Plan Item governed Spec and Execution Plan generation/i })).getAttribute('href')).toBe('/requirements/req-plan-item-governance');
-    expect(screen.getAllByText(/4 Plan Items/i).length).toBeGreaterThan(0);
-    expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b/);
+    expect((await screen.findByRole('link', { name: /Product workspace clarity and route-backed context/i })).getAttribute('href')).toBe('/requirements/req-product-workspace-clarity');
+    expect(document.querySelector('[data-development-plan-summary-bar]')?.textContent).toMatch(/Active plans2/i);
+    expect(document.querySelector('[data-development-plan-summary-bar]')?.textContent).toMatch(/Blocked items3/i);
+    expect(document.body.textContent).toMatch(/\d+ Plan Items?/i);
+    expect(document.body.textContent).not.toMatch(/source object context|\brow\b|Work Item Owner|owner_actor_id|\bTask\b/);
     expect(document.body.textContent).not.toContain('Release Owner');
   });
 
@@ -38,13 +40,80 @@ describe('Development Plan routes', () => {
 
     expect(await screen.findByRole('link', { name: developmentPlan.title })).toBeTruthy();
     fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'developer' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Driver' }), { target: { value: developmentPlanItem.driver_actor_id } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Reviewer' }), { target: { value: 'actor-reviewer' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Gate' }), { target: { value: 'execution' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Risk' }), { target: { value: 'medium' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Release impact' }), { target: { value: 'release_scoped' } });
 
     expect(screen.getByRole('link', { name: developmentPlan.title })).toBeTruthy();
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Risk' }), { target: { value: 'critical' } });
     expect(screen.queryByRole('link', { name: developmentPlan.title })).toBeNull();
+  });
+
+  it('keeps Development Plan index summary and inspector scoped to filtered rows', async () => {
+    const visiblePlan = {
+      ...developmentPlan,
+      id: 'dp-visible-critical-plan',
+      title: 'Visible critical Development Plan',
+      source_refs: [{ type: 'bug', id: 'bug-visible-critical', title: 'Visible critical bug' }],
+      item_count: 1,
+      blocked_count: 1,
+      responsible_role: 'developer',
+      responsible_roles: ['developer'],
+      driver_actor_id: 'actor-critical-driver',
+      driver_actor_ids: ['actor-critical-driver'],
+      reviewer_actor_id: 'actor-critical-reviewer',
+      reviewer_actor_ids: ['actor-critical-reviewer'],
+      gate_state: 'qa',
+      gate_states: ['qa'],
+      risk: 'critical',
+      risks: ['critical'],
+      release_impact: 'release_scoped',
+      release_impacts: ['release_scoped'],
+      href: '/development-plans/dp-visible-critical-plan',
+    };
+    const screen = await renderRoute('/development-plans', {
+      apiOverrides: {
+        [`GET /query/development-plans?project_id=${projectId}`]: {
+          items: [
+            {
+              ...developmentPlan,
+              item_count: developmentPlan.items.length,
+              blocked_count: 0,
+              responsible_role: 'developer',
+              responsible_roles: ['developer'],
+              driver_actor_id: developmentPlanItem.driver_actor_id,
+              driver_actor_ids: [developmentPlanItem.driver_actor_id],
+              reviewer_actor_id: developmentPlanItem.reviewer_actor_id,
+              reviewer_actor_ids: [developmentPlanItem.reviewer_actor_id],
+              gate_state: 'execution',
+              gate_states: ['execution'],
+              risk: 'medium',
+              risks: ['medium'],
+              release_impact: developmentPlanItem.release_impact,
+              release_impacts: [developmentPlanItem.release_impact],
+              href: `/development-plans/${developmentPlan.id}`,
+            },
+            visiblePlan,
+          ],
+          degraded_sources: [],
+        },
+      },
+    });
+
+    expect(await screen.findByRole('link', { name: developmentPlan.title })).toBeTruthy();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Source type' }), { target: { value: 'bug' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Risk' }), { target: { value: 'critical' } });
+
+    const summary = document.querySelector('[data-development-plan-summary-bar]');
+    expect(summary?.textContent).toMatch(/Total plans1/i);
+    expect(summary?.textContent).toMatch(/Active plans1/i);
+    expect(screen.queryByRole('link', { name: developmentPlan.title })).toBeNull();
+    expect(screen.getByRole('link', { name: /Visible critical Development Plan/i })).toBeTruthy();
+    expect(screen.getByRole('region', { name: /selected development plan preview/i }).textContent).toContain('Visible critical Development Plan');
+    expect(screen.getByRole('region', { name: /selected development plan preview/i }).textContent).not.toContain(developmentPlan.title);
   });
 
   it('renders a useful Development Plans empty state without reverting to a source picker placeholder', async () => {
@@ -155,7 +224,7 @@ describe('Development Plan routes', () => {
     await user.clear(await screen.findByRole('textbox', { name: /development plan title/i }));
     await user.type(screen.getByRole('textbox', { name: /development plan title/i }), 'Plan Item governance closure');
     await user.selectOptions(screen.getByRole('combobox', { name: /source type/i }), 'requirement');
-    await user.selectOptions(screen.getByRole('combobox', { name: /source object/i }), 'req-plan-item-governance');
+    await user.selectOptions(screen.getByRole('combobox', { name: /source object/i }), 'req-product-workspace-clarity');
     await user.type(screen.getByRole('textbox', { name: /manual source guidance/i }), 'Keep the plan scoped to Plan Item governance boundaries.');
     await user.type(screen.getByRole('textbox', { name: /ai generation guidance/i }), 'Draft Plan Items from governed generation acceptance criteria.');
 
@@ -164,7 +233,7 @@ describe('Development Plan routes', () => {
       expect.objectContaining({
         guidance: 'Keep the plan scoped to Plan Item governance boundaries.',
         title: 'Plan Item governance closure',
-        source_ref: { type: 'requirement', id: 'req-plan-item-governance', title: 'Plan Item governed Spec and Execution Plan generation' },
+        source_ref: { type: 'requirement', id: 'req-product-workspace-clarity', title: 'Product workspace clarity and route-backed context' },
       }),
     ]);
     expectNoDownstreamArtifactPayload(createBodies[0]);
@@ -179,7 +248,7 @@ describe('Development Plan routes', () => {
       },
     });
     await user.selectOptions(await generateScreen.findByRole('combobox', { name: /source type/i }), 'requirement');
-    await user.selectOptions(generateScreen.getByRole('combobox', { name: /source object/i }), 'req-plan-item-governance');
+    await user.selectOptions(generateScreen.getByRole('combobox', { name: /source object/i }), 'req-product-workspace-clarity');
     await user.type(generateScreen.getByRole('textbox', { name: /ai generation guidance/i }), 'Draft Plan Items from governed generation acceptance criteria.');
     await user.click(generateScreen.getByRole('button', { name: /^generate ai-assisted draft$/i }));
 
@@ -189,7 +258,7 @@ describe('Development Plan routes', () => {
     );
     expect(generateBodies).toEqual([
       expect.objectContaining({
-        source_ref: { type: 'requirement', id: 'req-plan-item-governance', title: 'Plan Item governed Spec and Execution Plan generation' },
+        source_ref: { type: 'requirement', id: 'req-product-workspace-clarity', title: 'Product workspace clarity and route-backed context' },
         guidance: expect.stringContaining('Draft Plan Items'),
       }),
     ]);
@@ -204,11 +273,12 @@ describe('Development Plan routes', () => {
     expect(await screen.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
     expectFirstViewportContract(screen, { pageFamily: 'planning-table', heading: developmentPlan.title });
     expect(document.querySelector('[data-page-family="planning-table"]')).toBeTruthy();
+    expect(document.querySelector('[data-product-shell="development-plan-workspace"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeTruthy();
-    for (const column of ['Plan Item', 'Role', 'Risk', 'Boundary', 'Spec', 'Execution Plan', 'Execution', 'Review', 'QA', 'Release impact', 'Next action']) {
+    for (const column of ['Plan Item', 'Typed refs', 'Current gate', 'Gate progress', 'Risk', 'Driver', 'Responsible role', 'Reviewer', 'Affected surfaces', 'Dependencies', 'Release impact', 'Next action']) {
       expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
     }
-    for (const hiddenTabletColumn of ['Current gate', 'Gate progress', 'QA / Review']) {
+    for (const hiddenTabletColumn of ['Boundary', 'Spec', 'Execution Plan', 'Execution', 'Review', 'QA', 'QA / Review']) {
       expect(screen.queryByRole('columnheader', { name: hiddenTabletColumn })).toBeNull();
     }
     expect(screen.getByRole('region', { name: /development plan items table region/i }).contains(screen.getByRole('table', { name: /development plan items/i }))).toBe(true);
@@ -217,12 +287,15 @@ describe('Development Plan routes', () => {
     expect(screen.getByRole('link', { name: developmentPlanItem.title }).getAttribute('href')).toBe(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
-    expect(screen.getAllByRole('link', { name: /open item/i }).map((link) => link.getAttribute('href'))).toContain(
+    expect(screen.getAllByRole('link', { name: /open plan item/i }).map((link) => link.getAttribute('href'))).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
-    expect(screen.getByRole('button', { name: /add row/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /regenerate with ai/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /add plan item/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /ai generate missing plan items/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /regenerate with guidance/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /show context manifest/i })).toBeTruthy();
+    expect(screen.getByRole('region', { name: /selected plan item inspector/i })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/source object context|\brow\b/i);
   });
 
   it('uses compact gate progress summary columns at 1024px instead of cramming every planning field', async () => {
@@ -231,10 +304,10 @@ describe('Development Plan routes', () => {
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}`);
 
     expect(await screen.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
-    for (const column of ['Plan Item', 'Role', 'Risk', 'Current gate', 'Gate progress', 'Execution', 'QA / Review', 'Next action']) {
+    for (const column of ['Plan Item', 'Typed refs', 'Current gate', 'Gate progress', 'Risk', 'Driver', 'Responsible role', 'Next action']) {
       expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
     }
-    for (const desktopOnlyColumn of ['Driver', 'Reviewer', 'Dependency hints', 'Affected surface', 'Boundary', 'Spec', 'Execution Plan', 'Release impact']) {
+    for (const desktopOnlyColumn of ['Reviewer', 'Affected surfaces', 'Dependencies', 'Boundary', 'Spec', 'Execution Plan', 'Release impact']) {
       expect(screen.queryByRole('columnheader', { name: desktopOnlyColumn })).toBeNull();
     }
     expect(screen.getAllByText(/Current gate/i).length).toBeGreaterThan(0);
@@ -253,13 +326,13 @@ describe('Development Plan routes', () => {
     });
 
     expect((await screen.findAllByText(developmentPlanItem.title)).length).toBeGreaterThan(0);
-    const preview = await screen.findByRole('region', { name: /selected development plan item/i });
+    const preview = await screen.findByRole('region', { name: /selected plan item inspector/i });
     expect(preview.textContent).toContain(developmentPlanItem.title);
     expect(preview.textContent).toContain(developmentPlanItem.summary);
     expect(preview.textContent).toMatch(/Current gate/i);
     expect(preview.textContent).toContain(developmentPlanItem.next_action);
     expect(preview.textContent).toMatch(/Blocker \/ risk/i);
-    expect(preview.textContent).toMatch(/Plan Item governed Spec and Execution Plan generation/i);
+    expect(preview.textContent).toMatch(/Product workspace clarity and route-backed context/i);
     expect(preview.textContent).toMatch(/Gate evidence/i);
     expect(preview.textContent).toMatch(/Driver/i);
     expect(preview.textContent).toMatch(/Reviewer/i);
@@ -385,7 +458,7 @@ describe('Development Plan routes', () => {
   it('prioritizes the active gate body on Development Plan Item focus routes', async () => {
     for (const [route, title, bodyText] of [
       [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`, 'Boundary brainstorming', /Which source and code boundaries are in scope/i],
-      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, 'Execution supervision', /Codex worker is seeding visual review data/i],
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, 'Execution supervision', /Codex worker is rebuilding product workspace preview data/i],
     ] as const) {
       const screen = await renderRoute(route);
 
@@ -408,7 +481,7 @@ describe('Development Plan routes', () => {
 
     await user.tab();
     const targetOpenItemLink = screen
-      .getAllByRole('link', { name: /open item/i })
+      .getAllByRole('link', { name: /open plan item/i })
       .find((link) => link.getAttribute('href') === `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
     expect(targetOpenItemLink).toBeTruthy();
     for (let index = 0; index < 50 && document.activeElement !== targetOpenItemLink; index += 1) {
@@ -711,15 +784,14 @@ describe('Development Plan routes', () => {
     expect(document.body.textContent).not.toContain('Retry evidence should not render');
   });
 
-  it('renders required surface states for Development Plan pages', async () => {
-    for (const [route, key] of [
-      [`/development-plans/${developmentPlan.id}`, 'Development Plan Page'],
-      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, 'Development Plan Item Detail'],
-    ] as const) {
-      const screen = await renderRoute(route);
-      expect(await screen.findByLabelText(new RegExp(`${key} .* state`, 'i'))).toBeTruthy();
-      cleanup();
-    }
+  it('keeps Development Plan loaded state compact while Plan Item pages expose exceptional state', async () => {
+    const planScreen = await renderRoute(`/development-plans/${developmentPlan.id}`);
+    expect(await planScreen.findByRole('heading', { name: developmentPlan.title })).toBeTruthy();
+    expect(planScreen.queryByLabelText(/Development Plan Page .* state/i)).toBeNull();
+    cleanup();
+
+    const itemScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+    expect(await itemScreen.findByLabelText(/Development Plan Item Detail .* state/i)).toBeTruthy();
   });
 });
 

@@ -55,6 +55,11 @@ const activeTypedSourceText = () =>
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
 
+const activeDevelopmentPlanText = () =>
+  textFiles('apps/web/src/features/development-plans')
+    .map((file) => readFileSync(file, 'utf8'))
+    .join('\n');
+
 type LegacyPattern = {
   target: string;
   pattern: RegExp;
@@ -240,5 +245,11 @@ describe('no legacy Web UI baggage', () => {
     expect(activeTypedSourceText()).not.toMatch(/requirement summary unavailable/i);
     expect(activeTypedSourceText()).not.toMatch(/planning state unknown/i);
     expect(activeTypedSourceText()).not.toMatch(/evidence unavailable/i);
+  });
+
+  it('does not keep generic Development Plan workspace copy or normal state banners', () => {
+    expect(activeDevelopmentPlanText()).not.toMatch(/source object context/i);
+    expect(activeDevelopmentPlanText()).not.toMatch(/\b(?:add|save|preview|generate missing|regenerate missing|new) rows?\b/i);
+    expect(activeDevelopmentPlanText()).not.toMatch(/normal loaded|normal approved|approved state|Development Plan Page/i);
   });
 });

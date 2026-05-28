@@ -397,8 +397,11 @@ export async function listDevelopmentPlanProjections(
     visiblePlans.map(async (plan) => {
       const items = await repository.listDevelopmentPlanItems(plan.id);
       const responsibleRoles = uniqueStrings(items.map((item) => item.responsible_role));
+      const driverActorIds = uniqueStrings(items.map((item) => item.driver_actor_id));
+      const reviewerActorIds = uniqueStrings(items.map((item) => item.reviewer_actor_id));
       const gateStates = uniqueStrings(items.map(currentDevelopmentPlanItemGate));
       const risks = uniqueStrings(items.map((item) => item.risk));
+      const releaseImpacts = uniqueStrings(items.map((item) => item.release_impact));
       return {
         id: plan.id,
         object_ref: developmentPlanRef(plan),
@@ -409,10 +412,16 @@ export async function listDevelopmentPlanProjections(
         blocked_count: items.filter(isDevelopmentPlanItemBlocked).length,
         responsible_role: responsibleRoles.length === 1 ? responsibleRoles[0] : 'mixed',
         responsible_roles: responsibleRoles,
+        driver_actor_id: driverActorIds.length === 1 ? driverActorIds[0] : undefined,
+        driver_actor_ids: driverActorIds,
+        reviewer_actor_id: reviewerActorIds.length === 1 ? reviewerActorIds[0] : undefined,
+        reviewer_actor_ids: reviewerActorIds,
         gate_state: gateStates.length === 1 ? gateStates[0] : 'mixed',
         gate_states: gateStates,
         risk: highestRisk(risks),
         risks,
+        release_impact: releaseImpacts.length === 1 ? releaseImpacts[0] : undefined,
+        release_impacts: releaseImpacts,
         href: `/development-plans/${plan.id}`,
         updated_at: plan.updated_at,
       };

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { bugListItem, initiativeListItem, requirementListItem, techDebtListItem } from './fixtures/product-data';
+import { bugListItem, developmentPlan, initiativeListItem, requirementListItem, techDebtListItem } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 const repoRoot = process.cwd();
@@ -104,6 +104,8 @@ describe('product workspace shell boundaries', () => {
     ['/tech-debt', 'tech-debt-workspace'],
     ['/tech-debt/new', 'tech-debt-workspace'],
     [`/tech-debt/${techDebtListItem.id}`, 'tech-debt-workspace'],
+    ['/development-plans', 'development-plan-workspace'],
+    [`/development-plans/${developmentPlan.id}`, 'development-plan-workspace'],
   ] as const)('renders %s inside the typed product shell %s', async (route, shellMarker) => {
     await renderRoute(route);
 

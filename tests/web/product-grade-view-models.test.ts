@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { cockpitCommandCenterViewModel, cockpitViewModel } from '../../apps/web/src/features/cockpit/cockpit-view-model';
 import {
   developmentPlanItemViewModel,
+  developmentPlanWorkspaceViewModel,
   developmentPlanViewModel,
 } from '../../apps/web/src/features/development-plans/development-plan-view-model';
 import { executionViewModel } from '../../apps/web/src/features/executions/execution-view-model';
@@ -427,6 +428,42 @@ describe('product-grade presentation view models', () => {
   });
 
   it('projects Development Plans and Development Plan Items', () => {
+    expect(developmentPlanWorkspaceViewModel([developmentPlan], developmentPlan.id)).toMatchObject({
+      summaryMetrics: expect.arrayContaining([
+        expect.objectContaining({ label: 'Total plans', value: '1' }),
+        expect.objectContaining({ label: 'Active plans', value: '1' }),
+        expect.objectContaining({ label: 'Blocked items', value: '2' }),
+        expect.objectContaining({ label: 'Review aging', value: expect.any(String) }),
+        expect.objectContaining({ label: 'Execution in progress', value: '1' }),
+      ]),
+      plans: [
+        expect.objectContaining({
+          title: developmentPlan.title,
+          typedRefs: ['Product workspace clarity and route-backed context'],
+          itemCount: 4,
+          blockedCount: 2,
+          gateDistribution: expect.stringContaining('Spec'),
+          actors: expect.objectContaining({
+            drivers: expect.arrayContaining([actorId]),
+            reviewers: expect.arrayContaining(['actor-reviewer']),
+          }),
+          nextAction: expect.any(String),
+        }),
+      ],
+      selectedPlan: expect.objectContaining({
+        id: developmentPlan.id,
+        selectedPlanItem: expect.objectContaining({
+          id: developmentPlan.items[0].id,
+          typedSourceContext: ['Product workspace clarity and route-backed context'],
+          artifacts: expect.arrayContaining([
+            expect.objectContaining({ label: 'Spec', href: expect.stringContaining('/spec') }),
+            expect.objectContaining({ label: 'Execution Plan', href: expect.stringContaining('/execution-plan') }),
+            expect.objectContaining({ label: 'Execution', href: expect.stringContaining('/execution') }),
+          ]),
+        }),
+      }),
+    });
+
     expect(developmentPlanViewModel(developmentPlan)).toMatchObject({
       objectLabel: developmentPlan.title,
       objectType: 'Development Plan',
@@ -455,6 +492,40 @@ describe('product-grade presentation view models', () => {
       qa_handoff_status: 'approved',
       review_status: 'approved',
     }).nextAction).toBe('Prepare release');
+  });
+
+  it('does not count ordinary pending gate progression as blocked Development Plan work', () => {
+    const pendingPlan = {
+      ...developmentPlan,
+      blocked_count: undefined,
+      items: [
+        {
+          ...developmentPlan.items[0],
+          boundary_status: 'approved',
+          spec_status: 'in_review',
+          execution_plan_status: 'missing',
+          execution_status: 'not_started',
+          review_status: 'missing',
+          qa_handoff_status: 'pending',
+        },
+      ],
+    };
+
+    expect(developmentPlanWorkspaceViewModel([pendingPlan], pendingPlan.id)).toMatchObject({
+      summaryMetrics: expect.arrayContaining([
+        expect.objectContaining({ label: 'Blocked items', value: '0' }),
+      ]),
+      selectedPlan: expect.objectContaining({
+        blockedCount: 0,
+      }),
+    });
+
+    expect(developmentPlanViewModel(pendingPlan)).toMatchObject({
+      riskSignal: 'No blocked item signal',
+      secondaryMetadata: expect.arrayContaining([
+        expect.objectContaining({ label: 'Blocked', value: '0' }),
+      ]),
+    });
   });
 
   it('projects Spec and Execution Plan governance queues', () => {
