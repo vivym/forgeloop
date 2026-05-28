@@ -636,7 +636,6 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
     `- Cleanup status: ${report.cleanup_status}`,
     `- Changed files: ${report.changed_files.join(', ')}`,
     `- Report path: ${report.report_path}`,
-    '',
   ];
   const markdown = `${lines.join('\n')}\n`;
   assertPublicSafeReport(markdown);
@@ -710,7 +709,6 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
           `- Dogfood worktree base: mode=${report.dogfood_worktree_base.mode} base_commit_digest=${report.dogfood_worktree_base.base_commit_digest}`,
         ]),
     ...(report.codex_app_server_evidence?.phases ?? []).map(renderCodexAppServerPhaseEvidenceLine),
-    '',
   ];
   const markdown = `${lines.join('\n')}\n`;
   assertPublicSafeReport(markdown);

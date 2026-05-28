@@ -550,6 +550,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(markdown).not.toContain('docker-exec:');
     expect(markdown).not.toContain('localhost');
     expect(markdown).not.toContain('container');
+    expect(markdown).not.toMatch(/\n\n$/);
   });
 
   it('rejects unsafe public report values and path-traversal report filenames', async () => {
@@ -741,6 +742,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       expect(writtenMarkdown).not.toContain('localhost');
       expect(writtenMarkdown).not.toContain('auth.json');
       expect(writtenMarkdown).not.toContain('config.toml');
+      expect(writtenMarkdown).not.toMatch(/\n\n$/);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
