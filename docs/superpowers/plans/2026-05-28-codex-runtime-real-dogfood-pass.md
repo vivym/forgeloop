@@ -1431,7 +1431,7 @@ try {
 } catch (error) {
   expect(error).toMatchObject({
     blockerCode: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
-    details: {
+    report: {
       cleanup_status: 'blocked',
       codex_app_server_evidence: {
         phases: [
@@ -1518,7 +1518,15 @@ if (runtimeJobDigests.length === 0 || outputSchemaVersions.length === 0 || appSe
 Run:
 
 ```bash
-pnpm vitest run tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts tests/api/codex-runtime-control-plane.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+```
+
+Expected: PASS.
+
+If Step 5 changed `packages/domain/src/codex-runtime.ts` or `packages/codex-worker-runtime/src/remote-worker-client.ts`, also include their focused tests in the same verification run:
+
+```bash
+pnpm vitest run tests/domain/codex-runtime.test.ts tests/codex-worker-runtime/remote-worker-client.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 ```
 
 Expected: PASS.
@@ -1528,9 +1536,11 @@ Expected: PASS.
 Run:
 
 ```bash
-git add scripts/codex-runtime-superpowers-dogfood.ts tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts tests/api/codex-runtime-control-plane.test.ts
+git add scripts/codex-runtime-superpowers-dogfood.ts tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts tests/api/codex-runtime-control-plane.test.ts packages/domain/src/codex-runtime.ts tests/domain/codex-runtime.test.ts packages/codex-worker-runtime/src/remote-worker-client.ts tests/codex-worker-runtime/remote-worker-client.test.ts
 git commit -m "feat: record codex dogfood runtime schema evidence"
 ```
+
+If `packages/domain/src/codex-runtime.ts`, `tests/domain/codex-runtime.test.ts`, `packages/codex-worker-runtime/src/remote-worker-client.ts`, or `tests/codex-worker-runtime/remote-worker-client.test.ts` were not touched because the existing projection already carried validated run-execution runtime evidence, do not stage them. Before committing, run `git status --short` and ensure every touched Task 4 file is either intentionally staged or intentionally absent from the diff.
 
 ## Task 5: Update Runbook And Guard Tests
 
@@ -1993,7 +2003,7 @@ If the report is BLOCKED because of an external dependency, the commit message m
 Run:
 
 ```bash
-pnpm vitest run tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts tests/smoke/codex-runtime-no-baggage-gate.test.ts tests/smoke/runbook-script-consistency.test.ts tests/api/brainstorming.test.ts tests/api/spec-plan-service.test.ts tests/api/executions.test.ts tests/codex-worker-runtime/remote-worker-client.test.ts tests/codex-worker-runtime/app-server-launcher.test.ts tests/codex-runtime/runtime.test.ts tests/codex-runtime/app-server-generation-driver.test.ts tests/domain/codex-runtime.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm vitest run tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts tests/smoke/codex-runtime-no-baggage-gate.test.ts tests/smoke/runbook-script-consistency.test.ts tests/api/brainstorming.test.ts tests/api/spec-plan-service.test.ts tests/api/executions.test.ts tests/api/codex-runtime-control-plane.test.ts tests/codex-worker-runtime/remote-worker-client.test.ts tests/codex-worker-runtime/app-server-launcher.test.ts tests/codex-runtime/runtime.test.ts tests/codex-runtime/app-server-generation-driver.test.ts tests/domain/codex-runtime.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 ```
 
 Expected: PASS. If any test fails, inspect the first failing assertion and fix only this slice.
