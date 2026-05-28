@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { dirname, join, posix, relative, resolve } from 'node:path';
 
@@ -411,10 +411,19 @@ export const safeUnpackWorkspaceBundle = async (input: {
   const root = await realpath(input.tempRoot).catch(() => {
     throw invalidBundle('temp root is unavailable');
   });
-  const jobRoot = resolve(join(root, input.runtimeJobId));
-  const existingJobRoot = await lstat(jobRoot).catch(() => undefined);
-  if (existingJobRoot !== undefined) {
+  const jobNamespace = resolve(join(root, input.runtimeJobId));
+  if (!isInside(root, jobNamespace) || jobNamespace === root) {
+    throw invalidBundle('runtime job id is invalid');
+  }
+  const existingJobNamespace = await lstat(jobNamespace).catch(() => undefined);
+  if (existingJobNamespace === undefined) {
+    await mkdir(jobNamespace, { recursive: false, mode: 0o700 });
+  } else if (!existingJobNamespace.isDirectory() || existingJobNamespace.isSymbolicLink()) {
     throw invalidBundle('job temp root already exists');
+  }
+  const jobRoot = resolve(join(jobNamespace, randomUUID()));
+  if (!isInside(jobNamespace, jobRoot)) {
+    throw invalidBundle('runtime job id is invalid');
   }
   await mkdir(jobRoot, { recursive: false, mode: 0o700 });
   const workspacePath = resolve(join(jobRoot, 'workspace'));

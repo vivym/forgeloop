@@ -112,6 +112,64 @@ describe('Work Item product API', () => {
     }
   });
 
+  it('creates a typed source object from the route source type without accepting body kind', async () => {
+    const project = await createProject();
+
+    const sourceObject = (
+      await request(app.getHttpServer())
+        .post('/source-objects/requirement')
+        .send({
+          project_id: project.id,
+          title: 'Create runtime dogfood source',
+          goal: 'Seed a canonical source object for the product loop.',
+          success_criteria: ['The created object uses the route source type.'],
+          priority: 'P0',
+          risk: 'high',
+          driver_actor_id: 'actor-driver',
+          intake_context: intakeContextByKind.requirement,
+        })
+        .expect(201)
+    ).body;
+
+    expect(sourceObject).toMatchObject({
+      project_id: project.id,
+      kind: 'requirement',
+      title: 'Create runtime dogfood source',
+      driver_actor_id: 'actor-driver',
+      intake_context: intakeContextByKind.requirement,
+    });
+    expect(sourceObject).not.toHaveProperty('owner_actor_id');
+
+    await request(app.getHttpServer())
+      .post('/source-objects/requirement')
+      .send({
+        project_id: project.id,
+        kind: 'requirement',
+        title: 'Reject duplicated source kind',
+        goal: 'The source type belongs to the route.',
+        success_criteria: ['body.kind is not accepted.'],
+        priority: 'P0',
+        risk: 'high',
+        driver_actor_id: 'actor-driver',
+        intake_context: intakeContextByKind.requirement,
+      })
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .post('/source-objects/requirement')
+      .send({
+        project_id: project.id,
+        title: 'Reject mismatched source intake',
+        goal: 'The route type and intake context must agree.',
+        success_criteria: ['Mismatched intake is rejected.'],
+        priority: 'P0',
+        risk: 'high',
+        driver_actor_id: 'actor-driver',
+        intake_context: intakeContextByKind.bug,
+      })
+      .expect(400);
+  });
+
   it('patches driver_actor_id and uses the driver for status history and audit events', async () => {
     const repository = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
     const { workItem } = await createWorkItem('requirement');

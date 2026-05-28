@@ -930,6 +930,52 @@ describe('codex app-server driver input routing', () => {
     ]);
   });
 
+  it('terminates startRun when Codex 0.132 reports thread idle after assistant output', async () => {
+    const request = vi.fn(async (method: string) =>
+      method === 'thread/start'
+        ? {
+            thread: { id: 'thread-1' },
+            approvalPolicy: 'never',
+            sandbox: { type: 'dangerFullAccess' },
+          }
+        : { turn: { id: 'turn-1' } },
+    );
+    const driver = createGovernedAppServerDriverForTest({
+      request,
+      notifications: async function* () {
+        yield {
+          method: 'item/agentMessage/delta',
+          params: { threadId: 'thread-1', turnId: 'turn-1', delta: 'done' },
+        };
+        yield {
+          method: 'thread/status/changed',
+          params: {
+            threadId: 'thread-1',
+            status: { type: 'idle' },
+          },
+        };
+        await new Promise(() => undefined);
+      },
+    });
+
+    await expect(
+      withTimeout(
+        collectUntilTerminal(driver.startRun({ runSpec: createRunSpec(), workspacePath: tmpdir() })),
+        'Codex app-server startRun did not terminate after idle thread status.',
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'thread_started' }) }),
+      expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'turn_started' }) }),
+      expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'agent_message_delta' }) }),
+      expect.objectContaining({ kind: 'event', event: expect.objectContaining({ event_type: 'codex_warning' }) }),
+      expect.objectContaining({
+        kind: 'terminal',
+        status: 'succeeded',
+        summary: 'Codex app-server thread became idle after assistant output.',
+      }),
+    ]);
+  });
+
   it('fails startRun when the app-server reports the thread idle without turn/completed', async () => {
     const request = vi.fn(async (method: string) =>
       method === 'thread/start'

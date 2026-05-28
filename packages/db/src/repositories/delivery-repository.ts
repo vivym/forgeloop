@@ -176,6 +176,7 @@ export interface ListCodexCredentialBindingReadinessCandidatesInput {
 }
 
 export interface CodexCredentialBindingReadinessCandidate {
+  id: string;
   purpose: CodexCredentialBinding['purpose'];
 }
 

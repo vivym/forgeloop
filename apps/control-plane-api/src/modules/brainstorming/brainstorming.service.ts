@@ -151,8 +151,18 @@ export class BrainstormingService {
     });
   }
 
-  async getBoundaryBrainstormingSession(sessionId: string): Promise<BrainstormingSession> {
-    return this.requireBrainstormingSession(sessionId);
+  async getBoundaryBrainstormingSession(
+    sessionId: string,
+  ): Promise<BrainstormingSession & { current_round_runtime_job_id?: string }> {
+    const session = await this.requireBrainstormingSession(sessionId);
+    if (session.current_round_id === undefined) {
+      return session;
+    }
+    const currentRound = (await this.repository.listBoundaryRounds(session.id)).find((round) => round.id === session.current_round_id);
+    return {
+      ...session,
+      ...(currentRound?.runtime_job_id === undefined ? {} : { current_round_runtime_job_id: currentRound.runtime_job_id }),
+    };
   }
 
   private async startBoundaryProcess(

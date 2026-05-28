@@ -224,6 +224,7 @@ export const execution = {
   id: 'execution-web-product',
   development_plan_item_id: developmentPlanItem.id,
   execution_plan_revision_id: executionPlanRevision.id,
+  approved_spec_revision_id: specRevision.id,
   ref: { type: 'execution', id: 'execution-web-product', title: 'Execute AI-native Web API client work' },
   development_plan_item_ref: {
     type: 'development_plan_item',
@@ -237,6 +238,7 @@ export const execution = {
     execution_plan_id: executionPlan.id,
     title: executionPlanRevision.summary,
   },
+  approved_spec_revision_ref: { type: 'spec_revision', id: specRevision.id, spec_id: spec.id, title: specRevision.summary },
   status: 'running',
   worker_state: 'running',
   current_step: 'Applying approved Execution Plan',

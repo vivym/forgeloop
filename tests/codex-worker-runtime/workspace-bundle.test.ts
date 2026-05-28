@@ -97,7 +97,7 @@ describe('workspace bundle validation and safe unpack', () => {
       runtimeJobId: 'runtime-job-1',
     });
 
-    expect(relative(await realpath(tempRoot), unpacked.workspacePath)).toBe('runtime-job-1/workspace');
+    expect(relative(await realpath(tempRoot), unpacked.workspacePath)).toMatch(/^runtime-job-1\/[0-9a-f-]{36}\/workspace$/);
     await expect(readFile(join(unpacked.workspacePath, 'src/app.ts'), 'utf8')).resolves.toBe('export const value = 1;\n');
     expect(unpacked.manifest_digest).toBe(manifestDigest);
     expect(unpacked.archive_digest).toBe(archiveDigest);
@@ -129,6 +129,34 @@ describe('workspace bundle validation and safe unpack', () => {
     await writeFile(join(unpacked.workspacePath, 'src/app.ts'), 'export const value = 2;\n');
 
     await expect(computeMountedWorkspaceDigest(unpacked.workspacePath, unpacked.manifest)).resolves.not.toBe(unpacked.manifest_digest);
+  });
+
+  it('uses a fresh attempt root when the same runtime job is unpacked again', async () => {
+    const tempRoot = await makeTempDir();
+    const manifest = createWorkspaceBundleManifest({
+      bundleId: 'bundle-repeat',
+      createdAt: now,
+      allowedPaths: ['README.md'],
+      forbiddenPaths: [],
+      files: [{ path: 'README.md', content: '# Remote run\n' }],
+    });
+    const archive = createWorkspaceBundleArchive({
+      manifest,
+      files: [{ path: 'README.md', content: '# Remote run\n' }],
+    });
+    const commonInput = {
+      archiveBytes: archive,
+      expectedArchiveDigest: workspaceBundleArchiveDigest(archive),
+      expectedManifestDigest: workspaceBundleManifestDigest(manifest),
+      tempRoot,
+      runtimeJobId: 'runtime-job-repeat',
+    };
+
+    const first = await safeUnpackWorkspaceBundle(commonInput);
+    const second = await safeUnpackWorkspaceBundle(commonInput);
+
+    expect(first.jobRoot).not.toBe(second.jobRoot);
+    await expect(readFile(join(second.workspacePath, 'README.md'), 'utf8')).resolves.toBe('# Remote run\n');
   });
 
   it('rejects digest mismatch, path traversal, absolute paths, symlinks, special files, and unsafe .git indirection', async () => {

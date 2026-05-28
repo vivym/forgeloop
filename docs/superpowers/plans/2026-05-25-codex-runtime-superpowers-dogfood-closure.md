@@ -1732,7 +1732,7 @@ git commit -m "feat: add codex runtime superpowers dogfood"
 - Modify only files needed to fix verification failures.
 - Create report output under `docs/superpowers/reports/` only if strict dogfood succeeds and the report is intended to be committed.
 
-- [ ] **Step 1: Run product/API focused suite**
+- [x] **Step 1: Run product/API focused suite**
 
 Run:
 
@@ -1742,7 +1742,7 @@ pnpm vitest run tests/contracts/project-management-contracts.test.ts tests/api/b
 
 Expected: PASS.
 
-- [ ] **Step 2: Run runtime focused suite**
+- [x] **Step 2: Run runtime focused suite**
 
 Run:
 
@@ -1752,7 +1752,7 @@ pnpm vitest run tests/api/codex-runtime*.test.ts tests/codex-runtime tests/codex
 
 Expected: PASS.
 
-- [ ] **Step 3: Run guard scripts**
+- [x] **Step 3: Run guard scripts**
 
 Run:
 
@@ -1780,7 +1780,7 @@ Expected:
 - stale-boundary negative check shows Spec generation was blocked before rebase/restart and then proceeded only from current Boundary Summary evidence;
 - source-changing execution limited to the dogfood allowlist.
 
-- [ ] **Step 5: Run full test suite**
+- [x] **Step 5: Run full test suite**
 
 Run:
 

@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-import { codexRuntimeScopeMatches, type CodexRuntimeScope, type CodexRuntimeTargetKind } from '@forgeloop/domain';
+import { codexWorkerScopeMatchesTarget, type CodexRuntimeScope, type CodexRuntimeTargetKind } from '@forgeloop/domain';
 
 export interface LocalCodexWorkerRuntime {
   register(): Promise<void>;
@@ -150,7 +150,12 @@ export const createLocalCodexWorkerRuntime = (options: LocalCodexWorkerRuntimeOp
       if (!options.dockerImageDigests.includes(input.dockerImageDigest)) {
         throw new Error('codex_worker_capability_mismatch: docker image digest is not supported');
       }
-      if (!codexRuntimeScopeMatches(options.authorizedScopes, { project_id: input.projectId, ...(input.repoId === undefined ? {} : { repo_id: input.repoId }) })) {
+      if (
+        !codexWorkerScopeMatchesTarget(options.authorizedScopes, input.targetKind, {
+          project_id: input.projectId,
+          ...(input.repoId === undefined ? {} : { repo_id: input.repoId }),
+        })
+      ) {
         throw new Error('codex_worker_capability_mismatch: scope is not authorized');
       }
       return { workerId: options.workerId, sessionToken: token };

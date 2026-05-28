@@ -13,6 +13,7 @@ import {
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
   codexRuntimeScopeMatches,
+  codexWorkerScopeMatchesTarget,
   codexWorkspaceAcquisitionDigest,
   assertCodexRuntimePublicSafeValue,
   redactCodexLaunchMaterialization,
@@ -723,6 +724,20 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it('allows run-execution patch artifact metadata to report safe repo-relative changed files', () => {
+    expect(() =>
+      validateCodexRuntimeJobArtifactIntake({
+        kind: 'run_execution_patch',
+        content_type: 'text/x-diff',
+        digest: digestA,
+        size_bytes: 128,
+        metadata_json: {
+          changed_files: ['README.md', 'src/index.ts', '.forgeloop/repo-owned.toml'],
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it.each([
     {
       task_kind: 'spec_draft',
@@ -1321,6 +1336,24 @@ describe('codex runtime domain contracts', () => {
     expect(codexRuntimeScopeMatches([{ project_id: 'project-1' }], { project_id: 'project-2', repo_id: 'repo-1' })).toBe(false);
   });
 
+  it('requires repo-specific worker scope for source-changing run execution', () => {
+    expect(
+      codexWorkerScopeMatchesTarget([{ project_id: 'project-1' }], 'generation', { project_id: 'project-1', repo_id: 'repo-1' }),
+    ).toBe(true);
+    expect(
+      codexWorkerScopeMatchesTarget([{ project_id: 'project-1' }], 'run_execution', { project_id: 'project-1', repo_id: 'repo-1' }),
+    ).toBe(false);
+    expect(
+      codexWorkerScopeMatchesTarget([{ project_id: 'project-1', repo_id: 'repo-1' }], 'run_execution', {
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+      }),
+    ).toBe(true);
+    expect(codexWorkerScopeMatchesTarget([{ project_id: 'project-1', repo_id: 'repo-1' }], 'run_execution', { project_id: 'project-1' })).toBe(
+      false,
+    );
+  });
+
   it('creates stable profile revision digests independent of object key order', () => {
     const left = baseRevision({
       network_policy: hostFirewallPolicy([
@@ -1875,17 +1908,16 @@ describe('codex runtime domain contracts', () => {
 
     expect(() => validateCodexDockerRuntimeEvidence(validDockerRuntimeEvidence)).not.toThrow();
 
-    expectDomainErrorCode(
-      () =>
-        validateCodexDockerRuntimeEvidence({
-          runtime_profile_id: '550e8400-e29b-41d4-a716-446655440000',
-          runtime_profile_revision_id: '018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
-          credential_binding_id: 'credential-binding-550e8400-e29b-41d4-a716-446655440000',
-          credential_binding_version_id: 'credential-version-018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
-          launch_lease_id: 'lease-550e8400-e29b-41d4-a716-446655440000',
-        }),
-      'codex_docker_runtime_evidence_unsafe',
-    );
+    expect(() =>
+      validateCodexDockerRuntimeEvidence({
+        ...validDockerRuntimeEvidence,
+        runtime_profile_id: '550e8400-e29b-41d4-a716-446655440000',
+        runtime_profile_revision_id: '018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
+        credential_binding_id: 'credential-binding-550e8400-e29b-41d4-a716-446655440000',
+        credential_binding_version_id: 'credential-version-018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
+        launch_lease_id: 'lease-550e8400-e29b-41d4-a716-446655440000',
+      }),
+    ).not.toThrow();
 
     expectDomainErrorCode(
       () =>

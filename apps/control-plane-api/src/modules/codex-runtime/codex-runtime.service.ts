@@ -25,6 +25,7 @@ import {
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexGenerationRuntimeJobResult,
+  DomainError,
   type CodexLaunchLease,
   type CodexLaunchTarget,
   type CodexLaunchTokenEnvelope,
@@ -136,7 +137,7 @@ const requireUnsafeDbImportAllowed = (): void => {
 };
 
 const defaultImportResourceLimits = {
-  cpu_ms: 600_000,
+  cpu_ms: 2_000,
   memory_mb: 4096,
   pids: 512,
   fds: 1024,
@@ -331,6 +332,13 @@ const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
         }),
   };
 };
+
+const workerRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob & Pick<CodexRuntimeJob, 'workspace_acquisition_json'> => ({
+  ...publicRuntimeJob(job),
+  ...(job.target_kind === 'run_execution' && job.workspace_acquisition_json !== undefined
+    ? { workspace_acquisition_json: job.workspace_acquisition_json }
+    : {}),
+});
 
 const publicEnvelopeMetadata = (envelope: CodexLaunchTokenEnvelope | undefined) =>
   envelope === undefined
@@ -650,23 +658,23 @@ export class CodexRuntimeService {
   async createRuntimeJob(input: CreateCodexRuntimeJobDto) {
     validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
     const now = nowIso();
-    const revision = await this.repository.getActiveCodexRuntimeProfileRevision({
-      project_id: input.target.project_id,
-      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
-      target_kind: input.target.target_kind,
-      now,
-    });
-    if (revision === undefined || revision.id !== input.runtime_profile_revision_id) {
-      throw new BadRequestException('Codex runtime profile revision fence was rejected');
-    }
     const credential = await this.repository.getCodexCredentialBindingPublic(input.credential_binding_id);
     if (
       credential === undefined ||
-      credential.profile_id !== revision.profile_id ||
       credential.active_version_id !== input.credential_binding_version_id ||
       credential.active_payload_digest !== input.credential_payload_digest
     ) {
       throw new BadRequestException('Codex credential binding fence was rejected');
+    }
+    const revision = await this.repository.getActiveCodexRuntimeProfileRevision({
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+      target_kind: input.target.target_kind,
+      runtime_profile_id: credential.profile_id,
+      now,
+    });
+    if (revision === undefined || revision.id !== input.runtime_profile_revision_id || revision.profile_id !== credential.profile_id) {
+      throw new BadRequestException('Codex runtime profile revision fence was rejected');
     }
     const target: CodexLaunchTarget = {
       target_type: input.target.target_type,
@@ -750,9 +758,20 @@ export class CodexRuntimeService {
     if (runtimeJob === undefined) {
       throw new NotFoundException('Codex runtime job not found');
     }
+    const artifacts = await this.repository.listCodexRuntimeJobArtifacts({ runtime_job_id: jobId });
     return {
       runtime_job: publicRuntimeJob(runtimeJob),
       envelope: publicEnvelopeMetadata(await this.repository.getCodexRuntimeJobEnvelope({ runtime_job_id: jobId })),
+      artifacts: artifacts.map((artifact) => ({
+        id: artifact.id,
+        kind: artifact.kind,
+        name: artifact.name,
+        content_type: artifact.content_type,
+        digest: artifact.digest,
+        size_bytes: artifact.size_bytes,
+        metadata_json: artifact.metadata_json,
+        created_at: artifact.created_at,
+      })),
     };
   }
 
@@ -829,7 +848,7 @@ export class CodexRuntimeService {
     });
     const rows = await Promise.all(
       runtimeJobs.map(async (runtimeJob) => ({
-        runtime_job: publicRuntimeJob(runtimeJob),
+        runtime_job: workerRuntimeJob(runtimeJob),
         envelope: publicEnvelopeMetadata(await this.repository.getCodexRuntimeJobEnvelope({ runtime_job_id: runtimeJob.id })),
       })),
     );
@@ -1116,30 +1135,92 @@ export class CodexRuntimeService {
         terminalResult: terminalResult as CodexGenerationRuntimeJobResult,
       });
     }
+    if (
+      runtimeJob.target_type === 'automation_action_run' &&
+      runtimeJob.target_kind === 'generation' &&
+      input.terminal_status !== 'succeeded'
+    ) {
+      await this.failProductGenerationActionRunForRuntimeTerminal({
+        actionRunId: runtimeJob.target_id,
+        runtimeJobId: runtimeJob.id,
+        terminalStatus: input.terminal_status,
+        reasonCode: input.reason_code,
+        now,
+      });
+    }
     return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  private async failProductGenerationActionRunForRuntimeTerminal(input: {
+    actionRunId: string;
+    runtimeJobId: string;
+    terminalStatus: string;
+    reasonCode: string;
+    now: string;
+  }): Promise<void> {
+    const actionRun = await this.repository.getAutomationActionRun(input.actionRunId);
+    if (
+      actionRun === undefined ||
+      actionRun.status !== 'running' ||
+      actionRun.claim_token === undefined ||
+      !this.isProductGenerationAction(actionRun.action_type)
+    ) {
+      return;
+    }
+    try {
+      await this.repository.completeAutomationActionRun({
+        id: actionRun.id,
+        idempotency_key: actionRun.idempotency_key,
+        claim_token: actionRun.claim_token,
+        status: input.terminalStatus === 'cancelled' ? 'blocked' : 'failed',
+        result_json: {
+          product_generation_result: 'runtime_job_failed',
+          runtime_job_id: input.runtimeJobId,
+          reason_code: input.reasonCode,
+          terminal_status: input.terminalStatus,
+        },
+        retryable: input.terminalStatus !== 'cancelled',
+        finished_at: input.now,
+      });
+    } catch (error) {
+      if (!(error instanceof DomainError && error.code === 'INVALID_TRANSITION')) {
+        throw error;
+      }
+      const refreshed = await this.repository.getAutomationActionRun(actionRun.id);
+      if (refreshed?.status !== 'succeeded' && refreshed?.status !== 'failed' && refreshed?.status !== 'blocked') {
+        throw error;
+      }
+    }
+  }
+
+  private isProductGenerationAction(actionType: string): boolean {
+    return (
+      actionType === 'run_boundary_brainstorming_round' ||
+      actionType === 'generate_development_plan_item_spec_revision' ||
+      actionType === 'generate_development_plan_item_execution_plan_revision'
+    );
   }
 
   async createLaunchLease(input: CreateCodexLaunchLeaseDto) {
     validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
     const now = nowIso();
-    const revision = await this.repository.getActiveCodexRuntimeProfileRevision({
-      project_id: input.target.project_id,
-      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
-      target_kind: input.target.target_kind,
-      now,
-    });
-    if (revision === undefined || revision.id !== input.runtime_profile_revision_id) {
-      throw new BadRequestException('Codex runtime profile revision fence was rejected');
-    }
-
     const credential = await this.repository.getCodexCredentialBindingPublic(input.credential_binding_id);
     if (
       credential === undefined ||
-      credential.profile_id !== revision.profile_id ||
       credential.active_version_id !== input.credential_binding_version_id ||
       credential.active_payload_digest !== input.credential_payload_digest
     ) {
       throw new BadRequestException('Codex credential binding fence was rejected');
+    }
+    const revision = await this.repository.getActiveCodexRuntimeProfileRevision({
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+      target_kind: input.target.target_kind,
+      runtime_profile_id: credential.profile_id,
+      now,
+    });
+    if (revision === undefined || revision.id !== input.runtime_profile_revision_id || revision.profile_id !== credential.profile_id) {
+      throw new BadRequestException('Codex runtime profile revision fence was rejected');
     }
 
     const fence = await this.launchFenceFor(input, now);

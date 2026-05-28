@@ -106,6 +106,20 @@ const parseCodexConfigToml = (env: EnvLike): string => {
   return configToml;
 };
 
+const withoutTopLevelTomlKey = (toml: string, key: string): string =>
+  toml
+    .split(/\r?\n/)
+    .filter((line) => !new RegExp(`^\\s*${key}\\s*=`).test(line))
+    .join('\n')
+    .replace(/\n*$/, '\n');
+
+const codexConfigTomlForTarget = (toml: string, targetKind: 'generation' | 'run_execution'): string => {
+  if (targetKind === 'run_execution') {
+    return toml;
+  }
+  return `${withoutTopLevelTomlKey(toml, 'sandbox_mode')}sandbox_mode = "read-only"\n`;
+};
+
 const parseAuthJson = (env: EnvLike, stdin?: string): unknown => {
   if (optionalEnv(env, 'FORGELOOP_CODEX_AUTH_JSON_INLINE') !== undefined) {
     throw new Error('FORGELOOP_CODEX_AUTH_JSON_INLINE_not_allowed');
@@ -228,18 +242,24 @@ export const runCodexRuntimeDogfoodBootstrap = async (
   config: CodexRuntimeDogfoodBootstrapConfig = loadCodexRuntimeDogfoodBootstrapConfig(),
 ): Promise<Record<string, unknown>> => {
   const createdAt = new Date().toISOString();
+  const generationAllowedScope = { project_id: config.allowedScope.project_id };
+  if (config.allowedScope.repo_id === undefined) {
+    throw new Error('FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID_required_for_run_execution_worker');
+  }
+  const runExecutionAllowedScope = { project_id: config.allowedScope.project_id, repo_id: config.allowedScope.repo_id };
+  const generationWorkerIdentity = `${config.workerIdentity}-generation`;
+  const runExecutionWorkerIdentity = `${config.workerIdentity}-run-execution`;
   const generationImport = (await signedSetupPost(config, '/internal/codex-runtime/import-local-codex', {
     profile_name: 'codex-runtime-generation-local-dogfood',
     target_kind: 'generation',
     local_source_label: 'dogfood-bootstrap-generation',
-    codex_config_toml: config.codexConfigToml,
+    codex_config_toml: codexConfigTomlForTarget(config.codexConfigToml, 'generation'),
     auth_json: config.authJson,
     project_id: config.allowedScope.project_id,
-    ...(config.allowedScope.repo_id === undefined ? {} : { repo_id: config.allowedScope.repo_id }),
     docker_image: config.dockerImage,
     docker_image_digest: config.dockerImageDigest,
     expected_effective_config_digest: config.generationExpectedEffectiveConfigDigest,
-    allowed_scopes: [config.allowedScope],
+    allowed_scopes: [generationAllowedScope],
     network_policy: config.networkPolicy,
     provider: 'unsafe_db',
     unsafe_db_acknowledgement: true,
@@ -249,28 +269,46 @@ export const runCodexRuntimeDogfoodBootstrap = async (
     profile_name: 'codex-runtime-run-execution-local-dogfood',
     target_kind: 'run_execution',
     local_source_label: 'dogfood-bootstrap-run-execution',
-    codex_config_toml: config.codexConfigToml,
+    codex_config_toml: codexConfigTomlForTarget(config.codexConfigToml, 'run_execution'),
     auth_json: config.authJson,
     project_id: config.allowedScope.project_id,
     ...(config.allowedScope.repo_id === undefined ? {} : { repo_id: config.allowedScope.repo_id }),
     docker_image: config.dockerImage,
     docker_image_digest: config.dockerImageDigest,
     expected_effective_config_digest: config.runExecutionExpectedEffectiveConfigDigest,
-    allowed_scopes: [config.allowedScope],
+    allowed_scopes: [runExecutionAllowedScope],
     network_policy: config.networkPolicy,
     provider: 'unsafe_db',
     unsafe_db_acknowledgement: true,
     created_by: { actor_id: config.actorId },
   })) as Record<string, string>;
   await signedSetupPost(config, '/internal/codex-runtime/worker-bootstrap-tokens', {
-    id: `bootstrap-${createHash('sha256').update(config.workerIdentity).digest('hex').slice(0, 16)}`,
-    worker_identity: config.workerIdentity,
+    id: `bootstrap-${createHash('sha256').update(generationWorkerIdentity).digest('hex').slice(0, 16)}`,
+    worker_identity: generationWorkerIdentity,
     bootstrap_token_hash: codexCredentialPayloadDigest(config.workerBootstrapToken),
     bootstrap_token_version: config.workerBootstrapTokenVersion,
     status: 'active',
-    allowed_scopes_json: [config.allowedScope],
+    allowed_scopes_json: [generationAllowedScope],
     allowed_capabilities_json: {
-      target_kinds: ['generation', 'run_execution'],
+      target_kinds: ['generation'],
+      docker_image_digests: [config.dockerImageDigest],
+      network_policy_digests: [codexRuntimeNetworkPolicyDigest(config.networkPolicy)],
+      network_provider_config_digests: [config.networkPolicy.provider_config.provider_config_digest],
+    },
+    created_by_actor_id: config.actorId,
+    created_at: createdAt,
+    expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    created_by: { actor_id: config.actorId },
+  });
+  await signedSetupPost(config, '/internal/codex-runtime/worker-bootstrap-tokens', {
+    id: `bootstrap-${createHash('sha256').update(runExecutionWorkerIdentity).digest('hex').slice(0, 16)}`,
+    worker_identity: runExecutionWorkerIdentity,
+    bootstrap_token_hash: codexCredentialPayloadDigest(config.workerBootstrapToken),
+    bootstrap_token_version: config.workerBootstrapTokenVersion,
+    status: 'active',
+    allowed_scopes_json: [runExecutionAllowedScope],
+    allowed_capabilities_json: {
+      target_kinds: ['run_execution'],
       docker_image_digests: [config.dockerImageDigest],
       network_policy_digests: [codexRuntimeNetworkPolicyDigest(config.networkPolicy)],
       network_provider_config_digests: [config.networkPolicy.provider_config.provider_config_digest],
@@ -288,6 +326,8 @@ export const runCodexRuntimeDogfoodBootstrap = async (
     run_execution_runtime_profile_id: runExecutionImport.profile_id,
     run_execution_runtime_profile_revision_id: runExecutionImport.profile_revision_id,
     run_execution_credential_binding_id: runExecutionImport.credential_binding_id,
+    generation_worker_identity: generationWorkerIdentity,
+    run_execution_worker_identity: runExecutionWorkerIdentity,
     docker_image_digest: config.dockerImageDigest,
     codex_config_digest: generationImport.codex_config_digest,
     network_policy_digest: codexRuntimeNetworkPolicyDigest(config.networkPolicy),

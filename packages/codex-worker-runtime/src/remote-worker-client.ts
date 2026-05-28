@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, readdir, readFile, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import {
   codexCanonicalDigest,
@@ -136,6 +136,25 @@ interface WorkerSession {
   expiresAt: string;
   epoch: number;
   keyPair: CodexWorkerSessionKeyPair;
+}
+
+type RunExecutionFailureStage =
+  | 'workspace_bundle_acquisition'
+  | 'launch_materialization'
+  | 'docker_app_server_startup'
+  | 'runtime_job_start'
+  | 'app_server_started_event'
+  | 'run_execution_driver_terminal'
+  | 'run_execution_control_poll'
+  | 'run_execution_result_collection'
+  | 'run_execution_artifact_upload';
+
+interface RuntimeFailureDiagnostic {
+  runtime_target_kind?: CodexRuntimeTargetKind;
+  app_server_started?: boolean;
+  failure_stage?: RunExecutionFailureStage;
+  failure_subcode?: string;
+  runtime_evidence_digest?: string;
 }
 
 export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOptions): RemoteCodexWorkerClient => {
@@ -395,7 +414,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       const reasonCode = await publicErrorCodeForJobError(error, workerSession, job);
       await appServerSession?.close('failed', reasonCode).catch(() => undefined);
       if (reasonCode !== 'codex_runtime_job_cancelled') {
-        await uploadFailureArtifact(workerSession, job, reasonCode).catch(() => undefined);
+        await uploadFailureArtifact(workerSession, job, reasonCode, error).catch(() => undefined);
       }
       await terminalize(workerSession, job, {
         terminal_status: reasonCode === 'codex_runtime_job_cancelled' ? 'cancelled' : 'failed',
@@ -428,6 +447,12 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     let appServerSession: Awaited<ReturnType<RemoteLauncher['startFromMaterialization']>> | undefined;
     let driver: CodexSessionDriver | undefined;
     let successTerminalAttempted = false;
+    let workspace: WorkspaceBundleUnpackResult | undefined;
+    const failureDiagnostic: RuntimeFailureDiagnostic = {
+      runtime_target_kind: 'run_execution',
+      app_server_started: false,
+      failure_stage: 'launch_materialization',
+    };
     try {
       const claimed = await options.controlPlaneClient.claimLaunchTokenEnvelope?.(options.workerId, job.id, {
         ...workerProof(workerSession),
@@ -446,12 +471,14 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         await options.controlPlaneClient.fetchRuntimeJobWorkload?.(options.workerId, job.id, workerProof(workerSession)),
       );
       const acquisition = requiredWorkspaceBundleAcquisition(job, workloadResponse.workload);
-      const workspace = await acquireRunExecutionWorkspaceBundle(workerSession, job, workloadResponse.workload, acquisition);
+      failureDiagnostic.failure_stage = 'workspace_bundle_acquisition';
+      workspace = await acquireRunExecutionWorkspaceBundle(workerSession, job, workloadResponse.workload, acquisition);
       const workloadPayload = await resolveRunExecutionWorkloadPayload(workloadResponse, workspace);
       if (options.controlPlaneClient.materializeRuntimeJob === undefined) {
         throw new Error('codex_control_plane_method_missing:materializeRuntimeJob');
       }
       await throwIfCancelled(workerSession, job);
+      failureDiagnostic.failure_stage = 'launch_materialization';
       const materialization = await options.controlPlaneClient.materializeRuntimeJob(options.workerId, job.id, {
         ...workerProof(workerSession),
         launch_lease_id: job.launch_lease_id,
@@ -462,6 +489,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         accepted_session_epoch: workerSession.epoch,
       });
       await throwIfCancelled(workerSession, job);
+      failureDiagnostic.failure_stage = 'docker_app_server_startup';
       appServerSession = await options.launcher.startFromMaterialization(materialization, {
         workerSessionToken: workerSession.token,
         terminalizeLaunchLeaseOnClose: false,
@@ -473,23 +501,27 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       if (options.controlPlaneClient.startRuntimeJob === undefined) {
         throw new Error('codex_control_plane_method_missing:startRuntimeJob');
       }
+      failureDiagnostic.app_server_started = true;
+      failureDiagnostic.runtime_evidence_digest = codexCanonicalDigest(appServerSession.publicEvidence);
+      failureDiagnostic.failure_stage = 'runtime_job_start';
       await options.controlPlaneClient.startRuntimeJob(options.workerId, job.id, {
         ...workerProof(workerSession),
         start_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'start' }),
-        runtime_evidence_digest: codexCanonicalDigest(appServerSession.publicEvidence),
+        runtime_evidence_digest: failureDiagnostic.runtime_evidence_digest,
         launch_materialization_digest: codexCanonicalDigest({
           lease_id: materialization.lease_id,
           expires_at: materialization.expires_at,
           materialized_at: materialization.materialized_at,
         }),
       });
+      failureDiagnostic.failure_stage = 'app_server_started_event';
       await options.controlPlaneClient.appendRuntimeJobEvent?.(options.workerId, job.id, {
         ...workerProof(workerSession),
         event_id: codexCanonicalDigest({ runtime_job_id: job.id, event: 'app_server_started' }),
         event_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'event', event: 'app_server_started' }),
         event_type: 'app_server_started',
-        event_payload_json: { runtime_evidence_digest: codexCanonicalDigest(appServerSession.publicEvidence) },
-        event_payload_digest: codexCanonicalDigest({ runtime_evidence_digest: codexCanonicalDigest(appServerSession.publicEvidence) }),
+        event_payload_json: { runtime_evidence_digest: failureDiagnostic.runtime_evidence_digest },
+        event_payload_digest: codexCanonicalDigest({ runtime_evidence_digest: failureDiagnostic.runtime_evidence_digest }),
       });
 
       driver =
@@ -505,6 +537,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
           { workerIdentity: options.workerIdentity },
           { dockerSession: appServerSession },
         );
+      failureDiagnostic.failure_stage = 'run_execution_driver_terminal';
       const terminal = await runRunExecutionWithControl(workerSession, job, driver, {
         runSpec: runSpecWithPackagePrompt(workloadPayload.runSpec, workloadPayload.packagePrompt),
         workspacePath: appServerSession.containerWorkspacePath ?? workspace.workspacePath,
@@ -531,8 +564,10 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         },
       });
       if (terminal.status !== 'succeeded') {
+        failureDiagnostic.failure_subcode = runExecutionTerminalFailureSubcode(terminal);
         throw new Error(terminal.status === 'cancelled' ? 'codex_runtime_job_cancelled' : 'codex_app_server_unavailable');
       }
+      failureDiagnostic.failure_stage = 'run_execution_result_collection';
       const resultDraft = await collectRunExecutionResult({
         workload: workloadResponse.workload,
         packagePrompt: workloadPayload.packagePrompt,
@@ -565,18 +600,32 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         }
         await driver?.close?.().catch(() => undefined);
         await appServerSession?.close('failed', 'codex_runtime_job_unavailable').catch(() => undefined);
+        await cleanupRunExecutionWorkspace(workspace).catch(() => undefined);
         return;
       }
       const reasonCode = await publicErrorCodeForJobError(error, workerSession, job);
+      if (
+        failureDiagnostic.failure_stage === 'run_execution_driver_terminal' &&
+        error instanceof Error &&
+        error.message.startsWith('codex_control_plane_request_failed:')
+      ) {
+        failureDiagnostic.failure_stage = 'run_execution_control_poll';
+      }
+      const failureSubcode = runExecutionFailureSubcode(error, failureDiagnostic.failure_stage);
+      if (failureDiagnostic.failure_subcode === undefined && failureSubcode !== undefined) {
+        failureDiagnostic.failure_subcode = failureSubcode;
+      }
       await driver?.close?.().catch(() => undefined);
       await appServerSession?.close('failed', reasonCode).catch(() => undefined);
       if (reasonCode !== 'codex_runtime_job_cancelled') {
-        await uploadFailureArtifact(workerSession, job, reasonCode).catch(() => undefined);
+        await uploadFailureArtifact(workerSession, job, reasonCode, error, failureDiagnostic).catch(() => undefined);
       }
       await terminalize(workerSession, job, {
         terminal_status: reasonCode === 'codex_runtime_job_cancelled' ? 'cancelled' : 'failed',
         reason_code: reasonCode,
       });
+    } finally {
+      await cleanupRunExecutionWorkspace(workspace).catch(() => undefined);
     }
   };
 
@@ -948,19 +997,33 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     workerSession: WorkerSession,
     job: Pick<CodexRuntimeJob, 'id'>,
     reasonCode: string,
+    error?: unknown,
+    diagnostic: RuntimeFailureDiagnostic = {},
   ): Promise<void> => {
     if (options.controlPlaneClient.uploadRuntimeJobArtifact === undefined) {
       return;
     }
+    const failureSubcode = diagnostic.failure_subcode ?? workspaceBundleInvalidSubcode(error);
+    const publicSummary =
+      reasonCode === 'codex_workspace_bundle_invalid'
+        ? 'Remote Codex workspace bundle validation failed.'
+        : 'Remote Codex app-server startup or generation failed.';
+    const metadata = {
+      reason_code: reasonCode,
+      ...(diagnostic.runtime_target_kind === undefined ? {} : { runtime_target_kind: diagnostic.runtime_target_kind }),
+      ...(diagnostic.app_server_started === undefined ? {} : { app_server_started: diagnostic.app_server_started }),
+      ...(diagnostic.failure_stage === undefined ? {} : { failure_stage: diagnostic.failure_stage }),
+      ...(failureSubcode === undefined ? {} : { failure_subcode: failureSubcode }),
+      ...(diagnostic.runtime_evidence_digest === undefined ? {} : { runtime_evidence_digest: diagnostic.runtime_evidence_digest }),
+      public_summary: publicSummary,
+    };
     await options.controlPlaneClient.uploadRuntimeJobArtifact(options.workerId, job.id, {
       ...workerProof(workerSession),
       ...jsonRuntimeJobArtifactUpload({
         kind: 'startup_failure_evidence',
         name: 'startup-failure-evidence.json',
-        payload: {
-          reason_code: reasonCode,
-          public_summary: 'Remote Codex app-server startup or generation failed.',
-        },
+        payload: metadata,
+        metadata,
       }),
     });
   };
@@ -1212,6 +1275,14 @@ const runSpecWithPackagePrompt = (
   },
 });
 
+const cleanupRunExecutionWorkspace = async (workspace: WorkspaceBundleUnpackResult | undefined): Promise<void> => {
+  if (workspace === undefined) {
+    return;
+  }
+  await rm(workspace.jobRoot, { recursive: true, force: true });
+  await rm(dirname(workspace.jobRoot), { recursive: true, force: true }).catch(() => undefined);
+};
+
 const sha256 = (bytes: Uint8Array | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const shouldSkipDefaultCollectorPath = (path: string): boolean =>
@@ -1418,19 +1489,107 @@ const publicRuntimeWorkerErrorCodes = new Set([
   'codex_control_plane_workspace_bundle_temp_root_rejected',
   'codex_launch_materialization_denied',
   'codex_worker_unavailable',
+  'codex_worker_docker_unavailable',
   'codex_worker_docker_policy_unavailable',
   'codex_runtime_workspace_isolation_unavailable',
   'codex_app_server_effective_config_mismatch',
   'codex_app_server_unavailable',
+  'codex_generation_disabled',
+  'codex_generation_safety_unavailable',
+  'codex_generation_sandbox_invalid',
   'codex_generation_timeout',
   'codex_generation_cancelled',
+  'codex_generation_concurrency_limit_exceeded',
+  'codex_generation_raw_log_too_large',
+  'codex_generation_usage_limited',
+  'codex_generation_turn_failed',
   'generated_output_invalid_json',
+  'generated_output_ambiguous',
   'generated_output_schema_invalid',
   'generated_output_too_large',
 ]);
 
 const publicErrorCode = (error: unknown): string => {
+  if (isRecord(error) && typeof error.code === 'string' && publicRuntimeWorkerErrorCodes.has(error.code)) {
+    return error.code;
+  }
   const message = error instanceof Error ? error.message : '';
+  if (message.startsWith('codex_control_plane_request_failed:')) {
+    return 'codex_runtime_job_unavailable';
+  }
   const code = message.split(':', 1)[0]?.trim();
   return code !== undefined && publicRuntimeWorkerErrorCodes.has(code) ? code : 'codex_app_server_unavailable';
+};
+
+const runExecutionFailureSubcode = (error: unknown, stage?: RunExecutionFailureStage): string | undefined => {
+  const message = error instanceof Error ? error.message : '';
+  if (message.startsWith('codex_control_plane_request_failed:')) {
+    return 'control_plane_request_failed';
+  }
+  const workspaceBundleSubcode = workspaceBundleInvalidSubcode(error);
+  if (workspaceBundleSubcode !== undefined) {
+    return workspaceBundleSubcode;
+  }
+  const publicCode = publicErrorCode(error);
+  if (publicCode === 'codex_app_server_unavailable' && stage === 'runtime_job_start') {
+    return 'runtime_job_start_unavailable';
+  }
+  if (publicCode === 'codex_app_server_unavailable' && stage === 'app_server_started_event') {
+    return 'runtime_job_event_append_unavailable';
+  }
+  if (publicCode === 'codex_app_server_unavailable' && stage === 'run_execution_result_collection') {
+    return 'run_execution_result_collector_failed';
+  }
+  if (publicCode === 'codex_app_server_unavailable' && stage === 'run_execution_artifact_upload') {
+    return 'runtime_job_artifact_upload_unavailable';
+  }
+  return undefined;
+};
+
+const runExecutionTerminalFailureSubcode = (terminal: Extract<CodexDriverStreamItem, { kind: 'terminal' }>): string => {
+  const summary = terminal.summary.toLowerCase();
+  if (summary.includes('idle before turn completion')) {
+    return 'app_server_thread_idle_before_turn_completed';
+  }
+  if (summary.includes('notification stream ended')) {
+    return 'app_server_notification_stream_ended';
+  }
+  return 'app_server_turn_failed';
+};
+
+const workspaceBundleInvalidSubcodes = new Map<string, string>([
+  ['workspace symlinks are not allowed', 'workspace_symlinks_not_allowed'],
+  ['workspace entry escapes root', 'workspace_entry_escapes_root'],
+  ['archive exceeds byte limit', 'archive_exceeds_byte_limit'],
+  ['archive digest mismatch', 'archive_digest_mismatch'],
+  ['manifest digest mismatch', 'manifest_digest_mismatch'],
+  ['archive entries do not match manifest', 'archive_entries_mismatch'],
+  ['archive contains entries outside manifest', 'archive_contains_entries_outside_manifest'],
+  ['temp root is unavailable', 'temp_root_unavailable'],
+  ['job temp root already exists', 'job_temp_root_already_exists'],
+  ['workspace path escapes temp root', 'workspace_path_escapes_temp_root'],
+  ['workspace path escapes real temp root', 'workspace_path_escapes_real_temp_root'],
+  ['entry target escapes workspace root', 'entry_target_escapes_workspace_root'],
+  ['archive entry type is not unpackable', 'archive_entry_type_not_unpackable'],
+  ['archive file content is missing', 'archive_file_content_missing'],
+  ['archive file content does not match manifest', 'archive_file_content_mismatch'],
+  ['mounted workspace root is unavailable', 'mounted_workspace_root_unavailable'],
+  ['mounted workspace entry escapes root', 'mounted_workspace_entry_escapes_root'],
+  ['mounted workspace contains symlink', 'mounted_workspace_contains_symlink'],
+  ['mounted workspace contains unsupported entry type', 'mounted_workspace_contains_unsupported_entry_type'],
+  ['entry path is outside allowed paths', 'entry_path_outside_allowed_paths'],
+  ['entry path is forbidden', 'entry_path_forbidden'],
+]);
+
+const workspaceBundleInvalidSubcode = (error: unknown): string | undefined => {
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'codex_workspace_bundle_invalid') {
+    return 'workspace_bundle_invalid';
+  }
+  const prefix = 'codex_workspace_bundle_invalid:';
+  if (!message.startsWith(prefix)) {
+    return undefined;
+  }
+  const suffix = message.slice(prefix.length).trim();
+  return workspaceBundleInvalidSubcodes.get(suffix) ?? 'workspace_bundle_invalid';
 };

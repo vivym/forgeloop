@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 
-import { BadRequestException, Body, Controller, Get, Param, Post, Query, Res, StreamableFile, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, Param, Post, Query, Res, StreamableFile, UseGuards } from '@nestjs/common';
 import { codexCanonicalDigest, codexCredentialPayloadDigest } from '@forgeloop/domain';
 
 import { TrustedAutomationActorGuard } from '../automation/trusted-automation-actor.guard';
@@ -80,7 +80,7 @@ const assertWorkerBodyDigest = (input: { body_digest: string }): void => {
 
 @Controller()
 export class CodexRuntimeController {
-  constructor(private readonly service: CodexRuntimeService) {}
+  constructor(@Inject(CodexRuntimeService) private readonly service: CodexRuntimeService) {}
 
   @Post('/internal/codex-runtime/profiles')
   @UseGuards(TrustedCodexRuntimeSetupGuard)

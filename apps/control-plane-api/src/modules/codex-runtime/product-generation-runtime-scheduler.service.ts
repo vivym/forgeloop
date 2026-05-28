@@ -42,6 +42,28 @@ const networkProviderConfigDigest = (revision: Parameters<typeof normalizeCodexR
     : undefined;
 };
 
+const generationCredentialIsUsable = async (
+  repository: DeliveryRepository,
+  input: {
+    credential_binding_id: string;
+    profile_id: string;
+    project_id: string;
+    repo_id?: string;
+    now: string;
+  },
+): Promise<boolean> => {
+  const credential = await repository.getCodexCredentialBindingPublic(input.credential_binding_id);
+  return (
+    credential !== undefined &&
+    credential.profile_id === input.profile_id &&
+    credential.project_id === input.project_id &&
+    credential.purpose === 'model_provider' &&
+    credential.active_version_id !== undefined &&
+    credential.active_payload_digest !== undefined &&
+    (credential.repo_id === undefined || credential.repo_id === input.repo_id)
+  );
+};
+
 export type ProductGenerationRuntimeScheduleResult = {
   action_run: AutomationActionRun;
   runtime_job: PublicProductGenerationRuntimeJob;
@@ -248,28 +270,60 @@ export class ProductGenerationRuntimeSchedulerService {
     policyDigests: Record<string, string>;
     now: string;
   }): Promise<CodexRuntimeJob> {
-    const runtimeProfileId = optionalEnv(generationRuntimeProfileEnv);
-    const credentialBindingId = optionalEnv(generationCredentialBindingEnv);
-    if (credentialBindingId === undefined) {
-      throw new BadRequestException(`Codex generation credential binding is not configured: ${generationCredentialBindingEnv}`);
-    }
     const repoIds = this.canonicalRepoIds(input.repoIds);
     const repoId = repoIds[0];
-    const profileRevision = await input.repository.getActiveCodexRuntimeProfileRevision({
+    const configuredRuntimeProfileId = optionalEnv(generationRuntimeProfileEnv);
+    const configuredCredentialBindingId = optionalEnv(generationCredentialBindingEnv);
+    let profileRevision = await input.repository.getActiveCodexRuntimeProfileRevision({
       project_id: input.projectId,
       ...(repoId === undefined ? {} : { repo_id: repoId }),
       target_kind: 'generation',
-      ...(runtimeProfileId === undefined ? {} : { runtime_profile_id: runtimeProfileId }),
+      ...(configuredRuntimeProfileId === undefined ? {} : { runtime_profile_id: configuredRuntimeProfileId }),
       now: input.now,
     });
     if (profileRevision === undefined) {
+      profileRevision = await input.repository.getActiveCodexRuntimeProfileRevision({
+        project_id: input.projectId,
+        ...(repoId === undefined ? {} : { repo_id: repoId }),
+        target_kind: 'generation',
+        now: input.now,
+      });
+    }
+    if (profileRevision === undefined) {
       throw new BadRequestException(`Codex generation runtime profile is not available: ${generationRuntimeProfileEnv}`);
+    }
+
+    const configuredCredentialUsable =
+      configuredCredentialBindingId === undefined
+        ? false
+        : await generationCredentialIsUsable(input.repository, {
+            credential_binding_id: configuredCredentialBindingId,
+            profile_id: profileRevision.profile_id,
+            project_id: input.projectId,
+            ...(repoId === undefined ? {} : { repo_id: repoId }),
+            now: input.now,
+          });
+    const credentialBindingId =
+      configuredCredentialUsable && configuredCredentialBindingId !== undefined
+        ? configuredCredentialBindingId
+        : (
+            await input.repository.listCodexCredentialBindingReadinessCandidates({
+              project_id: input.projectId,
+              ...(repoId === undefined ? {} : { repo_id: repoId }),
+              runtime_profile_id: profileRevision.profile_id,
+              target_kind: 'generation',
+              now: input.now,
+            })
+          ).find((candidate) => candidate.purpose === 'model_provider')?.id;
+    if (credentialBindingId === undefined) {
+      throw new BadRequestException(`Codex generation credential binding is not configured: ${generationCredentialBindingEnv}`);
     }
     const credential = await input.repository.getCodexCredentialBindingPublic(credentialBindingId);
     if (
       credential === undefined ||
       credential.profile_id !== profileRevision.profile_id ||
       credential.project_id !== input.projectId ||
+      credential.purpose !== 'model_provider' ||
       credential.active_version_id === undefined ||
       credential.active_payload_digest === undefined ||
       (credential.repo_id !== undefined && credential.repo_id !== repoId)

@@ -156,7 +156,7 @@ const buildRemoteDogfoodGenerationRevision = (input: {
     allowed_driver_kind: 'app_server',
     network_policy: input.networkPolicy,
     resource_limits: {
-      cpu_ms: 600_000,
+      cpu_ms: 2_000,
       memory_mb: 4096,
       pids: 512,
       fds: 1024,

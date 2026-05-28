@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
 import { InMemoryDeliveryRepository, type CreatePendingWorkspaceBundleArtifactInput } from '../../packages/db/src';
-import { codexCanonicalDigest, transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
+import { codexCanonicalDigest, codexRuntimeJobInputDigest, codexWorkspaceAcquisitionDigest, transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
 import type { CodexDriverStartInput, CodexSessionDriver, LocalCodexEvidenceInput, RunRuntimeMetadata } from '../../packages/executor/src';
 
 import { createRunWorkerPendingWorkspaceBundleArtifact, FakeCodexSessionDriver, RunWorker, type RemoteRunExecutionClient } from '../../packages/run-worker/src';
@@ -1282,6 +1282,7 @@ describe('RunWorker', () => {
       credential_payload_digest: `sha256:${'b'.repeat(64)}`,
       execution_package_id: executionPackage.id,
       run_session_id: runSession.id,
+      run_worker_lease_id: expect.any(String),
       run_session_status: 'running',
       execution_package_version: executionPackage.version,
       pending_workspace_bundle: expect.objectContaining({
@@ -1300,9 +1301,14 @@ describe('RunWorker', () => {
       output_schema_version: 'codex_run_execution_result.v1',
     });
     expect(created.input_json).not.toMatchObject({
+      run_worker_lease_id: expect.anything(),
+    });
+    expect(created.input_json).not.toMatchObject({
       package_prompt: expect.anything(),
       execution_context_json: expect.anything(),
     });
+    expect(() => codexRuntimeJobInputDigest(created.input_json)).not.toThrow();
+    expect(() => codexWorkspaceAcquisitionDigest(created.workspace_acquisition_json)).not.toThrow();
     expect(JSON.stringify(created)).not.toContain(repo);
     const archive = JSON.parse(Buffer.from(repository.pendingWorkspaceBundleInputs[0]!.archive_bytes_base64, 'base64').toString('utf8')) as {
       entries: Array<{ path: string; content_base64?: string }>;
@@ -1574,6 +1580,15 @@ describe('RunWorker', () => {
       leaseToken: activeLease.lease_token,
     });
 
+    const failedRunSession = await repository.getRunSession(runSession.id);
+    expect(failedRunSession?.executor_result).toMatchObject({
+      status: 'failed',
+      summary: 'codex_runtime_job_unavailable',
+      raw_metadata: {
+        remote_runtime_job_id: runtimeJobId,
+        remote_runtime_reason_code: 'codex_runtime_job_unavailable',
+      },
+    });
     expect(createInputs).toHaveLength(1);
     expect(createInputs[0]).toMatchObject({
       runtime_job_id: runtimeJobId,

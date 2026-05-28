@@ -544,12 +544,19 @@ const executorResultFromRemoteRunExecution = (input: {
   const result = input.terminal.terminalResult;
   if (input.terminal.terminalStatus !== 'succeeded' || result === undefined) {
     const status = input.terminal.terminalStatus === 'cancelled' ? 'cancelled' : 'failed';
-    return terminalExecutorResult({
+    const executorResult = terminalExecutorResult({
       runSession: input.runSession,
       status,
       summary: input.terminal.reasonCode ?? 'Remote Codex run execution failed.',
       at: input.at,
     });
+    return {
+      ...executorResult,
+      raw_metadata: {
+        remote_runtime_job_id: input.terminal.runtimeJobId,
+        ...(input.terminal.reasonCode === undefined ? {} : { remote_runtime_reason_code: input.terminal.reasonCode }),
+      },
+    };
   }
   return {
     run_session_id: input.runSession.id,
@@ -1163,7 +1170,6 @@ export class RunWorker {
       run_session_id: input.runSession.id,
       execution_package_id: input.executionPackage.id,
       execution_package_version: input.executionPackage.version,
-      run_worker_lease_id: runWorkerLeaseId,
       workspace_bundle_id: input.bundle.bundle_id,
       workspace_bundle_digest: input.bundle.archive_digest,
       package_prompt_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/package-prompt`,

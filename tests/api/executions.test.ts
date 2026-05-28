@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import type { DeliveryRepository } from '@forgeloop/db';
+import type { DevelopmentPlanItemRevision } from '@forgeloop/domain';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -127,6 +128,97 @@ describe('Executions API', () => {
       execution_status: 'running',
       next_action: 'monitor_execution',
     });
+  });
+
+  it('starts execution after the item revision advances through Spec and Execution Plan approvals', async () => {
+    const { developmentPlan, item, specRevision, executionPlanRevision } = await seedApprovedExecutionPlan(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const boundary = await repository.getBoundarySummary(specRevision.boundary_summary_id!);
+    if (boundary === undefined) {
+      throw new Error('Boundary Summary was not persisted');
+    }
+    const [boundaryRevision] = await repository.listBoundarySummaryRevisions(boundary.id);
+    if (boundaryRevision === undefined) {
+      throw new Error('Boundary Summary Revision was not persisted');
+    }
+    const boundaryApprovalItemRevisionId = 'development-plan-item-revision-at-boundary-approval';
+    await repository.saveBoundarySummary({
+      ...boundary,
+      development_plan_item_revision_id: boundaryApprovalItemRevisionId,
+    });
+    await repository.updateBoundarySummaryRevision({
+      ...boundaryRevision,
+      development_plan_item_revision_id: boundaryApprovalItemRevisionId,
+    });
+    const currentItem = {
+      ...item,
+      revision_id: 'development-plan-item-revision-after-execution-plan-approval',
+      spec_status: 'approved' as const,
+      execution_plan_status: 'approved' as const,
+      next_action: 'start_execution',
+      updated_at: '2026-05-05T00:01:00.000Z',
+    };
+    const currentItemRevision: DevelopmentPlanItemRevision = {
+      id: currentItem.revision_id,
+      development_plan_item_id: currentItem.id,
+      development_plan_id: currentItem.development_plan_id,
+      revision_number: 2,
+      snapshot: currentItem,
+      change_reason: 'execution_plan_approved',
+      edited_by_actor_id: executionActorDeveloper,
+      created_at: currentItem.updated_at,
+    };
+    await repository.saveDevelopmentPlanItem(currentItem);
+    await repository.saveDevelopmentPlanItemRevision(currentItemRevision);
+
+    const execution = (
+      await request(app.getHttpServer())
+        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+        .send({ actor_id: executionActorDeveloper })
+        .expect(201)
+    ).body;
+
+    expect(execution).toMatchObject({
+      development_plan_item_id: item.id,
+      execution_plan_revision_id: executionPlanRevision.id,
+      approved_spec_revision_id: specRevision.id,
+      status: 'running',
+    });
+    await expect(repository.listRunSessions()).resolves.toHaveLength(1);
+  });
+
+  it('fails closed when the item advances after Execution Plan approval before execution starts', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const driftedItem = {
+      ...item,
+      revision_id: 'development-plan-item-revision-after-unrelated-edit',
+      spec_status: 'approved' as const,
+      execution_plan_status: 'approved' as const,
+      next_action: 'start_execution',
+      updated_at: '2026-05-05T00:01:00.000Z',
+    };
+    const driftedItemRevision: DevelopmentPlanItemRevision = {
+      id: driftedItem.revision_id,
+      development_plan_item_id: driftedItem.id,
+      development_plan_id: driftedItem.development_plan_id,
+      revision_number: 2,
+      snapshot: driftedItem,
+      change_reason: 'item_metadata_updated',
+      edited_by_actor_id: executionActorDeveloper,
+      created_at: driftedItem.updated_at,
+    };
+    await repository.saveDevelopmentPlanItem(driftedItem);
+    await repository.saveDevelopmentPlanItemRevision(driftedItemRevision);
+
+    await request(app.getHttpServer())
+      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+      .send({ actor_id: executionActorDeveloper })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('approved_execution_plan_not_current_item_revision');
+      });
+    await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
   it('replays an already-started item revision without enqueueing a second run session', async () => {

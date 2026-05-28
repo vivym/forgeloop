@@ -2,9 +2,13 @@ import { Body, Controller, Get, Inject, Param, Patch, Post, Query } from '@nestj
 import { markdownDocumentSchema, type MarkdownDocument } from '@forgeloop/contracts';
 
 import {
+  createSourceObjectSchema,
   createWorkItemSchema,
+  sourceObjectTypeSchema,
   updateWorkItemSchema,
+  type CreateSourceObjectDto,
   type CreateWorkItemDto,
+  type SourceObjectTypeDto,
   type UpdateWorkItemDto,
 } from '../delivery/dto';
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
@@ -27,6 +31,14 @@ export class WorkItemsController {
   @Post('work-items')
   createWorkItem(@Body(new ZodValidationPipe(createWorkItemSchema)) body: CreateWorkItemDto) {
     return this.workItemService.createWorkItem(body);
+  }
+
+  @Post('source-objects/:sourceType')
+  createSourceObject(
+    @Param('sourceType', new ZodValidationPipe(sourceObjectTypeSchema)) sourceType: SourceObjectTypeDto,
+    @Body(new ZodValidationPipe(createSourceObjectSchema)) body: CreateSourceObjectDto,
+  ) {
+    return this.workItemService.createWorkItem({ ...body, kind: sourceType });
   }
 
   @Get('work-items')

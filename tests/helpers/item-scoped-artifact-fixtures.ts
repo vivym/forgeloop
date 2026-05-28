@@ -66,6 +66,8 @@ export async function seedItemScopedSpecPlan(
   const now = runtime.now();
   const workItem = requireFound(await repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
   const sourceRef = { type: workItem.kind, id: workItem.id, title: workItem.title } as const;
+  const specStatus = options.specStatus ?? 'approved';
+  const executionPlanStatus = options.includePlan === false ? 'missing' : (options.planStatus ?? 'approved');
 
   const developmentPlan: DevelopmentPlan = {
     id: runtime.id('development-plan'),
@@ -117,8 +119,8 @@ export async function seedItemScopedSpecPlan(
     dependency_hints: [],
     affected_surfaces: ['tests'],
     boundary_status: 'approved',
-    spec_status: options.specStatus ?? 'approved',
-    execution_plan_status: options.includePlan === false ? 'not_started' : (options.planStatus ?? 'approved'),
+    spec_status: specStatus,
+    execution_plan_status: executionPlanStatus,
     execution_status: 'not_started',
     review_status: 'not_started',
     qa_handoff_status: 'not_started',
@@ -128,13 +130,19 @@ export async function seedItemScopedSpecPlan(
     updated_at: now,
   };
   await repository.saveDevelopmentPlanItem(item);
+  const itemRevisionChangeReason =
+    executionPlanStatus === 'approved'
+      ? 'execution_plan_approved'
+      : specStatus === 'approved' && options.includePlan === false
+        ? 'spec_approved'
+        : 'item_scoped_fixture_created';
   const itemRevision: DevelopmentPlanItemRevision = {
     id: item.revision_id,
     development_plan_item_id: item.id,
     development_plan_id: developmentPlan.id,
     revision_number: 1,
     snapshot: item,
-    change_reason: 'item_scoped_fixture_created',
+    change_reason: itemRevisionChangeReason,
     edited_by_actor_id: actorId,
     created_at: now,
   };

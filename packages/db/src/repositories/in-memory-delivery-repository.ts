@@ -83,6 +83,7 @@ import {
   codexLaunchTokenEnvelopeDigest,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeScopeMatches,
+  codexWorkerScopeMatchesTarget,
   codexWorkspaceAcquisitionDigest,
   collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
@@ -825,19 +826,39 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     };
   }
 
-  async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
-    const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
-    const credential =
-      input.credential_binding_id !== undefined
-        ? this.getScopedCodexCredentialBindingPublic({
-            credential_binding_id: input.credential_binding_id,
-            target_kind: input.target_kind,
-            ...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
-            project_id: input.project_id,
-            ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-            now: input.now,
-          })
-        : undefined;
+	async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
+		const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
+		let credential =
+			input.credential_binding_id === undefined
+				? undefined
+				: this.getScopedCodexCredentialBindingPublic({
+					credential_binding_id: input.credential_binding_id,
+					target_kind: input.target_kind,
+					...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
+					project_id: input.project_id,
+					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+					now: input.now,
+				});
+		if (credential === undefined && input.credential_binding_id === undefined && profileRevision !== undefined) {
+			const candidates = await this.listCodexCredentialBindingReadinessCandidates({
+				project_id: input.project_id,
+				...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+				runtime_profile_id: profileRevision.profile_id,
+				target_kind: input.target_kind,
+				now: input.now,
+			});
+			const modelProviderCandidate = candidates.filter((candidate) => candidate.purpose === 'model_provider');
+			if (modelProviderCandidate.length === 1) {
+				credential = this.getScopedCodexCredentialBindingPublic({
+					credential_binding_id: modelProviderCandidate[0]!.id,
+					target_kind: input.target_kind,
+					runtime_profile_id: profileRevision.profile_id,
+					project_id: input.project_id,
+					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+					now: input.now,
+				});
+			}
+		}
     const profileNetworkPolicy = profileRevision === undefined ? undefined : normalizeCodexRuntimeNetworkPolicy(profileRevision.network_policy);
     const worker =
       profileRevision !== undefined && profileNetworkPolicy !== undefined
@@ -938,7 +959,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         const activeVersion = this.codexCredentialBindingVersions.get(binding.active_version_id)?.version;
         return activeVersion?.status === 'active';
       })
-      .map((binding) => ({ purpose: binding.purpose }));
+      .map((binding) => ({ id: binding.id, purpose: binding.purpose }));
   }
 
   async getCodexWorkerReadinessDiagnostic(
@@ -950,7 +971,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         record.registration.control_channel_status === 'connected' &&
         record.session_expires_at > input.now &&
         codexWorkerHeartbeatIsFresh(record.registration.last_heartbeat_at, input.now) &&
-        codexRuntimeScopeMatches(record.allowed_scopes, codexScope(input.project_id, input.repo_id)),
+        codexWorkerScopeMatchesTarget(record.allowed_scopes, input.target_kind, codexScope(input.project_id, input.repo_id)),
     );
 
     if (available.length === 0) {
@@ -1131,13 +1152,19 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
           codexWorkerHeartbeatIsFresh(record.registration.last_heartbeat_at, input.now) &&
           record.registration.active_lease_count < record.registration.max_concurrency &&
           record.registration.capabilities.includes(input.target_kind) &&
-          codexRuntimeScopeMatches(record.allowed_scopes, codexScope(input.project_id, input.repo_id)) &&
+          codexWorkerScopeMatchesTarget(record.allowed_scopes, input.target_kind, codexScope(input.project_id, input.repo_id)) &&
           record.docker_image_digests.includes(input.docker_image_digest) &&
           record.network_policy_digests.includes(input.network_policy_digest) &&
           (input.network_provider_config_digest === undefined ||
             record.network_provider_config_digests.includes(input.network_provider_config_digest)),
       )
-      .sort((left, right) => left.registration.active_lease_count - right.registration.active_lease_count)[0];
+      .sort(
+        (left, right) =>
+          left.registration.active_lease_count - right.registration.active_lease_count ||
+          (right.registration.last_heartbeat_at ?? '').localeCompare(left.registration.last_heartbeat_at ?? '') ||
+          right.registration.registered_at.localeCompare(left.registration.registered_at) ||
+          right.registration.id.localeCompare(left.registration.id),
+      )[0];
     return this.cloneMaybe(worker?.registration);
   }
 
@@ -1840,13 +1867,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.assertCodexRuntimeJobArtifactIntake(input);
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
+    const preStartFailureEvidenceAllowed =
+      input.kind === 'startup_failure_evidence' &&
+      (record?.job.status === 'accepted' || record?.job.status === 'materializing') &&
+      leaseRecord?.lease.status === 'active';
     if (
       record === undefined ||
       leaseRecord === undefined ||
       record.job.worker_id !== input.worker_id ||
-      record.job.status !== 'running' ||
+      (record.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
       record.job.expires_at <= input.now ||
-      leaseRecord.lease.status !== 'materialized' ||
+      (leaseRecord.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
       leaseRecord.lease.expires_at <= input.now
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
@@ -5451,7 +5482,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       (worker.registration.status === 'online' || worker.registration.status === 'draining') &&
       worker.registration.control_channel_status === 'connected' &&
       worker.registration.capabilities.includes(record.lease.target.target_kind) &&
-      codexRuntimeScopeMatches(worker.allowed_scopes, codexScope(record.lease.target.project_id, record.lease.target.repo_id)) &&
+      codexWorkerScopeMatchesTarget(
+        worker.allowed_scopes,
+        record.lease.target.target_kind,
+        codexScope(record.lease.target.project_id, record.lease.target.repo_id),
+      ) &&
       worker.docker_image_digests.includes(record.docker_image_digest) &&
       worker.network_policy_digests.includes(record.network_policy_digest) &&
       (record.network_provider_config_digest === undefined ||
@@ -5710,7 +5745,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       codexWorkerHeartbeatIsFresh(worker.registration.last_heartbeat_at, input.now) &&
       worker.registration.active_lease_count < worker.registration.max_concurrency &&
       worker.registration.capabilities.includes(input.target.target_kind) &&
-      codexRuntimeScopeMatches(worker.allowed_scopes, codexScope(input.target.project_id, input.target.repo_id)) &&
+      codexWorkerScopeMatchesTarget(worker.allowed_scopes, input.target.target_kind, codexScope(input.target.project_id, input.target.repo_id)) &&
       worker.docker_image_digests.includes(input.docker_image_digest) &&
       worker.network_policy_digests.includes(input.network_policy_digest) &&
       (input.network_provider_config_digest === undefined ||

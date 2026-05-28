@@ -299,7 +299,7 @@ export class DockerizedCodexAppServerLauncher {
     if (this.options.effectiveConfigProbe === undefined) {
       return this.options.dockerRunner.options?.effectiveConfig;
     }
-    const deadline = Date.now() + (this.options.startupProbeTimeoutMs ?? 5_000);
+    const deadline = Date.now() + (this.options.startupProbeTimeoutMs ?? 15_000);
     let lastError: unknown;
     while (Date.now() <= deadline) {
       try {
@@ -370,6 +370,7 @@ export class DockerizedCodexAppServerLauncher {
 
 const publicStartupFailureCodes = new Set([
   'codex_worker_unavailable',
+  'codex_worker_docker_unavailable',
   'codex_worker_docker_policy_unavailable',
   'codex_runtime_workspace_isolation_unavailable',
   'codex_app_server_effective_config_mismatch',

@@ -527,6 +527,7 @@ export class ExecutionsService {
     if (item === undefined || item.development_plan_id !== developmentPlanId) {
       throw new NotFoundException(`DevelopmentPlanItem ${itemId} not found`);
     }
+    await this.requireCurrentItemRevisionAtApprovedExecutionPlanGate(item, repository);
     const executionPlan = (await repository.listExecutionPlansForDevelopmentPlanItem(item.id))
       .slice()
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0];
@@ -568,6 +569,33 @@ export class ExecutionsService {
     await this.requireApprovedSpecBoundaryChain(item, spec, specRevision, repository);
     const workItem = this.requireFound(await repository.getWorkItem(item.source_ref.id), `${item.source_ref.type} ${item.source_ref.id}`);
     return { plan, item, workItem, spec, specRevision, executionPlan, executionPlanRevision: revision };
+  }
+
+  private async requireCurrentItemRevisionAtApprovedExecutionPlanGate(
+    item: DevelopmentPlanItem,
+    repository: DeliveryRepository,
+  ): Promise<void> {
+    if (!(await this.currentItemRevisionAtApprovedExecutionPlanGate(item, repository))) {
+      throw new BadRequestException(
+        `DevelopmentPlanItem ${item.id} cannot start execution: approved_execution_plan_not_current_item_revision`,
+      );
+    }
+  }
+
+  private async currentItemRevisionAtApprovedExecutionPlanGate(
+    item: DevelopmentPlanItem,
+    repository: DeliveryRepository,
+  ): Promise<boolean> {
+    const currentRevision = (await repository.listDevelopmentPlanItemRevisions(item.id)).find(
+      (revision) => revision.id === item.revision_id,
+    );
+    return (
+      currentRevision?.change_reason === 'execution_plan_approved' &&
+      currentRevision.snapshot.spec_status === 'approved' &&
+      currentRevision.snapshot.execution_plan_status === 'approved' &&
+      (currentRevision.snapshot.execution_status === 'not_started' || currentRevision.snapshot.execution_status === 'ready') &&
+      currentRevision.snapshot.next_action === 'start_execution'
+    );
   }
 
   private async requireApprovedSpecBoundaryChain(
@@ -627,14 +655,14 @@ export class ExecutionsService {
   ): boolean {
     return (
       boundary.development_plan_item_id === item.id &&
-      boundary.development_plan_item_revision_id === item.revision_id &&
+      boundary.brainstorming_session_id === session.id &&
+      boundary.brainstorming_session_revision_id === session.revision_id &&
       boundary.revision_id === revision.id &&
       revision.boundary_summary_id === boundary.id &&
       revision.development_plan_item_id === item.id &&
-      revision.development_plan_item_revision_id === item.revision_id &&
+      revision.development_plan_item_revision_id === boundary.development_plan_item_revision_id &&
       this.boundarySummaryRevisionSessionId(revision) === session.id &&
       session.development_plan_item_id === item.id &&
-      session.development_plan_item_revision_id === item.revision_id &&
       session.status === 'approved' &&
       session.boundary_summary_id === boundary.id &&
       session.approved_summary_revision_id === revision.id

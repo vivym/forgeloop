@@ -14,7 +14,7 @@ import {
 import { CodexAppServerEndpointTransport, effectiveConfigFromResponse, type CodexAppServerTransport } from '@forgeloop/codex-runtime';
 import type { ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
 import type { DeliveryRepository } from '@forgeloop/db';
-import type { CodexRuntimeScope, CodexRuntimeTargetKind, RunRuntimeMetadata, RunSession } from '@forgeloop/domain';
+import type { CodexRuntimeScope, CodexRuntimeStatusProjection, CodexRuntimeTargetKind, RunRuntimeMetadata, RunSession } from '@forgeloop/domain';
 import {
   captureLocalCodexEvidence,
   CodexExecFallbackDriver,
@@ -410,7 +410,7 @@ const createLocalDockerLeasedDriverFactory = (input: {
   const dockerImageDigests = firstDigestList('FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST', 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS');
   const networkPolicyDigests = firstDigestList('FORGELOOP_CODEX_NETWORK_POLICY_DIGEST', 'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS');
   const networkProviderConfigDigests = stringListEnv('FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS');
-  const runtimeSelection = input.runExecutionRuntimeConfig.launchSelection();
+  const runtimeSelection = input.runExecutionRuntimeConfig.selection();
   const maxConcurrency = positiveIntEnv('FORGELOOP_WORKER_MAX_CONCURRENCY', 1);
   const capabilities = workerCapabilitiesEnv(['run_execution']);
   const authorizedScopes = runtimeScopesEnv();
@@ -486,8 +486,10 @@ const createLocalDockerLeasedDriverFactory = (input: {
             project_id: runSpec.project_id,
             repo_id: runSpec.repo.repo_id,
             target_kind: 'run_execution',
-            ...(runtimeSelection.runtime_profile_id === undefined ? {} : { runtime_profile_id: runtimeSelection.runtime_profile_id }),
-            credential_binding_id: runtimeSelection.credential_binding_id,
+            ...(runtimeSelection?.runtime_profile_id === undefined ? {} : { runtime_profile_id: runtimeSelection.runtime_profile_id }),
+            ...(runtimeSelection?.credential_binding_id === undefined
+              ? {}
+              : { credential_binding_id: runtimeSelection.credential_binding_id }),
           });
           if (
             status.runtime_profile_revision_id === undefined ||
@@ -545,22 +547,41 @@ const createRemoteRunExecutionClient = (
   if (codexRunWorkerMode() !== 'remote_outbound') {
     return undefined;
   }
-  const runtimeSelection = runExecutionRuntimeConfig.launchSelection();
-  const runtimeProfileId = runtimeSelection.runtime_profile_id ?? requiredEnv('FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID');
   const waitTimeoutMs = positiveIntEnv('FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS');
   const pollIntervalMs = positiveIntEnv('FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS');
+  const isReady = (status: CodexRuntimeStatusProjection): boolean =>
+    status.profile_status === 'active' &&
+    status.worker_status === 'online' &&
+    status.runtime_profile_revision_id !== undefined &&
+    status.credential_binding_id !== undefined &&
+    status.credential_binding_version_id !== undefined &&
+    status.credential_payload_digest !== undefined;
   return {
     waitTimeoutMs,
     pollIntervalMs,
     client: {
-      getStatus: (input) =>
-        codexRuntimeService.getStatus({
+      getStatus: async (input) => {
+        const runtimeSelection = runExecutionRuntimeConfig.selection();
+        if (runtimeSelection !== undefined) {
+          const configuredStatus = await codexRuntimeService.getStatus({
+            project_id: input.projectId,
+            ...(input.repoId === undefined ? {} : { repo_id: input.repoId }),
+            target_kind: input.targetKind,
+            ...(runtimeSelection.runtime_profile_id === undefined ? {} : { runtime_profile_id: runtimeSelection.runtime_profile_id }),
+            ...(runtimeSelection.credential_binding_id === undefined
+              ? {}
+              : { credential_binding_id: runtimeSelection.credential_binding_id }),
+          });
+          if (isReady(configuredStatus)) {
+            return configuredStatus;
+          }
+        }
+        return codexRuntimeService.getStatus({
           project_id: input.projectId,
           ...(input.repoId === undefined ? {} : { repo_id: input.repoId }),
           target_kind: input.targetKind,
-          runtime_profile_id: runtimeProfileId,
-          credential_binding_id: runtimeSelection.credential_binding_id,
-        }),
+        });
+      },
       createRuntimeJob: (input) => codexRuntimeService.createRuntimeJob(input as never),
       getRuntimeJob: (runtimeJobId) => codexRuntimeService.getRuntimeJob(runtimeJobId),
       cancelRuntimeJob: (runtimeJobId, input) => codexRuntimeService.cancelRuntimeJob(runtimeJobId, input as never),

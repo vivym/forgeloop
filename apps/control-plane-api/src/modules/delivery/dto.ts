@@ -10,6 +10,8 @@ import {
   requiredCheckSpecSchema,
   type ArtifactKind,
   type RequiredCheckSpec,
+  workItemIntakeContextSchema,
+  workItemKindSchema,
 } from '@forgeloop/contracts';
 import { z } from 'zod';
 
@@ -39,6 +41,23 @@ export type CreateProjectRepoDto = z.infer<typeof createProjectRepoSchema>;
 
 export const createWorkItemSchema = createWorkItemRequestSchema;
 export type CreateWorkItemDto = z.infer<typeof createWorkItemSchema>;
+
+export const createSourceObjectSchema = z
+  .object({
+    project_id: nonEmptyString,
+    title: nonEmptyString,
+    goal: nonEmptyString,
+    success_criteria: stringList,
+    priority: nonEmptyString,
+    risk: nonEmptyString,
+    driver_actor_id: nonEmptyString,
+    intake_context: workItemIntakeContextSchema,
+  })
+  .strict();
+export type CreateSourceObjectDto = z.infer<typeof createSourceObjectSchema>;
+
+export const sourceObjectTypeSchema = workItemKindSchema;
+export type SourceObjectTypeDto = z.infer<typeof sourceObjectTypeSchema>;
 
 export const updateWorkItemSchema = patchWorkItemRequestSchema;
 export type UpdateWorkItemDto = z.infer<typeof updateWorkItemSchema>;

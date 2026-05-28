@@ -361,7 +361,6 @@ export interface CodexRunExecutionWorkloadV1 {
   run_session_id: string;
   execution_package_id: string;
   execution_package_version: number;
-  run_worker_lease_id: string;
   workspace_bundle_id: string;
   workspace_bundle_digest: string;
   package_prompt_ref: string;
@@ -911,6 +910,16 @@ const displayHexRuntimeIdTokenPattern = /\b[a-f0-9]{12,64}\b/gi;
 const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=`])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
 const publicUnsafeSecretTokenPattern =
   /\b(?:(?:api[_-]?key|token|secret|password|authorization|auth(?:[_-]?header)?)\s*(?:[:=]|Bearer\b)|Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]+)/i;
+const dockerRuntimeEvidencePublicIdKeys = new Set([
+  'runtime_profile_id',
+  'runtime_profile_revision_id',
+  'credential_binding_id',
+  'credential_binding_version_id',
+  'launch_lease_id',
+]);
+const dockerRuntimeEvidencePublicIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const isDockerRuntimeEvidencePublicId = (key: string, value: string): boolean =>
+  dockerRuntimeEvidencePublicIdKeys.has(key) && dockerRuntimeEvidencePublicIdPattern.test(value);
 const codexRuntimePublicRoutePathTokenPattern =
   /(^|[\s([{"'=`])\/(?:api|v\d+(?:\.\d+)?|graphql|health|status|auth|oauth)(?:\/\S*)?/gi;
 const stripCodexRuntimePublicRoutePathTokens = (value: string): string =>
@@ -1222,6 +1231,20 @@ export const codexRuntimeScopeMatches = (allowed: readonly CodexRuntimeScope[], 
       scope.project_id === target.project_id &&
       (scope.repo_id === undefined || (target.repo_id !== undefined && scope.repo_id === target.repo_id)),
   );
+
+export const codexWorkerScopeMatchesTarget = (
+  allowed: readonly CodexRuntimeScope[],
+  targetKind: CodexRuntimeTargetKind,
+  target: CodexRuntimeScope,
+): boolean => {
+  if (targetKind !== 'run_execution') {
+    return codexRuntimeScopeMatches(allowed, target);
+  }
+  return (
+    target.repo_id !== undefined &&
+    allowed.some((scope) => scope.project_id === target.project_id && scope.repo_id === target.repo_id)
+  );
+};
 
 export const codexRuntimeProfileRevisionDigest = (revision: CodexRuntimeProfileRevision): string =>
   codexCanonicalDigest({
@@ -1896,6 +1919,7 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
 };
 
 export const validateCodexRuntimeJobArtifactIntake = (input: {
+  kind?: string;
   content_type: string;
   digest: string;
   size_bytes: number;
@@ -1911,7 +1935,9 @@ export const validateCodexRuntimeJobArtifactIntake = (input: {
     throw unsafeCodexRuntimePublicValue('Codex runtime job artifact size exceeds the allowed limit.');
   }
   if (input.metadata_json !== undefined) {
-    assertCodexRuntimePublicSafeValue(input.metadata_json, 'runtime job artifact metadata');
+    assertCodexRuntimePublicSafeRecord(input.metadata_json, 'runtime job artifact metadata', [], {
+      allowRunExecutionChangedFiles: input.kind === 'run_execution_patch' && input.content_type === 'text/x-diff',
+    });
   }
 };
 
@@ -2299,6 +2325,9 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence digest fields must be sha256 digests.', {
         field: key,
       });
+    }
+    if (isDockerRuntimeEvidencePublicId(key, value)) {
+      continue;
     }
     if (
       !key.endsWith('_digest') &&

@@ -84,6 +84,7 @@ import {
   codexLaunchTokenEnvelopeDigest,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeScopeMatches,
+  codexWorkerScopeMatchesTarget,
   codexWorkspaceAcquisitionDigest,
   collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
@@ -1184,19 +1185,39 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     };
   }
 
-  async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
-    const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
-    const credential =
-      input.credential_binding_id === undefined
-        ? undefined
-        : await this.getScopedCodexCredentialBindingPublic({
-            credential_binding_id: input.credential_binding_id,
-            target_kind: input.target_kind,
-            ...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
-            project_id: input.project_id,
-            ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-            now: input.now,
-          });
+	async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
+		const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
+		let credential =
+			input.credential_binding_id === undefined
+				? undefined
+				: await this.getScopedCodexCredentialBindingPublic({
+					credential_binding_id: input.credential_binding_id,
+					target_kind: input.target_kind,
+					...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
+					project_id: input.project_id,
+					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+					now: input.now,
+				});
+		if (credential === undefined && input.credential_binding_id === undefined && profileRevision !== undefined) {
+			const candidates = await this.listCodexCredentialBindingReadinessCandidates({
+				project_id: input.project_id,
+				...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+				runtime_profile_id: profileRevision.profile_id,
+				target_kind: input.target_kind,
+				now: input.now,
+			});
+			const modelProviderCandidate = candidates.filter((candidate) => candidate.purpose === 'model_provider');
+			if (modelProviderCandidate.length === 1) {
+				credential = await this.getScopedCodexCredentialBindingPublic({
+					credential_binding_id: modelProviderCandidate[0]!.id,
+					target_kind: input.target_kind,
+					runtime_profile_id: profileRevision.profile_id,
+					project_id: input.project_id,
+					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+					now: input.now,
+				});
+			}
+		}
     const profileNetworkPolicy = profileRevision === undefined ? undefined : normalizeCodexRuntimeNetworkPolicy(profileRevision.network_policy);
     const worker =
       profileRevision === undefined || profileNetworkPolicy === undefined
@@ -1317,7 +1338,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           profileTargetKind === input.target_kind &&
           versionStatus === 'active',
       )
-      .map(({ binding }) => ({ purpose: binding.purpose }));
+      .map(({ binding }) => ({ id: binding.id, purpose: binding.purpose }));
   }
 
   async getCodexWorkerReadinessDiagnostic(
@@ -1334,13 +1355,18 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           isNotNull(codex_worker_registrations.lastHeartbeatAt),
         ),
       )
-      .orderBy(asc(codex_worker_registrations.leaseCount), asc(codex_worker_registrations.id));
+      .orderBy(
+        asc(codex_worker_registrations.leaseCount),
+        desc(codex_worker_registrations.lastHeartbeatAt),
+        desc(codex_worker_registrations.registeredAt),
+        desc(codex_worker_registrations.id),
+      );
     const available = rows
       .map((row) => fromDbRecord<CodexWorkerRegistrationDbRecord>(row))
       .filter(
         (record) =>
           codexWorkerHeartbeatIsFresh(record.last_heartbeat_at, input.now) &&
-          codexRuntimeScopeMatches(record.allowed_scopes_json, codexScope(input.project_id, input.repo_id)),
+          codexWorkerScopeMatchesTarget(record.allowed_scopes_json, input.target_kind, codexScope(input.project_id, input.repo_id)),
       );
 
     if (available.length === 0) {
@@ -1595,7 +1621,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           isNotNull(codex_worker_registrations.lastHeartbeatAt),
         ),
       )
-      .orderBy(asc(codex_worker_registrations.leaseCount), asc(codex_worker_registrations.id));
+      .orderBy(
+        asc(codex_worker_registrations.leaseCount),
+        desc(codex_worker_registrations.lastHeartbeatAt),
+        desc(codex_worker_registrations.registeredAt),
+        desc(codex_worker_registrations.id),
+      );
     const matched = rows
       .map((row) => fromDbRecord<CodexWorkerRegistrationDbRecord>(row))
       .find(
@@ -1603,7 +1634,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           codexWorkerHeartbeatIsFresh(record.last_heartbeat_at, input.now) &&
           record.lease_count < record.max_concurrency &&
           capabilityList(record.capabilities_json, 'target_kinds').includes(input.target_kind) &&
-          codexRuntimeScopeMatches(record.allowed_scopes_json, codexScope(input.project_id, input.repo_id)) &&
+          codexWorkerScopeMatchesTarget(record.allowed_scopes_json, input.target_kind, codexScope(input.project_id, input.repo_id)) &&
           capabilityList(record.capabilities_json, 'docker_image_digests').includes(input.docker_image_digest) &&
           capabilityList(record.capabilities_json, 'network_policy_digests').includes(input.network_policy_digest) &&
           (input.network_provider_config_digest === undefined ||
@@ -2518,13 +2549,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
     this.assertCodexRuntimeJobArtifactIntake(input);
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    const preStartFailureEvidenceAllowed =
+      input.kind === 'startup_failure_evidence' &&
+      (bundle.job?.status === 'accepted' || bundle.job?.status === 'materializing') &&
+      bundle.lease?.status === 'active';
     if (
       bundle.job === undefined ||
       bundle.lease === undefined ||
       bundle.job.worker_id !== input.worker_id ||
-      bundle.job.status !== 'running' ||
+      (bundle.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
       bundle.job.expires_at <= input.now ||
-      bundle.lease.status !== 'materialized' ||
+      (bundle.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
       bundle.lease.expires_at <= input.now
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
@@ -3401,7 +3436,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       codexWorkerHeartbeatIsFresh(worker.last_heartbeat_at, input.now) &&
       worker.lease_count < worker.max_concurrency &&
       capabilityList(worker.capabilities_json, 'target_kinds').includes(input.target.target_kind) &&
-      codexRuntimeScopeMatches(worker.allowed_scopes_json, codexScope(input.target.project_id, input.target.repo_id)) &&
+      codexWorkerScopeMatchesTarget(worker.allowed_scopes_json, input.target.target_kind, codexScope(input.target.project_id, input.target.repo_id)) &&
       capabilityList(worker.capabilities_json, 'docker_image_digests').includes(input.docker_image_digest) &&
       capabilityList(worker.capabilities_json, 'network_policy_digests').includes(input.network_policy_digest) &&
       (input.network_provider_config_digest === undefined ||
@@ -6813,7 +6848,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       (worker.status === 'online' || worker.status === 'draining') &&
       worker.control_channel_status === 'connected' &&
       capabilityList(worker.capabilities_json, 'target_kinds').includes(record.target_kind) &&
-      codexRuntimeScopeMatches(worker.allowed_scopes_json, codexScope(record.project_id, record.repo_id)) &&
+      codexWorkerScopeMatchesTarget(worker.allowed_scopes_json, record.target_kind, codexScope(record.project_id, record.repo_id)) &&
       capabilityList(worker.capabilities_json, 'docker_image_digests').includes(record.docker_image_digest) &&
       capabilityList(worker.capabilities_json, 'network_policy_digests').includes(record.network_policy_digest) &&
       (record.network_provider_config_digest === undefined ||

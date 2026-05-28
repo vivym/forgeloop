@@ -15,6 +15,7 @@ import {
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
   type CodexGenerationRuntimeJobResult,
+  type CodexLaunchMaterialization,
   type CodexRuntimeJob,
   type CodexRuntimeProfileRevision,
 } from '../../packages/domain/src';
@@ -394,6 +395,38 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(actionResponse.runtime_job.repo_id).toBe('repo-0');
     const rawRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: actionResponse.runtime_job.id }))!;
     expect(rawRuntimeJob.workspace_acquisition_json?.repo_ids).toEqual(['repo-0', 'repo-1']);
+  });
+
+  it('uses current centralized generation config when stale env pins point at another scope', async () => {
+    const { plan, item } = await seedApprovedBoundary(app);
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
+    vi.stubEnv('FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID', 'stale-profile-from-another-control-plane');
+    vi.stubEnv('FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID', 'stale-credential-from-another-control-plane');
+
+    const actionResponse = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
+        .send({ actor_id: actorTech })
+        .expect(201)
+    ).body;
+
+    const rawRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: actionResponse.runtime_job.id }))!;
+    expect(rawRuntimeJob.repo_id).toBe('repo-1');
+    const { materialization } = await startGenerationRuntimeJob(repository, actionResponse.runtime_job, 'stale-env-fallback');
+    expect(materialization.launch_target).toMatchObject({ project_id: plan.project_id, repo_id: 'repo-1' });
+    expect(materialization.profile_revision.allowed_scopes).toContainEqual(
+      expect.objectContaining({ project_id: plan.project_id }),
+    );
+    expect(materialization.resolved_credentials).toHaveLength(1);
+    const materializedCredential = await repository.getCodexCredentialBindingPublic(materialization.resolved_credentials[0]!.binding_id);
+    expect(materializedCredential).toMatchObject({
+      project_id: plan.project_id,
+      profile_id: materialization.profile_revision.profile_id,
+      purpose: 'model_provider',
+    });
+    expect(materialization.resolved_credentials[0]?.binding_id).not.toBe('stale-credential-from-another-control-plane');
   });
 
   it('fails product generation without a retryable claim when the terminal result prompt contract mismatches the workload', async () => {
@@ -1311,7 +1344,7 @@ async function startGenerationRuntimeJob(
   repository: DeliveryRepository,
   runtimeJob: RuntimeJobRef,
   suffix: string,
-): Promise<{ sessionToken: string; terminalAt: string }> {
+): Promise<{ sessionToken: string; terminalAt: string; materialization: CodexLaunchMaterialization }> {
   const job = (await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJob.id })) ?? runtimeJob;
   const terminalAt = '2026-05-05T00:00:45.000Z';
   const projectScopedWorkerId = stableUuid({ kind: 'generation-worker', projectId: job.project_id, repoId: 'project' });
@@ -1359,7 +1392,7 @@ async function startGenerationRuntimeJob(
     replay_protection: replayProtection('claim-envelope'),
     now: terminalAt,
   });
-  await repository.materializeCodexRuntimeJob({
+  const materialization = await repository.materializeCodexRuntimeJob({
     runtime_job_id: job.id,
     launch_lease_id: job.launch_lease_id,
     worker_id: job.worker_id,
@@ -1388,7 +1421,7 @@ async function startGenerationRuntimeJob(
     replay_protection: replayProtection('start'),
     now: terminalAt,
   });
-  return { sessionToken, terminalAt };
+  return { sessionToken, terminalAt, materialization };
 }
 
 async function terminalizeGenerationRuntimeJob(
@@ -1576,6 +1609,7 @@ async function seedGenerationRuntimeForProject(app: INestApplication, projectId:
   vi.stubEnv('FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID', profileId);
   vi.stubEnv('FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID', credentialBindingId);
   vi.stubEnv('FORGELOOP_AUTOMATION_TEST_NOW', '2026-05-05T00:00:30.000Z');
+  return { profileId, profileRevisionId, credentialBindingId, credentialVersionId, workerId };
 }
 
 function stableUuid(input: Record<string, unknown>): string {
