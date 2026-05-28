@@ -1622,6 +1622,12 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         }
 
         if (status === 'approved') {
+          if (mode === 'initial' && !summaryChangeRequested) {
+            throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_unexpected_state', {
+              status: 'BLOCKED',
+              blocker_code: 'codex_runtime_superpowers_boundary_unexpected_state',
+            });
+          }
           const approvedRevisionId = requireState(
             currentSession.approved_summary_revision_id,
             'codex_runtime_superpowers_dogfood_boundary_summary_revision_id_missing',

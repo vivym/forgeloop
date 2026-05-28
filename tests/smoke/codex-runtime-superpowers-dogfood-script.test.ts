@@ -18,6 +18,7 @@ import {
   renderCodexRuntimeSuperpowersDogfoodReport,
   runCodexRuntimeSuperpowersDogfood,
   sanitizeCodexRemoteWorkerDogfoodEnv,
+  type CodexRuntimeSuperpowersDogfoodCliConfig,
   type CodexRuntimeSuperpowersDogfoodClient,
 } from '../../scripts/codex-runtime-superpowers-dogfood';
 
@@ -218,6 +219,117 @@ const completeDogfoodClientWithPhaseEvidence = (overrides?: {
   })),
   writeReport: vi.fn(async () => ({ report_path: fixedReportPath })),
 });
+
+type BoundarySessionFixture = {
+  id: string;
+  status?: 'draft' | 'ai_turn_running' | 'waiting_for_leader' | 'summary_proposed' | 'approved' | 'changes_requested' | 'stale' | 'cancelled';
+  questions?: Array<{ id: string; status?: string; required?: boolean; answered_by_answer_id?: string }>;
+  latest_summary_revision_id?: string;
+  approved_summary_revision_id?: string;
+  current_round_runtime_job_id?: string;
+};
+
+const boundaryHttpClientConfig = (
+  overrides?: Partial<CodexRuntimeSuperpowersDogfoodCliConfig>,
+): CodexRuntimeSuperpowersDogfoodCliConfig => ({
+  controlPlaneUrl: 'http://control-plane.invalid',
+  actorId: 'actor-setup',
+  generationRuntimeProfileId: 'profile-generation',
+  generationCredentialBindingId: 'binding-generation',
+  runExecutionRuntimeProfileId: 'profile-run',
+  runExecutionCredentialBindingId: 'binding-run',
+  projectId: 'project-1',
+  sourceObjectType: 'requirement',
+  sourceObjectId: 'requirement-1',
+  leaderActorId: 'actor-leader',
+  reviewerActorId: 'actor-reviewer',
+  repoId: 'repo-1',
+  repoLocalPath: '/repo/current',
+  repoBaseCommitSha: 'abc123',
+  noSharedFilesystem: true,
+  skipBootstrap: true,
+  remoteRuntimeJobWaitTimeoutMs: 100,
+  remoteRuntimeJobPollIntervalMs: 0,
+  boundaryMaxAiTurns: 6,
+  ...overrides,
+});
+
+const createBoundaryStateLoopClient = (input: {
+  boundarySessionResponses: BoundarySessionFixture[];
+  initialSessionId?: string;
+  rebaseSessionId?: string;
+  config?: Partial<CodexRuntimeSuperpowersDogfoodCliConfig>;
+}) => {
+  const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+  const workerCalls: string[] = [];
+  const boundarySessionResponses = [...input.boundarySessionResponses];
+  const lastBoundarySessionResponse = boundarySessionResponses.at(-1);
+  const initialSessionId = input.initialSessionId ?? 'boundary-session-1';
+  const rebaseSessionId = input.rebaseSessionId ?? 'boundary-session-rebased';
+  const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const parsedUrl = new URL(String(url));
+    const path = parsedUrl.pathname;
+    const method = init?.method ?? 'GET';
+    const body = typeof init?.body === 'string' && init.body.length > 0 ? JSON.parse(init.body) : undefined;
+    requests.push({ method, path, body });
+
+    if (method === 'POST' && path === '/development-plans') {
+      return jsonResponse({ id: 'development-plan-1' });
+    }
+    if (method === 'POST' && path === '/development-plans/development-plan-1/items') {
+      return jsonResponse({ id: 'item-1' });
+    }
+    if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/boundary-brainstorming') {
+      return jsonResponse({ id: initialSessionId });
+    }
+    if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/boundary-brainstorming/restart') {
+      return jsonResponse({ id: rebaseSessionId });
+    }
+    if (method === 'GET' && path.startsWith('/boundary-brainstorming-sessions/')) {
+      return jsonResponse(boundarySessionResponses.shift() ?? lastBoundarySessionResponse);
+    }
+    if (method === 'GET' && path.startsWith('/internal/codex-runtime/runtime-jobs/')) {
+      const runtimeJobId = decodeURIComponent(path.split('/').pop()!);
+      return jsonResponse({
+        runtime_job: {
+          id: runtimeJobId,
+          status: 'terminal',
+          terminal_status: 'succeeded',
+          terminal_result_json: { output_schema_version: 'boundary_round_result.v1' },
+        },
+      });
+    }
+    if (method === 'POST' && path.endsWith('/answers')) {
+      const questionId = typeof body?.question_id === 'string' ? body.question_id : 'unknown';
+      return jsonResponse({ id: `answer-${questionId}` });
+    }
+    if (method === 'POST' && path.endsWith('/continue')) {
+      return jsonResponse({ id: path.split('/')[2] });
+    }
+    if (method === 'POST' && path.includes('/summary-revisions/') && path.endsWith('/request-changes')) {
+      const revisionId = decodeURIComponent(path.split('/summary-revisions/')[1].split('/')[0]);
+      return jsonResponse({ boundary_summary_revision_id: revisionId });
+    }
+    if (method === 'POST' && path.includes('/summary-revisions/') && path.endsWith('/approve')) {
+      const revisionId = decodeURIComponent(path.split('/summary-revisions/')[1].split('/')[0]);
+      return jsonResponse({ boundary_summary_revision_id: revisionId });
+    }
+    throw new Error(`unexpected request ${method} ${path}`);
+  });
+  const client = createCodexRuntimeSuperpowersDogfoodHttpClient(boundaryHttpClientConfig(input.config), {
+    fetchImpl: fetchImpl as unknown as typeof fetch,
+    env: {
+      FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'test-secret',
+      FORGELOOP_AUTOMATION_ACTOR_ID: 'automation-actor',
+      FORGELOOP_AUTOMATION_DAEMON_IDENTITY: 'automation-daemon',
+    },
+    runRemoteWorkerOnce: async (targetKind) => {
+      workerCalls.push(targetKind ?? 'generation');
+    },
+  });
+
+  return { client, requests, workerCalls };
+};
 
 describe('Codex runtime Superpowers dogfood script', () => {
   it('orchestrates the strict product loop through central config/auth and no-shared-filesystem execution', async () => {
@@ -844,6 +956,31 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(config.boundaryMaxAiTurns).toBe(6);
   });
 
+  it('defaults the bounded Boundary dogfood loop to 8 AI turns', () => {
+    const config = loadCodexRuntimeSuperpowersDogfoodCliConfig({
+      FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
+      FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
+      FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
+      FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'requirement-1',
+      FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+    });
+
+    expect(config.boundaryMaxAiTurns).toBe(8);
+  });
+
+  it('rejects a zero Boundary dogfood loop max AI turn setting', () => {
+    expect(() =>
+      loadCodexRuntimeSuperpowersDogfoodCliConfig({
+        FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
+        FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
+        FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
+        FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'requirement-1',
+        FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+        FORGELOOP_CODEX_DOGFOOD_BOUNDARY_MAX_AI_TURNS: '0',
+      }),
+    ).toThrow(/FORGELOOP_CODEX_DOGFOOD_BOUNDARY_MAX_AI_TURNS_must_be_positive_integer/);
+  });
+
   it('defaults the dogfood repo base commit to the current repository HEAD', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'forgeloop-dogfood-base-'));
     const previousCwd = process.cwd();
@@ -1295,6 +1432,186 @@ describe('Codex runtime Superpowers dogfood script', () => {
       requestOrder.indexOf('POST /boundary-brainstorming-sessions/boundary-session-1/continue'),
     );
     expect(requestOrder.filter((request) => request === 'POST /boundary-brainstorming-sessions/boundary-session-1/answers')).toHaveLength(2);
+  });
+
+  it('blocks an already approved initial Boundary summary that skipped the required request-change path', async () => {
+    const { client } = createBoundaryStateLoopClient({
+      boundarySessionResponses: [
+        {
+          id: 'boundary-session-1',
+          status: 'approved',
+          approved_summary_revision_id: 'summary-approved',
+          questions: [],
+        },
+      ],
+    });
+
+    await client.seedSourceAndDevelopmentPlanItem();
+    await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_boundary_unexpected_state',
+    });
+  });
+
+  it('rebases Boundary brainstorming through restart and approves the current summary without request changes', async () => {
+    const { client, requests } = createBoundaryStateLoopClient({
+      boundarySessionResponses: [
+        {
+          id: 'boundary-session-rebased',
+          status: 'summary_proposed',
+          latest_summary_revision_id: 'summary-rebased',
+          questions: [],
+        },
+      ],
+    });
+
+    await client.seedSourceAndDevelopmentPlanItem();
+    const rebasedBoundary = await client.completeBoundaryBrainstorming('rebase');
+
+    expect(rebasedBoundary).toMatchObject({
+      mode: 'rebase',
+      session_id: 'boundary-session-rebased',
+      approved_summary_revision_id: 'summary-rebased',
+      ai_turn_count: 0,
+      follow_up_path_covered: false,
+      summary_request_change_path_covered: false,
+      runtime_job_digests: [],
+      app_server_evidence_digests: [],
+      cleanup_status: 'completed',
+    });
+    const requestOrder = requests.map((request) => `${request.method} ${request.path}`);
+    expect(requestOrder).toContain(
+      'POST /development-plans/development-plan-1/items/item-1/boundary-brainstorming/restart',
+    );
+    expect(requestOrder).not.toContain('POST /development-plans/development-plan-1/items/item-1/boundary-brainstorming');
+    expect(requestOrder).toContain(
+      'POST /boundary-brainstorming-sessions/boundary-session-rebased/summary-revisions/summary-rebased/approve',
+    );
+    expect(requestOrder.some((request) => request.endsWith('/request-changes'))).toBe(false);
+  });
+
+  it('continues after Boundary changes_requested state and can later approve the revised summary', async () => {
+    const { client, requests } = createBoundaryStateLoopClient({
+      boundarySessionResponses: [
+        {
+          id: 'boundary-session-rebased',
+          status: 'changes_requested',
+          questions: [{ id: 'question-change', status: 'open', required: true }],
+        },
+        {
+          id: 'boundary-session-rebased',
+          status: 'summary_proposed',
+          latest_summary_revision_id: 'summary-after-change',
+          questions: [
+            { id: 'question-change', status: 'answered', required: true, answered_by_answer_id: 'answer-question-change' },
+          ],
+        },
+      ],
+    });
+
+    await client.seedSourceAndDevelopmentPlanItem();
+    const rebasedBoundary = await client.completeBoundaryBrainstorming('rebase');
+
+    expect(rebasedBoundary).toMatchObject({
+      mode: 'rebase',
+      approved_summary_revision_id: 'summary-after-change',
+      follow_up_path_covered: false,
+      summary_request_change_path_covered: false,
+      app_server_evidence_digests: [],
+      cleanup_status: 'completed',
+    });
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: 'POST',
+          path: '/boundary-brainstorming-sessions/boundary-session-rebased/answers',
+          body: expect.objectContaining({ question_id: 'question-change' }),
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/boundary-brainstorming-sessions/boundary-session-rebased/continue',
+          body: expect.objectContaining({
+            leader_input_markdown: 'Continue after requested Boundary Summary changes and keep the strict dogfood boundary current.',
+          }),
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/boundary-brainstorming-sessions/boundary-session-rebased/summary-revisions/summary-after-change/approve',
+        }),
+      ]),
+    );
+  });
+
+  it('blocks stale or cancelled Boundary session states as unexpected', async () => {
+    for (const status of ['stale', 'cancelled'] as const) {
+      const { client } = createBoundaryStateLoopClient({
+        boundarySessionResponses: [
+          {
+            id: `boundary-session-${status}`,
+            status,
+            questions: [],
+          },
+        ],
+        initialSessionId: `boundary-session-${status}`,
+      });
+
+      await client.seedSourceAndDevelopmentPlanItem();
+      await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
+        blockerCode: 'codex_runtime_superpowers_boundary_unexpected_state',
+      });
+    }
+  });
+
+  it('blocks when Boundary AI turns exceed the configured max', async () => {
+    const { client, workerCalls } = createBoundaryStateLoopClient({
+      boundarySessionResponses: [
+        {
+          id: 'boundary-session-1',
+          status: 'ai_turn_running',
+          current_round_runtime_job_id: 'runtime-job-a',
+          questions: [],
+        },
+        {
+          id: 'boundary-session-1',
+          status: 'waiting_for_leader',
+          questions: [],
+        },
+        {
+          id: 'boundary-session-1',
+          status: 'ai_turn_running',
+          current_round_runtime_job_id: 'runtime-job-b',
+          questions: [],
+        },
+      ],
+      config: {
+        boundaryMaxAiTurns: 1,
+      },
+    });
+
+    await client.seedSourceAndDevelopmentPlanItem();
+    await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_boundary_max_turns_exceeded',
+    });
+    expect(workerCalls).toEqual(['generation']);
+  });
+
+  it('blocks when the Boundary state loop exhausts bounded iterations', async () => {
+    const { client } = createBoundaryStateLoopClient({
+      boundarySessionResponses: [
+        {
+          id: 'boundary-session-rebased',
+          status: 'waiting_for_leader',
+          questions: [],
+        },
+      ],
+      config: {
+        boundaryMaxAiTurns: 1,
+      },
+    });
+
+    await client.seedSourceAndDevelopmentPlanItem();
+    await expect(client.completeBoundaryBrainstorming('rebase')).rejects.toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_boundary_loop_exhausted',
+    });
   });
 
   it('continues Boundary brainstorming from session state when the Boundary question is visible', async () => {
