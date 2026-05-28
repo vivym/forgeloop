@@ -12,6 +12,15 @@ const scopeSchema = z.object({
 const actorSchema = z.object({
   actor_id: z.string().min(1),
 }).strict();
+const localCodexImportSourceLabelSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
+  .refine((value) => {
+    const normalized = value.toLowerCase();
+    return !normalized.includes('config.toml') && !normalized.includes('auth.json');
+  });
 
 const createdByFields = {
   created_by_actor_id: z.string().min(1).optional(),
@@ -171,8 +180,61 @@ export const createCodexCredentialSchema = z.object({
     created_at: z.string().min(1),
   }).strict(),
   secret_payload_json: z.unknown(),
+  unsafe_db_acknowledgement: z.literal(true),
   ...createdByFields,
 }).strict();
+
+export const importCodexRuntimeProfileSchema = z
+  .object({
+    profile_name: z.string().min(1),
+    target_kind: runtimeTargetKindSchema,
+    codex_config_toml: z.string().min(1),
+    project_id: z.string().min(1),
+    repo_id: z.string().min(1).optional(),
+    docker_image: z.string().min(1),
+    docker_image_digest: sha256DigestSchema,
+    expected_effective_config_digest: sha256DigestSchema,
+    allowed_scopes: z.array(scopeSchema).min(1),
+    network_policy: networkPolicySchema,
+    created_by: actorSchema,
+    setup_nonce: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const importCodexCredentialSchema = z
+  .object({
+    profile_id: z.string().min(1),
+    project_id: z.string().min(1),
+    repo_id: z.string().min(1).optional(),
+    purpose: z.enum(['model_provider', 'package_registry', 'git_remote', 'other']),
+    auth_json: z.unknown(),
+    provider: z.literal('unsafe_db'),
+    unsafe_db_acknowledgement: z.literal(true),
+    created_by: actorSchema,
+    setup_nonce: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const importLocalCodexSchema = z
+  .object({
+    profile_name: z.string().min(1),
+    target_kind: runtimeTargetKindSchema,
+    local_source_label: localCodexImportSourceLabelSchema,
+    codex_config_toml: z.string().min(1),
+    auth_json: z.unknown(),
+    project_id: z.string().min(1),
+    repo_id: z.string().min(1).optional(),
+    docker_image: z.string().min(1),
+    docker_image_digest: sha256DigestSchema,
+    expected_effective_config_digest: sha256DigestSchema,
+    allowed_scopes: z.array(scopeSchema).min(1),
+    network_policy: networkPolicySchema,
+    provider: z.literal('unsafe_db'),
+    unsafe_db_acknowledgement: z.literal(true),
+    created_by: actorSchema,
+    setup_nonce: z.string().min(1).optional(),
+  })
+  .strict();
 
 export const createCodexWorkerBootstrapTokenSchema = z.object({
   id: z.string().min(1),
@@ -491,6 +553,9 @@ export const terminalizeCodexLaunchLeaseSchema = workerSessionRequestSchema.exte
 
 export type CreateCodexRuntimeProfileDto = z.infer<typeof createCodexRuntimeProfileSchema>;
 export type CreateCodexCredentialDto = z.infer<typeof createCodexCredentialSchema>;
+export type ImportCodexRuntimeProfileDto = z.infer<typeof importCodexRuntimeProfileSchema>;
+export type ImportCodexCredentialDto = z.infer<typeof importCodexCredentialSchema>;
+export type ImportLocalCodexDto = z.infer<typeof importLocalCodexSchema>;
 export type CreateCodexWorkerBootstrapTokenDto = z.infer<typeof createCodexWorkerBootstrapTokenSchema>;
 export type CodexRuntimeStatusQuery = z.infer<typeof codexRuntimeStatusQuerySchema>;
 export type RecoverStaleCodexWorkersDto = z.infer<typeof recoverStaleCodexWorkersSchema>;

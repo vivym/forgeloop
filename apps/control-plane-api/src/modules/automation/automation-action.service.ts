@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
-import { DomainError } from '@forgeloop/domain';
+import { codexCanonicalDigest, DomainError } from '@forgeloop/domain';
 import type { DeliveryRepository } from '@forgeloop/db';
 
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
@@ -27,6 +27,12 @@ const claimConflictBody = {
   code: 'automation_action_claim_conflict',
   message: 'Automation action claim is not active.',
 };
+
+const productGenerationActionTypes = new Set([
+  'run_boundary_brainstorming_round',
+  'generate_development_plan_item_spec_revision',
+  'generate_development_plan_item_execution_plan_revision',
+]);
 
 const conflict = (body: Record<string, string>): HttpException => new HttpException(body, HttpStatus.CONFLICT);
 const isInvalidTransition = (error: unknown): error is DomainError =>
@@ -55,6 +61,7 @@ export class AutomationActionService {
   constructor(@Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository) {}
 
   async createOrReplayAction(input: CreateAutomationActionRunDto): Promise<AutomationActionResponseDto> {
+    this.assertProductGenerationPreconditionFingerprint(input);
     try {
       const action = await this.repository.createOrReplayAutomationActionRun({
         id: input.id ?? randomUUID(),
@@ -182,6 +189,25 @@ export class AutomationActionService {
         throw conflict(claimConflictBody);
       }
       throw error;
+    }
+  }
+
+  private assertProductGenerationPreconditionFingerprint(input: CreateAutomationActionRunDto): void {
+    if (!productGenerationActionTypes.has(input.action_type)) {
+      return;
+    }
+
+    const actionInput = input.action_input_json as { precondition_fingerprint_json: Record<string, unknown> };
+    const preconditionFingerprintJson = actionInput.precondition_fingerprint_json;
+    const expectedFingerprint = codexCanonicalDigest(preconditionFingerprintJson);
+    if (input.precondition_fingerprint !== expectedFingerprint) {
+      throw new HttpException(
+        {
+          code: 'automation_action_precondition_fingerprint_mismatch',
+          message: 'Automation action precondition_fingerprint does not match action_input_json.precondition_fingerprint_json.',
+        },
+        HttpStatus.BAD_REQUEST,
+      );
     }
   }
 

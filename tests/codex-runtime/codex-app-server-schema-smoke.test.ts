@@ -42,16 +42,21 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
 
     try {
       const { stdout: version } = await execFile(codexBin, ['--version'], { timeout: 20_000 });
-      expect(version.trim()).toMatch(/^codex-cli 0\.132\./);
+      expect(version.trim()).toMatch(/^codex-cli 0\.13[2-9]\./);
       await execFile(codexBin, ['app-server', 'generate-json-schema', '--out', schemaDir], { timeout: 30_000 });
       await execFile(codexBin, ['app-server', 'generate-ts', '--out', tsDir], { timeout: 30_000 });
 
       const threadStart = await readJson(join(schemaDir, 'v2', 'ThreadStartParams.json'));
       const turnStart = await readJson(join(schemaDir, 'v2', 'TurnStartParams.json'));
       const configRead = await readJson(join(schemaDir, 'v2', 'ConfigReadParams.json'));
+      const turnStartResponseSource = await readFile(join(tsDir, 'v2', 'TurnStartResponse.ts'), 'utf8');
+      const turnCompletedSource = await readFile(join(tsDir, 'v2', 'TurnCompletedNotification.ts'), 'utf8');
+      const threadItemSource = await readFile(join(tsDir, 'v2', 'ThreadItem.ts'), 'utf8');
+      const responseItemSource = await readFile(join(tsDir, 'ResponseItem.ts'), 'utf8');
       expect(Object.keys((threadStart.properties as Record<string, unknown>) ?? {})).toContain('sandbox');
       expect(Object.keys((threadStart.properties as Record<string, unknown>) ?? {})).not.toContain('sandboxPolicy');
       expect(Object.keys((turnStart.properties as Record<string, unknown>) ?? {})).toContain('sandboxPolicy');
+      expect(Object.keys((turnStart.properties as Record<string, unknown>) ?? {})).toContain('outputSchema');
       expect(turnStart.required).toEqual(['input', 'threadId']);
       expect(Object.keys((configRead.properties as Record<string, unknown>) ?? {})).toContain('includeLayers');
 
@@ -65,8 +70,17 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
       expect(userInputSource).toContain('{ "type": "text", text: string,');
       expect(userInputSource).toContain('text_elements: Array<TextElement>');
       expect(serverNotificationSource).toContain('"method": "item/agentMessage/delta"');
+      expect(serverNotificationSource).toContain('"method": "item/completed"');
+      expect(serverNotificationSource).toContain('"method": "rawResponseItem/completed"');
       expect(serverNotificationSource).toContain('"method": "turn/completed"');
       expect(serverNotificationSource).toContain('"method": "thread/status/changed"');
+      expect(turnStartResponseSource).toContain('turn: Turn');
+      expect(turnCompletedSource).toContain('turn: Turn');
+      expect(threadItemSource).toContain('"type": "agentMessage"');
+      expect(threadItemSource).toContain('text: string');
+      expect(responseItemSource).toContain('"type": "message"');
+      expect(responseItemSource).toContain('role: string');
+      expect(responseItemSource).toContain('content: Array<ContentItem>');
 
       const capturedRequests: Array<{ method: string; params: Record<string, unknown> }> = [];
       const transport: CodexAppServerTransport = {
@@ -76,7 +90,10 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
             return { threadId: 'thread-1', effectiveConfig: { sandbox: 'read-only', approvalPolicy: 'never' } };
           }
           if (method === 'turn/start') {
-            return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly', networkAccess: false } } };
+            return {
+              turn: { id: 'turn-1', status: 'inProgress', items: [], itemsView: 'full', error: null },
+              effectiveConfig: { sandboxPolicy: { type: 'readOnly', networkAccess: false } },
+            };
           }
           if (method === 'turn/interrupt') {
             return { acknowledged: true };
@@ -84,8 +101,27 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
           return {};
         },
         notifications: async function* () {
-          yield { method: 'item/agentMessage/delta', params: { delta: '{"schema_version":"plan_draft.v1","summary":"ok"}' } };
-          yield { method: 'turn/completed', params: { turn: { status: 'completed' } } };
+          yield { method: 'item/agentMessage/delta', params: { delta: 'Interim commentary.' } };
+          yield {
+            method: 'turn/completed',
+            params: {
+              turn: {
+                id: 'turn-1',
+                status: 'completed',
+                itemsView: 'full',
+                error: null,
+                items: [
+                  {
+                    type: 'agentMessage',
+                    id: 'message-1',
+                    text: '{"schema_version":"plan_draft.v1","summary":"ok"}',
+                    phase: 'final_answer',
+                    memoryCitation: null,
+                  },
+                ],
+              },
+            },
+          };
         },
       };
       const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });

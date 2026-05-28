@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
-import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { dirname, join, posix, relative, resolve } from 'node:path';
 
 const workspaceBundleArchiveSchemaVersion = 'workspace_bundle_archive.v1';
@@ -47,10 +47,12 @@ export interface WorkspaceBundleFileInput {
 }
 
 export interface WorkspaceBundleUnpackResult {
+  jobRoot: string;
   workspacePath: string;
   manifest: WorkspaceBundleManifest;
   manifest_digest: string;
   archive_digest: string;
+  mounted_workspace_digest: string;
   size_bytes: number;
 }
 
@@ -319,6 +321,69 @@ export const verifyWorkspaceBundleArchiveDigest = (
   };
 };
 
+export const computeMountedWorkspaceDigest = async (
+  workspacePath: string,
+  manifest: WorkspaceBundleManifest,
+): Promise<string> => {
+  const root = await realpath(workspacePath).catch(() => {
+    throw invalidBundle('mounted workspace root is unavailable');
+  });
+  const expectedByPath = new Map(manifest.entries.map((entry) => [entry.path, entry]));
+  const entries: WorkspaceBundleManifestEntry[] = [];
+
+  const walk = async (directory: string): Promise<void> => {
+    const children = await readdir(directory, { withFileTypes: true });
+    for (const child of children) {
+      const absolutePath = resolve(join(directory, child.name));
+      if (!isInside(root, absolutePath)) {
+        throw invalidBundle('mounted workspace entry escapes root');
+      }
+      const relativePath = normalizeBundlePath(relative(root, absolutePath).replaceAll('\\', '/'));
+      assertPathPolicy(relativePath, manifest.allowed_paths, manifest.forbidden_paths);
+      if (child.isSymbolicLink()) {
+        throw invalidBundle('mounted workspace contains symlink');
+      }
+      if (child.isDirectory()) {
+        await walk(absolutePath);
+        continue;
+      }
+      if (!child.isFile()) {
+        throw invalidBundle('mounted workspace contains unsupported entry type');
+      }
+      const bytes = await readFile(absolutePath);
+      const expected = expectedByPath.get(relativePath);
+      entries.push({
+        path: relativePath,
+        type: 'file',
+        digest: sha256(bytes),
+        size_bytes: bytes.byteLength,
+        ...(expected?.mode === undefined ? {} : { mode: expected.mode }),
+      });
+    }
+  };
+
+  await walk(root);
+  for (const entry of manifest.entries) {
+    if (entry.type !== 'directory') {
+      continue;
+    }
+    const directoryPath = resolve(join(root, entry.path));
+    const stat = await lstat(directoryPath).catch(() => undefined);
+    if (stat?.isDirectory() === true) {
+      entries.push(entry);
+    }
+  }
+
+  return workspaceBundleManifestDigest({
+    schema_version: workspaceBundleManifestSchemaVersion,
+    bundle_id: manifest.bundle_id,
+    created_at: manifest.created_at,
+    allowed_paths: manifest.allowed_paths,
+    forbidden_paths: manifest.forbidden_paths,
+    entries: entries.sort(stableEntrySort),
+  });
+};
+
 export const safeUnpackWorkspaceBundle = async (input: {
   archiveBytes: Uint8Array;
   expectedArchiveDigest: string;
@@ -346,10 +411,19 @@ export const safeUnpackWorkspaceBundle = async (input: {
   const root = await realpath(input.tempRoot).catch(() => {
     throw invalidBundle('temp root is unavailable');
   });
-  const jobRoot = resolve(join(root, input.runtimeJobId));
-  const existingJobRoot = await lstat(jobRoot).catch(() => undefined);
-  if (existingJobRoot !== undefined) {
+  const jobNamespace = resolve(join(root, input.runtimeJobId));
+  if (!isInside(root, jobNamespace) || jobNamespace === root) {
+    throw invalidBundle('runtime job id is invalid');
+  }
+  const existingJobNamespace = await lstat(jobNamespace).catch(() => undefined);
+  if (existingJobNamespace === undefined) {
+    await mkdir(jobNamespace, { recursive: false, mode: 0o700 });
+  } else if (!existingJobNamespace.isDirectory() || existingJobNamespace.isSymbolicLink()) {
     throw invalidBundle('job temp root already exists');
+  }
+  const jobRoot = resolve(join(jobNamespace, randomUUID()));
+  if (!isInside(jobNamespace, jobRoot)) {
+    throw invalidBundle('runtime job id is invalid');
   }
   await mkdir(jobRoot, { recursive: false, mode: 0o700 });
   const workspacePath = resolve(join(jobRoot, 'workspace'));
@@ -389,11 +463,14 @@ export const safeUnpackWorkspaceBundle = async (input: {
     await mkdir(dirname(target), { recursive: true, mode: 0o700 });
     await writeFile(target, bytes, { mode: 0o600, flag: 'wx' });
   }
+  const mountedWorkspaceDigest = await computeMountedWorkspaceDigest(workspacePath, manifest);
   return {
+    jobRoot,
     workspacePath,
     manifest,
     manifest_digest: manifestDigest,
     archive_digest: archive.digest,
+    mounted_workspace_digest: mountedWorkspaceDigest,
     size_bytes: archive.size_bytes,
   };
 };

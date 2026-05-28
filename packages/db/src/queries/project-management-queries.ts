@@ -51,6 +51,12 @@ type ExecutionPlanWithContext = { executionPlan: ExecutionPlanDocument; plan: De
 type ExecutionWithContext = { execution: Execution; plan: DevelopmentPlan; item: DevelopmentPlanItem };
 type CodeReviewWithContext = { handoff: CodeReviewHandoff; execution: Execution; plan: DevelopmentPlan; item: DevelopmentPlanItem };
 type QaWithContext = { handoff: QaHandoff; plan: DevelopmentPlan; item: DevelopmentPlanItem };
+type ExecutionRuntimeEvidenceProjection = {
+  workspace_bundle_digest: string;
+  workspace_bundle_manifest_digest?: string;
+  mounted_task_workspace_digest: string;
+  changed_files: string[];
+};
 
 export async function listMyWorkQueue(
   repository: DeliveryRepository,
@@ -365,9 +371,11 @@ export async function getDevelopmentPlanItemProjection(
     boundary_summary_revisions: boundaryRevisionCandidates,
     specs: specs.filter((spec) => spec.development_plan_item_id === item.id).map(specQueueRow(repository, plan, item)),
     execution_plans: await Promise.all(executionPlans.map((executionPlan) => executionPlanQueueRow(repository, plan, item, executionPlan))),
-    executions: executions
-      .filter(({ execution }) => execution.development_plan_item_id === item.id)
-      .map(({ execution }) => executionQueueRow(plan, item, execution)),
+    executions: await Promise.all(
+      executions
+        .filter(({ execution }) => execution.development_plan_item_id === item.id)
+        .map(({ execution }) => executionQueueRow(repository, plan, item, execution)),
+    ),
     code_review_handoffs: codeReviewHandoffs
       .filter(({ handoff }) => handoff.development_plan_item_id === item.id)
       .map(({ handoff, execution }) => codeReviewHandoffItemRow(execution, handoff)),
@@ -406,8 +414,11 @@ export async function listExecutionQueue(
   query: AiNativeQuery,
 ): Promise<Record<string, unknown>> {
   const executions = await listExecutionsForProject(repository, query.project_id);
+  const rows = await Promise.all(
+    executions.map(({ execution, plan, item }) => executionQueueRow(repository, plan, item, execution)),
+  );
   return {
-    items: executions.map(({ execution, plan, item }) => executionQueueRow(plan, item, execution)).sort(byUpdatedAtDesc),
+    items: rows.sort(byUpdatedAtDesc),
     degraded_sources: [],
   };
 }
@@ -678,9 +689,49 @@ async function executionPlanQueueRow(
   };
 }
 
-function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, execution: Execution): Record<string, unknown> {
+async function executionRuntimeEvidence(
+  repository: DeliveryRepository,
+  execution: Execution,
+): Promise<ExecutionRuntimeEvidenceProjection | undefined> {
+  const runSessionRef = execution.runtime_evidence_refs.find((ref) => ref.type === 'run_session');
+  if (runSessionRef === undefined) {
+    return undefined;
+  }
+  const runSession = await repository.getRunSession(runSessionRef.id);
+  if (runSession === undefined) {
+    return undefined;
+  }
+
+  const rawMetadata = isRecord(runSession.executor_result?.raw_metadata) ? runSession.executor_result.raw_metadata : undefined;
+  const runtimeMetadata = isRecord(runSession.runtime_metadata) ? runSession.runtime_metadata : undefined;
+  const workspaceBundleDigest =
+    stringValue(rawMetadata, 'workspace_bundle_digest') ?? stringValue(runtimeMetadata, 'remote_workspace_bundle_digest');
+  const workspaceBundleManifestDigest =
+    stringValue(rawMetadata, 'workspace_bundle_manifest_digest') ?? stringValue(runtimeMetadata, 'remote_workspace_manifest_digest');
+  const mountedTaskWorkspaceDigest = stringValue(rawMetadata, 'mounted_task_workspace_digest');
+  const changedFiles = runSession.changed_files.map((file) => file.path).filter((path) => path.trim().length > 0);
+
+  if (workspaceBundleDigest === undefined || mountedTaskWorkspaceDigest === undefined) {
+    return undefined;
+  }
+
+  return {
+    workspace_bundle_digest: workspaceBundleDigest,
+    ...(workspaceBundleManifestDigest === undefined ? {} : { workspace_bundle_manifest_digest: workspaceBundleManifestDigest }),
+    mounted_task_workspace_digest: mountedTaskWorkspaceDigest,
+    changed_files: changedFiles,
+  };
+}
+
+async function executionQueueRow(
+  repository: DeliveryRepository,
+  plan: DevelopmentPlan,
+  item: DevelopmentPlanItem,
+  execution: Execution,
+): Promise<Record<string, unknown>> {
   const blocked = execution.blocked === true || execution.status === 'failed';
   const interrupted = !blocked && (execution.status === 'interrupted' || execution.status === 'paused');
+  const runtimeEvidence = await executionRuntimeEvidence(repository, execution);
   return {
     id: execution.id,
     object_ref: execution.ref,
@@ -699,6 +750,7 @@ function executionQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, exe
     diff_refs: execution.diff_refs,
     test_evidence_refs: execution.test_evidence_refs,
     runtime_evidence_refs: execution.runtime_evidence_refs,
+    ...(runtimeEvidence === undefined ? {} : { runtime_evidence: runtimeEvidence }),
     actions: [
       ...(interrupted
         ? [

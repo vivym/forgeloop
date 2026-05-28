@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 
+import { artifactRefSchema } from '@forgeloop/contracts';
+
 import { DomainError, type IsoDateTime, type RunDriverKind } from './types.js';
 
 export type CodexRuntimeEnvironment = 'local_dogfood' | 'test';
@@ -313,6 +315,17 @@ export interface CodexLaunchTokenEnvelope {
   created_at: IsoDateTime;
 }
 
+export const codexGenerationTaskKinds = [
+  'spec_draft',
+  'plan_draft',
+  'package_drafts',
+  'boundary_brainstorming_round',
+  'development_plan_item_spec_revision',
+  'development_plan_item_execution_plan_revision',
+] as const;
+
+export type CodexGenerationTaskKind = (typeof codexGenerationTaskKinds)[number];
+
 export type CodexLaunchTokenEnvelopeDigestInput = Pick<
   CodexLaunchTokenEnvelope,
   | 'id'
@@ -332,7 +345,7 @@ export interface CodexGenerationWorkloadV1 {
   schema_version: 'codex_generation_workload.v1';
   runtime_job_id: string;
   action_run_id: string;
-  task_kind: 'spec_draft' | 'plan_draft' | 'package_drafts';
+  task_kind: CodexGenerationTaskKind;
   prompt_version: string;
   output_schema_version: string;
   signed_context_ref: string;
@@ -348,7 +361,6 @@ export interface CodexRunExecutionWorkloadV1 {
   run_session_id: string;
   execution_package_id: string;
   execution_package_version: number;
-  run_worker_lease_id: string;
   workspace_bundle_id: string;
   workspace_bundle_digest: string;
   package_prompt_ref: string;
@@ -363,7 +375,7 @@ export interface CodexRunExecutionWorkloadV1 {
 }
 
 export interface CodexGenerationRuntimeJobResult {
-  task_kind: 'spec_draft' | 'plan_draft' | 'package_drafts';
+  task_kind: CodexGenerationTaskKind;
   prompt_version: string;
   output_schema_version: string;
   generated_payload: Record<string, unknown>;
@@ -402,6 +414,8 @@ export interface CodexRunExecutionRuntimeJobResult {
   execution_package_version: number;
   run_session_id: string;
   workspace_bundle_digest: string;
+  workspace_bundle_manifest_digest: string;
+  mounted_task_workspace_digest: string;
   changed_files: string[];
   patch_artifact?: {
     content_type: 'text/x-diff';
@@ -479,6 +493,7 @@ export const codexPublicBlockerCodes = [
   'codex_launch_lease_denied',
   'codex_launch_materialization_denied',
   'codex_runtime_job_unavailable',
+  'codex_generation_workload_unsupported',
   'codex_runtime_job_expired',
   'codex_runtime_job_cancelled',
   'codex_workspace_bundle_invalid',
@@ -895,6 +910,20 @@ const displayHexRuntimeIdTokenPattern = /\b[a-f0-9]{12,64}\b/gi;
 const displayUnsafePathTokenPattern = /(?:^|[\s([{"'=`])(?:\/|~[\\/]|\.{1,2}[\\/]|\\\\|[A-Za-z]:[\\/])\S*/;
 const publicUnsafeSecretTokenPattern =
   /\b(?:(?:api[_-]?key|token|secret|password|authorization|auth(?:[_-]?header)?)\s*(?:[:=]|Bearer\b)|Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]+)/i;
+const dockerRuntimeEvidencePublicIdKeys = new Set([
+  'runtime_profile_id',
+  'runtime_profile_revision_id',
+  'credential_binding_id',
+  'credential_binding_version_id',
+  'launch_lease_id',
+]);
+const dockerRuntimeEvidencePublicIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const isDockerRuntimeEvidencePublicId = (key: string, value: string): boolean =>
+  dockerRuntimeEvidencePublicIdKeys.has(key) && dockerRuntimeEvidencePublicIdPattern.test(value);
+const codexRuntimePublicRoutePathTokenPattern =
+  /(^|[\s([{"'=`])\/(?:api|v\d+(?:\.\d+)?|graphql|health|status|auth|oauth)(?:\/\S*)?/gi;
+const stripCodexRuntimePublicRoutePathTokens = (value: string): string =>
+  value.replace(codexRuntimePublicRoutePathTokenPattern, (_match, prefix: string) => prefix);
 const isCodexRuntimeUnsafeDisplayTokenString = (value: string): boolean =>
   [...value.matchAll(displayBracketedIpv6TokenPattern)].some(([candidate]) => isCodexRuntimeEndpointOrContainerString(candidate)) ||
   [...value.matchAll(displayIpv6TokenPattern)].some(([candidate]) => isCodexRuntimeEndpointOrContainerString(candidate)) ||
@@ -1203,6 +1232,20 @@ export const codexRuntimeScopeMatches = (allowed: readonly CodexRuntimeScope[], 
       (scope.repo_id === undefined || (target.repo_id !== undefined && scope.repo_id === target.repo_id)),
   );
 
+export const codexWorkerScopeMatchesTarget = (
+  allowed: readonly CodexRuntimeScope[],
+  targetKind: CodexRuntimeTargetKind,
+  target: CodexRuntimeScope,
+): boolean => {
+  if (targetKind !== 'run_execution') {
+    return codexRuntimeScopeMatches(allowed, target);
+  }
+  return (
+    target.repo_id !== undefined &&
+    allowed.some((scope) => scope.project_id === target.project_id && scope.repo_id === target.repo_id)
+  );
+};
+
 export const codexRuntimeProfileRevisionDigest = (revision: CodexRuntimeProfileRevision): string =>
   codexCanonicalDigest({
     environment: revision.environment,
@@ -1377,6 +1420,14 @@ const requireCodexRuntimeResultInteger = (input: Record<string, unknown>, field:
   return value;
 };
 
+const requireCodexRuntimeResultBoolean = (input: Record<string, unknown>, field: string): boolean => {
+  const value = input[field];
+  if (typeof value !== 'boolean') {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must be a boolean.`);
+  }
+  return value;
+};
+
 const requireCodexRuntimeResultRecord = (input: Record<string, unknown>, field: string): Record<string, unknown> => {
   const value = input[field];
   if (!isPlainObject(value)) {
@@ -1391,6 +1442,14 @@ const requireCodexRuntimeResultArray = (input: Record<string, unknown>, field: s
     throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must be an array.`);
   }
   return value;
+};
+
+const requireCodexRuntimeResultStringArray = (input: Record<string, unknown>, field: string): string[] => {
+  const value = requireCodexRuntimeResultArray(input, field);
+  if (value.some((entry) => typeof entry !== 'string' || entry.length === 0)) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must be an array of non-empty strings.`);
+  }
+  return value as string[];
 };
 
 const assertCodexRuntimeResultKeys = (input: Record<string, unknown>, allowedKeys: ReadonlySet<string>, label: string): void => {
@@ -1426,6 +1485,65 @@ const codexGenerationRuntimeJobResultKeys = new Set([
   'runtime_evidence',
   'public_summary',
 ]);
+const codexGenerationTaskKindSet = new Set<string>(codexGenerationTaskKinds);
+const productGenerationTaskKindSet = new Set<string>([
+  'boundary_brainstorming_round',
+  'development_plan_item_spec_revision',
+  'development_plan_item_execution_plan_revision',
+]);
+const boundaryRoundRuntimeResultKeys = new Set([
+  'schema_version',
+  'session_id',
+  'round_id',
+  'questions',
+  'proposed_decisions',
+  'summary_proposal',
+  'needs_leader_input',
+  'public_summary',
+  'artifacts',
+]);
+const boundaryRoundQuestionKeys = new Set(['text', 'required', 'rationale']);
+const boundaryRoundDecisionKeys = new Set(['text', 'rationale']);
+const boundaryRoundSummaryProposalKeys = new Set([
+  'summary_markdown',
+  'confirmed_scope',
+  'confirmed_out_of_scope',
+  'accepted_assumptions',
+  'open_risks',
+  'validation_expectations',
+]);
+const generatedSpecRevisionKeys = new Set([
+  'schema_version',
+  'development_plan_item_id',
+  'boundary_summary_revision_id',
+  'summary',
+  'content_markdown',
+  'problem_context',
+  'scope_in',
+  'scope_out',
+  'acceptance_criteria',
+  'test_strategy',
+  'risks',
+  'assumptions',
+  'unresolved_questions',
+  'public_summary',
+]);
+const generatedExecutionPlanRevisionKeys = new Set([
+  'schema_version',
+  'development_plan_item_id',
+  'based_on_spec_revision_id',
+  'summary',
+  'content_markdown',
+  'implementation_sequence',
+  'validation_strategy',
+  'allowed_paths',
+  'forbidden_paths',
+  'required_checks',
+  'rollback_notes',
+  'handoff_criteria',
+  'public_summary',
+]);
+const generatedExecutionPlanRequiredCheckKeys = new Set(['check_id', 'command', 'timeout_seconds', 'blocks_review']);
 const codexRunExecutionPatchArtifactKeys = new Set(['content_type', 'digest', 'internal_ref']);
 const codexRunExecutionCheckResultKeys = new Set(['name', 'status', 'summary', 'output_digest', 'output_internal_ref']);
 const codexRunExecutionRuntimeJobResultKeys = new Set([
@@ -1434,6 +1552,8 @@ const codexRunExecutionRuntimeJobResultKeys = new Set([
   'execution_package_version',
   'run_session_id',
   'workspace_bundle_digest',
+  'workspace_bundle_manifest_digest',
+  'mounted_task_workspace_digest',
   'changed_files',
   'patch_artifact',
   'check_results',
@@ -1461,18 +1581,282 @@ const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<stri
   return input;
 };
 
+const runtimePayloadRawMaterialPattern =
+  /(?:\b(?:auth\.json|config\.toml)\b|\b(?:app[-_ ]?server\s+)?endpoint\s*[:=]\s*(?:unix|https?|wss?|tcp|socket|sock):|\bapp[-_ ]?server\s+endpoint\b|\b(?:unix|websocket|socket|sock):|\b(?:socket|sock)\s+(?:path|file|id)\b|\bcontainer[-_ ]?(?:id|name)\b|\bauth[-_ ]?(?:json|config|file|token|material)\b|\braw[-_ ]?(?:config|auth|logs?|output|prompt)\b|\bconfig[-_ ]?(?:json|file|path|material)\b|\bapp[-_ ]?server[-_ ]?logs?\b:?)/i;
+const runtimePayloadHexContainerIdPattern = /[a-f0-9]{12,64}/gi;
+
+const hasRuntimePayloadRawContainerIdToken = (value: string): boolean =>
+  Array.from(value.matchAll(runtimePayloadHexContainerIdPattern)).some((match) => {
+    const index = match.index ?? 0;
+    const previous = index > 0 ? (value[index - 1] ?? '') : '';
+    const next = value[index + match[0].length] ?? '';
+    return (
+      !/[a-f0-9-]/i.test(previous) &&
+      !/[a-f0-9-]/i.test(next) &&
+      value.slice(Math.max(0, index - 7), index).toLowerCase() !== 'sha256:'
+    );
+  });
+
+const isUnsafeGeneratedPayloadString = (value: string, path: readonly string[]): boolean => {
+  const safetyValue = stripCodexRuntimePublicRoutePathTokens(value);
+  if (runtimePayloadRawMaterialPattern.test(value)) {
+    return true;
+  }
+  if (
+    hasRuntimePayloadRawContainerIdToken(value)
+  ) {
+    return true;
+  }
+  if (isGeneratedExecutionPlanPathField(path)) {
+    return !isSafeCodexRuntimeRepoRelativePath(value);
+  }
+  if (isGeneratedExecutionPlanCommandField(path)) {
+    return (
+      publicUnsafeSecretTokenPattern.test(safetyValue) ||
+      displayUnsafeEndpointTokenPattern.test(safetyValue) ||
+      displayUnsafePathTokenPattern.test(safetyValue)
+    );
+  }
+  return isRawRuntimePublicString(safetyValue, { allowDisplayText: isCodexRuntimeDisplayStringPath(path) });
+};
+
+const isGeneratedExecutionPlanPathField = (path: readonly string[]): boolean => {
+  const parent = path[path.length - 2];
+  return (parent === 'allowed_paths' || parent === 'forbidden_paths') && /^\d+$/.test(path[path.length - 1] ?? '');
+};
+
+const isGeneratedExecutionPlanCommandField = (path: readonly string[]): boolean => {
+  const last = path[path.length - 1];
+  const grandparent = path[path.length - 3];
+  return last === 'command' && grandparent === 'required_checks';
+};
+
+const assertGeneratedPayloadPublicSafe = (value: unknown, path: readonly string[] = []): void => {
+  if (typeof value === 'string') {
+    if (isUnsafeGeneratedPayloadString(value, path)) {
+      throw unsafeCodexRuntimePublicValue(
+        'Codex runtime generated payload cannot include raw paths, endpoints, container IDs, socket paths, config, auth, or logs.',
+        { field: path.join('.') },
+      );
+    }
+    return;
+  }
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') {
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw unsafeCodexRuntimePublicValue('Codex runtime generated payload must be JSON-compatible.', { field: path.join('.') });
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertGeneratedPayloadPublicSafe(entry, [...path, String(index)]));
+    return;
+  }
+  if (isPlainObject(value)) {
+    for (const [key, entry] of Object.entries(value)) {
+      if (isUnsafeCodexRuntimePublicKey(key)) {
+        throw unsafeCodexRuntimePublicValue(
+          'Codex runtime generated payload cannot include raw paths, endpoints, container IDs, socket paths, config, auth, or logs.',
+          { field: [...path, key].join('.') },
+        );
+      }
+      assertGeneratedPayloadPublicSafe(entry, [...path, key]);
+    }
+    return;
+  }
+  throw unsafeCodexRuntimePublicValue('Codex runtime generated payload must be JSON-compatible.', { field: path.join('.') });
+};
+
+const requireOptionalCodexRuntimeResultString = (input: Record<string, unknown>, field: string): string | undefined => {
+  if (input[field] === undefined) {
+    return undefined;
+  }
+  return requireCodexRuntimeResultString(input, field);
+};
+
+const requireBoundaryRoundQuestion = (input: unknown, field: string): void => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must contain question objects.`);
+  }
+  assertCodexRuntimeResultKeys(input, boundaryRoundQuestionKeys, field);
+  requireCodexRuntimeResultString(input, 'text');
+  requireCodexRuntimeResultBoolean(input, 'required');
+  requireOptionalCodexRuntimeResultString(input, 'rationale');
+};
+
+const requireBoundaryRoundDecision = (input: unknown, field: string): void => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must contain decision objects.`);
+  }
+  assertCodexRuntimeResultKeys(input, boundaryRoundDecisionKeys, field);
+  requireCodexRuntimeResultString(input, 'text');
+  requireOptionalCodexRuntimeResultString(input, 'rationale');
+};
+
+const requireBoundaryRoundSummaryProposal = (input: unknown): void => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue('Codex boundary round summary_proposal must be an object.');
+  }
+  assertCodexRuntimeResultKeys(input, boundaryRoundSummaryProposalKeys, 'summary_proposal');
+  requireCodexRuntimeResultString(input, 'summary_markdown');
+  requireCodexRuntimeResultStringArray(input, 'confirmed_scope');
+  requireCodexRuntimeResultStringArray(input, 'confirmed_out_of_scope');
+  requireCodexRuntimeResultStringArray(input, 'accepted_assumptions');
+  requireCodexRuntimeResultStringArray(input, 'open_risks');
+  requireCodexRuntimeResultStringArray(input, 'validation_expectations');
+};
+
+const requireBoundaryRoundRuntimeResultPayload = (input: Record<string, unknown>): void => {
+  assertCodexRuntimeResultKeys(input, boundaryRoundRuntimeResultKeys, 'boundary round generated_payload');
+  if (input.schema_version !== 'boundary_round_result.v1') {
+    throw unsafeCodexRuntimePublicValue('Codex boundary round generated_payload schema_version is invalid.');
+  }
+  requireCodexRuntimeResultString(input, 'session_id');
+  requireCodexRuntimeResultString(input, 'round_id');
+  requireCodexRuntimeResultArray(input, 'questions').forEach((entry) => requireBoundaryRoundQuestion(entry, 'questions'));
+  requireCodexRuntimeResultArray(input, 'proposed_decisions').forEach((entry) =>
+    requireBoundaryRoundDecision(entry, 'proposed_decisions'),
+  );
+  if (input.summary_proposal !== undefined) {
+    requireBoundaryRoundSummaryProposal(input.summary_proposal);
+  }
+  requireCodexRuntimeResultBoolean(input, 'needs_leader_input');
+  requireCodexRuntimeResultString(input, 'public_summary');
+  requireCodexRuntimeResultArray(input, 'artifacts').forEach((entry) => {
+    if (!artifactRefSchema.safeParse(entry).success) {
+      throw unsafeCodexRuntimePublicValue('Codex boundary round generated_payload artifacts are invalid.');
+    }
+  });
+  assertGeneratedPayloadPublicSafe(input);
+};
+
+const requireGeneratedSpecRevisionPayload = (input: Record<string, unknown>): void => {
+  assertCodexRuntimeResultKeys(input, generatedSpecRevisionKeys, 'Spec revision generated_payload');
+  if (input.schema_version !== 'spec_revision.v1') {
+    throw unsafeCodexRuntimePublicValue('Codex Spec revision generated_payload schema_version is invalid.');
+  }
+  requireCodexRuntimeResultString(input, 'development_plan_item_id');
+  requireCodexRuntimeResultString(input, 'boundary_summary_revision_id');
+  requireCodexRuntimeResultString(input, 'summary');
+  requireCodexRuntimeResultString(input, 'content_markdown');
+  requireCodexRuntimeResultString(input, 'problem_context');
+  requireCodexRuntimeResultStringArray(input, 'scope_in');
+  requireCodexRuntimeResultStringArray(input, 'scope_out');
+  requireCodexRuntimeResultStringArray(input, 'acceptance_criteria');
+  requireCodexRuntimeResultStringArray(input, 'test_strategy');
+  requireCodexRuntimeResultStringArray(input, 'risks');
+  requireCodexRuntimeResultStringArray(input, 'assumptions');
+  requireCodexRuntimeResultStringArray(input, 'unresolved_questions');
+  requireCodexRuntimeResultString(input, 'public_summary');
+  assertGeneratedPayloadPublicSafe(input);
+};
+
+const requireGeneratedExecutionPlanRequiredCheck = (input: unknown): void => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue('Codex Execution Plan required_checks must contain objects.');
+  }
+  assertCodexRuntimeResultKeys(input, generatedExecutionPlanRequiredCheckKeys, 'required_checks');
+  requireCodexRuntimeResultString(input, 'check_id');
+  requireCodexRuntimeResultString(input, 'command');
+  if (typeof input.timeout_seconds !== 'number' || !Number.isInteger(input.timeout_seconds) || input.timeout_seconds <= 0) {
+    throw unsafeCodexRuntimePublicValue('Codex Execution Plan required_checks timeout_seconds must be a positive integer.');
+  }
+  requireCodexRuntimeResultBoolean(input, 'blocks_review');
+};
+
+const requireGeneratedExecutionPlanRevisionPayload = (input: Record<string, unknown>): void => {
+  assertCodexRuntimeResultKeys(input, generatedExecutionPlanRevisionKeys, 'Execution Plan revision generated_payload');
+  if (input.schema_version !== 'execution_plan_revision.v1') {
+    throw unsafeCodexRuntimePublicValue('Codex Execution Plan revision generated_payload schema_version is invalid.');
+  }
+  requireCodexRuntimeResultString(input, 'development_plan_item_id');
+  requireCodexRuntimeResultString(input, 'based_on_spec_revision_id');
+  requireCodexRuntimeResultString(input, 'summary');
+  requireCodexRuntimeResultString(input, 'content_markdown');
+  requireCodexRuntimeResultStringArray(input, 'implementation_sequence');
+  requireCodexRuntimeResultStringArray(input, 'validation_strategy');
+  requireCodexRuntimeResultStringArray(input, 'allowed_paths').forEach((path) => {
+    if (!isSafeCodexRuntimeRepoRelativePath(path)) {
+      throw unsafeCodexRuntimePublicValue('Codex Execution Plan allowed_paths must be safe repository-relative paths.');
+    }
+  });
+  requireCodexRuntimeResultStringArray(input, 'forbidden_paths').forEach((path) => {
+    if (!isSafeCodexRuntimeRepoRelativePath(path)) {
+      throw unsafeCodexRuntimePublicValue('Codex Execution Plan forbidden_paths must be safe repository-relative paths.');
+    }
+  });
+  const checkIds = requireCodexRuntimeResultArray(input, 'required_checks').map((entry) => {
+    requireGeneratedExecutionPlanRequiredCheck(entry);
+    return (entry as Record<string, unknown>).check_id as string;
+  });
+  if (new Set(checkIds).size !== checkIds.length) {
+    throw unsafeCodexRuntimePublicValue('Codex Execution Plan required_checks check_id values must be unique.');
+  }
+  requireCodexRuntimeResultString(input, 'rollback_notes');
+  requireCodexRuntimeResultStringArray(input, 'handoff_criteria');
+  requireCodexRuntimeResultString(input, 'public_summary');
+  assertGeneratedPayloadPublicSafe(input);
+};
+
+const requireProductGenerationPayload = (taskKind: CodexGenerationTaskKind, generatedPayload: Record<string, unknown>): void => {
+  switch (taskKind) {
+    case 'boundary_brainstorming_round':
+      requireBoundaryRoundRuntimeResultPayload(generatedPayload);
+      return;
+    case 'development_plan_item_spec_revision':
+      requireGeneratedSpecRevisionPayload(generatedPayload);
+      return;
+    case 'development_plan_item_execution_plan_revision':
+      requireGeneratedExecutionPlanRevisionPayload(generatedPayload);
+      return;
+    case 'spec_draft':
+    case 'plan_draft':
+    case 'package_drafts':
+      return;
+  }
+};
+
+const isGeneratedPayloadArtifactRefPayload = (payload: Record<string, unknown>): boolean =>
+  payload.schema_version === 'generated_payload_ref.v1';
+
+const requireGeneratedPayloadArtifactRefPayload = (
+  payload: Record<string, unknown>,
+  expectedGeneratedPayloadDigest: string,
+): void => {
+  assertCodexRuntimeResultKeys(payload, new Set(['schema_version', 'artifact']), 'generated_payload ref');
+  const artifact = requireCodexRuntimeResultRecord(payload, 'artifact');
+  requireCodexRuntimeArtifact(artifact, 'generated_payload.artifact');
+  if (
+    artifact.kind !== 'generated_payload' ||
+    artifact.content_type !== 'application/json' ||
+    artifact.digest !== expectedGeneratedPayloadDigest ||
+    typeof artifact.internal_ref !== 'string'
+  ) {
+    throw unsafeCodexRuntimePublicValue('Codex generation terminal result generated_payload artifact ref is invalid.');
+  }
+  assertGeneratedPayloadPublicSafe(payload);
+};
+
 const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>): CodexGenerationRuntimeJobResult => {
   assertCodexRuntimeResultKeys(input, codexGenerationRuntimeJobResultKeys, 'generation result');
-  if (!['spec_draft', 'plan_draft', 'package_drafts'].includes(String(input.task_kind))) {
+  if (!codexGenerationTaskKindSet.has(String(input.task_kind))) {
     throw unsafeCodexRuntimePublicValue('Codex generation terminal result task_kind is invalid.');
   }
+  const taskKind = input.task_kind as CodexGenerationTaskKind;
   requireCodexRuntimeResultString(input, 'prompt_version');
   requireCodexRuntimeResultString(input, 'output_schema_version');
   const generatedPayload = requireCodexRuntimeResultRecord(input, 'generated_payload');
+  const generatedPayloadDigest = requireCodexRuntimeResultDigest(input, 'generated_payload_digest');
+  if (isGeneratedPayloadArtifactRefPayload(generatedPayload)) {
+    requireGeneratedPayloadArtifactRefPayload(generatedPayload, generatedPayloadDigest);
+  } else {
+    if (generatedPayloadDigest !== codexCanonicalDigest(generatedPayload)) {
+      throw unsafeCodexRuntimePublicValue('Codex generation terminal result generated_payload_digest does not match generated_payload.');
+    }
+    requireProductGenerationPayload(taskKind, generatedPayload);
+  }
   if (Buffer.byteLength(JSON.stringify(generatedPayload), 'utf8') > codexRuntimeGeneratedPayloadInlineMaxBytes) {
     throw unsafeCodexRuntimePublicValue('Codex generation terminal result generated_payload must be uploaded as an artifact ref.');
   }
-  requireCodexRuntimeResultDigest(input, 'generated_payload_digest');
   requireCodexRuntimeResultArray(input, 'generation_artifacts').forEach((artifact) =>
     requireCodexRuntimeArtifact(artifact, 'generation_artifacts'),
   );
@@ -1492,6 +1876,8 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
   requireCodexRuntimeResultInteger(input, 'execution_package_version');
   requireCodexRuntimeResultString(input, 'run_session_id');
   requireCodexRuntimeResultDigest(input, 'workspace_bundle_digest');
+  requireCodexRuntimeResultDigest(input, 'workspace_bundle_manifest_digest');
+  requireCodexRuntimeResultDigest(input, 'mounted_task_workspace_digest');
   const changedFiles = requireCodexRuntimeResultArray(input, 'changed_files');
   if (changedFiles.some((entry) => typeof entry !== 'string' || !isSafeCodexRuntimeRepoRelativePath(entry))) {
     throw unsafeCodexRuntimePublicValue('Codex run-execution changed_files must be safe repository-relative paths.');
@@ -1533,6 +1919,7 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
 };
 
 export const validateCodexRuntimeJobArtifactIntake = (input: {
+  kind?: string;
   content_type: string;
   digest: string;
   size_bytes: number;
@@ -1548,7 +1935,9 @@ export const validateCodexRuntimeJobArtifactIntake = (input: {
     throw unsafeCodexRuntimePublicValue('Codex runtime job artifact size exceeds the allowed limit.');
   }
   if (input.metadata_json !== undefined) {
-    assertCodexRuntimePublicSafeValue(input.metadata_json, 'runtime job artifact metadata');
+    assertCodexRuntimePublicSafeRecord(input.metadata_json, 'runtime job artifact metadata', [], {
+      allowRunExecutionChangedFiles: input.kind === 'run_execution_patch' && input.content_type === 'text/x-diff',
+    });
   }
 };
 
@@ -1583,11 +1972,35 @@ export const collectCodexRuntimeJobTerminalArtifactRefs = (input: unknown): Code
       ),
     ];
   }
-  return result.generation_artifacts.flatMap((artifact) =>
-    artifact.internal_ref === undefined || artifact.digest === undefined
-      ? []
-      : [{ internal_ref: artifact.internal_ref, digest: artifact.digest, content_type: artifact.content_type }],
-  );
+  const generatedPayloadArtifact =
+    isPlainObject(result.generated_payload) &&
+    result.generated_payload.schema_version === 'generated_payload_ref.v1' &&
+    isPlainObject(result.generated_payload.artifact)
+      ? [
+          {
+            internal_ref: requireCodexRuntimeResultString(result.generated_payload.artifact, 'internal_ref'),
+            digest: requireCodexRuntimeResultDigest(result.generated_payload.artifact, 'digest'),
+            content_type: requireCodexRuntimeResultString(result.generated_payload.artifact, 'content_type'),
+          },
+        ]
+      : [];
+  const refs = [
+    ...generatedPayloadArtifact,
+    ...result.generation_artifacts.flatMap((artifact) =>
+      artifact.internal_ref === undefined || artifact.digest === undefined
+        ? []
+        : [{ internal_ref: artifact.internal_ref, digest: artifact.digest, content_type: artifact.content_type }],
+    ),
+  ];
+  const seen = new Set<string>();
+  return refs.filter((ref) => {
+    const key = `${ref.internal_ref}\0${ref.digest}\0${ref.content_type ?? ''}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 };
 
 export const codexLaunchTokenEnvelopeDigest = (input: CodexLaunchTokenEnvelopeDigestInput | CodexLaunchTokenEnvelope): string => {
@@ -1623,10 +2036,14 @@ export const validateCodexRuntimeJobTerminalResult = (
     input.task_kind === 'run_execution'
       ? requireCodexRunExecutionRuntimeJobResult(input)
       : requireCodexGenerationRuntimeJobResult(input);
+  const omittedPublicSafeKeys = new Set<string>([
+    ...(input.task_kind !== 'run_execution' && input.runtime_evidence !== undefined ? ['runtime_evidence'] : []),
+    ...(productGenerationTaskKindSet.has(String(input.task_kind)) ? ['generated_payload'] : []),
+  ]);
   const publicSafeInput =
-    input.task_kind === 'run_execution' || input.runtime_evidence === undefined
+    omittedPublicSafeKeys.size === 0
       ? input
-      : Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'runtime_evidence'));
+      : Object.fromEntries(Object.entries(input).filter(([key]) => !omittedPublicSafeKeys.has(key)));
   assertCodexRuntimePublicSafeRecord(publicSafeInput, 'terminal result', [], {
     allowRunExecutionChangedFiles: input.task_kind === 'run_execution',
   });
@@ -1908,6 +2325,9 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
       throw unsafeDockerRuntimeEvidence('Codex public-safe Docker runtime evidence digest fields must be sha256 digests.', {
         field: key,
       });
+    }
+    if (isDockerRuntimeEvidencePublicId(key, value)) {
+      continue;
     }
     if (
       !key.endsWith('_digest') &&

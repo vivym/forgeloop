@@ -80,6 +80,8 @@ export class DockerizedCodexAppServerLauncher {
     materialization: CodexLaunchMaterialization,
     input: {
       originalWorkspacePath?: string;
+      taskWorkspaceDigest?: string;
+      taskWorkspaceRoot?: string;
       workerSessionToken?: string;
       terminalizeLaunchLeaseOnClose?: boolean;
     } = {},
@@ -91,7 +93,11 @@ export class DockerizedCodexAppServerLauncher {
     let container: StartedDockerContainer | undefined;
     let networkSelfTest: Awaited<ReturnType<typeof runNetworkPolicySelfTest>> | undefined;
     try {
-      if (input.originalWorkspacePath !== undefined && this.options.allowedRepoRoots === undefined) {
+      if (
+        input.originalWorkspacePath !== undefined &&
+        input.taskWorkspaceDigest === undefined &&
+        this.options.allowedRepoRoots === undefined
+      ) {
         throw new Error('codex_runtime_workspace_isolation_unavailable: allowed repo roots are required');
       }
       const credential = materialization.resolved_credentials[0];
@@ -105,6 +111,8 @@ export class DockerizedCodexAppServerLauncher {
       workspace = await prepareContainerWorkspace({
         sourceAccessMode: materialization.profile_revision.source_access_mode,
         ...(input.originalWorkspacePath === undefined ? {} : { originalWorkspacePath: input.originalWorkspacePath }),
+        ...(input.taskWorkspaceDigest === undefined ? {} : { taskWorkspaceDigest: input.taskWorkspaceDigest }),
+        ...(input.taskWorkspaceRoot === undefined ? {} : { taskWorkspaceRoot: input.taskWorkspaceRoot }),
         leaseTempRoot: filesystem.leaseTempRoot,
         allowedRepoRoots: this.options.allowedRepoRoots ?? (input.originalWorkspacePath === undefined ? [] : [input.originalWorkspacePath]),
       });
@@ -291,7 +299,7 @@ export class DockerizedCodexAppServerLauncher {
     if (this.options.effectiveConfigProbe === undefined) {
       return this.options.dockerRunner.options?.effectiveConfig;
     }
-    const deadline = Date.now() + (this.options.startupProbeTimeoutMs ?? 5_000);
+    const deadline = Date.now() + (this.options.startupProbeTimeoutMs ?? 15_000);
     let lastError: unknown;
     while (Date.now() <= deadline) {
       try {
@@ -362,6 +370,7 @@ export class DockerizedCodexAppServerLauncher {
 
 const publicStartupFailureCodes = new Set([
   'codex_worker_unavailable',
+  'codex_worker_docker_unavailable',
   'codex_worker_docker_policy_unavailable',
   'codex_runtime_workspace_isolation_unavailable',
   'codex_app_server_effective_config_mismatch',

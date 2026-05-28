@@ -39,6 +39,10 @@ import type {
 } from '@forgeloop/domain';
 
 import type {
+  BoundaryAnswerRecord,
+  BoundaryDecisionRecord,
+  BoundaryQuestionRecord,
+  BoundaryRoundRecord,
   DeliveryRepository,
   ReleaseExecutionPackageRecord,
   ReleaseWorkItemRecord,
@@ -108,6 +112,7 @@ const ids = {
   developmentPlanItemRevision2: 'ffffffff-ffff-4fff-8fff-fffffffffff3',
   brainstormingSession: '12121212-1212-4212-8212-121212121211',
   brainstormingSessionRevision: '12121212-1212-4212-8212-121212121212',
+  boundaryRound: '12121212-1212-4212-8212-121212121213',
   boundarySummary: '13131313-1313-4313-8313-131313131311',
   boundarySummaryRevision: '13131313-1313-4313-8313-131313131312',
   executionPlan: '14141414-1414-4414-8414-141414141411',
@@ -769,6 +774,10 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       }),
     );
     await repository.saveBrainstormingSession(brainstormingSessionFixture());
+    await repository.saveBoundaryRound(boundaryRoundFixture());
+    await repository.saveBoundaryQuestion(boundaryQuestionFixture());
+    await repository.saveBoundaryAnswer(boundaryAnswerFixture());
+    await repository.saveBoundaryDecision(boundaryDecisionFixture());
     await repository.saveBoundarySummary(boundarySummaryFixture());
     await repository.saveBoundarySummaryRevision(boundarySummaryRevisionFixture());
     await repository.saveSpec(
@@ -845,6 +854,10 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       changed_fields: expect.arrayContaining(['boundary_status', 'next_action', 'revision_id', 'updated_at']),
     });
     expect(await repository.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
+    expect(await repository.listBoundaryRounds(ids.brainstormingSession)).toEqual([boundaryRoundFixture()]);
+    expect(await repository.listBoundaryQuestions(ids.brainstormingSession)).toEqual([boundaryQuestionFixture()]);
+    expect(await repository.listBoundaryAnswers(ids.brainstormingSession)).toEqual([boundaryAnswerFixture()]);
+    expect(await repository.listBoundaryDecisions(ids.brainstormingSession)).toEqual([boundaryDecisionFixture()]);
     expect(await repository.getBoundarySummary(ids.boundarySummary)).toMatchObject({
       development_plan_item_id: ids.developmentPlanItem,
     });
@@ -899,6 +912,410 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     });
   });
 
+  it('backfills Boundary Brainstorming leadership defaults and summary revision eligibility', async () => {
+    const repository = await factory();
+    const reviewerItemId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+    const reviewerItemRevisionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2';
+    const driverItemId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1';
+    const driverItemRevisionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2';
+    const blockedItemId = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1';
+    const blockedItemRevisionId = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2';
+    const storedLeaderItemId = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1';
+    const storedLeaderItemRevisionId = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2';
+    const reviewerSessionId = 'edededed-eded-4ded-8ded-ededededed01';
+    const multiRoundSessionId = 'edededed-eded-4ded-8ded-ededededed00';
+    const storedLeaderSessionId = 'edededed-eded-4ded-8ded-ededededed02';
+    const summarySessionId = 'edededed-eded-4ded-8ded-ededededed03';
+    const unsafeSummaryId = 'edededed-eded-4ded-8ded-ededededed04';
+    const unsafeRevisionId = 'edededed-eded-4ded-8ded-ededededed05';
+    const safeSummarySessionId = 'edededed-eded-4ded-8ded-ededededed06';
+    const safeSummaryId = 'edededed-eded-4ded-8ded-ededededed07';
+    const safeRevisionId = 'edededed-eded-4ded-8ded-ededededed08';
+    const safeRoundId = 'contract-safe-round';
+
+    await repository.saveOrganization({
+      id: ids.org,
+      name: 'ForgeLoop Test Org',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveActor({
+      id: ids.human,
+      org_id: ids.org,
+      display_name: 'Human Reviewer',
+      actor_type: 'human',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveActor({
+      id: ids.system,
+      org_id: ids.org,
+      display_name: 'Driver Actor',
+      actor_type: 'system',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveActor({
+      id: ids.ai,
+      org_id: ids.org,
+      display_name: 'Stored Boundary Leader',
+      actor_type: 'ai',
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveProject({
+      id: ids.project,
+      org_id: ids.org,
+      key: 'FORGE',
+      name: 'ForgeLoop',
+      repo_ids: ['repo-1'],
+      owner_actor_id: ids.human,
+      created_at: at,
+      updated_at: at,
+    });
+    await repository.saveDevelopmentPlan(developmentPlanFixture());
+
+    await repository.saveDevelopmentPlanItem(
+      developmentPlanItemFixture({
+        id: reviewerItemId,
+        revision_id: reviewerItemRevisionId,
+        reviewer_actor_id: ids.human,
+        driver_actor_id: ids.system,
+        leader_actor_id: undefined,
+      }),
+    );
+    await repository.saveDevelopmentPlanItem(
+      developmentPlanItemFixture({
+        id: driverItemId,
+        revision_id: driverItemRevisionId,
+        reviewer_actor_id: undefined,
+        driver_actor_id: ids.system,
+        leader_actor_id: undefined,
+      }),
+    );
+    await repository.saveDevelopmentPlanItem(
+      developmentPlanItemFixture({
+        id: blockedItemId,
+        revision_id: blockedItemRevisionId,
+        reviewer_actor_id: undefined,
+        driver_actor_id: undefined,
+        leader_actor_id: undefined,
+      }),
+    );
+    await repository.saveDevelopmentPlanItem(
+      developmentPlanItemFixture({
+        id: storedLeaderItemId,
+        revision_id: storedLeaderItemRevisionId,
+        reviewer_actor_id: ids.human,
+        driver_actor_id: ids.system,
+        leader_actor_id: ids.ai,
+        leader_delegate_actor_ids: [ids.system],
+      }),
+    );
+
+    await repository.saveBrainstormingSession(
+      legacyBoundarySessionFixture({
+        id: reviewerSessionId,
+        revision_id: 'edededed-eded-4ded-8ded-ededededed11',
+        development_plan_item_id: reviewerItemId,
+        development_plan_item_revision_id: reviewerItemRevisionId,
+        questions: [
+          {
+            id: 'contract-legacy-question',
+            text: 'Who leads this boundary?',
+            author_id: ids.ai,
+            status: 'open',
+            required: true,
+            created_at: at,
+          },
+        ],
+      }),
+    );
+    await repository.saveBrainstormingSession(
+      legacyBoundarySessionFixture({
+        id: multiRoundSessionId,
+        revision_id: 'edededed-eded-4ded-8ded-ededededed10',
+        development_plan_item_id: reviewerItemId,
+        development_plan_item_revision_id: reviewerItemRevisionId,
+        questions: [
+          {
+            id: 'contract-multi-question',
+            text: 'Which existing round should receive legacy evidence?',
+            author_id: ids.ai,
+            status: 'resolved',
+            required: false,
+            answered_by_answer_id: 'contract-multi-answer',
+            created_at: at,
+          },
+        ],
+        answers: [
+          {
+            id: 'contract-multi-answer',
+            question_id: 'contract-multi-question',
+            text: 'Use the latest round.',
+            actor_id: ids.human,
+            actor_role: 'leader',
+            created_at: at,
+          },
+        ],
+        decisions: [
+          {
+            id: 'contract-multi-decision',
+            text: 'Attach legacy arrays to the latest round when current_round_id is absent.',
+            actor_id: ids.human,
+            actor_role: 'leader',
+            source: 'leader',
+            state: 'accepted',
+            created_at: at,
+          },
+        ],
+      }),
+    );
+    await repository.saveBoundaryRound(
+      boundaryRoundFixture({
+        id: 'contract-multi-round-1',
+        session_id: multiRoundSessionId,
+        session_revision_id: 'edededed-eded-4ded-8ded-ededededed10',
+        round_number: 1,
+      }),
+    );
+    await repository.saveBoundaryRound(
+      boundaryRoundFixture({
+        id: 'contract-multi-round-2',
+        session_id: multiRoundSessionId,
+        session_revision_id: 'edededed-eded-4ded-8ded-ededededed10',
+        round_number: 2,
+      }),
+    );
+    await repository.saveBrainstormingSession(
+      legacyBoundarySessionFixture({
+        id: storedLeaderSessionId,
+        revision_id: 'edededed-eded-4ded-8ded-ededededed12',
+        development_plan_item_id: storedLeaderItemId,
+        development_plan_item_revision_id: storedLeaderItemRevisionId,
+      }),
+    );
+
+    const leaderBackfill = await repository.backfillBoundaryLeaderDefaults({ now: later });
+
+    await expect(repository.getDevelopmentPlanItem(reviewerItemId)).resolves.toMatchObject({
+      leader_actor_id: ids.human,
+      leader_delegate_actor_ids: [],
+    });
+    await expect(repository.getDevelopmentPlanItem(driverItemId)).resolves.toMatchObject({
+      leader_actor_id: ids.system,
+      leader_delegate_actor_ids: [],
+    });
+    expect((await repository.getDevelopmentPlanItem(blockedItemId))?.leader_actor_id).toBeUndefined();
+    await expect(repository.getBrainstormingSession(storedLeaderSessionId)).resolves.toMatchObject({
+      leader_actor_id: ids.ai,
+      leader_delegate_actor_ids: [ids.system],
+      current_round_id: `${storedLeaderSessionId}-round-1`,
+    });
+    expect(await repository.listBoundaryRounds(reviewerSessionId)).toEqual([
+      expect.objectContaining({ id: `${reviewerSessionId}-round-1`, round_number: 1, trigger: 'start' }),
+    ]);
+    expect(await repository.listBoundaryQuestions(reviewerSessionId)).toEqual([
+      expect.objectContaining({ id: 'contract-legacy-question', round_id: `${reviewerSessionId}-round-1` }),
+    ]);
+    await expect(repository.getBrainstormingSession(multiRoundSessionId)).resolves.toMatchObject({
+      leader_actor_id: ids.human,
+      current_round_id: 'contract-multi-round-2',
+    });
+    expect(await repository.listBoundaryQuestions(multiRoundSessionId)).toEqual([
+      expect.objectContaining({ id: 'contract-multi-question', round_id: 'contract-multi-round-2' }),
+    ]);
+    expect(await repository.listBoundaryAnswers(multiRoundSessionId)).toEqual([
+      expect.objectContaining({ id: 'contract-multi-answer', round_id: 'contract-multi-round-2' }),
+    ]);
+    expect(await repository.listBoundaryDecisions(multiRoundSessionId)).toEqual([
+      expect.objectContaining({ id: 'contract-multi-decision', round_id: 'contract-multi-round-2' }),
+    ]);
+    expect(leaderBackfill).toEqual({
+      updated_item_ids: [reviewerItemId, driverItemId],
+      updated_session_ids: [multiRoundSessionId, reviewerSessionId, storedLeaderSessionId],
+      blocked_item_ids: [blockedItemId],
+    });
+
+    await repository.saveBrainstormingSession(
+      legacyBoundarySessionFixture({
+        id: summarySessionId,
+        revision_id: 'edededed-eded-4ded-8ded-ededededed13',
+        development_plan_item_id: reviewerItemId,
+        development_plan_item_revision_id: reviewerItemRevisionId,
+        leader_actor_id: ids.human,
+        leader_delegate_actor_ids: [],
+        status: 'approved',
+        approval_state: 'approved',
+        boundary_summary_id: unsafeSummaryId,
+        approver_actor_id: ids.human,
+        approved_at: at,
+      }),
+    );
+    await repository.saveBoundarySummary(
+      boundarySummaryFixture({
+        id: unsafeSummaryId,
+        revision_id: unsafeRevisionId,
+        brainstorming_session_id: summarySessionId,
+        brainstorming_session_revision_id: 'edededed-eded-4ded-8ded-ededededed13',
+        development_plan_item_id: reviewerItemId,
+        development_plan_item_revision_id: reviewerItemRevisionId,
+      }),
+    );
+    const unsafeRevision = boundarySummaryRevisionFixture({
+      id: unsafeRevisionId,
+      boundary_summary_id: unsafeSummaryId,
+      brainstorming_session_id: summarySessionId,
+      brainstorming_session_revision_id: 'edededed-eded-4ded-8ded-ededededed13',
+      development_plan_item_id: reviewerItemId,
+      development_plan_item_revision_id: reviewerItemRevisionId,
+      decision_snapshot: [],
+      decision_count: 0,
+    });
+    delete (unsafeRevision as Record<string, unknown>).source_round_id;
+    delete (unsafeRevision as Record<string, unknown>).development_plan_id;
+    delete (unsafeRevision as Record<string, unknown>).status;
+    delete (unsafeRevision as Record<string, unknown>).confirmed_scope;
+    delete (unsafeRevision as Record<string, unknown>).confirmed_out_of_scope;
+    delete (unsafeRevision as Record<string, unknown>).accepted_assumptions;
+    delete (unsafeRevision as Record<string, unknown>).open_risks;
+    delete (unsafeRevision as Record<string, unknown>).validation_expectations;
+    delete (unsafeRevision as Record<string, unknown>).question_answer_snapshot;
+    delete (unsafeRevision as Record<string, unknown>).context_manifest_id;
+    delete (unsafeRevision as Record<string, unknown>).context_manifest_revision_id;
+    await repository.saveBoundarySummaryRevision(unsafeRevision);
+
+    const revisionBackfill = await repository.backfillBoundarySummaryRevisionEligibility({
+      session_id: summarySessionId,
+      boundary_summary_id: unsafeSummaryId,
+      now: later,
+    });
+
+    await expect(repository.listBoundarySummaryRevisions(unsafeSummaryId)).resolves.toEqual([
+      expect.objectContaining({ id: unsafeRevisionId, status: 'draft' }),
+    ]);
+    await expect(repository.getBrainstormingSession(summarySessionId)).resolves.not.toHaveProperty('approved_summary_revision_id');
+    expect(revisionBackfill).toEqual({
+      downgraded_revision_ids: [unsafeRevisionId],
+      approved_revision_ids: [],
+    });
+
+    const revisionBackfillAgain = await repository.backfillBoundarySummaryRevisionEligibility({
+      session_id: summarySessionId,
+      boundary_summary_id: unsafeSummaryId,
+      now: '2026-05-24T00:08:00.000Z',
+    });
+
+    await expect(repository.getBrainstormingSession(summarySessionId)).resolves.toMatchObject({
+      updated_at: later,
+    });
+    expect(revisionBackfillAgain).toEqual({
+      downgraded_revision_ids: [],
+      approved_revision_ids: [],
+    });
+
+    await repository.saveBrainstormingSession(
+      legacyBoundarySessionFixture({
+        id: safeSummarySessionId,
+        revision_id: 'edededed-eded-4ded-8ded-ededededed14',
+        development_plan_item_id: reviewerItemId,
+        development_plan_item_revision_id: reviewerItemRevisionId,
+        leader_actor_id: ids.human,
+        leader_delegate_actor_ids: [],
+        status: 'approved',
+        current_round_id: safeRoundId,
+        latest_summary_revision_id: safeRevisionId,
+        approved_summary_revision_id: safeRevisionId,
+        approval_state: 'approved',
+        boundary_summary_id: safeSummaryId,
+        approver_actor_id: ids.human,
+        approved_at: at,
+        updated_at: at,
+      }),
+    );
+    await repository.saveBoundaryRound(
+      boundaryRoundFixture({
+        id: safeRoundId,
+        session_id: safeSummarySessionId,
+        session_revision_id: 'edededed-eded-4ded-8ded-ededededed14',
+        round_number: 1,
+      }),
+    );
+    await repository.saveBoundaryQuestion(
+      boundaryQuestionFixture({
+        id: 'contract-safe-question',
+        session_id: safeSummarySessionId,
+        round_id: safeRoundId,
+        answered_by_answer_id: 'contract-safe-answer',
+      }),
+    );
+    await repository.saveBoundaryAnswer(
+      boundaryAnswerFixture({
+        id: 'contract-safe-answer',
+        session_id: safeSummarySessionId,
+        round_id: safeRoundId,
+        question_id: 'contract-safe-question',
+      }),
+    );
+    await repository.saveBoundaryDecision(
+      boundaryDecisionFixture({
+        id: 'contract-safe-decision',
+        session_id: safeSummarySessionId,
+        round_id: safeRoundId,
+      }),
+    );
+    await repository.saveBoundarySummary(
+      boundarySummaryFixture({
+        id: safeSummaryId,
+        revision_id: safeRevisionId,
+        brainstorming_session_id: safeSummarySessionId,
+        brainstorming_session_revision_id: 'edededed-eded-4ded-8ded-ededededed14',
+        development_plan_item_id: reviewerItemId,
+        development_plan_item_revision_id: reviewerItemRevisionId,
+      }),
+    );
+    await repository.saveBoundarySummaryRevision(
+      boundarySummaryRevisionFixture({
+        id: safeRevisionId,
+        boundary_summary_id: safeSummaryId,
+        brainstorming_session_id: safeSummarySessionId,
+        brainstorming_session_revision_id: 'edededed-eded-4ded-8ded-ededededed14',
+        source_round_id: safeRoundId,
+        development_plan_item_id: reviewerItemId,
+        development_plan_item_revision_id: reviewerItemRevisionId,
+        question_answer_snapshot: [
+          { question_id: 'contract-safe-question', answer_id: 'contract-safe-answer', text: boundaryAnswerFixture().text },
+        ],
+        decision_snapshot: [{ decision_id: 'contract-safe-decision', text: boundaryDecisionFixture().text }],
+      }),
+    );
+
+    const safeRevisionBackfill = await repository.backfillBoundarySummaryRevisionEligibility({
+      session_id: safeSummarySessionId,
+      boundary_summary_id: safeSummaryId,
+      now: later,
+    });
+    const safeRevisionBackfillAgain = await repository.backfillBoundarySummaryRevisionEligibility({
+      session_id: safeSummarySessionId,
+      boundary_summary_id: safeSummaryId,
+      now: '2026-05-24T00:08:00.000Z',
+    });
+
+    await expect(repository.getBrainstormingSession(safeSummarySessionId)).resolves.toMatchObject({
+      updated_at: at,
+      latest_summary_revision_id: safeRevisionId,
+      approved_summary_revision_id: safeRevisionId,
+    });
+    expect(safeRevisionBackfill).toEqual({
+      downgraded_revision_ids: [],
+      approved_revision_ids: [],
+    });
+    expect(safeRevisionBackfillAgain).toEqual({
+      downgraded_revision_ids: [],
+      approved_revision_ids: [],
+    });
+  });
+
   it('commits AI-native planning graph writes made inside delivery transactions', async () => {
     const repository = await factory();
 
@@ -931,6 +1348,10 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       await transaction.saveDevelopmentPlan(developmentPlanFixture());
       await transaction.saveDevelopmentPlanItem(developmentPlanItemFixture());
       await transaction.saveBrainstormingSession(brainstormingSessionFixture());
+      await transaction.saveBoundaryRound(boundaryRoundFixture());
+      await transaction.saveBoundaryQuestion(boundaryQuestionFixture());
+      await transaction.saveBoundaryAnswer(boundaryAnswerFixture());
+      await transaction.saveBoundaryDecision(boundaryDecisionFixture());
       await transaction.saveBoundarySummary(boundarySummaryFixture());
       await transaction.saveSpec(specFixture());
       await transaction.saveSpecRevision(specRevisionFixture());
@@ -943,6 +1364,10 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
         developmentPlanFixture({ items: [developmentPlanItemFixture()] }),
       );
       expect(await transaction.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
+      expect(await transaction.listBoundaryRounds(ids.brainstormingSession)).toEqual([boundaryRoundFixture()]);
+      expect(await transaction.listBoundaryQuestions(ids.brainstormingSession)).toEqual([boundaryQuestionFixture()]);
+      expect(await transaction.listBoundaryAnswers(ids.brainstormingSession)).toEqual([boundaryAnswerFixture()]);
+      expect(await transaction.listBoundaryDecisions(ids.brainstormingSession)).toEqual([boundaryDecisionFixture()]);
       expect(await transaction.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
       expect(await transaction.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
       expect(await transaction.getExecution(ids.execution)).toEqual(executionFixture());
@@ -954,6 +1379,10 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     );
     expect(await repository.getDevelopmentPlanItem(ids.developmentPlanItem)).toEqual(developmentPlanItemFixture());
     expect(await repository.getBrainstormingSession(ids.brainstormingSession)).toEqual(brainstormingSessionFixture());
+    expect(await repository.listBoundaryRounds(ids.brainstormingSession)).toEqual([boundaryRoundFixture()]);
+    expect(await repository.listBoundaryQuestions(ids.brainstormingSession)).toEqual([boundaryQuestionFixture()]);
+    expect(await repository.listBoundaryAnswers(ids.brainstormingSession)).toEqual([boundaryAnswerFixture()]);
+    expect(await repository.listBoundaryDecisions(ids.brainstormingSession)).toEqual([boundaryDecisionFixture()]);
     expect(await repository.getBoundarySummary(ids.boundarySummary)).toEqual(boundarySummaryFixture());
     expect(await repository.getExecutionPlan(ids.executionPlan)).toEqual(executionPlanFixture());
     expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
@@ -991,6 +1420,7 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     await repository.saveDevelopmentPlanRevision(developmentPlanRevisionFixture());
     await repository.saveDevelopmentPlanItem(developmentPlanItemFixture());
     await repository.saveBrainstormingSession(brainstormingSessionFixture());
+    await repository.saveBoundaryRound(boundaryRoundFixture());
     await repository.saveBoundarySummary(boundarySummaryFixture());
     await repository.saveSpec(specFixture());
     await repository.saveSpecRevision(specRevisionFixture());
@@ -2330,6 +2760,8 @@ const developmentPlanItemFixture = (overrides: Partial<DevelopmentPlanItem> = {}
   driver_actor_id: ids.human,
   responsible_role: 'developer',
   reviewer_actor_id: ids.human,
+  leader_actor_id: ids.human,
+  leader_delegate_actor_ids: [],
   risk: 'medium',
   dependency_hints: ['Task 1 contract refs'],
   affected_surfaces: ['packages/db', 'packages/domain'],
@@ -2365,10 +2797,17 @@ const brainstormingSessionFixture = (overrides: Partial<BrainstormingSession> = 
   revision_id: ids.brainstormingSessionRevision,
   source_ref: { type: 'requirement', id: ids.workItem, revision_id: ids.specRevision1 },
   development_plan_id: ids.developmentPlan,
+  development_plan_revision_id: ids.developmentPlanRevision2,
   development_plan_item_id: ids.developmentPlanItem,
   development_plan_item_revision_id: ids.developmentPlanItemRevision2,
+  leader_actor_id: ids.human,
+  leader_delegate_actor_ids: [],
   context_manifest_id: ids.contextManifest,
   context_manifest_revision_id: ids.contextManifestRevision,
+  status: 'approved',
+  current_round_id: ids.boundaryRound,
+  latest_summary_revision_id: ids.boundarySummaryRevision,
+  approved_summary_revision_id: ids.boundarySummaryRevision,
   questions: [
     {
       id: 'question-1',
@@ -2405,6 +2844,86 @@ const brainstormingSessionFixture = (overrides: Partial<BrainstormingSession> = 
   ...overrides,
 });
 
+const legacyBoundarySessionFixture = (
+  overrides: Partial<BrainstormingSession> &
+    Pick<BrainstormingSession, 'id' | 'development_plan_item_id' | 'development_plan_item_revision_id'>,
+): BrainstormingSession => {
+  const session = brainstormingSessionFixture({
+    status: 'waiting_for_leader',
+    questions: [],
+    answers: [],
+    decisions: [],
+    approval_state: 'questions_open',
+  });
+  delete (session as Partial<BrainstormingSession>).leader_actor_id;
+  delete (session as Partial<BrainstormingSession>).leader_delegate_actor_ids;
+  delete (session as Partial<BrainstormingSession>).current_round_id;
+  delete (session as Partial<BrainstormingSession>).latest_summary_revision_id;
+  delete (session as Partial<BrainstormingSession>).approved_summary_revision_id;
+  delete (session as Partial<BrainstormingSession>).boundary_summary_id;
+  delete (session as Partial<BrainstormingSession>).approver_actor_id;
+  delete (session as Partial<BrainstormingSession>).approved_at;
+  return {
+    ...session,
+    ...overrides,
+  } as BrainstormingSession;
+};
+
+const boundaryRoundFixture = (overrides: Partial<BoundaryRoundRecord> = {}): BoundaryRoundRecord => ({
+  id: ids.boundaryRound,
+  session_id: ids.brainstormingSession,
+  session_revision_id: ids.brainstormingSessionRevision,
+  round_number: 1,
+  trigger: 'start',
+  ai_output_markdown: 'Ask the Leader for the minimum persistence boundary.',
+  status: 'terminal',
+  created_at: '2026-05-24T00:02:00.000Z',
+  updated_at: '2026-05-24T00:03:30.000Z',
+  ...overrides,
+});
+
+const boundaryQuestionFixture = (overrides: Partial<BoundaryQuestionRecord> = {}): BoundaryQuestionRecord => ({
+  id: 'question-1',
+  session_id: ids.brainstormingSession,
+  round_id: ids.boundaryRound,
+  sequence: 1,
+  text: 'What DB shape is needed?',
+  author_id: ids.ai,
+  created_at: '2026-05-24T00:02:00.000Z',
+  status: 'resolved',
+  required: true,
+  answered_by_answer_id: 'answer-1',
+  ...overrides,
+});
+
+const boundaryAnswerFixture = (overrides: Partial<BoundaryAnswerRecord> = {}): BoundaryAnswerRecord => ({
+  id: 'answer-1',
+  session_id: ids.brainstormingSession,
+  round_id: ids.boundaryRound,
+  question_id: 'question-1',
+  sequence: 1,
+  text: 'Use Drizzle schema plus repository contracts.',
+  actor_id: ids.human,
+  actor_role: 'leader',
+  created_at: '2026-05-24T00:03:00.000Z',
+  ...overrides,
+});
+
+const boundaryDecisionFixture = (overrides: Partial<BoundaryDecisionRecord> = {}): BoundaryDecisionRecord => ({
+  id: 'decision-1',
+  session_id: ids.brainstormingSession,
+  round_id: ids.boundaryRound,
+  sequence: 1,
+  text: 'Persist the planning graph in first-class tables.',
+  actor_id: ids.human,
+  actor_role: 'leader',
+  source: 'leader',
+  state: 'accepted',
+  rationale: 'The AI-native UX needs durable planning handoffs.',
+  created_at: '2026-05-24T00:03:30.000Z',
+  ...overrides,
+});
+
 const boundarySummaryFixture = (overrides: Partial<BoundarySummary> = {}): BoundarySummary => ({
   id: ids.boundarySummary,
   revision_id: ids.boundarySummaryRevision,
@@ -2427,17 +2946,28 @@ const boundarySummaryRevisionFixture = (overrides: Partial<BoundarySummaryRevisi
   boundary_summary_id: ids.boundarySummary,
   brainstorming_session_id: ids.brainstormingSession,
   brainstorming_session_revision_id: ids.brainstormingSessionRevision,
+  source_round_id: ids.boundaryRound,
+  development_plan_id: ids.developmentPlan,
   development_plan_item_id: ids.developmentPlanItem,
   development_plan_item_revision_id: ids.developmentPlanItemRevision2,
   revision_number: 1,
+  status: 'approved',
   summary_markdown: 'Task 2 scope is approved.',
-  decision_snapshot: brainstormingSessionFixture().decisions,
+  confirmed_scope: ['Repository persistence'],
+  confirmed_out_of_scope: ['API orchestration'],
+  accepted_assumptions: ['Existing product surfaces keep compatibility arrays during migration.'],
+  open_risks: ['Drizzle migrations must preserve immutable revision ordering.'],
+  validation_expectations: ['Repository contract passes for in-memory and Drizzle adapters.'],
+  question_answer_snapshot: [{ question_id: 'question-1', answer_id: 'answer-1', text: boundaryAnswerFixture().text }],
+  decision_snapshot: [{ decision_id: 'decision-1', text: boundaryDecisionFixture().text, rationale: boundaryDecisionFixture().rationale }],
   decision_count: 1,
+  context_manifest_id: ids.contextManifest,
+  context_manifest_revision_id: ids.contextManifestRevision,
   approved_by_actor_id: ids.human,
   approved_at: '2026-05-24T00:04:00.000Z',
   created_at: '2026-05-24T00:04:00.000Z',
   ...overrides,
-});
+}) as BoundarySummaryRevision;
 
 const specFixture = (overrides: Partial<Spec> = {}): Spec => ({
   id: ids.spec,
@@ -2473,7 +3003,7 @@ const specRevisionFixture = (overrides: Partial<SpecRevision> = {}): SpecRevisio
   acceptance_criteria: ['Repository contract passes'],
   risk_notes: ['Keep legacy Work Item Owner semantics out of product refs'],
   test_strategy_summary: 'Repository contract tests',
-  structured_document: { sections: ['goal', 'scope'] },
+  structured_document: { sections: ['goal', 'scope'], boundary_summary_revision_id: ids.boundarySummaryRevision },
   author_actor_id: ids.human,
   artifact_refs: [artifactRef('spec', 'approved persistence spec')],
   development_plan_item_id: ids.developmentPlanItem,
@@ -2527,6 +3057,13 @@ const executionFixture = (overrides: Partial<Execution> = {}): Execution => ({
     id: ids.executionPlanRevision,
     execution_plan_id: ids.executionPlan,
     title: 'Approved execution plan',
+  },
+  approved_spec_revision_id: ids.specRevision1,
+  approved_spec_revision_ref: {
+    type: 'spec_revision',
+    id: ids.specRevision1,
+    spec_id: ids.spec,
+    title: 'Spec revision 1',
   },
   status: 'ready',
   worker_state: 'ready-for-review-worker',

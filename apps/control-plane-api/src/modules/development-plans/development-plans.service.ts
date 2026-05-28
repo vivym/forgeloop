@@ -38,6 +38,12 @@ type CreateDevelopmentPlanItemInput = {
   release_impact: DevelopmentPlanItem['release_impact'];
 };
 
+type UpdateDevelopmentPlanItemInput = {
+  title?: string | undefined;
+  summary?: string | undefined;
+  actor_id?: string | undefined;
+};
+
 type GenerateDraftInput = {
   project_id: string;
   source_ref: SourceObjectRef;
@@ -124,6 +130,42 @@ export class DevelopmentPlansService {
       );
       await this.appendItemEvent(item.id, 'development_plan_item_created', input.driver_actor_id, { development_plan_id: plan.id }, repository);
       return item;
+    });
+  }
+
+  async updateDevelopmentPlanItem(
+    developmentPlanId: string,
+    itemId: string,
+    input: UpdateDevelopmentPlanItemInput,
+  ): Promise<DevelopmentPlanItem> {
+    return this.withDevelopmentPlanMutation(developmentPlanId, async (repository) => {
+      const plan = await this.requireDevelopmentPlan(developmentPlanId, repository);
+      const item = await this.requireDevelopmentPlanItem(developmentPlanId, itemId, repository);
+      const updatedItem: DevelopmentPlanItem = {
+        ...item,
+        revision_id: this.runtime.id('development-plan-item-revision'),
+        ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.summary === undefined ? {} : { summary: input.summary }),
+        updated_at: this.runtime.now(),
+      };
+      await repository.saveDevelopmentPlanItem(updatedItem);
+      await this.saveItemRevision(updatedItem, 'manual_item_updated', input.actor_id, repository);
+      const updatedPlan: DevelopmentPlan = {
+        ...plan,
+        revision_id: this.runtime.id('development-plan-revision'),
+        updated_at: this.runtime.now(),
+      };
+      await repository.saveDevelopmentPlan(updatedPlan);
+      await this.saveDevelopmentPlanRevision(
+        updatedPlan,
+        { changeReason: 'development_plan_item_updated', actorId: input.actor_id },
+        repository,
+      );
+      await this.appendItemEvent(item.id, 'development_plan_item_updated', input.actor_id, {
+        development_plan_id: plan.id,
+        revision_id: updatedItem.revision_id,
+      }, repository);
+      return updatedItem;
     });
   }
 
@@ -318,6 +360,18 @@ export class DevelopmentPlansService {
     return plan;
   }
 
+  private async requireDevelopmentPlanItem(
+    developmentPlanId: string,
+    itemId: string,
+    repository: DeliveryRepository = this.repository,
+  ): Promise<DevelopmentPlanItem> {
+    const item = await repository.getDevelopmentPlanItem(itemId);
+    if (item === undefined || item.development_plan_id !== developmentPlanId) {
+      throw new NotFoundException(`Development Plan Item ${itemId} not found`);
+    }
+    return item;
+  }
+
   private async requireSourceObject(
     projectId: string,
     sourceRef: SourceObjectRef,
@@ -355,6 +409,7 @@ export class DevelopmentPlansService {
       responsible_role: input.responsible_role,
       ...(input.driver_actor_id === undefined ? {} : { driver_actor_id: input.driver_actor_id }),
       ...(input.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: input.reviewer_actor_id }),
+      leader_delegate_actor_ids: [],
       risk: input.risk,
       dependency_hints: input.dependency_hints,
       affected_surfaces: input.affected_surfaces,

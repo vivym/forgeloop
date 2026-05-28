@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexRuntimeNetworkPolicyDigest,
   codexWorkspaceAcquisitionDigest,
   codexRuntimeProfileRevisionDigest,
   DomainError,
@@ -17,6 +18,7 @@ import {
   type ExecutionPackage,
   type CodexLaunchLeaseWithToken,
   type CodexLaunchTarget,
+  type CodexRuntimeScope,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
   type RunSession,
@@ -286,14 +288,80 @@ const seedProfileAndCredential = async (repository: DeliveryRepository, targetKi
     credentialIds.version,
   );
 
-  await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
-  await repository.createCodexCredentialBindingWithVersion({
-    binding,
-    version,
-    secret_payload_json: secretPayload,
-  });
+    await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
+    await repository.createCodexCredentialBindingWithVersion({
+      binding,
+      version,
+      secret_payload_json: secretPayload,
+    });
 
-  return { profile, revision, binding, version, secretPayload };
+    return { profile, revision, binding, version, secretPayload };
+  };
+
+const heartbeatWorkerForRuntime = async (
+  repository: DeliveryRepository,
+  input: {
+    targetKind: CodexLaunchTarget['target_kind'];
+    revision: CodexRuntimeProfileRevision;
+    allowedScopes: readonly CodexRuntimeScope[];
+  },
+) => {
+  const workerId = `worker-${input.targetKind}`;
+  const sessionToken = `session-token-${input.targetKind}`;
+  await repository.createCodexWorkerBootstrapToken({
+    id: `bootstrap-token-${input.targetKind}`,
+    worker_identity: `local-worker-${input.targetKind}`,
+    bootstrap_token_hash: tokenHash(`bootstrap-token-raw-${input.targetKind}`),
+    bootstrap_token_version: 1,
+    status: 'active',
+    allowed_scopes_json: input.allowedScopes,
+    allowed_capabilities_json: {
+      target_kinds: [input.targetKind],
+      docker_image_digests: [input.revision.docker_image_digest],
+      network_policy_digests: [codexRuntimeNetworkPolicyDigest(input.revision.network_policy)],
+      network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
+    },
+    created_by_actor_id: 'actor-admin',
+    created_at: now,
+    expires_at: expiresAt,
+  });
+  await repository.upsertCodexWorkerRegistration({
+    worker_id: workerId,
+    worker_identity: `local-worker-${input.targetKind}`,
+    version: '0.1.0',
+    bootstrap_token_hash: tokenHash(`bootstrap-token-raw-${input.targetKind}`),
+    bootstrap_token_version: 1,
+    session_token: sessionToken,
+    session_expires_at: expiresAt,
+    status: 'online',
+    control_channel_status: 'connected',
+    allowed_scopes: input.allowedScopes,
+    capabilities: [input.targetKind],
+    docker_image_digests: [input.revision.docker_image_digest],
+    network_policy_digests: [codexRuntimeNetworkPolicyDigest(input.revision.network_policy)],
+    network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
+    host_worker_uid: 501,
+    host_worker_gid: 20,
+    lease_count: 0,
+    max_concurrency: 2,
+    labels: { host: 'test-host' },
+    session_public_key_id: `session-key-${input.targetKind}`,
+    session_public_key_algorithm: 'x25519',
+    session_public_key_material: 'public-key-material',
+    session_public_key_expires_at: expiresAt,
+    now,
+  });
+  await repository.heartbeatCodexWorker({
+    worker_id: workerId,
+    session_token: sessionToken,
+    nonce: `heartbeat-${input.targetKind}`,
+    nonce_timestamp: now,
+    status: 'online',
+    control_channel_status: 'connected',
+    active_lease_count: 0,
+    capabilities: [input.targetKind],
+    now,
+  });
 };
 
 const seedWorker = async (
@@ -307,6 +375,7 @@ const seedWorker = async (
     session_expires_at?: string;
     session_public_key_expires_at?: string;
     capabilities?: readonly CodexLaunchTarget['target_kind'][];
+    allowedScopes?: readonly CodexRuntimeScope[];
     lease_count?: number;
     max_concurrency?: number;
   } = {},
@@ -319,13 +388,14 @@ const seedWorker = async (
     overrides.bootstrap_token_raw ?? (workerId === 'worker-1' ? 'bootstrap-token-raw' : `bootstrap-token-${workerId}-raw`);
   const sessionToken = overrides.session_token ?? 'session-token-1';
   const capabilities = overrides.capabilities ?? ['generation'];
+  const allowedScopes = overrides.allowedScopes ?? [{ project_id: 'project-1', repo_id: 'repo-1' }];
   await repository.createCodexWorkerBootstrapToken({
     id: bootstrapTokenId,
     worker_identity: workerIdentity,
     bootstrap_token_hash: tokenHash(bootstrapTokenRaw),
     bootstrap_token_version: 1,
     status: 'active',
-    allowed_scopes_json: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+    allowed_scopes_json: allowedScopes,
     allowed_capabilities_json: {
       target_kinds: capabilities,
       docker_image_digests: [`sha256:${'a'.repeat(64)}`],
@@ -349,7 +419,7 @@ const seedWorker = async (
       session_expires_at: overrides.session_expires_at ?? expiresAt,
       status: 'online',
       control_channel_status: 'connected',
-      allowed_scopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      allowed_scopes: allowedScopes,
       capabilities,
       docker_image_digests: [`sha256:${'a'.repeat(64)}`],
       network_policy_digests: [codexCanonicalDigest(profileRevision().revision.network_policy)],
@@ -633,15 +703,18 @@ const materializeRuntimeJob = (
     ...patch,
   });
 
-const validGenerationTerminalResult = (summary = 'completed') => ({
-  task_kind: 'spec_draft' as const,
-  prompt_version: 'prompt-v1',
-  output_schema_version: 'spec-draft.v1',
-  generated_payload: { summary },
-  generated_payload_digest: tokenHash(`generated-payload-${summary}`),
-  generation_artifacts: [],
-  public_summary: summary,
-});
+const validGenerationTerminalResult = (summary = 'completed') => {
+  const generatedPayload = { summary };
+  return {
+    task_kind: 'spec_draft' as const,
+    prompt_version: 'prompt-v1',
+    output_schema_version: 'spec-draft.v1',
+    generated_payload: generatedPayload,
+    generated_payload_digest: codexCanonicalDigest(generatedPayload),
+    generation_artifacts: [],
+    public_summary: summary,
+  };
+};
 
 const startRuntimeJob = (
   repository: DeliveryRepository,
@@ -846,6 +919,60 @@ describe('codex runtime repository behavior', () => {
     expect(status).not.toHaveProperty('credential_payload_digest');
   });
 
+  it('projects the only matching model-provider credential when runtime status is queried by scope', async () => {
+    const repository = createRepository();
+    const { revision, binding, version } = await seedProfileAndCredential(repository, 'run_execution');
+    await heartbeatWorkerForRuntime(repository, { targetKind: 'run_execution', revision, allowedScopes: revision.allowed_scopes });
+
+    const status = await repository.getCodexRuntimeStatus({
+      project_id: 'project-1',
+      repo_id: 'repo-1',
+      target_kind: 'run_execution',
+      now,
+    });
+
+    expect(status).toMatchObject({
+      runtime_profile_id: 'runtime-profile-run_execution',
+      credential_binding_id: binding.id,
+      credential_binding_version_id: version.id,
+      credential_payload_digest: version.payload_digest,
+      profile_status: 'active',
+      worker_status: 'online',
+      blocker_codes: [],
+    });
+  });
+
+  it('does not auto-project ambiguous model-provider credentials in runtime status', async () => {
+    const repository = createRepository();
+    const { profile, revision, binding } = await seedProfileAndCredential(repository, 'run_execution');
+    const other = credential(
+      { id: 'credential-binding-run-2', profile_id: profile.id },
+      { id: 'credential-version-run-2' },
+    );
+    await repository.createCodexCredentialBindingWithVersion({
+      binding: other.binding,
+      version: other.version,
+      secret_payload_json: other.secretPayload,
+    });
+    await heartbeatWorkerForRuntime(repository, { targetKind: 'run_execution', revision, allowedScopes: revision.allowed_scopes });
+
+    const status = await repository.getCodexRuntimeStatus({
+      project_id: binding.project_id,
+      repo_id: binding.repo_id,
+      target_kind: 'run_execution',
+      now,
+    });
+
+    expect(status).toMatchObject({
+      runtime_profile_id: profile.id,
+      profile_status: 'active',
+      worker_status: 'online',
+    });
+    expect(status).not.toHaveProperty('credential_binding_id');
+    expect(status).not.toHaveProperty('credential_binding_version_id');
+    expect(status).not.toHaveProperty('credential_payload_digest');
+  });
+
   it('registers workers and heartbeat updates availability', async () => {
     const repository = createRepository();
     await seedProfileAndCredential(repository);
@@ -899,6 +1026,70 @@ describe('codex runtime repository behavior', () => {
         now: '2026-05-20T00:07:00.000Z',
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it('prefers the freshest available worker when compatible workers have equal lease load', async () => {
+    const repository = createRepository();
+    await seedProfileAndCredential(repository);
+    const { worker: olderWorker, sessionToken: olderSessionToken } = await seedWorker(repository, { worker_id: 'worker-1' });
+    const { worker: newerWorker, sessionToken: newerSessionToken } = await seedWorker(repository, {
+      worker_id: 'worker-2',
+      session_token: 'session-token-2',
+    });
+
+    for (const [worker, sessionToken, nonce] of [
+      [olderWorker, olderSessionToken, 'heartbeat-worker-1'],
+      [newerWorker, newerSessionToken, 'heartbeat-worker-2'],
+    ] as const) {
+      await repository.heartbeatCodexWorker({
+        worker_id: worker.id,
+        session_token: sessionToken,
+        nonce,
+        nonce_timestamp: later,
+        status: 'online',
+        control_channel_status: 'connected',
+        active_lease_count: 0,
+        capabilities: ['generation'],
+        now: later,
+      });
+    }
+
+    await expect(
+      repository.findAvailableCodexWorker({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'generation',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        network_policy_digest: codexCanonicalDigest(profileRevision().revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        now: later,
+      }),
+    ).resolves.toMatchObject({ id: newerWorker.id });
+
+    const freshest = '2026-05-20T00:02:00.000Z';
+    await repository.heartbeatCodexWorker({
+      worker_id: olderWorker.id,
+      session_token: olderSessionToken,
+      nonce: 'heartbeat-worker-1-freshest',
+      nonce_timestamp: freshest,
+      status: 'online',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation'],
+      now: freshest,
+    });
+
+    await expect(
+      repository.findAvailableCodexWorker({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'generation',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        network_policy_digest: codexCanonicalDigest(profileRevision().revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        now: freshest,
+      }),
+    ).resolves.toMatchObject({ id: olderWorker.id });
   });
 
   it('rejects heartbeat capability escalation beyond registration capabilities', async () => {
@@ -976,6 +1167,50 @@ describe('codex runtime repository behavior', () => {
         now: later,
       }),
     ).resolves.toMatchObject({ id: worker.id, capabilities: ['generation'] });
+  });
+
+  it('requires repo-specific worker scope for run-execution availability', async () => {
+    const repository = createRepository();
+    await seedProfileAndCredential(repository, 'generation');
+    await seedProfileAndCredential(repository, 'run_execution');
+    const { worker, sessionToken } = await seedWorker(repository, {
+      capabilities: ['generation', 'run_execution'],
+      allowedScopes: [{ project_id: 'project-1' }],
+    });
+    await repository.heartbeatCodexWorker({
+      worker_id: worker.id,
+      session_token: sessionToken,
+      nonce: 'heartbeat-run-execution-scope-nonce',
+      nonce_timestamp: now,
+      status: 'online',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation', 'run_execution'],
+      now,
+    });
+
+    await expect(
+      repository.findAvailableCodexWorker({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'generation',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        network_policy_digest: codexCanonicalDigest(profileRevision().revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        now,
+      }),
+    ).resolves.toMatchObject({ id: worker.id });
+    await expect(
+      repository.findAvailableCodexWorker({
+        project_id: 'project-1',
+        repo_id: 'repo-1',
+        target_kind: 'run_execution',
+        docker_image_digest: `sha256:${'a'.repeat(64)}`,
+        network_policy_digest: codexCanonicalDigest(profileRevision({ target_kind: 'run_execution' }).revision.network_policy),
+        network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+        now,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it('keeps runtime profile revisions immutable on duplicate create', async () => {
@@ -1161,9 +1396,11 @@ describe('codex runtime repository behavior', () => {
       id: input.id,
       token_hash: input.bootstrap_token_hash,
     });
-    await expect(repository.createCodexWorkerBootstrapToken(input)).resolves.toMatchObject({
+    await expect(repository.createCodexWorkerBootstrapToken({ ...input, created_at: later, expires_at: later })).resolves.toMatchObject({
       id: input.id,
       token_hash: input.bootstrap_token_hash,
+      created_at: input.created_at,
+      expires_at: input.expires_at,
     });
   });
 
@@ -1885,7 +2122,6 @@ describe('codex runtime repository behavior', () => {
       terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
         terminal_result_json: {
           ...validGenerationTerminalResult(),
-          generated_payload_digest: artifact.digest,
           generation_artifacts: [
             {
               kind: 'generated_payload',
@@ -1898,6 +2134,38 @@ describe('codex runtime repository behavior', () => {
         },
       }),
     ).resolves.toMatchObject({ status: 'terminal', terminal_status: 'succeeded' });
+  });
+
+  it('requires oversized generated payload artifact refs to match stored artifacts', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    const generatedPayloadDigest = tokenHash('oversized-product-generated-payload');
+    await expect(
+      terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+        terminal_result_json: {
+          task_kind: 'development_plan_item_spec_revision',
+          prompt_version: 'spec-revision.remote.v1',
+          output_schema_version: 'spec_revision.v1',
+          generated_payload: {
+            schema_version: 'generated_payload_ref.v1',
+            artifact: {
+              kind: 'generated_payload',
+              name: 'generated-payload.json',
+              content_type: 'application/json',
+              digest: generatedPayloadDigest,
+              internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+            },
+          },
+          generated_payload_digest: generatedPayloadDigest,
+          generation_artifacts: [],
+          public_summary: 'Generated an oversized Spec revision.',
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
   });
 
   it('rejects worker-invented, wrong-job, invalid-type, and oversized runtime job artifacts', async () => {

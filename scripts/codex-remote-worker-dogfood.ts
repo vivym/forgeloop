@@ -33,6 +33,7 @@ export interface CodexRemoteWorkerDogfoodConfig {
   workerTempRoot: string;
   dockerBin: string;
   appServerTransport: AppServerTransportMode;
+  noSharedFilesystem: boolean;
   allowedRepoRoots: string[];
   allowedScopes: CodexRuntimeScope[];
   capabilities: CodexRuntimeTargetKind[];
@@ -107,6 +108,14 @@ const digestListEnv = (env: EnvLike, key: string): string[] | undefined => {
   return values;
 };
 
+const parseJson = (value: string, key: string): unknown => {
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error(`${key}_invalid_json`);
+  }
+};
+
 const singleDigestListEnv = (env: EnvLike, pluralKey: string, singleKey: string): string[] => {
   const plural = digestListEnv(env, pluralKey);
   if (plural !== undefined) {
@@ -120,6 +129,14 @@ const singleDigestListEnv = (env: EnvLike, pluralKey: string, singleKey: string)
 };
 
 const allowedScopesEnv = (env: EnvLike): CodexRuntimeScope[] => {
+  const raw = optionalEnv(env, 'FORGELOOP_CODEX_WORKER_SCOPES_JSON');
+  if (raw !== undefined) {
+    const parsed = parseJson(raw, 'FORGELOOP_CODEX_WORKER_SCOPES_JSON');
+    if (!Array.isArray(parsed)) {
+      throw new Error('FORGELOOP_CODEX_WORKER_SCOPES_JSON_must_be_array');
+    }
+    return parsed.map((entry) => entry as CodexRuntimeScope);
+  }
   const projectId = requiredEnv(env, 'FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID');
   const repoId = optionalEnv(env, 'FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID');
   return [{ project_id: projectId, ...(repoId === undefined ? {} : { repo_id: repoId }) }];
@@ -169,9 +186,32 @@ const pathListEnv = (env: EnvLike, key: string): string[] => {
     .filter((entry) => entry.length > 0);
 };
 
+const booleanEnv = (env: EnvLike, key: string): boolean => {
+  const raw = optionalEnv(env, key);
+  return raw === '1' || raw === 'true' || raw === 'yes';
+};
+
+const assertNoSharedFilesystemInputs = (env: EnvLike): void => {
+  for (const key of [
+    'FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS',
+    'FORGELOOP_CODEX_CONFIG_TOML_PATH',
+    'FORGELOOP_CODEX_AUTH_JSON_PATH',
+    'FORGELOOP_CODEX_HOME',
+    'CODEX_HOME',
+  ]) {
+    if (optionalEnv(env, key) !== undefined) {
+      throw new Error(`${key}_not_allowed_in_no_shared_filesystem_mode`);
+    }
+  }
+};
+
 export const loadCodexRemoteWorkerDogfoodConfig = (env: EnvLike = process.env): CodexRemoteWorkerDogfoodConfig => {
   const workerIdentity = requiredEnv(env, 'FORGELOOP_WORKER_IDENTITY');
   const workerId = optionalEnv(env, 'FORGELOOP_CODEX_WORKER_ID') ?? workerIdentity;
+  const noSharedFilesystem = booleanEnv(env, 'FORGELOOP_CODEX_NO_SHARED_FILESYSTEM');
+  if (noSharedFilesystem) {
+    assertNoSharedFilesystemInputs(env);
+  }
   return {
     controlPlaneUrl: requiredEnv(env, 'FORGELOOP_CONTROL_PLANE_URL').replace(/\/$/, ''),
     trustedActorHeaderSecret: requiredEnv(env, 'FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET'),
@@ -184,7 +224,8 @@ export const loadCodexRemoteWorkerDogfoodConfig = (env: EnvLike = process.env): 
     workerTempRoot: requiredEnv(env, 'FORGELOOP_WORKER_TEMP_ROOT'),
     dockerBin: optionalEnv(env, 'FORGELOOP_DOCKER_BIN') ?? 'docker',
     appServerTransport: appServerTransportEnv(env),
-    allowedRepoRoots: pathListEnv(env, 'FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS'),
+    noSharedFilesystem,
+    allowedRepoRoots: noSharedFilesystem ? [] : pathListEnv(env, 'FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS'),
     allowedScopes: allowedScopesEnv(env),
     capabilities: capabilitiesEnv(env),
     dockerImageDigests: singleDigestListEnv(env, 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS', 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST'),
@@ -211,6 +252,7 @@ export const renderCodexRemoteWorkerDogfoodStartSummary = (config: CodexRemoteWo
     `Control plane digest: ${codexCanonicalDigest(config.controlPlaneUrl)}`,
     `Worker digest: ${codexCanonicalDigest(config.workerId)}`,
     `Run mode: ${config.runMode}`,
+    `No shared filesystem: ${config.noSharedFilesystem ? 'enabled' : 'disabled'}`,
     `Capabilities: ${config.capabilities.join(',')}`,
     `Docker image digests: ${config.dockerImageDigests.join(',')}`,
     `Network policy digests: ${config.networkPolicyDigests.join(',')}`,
@@ -223,6 +265,7 @@ const publicRemoteWorkerDogfoodCodes = new Set([
   'codex_app_server_effective_config_mismatch',
   'codex_runtime_job_unavailable',
   'codex_worker_unavailable',
+  'codex_worker_docker_unavailable',
   'codex_worker_docker_policy_unavailable',
   'codex_runtime_workspace_isolation_unavailable',
   'codex_docker_runtime_evidence_unsafe',
@@ -271,10 +314,37 @@ const codexEffectiveConfigProbe = async (
   throw new Error('codex_app_server_effective_config_mismatch');
 };
 
-export const runCodexRemoteWorkerDogfood = async (
-  config: CodexRemoteWorkerDogfoodConfig = loadCodexRemoteWorkerDogfoodConfig(),
-): Promise<{ iterations?: number; processed: number }> => {
-  const now = () => new Date().toISOString();
+const dogfoodNow = (): string => process.env.FORGELOOP_AUTOMATION_TEST_NOW ?? new Date().toISOString();
+
+type RemoteDogfoodWorker = ReturnType<typeof createRemoteCodexWorkerClient>;
+
+const cachedRemoteDogfoodWorkers = new Map<string, RemoteDogfoodWorker>();
+
+const remoteDogfoodWorkerCacheKey = (config: CodexRemoteWorkerDogfoodConfig): string =>
+  codexCanonicalDigest({
+    control_plane_url_digest: codexCanonicalDigest(config.controlPlaneUrl),
+    worker_id_digest: codexCanonicalDigest(config.workerId),
+    worker_identity_digest: codexCanonicalDigest(config.workerIdentity),
+    worker_bootstrap_token_version: config.workerBootstrapTokenVersion,
+    worker_temp_root_digest: codexCanonicalDigest(config.workerTempRoot),
+    docker_bin: config.dockerBin,
+    app_server_transport: config.appServerTransport,
+    no_shared_filesystem: config.noSharedFilesystem,
+    allowed_repo_roots: config.allowedRepoRoots.map((entry) => codexCanonicalDigest(entry)),
+    allowed_scopes: config.allowedScopes,
+    capabilities: config.capabilities,
+    docker_image_digests: config.dockerImageDigests,
+    network_policy_digests: config.networkPolicyDigests,
+    network_provider_config_digests: config.networkProviderConfigDigests ?? [],
+    host_uid: config.hostUid,
+    host_gid: config.hostGid,
+    max_concurrency: config.maxConcurrency,
+    poll_interval_ms: config.pollIntervalMs,
+    control_poll_interval_ms: config.controlPollIntervalMs,
+  });
+
+const createDogfoodWorker = (config: CodexRemoteWorkerDogfoodConfig): RemoteDogfoodWorker => {
+  const now = dogfoodNow;
   const nonceFactory = () => randomUUID();
   const controlPlaneClient = new CodexRuntimeControlPlaneClient({
     baseUrl: config.controlPlaneUrl,
@@ -309,7 +379,7 @@ export const runCodexRemoteWorkerDogfood = async (
     now,
     nonceFactory,
   });
-  const worker = createRemoteCodexWorkerClient({
+  return createRemoteCodexWorkerClient({
     workerId: config.workerId,
     workerIdentity: config.workerIdentity,
     version: 'codex-remote-worker-dogfood',
@@ -332,6 +402,23 @@ export const runCodexRemoteWorkerDogfood = async (
     now,
     nonceFactory,
   });
+};
+
+const dogfoodWorkerFor = (config: CodexRemoteWorkerDogfoodConfig): RemoteDogfoodWorker => {
+  const cacheKey = remoteDogfoodWorkerCacheKey(config);
+  const cached = cachedRemoteDogfoodWorkers.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const worker = createDogfoodWorker(config);
+  cachedRemoteDogfoodWorkers.set(cacheKey, worker);
+  return worker;
+};
+
+export const runCodexRemoteWorkerDogfood = async (
+  config: CodexRemoteWorkerDogfoodConfig = loadCodexRemoteWorkerDogfoodConfig(),
+): Promise<{ iterations?: number; processed: number }> => {
+  const worker = dogfoodWorkerFor(config);
   return config.runMode === 'run_loop' ? worker.runLoop() : worker.runOnce();
 };
 

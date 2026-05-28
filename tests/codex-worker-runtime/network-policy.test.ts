@@ -86,6 +86,60 @@ describe('network policy materialization', () => {
     expect(commandText).toContain('forgeloop-net-lease-1');
   });
 
+  it('retries model provider egress self-test while the proxy sidecar becomes ready', async () => {
+    class FlakyModelProviderProbeRunner extends FakeDockerRunner {
+      private allowedProbeAttempts = 0;
+
+      override async run(input: Parameters<FakeDockerRunner['run']>[0]): ReturnType<FakeDockerRunner['run']> {
+        if (input.publicSummary?.operation === 'network_self_test_allowed_model_provider_egress') {
+          this.startedCommands.push(input);
+          this.allowedProbeAttempts += 1;
+          if (this.allowedProbeAttempts === 1) {
+            return { exitCode: 1, stdout: '', stderr: 'proxy not ready' };
+          }
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        return super.run(input);
+      }
+    }
+    const runner = new FlakyModelProviderProbeRunner();
+    const providerConfig = {
+      proxy_image: 'ghcr.io/forgeloop/proxy',
+      proxy_image_digest: digest('b'),
+      self_test_image: 'ghcr.io/forgeloop/self-test',
+      self_test_image_digest: digest('c'),
+    };
+
+    await expect(
+      runNetworkPolicySelfTest({
+        runner,
+        workerId: 'worker-1',
+        launchLeaseId: 'lease-1',
+        hostUid: 501,
+        hostGid: 20,
+        modelProviderProbeRetryDelayMs: 0,
+        policy: {
+          mode: 'egress_allowlist',
+          provider: 'docker_network_proxy',
+          allowlist_rules: [{ id: 'openai', protocol: 'https', host: 'api.openai.com', purpose: 'model_provider' }],
+          provider_config: {
+            ...providerConfig,
+            provider_config_digest: codexCanonicalDigest(providerConfig),
+          },
+          egress_allowlist_digest: codexCanonicalDigest({
+            provider: 'docker_network_proxy',
+            allowlist_rules: [{ id: 'openai', protocol: 'https', host: 'api.openai.com', purpose: 'model_provider' }],
+          }),
+          self_test_digest: providerConfig.self_test_image_digest,
+        },
+      }),
+    ).resolves.toMatchObject({ publicSummary: { allowed_model_provider_egress: true } });
+
+    expect(
+      runner.startedCommands.filter((command) => command.publicSummary?.operation === 'network_self_test_allowed_model_provider_egress'),
+    ).toHaveLength(2);
+  });
+
   it('cleans the proxy sidecar and internal network when self-test setup fails', async () => {
     class FailingSelfTestRunner extends FakeDockerRunner {
       override async run(input: Parameters<FakeDockerRunner['run']>[0]): ReturnType<FakeDockerRunner['run']> {
@@ -111,6 +165,7 @@ describe('network policy materialization', () => {
         launchLeaseId: 'lease-1',
         hostUid: 501,
         hostGid: 20,
+        modelProviderProbeRetryDelayMs: 0,
         policy: {
           mode: 'egress_allowlist',
           provider: 'docker_network_proxy',
@@ -130,5 +185,8 @@ describe('network policy materialization', () => {
 
     expect(runner.stoppedContainerDigests).toHaveLength(1);
     expect(runner.startedCommands.map((command) => command.publicSummary?.operation)).toContain('network_remove');
+    expect(
+      runner.startedCommands.filter((command) => command.publicSummary?.operation === 'network_self_test_allowed_model_provider_egress'),
+    ).toHaveLength(6);
   });
 });

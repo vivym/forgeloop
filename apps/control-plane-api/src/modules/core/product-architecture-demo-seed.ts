@@ -527,6 +527,8 @@ const execution = {
   id: 'exec-demo-seed-visual-review',
   development_plan_item_id: 'dpi-demo-seed-visual-review',
   execution_plan_revision_id: executionPlanRevision.id,
+  approved_spec_revision_id: specRevision.id,
+  approved_spec_revision_ref: { type: 'spec_revision', id: specRevision.id, spec_id: spec.id, title: specRevision.summary },
   ref: { type: 'execution', id: 'exec-demo-seed-visual-review', title: 'Codex worker is seeding visual review data' },
   development_plan_item_ref: {
     type: 'development_plan_item',
@@ -746,6 +748,8 @@ function planItem(input: {
     driver_actor_id: ownerActorId,
     responsible_role: 'developer',
     reviewer_actor_id: reviewerActorId,
+    leader_actor_id: reviewerActorId,
+    leader_delegate_actor_ids: [techLeadActorId],
     risk: input.id === 'dpi-development-plan-table-inspector' ? 'high' : 'medium',
     dependency_hints: ['Task 1 route contracts are committed'],
     affected_surfaces: input.affected_surfaces,

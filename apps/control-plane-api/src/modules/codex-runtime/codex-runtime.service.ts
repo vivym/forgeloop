@@ -13,6 +13,7 @@ import {
   codexCredentialPayloadDigest,
   codexRuntimeJobInputDigest,
   codexRuntimeNetworkPolicyDigest,
+  codexRuntimeProfileRevisionDigest,
   codexWorkspaceAcquisitionDigest,
   collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
@@ -23,6 +24,8 @@ import {
   type AutomationActionRun,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
+  type CodexGenerationRuntimeJobResult,
+  DomainError,
   type CodexLaunchLease,
   type CodexLaunchTarget,
   type CodexLaunchTokenEnvelope,
@@ -36,6 +39,7 @@ import {
 } from '@forgeloop/domain';
 import type { CodexLaunchFenceSnapshot, DeliveryRepository } from '@forgeloop/db';
 
+import { ProductGenerationResultService } from '../automation/product-generation-result.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type {
   CodexRuntimeStatusQuery,
@@ -51,6 +55,9 @@ import type {
   CreateCodexRuntimeProfileDto,
   CreateCodexWorkerBootstrapTokenDto,
   HeartbeatCodexWorkerDto,
+  ImportCodexCredentialDto,
+  ImportCodexRuntimeProfileDto,
+  ImportLocalCodexDto,
   MaterializeCodexRuntimeJobDto,
   MaterializeCodexLaunchLeaseDto,
   PollCodexRuntimeJobsDto,
@@ -122,6 +129,48 @@ const requireUnsafeDbCredentialStore = (): void => {
   }
 };
 
+const requireUnsafeDbImportAllowed = (): void => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new ForbiddenException('unsafe_db Codex credentials are rejected in production');
+  }
+  requireUnsafeDbCredentialStore();
+};
+
+const defaultImportResourceLimits = {
+  cpu_ms: 2_000,
+  memory_mb: 4096,
+  pids: 512,
+  fds: 1024,
+  workspace_bytes: 2_000_000_000,
+  artifact_bytes: 500_000_000,
+  timeout_ms: 900_000,
+  output_limit_bytes: 2_000_000,
+  run_output_limit_bytes: 2_000_000,
+};
+
+const defaultImportDockerPolicy = {
+  app_server_only: true,
+  rootless: true,
+  read_only_rootfs: true,
+  no_new_privileges: true,
+  drop_capabilities: ['ALL'],
+};
+
+const importEffectiveConfigAssertions = (targetKind: CodexRuntimeTargetKind): CodexRuntimeProfileRevision['effective_config_assertions'] =>
+  targetKind === 'generation'
+    ? {
+        target_kind: 'generation',
+        approval_policy: 'never',
+        source_write_policy: 'artifact_only',
+        forbidden_writable_roots: ['workspace'],
+      }
+    : {
+        target_kind: 'run_execution',
+        approval_policy: 'never',
+        sandbox_type: 'danger-full-access',
+        writable_roots_policy: 'task_workspace_only',
+      };
+
 const generateWorkerSessionToken = (): string => `codex-worker-session-${randomBytes(32).toString('base64url')}`;
 const deterministicRuntimeArtifactId = (runtimeJobId: string, artifactIdempotencyKey: string): string => {
   const hex = codexCanonicalDigest({ runtime_job_id: runtimeJobId, artifact_idempotency_key: artifactIdempotencyKey }).slice(
@@ -133,6 +182,47 @@ const deterministicRuntimeArtifactId = (runtimeJobId: string, artifactIdempotenc
   const uuidHex = bytes.toString('hex');
   return `${uuidHex.slice(0, 8)}-${uuidHex.slice(8, 12)}-${uuidHex.slice(12, 16)}-${uuidHex.slice(16, 20)}-${uuidHex.slice(20, 32)}`;
 };
+
+const deterministicCodexImportId = (namespace: string, input: Record<string, unknown>): string => {
+  const hex = codexCanonicalDigest({ namespace, input }).slice('sha256:'.length);
+  const bytes = Buffer.from(hex.slice(0, 32), 'hex');
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const uuidHex = bytes.toString('hex');
+  return `${uuidHex.slice(0, 8)}-${uuidHex.slice(8, 12)}-${uuidHex.slice(12, 16)}-${uuidHex.slice(16, 20)}-${uuidHex.slice(20, 32)}`;
+};
+
+const importedProfileIdentity = (
+  input: ImportCodexRuntimeProfileDto | ImportLocalCodexDto,
+  environment: CodexRuntimeProfileRevision['environment'],
+): Record<string, unknown> => ({
+  schema_version: 'codex_runtime_profile_import.v1',
+  source_kind: 'local_source_label' in input ? 'local_codex_import' : 'profile_import',
+  ...('local_source_label' in input ? { source_label: input.local_source_label } : {}),
+  environment,
+  profile_name: input.profile_name,
+  target_kind: input.target_kind,
+  project_id: input.project_id,
+  ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+  docker_image: input.docker_image,
+  docker_image_digest: input.docker_image_digest,
+  codex_config_digest: codexCanonicalDigest(input.codex_config_toml),
+  expected_effective_config_digest: input.expected_effective_config_digest,
+  allowed_scopes: input.allowed_scopes,
+  network_policy_digest: codexRuntimeNetworkPolicyDigest(input.network_policy as CodexRuntimeNetworkPolicy),
+});
+
+const importedCredentialIdentity = (
+  input: Pick<ImportCodexCredentialDto, 'profile_id' | 'project_id' | 'repo_id' | 'purpose' | 'auth_json' | 'provider'>,
+): Record<string, unknown> => ({
+  schema_version: 'codex_credential_import.v1',
+  profile_id: input.profile_id,
+  project_id: input.project_id,
+  ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+  provider: input.provider,
+  purpose: input.purpose,
+  credential_payload_digest: codexCredentialPayloadDigest(input.auth_json),
+});
 
 const materializedNetworkPolicy = (policy: CodexRuntimeNetworkPolicy) => {
   return normalizeCodexRuntimeNetworkPolicy(policy);
@@ -242,6 +332,13 @@ const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
         }),
   };
 };
+
+const workerRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob & Pick<CodexRuntimeJob, 'workspace_acquisition_json'> => ({
+  ...publicRuntimeJob(job),
+  ...(job.target_kind === 'run_execution' && job.workspace_acquisition_json !== undefined
+    ? { workspace_acquisition_json: job.workspace_acquisition_json }
+    : {}),
+});
 
 const publicEnvelopeMetadata = (envelope: CodexLaunchTokenEnvelope | undefined) =>
   envelope === undefined
@@ -379,7 +476,11 @@ const publicCredentialVersion = (version: CodexCredentialBindingVersion): CodexC
 
 @Injectable()
 export class CodexRuntimeService {
-  constructor(@Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository) {}
+  constructor(
+    @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
+    @Inject(ProductGenerationResultService)
+    private readonly productGenerationResults: ProductGenerationResultService,
+  ) {}
 
   async createProfile(input: CreateCodexRuntimeProfileDto) {
     const revision = validateCodexRuntimeProfileRevision(input.revision as unknown as CodexRuntimeProfileRevision, {
@@ -393,7 +494,7 @@ export class CodexRuntimeService {
   }
 
   async createCredential(input: CreateCodexCredentialDto) {
-    requireUnsafeDbCredentialStore();
+    requireUnsafeDbImportAllowed();
     const version = await this.repository.createCodexCredentialBindingWithVersion({
       binding: input.binding as CodexCredentialBinding,
       version: input.version as CodexCredentialBindingVersion,
@@ -403,6 +504,42 @@ export class CodexRuntimeService {
       credential_binding: input.binding,
       credential_binding_version: publicCredentialVersion(version),
     };
+  }
+
+  async importProfile(input: ImportCodexRuntimeProfileDto) {
+    return this.repository.withObjectLock(
+      `codex-runtime-profile-import:${codexCanonicalDigest(importedProfileIdentity(input, this.importEnvironment()))}`,
+      (repository) => this.persistImportedProfile(input, repository),
+    );
+  }
+
+  async importCredential(input: ImportCodexCredentialDto) {
+    requireUnsafeDbImportAllowed();
+    return this.repository.withObjectLock(
+      `codex-runtime-credential-import:${codexCanonicalDigest(importedCredentialIdentity(input))}`,
+      (repository) => this.persistImportedCredential(input, repository),
+    );
+  }
+
+  async importLocalCodex(input: ImportLocalCodexDto) {
+    requireUnsafeDbImportAllowed();
+    const profileImportDigest = codexCanonicalDigest(importedProfileIdentity(input, this.importEnvironment()));
+    return this.repository.withObjectLock(`codex-runtime-local-import:${profileImportDigest}`, (repository) =>
+      repository.withDeliveryTransaction(async (transactionalRepository) => {
+        const profile = await this.persistImportedProfile(input, transactionalRepository);
+        const credentialInput = { ...input, profile_id: profile.profile_id, purpose: 'model_provider' as const };
+        const credential = await this.persistImportedCredential(credentialInput, transactionalRepository);
+        return {
+          ...profile,
+          ...credential,
+          import_source_digest: codexCanonicalDigest({
+            kind: 'local_codex_import',
+            label: input.local_source_label,
+            imported_by_actor_id: input.created_by.actor_id,
+          }),
+        };
+      }),
+    );
   }
 
   async createWorkerBootstrapToken(input: CreateCodexWorkerBootstrapTokenDto) {
@@ -521,23 +658,23 @@ export class CodexRuntimeService {
   async createRuntimeJob(input: CreateCodexRuntimeJobDto) {
     validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
     const now = nowIso();
-    const revision = await this.repository.getActiveCodexRuntimeProfileRevision({
-      project_id: input.target.project_id,
-      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
-      target_kind: input.target.target_kind,
-      now,
-    });
-    if (revision === undefined || revision.id !== input.runtime_profile_revision_id) {
-      throw new BadRequestException('Codex runtime profile revision fence was rejected');
-    }
     const credential = await this.repository.getCodexCredentialBindingPublic(input.credential_binding_id);
     if (
       credential === undefined ||
-      credential.profile_id !== revision.profile_id ||
       credential.active_version_id !== input.credential_binding_version_id ||
       credential.active_payload_digest !== input.credential_payload_digest
     ) {
       throw new BadRequestException('Codex credential binding fence was rejected');
+    }
+    const revision = await this.repository.getActiveCodexRuntimeProfileRevision({
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+      target_kind: input.target.target_kind,
+      runtime_profile_id: credential.profile_id,
+      now,
+    });
+    if (revision === undefined || revision.id !== input.runtime_profile_revision_id || revision.profile_id !== credential.profile_id) {
+      throw new BadRequestException('Codex runtime profile revision fence was rejected');
     }
     const target: CodexLaunchTarget = {
       target_type: input.target.target_type,
@@ -621,9 +758,20 @@ export class CodexRuntimeService {
     if (runtimeJob === undefined) {
       throw new NotFoundException('Codex runtime job not found');
     }
+    const artifacts = await this.repository.listCodexRuntimeJobArtifacts({ runtime_job_id: jobId });
     return {
       runtime_job: publicRuntimeJob(runtimeJob),
       envelope: publicEnvelopeMetadata(await this.repository.getCodexRuntimeJobEnvelope({ runtime_job_id: jobId })),
+      artifacts: artifacts.map((artifact) => ({
+        id: artifact.id,
+        kind: artifact.kind,
+        name: artifact.name,
+        content_type: artifact.content_type,
+        digest: artifact.digest,
+        size_bytes: artifact.size_bytes,
+        metadata_json: artifact.metadata_json,
+        created_at: artifact.created_at,
+      })),
     };
   }
 
@@ -700,7 +848,7 @@ export class CodexRuntimeService {
     });
     const rows = await Promise.all(
       runtimeJobs.map(async (runtimeJob) => ({
-        runtime_job: publicRuntimeJob(runtimeJob),
+        runtime_job: workerRuntimeJob(runtimeJob),
         envelope: publicEnvelopeMetadata(await this.repository.getCodexRuntimeJobEnvelope({ runtime_job_id: runtimeJob.id })),
       })),
     );
@@ -950,8 +1098,9 @@ export class CodexRuntimeService {
     assertWorkerBodyDigest(input);
     const now = nowIso();
     assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    let terminalResult: ReturnType<typeof validateCodexRuntimeJobTerminalResult> | undefined;
     if (input.terminal_result_json !== undefined) {
-      validateCodexRuntimeJobTerminalResult(input.terminal_result_json);
+      terminalResult = validateCodexRuntimeJobTerminalResult(input.terminal_result_json);
       collectCodexRuntimeJobTerminalArtifactRefs(input.terminal_result_json);
     }
     const runtimeJob = await this.repository.terminalizeCodexRuntimeJob({
@@ -973,30 +1122,105 @@ export class CodexRuntimeService {
       ),
       now,
     });
+    if (
+      runtimeJob.target_type === 'automation_action_run' &&
+      runtimeJob.target_kind === 'generation' &&
+      input.terminal_status === 'succeeded' &&
+      terminalResult !== undefined &&
+      'task_kind' in terminalResult
+    ) {
+      await this.productGenerationResults.handleGenerationRuntimeTerminal({
+        runtimeJobId: runtimeJob.id,
+        actionRunId: runtimeJob.target_id,
+        terminalResult: terminalResult as CodexGenerationRuntimeJobResult,
+      });
+    }
+    if (
+      runtimeJob.target_type === 'automation_action_run' &&
+      runtimeJob.target_kind === 'generation' &&
+      input.terminal_status !== 'succeeded'
+    ) {
+      await this.failProductGenerationActionRunForRuntimeTerminal({
+        actionRunId: runtimeJob.target_id,
+        runtimeJobId: runtimeJob.id,
+        terminalStatus: input.terminal_status,
+        reasonCode: input.reason_code,
+        now,
+      });
+    }
     return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  private async failProductGenerationActionRunForRuntimeTerminal(input: {
+    actionRunId: string;
+    runtimeJobId: string;
+    terminalStatus: string;
+    reasonCode: string;
+    now: string;
+  }): Promise<void> {
+    const actionRun = await this.repository.getAutomationActionRun(input.actionRunId);
+    if (
+      actionRun === undefined ||
+      actionRun.status !== 'running' ||
+      actionRun.claim_token === undefined ||
+      !this.isProductGenerationAction(actionRun.action_type)
+    ) {
+      return;
+    }
+    try {
+      await this.repository.completeAutomationActionRun({
+        id: actionRun.id,
+        idempotency_key: actionRun.idempotency_key,
+        claim_token: actionRun.claim_token,
+        status: input.terminalStatus === 'cancelled' ? 'blocked' : 'failed',
+        result_json: {
+          product_generation_result: 'runtime_job_failed',
+          runtime_job_id: input.runtimeJobId,
+          reason_code: input.reasonCode,
+          terminal_status: input.terminalStatus,
+        },
+        retryable: input.terminalStatus !== 'cancelled',
+        finished_at: input.now,
+      });
+    } catch (error) {
+      if (!(error instanceof DomainError && error.code === 'INVALID_TRANSITION')) {
+        throw error;
+      }
+      const refreshed = await this.repository.getAutomationActionRun(actionRun.id);
+      if (refreshed?.status !== 'succeeded' && refreshed?.status !== 'failed' && refreshed?.status !== 'blocked') {
+        throw error;
+      }
+    }
+  }
+
+  private isProductGenerationAction(actionType: string): boolean {
+    return (
+      actionType === 'run_boundary_brainstorming_round' ||
+      actionType === 'generate_development_plan_item_spec_revision' ||
+      actionType === 'generate_development_plan_item_execution_plan_revision'
+    );
   }
 
   async createLaunchLease(input: CreateCodexLaunchLeaseDto) {
     validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
     const now = nowIso();
-    const revision = await this.repository.getActiveCodexRuntimeProfileRevision({
-      project_id: input.target.project_id,
-      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
-      target_kind: input.target.target_kind,
-      now,
-    });
-    if (revision === undefined || revision.id !== input.runtime_profile_revision_id) {
-      throw new BadRequestException('Codex runtime profile revision fence was rejected');
-    }
-
     const credential = await this.repository.getCodexCredentialBindingPublic(input.credential_binding_id);
     if (
       credential === undefined ||
-      credential.profile_id !== revision.profile_id ||
       credential.active_version_id !== input.credential_binding_version_id ||
       credential.active_payload_digest !== input.credential_payload_digest
     ) {
       throw new BadRequestException('Codex credential binding fence was rejected');
+    }
+    const revision = await this.repository.getActiveCodexRuntimeProfileRevision({
+      project_id: input.target.project_id,
+      ...(input.target.repo_id === undefined ? {} : { repo_id: input.target.repo_id }),
+      target_kind: input.target.target_kind,
+      runtime_profile_id: credential.profile_id,
+      now,
+    });
+    if (revision === undefined || revision.id !== input.runtime_profile_revision_id || revision.profile_id !== credential.profile_id) {
+      throw new BadRequestException('Codex runtime profile revision fence was rejected');
     }
 
     const fence = await this.launchFenceFor(input, now);
@@ -1125,6 +1349,169 @@ export class CodexRuntimeService {
       replay_protection: workerReplayProtection('POST', `/internal/codex-workers/${workerId}/launch-leases/${leaseId}/terminal`, input.body_digest),
       now,
     });
+  }
+
+  private async persistImportedProfile(
+    input: ImportCodexRuntimeProfileDto | ImportLocalCodexDto,
+    repository: DeliveryRepository,
+  ): Promise<{
+    profile_id: string;
+    profile_revision_id: string;
+    codex_config_digest: string;
+    profile_digest: string;
+  }> {
+    const createdAt = nowIso();
+    const environment = this.importEnvironment();
+    const identity = importedProfileIdentity(input, environment);
+    const profileId = deterministicCodexImportId('codex-runtime-profile-import', identity);
+    const preliminaryRevision: CodexRuntimeProfileRevision = {
+      id: '00000000-0000-4000-8000-000000000000',
+      profile_id: profileId,
+      revision_number: 1,
+      status: 'active',
+      environment,
+      docker_image: input.docker_image,
+      docker_image_digest: input.docker_image_digest,
+      target_kind: input.target_kind,
+      source_access_mode: input.target_kind === 'generation' ? 'artifact_only' : 'path_policy_scoped',
+      codex_config_toml: input.codex_config_toml,
+      codex_config_digest: codexCanonicalDigest(input.codex_config_toml),
+      expected_effective_config_digest: input.expected_effective_config_digest,
+      effective_config_assertions: importEffectiveConfigAssertions(input.target_kind),
+      app_server_required: true,
+      allowed_driver_kind: 'app_server',
+      network_policy: input.network_policy as CodexRuntimeNetworkPolicy,
+      resource_limits: defaultImportResourceLimits,
+      docker_policy: defaultImportDockerPolicy,
+      allowed_scopes: input.allowed_scopes as readonly CodexRuntimeScope[],
+      profile_digest: '',
+      created_by_actor_id: input.created_by.actor_id,
+      created_at: createdAt,
+    };
+    const profileDigest = codexRuntimeProfileRevisionDigest(preliminaryRevision);
+    const revisionId = deterministicCodexImportId('codex-runtime-profile-import-revision', { profile_id: profileId, profile_digest: profileDigest });
+    const revisionWithoutDigest: CodexRuntimeProfileRevision = {
+      ...preliminaryRevision,
+      id: revisionId,
+    };
+    const revision = validateCodexRuntimeProfileRevision(
+      {
+        ...revisionWithoutDigest,
+        profile_digest: profileDigest,
+      },
+      { strictRealDogfood: true },
+    );
+    const existingRevision = await repository.getActiveCodexRuntimeProfileRevision({
+      project_id: input.project_id,
+      ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+      target_kind: input.target_kind,
+      runtime_profile_id: profileId,
+      now: createdAt,
+    });
+    if (existingRevision !== undefined) {
+      if (
+        existingRevision.id === revision.id &&
+        existingRevision.codex_config_digest === revision.codex_config_digest &&
+        existingRevision.profile_digest === revision.profile_digest
+      ) {
+        return {
+          profile_id: profileId,
+          profile_revision_id: existingRevision.id,
+          codex_config_digest: existingRevision.codex_config_digest,
+          profile_digest: existingRevision.profile_digest,
+        };
+      }
+      throw new BadRequestException('Imported Codex runtime profile identity conflicts with existing profile');
+    }
+    const profileRevision = await repository.createCodexRuntimeProfileWithRevision({
+      profile: {
+        id: profileId,
+        name: input.profile_name,
+        environment,
+        target_kind: input.target_kind,
+        active_revision_id: revisionId,
+        created_by_actor_id: input.created_by.actor_id,
+        created_at: createdAt,
+        updated_at: createdAt,
+      },
+      revision,
+    });
+    return {
+      profile_id: profileId,
+      profile_revision_id: profileRevision.id,
+      codex_config_digest: profileRevision.codex_config_digest,
+      profile_digest: profileRevision.profile_digest,
+    };
+  }
+
+  private async persistImportedCredential(
+    input: Pick<ImportCodexCredentialDto, 'profile_id' | 'project_id' | 'repo_id' | 'purpose' | 'auth_json' | 'provider' | 'created_by'>,
+    repository: DeliveryRepository,
+  ): Promise<{
+    credential_binding_id: string;
+    credential_binding_version_id: string;
+    credential_payload_digest: string;
+  }> {
+    const createdAt = nowIso();
+    const payloadDigest = codexCredentialPayloadDigest(input.auth_json);
+    const credentialIdentity = importedCredentialIdentity(input);
+    const bindingId = deterministicCodexImportId('codex-credential-import-binding', credentialIdentity);
+    const versionId = deterministicCodexImportId('codex-credential-import-version', {
+      binding_id: bindingId,
+      credential_payload_digest: payloadDigest,
+    });
+    const existingCredential = await repository.getCodexCredentialBindingPublic(bindingId);
+    if (existingCredential !== undefined) {
+      if (
+        existingCredential.profile_id === input.profile_id &&
+        existingCredential.project_id === input.project_id &&
+        existingCredential.repo_id === input.repo_id &&
+        existingCredential.provider === input.provider &&
+        existingCredential.purpose === input.purpose &&
+        existingCredential.active_version_id === versionId &&
+        existingCredential.active_payload_digest === payloadDigest
+      ) {
+        return {
+          credential_binding_id: bindingId,
+          credential_binding_version_id: versionId,
+          credential_payload_digest: payloadDigest,
+        };
+      }
+      throw new BadRequestException('Imported Codex credential identity conflicts with existing credential');
+    }
+    const version = await repository.createCodexCredentialBindingWithVersion({
+      binding: {
+        id: bindingId,
+        profile_id: input.profile_id,
+        project_id: input.project_id,
+        ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+        provider: input.provider,
+        purpose: input.purpose,
+        active_version_id: versionId,
+        created_by_actor_id: input.created_by.actor_id,
+        created_at: createdAt,
+        updated_at: createdAt,
+      },
+      version: {
+        id: versionId,
+        binding_id: bindingId,
+        version_number: 1,
+        status: 'active',
+        payload_digest: payloadDigest,
+        created_by_actor_id: input.created_by.actor_id,
+        created_at: createdAt,
+      },
+      secret_payload_json: input.auth_json,
+    });
+    return {
+      credential_binding_id: bindingId,
+      credential_binding_version_id: version.id,
+      credential_payload_digest: version.payload_digest,
+    };
+  }
+
+  private importEnvironment(): CodexRuntimeProfileRevision['environment'] {
+    return process.env.NODE_ENV === 'test' ? 'test' : 'local_dogfood';
   }
 
   private async requireWorkerRuntimeJob(workerId: string, jobId: string): Promise<CodexRuntimeJob> {

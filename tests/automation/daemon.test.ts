@@ -877,7 +877,7 @@ describe('automation daemon loop', () => {
                   internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/generated_payload`,
                 },
               },
-              generated_payload_digest: `sha256:${'6'.repeat(64)}`,
+              generated_payload_digest: `sha256:${'5'.repeat(64)}`,
               generation_artifacts: [
                 {
                   kind: 'generated_payload',

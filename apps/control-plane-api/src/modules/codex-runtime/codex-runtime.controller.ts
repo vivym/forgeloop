@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 
-import { BadRequestException, Body, Controller, Get, Param, Post, Query, Res, StreamableFile, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, Param, Post, Query, Res, StreamableFile, UseGuards } from '@nestjs/common';
 import { codexCanonicalDigest, codexCredentialPayloadDigest } from '@forgeloop/domain';
 
 import { TrustedAutomationActorGuard } from '../automation/trusted-automation-actor.guard';
@@ -19,6 +19,9 @@ import {
   createCodexRuntimeProfileSchema,
   createCodexWorkerBootstrapTokenSchema,
   heartbeatCodexWorkerSchema,
+  importCodexCredentialSchema,
+  importCodexRuntimeProfileSchema,
+  importLocalCodexSchema,
   materializeCodexRuntimeJobSchema,
   materializeCodexLaunchLeaseSchema,
   pollCodexRuntimeJobsSchema,
@@ -44,6 +47,9 @@ import {
   type CreateCodexRuntimeProfileDto,
   type CreateCodexWorkerBootstrapTokenDto,
   type HeartbeatCodexWorkerDto,
+  type ImportCodexCredentialDto,
+  type ImportCodexRuntimeProfileDto,
+  type ImportLocalCodexDto,
   type MaterializeCodexRuntimeJobDto,
   type MaterializeCodexLaunchLeaseDto,
   type PollCodexRuntimeJobsDto,
@@ -74,7 +80,7 @@ const assertWorkerBodyDigest = (input: { body_digest: string }): void => {
 
 @Controller()
 export class CodexRuntimeController {
-  constructor(private readonly service: CodexRuntimeService) {}
+  constructor(@Inject(CodexRuntimeService) private readonly service: CodexRuntimeService) {}
 
   @Post('/internal/codex-runtime/profiles')
   @UseGuards(TrustedCodexRuntimeSetupGuard)
@@ -86,6 +92,24 @@ export class CodexRuntimeController {
   @UseGuards(TrustedCodexRuntimeSetupGuard)
   createCredential(@Body(new ZodValidationPipe(createCodexCredentialSchema)) body: CreateCodexCredentialDto) {
     return this.service.createCredential(body);
+  }
+
+  @Post('/internal/codex-runtime/import-profile')
+  @UseGuards(TrustedCodexRuntimeSetupGuard)
+  importProfile(@Body(new ZodValidationPipe(importCodexRuntimeProfileSchema)) body: ImportCodexRuntimeProfileDto) {
+    return this.service.importProfile(body);
+  }
+
+  @Post('/internal/codex-runtime/import-credential')
+  @UseGuards(TrustedCodexRuntimeSetupGuard)
+  importCredential(@Body(new ZodValidationPipe(importCodexCredentialSchema)) body: ImportCodexCredentialDto) {
+    return this.service.importCredential(body);
+  }
+
+  @Post('/internal/codex-runtime/import-local-codex')
+  @UseGuards(TrustedCodexRuntimeSetupGuard)
+  importLocalCodex(@Body(new ZodValidationPipe(importLocalCodexSchema)) body: ImportLocalCodexDto) {
+    return this.service.importLocalCodex(body);
   }
 
   @Post('/internal/codex-runtime/worker-bootstrap-tokens')

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { generatedPackageDraftSetSchema } from '@forgeloop/codex-runtime';
-import { artifactRefSchema } from '@forgeloop/contracts';
-import type { AutomationActionRun, AutomationActionRunStatus, AutomationScope } from '@forgeloop/domain';
+import { artifactRefSchema, sourceObjectRefSchema } from '@forgeloop/contracts';
+import { codexCanonicalDigest, type AutomationActionRun, type AutomationActionRunStatus, type AutomationScope } from '@forgeloop/domain';
 import type {
   RuntimeSnapshotBlockerRow,
   RuntimeSnapshotManualHoldRow,
@@ -61,6 +61,161 @@ const projectRuntimeSnapshotActionInputSchema = z
   })
   .strict();
 
+const productGenerationPreconditionFingerprintJsonSchema = z
+  .object({
+    source_object_ref: sourceObjectRefSchema,
+    source_object_revision_id: nonBlankString,
+    development_plan_id: nonBlankString,
+    development_plan_revision_id: nonBlankString,
+    development_plan_item_id: nonBlankString,
+    development_plan_item_revision_id: nonBlankString,
+    boundary_session_id: nonBlankString.optional(),
+    boundary_session_revision_id: nonBlankString.optional(),
+    boundary_round_id: nonBlankString.optional(),
+    approved_boundary_summary_revision_id: nonBlankString.optional(),
+    approved_spec_revision_id: nonBlankString.optional(),
+    context_manifest_id: nonBlankString,
+    context_manifest_revision_id: nonBlankString,
+    requested_by_actor_id: nonBlankString,
+  })
+  .strict();
+
+const boundaryRoundPreconditionFingerprintJsonSchema = productGenerationPreconditionFingerprintJsonSchema
+  .extend({
+    boundary_session_id: nonBlankString,
+    boundary_session_revision_id: nonBlankString,
+    boundary_round_id: nonBlankString,
+  })
+  .strict();
+
+const specRevisionPreconditionFingerprintJsonSchema = productGenerationPreconditionFingerprintJsonSchema
+  .extend({
+    boundary_session_id: nonBlankString,
+    boundary_session_revision_id: nonBlankString,
+    approved_boundary_summary_revision_id: nonBlankString,
+  })
+  .strict();
+
+const executionPlanRevisionPreconditionFingerprintJsonSchema = productGenerationPreconditionFingerprintJsonSchema
+  .extend({
+    boundary_session_id: nonBlankString,
+    boundary_session_revision_id: nonBlankString,
+    approved_boundary_summary_revision_id: nonBlankString,
+    approved_spec_revision_id: nonBlankString,
+  })
+  .strict();
+
+const addPreconditionMismatchIssue = (ctx: z.RefinementCtx, field: string): void => {
+  ctx.addIssue({
+    code: 'custom',
+    path: ['precondition_fingerprint_json', field],
+    message: `${field} must match the action input fence`,
+  });
+};
+
+const assertMatchingPreconditionFields = (
+  input: {
+    development_plan_id: string;
+    development_plan_revision_id: string;
+    development_plan_item_id: string;
+    development_plan_item_revision_id: string;
+    context_manifest_id: string;
+    context_manifest_revision_id: string;
+    requested_by_actor_id: string;
+    precondition_fingerprint_json: Record<string, unknown>;
+  },
+  ctx: z.RefinementCtx,
+  fieldMappings: Array<[preconditionField: string, inputField: string]>,
+): void => {
+  const fields = [
+    ['development_plan_id', 'development_plan_id'],
+    ['development_plan_revision_id', 'development_plan_revision_id'],
+    ['development_plan_item_id', 'development_plan_item_id'],
+    ['development_plan_item_revision_id', 'development_plan_item_revision_id'],
+    ['context_manifest_id', 'context_manifest_id'],
+    ['context_manifest_revision_id', 'context_manifest_revision_id'],
+    ['requested_by_actor_id', 'requested_by_actor_id'],
+    ...fieldMappings,
+  ] as const;
+  for (const [preconditionField, inputField] of fields) {
+    if (input.precondition_fingerprint_json[preconditionField] !== input[inputField as keyof typeof input]) {
+      addPreconditionMismatchIssue(ctx, preconditionField);
+    }
+  }
+};
+
+const boundaryRoundActionInputSchema = z
+  .object({
+    development_plan_id: nonBlankString,
+    development_plan_revision_id: nonBlankString,
+    development_plan_item_id: nonBlankString,
+    development_plan_item_revision_id: nonBlankString,
+    session_id: nonBlankString,
+    session_revision_id: nonBlankString,
+    round_id: nonBlankString,
+    operation: z.enum(['start', 'continue', 'revise_summary']),
+    context_manifest_id: nonBlankString,
+    context_manifest_revision_id: nonBlankString,
+    requested_by_actor_id: nonBlankString,
+    precondition_fingerprint_json: boundaryRoundPreconditionFingerprintJsonSchema,
+  })
+  .strict()
+  .superRefine((input, ctx) =>
+    assertMatchingPreconditionFields(input, ctx, [
+      ['boundary_session_id', 'session_id'],
+      ['boundary_session_revision_id', 'session_revision_id'],
+      ['boundary_round_id', 'round_id'],
+    ]),
+  );
+
+const generateDevelopmentPlanItemSpecRevisionActionInputSchema = z
+  .object({
+    development_plan_id: nonBlankString,
+    development_plan_revision_id: nonBlankString,
+    development_plan_item_id: nonBlankString,
+    development_plan_item_revision_id: nonBlankString,
+    boundary_session_id: nonBlankString,
+    boundary_session_revision_id: nonBlankString,
+    approved_boundary_summary_revision_id: nonBlankString,
+    context_manifest_id: nonBlankString,
+    context_manifest_revision_id: nonBlankString,
+    requested_by_actor_id: nonBlankString,
+    precondition_fingerprint_json: specRevisionPreconditionFingerprintJsonSchema,
+  })
+  .strict()
+  .superRefine((input, ctx) =>
+    assertMatchingPreconditionFields(input, ctx, [
+      ['boundary_session_id', 'boundary_session_id'],
+      ['boundary_session_revision_id', 'boundary_session_revision_id'],
+      ['approved_boundary_summary_revision_id', 'approved_boundary_summary_revision_id'],
+    ]),
+  );
+
+const generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema = z
+  .object({
+    development_plan_id: nonBlankString,
+    development_plan_revision_id: nonBlankString,
+    development_plan_item_id: nonBlankString,
+    development_plan_item_revision_id: nonBlankString,
+    boundary_session_id: nonBlankString,
+    boundary_session_revision_id: nonBlankString,
+    approved_boundary_summary_revision_id: nonBlankString,
+    approved_spec_revision_id: nonBlankString,
+    context_manifest_id: nonBlankString,
+    context_manifest_revision_id: nonBlankString,
+    requested_by_actor_id: nonBlankString,
+    precondition_fingerprint_json: executionPlanRevisionPreconditionFingerprintJsonSchema,
+  })
+  .strict()
+  .superRefine((input, ctx) =>
+    assertMatchingPreconditionFields(input, ctx, [
+      ['boundary_session_id', 'boundary_session_id'],
+      ['boundary_session_revision_id', 'boundary_session_revision_id'],
+      ['approved_boundary_summary_revision_id', 'approved_boundary_summary_revision_id'],
+      ['approved_spec_revision_id', 'approved_spec_revision_id'],
+    ]),
+  );
+
 const projectRuntimeSnapshotResultSchema = z.object({
   repo_id: nonBlankString,
   policy_status: z.enum(['missing', 'loaded', 'parse_failed', 'unsafe_path']),
@@ -86,7 +241,7 @@ const createAutomationActionRunBaseShape = {
   precondition_fingerprint: nonBlankString,
 } satisfies z.ZodRawShape;
 
-export const createAutomationActionRunSchema = z.discriminatedUnion('action_type', [
+const createAutomationActionRunUnionSchema = z.discriminatedUnion('action_type', [
   z
     .object({
       ...createAutomationActionRunBaseShape,
@@ -108,14 +263,77 @@ export const createAutomationActionRunSchema = z.discriminatedUnion('action_type
       action_input_json: projectRuntimeSnapshotActionInputSchema,
     })
     .strict(),
+  z
+    .object({
+      ...createAutomationActionRunBaseShape,
+      action_type: z.literal('run_boundary_brainstorming_round'),
+      action_input_json: boundaryRoundActionInputSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...createAutomationActionRunBaseShape,
+      action_type: z.literal('generate_development_plan_item_spec_revision'),
+      action_input_json: generateDevelopmentPlanItemSpecRevisionActionInputSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...createAutomationActionRunBaseShape,
+      action_type: z.literal('generate_development_plan_item_execution_plan_revision'),
+      action_input_json: generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema,
+    })
+    .strict(),
 ]);
+
+const productGenerationActionTypes = new Set([
+  'run_boundary_brainstorming_round',
+  'generate_development_plan_item_spec_revision',
+  'generate_development_plan_item_execution_plan_revision',
+]);
+
+export const createAutomationActionRunSchema = createAutomationActionRunUnionSchema.superRefine((input, ctx) => {
+  if (!productGenerationActionTypes.has(input.action_type)) {
+    return;
+  }
+
+  const actionInput = input.action_input_json as {
+    development_plan_item_revision_id: string;
+    precondition_fingerprint_json: Record<string, unknown>;
+  };
+  if (input.target_revision_id !== undefined && input.target_revision_id !== actionInput.development_plan_item_revision_id) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['target_revision_id'],
+      message: 'target_revision_id must match development_plan_item_revision_id',
+    });
+  }
+
+  const expectedFingerprint = codexCanonicalDigest(actionInput.precondition_fingerprint_json);
+  if (input.precondition_fingerprint !== expectedFingerprint) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['precondition_fingerprint'],
+      message: 'precondition_fingerprint must match the canonical precondition_fingerprint_json digest',
+    });
+  }
+});
 
 export const claimNextAutomationActionRunSchema = z
   .object({
     claim_token: nonBlankString,
     lease_ms: z.number().int().positive().max(60 * 60 * 1000).optional(),
     limit: z.number().int().min(1).max(100).default(1),
-    action_type: z.enum(['ensure_package_drafts', 'request_manual_path', 'project_runtime_snapshot']).optional(),
+    action_type: z
+      .enum([
+        'ensure_package_drafts',
+        'request_manual_path',
+        'project_runtime_snapshot',
+        'run_boundary_brainstorming_round',
+        'generate_development_plan_item_spec_revision',
+        'generate_development_plan_item_execution_plan_revision',
+      ])
+      .optional(),
     project_id: nonBlankString.optional(),
     repo_id: nonBlankString.optional(),
     automation_scope: automationScopeSchema.optional(),

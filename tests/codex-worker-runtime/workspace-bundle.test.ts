@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   collectWorkspaceBundleChangedFiles,
+  computeMountedWorkspaceDigest,
   createWorkspaceBundleArchive,
   createWorkspaceBundleManifest,
   createWorkspaceBundlePatchArtifact,
@@ -96,10 +97,66 @@ describe('workspace bundle validation and safe unpack', () => {
       runtimeJobId: 'runtime-job-1',
     });
 
-    expect(relative(await realpath(tempRoot), unpacked.workspacePath)).toBe('runtime-job-1/workspace');
+    expect(relative(await realpath(tempRoot), unpacked.workspacePath)).toMatch(/^runtime-job-1\/[0-9a-f-]{36}\/workspace$/);
     await expect(readFile(join(unpacked.workspacePath, 'src/app.ts'), 'utf8')).resolves.toBe('export const value = 1;\n');
     expect(unpacked.manifest_digest).toBe(manifestDigest);
     expect(unpacked.archive_digest).toBe(archiveDigest);
+    expect(unpacked.mounted_workspace_digest).toBe(manifestDigest);
+    expect(unpacked.mounted_workspace_digest).not.toContain(tempRoot);
+  });
+
+  it('computes mounted workspace digest from actual unpacked file contents', async () => {
+    const tempRoot = await makeTempDir();
+    const manifest = createWorkspaceBundleManifest({
+      bundleId: 'bundle-mounted-digest',
+      createdAt: now,
+      allowedPaths: ['src/**'],
+      forbiddenPaths: [],
+      files: [{ path: 'src/app.ts', content: 'export const value = 1;\n' }],
+    });
+    const archive = createWorkspaceBundleArchive({
+      manifest,
+      files: [{ path: 'src/app.ts', content: 'export const value = 1;\n' }],
+    });
+    const unpacked = await safeUnpackWorkspaceBundle({
+      archiveBytes: archive,
+      expectedArchiveDigest: workspaceBundleArchiveDigest(archive),
+      expectedManifestDigest: workspaceBundleManifestDigest(manifest),
+      tempRoot,
+      runtimeJobId: 'runtime-job-mounted-digest',
+    });
+
+    await writeFile(join(unpacked.workspacePath, 'src/app.ts'), 'export const value = 2;\n');
+
+    await expect(computeMountedWorkspaceDigest(unpacked.workspacePath, unpacked.manifest)).resolves.not.toBe(unpacked.manifest_digest);
+  });
+
+  it('uses a fresh attempt root when the same runtime job is unpacked again', async () => {
+    const tempRoot = await makeTempDir();
+    const manifest = createWorkspaceBundleManifest({
+      bundleId: 'bundle-repeat',
+      createdAt: now,
+      allowedPaths: ['README.md'],
+      forbiddenPaths: [],
+      files: [{ path: 'README.md', content: '# Remote run\n' }],
+    });
+    const archive = createWorkspaceBundleArchive({
+      manifest,
+      files: [{ path: 'README.md', content: '# Remote run\n' }],
+    });
+    const commonInput = {
+      archiveBytes: archive,
+      expectedArchiveDigest: workspaceBundleArchiveDigest(archive),
+      expectedManifestDigest: workspaceBundleManifestDigest(manifest),
+      tempRoot,
+      runtimeJobId: 'runtime-job-repeat',
+    };
+
+    const first = await safeUnpackWorkspaceBundle(commonInput);
+    const second = await safeUnpackWorkspaceBundle(commonInput);
+
+    expect(first.jobRoot).not.toBe(second.jobRoot);
+    await expect(readFile(join(second.workspacePath, 'README.md'), 'utf8')).resolves.toBe('# Remote run\n');
   });
 
   it('rejects digest mismatch, path traversal, absolute paths, symlinks, special files, and unsafe .git indirection', async () => {

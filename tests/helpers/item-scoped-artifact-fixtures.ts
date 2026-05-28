@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import type { DeliveryRepository } from '@forgeloop/db';
+import type { BoundaryAnswerRecord, BoundaryDecisionRecord, BoundaryQuestionRecord, DeliveryRepository } from '@forgeloop/db';
 import type {
   BoundarySummary,
   BoundarySummaryRevision,
@@ -66,6 +66,8 @@ export async function seedItemScopedSpecPlan(
   const now = runtime.now();
   const workItem = requireFound(await repository.getWorkItem(workItemId), `WorkItem ${workItemId}`);
   const sourceRef = { type: workItem.kind, id: workItem.id, title: workItem.title } as const;
+  const specStatus = options.specStatus ?? 'approved';
+  const executionPlanStatus = options.includePlan === false ? 'missing' : (options.planStatus ?? 'approved');
 
   const developmentPlan: DevelopmentPlan = {
     id: runtime.id('development-plan'),
@@ -111,12 +113,14 @@ export async function seedItemScopedSpecPlan(
     responsible_role: 'tech_lead',
     driver_actor_id: actorId,
     reviewer_actor_id: itemReviewerActorId,
+    leader_actor_id: itemReviewerActorId,
+    leader_delegate_actor_ids: actorId === itemReviewerActorId ? [] : [actorId],
     risk: workItem.risk === 'high' ? 'high' : workItem.risk === 'low' ? 'low' : 'medium',
     dependency_hints: [],
     affected_surfaces: ['tests'],
     boundary_status: 'approved',
-    spec_status: options.specStatus ?? 'approved',
-    execution_plan_status: options.includePlan === false ? 'not_started' : (options.planStatus ?? 'approved'),
+    spec_status: specStatus,
+    execution_plan_status: executionPlanStatus,
     execution_status: 'not_started',
     review_status: 'not_started',
     qa_handoff_status: 'not_started',
@@ -126,13 +130,19 @@ export async function seedItemScopedSpecPlan(
     updated_at: now,
   };
   await repository.saveDevelopmentPlanItem(item);
+  const itemRevisionChangeReason =
+    executionPlanStatus === 'approved'
+      ? 'execution_plan_approved'
+      : specStatus === 'approved' && options.includePlan === false
+        ? 'spec_approved'
+        : 'item_scoped_fixture_created';
   const itemRevision: DevelopmentPlanItemRevision = {
     id: item.revision_id,
     development_plan_item_id: item.id,
     development_plan_id: developmentPlan.id,
     revision_number: 1,
     snapshot: item,
-    change_reason: 'item_scoped_fixture_created',
+    change_reason: itemRevisionChangeReason,
     edited_by_actor_id: actorId,
     created_at: now,
   };
@@ -212,24 +222,36 @@ async function saveApprovedBoundary(
   actorId: string,
   now: string,
 ): Promise<{ session: BrainstormingSession; boundary: BoundarySummary }> {
+  const roundId = runtime.id('boundary-round');
+  const boundarySummaryId = runtime.id('boundary-summary');
+  const boundarySummaryRevisionId = runtime.id('boundary-summary-revision');
   const question = {
     id: runtime.id('brainstorming-question'),
+    round_id: roundId,
     text: 'What is the Development Plan Item boundary?',
     author_id: actorId,
     created_at: now,
     status: 'resolved' as const,
+    required: true,
+    answered_by_answer_id: runtime.id('brainstorming-answer'),
   };
   const answer = {
-    id: runtime.id('brainstorming-answer'),
+    id: question.answered_by_answer_id,
     question_id: question.id,
+    round_id: roundId,
     text: 'The fixture is scoped to this Development Plan Item.',
     actor_id: actorId,
+    actor_role: 'leader' as const,
     created_at: now,
   };
   const decision = {
     id: runtime.id('brainstorming-decision'),
+    round_id: roundId,
     text: 'Generate artifacts only through the item boundary.',
     actor_id: actorId,
+    actor_role: 'leader' as const,
+    source: 'leader' as const,
+    state: 'accepted' as const,
     rationale: 'Legacy direct Work Item artifact creation is retired.',
     created_at: now,
   };
@@ -238,24 +260,49 @@ async function saveApprovedBoundary(
     revision_id: runtime.id('brainstorming-session-revision'),
     source_ref: item.source_ref,
     development_plan_id: developmentPlan.id,
+    development_plan_revision_id: developmentPlan.revision_id,
     development_plan_item_id: item.id,
     development_plan_item_revision_id: item.revision_id,
+    leader_actor_id: item.leader_actor_id ?? item.reviewer_actor_id ?? actorId,
+    leader_delegate_actor_ids: item.leader_delegate_actor_ids,
     context_manifest_id: contextManifest.id,
     context_manifest_revision_id: contextManifest.revision_id,
+    status: 'approved',
+    current_round_id: roundId,
+    latest_summary_revision_id: boundarySummaryRevisionId,
+    approved_summary_revision_id: boundarySummaryRevisionId,
     questions: [question],
     answers: [answer],
     decisions: [decision],
     approval_state: 'approved',
+    boundary_summary_id: boundarySummaryId,
     approver_actor_id: actorId,
     approved_at: now,
+    closed_at: now,
     created_at: now,
     updated_at: now,
   };
   await repository.saveBrainstormingSession(session);
+  await repository.saveBoundaryRound({
+    id: roundId,
+    session_id: session.id,
+    session_revision_id: session.revision_id,
+    round_number: 1,
+    trigger: 'start',
+    status: 'terminal',
+    created_at: now,
+    updated_at: now,
+  });
+  const questionRecord: BoundaryQuestionRecord = { ...question, session_id: session.id, sequence: 1 };
+  const answerRecord: BoundaryAnswerRecord = { ...answer, session_id: session.id, sequence: 1 };
+  const decisionRecord: BoundaryDecisionRecord = { ...decision, session_id: session.id, sequence: 1 };
+  await repository.saveBoundaryQuestion(questionRecord);
+  await repository.saveBoundaryAnswer(answerRecord);
+  await repository.saveBoundaryDecision(decisionRecord);
 
   const boundary: BoundarySummary = {
-    id: runtime.id('boundary-summary'),
-    revision_id: runtime.id('boundary-summary-revision'),
+    id: boundarySummaryId,
+    revision_id: boundarySummaryRevisionId,
     brainstorming_session_id: session.id,
     brainstorming_session_revision_id: session.revision_id,
     development_plan_id: developmentPlan.id,
@@ -272,14 +319,25 @@ async function saveApprovedBoundary(
   const boundaryRevision: BoundarySummaryRevision = {
     id: boundary.revision_id,
     boundary_summary_id: boundary.id,
-    brainstorming_session_id: session.id,
-    brainstorming_session_revision_id: session.revision_id,
+    session_id: session.id,
+    session_revision_id: session.revision_id,
+    source_round_id: roundId,
+    development_plan_id: developmentPlan.id,
     development_plan_item_id: item.id,
     development_plan_item_revision_id: item.revision_id,
     revision_number: 1,
+    status: 'approved',
     summary_markdown: boundary.summary,
-    decision_snapshot: [decision],
+    confirmed_scope: ['Generate artifacts only through this Development Plan Item boundary.'],
+    confirmed_out_of_scope: ['Legacy direct Work Item artifact creation.'],
+    accepted_assumptions: [],
+    open_risks: [],
+    validation_expectations: ['Item-scoped artifact queries resolve approved boundary context.'],
+    question_answer_snapshot: [{ question_id: question.id, answer_id: answer.id, text: answer.text }],
+    decision_snapshot: [{ decision_id: decision.id, text: decision.text, rationale: decision.rationale }],
     decision_count: 1,
+    context_manifest_id: contextManifest.id,
+    context_manifest_revision_id: contextManifest.revision_id,
     approved_by_actor_id: actorId,
     approved_at: now,
     created_at: now,
@@ -347,6 +405,7 @@ async function saveSpec(
     acceptance_criteria: [...workItem.success_criteria],
     risk_notes: [workItem.risk],
     test_strategy_summary: `Validate ${workItem.title}.`,
+    structured_document: { boundary_summary_revision_id: boundary.revision_id },
     author_actor_id: options.actorId ?? defaultActorId,
     artifact_refs: [],
     created_at: now,

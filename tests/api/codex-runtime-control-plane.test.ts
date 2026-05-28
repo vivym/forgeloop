@@ -6,6 +6,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { ProductGenerationResultService } from '../../apps/control-plane-api/src/modules/automation/product-generation-result.service';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { signAutomationRequest } from '../../packages/automation/src/index';
@@ -22,6 +23,7 @@ import {
   type CodexRuntimeProfileRevision,
   type RunSession,
 } from '../../packages/domain/src/index';
+import { decryptCodexLaunchTokenEnvelope, generateCodexWorkerSessionKeyPair } from '../../packages/codex-worker-runtime/src/envelope-crypto';
 import { workspaceBundleArchiveDigest } from '../../packages/codex-worker-runtime/src/workspace-bundle';
 
 const secret = 'test-secret';
@@ -227,6 +229,7 @@ const credentialBody = () => ({
     created_at: now,
   },
   secret_payload_json: credentialSecretPayload,
+  unsafe_db_acknowledgement: true,
   created_by_actor_id: actorId,
 });
 
@@ -358,6 +361,27 @@ const runExecutionLeaseBody = (lease: { id: string; run_session_id: string; leas
   expires_at: expiresAt,
 });
 
+const buildRunSession = (overrides: Partial<RunSession> = {}): RunSession =>
+  ({
+    id: overrides.id ?? 'run-session-run-execution-1',
+    execution_package_id: overrides.execution_package_id ?? 'execution-package-run-execution-1',
+    requested_by_actor_id: overrides.requested_by_actor_id ?? 'actor-owner',
+    status: overrides.status ?? 'running',
+    changed_files: overrides.changed_files ?? [],
+    check_results: overrides.check_results ?? [],
+    artifacts: overrides.artifacts ?? [],
+    log_refs: overrides.log_refs ?? [],
+    runtime_metadata: overrides.runtime_metadata ?? {
+      durability_mode: 'durable',
+      recovery_attempt_count: 0,
+      effective_dangerous_mode: 'confirmed',
+      driver_status: 'running',
+      worker_lease_status: 'active',
+    },
+    created_at: overrides.created_at ?? now,
+    updated_at: overrides.updated_at ?? now,
+  }) satisfies RunSession;
+
 const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
   id: overrides.id ?? 'execution-package-run-execution-1',
   work_item_id: overrides.work_item_id ?? 'work-item-1',
@@ -412,6 +436,23 @@ const terminalBody = (sessionToken: string, overrides: Record<string, unknown> =
 const withBodyDigest = <T extends Record<string, unknown>>(body: T): T & { body_digest: string } => ({
   ...body,
   body_digest: codexCanonicalDigest(body),
+});
+
+const generatedSpecRevisionPayload = () => ({
+  schema_version: 'spec_revision.v1',
+  development_plan_item_id: 'item-runtime',
+  boundary_summary_revision_id: 'boundary-summary-revision-runtime',
+  summary: 'Generated Spec revision',
+  content_markdown: 'Implement the approved boundary.',
+  problem_context: 'The Development Plan Item needs a Spec revision.',
+  scope_in: ['Spec generation'],
+  scope_out: ['Execution'],
+  acceptance_criteria: ['Draft Spec revision is created'],
+  test_strategy: ['API writer tests'],
+  risks: ['Stale boundary'],
+  assumptions: ['Leader approved boundary summary'],
+  unresolved_questions: [],
+  public_summary: 'Generated a Spec revision.',
 });
 
 const forbiddenRuntimeJobProjectionFields = [
@@ -492,6 +533,20 @@ const runtimeJobBody = (claim: { id: string; claim_token: string; attempt: numbe
   };
 };
 
+const productSpecRuntimeJobBody = (claim: { id: string; claim_token: string; attempt: number; precondition_fingerprint: string }) => {
+  const base = runtimeJobBody(claim);
+  const workload = {
+    ...(base.input_json as Record<string, unknown>),
+    task_kind: 'development_plan_item_spec_revision',
+    output_schema_version: 'spec_revision.v1',
+  };
+  return {
+    ...base,
+    action_type: 'generate_development_plan_item_spec_revision',
+    input_json: workload,
+  };
+};
+
 const runtimeWorkerBody = (sessionToken: string, nonce: string, body: Record<string, unknown> = {}) =>
   withBodyDigest({
     worker_session_token: sessionToken,
@@ -546,10 +601,28 @@ const capturingSealer = (capturedLaunchTokens: Map<string, string>): CodexLaunch
   },
 });
 
-const bootApp = async (repository: DeliveryRepository = new InMemoryDeliveryRepository()): Promise<{ app: INestApplication; repository: DeliveryRepository }> => {
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+const bootApp = async (
+  repository: DeliveryRepository = new InMemoryDeliveryRepository(),
+  overrides: { productGenerationResultService?: Pick<ProductGenerationResultService, 'handleGenerationRuntimeTerminal'> } = {},
+): Promise<{ app: INestApplication; repository: DeliveryRepository }> => {
+  const builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_REPOSITORY)
     .useValue(repository)
+    .overrideProvider(DELIVERY_RUN_WORKER)
+    .useValue({ kick: () => undefined, drainOnce: async () => undefined });
+  if (overrides.productGenerationResultService !== undefined) {
+    builder.overrideProvider(ProductGenerationResultService).useValue(overrides.productGenerationResultService);
+  }
+  const moduleRef = await builder.compile();
+  const app = moduleRef.createNestApplication({ rawBody: true });
+  app.useLogger(false);
+  await app.init();
+  apps.push(app);
+  return { app, repository: app.get(DELIVERY_REPOSITORY) as DeliveryRepository };
+};
+
+const bootAppWithDefaultRepository = async (): Promise<{ app: INestApplication; repository: DeliveryRepository }> => {
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
@@ -647,6 +720,61 @@ const claimActionRun = async (repository: DeliveryRepository, suffix = '1', lock
   return claimed;
 };
 
+const claimProductSpecActionRun = async (repository: DeliveryRepository, suffix = 'product-spec') => {
+  const actionId = `action-run-${suffix}`;
+  const precondition = {
+    source_object_ref: { type: 'requirement', id: 'requirement-runtime' },
+    source_object_revision_id: 'requirement-runtime-revision',
+    development_plan_id: 'development-plan-runtime',
+    development_plan_revision_id: 'development-plan-runtime-revision',
+    development_plan_item_id: 'item-runtime',
+    development_plan_item_revision_id: 'item-runtime-revision',
+    boundary_session_id: 'boundary-session-runtime',
+    boundary_session_revision_id: 'boundary-session-runtime-revision',
+    approved_boundary_summary_revision_id: 'boundary-summary-revision-runtime',
+    context_manifest_id: 'context-runtime',
+    context_manifest_revision_id: 'context-runtime-revision',
+    requested_by_actor_id: actorId,
+  };
+  await repository.createOrReplayAutomationActionRun({
+    id: actionId,
+    action_type: 'generate_development_plan_item_spec_revision',
+    target_object_type: 'development_plan_item',
+    target_object_id: 'item-runtime',
+    target_revision_id: 'item-runtime-revision',
+    target_status: 'missing',
+    idempotency_key: `${actionId}-key`,
+    automation_scope: `repo:${projectId}:${repoId}`,
+    automation_settings_version: 1,
+    capability_fingerprint: 'development-plan-item-spec-runtime:v1',
+    precondition_fingerprint: codexCanonicalDigest(precondition),
+    action_input_json: {
+      development_plan_id: 'development-plan-runtime',
+      development_plan_revision_id: 'development-plan-runtime-revision',
+      development_plan_item_id: 'item-runtime',
+      development_plan_item_revision_id: 'item-runtime-revision',
+      boundary_session_id: 'boundary-session-runtime',
+      boundary_session_revision_id: 'boundary-session-runtime-revision',
+      approved_boundary_summary_revision_id: 'boundary-summary-revision-runtime',
+      context_manifest_id: 'context-runtime',
+      context_manifest_revision_id: 'context-runtime-revision',
+      requested_by_actor_id: actorId,
+      precondition_fingerprint_json: precondition,
+    },
+    now,
+  });
+  const claimed = await repository.claimNextAutomationActionRun({
+    now,
+    claim_token: `action-claim-token-${suffix}`,
+    locked_until: expiresAt,
+    limit: 1,
+  });
+  if (claimed === undefined) {
+    throw new Error('expected claimed product action run');
+  }
+  return claimed;
+};
+
 describe('codex runtime control-plane APIs', () => {
   beforeEach(() => {
     vi.stubEnv('FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET', secret);
@@ -685,6 +813,22 @@ describe('codex runtime control-plane APIs', () => {
     await signedSetupPost(app, '/internal/codex-runtime/credentials', credentialBody(), 'nonce-credential-no-flag').expect(403);
 
     vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    const credentialWithoutAck = credentialBody() as Record<string, unknown>;
+    delete credentialWithoutAck.unsafe_db_acknowledgement;
+    await signedSetupPost(
+      app,
+      '/internal/codex-runtime/credentials',
+      credentialWithoutAck,
+      'nonce-credential-no-ack',
+    ).expect(400);
+    vi.stubEnv('NODE_ENV', 'production');
+    await signedSetupPost(
+      app,
+      '/internal/codex-runtime/credentials',
+      credentialBody(),
+      'nonce-credential-production',
+    ).expect(403);
+    vi.stubEnv('NODE_ENV', 'test');
     await signedSetupPost(
       app,
       '/internal/codex-runtime/credentials',
@@ -809,6 +953,95 @@ describe('codex runtime control-plane APIs', () => {
       .post(`/internal/codex-workers/${workerId}/heartbeat`)
       .send(heartbeatBody(registration.session_token, 'heartbeat-1'))
       .expect(400);
+  });
+
+  it('seals decryptable launch token envelopes for no-shared filesystem workers', async () => {
+    vi.stubEnv('FORGELOOP_CODEX_NO_SHARED_FILESYSTEM', '1');
+    const { app, repository } = await bootAppWithDefaultRepository();
+    await seedRuntime(app, 'real-envelope');
+    const workerKeyPair = await generateCodexWorkerSessionKeyPair({});
+    const registration = await registerWorker(app, {
+      session_public_key_id: workerKeyPair.keyId,
+      session_public_key_material: workerKeyPair.publicKeyMaterial,
+      session_public_key_expires_at: longPublicKeyExpiresAt,
+    });
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/heartbeat`)
+      .send(heartbeatBody(registration.session_token, 'real-envelope-heartbeat', { nonce_timestamp: now }))
+      .expect(201);
+    const claimed = await claimActionRun(repository, 'real-envelope');
+    const created = await signedPost(app, '/internal/codex-runtime/runtime-jobs', runtimeJobBody(claimed));
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+
+    const acceptedSessionDigest = codexCredentialPayloadDigest(registration.session_token);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/accepted`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'real-envelope-accept', {
+          accept_idempotency_key: 'real-envelope-accept-1',
+          accepted_worker_session_digest: acceptedSessionDigest,
+          accepted_session_public_key_id: workerKeyPair.keyId,
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+
+    const claimedEnvelope = await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/envelope/claim`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'real-envelope-claim', {
+          envelope_id: runtimeJobEnvelopeId,
+          claim_request_id: 'real-envelope-claim-1',
+          accepted_worker_session_digest: acceptedSessionDigest,
+          accepted_session_public_key_id: workerKeyPair.keyId,
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+
+    expect(claimedEnvelope.body.envelope.ciphertext).not.toContain('in-memory:');
+    await expect(
+      decryptCodexLaunchTokenEnvelope({
+        envelope: claimedEnvelope.body.envelope,
+        privateKeyHandle: workerKeyPair.privateKeyHandle,
+      }),
+    ).resolves.toMatch(/^codex-runtime-launch:/);
+  });
+
+  it('imports local Codex profiles with Docker-safe default CPU quota', async () => {
+    vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    const { app, repository } = await bootApp();
+    const imported = await signedSetupPost(
+      app,
+      '/internal/codex-runtime/import-local-codex',
+      {
+        profile_name: 'Imported local Codex generation profile',
+        target_kind: 'generation',
+        local_source_label: 'docker-safe-cpu-default',
+        codex_config_toml: codexConfigToml,
+        auth_json: credentialSecretPayload,
+        project_id: projectId,
+        repo_id: repoId,
+        docker_image: 'forgeloop/codex-worker:test',
+        docker_image_digest: sha('3'),
+        expected_effective_config_digest: sha('4'),
+        allowed_scopes: [{ project_id: projectId, repo_id: repoId }],
+        network_policy: networkPolicy,
+        provider: 'unsafe_db',
+        unsafe_db_acknowledgement: true,
+        created_by: { actor_id: actorId },
+      },
+      'import-local-codex-docker-safe-cpu',
+    ).expect(201);
+
+    const revision = await repository.getActiveCodexRuntimeProfileRevision({
+      project_id: projectId,
+      repo_id: repoId,
+      target_kind: 'generation',
+      runtime_profile_id: imported.body.profile_id,
+      now,
+    });
+    expect(revision?.resource_limits.cpu_ms).toBe(2_000);
   });
 
   it('creates generation launch leases only for automation daemon claims and materializes raw auth once for the correct worker', async () => {
@@ -1165,6 +1398,149 @@ describe('codex runtime control-plane APIs', () => {
     }).expect(201);
     expect(secondRecovery.body.recovered_launch_leases).toHaveLength(0);
     expect(secondRecovery.body.run_session_transitions).toHaveLength(0);
+  });
+
+  it('honors explicit run-execution credential profile selection when newer active profiles share the scope', async () => {
+    const { app, repository } = await bootApp();
+    await signedSetupPost(app, '/internal/codex-runtime/profiles', runProfileBody(), 'run-execution-selected-profile').expect(201);
+    const newerRunProfile = runProfileBody();
+    newerRunProfile.profile = {
+      ...newerRunProfile.profile,
+      id: 'profile-run-execution-newer',
+      name: 'Newer run execution profile',
+      active_revision_id: 'profile-run-execution-newer-revision-1',
+      created_at: later,
+      updated_at: later,
+    };
+    newerRunProfile.revision = {
+      ...newerRunProfile.revision,
+      id: 'profile-run-execution-newer-revision-1',
+      profile_id: 'profile-run-execution-newer',
+      created_at: later,
+    };
+    newerRunProfile.revision = {
+      ...newerRunProfile.revision,
+      profile_digest: codexRuntimeProfileRevisionDigest(newerRunProfile.revision),
+    };
+    await signedSetupPost(app, '/internal/codex-runtime/profiles', newerRunProfile, 'run-execution-newer-profile').expect(201);
+    vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    await signedSetupPost(app, '/internal/codex-runtime/credentials', runCredentialBody(), 'run-execution-selected-credential').expect(201);
+    await signedSetupPost(
+      app,
+      '/internal/codex-runtime/worker-bootstrap-tokens',
+      runBootstrapBody(),
+      'run-execution-selected-bootstrap',
+    ).expect(201);
+    const registration = await registerWorker(app, {
+      capabilities: ['run_execution'],
+      docker_image_digests: [runProfileBody().revision.docker_image_digest],
+    });
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/heartbeat`)
+      .send(
+        heartbeatBody(registration.session_token, 'run-execution-selected-heartbeat', {
+          nonce_timestamp: now,
+          capabilities: ['run_execution'],
+        }),
+      )
+      .expect(201);
+
+    const leaseRunSession = buildRunSession({ id: 'run-session-selected-launch-lease' });
+    await repository.saveExecutionPackage(executionPackage());
+    await repository.saveRunSession(leaseRunSession);
+    const leaseRunWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: leaseRunSession.id,
+      worker_id: 'run-worker-selected-launch-lease',
+      lease_token: 'run-worker-token-selected-launch-lease',
+      now,
+      expires_at: expiresAt,
+    });
+    await signedPost(app, '/internal/codex-launch-leases', {
+      ...runExecutionLeaseBody(leaseRunWorkerLease),
+      id: 'lease-run-execution-selected-profile',
+      lease_request_id: 'lease-request-run-execution-selected-profile',
+    }).expect(201);
+
+    const runtimeJobExecutionPackage = executionPackage({ id: 'execution-package-selected-runtime-job' });
+    const runtimeJobRunSession = buildRunSession({
+      id: 'run-session-selected-runtime-job',
+      execution_package_id: runtimeJobExecutionPackage.id,
+    });
+    await repository.saveExecutionPackage(runtimeJobExecutionPackage);
+    await repository.saveRunSession(runtimeJobRunSession);
+    const runtimeJobRunWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: runtimeJobRunSession.id,
+      worker_id: 'run-worker-selected-runtime-job',
+      lease_token: 'run-worker-token-selected-runtime-job',
+      now,
+      expires_at: expiresAt,
+    });
+    const workspaceBundleBytes = Buffer.from('selected runtime job workspace\n');
+    const workspaceBundle = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: 'workspace-bundle-selected-runtime-job',
+      archive_ref: 'artifact:codex-pending-bundles:workspace-bundle-selected-runtime-job',
+      archive_digest: workspaceBundleArchiveDigest(workspaceBundleBytes),
+      manifest_digest: sha('d'),
+      size_bytes: workspaceBundleBytes.byteLength,
+      expires_at: expiresAt,
+    };
+    const pendingWorkspaceBundle = {
+      bundle_id: workspaceBundle.bundle_id,
+      pending_artifact_ref: workspaceBundle.archive_ref,
+      archive_digest: workspaceBundle.archive_digest,
+      manifest_digest: workspaceBundle.manifest_digest,
+      run_worker_lease_id: runtimeJobRunWorkerLease.id,
+      size_bytes: workspaceBundle.size_bytes,
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceBundle),
+      workspace_acquisition_json: workspaceBundle,
+      expires_at: expiresAt,
+    };
+    await repository.createPendingWorkspaceBundleArtifact({
+      ...pendingWorkspaceBundle,
+      id: '44444444-4444-4444-8444-444444444444',
+      run_session_id: runtimeJobRunSession.id,
+      execution_package_id: runtimeJobRunSession.execution_package_id,
+      archive_bytes_base64: workspaceBundleBytes.toString('base64'),
+      request_digest: codexCanonicalDigest({ bundle_id: pendingWorkspaceBundle.bundle_id, archive_digest: pendingWorkspaceBundle.archive_digest }),
+      created_at: now,
+    });
+    const createdRuntimeJob = await signedPost(app, '/internal/codex-runtime/runtime-jobs', {
+      runtime_job_id: 'runtime-job-selected-profile',
+      launch_lease_id: 'runtime-launch-lease-selected-profile',
+      envelope_id: 'runtime-envelope-selected-profile',
+      job_request_id: 'runtime-job-request-selected-profile',
+      target: {
+        target_type: 'run_session',
+        target_id: runtimeJobRunSession.id,
+        target_kind: 'run_execution',
+        project_id: projectId,
+        repo_id: repoId,
+      },
+      runtime_profile_revision_id: runProfileRevisionId,
+      credential_binding_id: runCredentialBindingId,
+      credential_binding_version_id: runCredentialVersionId,
+      credential_payload_digest: credentialPayloadDigest,
+      input_json: {
+        schema_version: 'codex_run_execution_workload.v1',
+        run_session_id: runtimeJobRunSession.id,
+        execution_package_id: runtimeJobRunSession.execution_package_id,
+        workspace_bundle_id: workspaceBundle.bundle_id,
+        workspace_bundle_digest: workspaceBundle.archive_digest,
+      },
+      workspace_acquisition_json: workspaceBundle,
+      pending_workspace_bundle: pendingWorkspaceBundle,
+      launch_attempt: 1,
+      execution_package_id: runtimeJobRunSession.execution_package_id,
+      run_session_id: runtimeJobRunSession.id,
+      run_worker_lease_id: runtimeJobRunWorkerLease.id,
+      run_worker_lease_token: runtimeJobRunWorkerLease.lease_token,
+      run_session_status: 'running',
+      run_session_updated_at: now,
+      execution_package_version: 1,
+      expires_at: expiresAt,
+    });
+    expect(createdRuntimeJob.status, JSON.stringify(createdRuntimeJob.body)).toBe(201);
   });
 
   it('downloads workspace bundle bytes only after pending artifact binding to the accepted runtime job', async () => {
@@ -1526,6 +1902,194 @@ describe('codex runtime control-plane APIs', () => {
       .expect(201);
   });
 
+  it('dispatches successful product generation terminal results to the product writer', async () => {
+    const productWriter = {
+      handleGenerationRuntimeTerminal: vi.fn().mockResolvedValue({ applied: true }),
+    };
+    const capturedLaunchTokens = new Map<string, string>();
+    const { app, repository } = await bootApp(
+      new InMemoryDeliveryRepository({ codexLaunchTokenEnvelopeSealer: capturingSealer(capturedLaunchTokens) }),
+      { productGenerationResultService: productWriter },
+    );
+    await seedRuntime(app, 'runtime-product-terminal');
+    const registration = await registerWorker(app);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/heartbeat`)
+      .send(heartbeatBody(registration.session_token, 'runtime-product-terminal-heartbeat', { nonce_timestamp: now }))
+      .expect(201);
+    const claimed = await claimProductSpecActionRun(repository);
+    await signedPost(app, '/internal/codex-runtime/runtime-jobs', productSpecRuntimeJobBody(claimed)).expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/accepted`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-accept', {
+          accept_idempotency_key: 'runtime-product-terminal-accept-1',
+          accepted_worker_session_digest: codexCredentialPayloadDigest(registration.session_token),
+          accepted_session_public_key_id: 'session-key-1',
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/envelope/claim`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-envelope-claim', {
+          envelope_id: runtimeJobEnvelopeId,
+          claim_request_id: 'runtime-product-terminal-envelope-claim-1',
+          accepted_worker_session_digest: codexCredentialPayloadDigest(registration.session_token),
+          accepted_session_public_key_id: 'session-key-1',
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+    vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/materialize`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-materialize', {
+          launch_lease_id: runtimeJobLaunchLeaseId,
+          launch_token: capturedLaunchTokens.get(runtimeJobId),
+          materialization_request_id: 'runtime-product-terminal-materialize-1',
+          accepted_worker_session_digest: codexCredentialPayloadDigest(registration.session_token),
+          accepted_session_public_key_id: 'session-key-1',
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+    const started = await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/started`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-start', {
+          start_idempotency_key: 'runtime-product-terminal-start-1',
+          runtime_evidence_digest: sha('a'),
+          launch_materialization_digest: sha('b'),
+        }),
+      );
+    expect(started.status, JSON.stringify(started.body)).toBe(201);
+    const generatedPayload = generatedSpecRevisionPayload();
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/terminal`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal', {
+          launch_lease_id: runtimeJobLaunchLeaseId,
+          terminal_status: 'succeeded',
+          reason_code: 'completed',
+          terminal_idempotency_key: 'runtime-product-terminal-1',
+          terminal_result_json: {
+            task_kind: 'development_plan_item_spec_revision',
+            prompt_version: 'prompt-v1',
+            output_schema_version: 'spec_revision.v1',
+            generated_payload: generatedPayload,
+            generated_payload_digest: codexCanonicalDigest(generatedPayload),
+            generation_artifacts: [],
+            public_summary: 'Generated a Spec revision.',
+          },
+        }),
+      )
+      .expect(201);
+
+    expect(productWriter.handleGenerationRuntimeTerminal).toHaveBeenCalledWith({
+      runtimeJobId,
+      actionRunId: claimed.id,
+      terminalResult: expect.objectContaining({
+        task_kind: 'development_plan_item_spec_revision',
+        generated_payload: generatedPayload,
+      }),
+    });
+  });
+
+  it('fails the owned product generation action when its runtime job terminalizes failed', async () => {
+    const productWriter = {
+      handleGenerationRuntimeTerminal: vi.fn().mockResolvedValue({ applied: true }),
+    };
+    const capturedLaunchTokens = new Map<string, string>();
+    const { app, repository } = await bootApp(
+      new InMemoryDeliveryRepository({ codexLaunchTokenEnvelopeSealer: capturingSealer(capturedLaunchTokens) }),
+      { productGenerationResultService: productWriter },
+    );
+    await seedRuntime(app, 'runtime-product-terminal-failed');
+    const registration = await registerWorker(app);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/heartbeat`)
+      .send(heartbeatBody(registration.session_token, 'runtime-product-terminal-failed-heartbeat', { nonce_timestamp: now }))
+      .expect(201);
+    const claimed = await claimProductSpecActionRun(repository, 'product-spec-failed');
+    await signedPost(app, '/internal/codex-runtime/runtime-jobs', productSpecRuntimeJobBody(claimed)).expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/accepted`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-failed-accept', {
+          accept_idempotency_key: 'runtime-product-terminal-failed-accept-1',
+          accepted_worker_session_digest: codexCredentialPayloadDigest(registration.session_token),
+          accepted_session_public_key_id: 'session-key-1',
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/envelope/claim`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-failed-envelope-claim', {
+          envelope_id: runtimeJobEnvelopeId,
+          claim_request_id: 'runtime-product-terminal-failed-envelope-claim-1',
+          accepted_worker_session_digest: codexCredentialPayloadDigest(registration.session_token),
+          accepted_session_public_key_id: 'session-key-1',
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+    vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/materialize`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-failed-materialize', {
+          launch_lease_id: runtimeJobLaunchLeaseId,
+          launch_token: capturedLaunchTokens.get(runtimeJobId),
+          materialization_request_id: 'runtime-product-terminal-failed-materialize-1',
+          accepted_worker_session_digest: codexCredentialPayloadDigest(registration.session_token),
+          accepted_session_public_key_id: 'session-key-1',
+          accepted_session_epoch: 1,
+        }),
+      )
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/started`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-failed-start', {
+          start_idempotency_key: 'runtime-product-terminal-failed-start-1',
+          runtime_evidence_digest: sha('c'),
+          launch_materialization_digest: sha('d'),
+        }),
+      )
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/terminal`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-product-terminal-failed', {
+          launch_lease_id: runtimeJobLaunchLeaseId,
+          terminal_status: 'failed',
+          reason_code: 'codex_generation_turn_failed',
+          terminal_idempotency_key: 'runtime-product-terminal-failed-1',
+        }),
+      )
+      .expect(201);
+
+    expect(productWriter.handleGenerationRuntimeTerminal).not.toHaveBeenCalled();
+    await expect(repository.getAutomationActionRun(claimed.id)).resolves.toMatchObject({
+      id: claimed.id,
+      status: 'failed',
+      result_json: {
+        product_generation_result: 'runtime_job_failed',
+        reason_code: 'codex_generation_turn_failed',
+        runtime_job_id: runtimeJobId,
+      },
+      retryable: true,
+    });
+  });
+
   it('drives remote runtime jobs through sealed-envelope worker APIs without exposing launch tokens', async () => {
     const capturedLaunchTokens = new Map<string, string>();
     const { app, repository } = await bootApp(
@@ -1684,6 +2248,36 @@ describe('codex runtime control-plane APIs', () => {
 
     const remoteLaunchToken = capturedLaunchTokens.get(runtimeJobId);
     expect(remoteLaunchToken).toEqual(expect.stringMatching(/^codex-runtime-launch:/));
+
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`)
+      .send(
+        runtimeWorkerBody(registration.session_token, 'runtime-job-startup-failure-artifact', {
+          artifact_idempotency_key: 'runtime-job-startup-failure-artifact-1',
+          kind: 'startup_failure_evidence',
+          name: 'startup-failure-evidence.json',
+          content_type: 'application/json',
+          digest: sha('a'),
+          size_bytes: 12,
+          metadata_json: {
+            reason_code: 'codex_workspace_bundle_invalid',
+            failure_subcode: 'job_temp_root_already_exists',
+            public_summary: 'Remote Codex workspace bundle validation failed.',
+          },
+        }),
+      )
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.artifact).toMatchObject({
+          runtime_job_id: runtimeJobId,
+          kind: 'startup_failure_evidence',
+          metadata_json: {
+            reason_code: 'codex_workspace_bundle_invalid',
+            failure_subcode: 'job_temp_root_already_exists',
+          },
+        });
+      });
+
     vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
     await request(app.getHttpServer())
       .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/materialize`)
@@ -1900,7 +2494,7 @@ describe('codex runtime control-plane APIs', () => {
       });
   });
 
-  it('redacts workspace acquisition payloads from worker poll projections', async () => {
+  it('redacts generation workspace acquisition payloads from worker poll projections', async () => {
     const { app, repository } = await bootApp();
     await seedRuntime(app, 'runtime-job-workspace-redaction');
     const registration = await registerWorker(app);
@@ -1938,6 +2532,150 @@ describe('codex runtime control-plane APIs', () => {
     expect(JSON.stringify(poll.body)).not.toContain('private-bundle-id-1');
     expect(JSON.stringify(poll.body)).not.toContain(sha('w'));
     expect(JSON.stringify(poll.body)).not.toContain(sha('x'));
+  });
+
+  it('includes run-execution workspace acquisition payloads in worker poll projections', async () => {
+    const { app, repository } = await bootApp();
+    await signedSetupPost(app, '/internal/codex-runtime/profiles', runProfileBody(), 'runtime-job-run-execution-workspace-poll-profile').expect(201);
+    vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    await signedSetupPost(app, '/internal/codex-runtime/credentials', runCredentialBody(), 'runtime-job-run-execution-workspace-poll-credential').expect(201);
+    await signedSetupPost(
+      app,
+      '/internal/codex-runtime/worker-bootstrap-tokens',
+      runBootstrapBody(),
+      'runtime-job-run-execution-workspace-poll-bootstrap',
+    ).expect(201);
+    const registration = await registerWorker(app, {
+      capabilities: ['run_execution'],
+      docker_image_digests: [runProfileBody().revision.docker_image_digest],
+    });
+    await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/heartbeat`)
+      .send(
+        heartbeatBody(registration.session_token, 'runtime-job-run-execution-workspace-poll-heartbeat', {
+          nonce_timestamp: now,
+          capabilities: ['run_execution'],
+        }),
+      )
+      .expect(201);
+
+    const runSession = {
+      id: 'run-session-worker-poll-1',
+      execution_package_id: 'execution-package-run-execution-1',
+      requested_by_actor_id: 'actor-owner',
+      status: 'running',
+      changed_files: [],
+      check_results: [],
+      artifacts: [],
+      log_refs: [],
+      runtime_metadata: {
+        durability_mode: 'durable',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      },
+      created_at: now,
+      updated_at: now,
+    } satisfies RunSession;
+    await repository.saveExecutionPackage(executionPackage());
+    await repository.saveRunSession(runSession);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: 'run-worker-poll-1',
+      lease_token: 'run-worker-poll-token-1',
+      now,
+      expires_at: expiresAt,
+    });
+    const archiveBytes = Buffer.from('workspace bundle bytes\n');
+    const archiveDigest = workspaceBundleArchiveDigest(archiveBytes);
+    const manifestDigest = sha('c');
+    const workspaceAcquisition = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: 'workspace-bundle-worker-poll-1',
+      archive_ref: 'artifact:codex-pending-bundles:workspace-bundle-worker-poll-1',
+      archive_digest: archiveDigest,
+      manifest_digest: manifestDigest,
+      size_bytes: archiveBytes.byteLength,
+      expires_at: expiresAt,
+    };
+    const pendingWorkspaceBundle = {
+      bundle_id: workspaceAcquisition.bundle_id,
+      pending_artifact_ref: workspaceAcquisition.archive_ref,
+      archive_digest: archiveDigest,
+      manifest_digest: manifestDigest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: archiveBytes.byteLength,
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisition),
+      workspace_acquisition_json: workspaceAcquisition,
+      expires_at: expiresAt,
+    };
+    await repository.createPendingWorkspaceBundleArtifact({
+      ...pendingWorkspaceBundle,
+      id: '33333333-3333-4333-8333-333333333333',
+      run_session_id: runSession.id,
+      execution_package_id: runSession.execution_package_id,
+      archive_bytes_base64: archiveBytes.toString('base64'),
+      request_digest: codexCanonicalDigest({ bundle_id: pendingWorkspaceBundle.bundle_id, archive_digest: archiveDigest }),
+      created_at: now,
+    });
+    await signedPost(app, '/internal/codex-runtime/runtime-jobs', {
+      runtime_job_id: 'runtime-job-worker-poll-run-execution-1',
+      launch_lease_id: 'runtime-launch-lease-worker-poll-run-execution-1',
+      envelope_id: 'runtime-envelope-worker-poll-run-execution-1',
+      job_request_id: 'runtime-job-request-worker-poll-run-execution-1',
+      target: {
+        target_type: 'run_session',
+        target_id: runSession.id,
+        target_kind: 'run_execution',
+        project_id: projectId,
+        repo_id: repoId,
+      },
+      runtime_profile_revision_id: runProfileRevisionId,
+      credential_binding_id: runCredentialBindingId,
+      credential_binding_version_id: runCredentialVersionId,
+      credential_payload_digest: credentialPayloadDigest,
+      input_json: {
+        schema_version: 'codex_run_execution_workload.v1',
+        run_session_id: runSession.id,
+        execution_package_id: runSession.execution_package_id,
+        execution_package_version: 1,
+        workspace_bundle_id: pendingWorkspaceBundle.bundle_id,
+        workspace_bundle_digest: archiveDigest,
+        package_prompt_ref: 'artifact://codex-runtime-jobs/runtime-job-worker-poll-run-execution-1/workload/package-prompt',
+        package_prompt_digest: sha('p'),
+        execution_context_ref: 'artifact://codex-runtime-jobs/runtime-job-worker-poll-run-execution-1/workload/execution-context',
+        execution_context_digest: sha('e'),
+        path_policy_digest: sha('q'),
+        required_checks_digest: sha('r'),
+        output_schema_version: 'codex_run_execution_result.v1',
+        created_at: now,
+        expires_at: expiresAt,
+      },
+      workspace_acquisition_json: workspaceAcquisition,
+      pending_workspace_bundle: pendingWorkspaceBundle,
+      launch_attempt: 1,
+      execution_package_id: runSession.execution_package_id,
+      run_session_id: runSession.id,
+      run_worker_lease_id: runWorkerLease.id,
+      run_worker_lease_token: runWorkerLease.lease_token,
+      run_session_status: 'running',
+      run_session_updated_at: now,
+      execution_package_version: 1,
+      expires_at: expiresAt,
+    }).expect(201);
+
+    const poll = await request(app.getHttpServer())
+      .post(`/internal/codex-workers/${workerId}/runtime-jobs/poll`)
+      .send(runtimeWorkerBody(registration.session_token, 'runtime-job-poll-run-execution-workspace', { limit: 1, target_kinds: ['run_execution'] }))
+      .expect(201);
+
+    expect(poll.body.runtime_jobs[0].runtime_job.workspace_acquisition_json).toEqual(workspaceAcquisition);
+    expect(poll.body.runtime_jobs[0].runtime_job.workspace_acquisition).toEqual({
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisition),
+      schema_version: 'workspace_bundle_acquisition.v1',
+    });
+    expect(poll.body.runtime_jobs[0].runtime_job.input_json).toBeUndefined();
+    expect(JSON.stringify(poll.body)).not.toContain(runLaunchToken);
+    expect(JSON.stringify(poll.body)).not.toContain('unsafe-db-access-token');
   });
 
   it('refreshes worker sessions without bootstrap reuse and refuses refresh while runtime jobs are assigned', async () => {

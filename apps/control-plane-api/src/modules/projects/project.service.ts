@@ -52,8 +52,9 @@ export class ProjectService {
   async createProjectRepo(projectId: string, dto: CreateProjectRepoDto): Promise<ProjectRepo> {
     const project = await this.getProject(projectId);
     const at = this.runtime.now();
+    const existing = (await this.repository.listProjectRepos(project.id)).find((repo) => repo.repo_id === dto.repo_id);
     const repo: ProjectRepo = {
-      id: this.runtime.id('project-repo'),
+      id: existing?.id ?? this.runtime.id('project-repo'),
       repo_id: dto.repo_id,
       project_id: project.id,
       name: dto.name,
@@ -62,7 +63,7 @@ export class ProjectService {
       default_branch: dto.default_branch ?? 'main',
       ...(dto.remote_url !== undefined ? { remote_url: dto.remote_url } : {}),
       base_commit_sha: dto.base_commit_sha,
-      created_at: at,
+      created_at: existing?.created_at ?? at,
       updated_at: at,
     };
     await this.repository.saveProjectRepo(repo);

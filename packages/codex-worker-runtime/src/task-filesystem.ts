@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve, relative, join } from 'node:path';
 
 export interface PreparedCodexTaskFilesystem {
@@ -39,6 +39,49 @@ const assertNoSymlink = async (path: string): Promise<void> => {
   }
 };
 
+const removeOwnedExistingLeaseRoot = async (input: {
+  workerTempRoot: string;
+  leaseTempRoot: string;
+  workerId: string;
+  launchLeaseId: string;
+}): Promise<void> => {
+  try {
+    const existing = await lstat(input.leaseTempRoot);
+    if (existing.isSymbolicLink()) {
+      throw new Error('codex task filesystem refuses symlinked paths');
+    }
+    if (!existing.isDirectory()) {
+      throw new Error('codex task filesystem refuses non-directory lease root');
+    }
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+
+  const metadataPath = join(input.leaseTempRoot, '.forgeloop-resource.json');
+  assertInsideWorkerTempRoot(input.workerTempRoot, metadataPath);
+  await assertNoSymlink(metadataPath);
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(await readFile(metadataPath, 'utf8'));
+  } catch {
+    throw new Error('codex task filesystem refuses unowned existing lease root');
+  }
+  const owned =
+    typeof metadata === 'object' &&
+    metadata !== null &&
+    'workerId' in metadata &&
+    'launchLeaseId' in metadata &&
+    metadata.workerId === input.workerId &&
+    metadata.launchLeaseId === input.launchLeaseId;
+  if (!owned) {
+    throw new Error('codex task filesystem refuses existing lease root owned by another worker');
+  }
+  await rm(input.leaseTempRoot, { recursive: true, force: true });
+};
+
 export const writeCodexHomeConfigAndAuth = async (input: {
   codexHomeHostPath: string;
   codexConfigToml: string;
@@ -53,9 +96,18 @@ export const writeCodexHomeConfigAndAuth = async (input: {
 };
 
 export const prepareCodexTaskFilesystem = async (input: PrepareCodexTaskFilesystemInput): Promise<PreparedCodexTaskFilesystem> => {
+  await assertNoSymlink(input.workerTempRoot);
+  await mkdir(input.workerTempRoot, { recursive: true, mode: 0o700 });
+  await chmod(input.workerTempRoot, 0o700);
+
   const leaseTempRoot = join(input.workerTempRoot, input.launchLeaseId);
   assertInsideWorkerTempRoot(input.workerTempRoot, leaseTempRoot);
-  await assertNoSymlink(leaseTempRoot);
+  await removeOwnedExistingLeaseRoot({
+    workerTempRoot: input.workerTempRoot,
+    leaseTempRoot,
+    workerId: input.workerId,
+    launchLeaseId: input.launchLeaseId,
+  });
   await mkdir(leaseTempRoot, { recursive: false, mode: 0o700 });
   await chmod(leaseTempRoot, 0o700);
   const metadataPath = join(leaseTempRoot, '.forgeloop-resource.json');

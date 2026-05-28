@@ -121,6 +121,32 @@ describe('AppServerGenerationDriver', () => {
     });
   });
 
+  it('does not send a partial app-server output schema without a complete strict schema', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/start') {
+        return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } };
+      }
+      return { turnId: 'turn-1' };
+    });
+    const transport: CodexAppServerTransport = {
+      request,
+      notifications: async function* () {
+        yield { type: 'assistant_message_delta', delta: '{"schema_version":"boundary_round_result.v1","summary":"ok"}' };
+        yield { type: 'turn_completed', status: 'completed' };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: { ...fakeSafety(), taskKind: 'boundary_brainstorming_round' } });
+
+    await driver.generate({
+      taskKind: 'boundary_brainstorming_round',
+      prompt: '{}',
+      outputSchemaVersion: 'boundary_round_result.v1',
+    });
+
+    const turnStartParams = request.mock.calls[1]?.[1] as Record<string, unknown>;
+    expect(turnStartParams).not.toHaveProperty('outputSchema');
+  });
+
   it('binds generation lease to sandbox policy and hard limits', async () => {
     const leaseInputs: unknown[] = [];
     const safety: CodexGenerationRuntimeSafety = {
@@ -278,6 +304,114 @@ describe('AppServerGenerationDriver', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('prefers the completed final agent message over interim commentary deltas', async () => {
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        }
+        return { turn: { id: 'turn-1', status: 'inProgress', items: [] } };
+      },
+      notifications: async function* () {
+        yield { method: 'item/agentMessage/delta', params: { delta: 'I will produce the requested JSON now.' } };
+        yield {
+          method: 'item/completed',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            completedAtMs: 1,
+            item: {
+              type: 'agentMessage',
+              id: 'message-1',
+              text: '{"schema_version":"plan_draft.v1","summary":"ok"}',
+              phase: 'final_answer',
+              memoryCitation: null,
+            },
+          },
+        };
+        yield { method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed', items: [] } } };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+
+    const result = await driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' });
+
+    expect(result.assistantText).toBe('{"schema_version":"plan_draft.v1","summary":"ok"}');
+    expect(result.extractedJson).toMatchObject({ schema_version: 'plan_draft.v1' });
+  });
+
+  it('reads completed final agent messages from the terminal turn snapshot when deltas are absent', async () => {
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        }
+        return { turn: { id: 'turn-1', status: 'inProgress', items: [] } };
+      },
+      notifications: async function* () {
+        yield {
+          method: 'turn/completed',
+          params: {
+            threadId: 'thread-1',
+            turn: {
+              id: 'turn-1',
+              status: 'completed',
+              items: [
+                {
+                  type: 'agentMessage',
+                  id: 'message-1',
+                  text: '{"schema_version":"plan_draft.v1","summary":"ok"}',
+                  phase: 'final_answer',
+                  memoryCitation: null,
+                },
+              ],
+            },
+          },
+        };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+
+    const result = await driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' });
+
+    expect(result.extractedJson).toMatchObject({ schema_version: 'plan_draft.v1' });
+  });
+
+  it('accepts a completed final agent message followed by idle without turn completion', async () => {
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        }
+        return { turn: { id: 'turn-1', status: 'inProgress', items: [] } };
+      },
+      notifications: async function* () {
+        yield {
+          method: 'item/completed',
+          params: {
+            item: {
+              type: 'agentMessage',
+              id: 'message-1',
+              text: '{"schema_version":"plan_draft.v1","summary":"ok"}',
+              phase: 'final_answer',
+              memoryCitation: null,
+            },
+          },
+        };
+        yield {
+          method: 'thread/status/changed',
+          params: { threadId: 'thread-1', status: { type: 'idle' } },
+        };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+
+    const result = await driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' });
+
+    expect(result.assistantText).toBe('{"schema_version":"plan_draft.v1","summary":"ok"}');
+    expect(result.extractedJson).toMatchObject({ schema_version: 'plan_draft.v1' });
+  });
+
   it('removes completed run abort listeners before the next generation', async () => {
     const oldController = new AbortController();
     let notificationStreams = 0;
@@ -336,6 +470,58 @@ describe('AppServerGenerationDriver', () => {
     await expect(
       driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' }),
     ).rejects.toThrow(/generated_output_invalid_json/);
+  });
+
+  it('fails when the thread becomes idle before turn completion', async () => {
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        }
+        return { turnId: 'turn-1' };
+      },
+      notifications: async function* () {
+        yield {
+          method: 'thread/status/changed',
+          params: { threadId: 'thread-1', status: { type: 'idle' } },
+        };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+
+    await expect(
+      driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' }),
+    ).rejects.toThrow(/codex_generation_turn_failed/);
+  });
+
+  it('maps app-server usage-limit turn errors to a public-safe reason code', async () => {
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        }
+        return { turnId: 'turn-1' };
+      },
+      notifications: async function* () {
+        yield {
+          method: 'turn/completed',
+          params: {
+            turn: {
+              status: 'failed',
+              error: {
+                message: 'You have hit your usage limit.',
+                codexErrorInfo: 'usageLimitExceeded',
+              },
+            },
+          },
+        };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+
+    await expect(
+      driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' }),
+    ).rejects.toThrow(/codex_generation_usage_limited/);
   });
 
   it('rejects invalid or multiple generated JSON objects', async () => {

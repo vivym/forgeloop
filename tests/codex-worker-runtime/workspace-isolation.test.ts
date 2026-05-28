@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -54,5 +54,45 @@ describe('prepareContainerWorkspace', () => {
     await expect(readFile(join(prepared.hostWorkspacePath ?? '', 'src.txt'), 'utf8')).resolves.toBe('copy-me');
     expect(JSON.stringify(prepared.publicSummary)).not.toContain(repo);
     expect(JSON.stringify(prepared.publicSummary)).not.toContain(externalGitDir);
+  });
+
+  it('mounts a downloaded task workspace bundle without shared repo roots or a .git directory', async () => {
+    const taskWorkspaceRoot = await mkdtemp(join(tmpdir(), 'forgeloop-bundle-root-'));
+    const workspace = join(taskWorkspaceRoot, 'runtime-job-1', 'workspace');
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, 'README.md'), '# bundled task workspace\n');
+    const prepared = await prepareContainerWorkspace({
+      sourceAccessMode: 'path_policy_scoped',
+      originalWorkspacePath: workspace,
+      taskWorkspaceRoot,
+      leaseTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-lease-')),
+      allowedRepoRoots: [],
+      taskWorkspaceDigest: 'sha256:' + 'a'.repeat(64),
+    });
+
+    expect(prepared).toMatchObject({
+      mode: 'task_workspace_bundle',
+      containerWorkspacePath: '/workspace',
+      publicWorkspaceDigest: 'sha256:' + 'a'.repeat(64),
+    });
+    expect(prepared.hostWorkspacePath).toBe(await realpath(workspace));
+    expect(JSON.stringify(prepared.publicSummary)).not.toContain(workspace);
+  });
+
+  it('rejects task workspace bundle mounts outside the downloaded bundle root', async () => {
+    const taskWorkspaceRoot = await mkdtemp(join(tmpdir(), 'forgeloop-bundle-root-'));
+    const outsideWorkspace = await mkdtemp(join(tmpdir(), 'forgeloop-outside-workspace-'));
+    await writeFile(join(outsideWorkspace, 'README.md'), '# outside task workspace\n');
+
+    await expect(
+      prepareContainerWorkspace({
+        sourceAccessMode: 'path_policy_scoped',
+        originalWorkspacePath: outsideWorkspace,
+        taskWorkspaceRoot,
+        leaseTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-lease-')),
+        allowedRepoRoots: [],
+        taskWorkspaceDigest: 'sha256:' + 'b'.repeat(64),
+      }),
+    ).rejects.toThrow(/task workspace path is outside bundle root/);
   });
 });

@@ -536,6 +536,49 @@ describe('delivery control plane API', () => {
     }
   });
 
+  it('updates an existing project repo binding for the same repo id instead of appending a stale path', async () => {
+    const server = app.getHttpServer();
+    const project = (
+      await request(server).post('/projects').send({ name: 'Forgeloop', owner_actor_id: actorOwner }).expect(201)
+    ).body;
+    const initial = (
+      await request(server)
+        .post(`/projects/${project.id}/repos`)
+        .send({
+          repo_id: 'repo-1',
+          name: 'forgeloop',
+          local_path: '/workspace/forgeloop',
+          default_branch: 'main',
+          base_commit_sha: 'abc123',
+        })
+        .expect(201)
+    ).body;
+
+    const updated = (
+      await request(server)
+        .post(`/projects/${project.id}/repos`)
+        .send({
+          repo_id: 'repo-1',
+          name: 'forgeloop',
+          local_path: await createWorkflowPolicyRepoRoot(),
+          default_branch: 'main',
+          base_commit_sha: 'def456',
+        })
+        .expect(201)
+    ).body;
+    const repos = (await request(server).get(`/projects/${project.id}/repos`).expect(200)).body;
+
+    expect(updated.id).toBe(initial.id);
+    expect(repos).toHaveLength(1);
+    expect(repos[0]).toMatchObject({
+      id: initial.id,
+      repo_id: 'repo-1',
+      base_commit_sha: 'def456',
+    });
+    expect(repos[0].local_path).not.toBe('/workspace/forgeloop');
+    expect((await request(server).get(`/projects/${project.id}`).expect(200)).body.repo_ids).toEqual(['repo-1']);
+  });
+
   it('maps invalid domain transitions and package validators to 4xx responses', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);

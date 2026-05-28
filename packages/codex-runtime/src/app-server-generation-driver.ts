@@ -145,19 +145,73 @@ const assistantDelta = (notification: unknown): string | undefined => {
   return stringField(body, ['delta', 'text']);
 };
 
+const agentMessageText = (value: unknown): string | undefined => {
+  if (!isRecord(value) || value.type !== 'agentMessage') {
+    return undefined;
+  }
+  return stringField(value, ['text']);
+};
+
+const responseMessageText = (value: unknown): string | undefined => {
+  if (!isRecord(value) || value.type !== 'message' || value.role !== 'assistant' || !Array.isArray(value.content)) {
+    return undefined;
+  }
+  const text = value.content
+    .map((entry) => (isRecord(entry) && entry.type === 'output_text' ? stringField(entry, ['text']) : undefined))
+    .filter((entry): entry is string => entry !== undefined)
+    .join('');
+  return text.length > 0 ? text : undefined;
+};
+
+const finalAgentMessageText = (notification: unknown): string | undefined => {
+  const body = notificationBody(notification);
+  const method = stringField(body, ['method']);
+  const type = stringField(body, ['type', 'event_type', 'eventType', 'kind']);
+
+  if (method === 'item/completed') {
+    return agentMessageText(body.item);
+  }
+  if (method === 'rawResponseItem/completed') {
+    return responseMessageText(body.item);
+  }
+  if (type === 'assistant_message_completed' || type === 'agent_message_completed' || type === 'message_completed') {
+    return stringField(body, ['message', 'text', 'content']);
+  }
+
+  const turn = isRecord(body.turn) ? body.turn : body;
+  if (Array.isArray(turn.items)) {
+    const finalMessages = turn.items
+      .map(agentMessageText)
+      .filter((entry): entry is string => entry !== undefined && entry.trim().length > 0);
+    return finalMessages.at(-1);
+  }
+
+  return undefined;
+};
+
 const terminalStatus = (notification: unknown): string | undefined => {
   const body = notificationBody(notification);
   const method = stringField(body, ['method']);
   const type = stringField(body, ['type', 'event_type', 'eventType', 'kind']);
   if (method === 'thread/status/changed') {
     const status = isRecord(body.status) ? stringField(body.status, ['type']) : stringField(body, ['status']);
-    return status === 'idle' ? 'completed' : undefined;
+    return status === 'idle' ? 'idle' : undefined;
   }
   if (method !== 'turn/completed' && type !== 'turn_completed') {
     return undefined;
   }
   const turn = isRecord(body.turn) ? body.turn : body;
   return stringField(turn, ['status']) ?? 'unknown';
+};
+
+const appServerTurnErrorCode = (notification: unknown): string | undefined => {
+  const body = notificationBody(notification);
+  const error = isRecord(body.error) ? body.error : isRecord(body.turn) && isRecord(body.turn.error) ? body.turn.error : undefined;
+  const codexErrorInfo = error === undefined ? undefined : stringField(error, ['codexErrorInfo', 'codex_error_info']);
+  if (codexErrorInfo === 'usageLimitExceeded') {
+    return 'codex_generation_usage_limited';
+  }
+  return undefined;
 };
 
 const extractThreadId = (response: unknown): string | undefined => {
@@ -351,6 +405,7 @@ export class AppServerGenerationDriver {
     }
 
     let text = '';
+    let finalText: string | undefined;
     let rawNotificationBytes = 0;
     for await (const notification of notifications) {
       rawNotificationBytes += byteLength(JSON.stringify(notification) ?? 'undefined');
@@ -366,19 +421,32 @@ export class AppServerGenerationDriver {
         }
       }
 
+      const completedMessage = finalAgentMessageText(notification);
+      if (completedMessage !== undefined) {
+        finalText = completedMessage;
+        if (byteLength(finalText) > limits.outputLimitBytes) {
+          throw new Error('generated_output_too_large');
+        }
+      }
+
       const status = terminalStatus(notification);
       if (status !== undefined) {
+        const output = finalText ?? text;
+        if (status === 'idle' && output.trim().length > 0) {
+          break;
+        }
         if (status !== 'completed') {
-          throw new Error('codex_generation_turn_failed');
+          throw new Error(appServerTurnErrorCode(notification) ?? 'codex_generation_turn_failed');
         }
         break;
       }
     }
 
-    if (text.trim().length === 0) {
+    const output = finalText ?? text;
+    if (output.trim().length === 0) {
       throw new Error('generated_output_invalid_json');
     }
-    return text;
+    return output;
   }
 
   #resetCancelState(signal: AbortSignal | undefined): void {

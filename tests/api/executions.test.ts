@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import type { DeliveryRepository } from '@forgeloop/db';
+import type { DevelopmentPlanItemRevision } from '@forgeloop/domain';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -8,14 +9,10 @@ import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import {
   executionActorDeveloper,
-  executionActorOwner,
   seedApprovedExecutionPlan,
 } from '../helpers/execution-supervision-fixtures';
 
-const ownerHeaders = {
-  'x-forgeloop-actor-id': executionActorOwner,
-  'x-forgeloop-actor-class': 'human',
-};
+const digest = (seed: string): string => `sha256:${seed.repeat(64).slice(0, 64)}`;
 
 describe('Executions API', () => {
   let app: INestApplication;
@@ -30,8 +27,27 @@ describe('Executions API', () => {
     await app.close();
   });
 
-  it('starts execution only from an approved Execution Plan revision and links runtime package as evidence', async () => {
-    const { workItem, developmentPlan, item, specRevision, executionPlanRevision } = await seedApprovedExecutionPlan(app);
+  it('starts execution only from an approved Execution Plan revision, links the approved Spec chain, and enqueues a run session', async () => {
+    const requiredChecks = [
+      {
+        check_id: 'docs-verify',
+        command: 'pnpm vitest run tests/api/executions.test.ts',
+        timeout_seconds: 120,
+        blocks_review: true,
+      },
+    ];
+    const { workItem, developmentPlan, item, specRevision, executionPlanRevision } = await seedApprovedExecutionPlan(app, {
+      executionPlanRevisionSummary: 'Update strict dogfood runtime docs',
+      executionPlanRevisionContent: 'Implement a docs-only strict dogfood runtime change.',
+      executionPlanStructuredDocument: {
+        implementation_sequence: ['Update runbook', 'Verify Execution bridge'],
+        validation_strategy: ['Run focused Execution API tests'],
+        allowed_paths: ['docs/**'],
+        forbidden_paths: ['packages/db/**'],
+        required_checks: requiredChecks,
+        public_summary: 'Docs-only strict dogfood runtime execution.',
+      },
+    });
     const server = app.getHttpServer();
 
     const execution = (
@@ -44,46 +60,69 @@ describe('Executions API', () => {
     expect(execution).toMatchObject({
       development_plan_item_id: item.id,
       execution_plan_revision_id: executionPlanRevision.id,
+      execution_plan_revision_ref: expect.objectContaining({ id: executionPlanRevision.id }),
+      approved_spec_revision_id: specRevision.id,
+      approved_spec_revision_ref: expect.objectContaining({ id: specRevision.id, spec_id: specRevision.spec_id }),
       status: 'running',
-      runtime_evidence_refs: [expect.objectContaining({ type: 'execution_package' })],
+      evidence_refs: expect.arrayContaining([
+        expect.objectContaining({ type: 'spec_revision', id: specRevision.id }),
+        expect.objectContaining({ type: 'execution_plan_revision', id: executionPlanRevision.id }),
+      ]),
+      runtime_evidence_refs: expect.arrayContaining([
+        expect.objectContaining({ type: 'execution_package' }),
+        expect.objectContaining({ type: 'run_session' }),
+      ]),
     });
     expect(execution).not.toHaveProperty('execution_package_id');
+    expect(execution).not.toHaveProperty('run_session_id');
+    expect(execution).not.toHaveProperty('internal_execution_package_id');
+    expect(execution).not.toHaveProperty('internal_run_session_id');
 
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const executionPackageRef = execution.runtime_evidence_refs.find(
       (ref: { type: string; id: string }) => ref.type === 'execution_package',
     );
+    const runSessionRef = execution.runtime_evidence_refs.find(
+      (ref: { type: string; id: string }) => ref.type === 'run_session',
+    );
     if (executionPackageRef === undefined) {
       throw new Error('Execution package runtime evidence ref was not recorded');
+    }
+    if (runSessionRef === undefined) {
+      throw new Error('Run session runtime evidence ref was not recorded');
     }
     const executionPackage = await repository.getExecutionPackage(executionPackageRef.id);
     expect(executionPackage).toMatchObject({
       development_plan_item_id: item.id,
       execution_id: execution.id,
       execution_plan_revision_id: executionPlanRevision.id,
+      objective: 'Update strict dogfood runtime docs',
+      allowed_paths: ['docs/**'],
+      forbidden_paths: ['packages/db/**'],
+      required_checks: [
+        expect.objectContaining({
+          check_id: 'docs-verify',
+          display_name: 'docs-verify',
+          command: 'pnpm vitest run tests/api/executions.test.ts',
+          timeout_seconds: 120,
+          blocks_review: true,
+        }),
+      ],
     });
     expect(executionPackage?.task_id).toBeUndefined();
     if (executionPackage === undefined) {
       throw new Error('Execution package was not persisted');
     }
-    await request(server)
-      .post(`/execution-packages/${executionPackage.id}/mark-ready`)
-      .set(ownerHeaders)
-      .send({ actor_id: executionActorOwner, expected_package_version: executionPackage.version })
-      .expect(201);
-    const acceptedRun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const runSession = await repository.getRunSession(acceptedRun.run_session_id);
+    const runSession = await repository.getRunSession(runSessionRef.id);
     expect(runSession?.run_spec).toMatchObject({
       execution_package_id: executionPackage.id,
       work_item_id: workItem.id,
       spec_revision_id: specRevision.id,
       plan_revision_id: executionPlanRevision.id,
+      executor_type: 'local_codex',
+      workflow_only: false,
+      allowed_paths: ['docs/**'],
+      forbidden_paths: ['packages/db/**'],
     });
     await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({
       execution_status: 'running',
@@ -91,7 +130,98 @@ describe('Executions API', () => {
     });
   });
 
-  it('does not create a second product Execution for an already-started item revision', async () => {
+  it('starts execution after the item revision advances through Spec and Execution Plan approvals', async () => {
+    const { developmentPlan, item, specRevision, executionPlanRevision } = await seedApprovedExecutionPlan(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const boundary = await repository.getBoundarySummary(specRevision.boundary_summary_id!);
+    if (boundary === undefined) {
+      throw new Error('Boundary Summary was not persisted');
+    }
+    const [boundaryRevision] = await repository.listBoundarySummaryRevisions(boundary.id);
+    if (boundaryRevision === undefined) {
+      throw new Error('Boundary Summary Revision was not persisted');
+    }
+    const boundaryApprovalItemRevisionId = 'development-plan-item-revision-at-boundary-approval';
+    await repository.saveBoundarySummary({
+      ...boundary,
+      development_plan_item_revision_id: boundaryApprovalItemRevisionId,
+    });
+    await repository.updateBoundarySummaryRevision({
+      ...boundaryRevision,
+      development_plan_item_revision_id: boundaryApprovalItemRevisionId,
+    });
+    const currentItem = {
+      ...item,
+      revision_id: 'development-plan-item-revision-after-execution-plan-approval',
+      spec_status: 'approved' as const,
+      execution_plan_status: 'approved' as const,
+      next_action: 'start_execution',
+      updated_at: '2026-05-05T00:01:00.000Z',
+    };
+    const currentItemRevision: DevelopmentPlanItemRevision = {
+      id: currentItem.revision_id,
+      development_plan_item_id: currentItem.id,
+      development_plan_id: currentItem.development_plan_id,
+      revision_number: 2,
+      snapshot: currentItem,
+      change_reason: 'execution_plan_approved',
+      edited_by_actor_id: executionActorDeveloper,
+      created_at: currentItem.updated_at,
+    };
+    await repository.saveDevelopmentPlanItem(currentItem);
+    await repository.saveDevelopmentPlanItemRevision(currentItemRevision);
+
+    const execution = (
+      await request(app.getHttpServer())
+        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+        .send({ actor_id: executionActorDeveloper })
+        .expect(201)
+    ).body;
+
+    expect(execution).toMatchObject({
+      development_plan_item_id: item.id,
+      execution_plan_revision_id: executionPlanRevision.id,
+      approved_spec_revision_id: specRevision.id,
+      status: 'running',
+    });
+    await expect(repository.listRunSessions()).resolves.toHaveLength(1);
+  });
+
+  it('fails closed when the item advances after Execution Plan approval before execution starts', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const driftedItem = {
+      ...item,
+      revision_id: 'development-plan-item-revision-after-unrelated-edit',
+      spec_status: 'approved' as const,
+      execution_plan_status: 'approved' as const,
+      next_action: 'start_execution',
+      updated_at: '2026-05-05T00:01:00.000Z',
+    };
+    const driftedItemRevision: DevelopmentPlanItemRevision = {
+      id: driftedItem.revision_id,
+      development_plan_item_id: driftedItem.id,
+      development_plan_id: driftedItem.development_plan_id,
+      revision_number: 2,
+      snapshot: driftedItem,
+      change_reason: 'item_metadata_updated',
+      edited_by_actor_id: executionActorDeveloper,
+      created_at: driftedItem.updated_at,
+    };
+    await repository.saveDevelopmentPlanItem(driftedItem);
+    await repository.saveDevelopmentPlanItemRevision(driftedItemRevision);
+
+    await request(app.getHttpServer())
+      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+      .send({ actor_id: executionActorDeveloper })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('approved_execution_plan_not_current_item_revision');
+      });
+    await expect(repository.listRunSessions()).resolves.toHaveLength(0);
+  });
+
+  it('replays an already-started item revision without enqueueing a second run session', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
     const server = app.getHttpServer();
     const firstExecution = (
@@ -101,11 +231,13 @@ describe('Executions API', () => {
         .expect(201)
     ).body;
 
-    const response = await request(server)
-      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-      .send({ actor_id: executionActorDeveloper })
-      .expect(409);
-    expect(response.body.message).toContain('already has an active execution');
+    const replayedExecution = (
+      await request(server)
+        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+        .send({ actor_id: executionActorDeveloper })
+        .expect(201)
+    ).body;
+    expect(replayedExecution.id).toBe(firstExecution.id);
 
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const [executionPackageRef] = firstExecution.runtime_evidence_refs.filter(
@@ -113,6 +245,126 @@ describe('Executions API', () => {
     );
     const executionPackage = await repository.getExecutionPackage(executionPackageRef.id);
     expect(executionPackage?.execution_id).toBe(firstExecution.id);
+    await expect(repository.listRunSessionsForPackage(executionPackageRef.id)).resolves.toHaveLength(1);
+  });
+
+  it('exposes real run-worker execution evidence on product Development Plan Item projections', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app, {
+      executionPlanRevisionSummary: 'Write strict runtime dogfood report',
+      executionPlanRevisionContent: 'Create the public-safe dogfood report.',
+      executionPlanStructuredDocument: {
+        implementation_sequence: ['Write docs/superpowers/reports/codex-runtime-superpowers-dogfood.md'],
+        validation_strategy: ['Verify public-safe report evidence'],
+        allowed_paths: ['docs/**'],
+        forbidden_paths: ['packages/db/**'],
+        required_checks: [
+          {
+            check_id: 'docs-verify',
+            command: 'pnpm vitest run tests/api/executions.test.ts',
+            timeout_seconds: 120,
+            blocks_review: true,
+          },
+        ],
+        public_summary: 'Docs-only strict runtime dogfood report.',
+      },
+    });
+    const execution = (
+      await request(app.getHttpServer())
+        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+        .send({ actor_id: executionActorDeveloper })
+        .expect(201)
+    ).body;
+    const runSessionRef = execution.runtime_evidence_refs.find((ref: { type: string; id: string }) => ref.type === 'run_session');
+    if (runSessionRef === undefined) {
+      throw new Error('Run session runtime evidence ref was not recorded');
+    }
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const runSession = await repository.getRunSession(runSessionRef.id);
+    if (runSession === undefined) {
+      throw new Error('Run session was not persisted');
+    }
+    const changedFiles = [
+      {
+        repo_id: 'repo-1',
+        path: 'docs/superpowers/reports/codex-runtime-superpowers-dogfood.md',
+        change_kind: 'added' as const,
+      },
+    ];
+    await repository.saveRunSession({
+      ...runSession,
+      status: 'succeeded',
+      changed_files: changedFiles,
+      executor_result: {
+        run_session_id: runSession.id,
+        executor_type: 'local_codex',
+        executor_version: 'codex-remote-worker',
+        status: 'succeeded',
+        started_at: runSession.started_at ?? runSession.created_at,
+        finished_at: '2026-05-05T00:02:00.000Z',
+        summary: 'Strict runtime dogfood report written.',
+        changed_files: changedFiles,
+        checks: [],
+        artifacts: [],
+        raw_metadata: {
+          workspace_bundle_digest: digest('w'),
+          workspace_bundle_manifest_digest: digest('x'),
+          mounted_task_workspace_digest: digest('m'),
+        },
+      },
+      updated_at: '2026-05-05T00:02:00.000Z',
+      finished_at: '2026-05-05T00:02:00.000Z',
+    });
+
+    const response = await request(app.getHttpServer())
+      .get(`/query/development-plans/${developmentPlan.id}/items/${item.id}`)
+      .expect(200);
+
+    expect(response.body.executions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: execution.id,
+          runtime_evidence: {
+            workspace_bundle_digest: digest('w'),
+            workspace_bundle_manifest_digest: digest('x'),
+            mounted_task_workspace_digest: digest('m'),
+            changed_files: ['docs/superpowers/reports/codex-runtime-superpowers-dogfood.md'],
+          },
+        }),
+      ]),
+    );
+  });
+
+  it('fails docs-only dogfood execution before launch when the approved Execution Plan omits docs allowlist', async () => {
+    const { developmentPlan, item } = await seedApprovedExecutionPlan(app, {
+      executionPlanRevisionSummary: 'Apply docs-only strict dogfood closure',
+      executionPlanRevisionContent: 'This is a docs-only dogfood execution plan.',
+      executionPlanStructuredDocument: {
+        implementation_sequence: ['Update docs/superpowers/reports/dogfood.md'],
+        validation_strategy: ['Verify docs-only mutation'],
+        allowed_paths: ['apps/control-plane-api/**'],
+        forbidden_paths: [],
+        required_checks: [
+          {
+            check_id: 'docs-gate',
+            command: 'pnpm test',
+            timeout_seconds: 120,
+            blocks_review: true,
+          },
+        ],
+        public_summary: 'Docs-only dogfood plan without docs allowlist.',
+      },
+    });
+
+    const response = await request(app.getHttpServer())
+      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+      .send({ actor_id: executionActorDeveloper })
+      .expect(400);
+
+    expect(response.body).toMatchObject({
+      code: 'path_policy_docs_allowlist_required',
+    });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
   it('fails closed for missing, draft, stale, or unapproved Execution Plan revisions', async () => {
@@ -163,6 +415,35 @@ describe('Executions API', () => {
       .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
       .send({ actor_id: executionActorDeveloper })
       .expect(400);
+  });
+
+  it('fails closed when the approved Spec no longer owns the item Boundary chain', async () => {
+    const { developmentPlan, item, specRevision } = await seedApprovedExecutionPlan(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const server = app.getHttpServer();
+
+    await repository.saveSpecRevision({
+      ...specRevision,
+      structured_document: {
+        ...(specRevision.structured_document ?? {}),
+        boundary_summary_revision_id: 'missing-boundary-summary-revision',
+      },
+    });
+    await request(server)
+      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+      .send({ actor_id: executionActorDeveloper })
+      .expect(400);
+    await expect(repository.listRunSessions()).resolves.toHaveLength(0);
+
+    await repository.saveSpecRevision({
+      ...specRevision,
+      development_plan_item_id: 'other-development-plan-item',
+    });
+    await request(server)
+      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
+      .send({ actor_id: executionActorDeveloper })
+      .expect(400);
+    await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
   it('supports interrupt and continue controls for a running product Execution', async () => {

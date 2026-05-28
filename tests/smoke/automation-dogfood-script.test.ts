@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   automationDogfoodExitCode,
@@ -13,7 +13,7 @@ import {
   requiredAutomationDogfoodSummaryMarkers,
 } from '../../scripts/automation-dogfood-summary';
 import { loadDogfoodGenerationRuntimeConfig, requestedGenerationMode } from '../../scripts/automation-dogfood';
-import { loadCodexRuntimeDogfoodBootstrapConfig } from '../../scripts/codex-runtime-dogfood-bootstrap';
+import { loadCodexRuntimeDogfoodBootstrapConfig, runCodexRuntimeDogfoodBootstrap } from '../../scripts/codex-runtime-dogfood-bootstrap';
 import {
   codexRemoteWorkerDogfoodCommand,
   loadCodexRemoteWorkerDogfoodConfig,
@@ -35,12 +35,13 @@ const emptyDogfoodResult = {
   restartRecoveredFromActionRuns: false,
 };
 const digest = (seed: string): string => `sha256:${seed.repeat(64).slice(0, 64)}`;
-const bootstrapEnv = () => ({
+const bootstrapEnv = (configTomlPath: string) => ({
   FORGELOOP_CONTROL_PLANE_URL: 'http://127.0.0.1:3000',
   FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET: 'secret',
   FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'setup-admin',
   FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_CLASS: 'system_bootstrap',
   FORGELOOP_CODEX_RUNTIME_SETUP_DAEMON_IDENTITY: 'setup-daemon',
+  FORGELOOP_CODEX_CONFIG_TOML_PATH: configTomlPath,
   FORGELOOP_CODEX_DOCKER_IMAGE: 'ghcr.io/forgeloop/codex-runtime',
   FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: digest('a'),
   FORGELOOP_CODEX_GENERATION_EXPECTED_EFFECTIVE_CONFIG_DIGEST: digest('b'),
@@ -292,52 +293,138 @@ describe('automation dogfood script', () => {
   });
 
   it('loads strict Codex runtime bootstrap config from file/stdin-safe auth only', () => {
-    const config = loadCodexRuntimeDogfoodBootstrapConfig(bootstrapEnv(), '{"env":{"OPENAI_API_KEY":"sk-test"}}');
-
-    expect(config.authJson).toEqual({ env: { OPENAI_API_KEY: 'sk-test' } });
-    expect(config.allowedScope).toEqual({ project_id: 'project-1', repo_id: 'repo-1' });
-    expect(config.networkPolicy).toMatchObject({
-      mode: 'egress_allowlist',
-      provider: 'docker_network_proxy',
-    });
-    expect(config.networkPolicy.allowlist_rules).toEqual([
-      { id: 'openai', protocol: 'https', host: 'api.openai.com', purpose: 'model_provider' },
-    ]);
-    expect(() =>
-      loadCodexRuntimeDogfoodBootstrapConfig({
-        ...bootstrapEnv(),
-        FORGELOOP_CODEX_AUTH_JSON_INLINE: '{"env":{"OPENAI_API_KEY":"sk-test"}}',
-      }),
-    ).toThrow(/INLINE_not_allowed/);
-    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-auth-'));
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-bootstrap-'));
     try {
+      const configPath = join(tempRoot, 'config.toml');
+      writeFileSync(configPath, 'model = "gpt-5.5"\napproval_policy = "never"\nsandbox_mode = "danger-full-access"\n');
+      chmodSync(configPath, 0o600);
+      const config = loadCodexRuntimeDogfoodBootstrapConfig(
+        bootstrapEnv(configPath),
+        '{"env":{"OPENAI_API_KEY":"sk-test"}}',
+      );
+
+      expect(config.codexConfigToml).toContain('model = "gpt-5.5"');
+      expect(config.authJson).toEqual({ env: { OPENAI_API_KEY: 'sk-test' } });
+      expect(config.allowedScope).toEqual({ project_id: 'project-1', repo_id: 'repo-1' });
+      expect(config.networkPolicy).toMatchObject({
+        mode: 'egress_allowlist',
+        provider: 'docker_network_proxy',
+      });
+      expect(config.networkPolicy.allowlist_rules).toEqual([
+        { id: 'openai', protocol: 'https', host: 'api.openai.com', purpose: 'model_provider' },
+      ]);
+      expect(() =>
+        loadCodexRuntimeDogfoodBootstrapConfig({
+          ...bootstrapEnv(configPath),
+          FORGELOOP_CODEX_AUTH_JSON_INLINE: '{"env":{"OPENAI_API_KEY":"sk-test"}}',
+        }),
+      ).toThrow(/INLINE_not_allowed/);
       const authPath = join(tempRoot, 'auth.json');
       writeFileSync(authPath, '{"env":{"OPENAI_API_KEY":"sk-test"}}');
       chmodSync(authPath, 0o644);
       expect(() =>
         loadCodexRuntimeDogfoodBootstrapConfig({
-          ...bootstrapEnv(),
+          ...bootstrapEnv(configPath),
           FORGELOOP_CODEX_AUTH_JSON_PATH: authPath,
         }),
       ).toThrow(/protected_regular_file/);
       chmodSync(authPath, 0o600);
       expect(
         loadCodexRuntimeDogfoodBootstrapConfig({
-          ...bootstrapEnv(),
+          ...bootstrapEnv(configPath),
           FORGELOOP_CODEX_AUTH_JSON_PATH: authPath,
         }).authJson,
       ).toEqual({ env: { OPENAI_API_KEY: 'sk-test' } });
+
+      chmodSync(configPath, 0o644);
+      expect(() =>
+        loadCodexRuntimeDogfoodBootstrapConfig(bootstrapEnv(configPath), '{"env":{"OPENAI_API_KEY":"sk-test"}}'),
+      ).toThrow(/protected_regular_file/);
+      chmodSync(configPath, 0o600);
+
+      expect(() =>
+        loadCodexRuntimeDogfoodBootstrapConfig({
+          ...bootstrapEnv(configPath),
+          FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON: JSON.stringify([
+            { id: 'npm', protocol: 'https', host: 'registry.npmjs.org', purpose: 'package_registry' },
+          ]),
+        }, '{"env":{"OPENAI_API_KEY":"sk-test"}}'),
+      ).toThrow(/model_provider/);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
-    expect(() =>
-      loadCodexRuntimeDogfoodBootstrapConfig({
-        ...bootstrapEnv(),
-        FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON: JSON.stringify([
-          { id: 'npm', protocol: 'https', host: 'registry.npmjs.org', purpose: 'package_registry' },
-        ]),
-      }, '{"env":{"OPENAI_API_KEY":"sk-test"}}'),
-    ).toThrow(/model_provider/);
+  });
+
+  it('bootstraps separate generation and run-execution worker trust roots', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-bootstrap-split-'));
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+    try {
+      const configPath = join(tempRoot, 'config.toml');
+      writeFileSync(configPath, 'model = "gpt-5.5"\napproval_policy = "never"\nsandbox_mode = "danger-full-access"\n');
+      chmodSync(configPath, 0o600);
+      const config = loadCodexRuntimeDogfoodBootstrapConfig(
+        bootstrapEnv(configPath),
+        '{"env":{"OPENAI_API_KEY":"sk-test"}}',
+      );
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string | URL, init?: RequestInit) => {
+          const path = new URL(String(url)).pathname;
+          const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+          requests.push({ path, body });
+          if (path === '/internal/codex-runtime/import-local-codex') {
+            return new Response(
+              JSON.stringify({
+                profile_id: `profile-${body.target_kind}`,
+                profile_revision_id: `revision-${body.target_kind}`,
+                credential_binding_id: `binding-${body.target_kind}`,
+                codex_config_digest: digest('c'),
+              }),
+              { status: 201 },
+            );
+          }
+          return new Response(JSON.stringify({ ok: true }), { status: 201 });
+        }),
+      );
+
+      const summary = await runCodexRuntimeDogfoodBootstrap(config);
+      const importBodies = requests
+        .filter((request) => request.path === '/internal/codex-runtime/import-local-codex')
+        .map((request) => request.body);
+      const bootstrapBodies = requests
+        .filter((request) => request.path === '/internal/codex-runtime/worker-bootstrap-tokens')
+        .map((request) => request.body);
+
+      expect(summary).toMatchObject({
+        generation_worker_identity: 'worker-1-generation',
+        run_execution_worker_identity: 'worker-1-run-execution',
+      });
+      expect(importBodies).toEqual([
+        expect.objectContaining({
+          target_kind: 'generation',
+          codex_config_toml: expect.stringContaining('sandbox_mode = "read-only"'),
+        }),
+        expect.objectContaining({
+          target_kind: 'run_execution',
+          codex_config_toml: expect.stringContaining('sandbox_mode = "danger-full-access"'),
+        }),
+      ]);
+      expect(bootstrapBodies).toEqual([
+        expect.objectContaining({
+          worker_identity: 'worker-1-generation',
+          allowed_scopes_json: [{ project_id: 'project-1' }],
+          allowed_capabilities_json: expect.objectContaining({ target_kinds: ['generation'] }),
+        }),
+        expect.objectContaining({
+          worker_identity: 'worker-1-run-execution',
+          allowed_scopes_json: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+          allowed_capabilities_json: expect.objectContaining({ target_kinds: ['run_execution'] }),
+        }),
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('loads remote worker dogfood config and renders only public-safe startup evidence', () => {
@@ -359,6 +446,44 @@ describe('automation dogfood script', () => {
     expect(summary).not.toContain('/tmp/forgeloop-remote-worker');
   });
 
+  it('enforces no-shared-filesystem remote worker mode without repo roots or host config paths', () => {
+    const config = loadCodexRemoteWorkerDogfoodConfig({
+      ...remoteWorkerEnv(),
+      FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+      FORGELOOP_CODEX_WORKER_CAPABILITIES: 'run_execution',
+    });
+    const summary = renderCodexRemoteWorkerDogfoodStartSummary(config);
+
+    expect(config.noSharedFilesystem).toBe(true);
+    expect(config.allowedRepoRoots).toEqual([]);
+    expect(summary).toContain('No shared filesystem: enabled');
+    expect(summary).not.toContain('/tmp/forgeloop-remote-worker');
+    expect(summary).not.toContain('config.toml');
+    expect(summary).not.toContain('auth.json');
+
+    expect(() =>
+      loadCodexRemoteWorkerDogfoodConfig({
+        ...remoteWorkerEnv(),
+        FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+        FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS: '/repo',
+      }),
+    ).toThrow(/FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS_not_allowed/);
+    expect(() =>
+      loadCodexRemoteWorkerDogfoodConfig({
+        ...remoteWorkerEnv(),
+        FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+        FORGELOOP_CODEX_CONFIG_TOML_PATH: '/tmp/config.toml',
+      }),
+    ).toThrow(/FORGELOOP_CODEX_CONFIG_TOML_PATH_not_allowed/);
+    expect(() =>
+      loadCodexRemoteWorkerDogfoodConfig({
+        ...remoteWorkerEnv(),
+        FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
+        FORGELOOP_CODEX_AUTH_JSON_PATH: '/tmp/auth.json',
+      }),
+    ).toThrow(/FORGELOOP_CODEX_AUTH_JSON_PATH_not_allowed/);
+  });
+
   it('redacts remote worker dogfood failures to public-safe codes', () => {
     const message = renderCodexRemoteWorkerDogfoodFailure(
       new Error('docker failed for /tmp/forgeloop-remote-worker at http://127.0.0.1:31337 with worker-bootstrap-token'),
@@ -368,6 +493,9 @@ describe('automation dogfood script', () => {
     expect(message).not.toContain('/tmp/forgeloop-remote-worker');
     expect(message).not.toContain('http://127.0.0.1:31337');
     expect(message).not.toContain('worker-bootstrap-token');
+    expect(renderCodexRemoteWorkerDogfoodFailure(new Error('codex_worker_docker_unavailable: /tmp/private'))).toBe(
+      'Remote Codex worker dogfood failed: codex_worker_docker_unavailable',
+    );
   });
 
   it('keeps the remote worker runbook anchored on central config bootstrap and task isolation', () => {

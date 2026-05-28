@@ -9,8 +9,12 @@ import {
 import type { DockerCommand } from './docker-command.js';
 import type { DockerRunner, StartedDockerContainer } from './docker-runner.js';
 
+const modelProviderProbeRetryDelaysMs = [100, 250, 500, 1_000, 2_000] as const;
+
 const hasModelProvider = (policy: Extract<CodexRuntimeNetworkPolicy, { mode: 'egress_allowlist' }>): boolean =>
   policy.allowlist_rules.some((rule) => rule.purpose === 'model_provider');
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const validateMaterializedNetworkPolicy = (
   policy: CodexRuntimeNetworkPolicy,
@@ -51,6 +55,7 @@ export const runNetworkPolicySelfTest = async (input: {
   hostUid: number;
   hostGid: number;
   policy: CodexRuntimeNetworkPolicy;
+  modelProviderProbeRetryDelayMs?: number;
 }): Promise<{ selfTestDigest: string; publicSummary: Record<string, unknown>; cleanup?: () => Promise<void> }> => {
   const policy = validateMaterializedNetworkPolicy(input.policy, { strictRealDogfood: input.policy.mode !== 'disabled' });
   if (policy.mode === 'disabled') {
@@ -74,6 +79,26 @@ export const runNetworkPolicySelfTest = async (input: {
     const result = await input.runner.run(command);
     if (result.exitCode !== 0) {
       throw new Error('codex_worker_docker_policy_unavailable: network self-test command failed');
+    }
+  };
+  const runDockerWithRetry = async (command: DockerCommand): Promise<void> => {
+    const retryDelays =
+      input.modelProviderProbeRetryDelayMs === undefined
+        ? modelProviderProbeRetryDelaysMs
+        : Array.from({ length: modelProviderProbeRetryDelaysMs.length }, () => input.modelProviderProbeRetryDelayMs!);
+    for (let attempt = 1; attempt <= retryDelays.length + 1; attempt += 1) {
+      try {
+        await runDocker(command);
+        return;
+      } catch (error) {
+        const retryDelayMs = retryDelays[attempt - 1];
+        if (retryDelayMs === undefined) {
+          throw error;
+        }
+        if (retryDelayMs > 0) {
+          await sleep(retryDelayMs);
+        }
+      }
     }
   };
   const cleanupCommands: DockerCommand[] = [];
@@ -153,7 +178,7 @@ export const runNetworkPolicySelfTest = async (input: {
       ],
       publicSummary: { operation: 'network_self_test_blocked_default_egress', network: networkName },
     });
-    await runDocker({
+    await runDockerWithRetry({
       executable: dockerBin,
       args: [
         'run',

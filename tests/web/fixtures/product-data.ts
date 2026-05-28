@@ -289,6 +289,7 @@ export const execution = {
   id: 'exec-demo-seed-visual-review',
   development_plan_item_id: developmentPlanItem.id,
   execution_plan_revision_id: executionPlanRevision.id,
+  approved_spec_revision_id: specRevision.id,
   title: 'Codex worker is seeding visual review data',
   ref: { type: 'execution', id: 'exec-demo-seed-visual-review', title: 'Codex worker is seeding visual review data' },
   development_plan_item_ref: {
@@ -303,6 +304,7 @@ export const execution = {
     execution_plan_id: executionPlan.id,
     title: executionPlanRevision.summary,
   },
+  approved_spec_revision_ref: { type: 'spec_revision', id: specRevision.id, spec_id: spec.id, title: specRevision.summary },
   status: 'running',
   worker_state: 'running',
   current_step: 'Seeding deterministic product architecture fixture data',

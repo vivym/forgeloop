@@ -49,6 +49,11 @@ type GeneratedPackageMetadata = {
   manifest_digest: string;
 };
 
+type ExecutionPlanPackagePolicy = Pick<
+  ExecutionPackage,
+  'objective' | 'required_checks' | 'allowed_paths' | 'forbidden_paths' | 'source_mutation_policy'
+>;
+
 type PackageContext = {
   project: Project;
   workItem: WorkItem;
@@ -81,6 +86,57 @@ const productGateRejectedActorClasses = new Set<AutomationActorClass>([
 
 const statusForPackage = (executionPackage: ExecutionPackage): string =>
   `${executionPackage.phase}/${executionPackage.activity_state}/${executionPackage.gate_state}`;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const stringArrayField = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || entry.trim().length === 0)) {
+    return undefined;
+  }
+  return value.map((entry) => entry.trim());
+};
+
+const requiredChecksField = (value: unknown): ExecutionPackage['required_checks'] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const checks: ExecutionPackage['required_checks'] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      return undefined;
+    }
+    const checkId = typeof entry.check_id === 'string' ? entry.check_id.trim() : '';
+    const command = typeof entry.command === 'string' ? entry.command.trim() : '';
+    const timeoutSeconds = entry.timeout_seconds;
+    const blocksReview = entry.blocks_review;
+    if (
+      checkId.length === 0 ||
+      command.length === 0 ||
+      !Number.isInteger(timeoutSeconds) ||
+      Number(timeoutSeconds) <= 0 ||
+      typeof blocksReview !== 'boolean'
+    ) {
+      return undefined;
+    }
+    checks.push({
+      check_id: checkId,
+      display_name: typeof entry.display_name === 'string' && entry.display_name.trim().length > 0 ? entry.display_name.trim() : checkId,
+      command,
+      timeout_seconds: Number(timeoutSeconds),
+      blocks_review: blocksReview,
+    });
+  }
+  return checks;
+};
+
+const mentionsDocsOnlyWork = (revision: ExecutionPlanRevision): boolean => {
+  const structuredDocument = revision.structured_document;
+  const structuredText = structuredDocument === undefined ? '' : JSON.stringify(structuredDocument);
+  return /docs-only|docs\//i.test(`${revision.summary}\n${revision.content}\n${structuredText}`);
+};
+
+const allowsDocsPath = (allowedPaths: readonly string[]): boolean => allowedPaths.includes('docs/**');
 
 @Injectable()
 export class ExecutionPackageService {
@@ -206,28 +262,17 @@ export class ExecutionPackageService {
       context.item.reviewer_actor_id ?? context.executionPlan.approved_by_actor_id ?? context.spec.approved_by_actor_id ?? context.workItem.driver_actor_id;
     const ownerActorId = context.item.driver_actor_id ?? context.workItem.driver_actor_id;
     const createdAt = this.now();
-    const sourceMutationPolicy = DEFAULT_SOURCE_MUTATION_POLICY;
-    const allowedPaths = ['apps/control-plane-api/**', 'apps/web/**', 'packages/domain/**', 'packages/contracts/**', 'tests/**'];
-    const forbiddenPaths = ['packages/db/**'];
-    const requiredChecks = [
-      {
-        check_id: 'focused',
-        display_name: 'Focused verification',
-        command: 'pnpm test',
-        timeout_seconds: 120,
-        blocks_review: true,
-      },
-    ];
+    const packagePolicy = this.packagePolicyFromExecutionPlanRevision(context.executionPlanRevision);
     const packagePolicyFields = await defaultPackagePolicyFields(repository, {
       projectId: context.project.id,
       repoId: repo.repo_id,
       loadedAt: createdAt,
-      requiredChecks,
-      allowedPaths,
-      forbiddenPaths,
-      sourceMutationPolicy,
+      requiredChecks: packagePolicy.required_checks,
+      allowedPaths: packagePolicy.allowed_paths,
+      forbiddenPaths: packagePolicy.forbidden_paths,
+      sourceMutationPolicy: packagePolicy.source_mutation_policy,
     });
-    const executionPackage = {
+    const draftPackage = {
       ...transitionExecutionPackage(undefined, {
         type: 'generate_package',
         id: this.id('execution-package'),
@@ -238,15 +283,15 @@ export class ExecutionPackageService {
         plan_revision_id: context.executionPlanRevision.id,
         project_id: context.project.id,
         repo_id: repo.repo_id,
-        objective: `Execute ${context.item.title}.`,
+        objective: packagePolicy.objective,
         owner_actor_id: ownerActorId,
         reviewer_actor_id: reviewerActorId,
         qa_owner_actor_id: context.workItem.driver_actor_id,
-        required_checks: requiredChecks,
+        required_checks: packagePolicy.required_checks,
         required_artifact_kinds: ['execution_summary'],
-        allowed_paths: allowedPaths,
-        forbidden_paths: forbiddenPaths,
-        source_mutation_policy: sourceMutationPolicy,
+        allowed_paths: packagePolicy.allowed_paths,
+        forbidden_paths: packagePolicy.forbidden_paths,
+        source_mutation_policy: packagePolicy.source_mutation_policy,
         at: createdAt,
       }),
       development_plan_item_id: context.item.id,
@@ -261,6 +306,7 @@ export class ExecutionPackageService {
       required_test_gates: [],
       ...packagePolicyFields,
     };
+    const executionPackage = transitionExecutionPackage(draftPackage, { type: 'mark_ready', at: createdAt });
     validateExecutionPackage(context.project, executionPackage);
     await repository.saveExecutionPackage(executionPackage);
     await this.eventWithRepository(
@@ -275,6 +321,63 @@ export class ExecutionPackageService {
       },
     );
     return executionPackage;
+  }
+
+  private packagePolicyFromExecutionPlanRevision(revision: ExecutionPlanRevision): ExecutionPlanPackagePolicy {
+    const structuredDocument = revision.structured_document;
+    const structuredFieldsPresent =
+      isRecord(structuredDocument) &&
+      stringArrayField(structuredDocument.allowed_paths) !== undefined &&
+      stringArrayField(structuredDocument.forbidden_paths) !== undefined &&
+      requiredChecksField(structuredDocument.required_checks) !== undefined &&
+      stringArrayField(structuredDocument.implementation_sequence) !== undefined;
+
+    if (mentionsDocsOnlyWork(revision) && !structuredFieldsPresent) {
+      throw new BadRequestException({
+        code: 'execution_plan_structured_policy_required',
+        message: 'Docs-only dogfood execution requires structured Execution Plan path policy fields.',
+      });
+    }
+
+    const allowedPaths = isRecord(structuredDocument) && structuredFieldsPresent
+      ? stringArrayField(structuredDocument.allowed_paths)!
+      : undefined;
+    const forbiddenPaths = isRecord(structuredDocument) && structuredFieldsPresent
+      ? stringArrayField(structuredDocument.forbidden_paths)!
+      : undefined;
+    const requiredChecks = isRecord(structuredDocument) && structuredFieldsPresent
+      ? requiredChecksField(structuredDocument.required_checks)!
+      : undefined;
+    if (mentionsDocsOnlyWork(revision) && !allowsDocsPath(allowedPaths ?? [])) {
+      throw new BadRequestException({
+        code: 'path_policy_docs_allowlist_required',
+        message: 'Docs-only dogfood execution requires docs/** in the approved Execution Plan allowed_paths.',
+      });
+    }
+
+    return {
+      objective: revision.summary.trim().length > 0 ? revision.summary : `Execute Execution Plan revision ${revision.id}.`,
+      required_checks:
+        requiredChecks ??
+        [
+          {
+            check_id: 'focused',
+            display_name: 'Focused verification',
+            command: 'pnpm test',
+            timeout_seconds: 120,
+            blocks_review: true,
+          },
+        ],
+      allowed_paths: allowedPaths ?? [
+        'apps/control-plane-api/**',
+        'apps/web/**',
+        'packages/domain/**',
+        'packages/contracts/**',
+        'tests/**',
+      ],
+      forbidden_paths: forbiddenPaths ?? ['packages/db/**'],
+      source_mutation_policy: DEFAULT_SOURCE_MUTATION_POLICY,
+    };
   }
 
   async patchExecutionPackage(packageId: string, dto: PatchExecutionPackageDto): Promise<ExecutionPackage> {

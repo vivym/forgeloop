@@ -6,14 +6,6 @@ const optionalEnv = (key: string): string | undefined => {
   return value === undefined || value.length === 0 ? undefined : value;
 };
 
-const requiredEnv = (key: string): string => {
-  const value = optionalEnv(key);
-  if (value === undefined) {
-    throw new Error(`Missing required Codex runtime config: ${key}`);
-  }
-  return value;
-};
-
 @Injectable()
 export class RunExecutionRuntimeConfigService {
   selection(): DeliveryRunReadinessRuntimeSelection | undefined {
@@ -25,13 +17,6 @@ export class RunExecutionRuntimeConfigService {
     return {
       ...(runtimeProfileId === undefined ? {} : { runtime_profile_id: runtimeProfileId }),
       ...(credentialBindingId === undefined ? {} : { credential_binding_id: credentialBindingId }),
-    };
-  }
-
-  launchSelection(): DeliveryRunReadinessRuntimeSelection & { credential_binding_id: string } {
-    return {
-      ...this.selection(),
-      credential_binding_id: requiredEnv('FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID'),
     };
   }
 }

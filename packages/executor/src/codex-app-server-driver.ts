@@ -216,6 +216,45 @@ const threadIdleTerminal = (notification: unknown): CodexDriverStreamItem | unde
   };
 };
 
+const assistantTextFromNotification = (notification: unknown): string | undefined => {
+  const body = notificationBody(notification);
+  const method = stringField(body, ['method']);
+  const type = stringField(body, ['type', 'event_type', 'eventType', 'kind']);
+  if (
+    method === 'item/agentMessage/delta' ||
+    type === 'assistant_message_delta' ||
+    type === 'agent_message_delta' ||
+    type === 'message_delta'
+  ) {
+    return stringField(body, ['delta', 'text', 'message', 'content']);
+  }
+  if (method === 'item/completed' && isRecord(body.item) && body.item.type === 'agentMessage') {
+    return stringField(body.item, ['text']);
+  }
+  if (type === 'assistant_message_completed' || type === 'agent_message_completed' || type === 'message_completed') {
+    return stringField(body, ['message', 'text', 'content']);
+  }
+  return undefined;
+};
+
+const threadIdleAfterAssistantTerminal = (notification: unknown, sawAssistantOutput: boolean): CodexDriverStreamItem | undefined => {
+  if (!sawAssistantOutput) {
+    return undefined;
+  }
+  const idleTerminal = threadIdleTerminal(notification);
+  if (idleTerminal === undefined) {
+    return undefined;
+  }
+  return {
+    kind: 'terminal',
+    status: 'succeeded',
+    summary: 'Codex app-server thread became idle after assistant output.',
+    runtimeMetadata: {
+      driver_status: 'terminal',
+    },
+  };
+};
+
 const notificationStreamEndedTerminal = (error?: unknown): CodexDriverStreamItem => {
   const message =
     error instanceof Error
@@ -650,6 +689,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
       return;
     }
 
+    let sawAssistantOutput = false;
     try {
       for await (const notification of notifications) {
         const rawRef = await this.#rawLogStore?.appendRawNotification({
@@ -657,6 +697,10 @@ export class CodexAppServerDriver implements CodexSessionDriver {
           source: 'app_server',
           payload: notification,
         });
+        const assistantText = assistantTextFromNotification(notification);
+        if (assistantText !== undefined && assistantText.trim().length > 0) {
+          sawAssistantOutput = true;
+        }
 
         for (const event of normalizeCodexAppServerNotification(notification)) {
           if (rawRef !== undefined) {
@@ -665,7 +709,7 @@ export class CodexAppServerDriver implements CodexSessionDriver {
           yield { kind: 'event', event };
         }
 
-        const terminal = turnCompletedTerminal(notification) ?? threadIdleTerminal(notification);
+        const terminal = turnCompletedTerminal(notification) ?? threadIdleAfterAssistantTerminal(notification, sawAssistantOutput) ?? threadIdleTerminal(notification);
         if (terminal !== undefined) {
           yield terminal;
           return;

@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
 import { InMemoryDeliveryRepository, type CreatePendingWorkspaceBundleArtifactInput } from '../../packages/db/src';
-import { codexCanonicalDigest, transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
+import { codexCanonicalDigest, codexRuntimeJobInputDigest, codexWorkspaceAcquisitionDigest, transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
 import type { CodexDriverStartInput, CodexSessionDriver, LocalCodexEvidenceInput, RunRuntimeMetadata } from '../../packages/executor/src';
 
 import { createRunWorkerPendingWorkspaceBundleArtifact, FakeCodexSessionDriver, RunWorker, type RemoteRunExecutionClient } from '../../packages/run-worker/src';
@@ -1235,6 +1235,8 @@ describe('RunWorker', () => {
             execution_package_version: executionPackage.version,
             run_session_id: runSession.id,
             workspace_bundle_digest: repository.pendingWorkspaceBundleInputs[0]!.archive_digest,
+            workspace_bundle_manifest_digest: repository.pendingWorkspaceBundleInputs[0]!.manifest_digest,
+            mounted_task_workspace_digest: repository.pendingWorkspaceBundleInputs[0]!.manifest_digest,
             changed_files: ['packages/workflow/src.ts'],
             patch_artifact: {
               content_type: 'text/x-diff',
@@ -1280,6 +1282,7 @@ describe('RunWorker', () => {
       credential_payload_digest: `sha256:${'b'.repeat(64)}`,
       execution_package_id: executionPackage.id,
       run_session_id: runSession.id,
+      run_worker_lease_id: expect.any(String),
       run_session_status: 'running',
       execution_package_version: executionPackage.version,
       pending_workspace_bundle: expect.objectContaining({
@@ -1298,9 +1301,14 @@ describe('RunWorker', () => {
       output_schema_version: 'codex_run_execution_result.v1',
     });
     expect(created.input_json).not.toMatchObject({
+      run_worker_lease_id: expect.anything(),
+    });
+    expect(created.input_json).not.toMatchObject({
       package_prompt: expect.anything(),
       execution_context_json: expect.anything(),
     });
+    expect(() => codexRuntimeJobInputDigest(created.input_json)).not.toThrow();
+    expect(() => codexWorkspaceAcquisitionDigest(created.workspace_acquisition_json)).not.toThrow();
     expect(JSON.stringify(created)).not.toContain(repo);
     const archive = JSON.parse(Buffer.from(repository.pendingWorkspaceBundleInputs[0]!.archive_bytes_base64, 'base64').toString('utf8')) as {
       entries: Array<{ path: string; content_base64?: string }>;
@@ -1314,6 +1322,79 @@ describe('RunWorker', () => {
       status: 'succeeded',
       changed_files: [{ repo_id: 'repo-1', path: 'packages/workflow/src.ts', change_kind: 'modified' }],
     });
+  });
+
+  it('treats remote run execution terminal results with mismatched workspace manifest evidence as stale', async () => {
+    const repository = new CapturingWorkspaceBundleRepository();
+    const { repo, head } = await createGitRepo();
+    const { executionPackage, runSession } = await seedQueuedPackageRun(repository);
+    const [projectRepo] = await repository.listProjectRepos('project-1');
+    await repository.saveProjectRepo({
+      ...projectRepo!,
+      local_path: repo,
+      base_commit_sha: head,
+      default_branch: 'main',
+    });
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+    });
+    const remoteClient: RemoteRunExecutionClient = {
+      getStatus: async () => ({
+        profile_status: 'active',
+        worker_status: 'online',
+        runtime_profile_revision_id: 'profile-rev-run-1',
+        runtime_profile_digest: `sha256:${'a'.repeat(64)}`,
+        credential_binding_id: 'credential-binding-run-1',
+        credential_binding_version_id: 'credential-version-run-1',
+        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
+        docker_image_digest: `sha256:${'c'.repeat(64)}`,
+        network_policy_digest: `sha256:${'d'.repeat(64)}`,
+      }),
+      createRuntimeJob: async (input) => ({ runtime_job: { id: input.runtime_job_id, status: 'queued' } }),
+      getRuntimeJob: async (runtimeJobId) => ({
+        runtime_job: {
+          id: runtimeJobId,
+          status: 'terminal',
+          terminal_status: 'succeeded',
+          terminal_result_json: {
+            task_kind: 'run_execution',
+            execution_package_id: executionPackage.id,
+            execution_package_version: executionPackage.version,
+            run_session_id: runSession.id,
+            workspace_bundle_digest: repository.pendingWorkspaceBundleInputs[0]!.archive_digest,
+            workspace_bundle_manifest_digest: `sha256:${'f'.repeat(64)}`,
+            mounted_task_workspace_digest: repository.pendingWorkspaceBundleInputs[0]!.manifest_digest,
+            changed_files: ['README.md'],
+            check_results: [],
+            execution_artifacts: [],
+            public_summary: 'Remote package run completed.',
+          },
+        },
+      }),
+    };
+    const worker = runWorker({
+      repository,
+      driver: new FakeCodexSessionDriver({
+        kind: 'app_server',
+        script: [{ kind: 'terminal', status: 'failed', summary: 'local driver should not run' }],
+      }),
+      remoteRunExecutionClient: remoteClient,
+      now: () => '2026-05-23T00:00:00.000Z',
+      heartbeatIntervalMs: 10,
+    });
+
+    await worker.drainOnce();
+
+    const staleRunSession = await repository.getRunSession(runSession.id);
+    expect(staleRunSession).toMatchObject({ status: 'running' });
+    expect(staleRunSession?.executor_result).toBeUndefined();
+    await expect(repository.listRunEvents(runSession.id)).resolves.toContainEqual(
+      expect.objectContaining({
+        event_type: 'codex_warning',
+        summary: 'Remote Codex runtime job terminal result was stale and was not applied.',
+      }),
+    );
   });
 
   it('uses the remote run execution wait timeout for pending bundle and runtime job expiry', async () => {
@@ -1358,6 +1439,8 @@ describe('RunWorker', () => {
             execution_package_version: executionPackage.version,
             run_session_id: runSession.id,
             workspace_bundle_digest: repository.pendingWorkspaceBundleInputs[0]!.archive_digest,
+            workspace_bundle_manifest_digest: repository.pendingWorkspaceBundleInputs[0]!.manifest_digest,
+            mounted_task_workspace_digest: repository.pendingWorkspaceBundleInputs[0]!.manifest_digest,
             changed_files: ['README.md'],
             patch_artifact: {
               content_type: 'text/x-diff',
@@ -1497,6 +1580,15 @@ describe('RunWorker', () => {
       leaseToken: activeLease.lease_token,
     });
 
+    const failedRunSession = await repository.getRunSession(runSession.id);
+    expect(failedRunSession?.executor_result).toMatchObject({
+      status: 'failed',
+      summary: 'codex_runtime_job_unavailable',
+      raw_metadata: {
+        remote_runtime_job_id: runtimeJobId,
+        remote_runtime_reason_code: 'codex_runtime_job_unavailable',
+      },
+    });
     expect(createInputs).toHaveLength(1);
     expect(createInputs[0]).toMatchObject({
       runtime_job_id: runtimeJobId,

@@ -4,8 +4,11 @@ import {
   boardCardSchema,
   bugDetailSchema,
   bugListItemSchema,
+  boundaryRoundSchema,
+  boundarySummaryRevisionSchema,
   brainstormingSessionSchema,
   contextManifestSchema,
+  developmentPlanItemSchema,
   editableObjectRefSchema,
   executionSchema,
   initiativeDetailSchema,
@@ -80,10 +83,14 @@ describe('project management typed object contracts', () => {
       revision_id: 'bs-rev-1',
       source_ref: { type: 'requirement', id: 'req-1', revision_id: 'req-rev-1' },
       development_plan_id: 'dp-1',
+      development_plan_revision_id: 'dp-rev-1',
       development_plan_item_id: 'dpi-1',
       development_plan_item_revision_id: 'dpi-rev-1',
+      leader_actor_id: 'actor-tech',
+      leader_delegate_actor_ids: [],
       context_manifest_id: 'cm-1',
       context_manifest_revision_id: 'cm-rev-1',
+      status: 'approved',
       questions: [
         {
           id: 'q-1',
@@ -157,6 +164,13 @@ describe('project management typed object contracts', () => {
     const execution = executionSchema.parse({
       id: 'exec-1',
       development_plan_item_id: 'dpi-1',
+      approved_spec_revision_id: 'spec-rev-1',
+      approved_spec_revision_ref: {
+        type: 'spec_revision',
+        id: 'spec-rev-1',
+        spec_id: 'spec-1',
+        title: 'Approved Spec',
+      },
       execution_plan_revision_id: 'epr-1',
       ref: { type: 'execution', id: 'exec-1', title: 'Execution for item' },
       development_plan_item_ref: {
@@ -228,10 +242,14 @@ describe('project management typed object contracts', () => {
       revision_id: 'bs-rev-1',
       source_ref: { type: 'requirement', id: 'req-1' },
       development_plan_id: 'dp-1',
+      development_plan_revision_id: 'dp-rev-1',
       development_plan_item_id: 'dpi-1',
       development_plan_item_revision_id: 'dpi-rev-1',
+      leader_actor_id: 'actor-tech',
+      leader_delegate_actor_ids: [],
       context_manifest_id: 'cm-1',
       context_manifest_revision_id: 'cm-rev-1',
+      status: 'approved',
       questions: [
         {
           id: 'q-1',
@@ -612,5 +630,295 @@ describe('project management typed object contracts', () => {
       expect(schema.parse(valid)).toMatchObject({ ref: valid.ref });
       expect(() => schema.parse(invalid)).toThrow();
     }
+  });
+
+  it('accepts Leader and delegate fields on Development Plan Item', () => {
+    expect(
+      developmentPlanItemSchema.parse({
+        id: 'item-1',
+        development_plan_id: 'plan-1',
+        revision_id: 'item-rev-1',
+        title: 'Runtime closure',
+        summary: 'Close runtime dogfood',
+        driver_actor_id: 'actor-driver',
+        reviewer_actor_id: 'actor-reviewer',
+        leader_actor_id: 'actor-leader',
+        leader_delegate_actor_ids: ['actor-delegate'],
+        responsible_role: 'tech_lead',
+        risk: 'high',
+        dependency_hints: [],
+        affected_surfaces: [],
+        boundary_status: 'in_progress',
+        spec_status: 'missing',
+        execution_plan_status: 'missing',
+        execution_status: 'not_started',
+        review_status: 'missing',
+        qa_handoff_status: 'missing',
+        release_impact: 'release_scoped',
+        next_action: 'boundary_brainstorming',
+        updated_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toMatchObject({
+      leader_actor_id: 'actor-leader',
+      leader_delegate_actor_ids: ['actor-delegate'],
+    });
+  });
+
+  it('accepts Boundary Brainstorming session process fields and Leader snapshot', () => {
+    expect(
+      brainstormingSessionSchema.parse({
+        id: 'session-1',
+        revision_id: 'session-rev-1',
+        source_ref: { type: 'requirement', id: 'req-1', revision_id: 'req-rev-1' },
+        development_plan_id: 'plan-1',
+        development_plan_revision_id: 'plan-rev-1',
+        development_plan_item_id: 'item-1',
+        development_plan_item_revision_id: 'item-rev-1',
+        leader_actor_id: 'actor-leader',
+        leader_delegate_actor_ids: ['actor-delegate'],
+        context_manifest_id: 'context-1',
+        context_manifest_revision_id: 'context-rev-1',
+        status: 'waiting_for_leader',
+        current_round_id: 'round-1',
+        latest_summary_revision_id: undefined,
+        approved_summary_revision_id: undefined,
+        questions: [],
+        answers: [],
+        decisions: [],
+        approval_state: 'questions_open',
+        created_at: '2026-05-25T00:00:00.000Z',
+        updated_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toMatchObject({
+      leader_actor_id: 'actor-leader',
+      current_round_id: 'round-1',
+      status: 'waiting_for_leader',
+    });
+  });
+
+  it('rejects approved Boundary Brainstorming process status without legacy approval and evidence', () => {
+    expect(() =>
+      brainstormingSessionSchema.parse({
+        id: 'session-1',
+        revision_id: 'session-rev-1',
+        source_ref: { type: 'requirement', id: 'req-1', revision_id: 'req-rev-1' },
+        development_plan_id: 'plan-1',
+        development_plan_revision_id: 'plan-rev-1',
+        development_plan_item_id: 'item-1',
+        development_plan_item_revision_id: 'item-rev-1',
+        leader_actor_id: 'actor-leader',
+        leader_delegate_actor_ids: [],
+        context_manifest_id: 'context-1',
+        context_manifest_revision_id: 'context-rev-1',
+        status: 'approved',
+        questions: [],
+        answers: [],
+        decisions: [],
+        approval_state: 'questions_open',
+        created_at: '2026-05-25T00:00:00.000Z',
+        updated_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toThrow(/approval_state/i);
+  });
+
+  it('accepts Boundary Brainstorming round artifacts', () => {
+    expect(
+      boundaryRoundSchema.parse({
+        id: 'round-1',
+        session_id: 'session-1',
+        session_revision_id: 'session-rev-1',
+        round_number: 1,
+        trigger: 'start',
+        leader_input_markdown: 'Clarify runtime boundary.',
+        ai_output_markdown: 'Open questions for the Leader.',
+        runtime_job_id: 'job-1',
+        runtime_profile_revision_id: 'profile-rev-1',
+        credential_binding_version_id: 'credential-version-1',
+        app_server_thread_digest: 'thread-digest-1',
+        app_server_turn_digest: 'turn-digest-1',
+        status: 'waiting_for_leader',
+        created_at: '2026-05-25T00:00:00.000Z',
+        updated_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toMatchObject({ id: 'round-1', session_id: 'session-1' });
+  });
+
+  it('requires product Execution to publicly link approved Spec revision', () => {
+    expect(() =>
+      executionSchema.parse({
+        id: 'execution-1',
+        development_plan_item_id: 'item-1',
+        execution_plan_revision_id: 'execution-plan-rev-1',
+        ref: { type: 'execution', id: 'execution-1' },
+        development_plan_item_ref: {
+          type: 'development_plan_item',
+          id: 'item-1',
+          development_plan_id: 'plan-1',
+          revision_id: 'item-rev-1',
+        },
+        execution_plan_revision_ref: {
+          type: 'execution_plan_revision',
+          id: 'execution-plan-rev-1',
+          execution_plan_id: 'execution-plan-1',
+        },
+        status: 'running',
+        evidence_refs: [],
+        runtime_evidence_refs: [],
+        interrupt_history: [],
+        continuation_history: [],
+        pr_refs: [],
+        diff_refs: [],
+        test_evidence_refs: [],
+        created_at: '2026-05-25T00:00:00.000Z',
+        updated_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toThrow(/approved_spec_revision_id/i);
+  });
+
+  it('accepts product Execution with approved Spec revision linkage and internal runtime evidence refs', () => {
+    expect(
+      executionSchema.parse({
+        id: 'execution-1',
+        development_plan_item_id: 'item-1',
+        approved_spec_revision_id: 'spec-rev-1',
+        approved_spec_revision_ref: {
+          type: 'spec_revision',
+          id: 'spec-rev-1',
+          spec_id: 'spec-1',
+        },
+        execution_plan_revision_id: 'execution-plan-rev-1',
+        ref: { type: 'execution', id: 'execution-1' },
+        development_plan_item_ref: {
+          type: 'development_plan_item',
+          id: 'item-1',
+          development_plan_id: 'plan-1',
+          revision_id: 'item-rev-1',
+        },
+        execution_plan_revision_ref: {
+          type: 'execution_plan_revision',
+          id: 'execution-plan-rev-1',
+          execution_plan_id: 'execution-plan-1',
+        },
+        status: 'running',
+        evidence_refs: [{ type: 'spec_revision', id: 'spec-rev-1', spec_id: 'spec-1' }],
+        runtime_evidence_refs: [{ type: 'execution_package', id: 'package-1' }],
+        interrupt_history: [],
+        continuation_history: [],
+        pr_refs: [],
+        diff_refs: [],
+        test_evidence_refs: [],
+        created_at: '2026-05-25T00:00:00.000Z',
+        updated_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toMatchObject({ approved_spec_revision_id: 'spec-rev-1' });
+  });
+
+  it('rejects product Execution with mismatched approved Spec revision IDs', () => {
+    expect(() =>
+      executionSchema.parse({
+        id: 'execution-1',
+        development_plan_item_id: 'item-1',
+        approved_spec_revision_id: 'spec-rev-1',
+        approved_spec_revision_ref: {
+          type: 'spec_revision',
+          id: 'spec-rev-2',
+          spec_id: 'spec-1',
+        },
+        execution_plan_revision_id: 'execution-plan-rev-1',
+        ref: { type: 'execution', id: 'execution-1' },
+        development_plan_item_ref: {
+          type: 'development_plan_item',
+          id: 'item-1',
+          development_plan_id: 'plan-1',
+          revision_id: 'item-rev-1',
+        },
+        execution_plan_revision_ref: {
+          type: 'execution_plan_revision',
+          id: 'execution-plan-rev-1',
+          execution_plan_id: 'execution-plan-1',
+        },
+        status: 'running',
+        evidence_refs: [{ type: 'spec_revision', id: 'spec-rev-1', spec_id: 'spec-1' }],
+        runtime_evidence_refs: [{ type: 'execution_package', id: 'package-1' }],
+        interrupt_history: [],
+        continuation_history: [],
+        pr_refs: [],
+        diff_refs: [],
+        test_evidence_refs: [],
+        created_at: '2026-05-25T00:00:00.000Z',
+        updated_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toThrow(/approved_spec_revision_ref/i);
+  });
+
+  it('rejects approved Boundary Summary revisions without question and decision evidence snapshots', () => {
+    expect(() =>
+      boundarySummaryRevisionSchema.parse({
+        id: 'boundary-rev-1',
+        boundary_summary_id: 'boundary-1',
+        session_id: 'session-1',
+        session_revision_id: 'session-rev-1',
+        source_round_id: 'round-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+        development_plan_item_revision_id: 'item-rev-1',
+        revision_number: 1,
+        status: 'approved',
+        summary_markdown: 'Summary',
+        confirmed_scope: ['runtime closure'],
+        confirmed_out_of_scope: [],
+        accepted_assumptions: [],
+        open_risks: [],
+        validation_expectations: ['pnpm test'],
+        question_answer_snapshot: [],
+        decision_snapshot: [],
+        context_manifest_id: 'context-1',
+        context_manifest_revision_id: 'context-rev-1',
+        approved_by_actor_id: 'actor-leader',
+        approved_at: '2026-05-25T00:00:00.000Z',
+        created_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toThrow(/approved Boundary Summary must include question and decision evidence/i);
+  });
+
+  it('accepts approved Boundary Summary revisions with persisted evidence snapshots', () => {
+    expect(
+      boundarySummaryRevisionSchema.parse({
+        id: 'boundary-rev-2',
+        boundary_summary_id: 'boundary-1',
+        session_id: 'session-1',
+        session_revision_id: 'session-rev-1',
+        source_round_id: 'round-2',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+        development_plan_item_revision_id: 'item-rev-1',
+        revision_number: 2,
+        status: 'approved',
+        summary_markdown: 'Summary',
+        confirmed_scope: ['runtime closure'],
+        confirmed_out_of_scope: ['CLI fallback'],
+        accepted_assumptions: ['centralized Codex config import is available'],
+        open_risks: ['worker registry bootstrap may be flaky'],
+        validation_expectations: ['pnpm dogfood:codex-runtime:superpowers'],
+        question_answer_snapshot: [
+          {
+            question_id: 'question-1',
+            answer_id: 'answer-1',
+            text: 'Which runtime boundary owns Codex config?',
+          },
+        ],
+        decision_snapshot: [
+          {
+            decision_id: 'decision-1',
+            text: 'Use centralized config distribution only.',
+          },
+        ],
+        context_manifest_id: 'context-1',
+        context_manifest_revision_id: 'context-rev-1',
+        approved_by_actor_id: 'actor-leader',
+        approved_at: '2026-05-25T00:00:00.000Z',
+        created_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toMatchObject({ status: 'approved' });
   });
 });

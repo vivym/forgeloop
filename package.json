@@ -23,7 +23,13 @@
     "dogfood:delivery:local-codex": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/delivery-local-codex-dogfood.ts",
     "dogfood:delivery:work-items": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/delivery-dogfood-work-items.ts",
     "dogfood:release-flow": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/release-flow-dogfood.ts",
-    "dogfood:release-flow:strict": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/release-flow-strict-dogfood.ts"
+    "dogfood:release-flow:strict": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/release-flow-strict-dogfood.ts",
+    "codex:runtime:import": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-import.ts",
+    "codex:runtime:bootstrap": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-dogfood-bootstrap.ts",
+    "codex:remote-worker": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-remote-worker-dogfood.ts",
+    "dogfood:codex-runtime:superpowers": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-superpowers-dogfood.ts",
+    "check:codex-runtime-superpowers-no-baggage": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/check-codex-runtime-superpowers-no-baggage.ts",
+    "check:runbook-scripts": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/check-runbook-scripts.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.19",

@@ -101,6 +101,7 @@ export function canGenerateSpecFromPlanItem(input: {
   item: DevelopmentPlanItem;
   brainstormingSession?: { approval_state: string };
   boundarySummary?: { approved_by_actor_id?: string; approved_at?: string };
+  boundarySummaryRevision?: { status: string };
 }): GateResult<SpecGenerationGateReason> {
   if (input.item.boundary_status !== 'approved') {
     return { ok: false, reason: 'boundary_not_approved' };
@@ -109,6 +110,9 @@ export function canGenerateSpecFromPlanItem(input: {
     return { ok: false, reason: 'brainstorming_not_approved' };
   }
   if (input.boundarySummary?.approved_by_actor_id === undefined || input.boundarySummary.approved_at === undefined) {
+    return { ok: false, reason: 'boundary_summary_missing_approval' };
+  }
+  if (input.boundarySummaryRevision?.status !== 'approved') {
     return { ok: false, reason: 'boundary_summary_missing_approval' };
   }
   return { ok: true };
