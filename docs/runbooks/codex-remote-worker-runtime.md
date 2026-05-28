@@ -112,7 +112,9 @@ FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS=1000 \
 pnpm dogfood:codex-runtime:superpowers
 ```
 
-The report belongs under `docs/superpowers/reports/` and must contain product object ids, artifact names, and digests only.
+This command is the canonical real dogfood pass. It drives Boundary Brainstorming from persisted session state, not fixed round numbers. The expected report path is `docs/superpowers/reports/codex-runtime-real-dogfood-pass.md`.
+
+The report must include the Boundary AI turn count, follow-up-path coverage, summary request-change coverage, stale-boundary negative result, runtime profile/credential digests, app-server runtime job digests, workspace bundle digest, mounted task workspace digest, changed files, and cleanup status.
 
 ## Run Execution Dogfood
 
