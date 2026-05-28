@@ -237,6 +237,38 @@ const assertPublicSafeChangedFile = (value: string): void => {
   }
 };
 
+const assertPublicSafeCleanupStatus = (value: string, label: string): asserts value is CodexRuntimeDogfoodCleanupStatus => {
+  if (value !== 'completed' && value !== 'blocked') {
+    throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
+  }
+};
+
+const assertPublicSafeCodexAppServerPhaseEvidence = (
+  phase: CodexRuntimeDogfoodPhaseEvidence,
+  options: { requireEvidenceDigests: boolean },
+): void => {
+  assertPublicSafeId(phase.phase, 'codex_app_server_phase');
+  assertPublicSafeId(phase.expected_output_schema_version, 'codex_app_server_phase_schema');
+  assertPublicSafeCleanupStatus(phase.cleanup_status, 'codex_app_server_phase_cleanup_status');
+  for (const schemaVersion of phase.observed_output_schema_versions) {
+    assertPublicSafeId(schemaVersion, 'codex_app_server_phase_observed_schema');
+  }
+  if (options.requireEvidenceDigests) {
+    assertNonEmptySha256Digests(phase.runtime_job_digests, 'codex_app_server_phase_runtime_job_digest');
+    assertNonEmptySha256Digests(phase.app_server_evidence_digests, 'codex_app_server_phase_evidence_digest');
+    return;
+  }
+  for (const digest of phase.runtime_job_digests) {
+    assertSha256Digest(digest, 'codex_app_server_phase_runtime_job_digest');
+  }
+  for (const digest of phase.app_server_evidence_digests) {
+    assertSha256Digest(digest, 'codex_app_server_phase_evidence_digest');
+  }
+};
+
+const renderCodexAppServerPhaseEvidenceLine = (phase: CodexRuntimeDogfoodPhaseEvidence): string =>
+  `- Phase ${phase.phase}: expected_schema=${phase.expected_output_schema_version} observed_schemas=${phase.observed_output_schema_versions.join(', ')} cleanup=${phase.cleanup_status} runtime_jobs=${phase.runtime_job_digests.join(', ')} app_server=${phase.app_server_evidence_digests.join(', ')}`;
+
 const optionalEnv = (env: EnvLike, key: string): string | undefined => {
   const value = env[key]?.trim();
   return value === undefined || value.length === 0 ? undefined : value;
@@ -495,9 +527,7 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
   if (report.codex_app_server_evidence.mode !== 'dockerized_app_server') {
     throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:codex_app_server_mode');
   }
-  if (report.cleanup_status !== 'completed' && report.cleanup_status !== 'blocked') {
-    throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:cleanup_status');
-  }
+  assertPublicSafeCleanupStatus(report.cleanup_status, 'cleanup_status');
   if (report.report_path !== fixedCodexRuntimeSuperpowersDogfoodReportPath) {
     throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:report_path');
   }
@@ -523,16 +553,7 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
     assertPublicSafeId(schemaVersion, 'codex_app_server_output_schema_version');
   }
   for (const phase of report.codex_app_server_evidence.phases) {
-    assertPublicSafeId(phase.phase, 'codex_app_server_phase');
-    assertPublicSafeId(phase.expected_output_schema_version, 'codex_app_server_phase_schema');
-    if (phase.cleanup_status !== 'completed' && phase.cleanup_status !== 'blocked') {
-      throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:codex_app_server_phase_cleanup_status');
-    }
-    for (const schemaVersion of phase.observed_output_schema_versions) {
-      assertPublicSafeId(schemaVersion, 'codex_app_server_phase_observed_schema');
-    }
-    assertNonEmptySha256Digests(phase.runtime_job_digests, 'codex_app_server_phase_runtime_job_digest');
-    assertNonEmptySha256Digests(phase.app_server_evidence_digests, 'codex_app_server_phase_evidence_digest');
+    assertPublicSafeCodexAppServerPhaseEvidence(phase, { requireEvidenceDigests: true });
   }
   for (const changedFile of report.changed_files) {
     assertPublicSafeChangedFile(changedFile);
@@ -554,10 +575,7 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
     `- Codex output schemas: ${report.codex_app_server_evidence.output_schema_versions.join(', ')}`,
     `- Codex runtime job digests: ${report.codex_app_server_evidence.runtime_job_digests.join(', ')}`,
     `- Codex app-server evidence digests: ${report.codex_app_server_evidence.app_server_evidence_digests.join(', ')}`,
-    ...report.codex_app_server_evidence.phases.map(
-      (phase) =>
-        `- Phase ${phase.phase}: expected_schema=${phase.expected_output_schema_version} observed_schemas=${phase.observed_output_schema_versions.join(', ')} cleanup=${phase.cleanup_status} runtime_jobs=${phase.runtime_job_digests.join(', ')} app_server=${phase.app_server_evidence_digests.join(', ')}`,
-    ),
+    ...report.codex_app_server_evidence.phases.map(renderCodexAppServerPhaseEvidenceLine),
     `- No shared filesystem worker: ${String(report.no_shared_filesystem_worker)}`,
     `- Runtime evidence: workspace_bundle_digest=${report.workspace_bundle_digest} mounted_task_workspace_digest=${report.mounted_task_workspace_digest}`,
     [
@@ -605,6 +623,12 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
       assertPublicSafeId(value, label);
     }
   }
+  if (report.cleanup_status !== undefined) {
+    assertPublicSafeCleanupStatus(report.cleanup_status, 'cleanup_status');
+  }
+  for (const phase of report.codex_app_server_evidence?.phases ?? []) {
+    assertPublicSafeCodexAppServerPhaseEvidence(phase, { requireEvidenceDigests: false });
+  }
   const lines = [
     '# Codex Runtime Superpowers Dogfood',
     '',
@@ -628,6 +652,8 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
     ...(report.run_session_id === undefined ? [] : [`- Run session: ${report.run_session_id}`]),
     ...(report.run_session_status === undefined ? [] : [`- Run session status: ${report.run_session_status}`]),
     ...(report.run_session_failure_reason === undefined ? [] : [`- Run session failure reason: ${report.run_session_failure_reason}`]),
+    ...(report.cleanup_status === undefined ? [] : [`- Cleanup status: ${report.cleanup_status}`]),
+    ...(report.codex_app_server_evidence?.phases ?? []).map(renderCodexAppServerPhaseEvidenceLine),
     '',
   ];
   const markdown = `${lines.join('\n')}\n`;

@@ -679,6 +679,88 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(markdown).not.toContain('docker-exec:');
   });
 
+  it('renders public-safe phase details in app-server phase-evidence blocker reports', () => {
+    const markdown = renderCodexRuntimeSuperpowersDogfoodBlockerReport({
+      status: 'BLOCKED',
+      blocker_code: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
+      cleanup_status: 'blocked',
+      codex_app_server_evidence: {
+        phases: [
+          {
+            ...codexAppServerEvidence.phases[0],
+            cleanup_status: 'blocked',
+          },
+          codexAppServerEvidence.phases[2],
+        ],
+      },
+    });
+
+    expect(markdown).toContain(
+      `Phase boundary_initial: expected_schema=boundary_round_result.v1 observed_schemas=boundary_round_result.v1 cleanup=blocked runtime_jobs=${digest('boundary-a')} app_server=${digest('boundary-app-server-a')}`,
+    );
+    expect(markdown).toContain(
+      `Phase spec: expected_schema=spec_revision.v1 observed_schemas=spec_revision.v1 cleanup=completed runtime_jobs=${digest('spec-a')} app_server=${digest('spec-app-server-a')}`,
+    );
+    expect(markdown).toContain('Cleanup status: blocked');
+    expect(markdown).not.toContain('/Users/');
+    expect(markdown).not.toContain('/tmp/');
+    expect(markdown).not.toContain('~/.codex');
+    expect(markdown).not.toContain('OPENAI_API_KEY');
+    expect(markdown).not.toContain('docker-exec:');
+    expect(markdown).not.toContain('localhost');
+    expect(markdown).not.toContain('container');
+  });
+
+  it('rejects unsafe phase details in app-server phase-evidence blocker reports', () => {
+    expect(() =>
+      renderCodexRuntimeSuperpowersDogfoodBlockerReport({
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
+        cleanup_status: 'completed',
+        codex_app_server_evidence: {
+          phases: [
+            {
+              ...codexAppServerEvidence.phases[0],
+              runtime_job_digests: ['/tmp/runtime-job-1'],
+            },
+          ],
+        },
+      }),
+    ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
+
+    expect(() =>
+      renderCodexRuntimeSuperpowersDogfoodBlockerReport({
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
+        cleanup_status: 'completed',
+        codex_app_server_evidence: {
+          phases: [
+            {
+              ...codexAppServerEvidence.phases[0],
+              app_server_evidence_digests: ['container-123'],
+            },
+          ],
+        },
+      }),
+    ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
+
+    expect(() =>
+      renderCodexRuntimeSuperpowersDogfoodBlockerReport({
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_app_server_phase_evidence_missing',
+        cleanup_status: 'completed',
+        codex_app_server_evidence: {
+          phases: [
+            {
+              ...codexAppServerEvidence.phases[0],
+              cleanup_status: 'deleted' as 'completed',
+            },
+          ],
+        },
+      }),
+    ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
+  });
+
   it('does not require pre-known Boundary question or summary revision ids in CLI config', () => {
     const config = loadCodexRuntimeSuperpowersDogfoodCliConfig({
       FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
