@@ -1,8 +1,17 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AttachmentRef, EditableObjectRef } from '@forgeloop/contracts';
 
-import { CompactMetadata, ProductPage, Section, SourceEvidenceLayout } from '../../shared/layout';
+import {
+  BugWorkspace,
+  CompactMetadata,
+  InitiativeWorkspace,
+  ProductPage,
+  RequirementWorkspace,
+  Section,
+  SourceEvidenceLayout,
+  TechDebtWorkspace,
+} from '../../shared/layout';
 import { EvidenceAttachments, InlineNotice, StatusPill } from '../../shared/ui';
 import { SurfaceStateIndicator } from './surface-state';
 
@@ -99,78 +108,118 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
       ariaLabel={heading}
     >
       <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
-      <SourceEvidenceLayout
-        summary={
-          <Section
-            aria-label="Evidence readiness summary"
-            description="Readiness is derived from the source object detail and attachment safety metadata."
-            title="Evidence readiness summary"
-            variant="panel"
-          >
-            <div className="grid gap-3">
-              <SurfaceStateIndicator label={heading} state={needsAttention ? 'blocked' : 'approved'} />
-              <div className="grid gap-2 text-sm text-text-secondary">
-                <span className="font-semibold text-text-primary">{needsAttention ? 'Resolve evidence gaps' : 'Evidence ready'}</span>
-                <span>Review source evidence readiness here; Spec and Execution Plan gates remain item-scoped.</span>
-                <span>{`Risk ${detail.risk ?? 'unscored'} / ${needsAttention ? 'Evidence needs attention' : 'No evidence blocker'}`}</span>
-                <span>{`${objectLabel} driver / ${detail.driver_actor_id ?? 'Unassigned'}`}</span>
-                <Link className="font-semibold text-primary hover:underline" to={sourceLink}>
-                  Open source object
-                </Link>
+      <TypedEvidenceShell
+        objectType={detail.ref.type}
+        table={
+          <SourceEvidenceLayout
+            summary={
+              <Section
+                aria-label="Evidence readiness summary"
+                description={`Readiness is derived from ${objectLabel} detail and attachment safety metadata.`}
+                title="Evidence readiness summary"
+                variant="panel"
+              >
+                <div className="grid gap-3">
+                  <div className="grid gap-2 text-sm text-text-secondary">
+                    <span className="font-semibold text-text-primary">{needsAttention ? 'Resolve evidence gaps' : 'Evidence ready'}</span>
+                    <span>Review evidence readiness here; Spec and Execution Plan gates remain item-scoped.</span>
+                    <span>{`Risk ${detail.risk ?? 'unscored'} / ${needsAttention ? 'Evidence needs attention' : 'No evidence blocker'}`}</span>
+                    <span>{`${driverLabelFor(detail.ref.type)} / ${detail.driver_actor_id ?? 'Unavailable'}`}</span>
+                    <Link className="font-semibold text-primary hover:underline" to={sourceLink}>
+                      Open {objectLabel}
+                    </Link>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <EvidenceStateCard count={readiness.relevant.length} label="Relevant evidence" tone="success" />
+                    <EvidenceStateCard count={readiness.missing.length} label="Missing evidence" tone={readiness.missing.length > 0 ? 'warning' : 'neutral'} />
+                    <EvidenceStateCard count={readiness.stale.length} label="Stale evidence" tone={readiness.stale.length > 0 ? 'warning' : 'neutral'} />
+                    <EvidenceStateCard count={readiness.unavailable.length} label="Unavailable evidence" tone={readiness.unavailable.length > 0 ? 'danger' : 'neutral'} />
+                  </div>
+                  <CompactMetadata
+                    items={[
+                      { label: objectLabel, value: detail.id },
+                      { label: 'Lifecycle', value: detail.status },
+                      { label: 'Attachments', value: String(attachmentRefs.length) },
+                      { label: 'Evidence refs', value: String(allEvidenceCount) },
+                    ]}
+                  />
+                </div>
+              </Section>
+            }
+            attachments={
+              <Section
+                aria-label={`${objectLabel} evidence attachments`}
+                description="Attachment previews use safe render references; unavailable attachments remain listed without raw storage URLs."
+                title={`${objectLabel} evidence attachments`}
+                variant="panel"
+              >
+                <EvidenceAttachments attachments={attachmentRefs} />
+              </Section>
+            }
+            rawDetails={
+              <div className="grid gap-4">
+                <Section
+                  aria-label="Evidence reference states"
+                  description={`These references stay scoped to the ${objectLabel} and do not expose raw artifact browsers.`}
+                  title="Evidence states"
+                  variant="panel"
+                >
+                  <div className="grid gap-3">
+                    <EvidenceRefList emptyText="No relevant evidence refs." label="Relevant evidence" refs={readiness.relevant} tone="success" />
+                    <EvidenceRefList emptyText="No missing evidence refs." label="Missing evidence" refs={readiness.missing} tone="warning" />
+                    <EvidenceRefList emptyText="No stale evidence refs." label="Stale evidence" refs={readiness.stale} tone="warning" />
+                    <EvidenceRefList emptyText="No unavailable evidence refs." label="Unavailable evidence" refs={readiness.unavailable} tone="danger" />
+                  </div>
+                </Section>
+                <Section aria-label="Scoped relationships" title="Scoped relationships" variant="subtle">
+                  <RelationshipLinks refs={[...relationshipRefs, ...releaseRefs]} />
+                </Section>
+                <Section aria-label="Scoped artifact references" title="Scoped artifact references" variant="subtle">
+                  <EvidenceRefList emptyText="No scoped evidence references." label="Evidence references" refs={sourceEvidenceRefs(detail)} tone="neutral" />
+                </Section>
               </div>
-              <div className="grid gap-3 md:grid-cols-4">
-                <EvidenceStateCard count={readiness.relevant.length} label="Relevant evidence" tone="success" />
-                <EvidenceStateCard count={readiness.missing.length} label="Missing evidence" tone={readiness.missing.length > 0 ? 'warning' : 'neutral'} />
-                <EvidenceStateCard count={readiness.stale.length} label="Stale evidence" tone={readiness.stale.length > 0 ? 'warning' : 'neutral'} />
-                <EvidenceStateCard count={readiness.unavailable.length} label="Unavailable evidence" tone={readiness.unavailable.length > 0 ? 'danger' : 'neutral'} />
-              </div>
-              <CompactMetadata
-                items={[
-                  { label: 'Source object', value: `${objectLabel} ${detail.id}` },
-                  { label: 'Lifecycle', value: detail.status },
-                  { label: 'Attachments', value: String(attachmentRefs.length) },
-                  { label: 'Evidence refs', value: String(allEvidenceCount) },
-                ]}
-              />
-            </div>
-          </Section>
-        }
-        attachments={
-          <Section
-            aria-label="Evidence attachments"
-            description="Attachment previews use safe render references; unavailable attachments remain listed without raw storage URLs."
-            title="Evidence attachments"
-            variant="panel"
-          >
-            <EvidenceAttachments attachments={attachmentRefs} />
-          </Section>
-        }
-        rawDetails={
-          <div className="grid gap-4">
-            <Section
-              aria-label="Evidence reference states"
-              description="These references stay scoped to the source object and do not expose raw artifact browsers."
-              title="Evidence states"
-              variant="panel"
-            >
-              <div className="grid gap-3">
-                <EvidenceRefList emptyText="No relevant evidence refs." label="Relevant evidence" refs={readiness.relevant} tone="success" />
-                <EvidenceRefList emptyText="No missing evidence refs." label="Missing evidence" refs={readiness.missing} tone="warning" />
-                <EvidenceRefList emptyText="No stale evidence refs." label="Stale evidence" refs={readiness.stale} tone="warning" />
-                <EvidenceRefList emptyText="No unavailable evidence refs." label="Unavailable evidence" refs={readiness.unavailable} tone="danger" />
-              </div>
-            </Section>
-            <Section aria-label="Scoped relationships" title="Scoped relationships" variant="subtle">
-              <RelationshipLinks refs={[...relationshipRefs, ...releaseRefs]} />
-            </Section>
-            <Section aria-label="Scoped artifact references" title="Scoped artifact references" variant="subtle">
-              <EvidenceRefList emptyText="No scoped evidence references." label="Evidence references" refs={sourceEvidenceRefs(detail)} tone="neutral" />
-            </Section>
-          </div>
+            }
+          />
         }
       />
     </ProductPage>
   );
+}
+
+function TypedEvidenceShell({
+  objectType,
+  table,
+}: {
+  objectType: EditableObjectRef['type'];
+  table: ReactNode;
+}) {
+  switch (objectType) {
+    case 'bug':
+      return <BugWorkspace table={table} />;
+    case 'initiative':
+      return <InitiativeWorkspace table={table} />;
+    case 'tech_debt':
+      return <TechDebtWorkspace table={table} />;
+    case 'requirement':
+      return <RequirementWorkspace table={table} />;
+    default:
+      return <RequirementWorkspace table={table} />;
+  }
+}
+
+function driverLabelFor(type: EditableObjectRef['type']): string {
+  switch (type) {
+    case 'bug':
+      return 'Bug Driver';
+    case 'initiative':
+      return 'Initiative Driver';
+    case 'tech_debt':
+      return 'Tech Debt Driver';
+    case 'requirement':
+      return 'Requirement Driver';
+    default:
+      return 'Driver';
+  }
 }
 
 function EvidenceStateCard({

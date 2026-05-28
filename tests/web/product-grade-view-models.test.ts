@@ -7,11 +7,17 @@ import {
 } from '../../apps/web/src/features/development-plans/development-plan-view-model';
 import { executionViewModel } from '../../apps/web/src/features/executions/execution-view-model';
 import { myWorkQueueViewModel } from '../../apps/web/src/features/my-work/my-work-view-model';
-import { sourceObjectListViewModel } from '../../apps/web/src/features/project-management/source-object-view-model';
+import {
+  bugWorkspaceViewModel,
+  initiativeWorkspaceViewModel,
+  requirementWorkspaceViewModel,
+  techDebtWorkspaceViewModel,
+} from '../../apps/web/src/features/project-management/source-object-view-model';
 import { releaseViewModel } from '../../apps/web/src/features/releases/release-view-model';
 import { reportViewModel } from '../../apps/web/src/features/reports/report-view-model';
 import { specPlanQueueViewModel } from '../../apps/web/src/features/spec-plan/spec-plan-view-model';
 import {
+  actorId,
   developmentPlan,
   developmentPlanItem,
   execution,
@@ -38,40 +44,72 @@ const specPlanQueueResponse = defaultProductApiResponses[
 };
 
 describe('product-grade presentation view models', () => {
-  it('projects source objects into first-viewport fields without bypassing Development Plan boundaries', () => {
-    expect(sourceObjectListViewModel(requirementDetail)).toMatchObject({
-      objectLabel: requirementDetail.title,
-      objectType: 'Requirement',
-      currentState: expect.any(String),
+  it('projects requirement rows into typed first-viewport fields without bypassing Development Plan boundaries', () => {
+    const row = requirementWorkspaceViewModel.row(requirementDetail, `/requirements/${requirementDetail.id}`);
+
+    expect(row).toMatchObject({
+      title: requirementDetail.title,
+      href: `/requirements/${requirementDetail.id}`,
+      status: expect.any(String),
+      priority: expect.any(String),
+      driver: expect.any(String),
+      developmentPlanCoverage: expect.any(String),
+      planItemCoverage: expect.any(String),
+      downstreamGateSummary: expect.any(String),
       nextAction: expect.any(String),
-      primaryActorOrRole: expect.any(String),
-      riskSignal: expect.any(String),
-      gateProgress: expect.any(Array),
-      criticalEvidence: expect.any(Array),
-      secondaryMetadata: expect.any(Array),
       previewSummary: expect.any(String),
-      timelineSummary: expect.any(String),
+      searchText: expect.any(String),
     });
-    expect(sourceObjectListViewModel(requirementDetail).nextAction).toContain('Development Plan');
-    expect(sourceObjectListViewModel(requirementDetail).nextAction).not.toContain('Spec');
-    expect(sourceObjectListViewModel(requirementDetail).nextAction).not.toContain('Execution Plan');
+    expect(row.nextAction).toContain('Plan Item');
+    expect(row.nextAction).not.toContain('Spec');
+    expect(row.nextAction).not.toContain('Execution Plan');
   });
 
-  it('renders unavailable source evidence truthfully instead of inventing a ready state', () => {
-    const viewModel = sourceObjectListViewModel({
+  it('renders unavailable typed source relationship metadata truthfully instead of inventing ready coverage', () => {
+    const row = requirementWorkspaceViewModel.row({
       ...requirementDetail,
-      attachment_refs: [],
-      evidence_refs: [],
       relationship_refs: [],
+      linked_development_plans: undefined,
+      linked_plan_items: undefined,
+      planning_coverage: undefined,
     });
 
-    expect(viewModel.criticalEvidence).toContainEqual(
-      expect.objectContaining({
-        label: 'Source evidence',
-        state: 'unavailable',
-        compactText: 'Evidence readiness unavailable',
-      }),
-    );
+    expect(row.developmentPlanCoverage).toBe('Unavailable');
+    expect(row.planItemCoverage).toBe('Unavailable');
+    expect(row.relatedObjects).toBe('Unavailable');
+  });
+
+  it('projects initiative-specific row fields for the typed workspace', () => {
+    expect(initiativeWorkspaceViewModel.row(initiativeListItem, `/initiatives/${initiativeListItem.id}`)).toMatchObject({
+      businessOutcome: initiativeListItem.business_outcome,
+      milestoneIntent: 'Unavailable',
+      childRequirements: '0',
+      childBugs: '0',
+      childTechDebt: '0',
+      releaseCoverage: '1 linked',
+      driver: actorId,
+    });
+  });
+
+  it('projects bug-specific row fields for the typed workspace', () => {
+    expect(bugWorkspaceViewModel.row(bugListItem, `/bugs/${bugListItem.id}`)).toMatchObject({
+      observedBehavior: 'Unavailable',
+      expectedBehavior: 'Unavailable',
+      reproduction: 'Unavailable',
+      severity: bugListItem.severity,
+      fixPlanningCoverage: '1 linked / 1 governed',
+      driver: actorId,
+    });
+  });
+
+  it('projects tech-debt-specific row fields for the typed workspace', () => {
+    expect(techDebtWorkspaceViewModel.row(techDebtListItem, `/tech-debt/${techDebtListItem.id}`)).toMatchObject({
+      affectedModules: techDebtListItem.affected_modules.join(', '),
+      riskRationale: techDebtListItem.risk_rationale,
+      validationStrategy: 'Unavailable',
+      remediationPlanningCoverage: '1 linked / 1 governed',
+      driver: actorId,
+    });
   });
 
   it('projects cockpit readiness into first-viewport fields', () => {

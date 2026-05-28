@@ -7,14 +7,14 @@ import { useProjectContext } from '../../shared/context/project-context';
 import { Section } from '../../shared/layout';
 import { createNarrativeDocument, ObjectCreateForm } from '../project-management/object-forms';
 import { ObjectDetailLayout } from '../project-management/object-detail-layout';
-import { ObjectList } from '../project-management/object-list';
+import { TypedSourceObjectList } from '../project-management/typed-source-object-list';
 
 export function TechDebtRoute() {
   const { projectId } = useProjectContext();
   const query = useTechDebtQuery({ project_id: projectId, limit: 100 });
 
   return (
-    <ObjectList
+    <TypedSourceObjectList
       createHref="/tech-debt/new"
       detailHref={(item) => `/tech-debt/${item.id}`}
       emptyMessage="No tech debt items match the current filters."
@@ -24,6 +24,7 @@ export function TechDebtRoute() {
       planningHref="/development-plans/new"
       subtitle="Debt scoping, refactor planning, risk control, and validation."
       title="Tech Debt"
+      workspaceKind="tech_debt"
     />
   );
 }

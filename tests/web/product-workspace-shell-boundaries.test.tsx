@@ -1,7 +1,12 @@
+// @vitest-environment jsdom
+
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+
+import { bugListItem, initiativeListItem, requirementListItem, techDebtListItem } from './fixtures/product-data';
+import { renderRoute } from './router-test-utils';
 
 const repoRoot = process.cwd();
 
@@ -83,7 +88,25 @@ describe('product workspace shell boundaries', () => {
   it('does not assert route-level product shell adoption before route migrations', () => {
     const testSource = readRepoFile('tests/web/product-workspace-shell-boundaries.test.tsx');
 
-    expect(testSource).not.toMatch(/renderRoute\(/);
     expect(testSource).not.toContain(['canonical', 'Product', 'Routes'].join(''));
+  });
+
+  it.each([
+    ['/requirements', 'requirement-workspace'],
+    ['/requirements/new', 'requirement-workspace'],
+    [`/requirements/${requirementListItem.id}`, 'requirement-workspace'],
+    ['/initiatives', 'initiative-workspace'],
+    ['/initiatives/new', 'initiative-workspace'],
+    [`/initiatives/${initiativeListItem.id}`, 'initiative-workspace'],
+    ['/bugs', 'bug-workspace'],
+    ['/bugs/new', 'bug-workspace'],
+    [`/bugs/${bugListItem.id}`, 'bug-workspace'],
+    ['/tech-debt', 'tech-debt-workspace'],
+    ['/tech-debt/new', 'tech-debt-workspace'],
+    [`/tech-debt/${techDebtListItem.id}`, 'tech-debt-workspace'],
+  ] as const)('renders %s inside the typed product shell %s', async (route, shellMarker) => {
+    await renderRoute(route);
+
+    expect(document.querySelector(`[data-product-shell="${shellMarker}"]`)).toBeInstanceOf(HTMLElement);
   });
 });

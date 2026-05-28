@@ -86,8 +86,10 @@ describe('Task 5 source object first viewport contracts', () => {
 
     expect(await rendered.findByRole('heading', { name: 'Requirements' })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'source-database', heading: 'Requirements' });
-    expect(document.querySelector('[data-database-toolbar]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-data-table][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-product-shell="requirement-workspace"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-typed-source-toolbar]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-typed-source-table] [data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.body.textContent).not.toMatch(/source object/i);
   });
 
   it('requires source object detail routes to expose the document first-viewport contract', async () => {
@@ -95,7 +97,9 @@ describe('Task 5 source object first viewport contracts', () => {
 
     expect(await rendered.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'source-document', heading: 'Requirement' });
+    expect(document.querySelector('[data-product-shell="requirement-workspace"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.body.textContent).not.toMatch(/source object/i);
   });
 
   it('requires source object evidence routes to expose evidence readiness before attachment lists', async () => {
@@ -104,9 +108,11 @@ describe('Task 5 source object first viewport contracts', () => {
     expect(await rendered.findByRole('heading', { name: 'Requirement Evidence' })).toBeTruthy();
     await waitFor(() => expect(document.querySelector('[data-evidence-summary]')?.textContent ?? '').toMatch(/evidence ready/i));
     expectFirstViewportContract(rendered, { pageFamily: 'source-evidence', heading: 'Requirement Evidence' });
+    expect(document.querySelector('[data-product-shell="requirement-workspace"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-evidence-summary][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-evidence-summary]')?.textContent).toMatch(/evidence ready/i);
     expect(document.querySelector('[data-evidence-summary]')?.textContent).not.toMatch(/Evidence attachments|Raw artifact links/i);
+    expect(document.body.textContent).not.toMatch(/source object/i);
   });
 });
 

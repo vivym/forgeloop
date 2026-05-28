@@ -43,6 +43,18 @@ const activeWebSourceText = () =>
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
 
+const activeTypedSourceText = () =>
+  [
+    'apps/web/src/features/project-management',
+    'apps/web/src/features/requirements',
+    'apps/web/src/features/initiatives',
+    'apps/web/src/features/bugs',
+    'apps/web/src/features/tech-debt',
+  ]
+    .flatMap(textFiles)
+    .map((file) => readFileSync(file, 'utf8'))
+    .join('\n');
+
 type LegacyPattern = {
   target: string;
   pattern: RegExp;
@@ -211,5 +223,22 @@ describe('no legacy Web UI baggage', () => {
 
   it('does not use old global visual class tokens on active Web surfaces', () => {
     expect(legacyClassTokenMatches()).toEqual([]);
+  });
+
+  it('does not keep generic typed source workspace copy in active typed source routes', () => {
+    expect(activeTypedSourceText()).not.toMatch(/source object database/i);
+    expect(activeTypedSourceText()).not.toMatch(/create source object/i);
+    expect(activeTypedSourceText()).not.toMatch(/plan source object/i);
+    expect(activeTypedSourceText()).not.toMatch(/source object context/i);
+    expect(activeTypedSourceText()).not.toMatch(/source context/i);
+    expect(activeTypedSourceText()).not.toMatch(/source intent/i);
+    expect(activeTypedSourceText()).not.toMatch(/source narrative document/i);
+    expect(activeTypedSourceText()).not.toMatch(/ready to author source/i);
+    expect(activeTypedSourceText()).not.toMatch(/work item owner/i);
+    expect(activeTypedSourceText()).not.toMatch(/\bdriver owns\b/i);
+    expect(activeTypedSourceText()).not.toMatch(/responsibility:\s*actor-owner/i);
+    expect(activeTypedSourceText()).not.toMatch(/requirement summary unavailable/i);
+    expect(activeTypedSourceText()).not.toMatch(/planning state unknown/i);
+    expect(activeTypedSourceText()).not.toMatch(/evidence unavailable/i);
   });
 });
