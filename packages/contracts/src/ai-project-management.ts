@@ -413,6 +413,7 @@ export const executionSchema = z
     stale: z.boolean().optional(),
     blocked: z.boolean().optional(),
     last_event_at: isoDateTimeSchema.optional(),
+    last_event_summary: nonEmpty.optional(),
     interrupt_history: z
       .array(z.object({ at: isoDateTimeSchema.optional(), reason: nonEmpty.optional() }).strict())
       .default([]),

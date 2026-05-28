@@ -12,6 +12,7 @@ import {
   myWorkQueueResponse,
   projectId,
   requirementDetail,
+  requirementListItem,
 } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 import type { ProductApiResponseMap } from './fixtures/product-api-mock';
@@ -20,14 +21,14 @@ type SurfaceState = 'loading' | 'empty' | 'error' | 'stale' | 'blocked' | 'appro
 
 describe('AI-native surface states', () => {
   it.each([
-    ['/requirements/req-1', 'Source Object Workspace'],
-    ['/dashboard', 'Dashboard'],
+    [`/requirements/${requirementListItem.id}`, 'Source Object Workspace'],
+    ['/cockpit', 'Cockpit'],
     ['/my-work', 'My Work'],
     ['/board', 'Board'],
     ['/reports', 'Reports'],
     [`/development-plans/${developmentPlan.id}`, 'Development Plan Page'],
     [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, 'Development Plan Item Detail'],
-    ['/specs-plans', 'Specs & Execution Plans Queue'],
+    ['/specs-plans', 'Document Reviews Queue'],
     ['/executions', 'Executions Queue'],
     [`/executions/${execution.id}`, 'Execution Detail'],
   ] as const)('renders loading, empty, error, stale, blocked, approved, running, and resumable states for %s', async (route) => {
@@ -44,8 +45,8 @@ describe('AI-native surface states', () => {
 });
 
 function overridesFor(route: string, state: SurfaceState): ProductApiResponseMap {
-  if (route === '/requirements/req-1') return sourceObjectOverrides(state);
-  if (route === '/dashboard') return dashboardOverrides(state);
+  if (route === `/requirements/${requirementListItem.id}`) return sourceObjectOverrides(state);
+  if (route === '/cockpit') return dashboardOverrides(state);
   if (route === '/my-work') return myWorkOverrides(state);
   if (route === '/board') return boardOverrides(state);
   if (route === `/development-plans/${developmentPlan.id}`) return developmentPlanOverrides(state);
@@ -57,7 +58,7 @@ function overridesFor(route: string, state: SurfaceState): ProductApiResponseMap
 }
 
 function sourceObjectOverrides(state: SurfaceState): ProductApiResponseMap {
-  const key = 'GET /query/requirements/req-1';
+  const key = `GET /query/requirements/${requirementListItem.id}`;
   if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
   if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
   if (state === 'empty') return { [key]: { ...requirementDetail, relationship_refs: [] } };
@@ -239,9 +240,11 @@ function executionDetailOverrides(state: SurfaceState): ProductApiResponseMap {
   if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
   if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
   if (state === 'empty') return { [key]: {} };
+  const { title: _title, ...executionDetail } = execution;
+  void _title;
   return {
     [key]: {
-      ...execution,
+      ...executionDetail,
       status: statusForExecutionDetailState(state),
       worker_state: statusForExecutionDetailState(state),
       stale: state === 'stale',

@@ -919,9 +919,9 @@ describe('automation daemon loop', () => {
   });
 
   it('caps remote runtime job polling sleep to the configured wait deadline', async () => {
+    let monotonicNowMs = 0;
     const sleepDurations: number[] = [];
     const cancelled: Array<{ jobId: string; input: Record<string, unknown> }> = [];
-    let monotonicNowMs = 0;
     const runtime = createRemoteCodexGenerationRuntime({
       runtimeProfileId: 'profile-1',
       credentialBindingId: 'credential-binding-1',

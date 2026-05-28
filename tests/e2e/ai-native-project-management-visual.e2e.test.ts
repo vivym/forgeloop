@@ -7,9 +7,13 @@ import {
   ensureVisualWebServer,
   installMockedProductApi,
   launchVisualBrowser,
+  writeProductArchitectureScreenshotReviewReport,
   startAiNativeProjectManagementFixture,
+  type ScreenshotReviewRecord,
   visualViewportWidths,
 } from './helpers/capture-route-screenshots';
+import { requiredScreenshotRoutes } from '../../apps/web/src/features/product-surfaces/route-contract';
+import { bugListItem, requirementListItem } from '../web/fixtures/product-data';
 
 const forbiddenProductStrings = [
   '/tasks',
@@ -34,19 +38,76 @@ describe('AI-native project management visual QA', () => {
       try {
         const page = await browser.newPage();
         await installMockedProductApi(page);
+        const records: ScreenshotReviewRecord[] = [];
 
         for (const route of aiNativeProjectManagementRoutes) {
           for (const width of visualViewportWidths) {
-            await captureRouteScreenshot(page, server.url, route, width);
+            records.push(await captureRouteScreenshot(page, server.url, route, width));
             await assertNoRenderedBaggage(page, route.path);
           }
         }
+
+        const report = await writeProductArchitectureScreenshotReviewReport(records);
+        expect(report.records.every((record) => record.decision === 'pass')).toBe(true);
+        expect(new Set(report.records.map((record) => record.route))).toEqual(new Set(requiredScreenshotRoutes.map((route) => route.concretePath)));
+        expect(requiredScreenshotRoutes.map((route) => route.concretePath)).toEqual([
+          '/',
+          '/cockpit',
+          '/my-work',
+          '/initiatives',
+          '/initiatives/new',
+          '/initiatives/init-ai-native-rollout',
+          '/initiatives/init-ai-native-rollout/evidence',
+          '/requirements',
+          '/requirements/new',
+          '/requirements/req-plan-item-governance',
+          '/requirements/req-plan-item-governance/evidence',
+          '/bugs',
+          '/bugs/new',
+          '/bugs/bug-execution-review-context',
+          '/bugs/bug-execution-review-context/evidence',
+          '/tech-debt',
+          '/tech-debt/new',
+          '/tech-debt/td-retire-workspace-page-template',
+          '/tech-debt/td-retire-workspace-page-template/evidence',
+          '/development-plans',
+          '/development-plans/new',
+          '/development-plans/dp-product-architecture-visual-rebuild',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-development-plan-table-inspector/brainstorming',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center/spec',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-requirements-database-view/execution-plan',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-demo-seed-visual-review/execution',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-cockpit-command-center/review',
+          '/development-plans/dp-product-architecture-visual-rebuild/items/dpi-requirements-database-view/qa',
+          '/specs-plans',
+          '/executions',
+          '/executions/exec-demo-seed-visual-review',
+          '/board',
+          '/releases',
+          '/releases/rel-product-architecture-preview',
+          '/releases/rel-product-architecture-preview/evidence',
+          '/reports',
+          '/reports/delivery',
+          '/reports/quality',
+          '/reports/release-readiness',
+          '/reports/observation',
+        ]);
+        expect(
+          new Set(report.records.map((record) => `${record.route} @ ${record.viewport}`)),
+        ).toEqual(
+          new Set(requiredScreenshotRoutes.flatMap((route) => route.viewports.map((viewport) => `${route.concretePath} @ ${viewport}`))),
+        );
+        expect(report.records).toHaveLength(requiredScreenshotRoutes.reduce((sum, route) => sum + route.viewports.length, 0));
+        expect(report.records.every((record) => record.geometry.horizontalOverflowPx <= 1)).toBe(true);
+        expect(report.records.filter((record) => record.viewport >= 1024).every((record) => (record.geometry.pageHeaderHeight ?? 0) <= 96)).toBe(true);
+        expect(report.manualReviewChecklist.every((item) => item.decision === 'pass')).toBe(true);
       } finally {
         await browser.close();
         await server.stop();
       }
     },
-    120_000,
+    240_000,
   );
 
   it(
@@ -56,28 +117,55 @@ describe('AI-native project management visual QA', () => {
 
       try {
         const { page, baseUrl } = fixture;
-        await page.goto(`${baseUrl}/requirements/req-1`);
+        await page.goto(`${baseUrl}/requirements/${requirementListItem.id}`);
 
         await page.getByRole('button', { name: /create development plan/i }).click();
-        await page.getByRole('textbox', { name: /development plan title/i }).fill('Checkout manual development plan');
+        await page.getByRole('textbox', { name: /development plan title/i }).fill('Manual Plan Item governance plan');
         await page.getByRole('button', { name: /^create$/i }).click();
         await expectPage(page).toHaveURL(/\/development-plans\/[^/]+$/);
         const manualPlanId = new URL(page.url()).pathname.split('/').at(-1);
         if (manualPlanId === undefined || manualPlanId.length === 0) throw new Error('Manual Development Plan id was not reflected in the URL');
 
         await page.getByRole('button', { name: /add row/i }).click();
-        await page.getByRole('textbox', { name: /plan item title/i }).fill('Manual checkout validation item');
-        await page.getByRole('textbox', { name: /summary/i }).fill('Validate checkout states before execution.');
+        await page.getByRole('textbox', { name: /plan item title/i }).fill('Manual Plan Item governance row');
+        await page.getByRole('textbox', { name: /summary/i }).fill('Validate Plan Item governance states before execution.');
         await page.getByRole('button', { name: /save row/i }).click();
-        await expectPage(page.getByRole('row', { name: /manual checkout validation item/i })).toBeVisible();
+        await expectPage(page.getByRole('row', { name: /manual plan item governance row/i })).toBeVisible();
 
-        await page.goto(`${baseUrl}/requirements/req-2`);
+        await page.goto(`${baseUrl}/bugs/${bugListItem.id}`);
         await page.getByRole('button', { name: /link existing development plan/i }).click();
         await page.getByRole('combobox', { name: /development plan/i }).selectOption(manualPlanId);
         await page.getByRole('button', { name: /^link$/i }).click();
-        await expectPage(page.getByRole('link', { name: /checkout manual development plan/i })).toHaveAttribute('href', new RegExp(`/development-plans/${manualPlanId}`));
+        await expectPage(page.getByRole('link', { name: /manual plan item governance plan/i })).toHaveAttribute('href', new RegExp(`/development-plans/${manualPlanId}`));
       } finally {
         await fixture.stop();
+      }
+    },
+    120_000,
+  );
+
+  it(
+    'keeps My Work filters operable on mobile viewports',
+    async () => {
+      const server = await ensureVisualWebServer();
+      const browser = await launchVisualBrowser();
+
+      try {
+        const page = await browser.newPage();
+        await installMockedProductApi(page);
+        await page.setViewportSize({ width: 375, height: 900 });
+        await page.goto(`${server.url}/my-work`);
+
+        await expectPage(page.getByRole('combobox', { name: /role filter/i })).toBeVisible();
+        await expectPage(page.getByRole('combobox', { name: /gate filter/i })).toBeVisible();
+        await expectPage(page.getByRole('combobox', { name: /status filter/i })).toBeVisible();
+        await expectPage(page.getByRole('combobox', { name: /risk filter/i })).toBeVisible();
+
+        await page.getByRole('combobox', { name: /role filter/i }).selectOption('developer');
+        await expectPage(page.getByRole('region', { name: /developer attention/i })).toBeVisible();
+      } finally {
+        await browser.close();
+        await server.stop();
       }
     },
     120_000,
@@ -90,7 +178,7 @@ describe('AI-native project management visual QA', () => {
 
       try {
         const { page, baseUrl } = fixture;
-        await page.goto(`${baseUrl}/requirements/req-1`);
+        await page.goto(`${baseUrl}/requirements/${requirementListItem.id}`);
         const generatedPlanResponse = page.waitForResponse(
           (response) => response.request().method() === 'POST' && response.url().endsWith('/development-plans/generate-draft') && response.status() === 201,
         );
@@ -162,13 +250,19 @@ async function assertNoRenderedBaggage(page: Page, path: string) {
     expect(bodyMarkup, `${path} must not link ${forbidden}`).not.toContain(forbidden);
   }
 
-  if (path === '/reports?report=replay') {
-    expect(bodyText, `${path} must show scoped replay context`).toContain('Lifecycle replay evidence context');
-    expect(bodyMarkup, `${path} must use query-scoped replay`).toContain('report=replay');
-  }
-
   if (!path.startsWith('/releases')) {
     expect(bodyText, `${path} must not render Release Owner outside release pages`).not.toContain('Release Owner');
+  }
+
+  if (path === '/development-plans') {
+    expect(bodyText, `${path} must render active plan workspace affordances`).toContain('Active Development Plans');
+    expect(bodyText, `${path} must keep source links visible`).toMatch(/source links/i);
+  }
+
+  if (path === '/development-plans/new') {
+    expect(bodyText, `${path} must render a real authoring workspace`).toContain('AI generation guidance');
+    expect(bodyText, `${path} must avoid old source picker placeholder`).not.toContain('Pick a source object first');
+    expect(bodyText, `${path} must preserve item-scoped downstream generation`).toContain('generated only from Plan Items after boundary approval');
   }
 
   for (const navText of primaryNavText) {

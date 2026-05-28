@@ -745,6 +745,15 @@ describe('P1 core schema release flow Drizzle schema', () => {
     }
     expect(columnType(executions, 'approved_spec_revision_id')).toBe('PgUUID');
     expect(columnNotNull(executions, 'approved_spec_revision_id')).toBe(true);
+    expect(columnType(executions, 'worker_state')).toBe('PgText');
+    expect(columnType(executions, 'current_step')).toBe('PgText');
+    expect(columnType(executions, 'stale')).toBe('PgBoolean');
+    expect(columnType(executions, 'blocked')).toBe('PgBoolean');
+    expect(columnType(executions, 'last_event_at')).toBe('PgTimestampString');
+    expect(columnType(executions, 'last_event_summary')).toBe('PgText');
+    for (const columnName of ['worker_state', 'current_step', 'stale', 'blocked', 'last_event_at', 'last_event_summary']) {
+      expect(columnNotNull(executions, columnName)).toBe(false);
+    }
     expect(
       hasUniqueIndex(development_plan_item_revisions, 'dpi_revisions_item_revision_unique', [
         'development_plan_item_id',

@@ -7,7 +7,8 @@ import type {
   WorkItemDeliveryReadiness,
 } from '@forgeloop/contracts';
 
-export const projectId = 'project-web-product';
+export const productArchitectureSeedId = 'project-product-architecture-demo';
+export const projectId = productArchitectureSeedId;
 export const actorId = 'actor-owner';
 
 export const requirementIntakeContext = {
@@ -19,12 +20,12 @@ export const requirementIntakeContext = {
 } as const;
 
 export const workItem = {
-  id: 'work-item-web-product',
+  id: 'req-plan-item-governance',
   project_id: projectId,
   kind: 'requirement',
-  title: 'Ship route-backed product lane',
-  goal: 'Provide deterministic product data for web route tests.',
-  success_criteria: ['API hooks resolve deterministic fixtures', 'Product Lane labels expose domain queues'],
+  title: 'Plan Item governed Spec and Execution Plan generation',
+  goal: 'Make Plan Item governance the source of Spec and Execution Plan generation.',
+  success_criteria: ['Plan Item generation flow is visible', 'Spec and Execution Plan generation stay item-scoped'],
   priority: 'P0',
   risk: 'medium',
   driver_actor_id: actorId,
@@ -33,14 +34,14 @@ export const workItem = {
   activity_state: 'active',
   gate_state: 'open',
   resolution: 'unresolved',
-  current_spec_id: 'spec-web-product',
-  current_plan_id: 'plan-web-product',
+  current_spec_id: 'spec-cockpit-command-center',
+  current_plan_id: 'plan-requirements-database-view',
   created_at: '2026-05-18T00:00:00.000Z',
   updated_at: '2026-05-18T00:00:00.000Z',
 };
 
 export const spec = {
-  id: 'spec-web-product',
+  id: 'spec-cockpit-command-center',
   work_item_id: workItem.id,
   scope_ref: { type: 'requirement', id: workItem.id, title: workItem.title },
   entity_type: 'spec',
@@ -48,8 +49,8 @@ export const spec = {
   editing_state: 'locked',
   gate_state: 'approved',
   resolution: 'approved',
-  current_revision_id: 'spec-revision-web-product',
-  approved_revision_id: 'spec-revision-web-product',
+  current_revision_id: 'specrev-cockpit-command-center-v1',
+  approved_revision_id: 'specrev-cockpit-command-center-v1',
   approved_at: '2026-05-18T00:10:00.000Z',
   approved_by_actor_id: 'actor-reviewer',
   created_at: '2026-05-18T00:05:00.000Z',
@@ -57,15 +58,15 @@ export const spec = {
 };
 
 export const specRevision = {
-  id: 'spec-revision-web-product',
+  id: 'specrev-cockpit-command-center-v1',
   spec_id: spec.id,
   work_item_id: workItem.id,
   revision_number: 1,
-  summary: 'Route-backed Product Lane spec',
-  content: 'The web Product Lane reads product data through shared API hooks.',
-  background: 'The fourth delivery slice establishes shared clients, query keys, and contexts.',
-  goals: ['Centralize product API reads', 'Keep product copy lane-safe'],
-  scope_in: ['Shared API hooks', 'Route test fixtures'],
+  summary: 'Cockpit operational command center Spec',
+  content: 'The Cockpit should act as an operational command center for AI-native project management.',
+  background: 'The product architecture rebuild replaces generic route shells with purpose-built surfaces.',
+  goals: ['Expose operational state density', 'Keep command paths Plan Item governed'],
+  scope_in: ['Cockpit information architecture', 'Review-ready fixture data'],
   scope_out: ['Route shell navigation'],
   acceptance_criteria: ['Query keys are stable', 'Fixtures need no live API'],
   risk_notes: ['Backend actor ids remain internal'],
@@ -74,7 +75,7 @@ export const specRevision = {
 };
 
 export const plan = {
-  id: 'plan-web-product',
+  id: 'plan-requirements-database-view',
   work_item_id: workItem.id,
   scope_ref: { type: 'requirement', id: workItem.id, title: workItem.title },
   entity_type: 'plan',
@@ -82,8 +83,8 @@ export const plan = {
   editing_state: 'locked',
   gate_state: 'approved',
   resolution: 'approved',
-  current_revision_id: 'plan-revision-web-product',
-  approved_revision_id: 'plan-revision-web-product',
+  current_revision_id: 'planrev-requirements-database-view-v1',
+  approved_revision_id: 'planrev-requirements-database-view-v1',
   approved_at: '2026-05-18T00:18:00.000Z',
   approved_by_actor_id: 'actor-reviewer',
   created_at: '2026-05-18T00:12:00.000Z',
@@ -91,68 +92,132 @@ export const plan = {
 };
 
 export const planRevision = {
-  id: 'plan-revision-web-product',
+  id: 'planrev-requirements-database-view-v1',
   plan_id: plan.id,
   work_item_id: workItem.id,
   revision_number: 1,
-  summary: 'Add shared API product foundation',
-  content: 'Create shared API clients, hooks, contexts, and deterministic fixtures.',
-  implementation_summary: 'Move current API clients into shared/api and consume canonical Product Lane DTOs.',
-  split_strategy: 'Foundation-only task with no route shell work.',
-  dependency_order: ['shared/api', 'shared/context', 'tests/web/fixtures'],
+  summary: 'Requirements database view Execution Plan',
+  content: 'Replace the Requirements list with a database view that keeps Plan Item governance visible.',
+  implementation_summary: 'Use canonical source object rows with fixture-backed evidence and generation links.',
+  split_strategy: 'Database view task with no cockpit layout migration.',
+  dependency_order: ['tests/web/fixtures', 'apps/web/src/features/requirements'],
   test_matrix: ['pnpm vitest run tests/web/api-hooks.test.tsx', 'pnpm --filter @forgeloop/web typecheck'],
   risk_mitigations: ['Keep route fixtures aligned with ProductAction contracts'],
   rollback_notes: 'Revert shared API foundation commit if route tasks need to pause.',
   created_at: '2026-05-18T00:13:00.000Z',
 };
 
-export const developmentPlanItem = {
-  id: 'development-plan-item-web-product',
-  development_plan_id: 'development-plan-web-product',
-  revision_id: 'development-plan-item-revision-web-product',
-  title: 'Build AI-native project management API clients',
-  summary: 'Replace legacy execution route clients with Development Plan Item scoped product clients.',
+const developmentPlanItemBase = {
+  development_plan_id: 'dp-product-architecture-visual-rebuild',
   driver_actor_id: actorId,
   responsible_role: 'developer',
   reviewer_actor_id: 'actor-reviewer',
   risk: 'medium',
-  dependency_hints: ['Development Plan contracts are available'],
-  affected_surfaces: ['apps/web/src/shared/api', 'tests/web/fixtures'],
+  release_impact: 'release_scoped',
+  updated_at: '2026-05-18T00:19:00.000Z',
+} as const;
+
+export const cockpitCommandCenterItem = {
+  ...developmentPlanItemBase,
+  id: 'dpi-cockpit-command-center',
+  revision_id: 'dpirev-cockpit-command-center-v1',
+  title: 'Rebuild Cockpit into operational command center',
+  summary: 'Replace generic cockpit composition with operational delivery, review, and risk signals.',
+  dependency_hints: ['Cockpit route contract is canonical'],
+  affected_surfaces: ['apps/web/src/features/cockpit'],
+  boundary_status: 'approved',
+  spec_status: 'in_review',
+  execution_plan_status: 'missing',
+  execution_status: 'not_started',
+  review_status: 'changes_requested',
+  qa_handoff_status: 'missing',
+  next_action: 'Resolve Spec review comments on Cockpit layout density.',
+} as const;
+
+export const requirementsDatabaseViewItem = {
+  ...developmentPlanItemBase,
+  id: 'dpi-requirements-database-view',
+  revision_id: 'dpirev-requirements-database-view-v1',
+  title: 'Replace Requirements list with database view',
+  summary: 'Turn Requirements into a source-object database with generation and evidence affordances.',
+  dependency_hints: ['Plan Item governed generation flow must stay visible'],
+  affected_surfaces: ['apps/web/src/features/requirements'],
+  boundary_status: 'approved',
+  spec_status: 'approved',
+  execution_plan_status: 'approved',
+  execution_status: 'ready',
+  review_status: 'missing',
+  qa_handoff_status: 'pending',
+  next_action: 'Use the approved Execution Plan to start database view implementation.',
+} as const;
+
+export const demoSeedVisualReviewItem = {
+  ...developmentPlanItemBase,
+  id: 'dpi-demo-seed-visual-review',
+  revision_id: 'dpirev-demo-seed-visual-review-v1',
+  title: 'Seed demo project state for visual review',
+  summary: 'Seed deterministic product architecture data for visual route review.',
+  dependency_hints: ['Task 1 route contracts are committed'],
+  affected_surfaces: ['tests/web/fixtures', 'tests/e2e/helpers'],
   boundary_status: 'approved',
   spec_status: 'approved',
   execution_plan_status: 'approved',
   execution_status: 'running',
   review_status: 'in_review',
   qa_handoff_status: 'pending',
-  release_impact: 'release_scoped',
-  next_action: 'Supervise execution and prepare review handoff.',
-  updated_at: '2026-05-18T00:19:00.000Z',
+  next_action: 'Resume the execution with seeded visual review data.',
 } as const;
+
+export const developmentPlanTableInspectorItem = {
+  ...developmentPlanItemBase,
+  id: 'dpi-development-plan-table-inspector',
+  revision_id: 'dpirev-development-plan-table-inspector-v1',
+  title: 'Rewrite Development Plan table and inspector',
+  summary: 'Replace the generic table detail with a dense plan table and inspector workflow.',
+  dependency_hints: ['Demo fixture data must include blocked boundary state'],
+  affected_surfaces: ['apps/web/src/features/development-plans'],
+  boundary_status: 'changes_requested',
+  spec_status: 'blocked',
+  execution_plan_status: 'blocked',
+  execution_status: 'not_started',
+  review_status: 'missing',
+  qa_handoff_status: 'missing',
+  next_action: 'Unblock the Plan Item boundary before authoring documents.',
+} as const;
+
+export const developmentPlanItemsById = {
+  'dpi-cockpit-command-center': cockpitCommandCenterItem,
+  'dpi-requirements-database-view': requirementsDatabaseViewItem,
+  'dpi-demo-seed-visual-review': demoSeedVisualReviewItem,
+  'dpi-development-plan-table-inspector': developmentPlanTableInspectorItem,
+} as const;
+
+export const developmentPlanItem = demoSeedVisualReviewItem;
 
 export const developmentPlan = {
   id: developmentPlanItem.development_plan_id,
-  revision_id: 'development-plan-revision-web-product',
-  title: 'Web product UI architecture foundation plan',
+  revision_id: 'dprev-product-architecture-visual-rebuild-v1',
+  title: 'Project architecture and visual rebuild',
   status: 'active',
-  source_refs: [{ type: 'requirement', id: 'req-1', title: 'Checkout requirement' }],
-  items: [developmentPlanItem],
+  source_refs: [{ type: 'requirement', id: workItem.id, title: workItem.title }],
+  items: Object.values(developmentPlanItemsById),
   created_at: '2026-05-18T00:11:00.000Z',
   updated_at: '2026-05-18T00:19:00.000Z',
 } as const;
 
 export const brainstormingSession = {
-  id: 'brainstorming-session-web-product',
-  revision_id: 'brainstorming-session-revision-web-product',
-  source_ref: { type: 'requirement', id: 'req-1', title: 'Checkout requirement' },
+  id: 'brainstorming-session-demo-seed-visual-review',
+  revision_id: 'brainstorming-session-revision-demo-seed-visual-review',
+  source_ref: developmentPlan.source_refs[0],
   development_plan_id: developmentPlan.id,
   development_plan_item_id: developmentPlanItem.id,
   development_plan_item_revision_id: developmentPlanItem.revision_id,
-  context_manifest_id: 'context-manifest-web-product',
-  context_manifest_revision_id: 'context-manifest-revision-web-product',
+  context_manifest_id: 'context-manifest-demo-seed-visual-review',
+  context_manifest_revision_id: 'context-manifest-revision-demo-seed-visual-review',
   questions: [
     {
-      id: 'brainstorming-question-web-product',
-      text: 'Which legacy product routes must be removed?',
+      id: 'brainstorming-question-demo-seed-visual-review',
+      text: 'Which product architecture states must be visible in the demo seed?',
       author_id: 'actor-tech-lead',
       created_at: '2026-05-18T00:14:00.000Z',
       status: 'answered',
@@ -160,49 +225,49 @@ export const brainstormingSession = {
   ],
   answers: [
     {
-      id: 'brainstorming-answer-web-product',
-      question_id: 'brainstorming-question-web-product',
-      text: 'Remove public direct-work, direct Spec, and direct Plan routes from the product shell.',
+      id: 'brainstorming-answer-demo-seed-visual-review',
+      question_id: 'brainstorming-question-demo-seed-visual-review',
+      text: 'Show source objects, four Plan Items, running execution, review, QA, release, and delivery risk.',
       actor_id: actorId,
       created_at: '2026-05-18T00:15:00.000Z',
     },
   ],
   decisions: [
     {
-      id: 'brainstorming-decision-web-product',
-      text: 'Development Plan Item is the product execution boundary.',
+      id: 'brainstorming-decision-demo-seed-visual-review',
+      text: 'Development Plan Item remains the product execution boundary.',
       actor_id: 'actor-tech-lead',
-      rationale: 'The product flow requires boundary brainstorming before spec and execution plan generation.',
+      rationale: 'The visual review needs seeded state across Spec, Execution Plan, execution, review, QA, and release.',
       created_at: '2026-05-18T00:16:00.000Z',
     },
   ],
   approval_state: 'approved',
-  boundary_summary_id: 'boundary-summary-web-product',
+  boundary_summary_id: 'boundary-summary-demo-seed-visual-review',
   approver_actor_id: 'actor-tech-lead',
   approved_at: '2026-05-18T00:17:00.000Z',
 } as const;
 
 export const boundarySummary = {
   id: brainstormingSession.boundary_summary_id,
-  revision_id: 'boundary-summary-revision-web-product',
+  revision_id: 'boundary-summary-revision-demo-seed-visual-review',
   brainstorming_session_id: brainstormingSession.id,
   brainstorming_session_revision_id: brainstormingSession.revision_id,
   development_plan_id: developmentPlan.id,
   development_plan_item_id: developmentPlanItem.id,
   development_plan_item_revision_id: developmentPlanItem.revision_id,
   source_ref: brainstormingSession.source_ref,
-  summary: 'Replace public legacy direct-work and direct Spec/Plan product surfaces with item-scoped AI-native clients.',
-  summary_markdown: 'Replace public legacy direct-work and direct Spec/Plan product surfaces with item-scoped AI-native clients.',
+  summary: 'Seed the product architecture preview with item-scoped states and review evidence.',
+  summary_markdown: 'Seed the product architecture preview with item-scoped states and review evidence.',
   approved_by_actor_id: brainstormingSession.approver_actor_id,
   approved_at: brainstormingSession.approved_at,
 } as const;
 
 export const executionPlan = {
-  id: 'execution-plan-web-product',
-  development_plan_item_id: developmentPlanItem.id,
+  id: 'execution-plan-requirements-database-view',
+  development_plan_item_id: requirementsDatabaseViewItem.id,
   status: 'approved',
-  current_revision_id: 'execution-plan-revision-web-product',
-  approved_revision_id: 'execution-plan-revision-web-product',
+  current_revision_id: 'planrev-requirements-database-view-v1',
+  approved_revision_id: 'planrev-requirements-database-view-v1',
   approved_by_actor_id: 'actor-tech-lead',
   approved_at: '2026-05-18T00:18:00.000Z',
   created_at: '2026-05-18T00:17:30.000Z',
@@ -210,22 +275,23 @@ export const executionPlan = {
 } as const;
 
 export const executionPlanRevision = {
-  id: executionPlan.approved_revision_id,
-  execution_plan_id: executionPlan.id,
-  development_plan_item_id: developmentPlanItem.id,
+  id: 'planrev-requirements-database-view-v1',
+  execution_plan_id: 'execution-plan-requirements-database-view',
+  development_plan_item_id: requirementsDatabaseViewItem.id,
   based_on_spec_revision_id: specRevision.id,
   revision_number: 1,
-  summary: 'Implement AI-native Web API clients and fixtures.',
-  content: 'Add client methods, hooks, query keys, and deterministic AI-native route fixtures.',
+  summary: 'Requirements database view Execution Plan',
+  content: 'Implement the Requirements database view using Plan Item governed source-object data.',
   created_at: '2026-05-18T00:17:40.000Z',
 } as const;
 
 export const execution = {
-  id: 'execution-web-product',
+  id: 'exec-demo-seed-visual-review',
   development_plan_item_id: developmentPlanItem.id,
   execution_plan_revision_id: executionPlanRevision.id,
   approved_spec_revision_id: specRevision.id,
-  ref: { type: 'execution', id: 'execution-web-product', title: 'Execute AI-native Web API client work' },
+  title: 'Codex worker is seeding visual review data',
+  ref: { type: 'execution', id: 'exec-demo-seed-visual-review', title: 'Codex worker is seeding visual review data' },
   development_plan_item_ref: {
     type: 'development_plan_item',
     id: developmentPlanItem.id,
@@ -241,13 +307,13 @@ export const execution = {
   approved_spec_revision_ref: { type: 'spec_revision', id: specRevision.id, spec_id: spec.id, title: specRevision.summary },
   status: 'running',
   worker_state: 'running',
-  current_step: 'Applying approved Execution Plan',
+  current_step: 'Seeding deterministic product architecture fixture data',
   source_ref: developmentPlan.source_refs[0],
-  evidence_refs: [{ type: 'execution', id: 'execution-web-product', title: 'Execution transcript summary' }],
-  runtime_evidence_refs: [{ type: 'execution_package', id: 'package-web-product', title: 'Add route-backed product API foundation' }],
-  pr_refs: [{ id: 'pr-web-product', title: 'AI-native Web API clients PR' }],
-  diff_refs: [{ id: 'diff-web-product', title: 'Web client diff' }],
-  test_evidence_refs: [{ id: 'test-web-product', title: 'Focused route tests' }],
+  evidence_refs: [{ type: 'execution', id: 'evidence-exec-demo-seed-checks', title: 'Demo seed fixture checks' }],
+  runtime_evidence_refs: [{ type: 'execution_package', id: 'pkg-demo-seed-visual-review-v1', title: 'Seed demo project state execution boundary' }],
+  pr_refs: [{ id: 'pr-product-architecture-preview', title: 'Product architecture preview data PR' }],
+  diff_refs: [{ id: 'diff-demo-seed-visual-review', title: 'Demo seed fixture diff' }],
+  test_evidence_refs: [{ id: 'test-demo-seed-visual-review', title: 'Focused demo seed tests' }],
   interrupt_history: [{ at: '2026-05-18T00:21:00.000Z', reason: 'Paused for review checkpoint' }],
   continuation_history: [{ at: '2026-05-18T00:22:00.000Z', summary: 'Continued after checkpoint' }],
   created_at: '2026-05-18T00:20:00.000Z',
@@ -255,45 +321,52 @@ export const execution = {
 } as const;
 
 export const codeReviewHandoff = {
-  id: 'code-review-handoff-web-product',
-  ref: { type: 'code_review_handoff', id: 'code-review-handoff-web-product', title: 'Review AI-native Web API clients' },
+  id: 'review-cockpit-requested-changes',
+  title: 'Requested changes on Cockpit layout density',
+  ref: { type: 'code_review_handoff', id: 'review-cockpit-requested-changes', title: 'Requested changes on Cockpit layout density' },
   execution_id: execution.id,
-  development_plan_item_id: developmentPlanItem.id,
+  development_plan_item_id: cockpitCommandCenterItem.id,
   execution_plan_revision_id: executionPlanRevision.id,
   reviewer_actor_id: 'actor-reviewer',
-  status: 'in_review',
-  summary: 'Review Web client and fixture migration away from public direct-work routes.',
-  changed_surfaces: ['apps/web/src/shared/api', 'tests/web/fixtures'],
+  status: 'changes_requested',
+  summary: 'Cockpit layout density needs tighter information hierarchy before visual review approval.',
+  changed_surfaces: ['apps/web/src/features/cockpit', 'tests/web/fixtures'],
   verification_evidence_refs: [{ type: 'execution', id: execution.id, title: execution.ref.title }],
-  comments: ['Review API client route coverage.'],
-  changes_requested: [],
+  comments: ['Density and hierarchy are not yet sufficient for the command center review target.'],
+  changes_requested: ['Reduce vertical sprawl in Cockpit command sections.'],
   created_at: '2026-05-18T00:28:00.000Z',
   updated_at: '2026-05-18T00:30:00.000Z',
 } as const;
 
 export const qaHandoff = {
-  id: 'qa-handoff-web-product',
-  ref: { type: 'qa_handoff', id: 'qa-handoff-web-product', title: 'QA AI-native Web API clients' },
+  id: 'qa-requirements-authoring-mdx',
+  title: 'QA pending MDX image insertion acceptance',
+  ref: { type: 'qa_handoff', id: 'qa-requirements-authoring-mdx', title: 'QA pending MDX image insertion acceptance' },
   code_review_handoff_id: codeReviewHandoff.id,
   execution_id: execution.id,
-  source_ref: { type: 'requirement', id: 'req-1', title: 'Checkout requirement' },
-  development_plan_item_id: developmentPlanItem.id,
-  development_plan_item_ref: execution.development_plan_item_ref,
+  source_ref: developmentPlan.source_refs[0],
+  development_plan_item_id: requirementsDatabaseViewItem.id,
+  development_plan_item_ref: {
+    type: 'development_plan_item',
+    id: requirementsDatabaseViewItem.id,
+    development_plan_id: developmentPlan.id,
+    title: requirementsDatabaseViewItem.title,
+  },
   approved_spec_revision_ref: { type: 'spec_revision', id: specRevision.id, spec_id: spec.id, title: specRevision.summary },
   approved_execution_plan_revision_ref: execution.execution_plan_revision_ref,
   status: 'pending',
-  acceptance_criteria: ['Client methods target Development Plan Item scoped endpoints'],
-  test_strategy: 'Run Web client contract and route smoke tests.',
+  acceptance_criteria: ['MDX image insertion acceptance is visible from Requirements authoring'],
+  test_strategy: 'Run fixture and route smoke tests for the Requirements database view.',
   verification_evidence_refs: [{ type: 'execution', id: execution.id, title: execution.ref.title }],
   known_risks: [],
   changed_surfaces: codeReviewHandoff.changed_surfaces,
-  release_impact: developmentPlanItem.release_impact,
+  release_impact: requirementsDatabaseViewItem.release_impact,
   created_at: '2026-05-18T00:31:00.000Z',
   updated_at: '2026-05-18T00:31:00.000Z',
 } as const;
 
 export const executionPackage = {
-  id: 'package-web-product',
+  id: 'pkg-demo-seed-visual-review-v1',
   task_id: 'task-1',
   work_item_id: workItem.id,
   scope_ref: { type: 'requirement', id: workItem.id, title: workItem.title },
@@ -303,7 +376,7 @@ export const executionPackage = {
   plan_revision_id: planRevision.id,
   project_id: projectId,
   repo_id: 'forgeloop',
-  objective: 'Add route-backed product API foundation',
+  objective: 'Seed demo project state execution boundary',
   owner_actor_id: 'actor-execution-owner',
   reviewer_actor_id: 'actor-reviewer',
   qa_owner_actor_id: 'actor-qa',
@@ -321,21 +394,21 @@ export const executionPackage = {
     },
   ],
   required_artifact_kinds: ['diff', 'check_output'],
-  allowed_paths: ['apps/web/src/shared/**', 'tests/web/**'],
+  allowed_paths: ['tests/web/fixtures/**', 'tests/e2e/helpers/**', 'scripts/**'],
   forbidden_paths: ['apps/control-plane-api/**'],
   version: 1,
-  last_run_session_id: 'run-web-product',
+  last_run_session_id: 'run-demo-seed-visual-review',
   created_at: '2026-05-18T00:20:00.000Z',
   updated_at: '2026-05-18T00:22:00.000Z',
 };
 
 export const runSession = {
-  id: 'run-web-product',
+  id: 'run-demo-seed-visual-review',
   execution_package_id: executionPackage.id,
   requested_by_actor_id: executionPackage.owner_actor_id,
   status: 'succeeded',
   executor_type: 'mock',
-  changed_files: [{ repo_id: 'forgeloop', path: 'apps/web/src/shared/api/hooks.ts', change_kind: 'added' }],
+  changed_files: [{ repo_id: 'forgeloop', path: 'tests/web/fixtures/product-data.ts', change_kind: 'modified' }],
   check_results: [
     {
       check_id: 'web-typecheck',
@@ -354,7 +427,7 @@ export const runSession = {
       storage_uri: 's3://forgeloop-product-fixtures/shared-api-foundation.diff',
     },
   ],
-  summary: 'Shared product API foundation passed deterministic checks.',
+  summary: 'Demo seed visual review data passed deterministic checks.',
   created_at: '2026-05-18T00:24:00.000Z',
   updated_at: '2026-05-18T00:25:00.000Z',
   started_at: '2026-05-18T00:24:00.000Z',
@@ -362,24 +435,24 @@ export const runSession = {
 };
 
 export const reviewPacket = {
-  id: 'review-web-product',
+  id: codeReviewHandoff.id,
   run_session_id: runSession.id,
   execution_package_id: executionPackage.id,
   reviewer_actor_id: executionPackage.reviewer_actor_id,
   status: 'completed',
-  decision: 'approved',
-  summary: 'Shared product API foundation is ready for route tests.',
+  decision: 'changes_requested',
+  summary: codeReviewHandoff.title,
   changed_files: runSession.changed_files,
   check_result_summary: 'All required product checks passed.',
   self_review: {
     status: 'succeeded',
-    summary: 'No live API dependency remains in the test fixtures.',
+    summary: 'Product architecture demo data is seeded, with Cockpit density still under review.',
     spec_plan_alignment: 'Aligned',
     test_assessment: 'Focused hook and state checks pass.',
     risk_notes: ['Product Lane fixtures remain contract-shaped'],
     follow_up_questions: [],
   },
-  risk_notes: ['Keep deleted queue identifiers out of product navigation labels'],
+  risk_notes: ['Generic WorkspacePage debt still blocks the final visual rebuild review'],
   reviewed_by_actor_id: executionPackage.reviewer_actor_id,
   reviewed_at: '2026-05-18T00:30:00.000Z',
   created_at: '2026-05-18T00:28:00.000Z',
@@ -408,22 +481,22 @@ export const cockpitPackageFor = (item: Pick<WorkItemCockpitResponse['item'], 'i
 };
 
 export const release = {
-  id: 'release-web-product',
-  org_id: 'org-web-product',
+  id: 'rel-product-architecture-preview',
+  org_id: 'org-product-architecture-preview',
   project_id: projectId,
-  title: 'Web product UI architecture foundation',
-  scope_summary: 'Shared product API hooks and deterministic route fixtures.',
+  title: 'Product architecture preview release',
+  scope_summary: 'Seeded source objects, Plan Items, execution, review, QA, and release data for visual review.',
   release_owner_actor_id: 'actor-release-owner',
   release_type: 'standard',
   phase: 'approval',
   activity_state: 'active',
   gate_state: 'open',
   resolution: 'unresolved',
-  work_item_ids: [workItem.id],
+  work_item_ids: [workItem.id, 'bug-execution-review-context', 'td-retire-workspace-page-template'],
   execution_package_ids: [executionPackage.id],
-  rollout_strategy: 'Use in route tests before production pages are ready.',
-  rollback_plan: 'Remove route test fixture usage and restore direct mocks.',
-  observation_plan: 'Watch route tests for missing API fixture coverage.',
+  rollout_strategy: 'Use seeded data for product architecture visual review before UI layout migrations.',
+  rollback_plan: 'Revert the seeded fixture data and preview script.',
+  observation_plan: 'Watch visual route screenshots for generic template debt.',
   created_by_actor_id: actorId,
   updated_by_actor_id: actorId,
   created_at: '2026-05-18T00:35:00.000Z',
@@ -432,20 +505,20 @@ export const release = {
 
 export const timeline = [
   {
-    id: 'timeline-web-product-1',
+    id: 'timeline-product-architecture-demo-1',
     source: 'fixture',
     object_type: 'requirement',
     object_id: workItem.id,
-    summary: 'Created shared product API foundation requirement.',
+    summary: 'Created Plan Item governed generation requirement.',
     created_at: workItem.created_at,
     payload: { project_id: projectId },
   },
 ];
 
 export const requirementListItem = {
-  id: 'req-1',
-  ref: { type: 'requirement', id: 'req-1' },
-  title: 'Checkout requirement',
+  id: 'req-plan-item-governance',
+  ref: { type: 'requirement', id: 'req-plan-item-governance' },
+  title: 'Plan Item governed Spec and Execution Plan generation',
   status: 'planning/active/open',
   priority: 'P1',
   risk: 'medium',
@@ -453,6 +526,35 @@ export const requirementListItem = {
   phase: 'planning',
   updated_at: '2026-05-18T01:00:00.000Z',
 } as const;
+
+const attachmentRef = ({
+  id,
+  owner_object_id,
+  owner_object_type,
+  title,
+}: {
+  id: string;
+  owner_object_id: string;
+  owner_object_type: 'bug' | 'initiative' | 'requirement' | 'tech_debt';
+  title: string;
+}) => ({
+  id,
+  owner_object_type,
+  owner_object_id,
+  linked_object_refs: [],
+  filename: `${id}.md`,
+  content_type: 'text/markdown',
+  size_bytes: 128,
+  checksum_sha256: 'a'.repeat(64),
+  uploaded_by_actor_id: actorId,
+  created_at: '2026-05-18T01:00:00.000Z',
+  evidence_category: 'document',
+  caption: title,
+  alt_text: title,
+  visibility: 'object',
+  safety_status: 'passed',
+  reference_status: 'active',
+}) as const;
 
 export const requirementDetail = {
   id: requirementListItem.id,
@@ -463,9 +565,16 @@ export const requirementDetail = {
   risk: requirementListItem.risk,
   driver_actor_id: requirementListItem.driver_actor_id,
   updated_at: requirementListItem.updated_at,
-  narrative_markdown: 'Checkout validation must block bad payment states before submission.',
-  evidence_refs: [],
-  attachment_refs: [],
+  narrative_markdown: 'Plan Item governance must be visible before Spec and Execution Plan generation.',
+  evidence_refs: [{ type: 'attachment', id: 'att-requirement-flow-image', title: 'Plan Item generation flow' }],
+  attachment_refs: [
+    attachmentRef({
+      id: 'att-requirement-flow-image',
+      owner_object_type: 'requirement',
+      owner_object_id: requirementListItem.id,
+      title: 'Plan Item generation flow',
+    }),
+  ],
   relationship_refs: [
     { type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title },
     {
@@ -475,19 +584,19 @@ export const requirementDetail = {
       title: developmentPlanItem.title,
     },
   ],
-  bug_refs: [{ type: 'bug', id: 'bug-1' }],
+  bug_refs: [{ type: 'bug', id: 'bug-execution-review-context' }],
   release_refs: [{ type: 'release', id: release.id }],
 } as const;
 
 export const initiativeListItem = {
-  id: 'init-1',
-  ref: { type: 'initiative', id: 'init-1' },
-  title: 'Checkout reliability initiative',
+  id: 'init-ai-native-rollout',
+  ref: { type: 'initiative', id: 'init-ai-native-rollout' },
+  title: 'AI-native project management rollout',
   status: 'planning/active/open',
   priority: 'P1',
   risk: 'medium',
   driver_actor_id: actorId,
-  business_outcome: 'Coordinate checkout reliability.',
+  business_outcome: 'Coordinate the product architecture rebuild rollout.',
   updated_at: '2026-05-18T01:01:00.000Z',
 } as const;
 
@@ -500,33 +609,47 @@ export const initiativeDetail = {
   risk: initiativeListItem.risk,
   driver_actor_id: initiativeListItem.driver_actor_id,
   updated_at: initiativeListItem.updated_at,
-  narrative_markdown: 'Coordinate checkout reliability across requirements, bugs, and task execution.',
-  evidence_refs: [],
-  attachment_refs: [],
-  child_refs: [{ type: 'requirement', id: 'req-1' }],
+  narrative_markdown: 'Coordinate AI-native project management surfaces across source objects, Plan Items, execution, and release.',
+  evidence_refs: [{ type: 'attachment', id: 'att-init-ai-native-rollout', title: 'AI-native project management rollout evidence' }],
+  attachment_refs: [
+    attachmentRef({
+      id: 'att-init-ai-native-rollout',
+      owner_object_type: 'initiative',
+      owner_object_id: initiativeListItem.id,
+      title: 'AI-native project management rollout evidence',
+    }),
+  ],
+  child_refs: [{ type: 'requirement', id: requirementListItem.id }],
   relationship_refs: [],
-  milestone_intent: 'Checkout validation readiness',
+  milestone_intent: 'Product architecture preview readiness',
   release_refs: [{ type: 'release', id: release.id }],
 } as const;
 
 export const techDebtListItem = {
-  id: 'td-1',
-  ref: { type: 'tech_debt', id: 'td-1' },
-  title: 'Checkout validation debt',
+  id: 'td-retire-workspace-page-template',
+  ref: { type: 'tech_debt', id: 'td-retire-workspace-page-template' },
+  title: 'Retire generic WorkspacePage visual template',
   status: 'planning/active/open',
   priority: 'P2',
   risk: 'medium',
   driver_actor_id: actorId,
-  affected_modules: ['apps/web/src/features/checkout'],
+  affected_modules: ['apps/web/src/features/product-surfaces'],
   updated_at: '2026-05-18T01:02:00.000Z',
 } as const;
 
 export const techDebtDetail = {
   ...techDebtListItem,
-  narrative_markdown: 'Validation logic is duplicated between form state and command guards.',
-  evidence_refs: [],
-  attachment_refs: [],
-  validation_strategy: 'Focused route tests and API command tests.',
+  narrative_markdown: 'Generic WorkspacePage composition prevents product-specific density and visual hierarchy.',
+  evidence_refs: [{ type: 'attachment', id: 'att-td-workspace-page-template', title: 'WorkspacePage template retirement evidence' }],
+  attachment_refs: [
+    attachmentRef({
+      id: 'att-td-workspace-page-template',
+      owner_object_type: 'tech_debt',
+      owner_object_id: techDebtListItem.id,
+      title: 'WorkspacePage template retirement evidence',
+    }),
+  ],
+  validation_strategy: 'Focused route tests and visual screenshot review.',
   relationship_refs: [
     {
       type: 'development_plan_item',
@@ -538,9 +661,9 @@ export const techDebtDetail = {
 } as const;
 
 export const bugListItem = {
-  id: 'bug-1',
-  ref: { type: 'bug', id: 'bug-1' },
-  title: 'Checkout regression',
+  id: 'bug-execution-review-context',
+  ref: { type: 'bug', id: 'bug-execution-review-context' },
+  title: 'Execution continuation loses review context',
   status: 'validation/active/open',
   priority: 'P0',
   risk: 'high',
@@ -558,12 +681,19 @@ export const bugDetail = {
   risk: bugListItem.risk,
   driver_actor_id: bugListItem.driver_actor_id,
   updated_at: bugListItem.updated_at,
-  narrative_markdown: 'Regression notes stay in Markdown while reproduction data remains structured.',
-  evidence_refs: [],
-  attachment_refs: [],
-  observed_behavior: 'Checkout accepts invalid cards.',
-  expected_behavior: 'Checkout blocks invalid cards.',
-  reproduction_steps: ['Open checkout', 'Submit an invalid card'],
+  narrative_markdown: 'Continuation must preserve the review context needed by the execution owner and reviewer.',
+  evidence_refs: [{ type: 'attachment', id: 'att-bug-reproduction-screenshot', title: 'Continuation loses review context' }],
+  attachment_refs: [
+    attachmentRef({
+      id: 'att-bug-reproduction-screenshot',
+      owner_object_type: 'bug',
+      owner_object_id: bugListItem.id,
+      title: 'Continuation loses review context',
+    }),
+  ],
+  observed_behavior: 'Execution continuation opens without the prior review context.',
+  expected_behavior: 'Execution continuation preserves the review context and pending decisions.',
+  reproduction_steps: ['Open the execution detail', 'Continue the running execution after review feedback'],
   relationship_refs: [
     {
       type: 'development_plan_item',
@@ -576,8 +706,8 @@ export const bugDetail = {
 
 export const boardCards = [
   {
-    id: 'board:req-1',
-    object_ref: { type: 'requirement', id: 'req-1', title: requirementListItem.title },
+    id: `board:${requirementListItem.id}`,
+    object_ref: { type: 'requirement', id: requirementListItem.id, title: requirementListItem.title },
     title: requirementListItem.title,
     column_id: 'planning',
     status: requirementListItem.status,
@@ -585,11 +715,11 @@ export const boardCards = [
     risk: requirementListItem.risk,
     driver_actor_id: requirementListItem.driver_actor_id,
     blocked: false,
-    href: '/requirements/req-1',
+    href: `/requirements/${requirementListItem.id}`,
   },
   {
-    id: 'board:init-1',
-    object_ref: { type: 'initiative', id: 'init-1', title: initiativeListItem.title },
+    id: `board:${initiativeListItem.id}`,
+    object_ref: { type: 'initiative', id: initiativeListItem.id, title: initiativeListItem.title },
     title: initiativeListItem.title,
     column_id: 'planning',
     status: initiativeListItem.status,
@@ -597,11 +727,11 @@ export const boardCards = [
     risk: initiativeListItem.risk,
     driver_actor_id: initiativeListItem.driver_actor_id,
     blocked: false,
-    href: '/initiatives/init-1',
+    href: `/initiatives/${initiativeListItem.id}`,
   },
   {
-    id: 'board:td-1',
-    object_ref: { type: 'tech_debt', id: 'td-1', title: techDebtListItem.title },
+    id: `board:${techDebtListItem.id}`,
+    object_ref: { type: 'tech_debt', id: techDebtListItem.id, title: techDebtListItem.title },
     title: techDebtListItem.title,
     column_id: 'planning',
     status: techDebtListItem.status,
@@ -609,7 +739,7 @@ export const boardCards = [
     risk: techDebtListItem.risk,
     driver_actor_id: techDebtListItem.driver_actor_id,
     blocked: false,
-    href: '/tech-debt/td-1',
+    href: `/tech-debt/${techDebtListItem.id}`,
   },
   {
     id: `board:${developmentPlanItem.id}`,
@@ -628,8 +758,8 @@ export const boardCards = [
     href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
   },
   {
-    id: 'board:bug-1',
-    object_ref: { type: 'bug', id: 'bug-1', title: bugListItem.title },
+    id: `board:${bugListItem.id}`,
+    object_ref: { type: 'bug', id: bugListItem.id, title: bugListItem.title },
     title: bugListItem.title,
     column_id: 'validation',
     status: bugListItem.status,
@@ -637,7 +767,7 @@ export const boardCards = [
     risk: bugListItem.risk,
     driver_actor_id: bugListItem.driver_actor_id,
     blocked: true,
-    href: '/bugs/bug-1',
+    href: `/bugs/${bugListItem.id}`,
   },
   {
     id: `board:${execution.id}`,
@@ -649,7 +779,7 @@ export const boardCards = [
     href: `/executions/${execution.id}`,
   },
   {
-    id: 'board:release-web-product',
+    id: `board:${release.id}`,
     object_ref: { type: 'release', id: release.id, title: release.title },
     title: release.title,
     column_id: 'release',
@@ -711,7 +841,7 @@ export const releaseReadinessDetail = {
   ],
   required_test_acceptance_evidence: [
     {
-      requirement_id: 'qa:bug-1',
+      requirement_id: `qa:${bugListItem.id}`,
       scope_ref: { type: 'bug', id: bugListItem.id, title: bugListItem.title },
       kind: 'qa_acceptance',
       status: 'missing',
@@ -754,7 +884,7 @@ export const releaseReadinessDetail = {
   ],
   observation_evidence: [
     {
-      requirement_id: 'observation:release-web-product',
+      requirement_id: `observation:${release.id}`,
       scope_ref: { type: 'release', id: release.id, title: release.title },
       kind: 'observation',
       status: 'missing',
@@ -775,6 +905,26 @@ export const releaseReadinessDetail = {
   ],
 } as const;
 
+export const sourceObjectEvidenceRefs = {
+  requirement: [
+    { type: 'attachment', id: 'att-requirement-flow-image', title: 'Plan Item generation flow' },
+  ],
+  initiative: [
+    { type: 'attachment', id: 'att-init-ai-native-rollout', title: 'AI-native project management rollout evidence' },
+  ],
+  techDebt: [
+    { type: 'attachment', id: 'att-td-workspace-page-template', title: 'WorkspacePage template retirement evidence' },
+  ],
+  bug: [
+    { type: 'attachment', id: 'att-bug-reproduction-screenshot', title: 'Continuation loses review context' },
+  ],
+} as const;
+
+export const releaseEvidenceRefs = [
+  { type: 'release_evidence', id: 'release-evidence-review', title: 'Code review approval evidence' },
+  { type: 'release_evidence', id: 'release-evidence-package-run', title: 'Package run evidence' },
+] as const;
+
 export const requirementListResponse = { items: [requirementListItem], degraded_sources: [] } as const;
 export const initiativeListResponse = { items: [initiativeListItem], degraded_sources: [] } as const;
 export const techDebtListResponse = { items: [techDebtListItem], degraded_sources: [] } as const;
@@ -783,22 +933,22 @@ export const bugListResponse = { items: [bugListItem], degraded_sources: [] } as
 export const myWorkQueueResponse = {
   items: [
     {
-      id: 'product:req-1',
-      object_ref: { type: 'requirement', id: 'req-1' },
-      title: 'Checkout requirement',
+      id: `product:${requirementListItem.id}`,
+      object_ref: { type: 'requirement', id: requirementListItem.id },
+      title: requirementListItem.title,
       attention_reason: 'product_attention',
-      expected_action: 'Clarify acceptance criteria',
+      expected_action: 'Clarify Plan Item generation governance',
       actor_id: actorId,
-      href: '/requirements/req-1',
+      href: `/requirements/${requirementListItem.id}`,
     },
     {
-      id: 'tech-lead:init-1',
-      object_ref: { type: 'initiative', id: 'init-1' },
-      title: 'Checkout reliability initiative',
+      id: `tech-lead:${initiativeListItem.id}`,
+      object_ref: { type: 'initiative', id: initiativeListItem.id },
+      title: initiativeListItem.title,
       attention_reason: 'tech_lead_attention',
-      expected_action: 'Review technical breakdown',
+      expected_action: 'Review rollout technical breakdown',
       actor_id: actorId,
-      href: '/initiatives/init-1',
+      href: `/initiatives/${initiativeListItem.id}`,
     },
     {
       id: `developer:${developmentPlanItem.id}`,
@@ -814,16 +964,16 @@ export const myWorkQueueResponse = {
       href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     },
     {
-      id: 'qa:bug-1',
-      object_ref: { type: 'bug', id: 'bug-1' },
-      title: 'Checkout regression',
+      id: `qa:${bugListItem.id}`,
+      object_ref: { type: 'bug', id: bugListItem.id },
+      title: bugListItem.title,
       attention_reason: 'qa_attention',
-      expected_action: 'Verify reproduction',
+      expected_action: 'Verify continuation context reproduction',
       actor_id: actorId,
-      href: '/bugs/bug-1',
+      href: `/bugs/${bugListItem.id}`,
     },
     {
-      id: 'release-owner:release-web-product',
+      id: `release-owner:${release.id}`,
       object_ref: { type: 'release', id: release.id },
       title: 'Release readiness decision',
       attention_reason: 'release_owner_attention',
@@ -832,13 +982,13 @@ export const myWorkQueueResponse = {
       href: `/releases/${release.id}`,
     },
     {
-      id: 'manager:td-1',
-      object_ref: { type: 'tech_debt', id: 'td-1' },
-      title: 'Checkout validation debt',
+      id: `manager:${techDebtListItem.id}`,
+      object_ref: { type: 'tech_debt', id: techDebtListItem.id },
+      title: techDebtListItem.title,
       attention_reason: 'manager_attention',
       expected_action: 'Review delivery risk',
       actor_id: actorId,
-      href: '/tech-debt/td-1',
+      href: `/tech-debt/${techDebtListItem.id}`,
     },
   ],
   degraded_sources: [],
@@ -1343,3 +1493,197 @@ export const productLaneFixtureItemsByLane = {
   'release-owner': [functionalLaneItems[4]],
   manager: [functionalLaneItems[5]],
 } satisfies Record<ProductLaneId, ProductLaneItem[]>;
+
+export const reportLinks = [
+  'development-plan-throughput',
+  'brainstorming-bottlenecks',
+  'spec-review-aging',
+  'execution-plan-review-aging',
+  'execution-continuation',
+  'execution-outcomes',
+  'code-review',
+  'qa-handoff-readiness',
+  'release-readiness',
+  'quality-bug-escape',
+].map((id) => ({ id, href: `/reports/${id}` }));
+
+export const reportFixtures = {
+  delivery: {
+    id: 'report-delivery-risk',
+    title: 'Delivery risk: visual rebuild blocked by generic template debt',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    groups: [
+      {
+        id: 'visual_rebuild_blocked',
+        count: 1,
+        items: [{ type: 'tech_debt', id: techDebtListItem.id, title: techDebtListItem.title }],
+      },
+      {
+        id: 'running_execution',
+        count: 1,
+        items: [{ type: 'execution', id: execution.id, title: execution.ref.title }],
+      },
+    ],
+    links: reportLinks,
+    degraded_sources: [],
+  },
+  developmentPlanThroughput: {
+    id: 'development-plan-throughput',
+    title: 'Development Plan Throughput',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    groups: [
+      { id: 'draft_or_active', count: developmentPlan.items.length, items: [execution.development_plan_item_ref] },
+      { id: 'approved_items', count: developmentPlan.items.filter((item) => item.execution_plan_status === 'approved').length, items: [execution.development_plan_item_ref] },
+    ],
+    links: reportLinks,
+    degraded_sources: [],
+  },
+  qualityBugEscape: {
+    id: 'quality-bug-escape',
+    title: 'Quality Bug Escape',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    groups: [
+      { id: 'escaped_bugs', count: 1, items: [{ type: 'bug', id: bugListItem.id, title: bugListItem.title }] },
+      { id: 'qa_blockers', count: 0, items: [] },
+    ],
+    links: reportLinks,
+    degraded_sources: [],
+  },
+  releaseReadiness: {
+    id: 'release-readiness',
+    title: 'Release Readiness',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    groups: [
+      { id: 'planned_releases', count: 1, items: [{ type: 'release', id: release.id, title: release.title }] },
+      { id: 'release_blocking_items', count: 0, items: [] },
+    ],
+    links: reportLinks,
+    degraded_sources: [],
+  },
+  executionOutcomes: {
+    id: 'execution-outcomes',
+    title: 'Execution Outcomes',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    groups: [
+      { id: 'succeeded', count: 1, items: [{ type: 'execution', id: execution.id, title: execution.ref.title }] },
+      { id: 'failed', count: 0, items: [] },
+    ],
+    links: reportLinks,
+    degraded_sources: [],
+  },
+  executionContinuation: {
+    id: 'execution-continuation',
+    title: 'Execution Continuation',
+    project_id: projectId,
+    generated_at: '2026-05-18T01:05:00.000Z',
+    groups: [
+      { id: 'interrupted_or_resumable', count: 0, items: [] },
+      { id: 'running', count: execution.status === 'running' ? 1 : 0, items: [{ type: 'execution', id: execution.id, title: execution.ref.title }] },
+    ],
+    links: reportLinks,
+    degraded_sources: [],
+  },
+} as const;
+
+export const productDynamicRouteFixtureManifest = [
+  {
+    family: 'source-document',
+    route: `/requirements/${requirementDetail.id}`,
+    objectType: 'requirement',
+    objectId: requirementDetail.id,
+    fixture: 'requirementDetail',
+    evidenceFixture: 'sourceObjectEvidenceRefs.requirement',
+  },
+  {
+    family: 'source-document',
+    route: `/initiatives/${initiativeDetail.id}`,
+    objectType: 'initiative',
+    objectId: initiativeDetail.id,
+    fixture: 'initiativeDetail',
+    evidenceFixture: 'sourceObjectEvidenceRefs.initiative',
+  },
+  {
+    family: 'source-document',
+    route: `/bugs/${bugDetail.id}`,
+    objectType: 'bug',
+    objectId: bugDetail.id,
+    fixture: 'bugDetail',
+    evidenceFixture: 'sourceObjectEvidenceRefs.bug',
+  },
+  {
+    family: 'source-document',
+    route: `/tech-debt/${techDebtDetail.id}`,
+    objectType: 'tech_debt',
+    objectId: techDebtDetail.id,
+    fixture: 'techDebtDetail',
+    evidenceFixture: 'sourceObjectEvidenceRefs.techDebt',
+  },
+  {
+    family: 'source-evidence',
+    route: `/requirements/${requirementDetail.id}/evidence`,
+    objectType: 'requirement',
+    objectId: requirementDetail.id,
+    fixture: 'requirementDetail.evidence_refs',
+  },
+  {
+    family: 'source-evidence',
+    route: `/initiatives/${initiativeDetail.id}/evidence`,
+    objectType: 'initiative',
+    objectId: initiativeDetail.id,
+    fixture: 'initiativeDetail.evidence_refs',
+  },
+  {
+    family: 'source-evidence',
+    route: `/bugs/${bugDetail.id}/evidence`,
+    objectType: 'bug',
+    objectId: bugDetail.id,
+    fixture: 'bugDetail.evidence_refs',
+  },
+  {
+    family: 'source-evidence',
+    route: `/tech-debt/${techDebtDetail.id}/evidence`,
+    objectType: 'tech_debt',
+    objectId: techDebtDetail.id,
+    fixture: 'techDebtDetail.evidence_refs',
+  },
+  {
+    family: 'planning-table',
+    route: `/development-plans/${developmentPlan.id}`,
+    objectType: 'development_plan',
+    objectId: developmentPlan.id,
+    fixture: 'developmentPlan',
+  },
+  {
+    family: 'gate-flow',
+    route: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+    objectType: 'development_plan_item',
+    objectId: developmentPlanItem.id,
+    fixture: 'developmentPlanItem',
+  },
+  {
+    family: 'execution-supervision',
+    route: `/executions/${execution.id}`,
+    objectType: 'execution',
+    objectId: execution.id,
+    fixture: 'execution',
+  },
+  {
+    family: 'release-readiness',
+    route: `/releases/${release.id}`,
+    objectType: 'release',
+    objectId: release.id,
+    fixture: 'release',
+  },
+  {
+    family: 'release-evidence',
+    route: `/releases/${release.id}/evidence`,
+    objectType: 'release',
+    objectId: release.id,
+    fixture: 'releaseEvidenceRefs',
+  },
+] as const;

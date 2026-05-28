@@ -1,12 +1,16 @@
-import { Link, useSearchParams } from 'react-router';
+import { Link, Navigate, useSearchParams } from 'react-router';
+import type { ReactNode } from 'react';
 
 import { useReportQuery } from '../../shared/api/hooks';
+import type { ProductObjectRef } from '../../shared/api/types';
 import { useProjectContext } from '../../shared/context/project-context';
-import { Metric, MetricGrid, PageHeader, Section } from '../../shared/layout';
-import { InlineNotice, StatusPill } from '../../shared/ui';
+import { useRuntimeFlags } from '../../shared/context/runtime-flags';
+import { CompactMetadata, ProductPage, ReportInsightLayout, Section } from '../../shared/layout';
+import { DataTable, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import { stateFromStatus, SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
+import { reportViewModel, type ReportProjection } from './report-view-model';
 
-type ReportId = 'delivery' | 'quality' | 'release-readiness' | 'observation' | 'replay';
+type ReportId = 'delivery' | 'quality' | 'release-readiness' | 'observation';
 type BackendReportId =
   | 'development-plan-throughput'
   | 'execution-continuation'
@@ -14,24 +18,30 @@ type BackendReportId =
   | 'quality-bug-escape'
   | 'release-readiness';
 
-const reportCatalog: Array<{
+type ReportCatalogItem = {
   id: ReportId;
   backendReportId: BackendReportId;
   title: string;
   href: string;
   summary: string;
-  metrics: Array<{ label: string; value: string }>;
-}> = [
+  owner: string;
+};
+
+type ReportGroupRow = {
+  affectedCount: number;
+  id: string;
+  count: number;
+  affected: string;
+};
+
+const reportCatalog: ReportCatalogItem[] = [
   {
     id: 'delivery',
     backendReportId: 'development-plan-throughput',
     title: 'Delivery Flow',
     href: '/reports/delivery',
     summary: 'Flow, bottlenecks, and Development Plan Item movement across product lifecycle objects.',
-    metrics: [
-      { label: 'Flow view', value: 'Typed' },
-      { label: 'Bottleneck scan', value: 'Active' },
-    ],
+    owner: 'Product',
   },
   {
     id: 'quality',
@@ -39,10 +49,7 @@ const reportCatalog: Array<{
     title: 'Quality',
     href: '/reports/quality',
     summary: 'Bug escape, validation coverage, and QA acceptance risk.',
-    metrics: [
-      { label: 'Bug escape', value: 'Tracked' },
-      { label: 'Validation', value: 'Current' },
-    ],
+    owner: 'QA',
   },
   {
     id: 'release-readiness',
@@ -50,10 +57,7 @@ const reportCatalog: Array<{
     title: 'Release Readiness',
     href: '/reports/release-readiness',
     summary: 'Readiness evidence, release risk, disabled reasons, and scope gates.',
-    metrics: [
-      { label: 'Readiness', value: 'Scoped' },
-      { label: 'Risk', value: 'Reviewed' },
-    ],
+    owner: 'Release',
   },
   {
     id: 'observation',
@@ -61,144 +65,9 @@ const reportCatalog: Array<{
     title: 'Observation',
     href: '/reports/observation',
     summary: 'Post-release signals, observation evidence, and regression follow-up.',
-    metrics: [
-      { label: 'Signals', value: 'Observed' },
-      { label: 'Follow-up', value: 'Open' },
-    ],
-  },
-  {
-    id: 'replay',
-    backendReportId: 'execution-continuation',
-    title: 'Replay',
-    href: '/reports?report=replay',
-    summary: 'Retrospective evidence and lifecycle replay for project management objects.',
-    metrics: [
-      { label: 'Replay scope', value: 'Product' },
-      { label: 'Evidence', value: 'Execution-scoped' },
-    ],
+    owner: 'Manager',
   },
 ];
-
-export function ReportsIndexRoute() {
-  const { projectId } = useProjectContext();
-  const [searchParams] = useSearchParams();
-  const scopedReportId = scopedReportFromSearchParams(searchParams);
-  const query = useReportQuery(backendReportIdFor(scopedReportId ?? 'delivery'), { project_id: projectId, limit: 100 });
-  const context = reportContextFromSearchParams(searchParams);
-
-  return (
-    <div className="grid gap-6">
-      <PageHeader
-        subtitle="Product metrics for the full AI-native loop from Development Plan creation through QA and release."
-        title="Reports"
-      />
-      <SurfaceStateIndicator label="Reports" state={reportSurfaceState(query.isLoading, query.isError, query.data)} />
-      {context !== undefined ? <InlineNotice description={context.description} title={context.title} tone="info" /> : null}
-      <Section title="Product metric sections">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {metricSections.map((section) => (
-            <article className="grid gap-2 rounded-md border border-border bg-background p-3" key={section.title}>
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-text-primary">{section.title}</h2>
-                <StatusPill tone="info">{section.owner}</StatusPill>
-              </div>
-              <p className="text-sm text-text-secondary">{section.summary}</p>
-            </article>
-          ))}
-        </div>
-      </Section>
-      <Section title="Report families">
-        <div className="grid gap-3 md:grid-cols-2">
-          {reportCatalog.map((report) => (
-            <Link
-              className="grid gap-2 rounded-card border border-border bg-surface p-4 shadow-sm transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none"
-              key={report.id}
-              to={report.href}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-base font-semibold text-text-primary">{report.title}</h2>
-                <StatusPill tone="info">Report</StatusPill>
-              </div>
-              <p className="text-sm text-text-secondary">{report.summary}</p>
-            </Link>
-          ))}
-        </div>
-      </Section>
-    </div>
-  );
-}
-
-function reportContextFromSearchParams(searchParams: URLSearchParams): { title: string; description: string } | undefined {
-  if (scopedReportFromSearchParams(searchParams) === 'replay') {
-    return {
-      title: 'Lifecycle replay evidence context',
-      description: 'Showing scoped lifecycle evidence inside Reports without exposing an object-level replay browser route.',
-    };
-  }
-
-  const codeReviewHandoffId = searchParams.get('code_review_handoff_id');
-  if (codeReviewHandoffId !== null) {
-    return {
-      title: `Focused code review handoff ${codeReviewHandoffId}`,
-      description: 'Showing report families relevant to code review turnaround and quality readiness.',
-    };
-  }
-
-  const qaHandoffId = searchParams.get('qa_handoff_id');
-  if (qaHandoffId !== null) {
-    return {
-      title: `Focused QA handoff ${qaHandoffId}`,
-      description: 'Showing report families relevant to QA handoff readiness and release confidence.',
-    };
-  }
-
-  const developmentPlanItemId = searchParams.get('development_plan_item_id');
-  if (developmentPlanItemId !== null) {
-    return {
-      title: 'Focused evidence context',
-      description: `Development Plan Item ${developmentPlanItemId}`,
-    };
-  }
-
-  return undefined;
-}
-
-function scopedReportFromSearchParams(searchParams: URLSearchParams): ReportId | undefined {
-  return searchParams.get('report') === 'replay' ? 'replay' : undefined;
-}
-
-function backendReportIdFor(reportId: ReportId): BackendReportId {
-  return reportCatalog.find((candidate) => candidate.id === reportId)?.backendReportId ?? reportCatalog[0]!.backendReportId;
-}
-
-export function ReportFamilyRoute({ reportId }: { reportId: ReportId }) {
-  const { projectId } = useProjectContext();
-  const report = reportCatalog.find((candidate) => candidate.id === reportId) ?? reportCatalog[0]!;
-  const query = useReportQuery(report.backendReportId, { project_id: projectId, limit: 100 });
-
-  return (
-    <>
-      <PageHeader subtitle={report.summary} title={report.title} />
-      <SurfaceStateIndicator label={`${report.title} report`} state={reportSurfaceState(query.isLoading, query.isError, query.data)} />
-      {query.isLoading ? <InlineNotice title={`${report.title} report is loading.`} tone="info" /> : null}
-      {query.isError ? <InlineNotice title={`${report.title} report could not be loaded.`} tone="danger" /> : null}
-      <Section title={`${report.title} summary`}>
-        <div className="grid gap-4">
-          <MetricGrid>
-            {report.metrics.map((metric) => (
-              <Metric key={metric.label} label={metric.label} value={metric.value} />
-            ))}
-            <Metric label="Project" value={query.data?.project_id ?? projectId} />
-            <Metric label="Generated" value={formatDate(query.data?.generated_at)} />
-          </MetricGrid>
-          <p className="text-sm text-text-secondary">
-            This report summarizes typed project-management objects and links follow-up work through execution evidence routes.
-          </p>
-        </div>
-      </Section>
-    </>
-  );
-}
 
 const metricSections = [
   {
@@ -253,6 +122,257 @@ const metricSections = [
   },
 ] as const;
 
+export function ReportsIndexRoute() {
+  const { projectId } = useProjectContext();
+  const runtimeFlags = useRuntimeFlags();
+  const [searchParams] = useSearchParams();
+  const report = reportCatalog[0]!;
+  const query = useReportQuery(report.backendReportId, { project_id: projectId, limit: 100 });
+  const context = reportContextFromSearchParams(searchParams);
+  const viewModel = reportViewModel(reportProjection(query.data, report));
+
+  if (retiredReportQueryRequested(searchParams)) {
+    return runtimeFlags.devToolsEnabled ? <ReplayDevOnlyPanel /> : <Navigate replace to="/reports" />;
+  }
+
+  return (
+    <ReportWorkspace
+      context={context}
+      heading="Reports"
+      isError={query.isError}
+      isLoading={query.isLoading}
+      report={report}
+      reportData={query.data}
+      stateLabel="Reports"
+      viewModel={viewModel}
+    >
+      <Section title="Product metric sections">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {metricSections.map((section) => (
+            <article className="grid gap-2 rounded-card border border-border bg-surface p-3" key={section.title}>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-text-primary">{section.title}</h3>
+                <StatusPill tone="info">{section.owner}</StatusPill>
+              </div>
+              <p className="m-0 text-sm text-text-secondary">{section.summary}</p>
+            </article>
+          ))}
+        </div>
+      </Section>
+      <Section title="Report families">
+        <div className="grid gap-3 md:grid-cols-2">
+          {reportCatalog.map((candidate) => (
+            <Link
+              className="grid gap-2 rounded-card border border-border bg-surface p-4 shadow-sm transition-colors duration-base ease-standard hover:border-primary hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none"
+              key={candidate.id}
+              to={candidate.href}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-base font-semibold text-text-primary">{candidate.title}</h3>
+                <StatusPill tone="info">{candidate.owner}</StatusPill>
+              </div>
+              <p className="m-0 text-sm text-text-secondary">{candidate.summary}</p>
+            </Link>
+          ))}
+        </div>
+      </Section>
+    </ReportWorkspace>
+  );
+}
+
+function ReplayDevOnlyPanel() {
+  return (
+    <ProductPage family="report-insight" heading="Reports Replay Dev Panel">
+      <Section title="Report unavailable">
+        <InlineNotice title="Lifecycle replay evidence context is available only with dev tools enabled." tone="warning" />
+      </Section>
+    </ProductPage>
+  );
+}
+
+export function ReportFamilyRoute({ reportId }: { reportId: ReportId }) {
+  const { projectId } = useProjectContext();
+  const report = reportCatalog.find((candidate) => candidate.id === reportId) ?? reportCatalog[0]!;
+  const query = useReportQuery(report.backendReportId, { project_id: projectId, limit: 100 });
+  const viewModel = reportViewModel(reportProjection(query.data, report));
+
+  return (
+    <ReportWorkspace
+      heading={report.title}
+      isError={query.isError}
+      isLoading={query.isLoading}
+      report={report}
+      reportData={query.data}
+      stateLabel={`${report.title} report`}
+      viewModel={viewModel}
+    />
+  );
+}
+
+function ReportWorkspace({
+  children,
+  context,
+  heading,
+  isError,
+  isLoading,
+  report,
+  reportData,
+  stateLabel,
+  viewModel,
+}: {
+  children?: ReactNode;
+  context?: { title: string; description: string } | undefined;
+  heading: string;
+  isError: boolean;
+  isLoading: boolean;
+  report: ReportCatalogItem;
+  reportData: Record<string, unknown> | undefined;
+  stateLabel: string;
+  viewModel: ReturnType<typeof reportViewModel>;
+}) {
+  const conclusion = viewModel.conclusion ?? viewModel.currentState;
+  const supporting = supportingSignal(reportData);
+  const affected = affectedObjects(reportData);
+  const suggestedAction = viewModel.suggestedAction?.label ?? viewModel.nextAction;
+
+  return (
+    <ProductPage family="report-insight" heading={heading}>
+      <ReportInsightLayout
+        conclusion={
+          <div className="grid gap-3">
+            <SurfaceStateIndicator label={stateLabel} state={reportSurfaceState(isLoading, isError, reportData)} />
+            {isLoading ? <InlineNotice title={`${heading} report is loading.`} tone="info" /> : null}
+            {isError ? <InlineNotice title={`${heading} report could not be loaded.`} tone="danger" /> : null}
+            {context !== undefined ? <InlineNotice description={context.description} title={context.title} tone="info" /> : null}
+            <ReportConclusion
+              affected={affected}
+              conclusion={conclusion}
+              report={report}
+              riskSignal={viewModel.riskSignal}
+              suggestedAction={suggestedAction}
+              supportingSignal={supporting}
+            />
+            {children}
+          </div>
+        }
+        signals={<ReportSignals report={report} reportData={reportData} />}
+        actions={<RecommendedActions action={suggestedAction} report={report} />}
+      />
+    </ProductPage>
+  );
+}
+
+function ReportConclusion({
+  affected,
+  conclusion,
+  report,
+  riskSignal,
+  suggestedAction,
+  supportingSignal,
+}: {
+  affected: string;
+  conclusion: string;
+  report: ReportCatalogItem;
+  riskSignal: string;
+  suggestedAction: string;
+  supportingSignal: string;
+}) {
+  return (
+    <Section description={report.summary} title="Operational intelligence">
+      <p className="sr-only">
+        {`Conclusion: ${conclusion}. Supporting signal: ${supportingSignal}. Affected objects: ${affected}. Suggested action: ${suggestedAction}. ${riskSignal}`}
+      </p>
+      <CompactMetadata
+        items={[
+          { label: 'Conclusion', value: conclusion },
+          { label: 'Supporting signal', value: supportingSignal },
+          { label: 'Affected objects', value: affected },
+          { label: 'Suggested action', value: suggestedAction },
+        ]}
+      />
+    </Section>
+  );
+}
+
+function ReportSignals({ report, reportData }: { report: ReportCatalogItem; reportData: Record<string, unknown> | undefined }) {
+  return (
+    <Section title={`${report.title} signal`}>
+      <DataTable
+        ariaLabel={`${report.title} report groups`}
+        columns={reportGroupColumns}
+        density="compact"
+        emptyMessage="No supporting report groups are available."
+        getRowKey={(row) => row.id}
+        rows={reportGroupRows(reportData)}
+      />
+    </Section>
+  );
+}
+
+function RecommendedActions({ action, report }: { action: string; report: ReportCatalogItem }) {
+  return (
+    <Section title="Recommended actions" variant="subtle">
+      <CompactMetadata
+        items={[
+          { label: 'Primary action', value: action },
+          { label: 'Responsible role', value: report.owner },
+          { label: 'Report family', value: report.title },
+        ]}
+      />
+    </Section>
+  );
+}
+
+const reportGroupColumns: DataTableColumn<ReportGroupRow>[] = [
+  { key: 'group', header: 'Signal', cell: (row) => formatValue(row.id) },
+  { key: 'count', header: 'Supporting count', cell: (row) => String(row.count) },
+  { key: 'affected', header: 'Object coverage', cell: (row) => row.affected },
+];
+
+function reportProjection(data: Record<string, unknown> | undefined, report: ReportCatalogItem): ReportProjection {
+  return {
+    id: stringField(data, 'id') ?? report.backendReportId,
+    title: stringField(data, 'title') ?? report.title,
+    project_id: stringField(data, 'project_id'),
+    generated_at: stringField(data, 'generated_at'),
+    groups: reportGroups(data),
+    links: reportLinks(data),
+    degraded_sources: stringArrayField(data, 'degraded_sources'),
+  };
+}
+
+function reportContextFromSearchParams(searchParams: URLSearchParams): { title: string; description: string } | undefined {
+  const codeReviewHandoffId = searchParams.get('code_review_handoff_id');
+  if (codeReviewHandoffId !== null) {
+    return {
+      title: `Focused code review handoff ${codeReviewHandoffId}`,
+      description: 'Showing report families relevant to code review turnaround and quality readiness.',
+    };
+  }
+
+  const qaHandoffId = searchParams.get('qa_handoff_id');
+  if (qaHandoffId !== null) {
+    return {
+      title: `Focused QA handoff ${qaHandoffId}`,
+      description: 'Showing report families relevant to QA handoff readiness and release confidence.',
+    };
+  }
+
+  const developmentPlanItemId = searchParams.get('development_plan_item_id');
+  if (developmentPlanItemId !== null) {
+    return {
+      title: 'Focused evidence context',
+      description: `Development Plan Item ${developmentPlanItemId}`,
+    };
+  }
+
+  return undefined;
+}
+
+function retiredReportQueryRequested(searchParams: URLSearchParams): boolean {
+  return searchParams.get('report') === 'replay';
+}
+
 function reportSurfaceState(isLoading: boolean, isError: boolean, data: Record<string, unknown> | undefined): SurfaceState | undefined {
   if (isLoading) return 'loading';
   if (isError) return 'error';
@@ -265,10 +385,102 @@ function reportSurfaceState(isLoading: boolean, isError: boolean, data: Record<s
   return data.generated_at === undefined ? 'empty' : 'approved';
 }
 
+function supportingSignal(data: Record<string, unknown> | undefined): string {
+  const groups = reportGroupRows(data);
+  if (groups.length === 0) return 'No supporting signal available';
+  const total = groups.reduce((sum, group) => sum + group.count, 0);
+  return `${groups.length} group(s), ${total} supporting signal(s)`;
+}
+
+function affectedObjects(data: Record<string, unknown> | undefined): string {
+  const affected = uniqueReportObjectRefs(reportGroups(data).flatMap((group) => productObjectRefs(group.items)));
+  if (affected.length === 0) return 'No affected objects in current signal';
+  return `${affected.length} affected object(s): ${objectTypeSummary(affected)}`;
+}
+
+function reportGroupRows(data: Record<string, unknown> | undefined): ReportGroupRow[] {
+  const groups = reportGroups(data);
+  return groups.filter(isRecord).map((group, index) => {
+    const items = productObjectRefs(group.items);
+    const count = typeof group.count === 'number' ? group.count : items.length;
+    return {
+      id: String(group.id ?? `group-${index + 1}`),
+      count,
+      affectedCount: items.length,
+      affected: affectedLabel(items),
+    };
+  });
+}
+
+function reportGroups(data: Record<string, unknown> | undefined): NonNullable<ReportProjection['groups']> {
+  return arrayField(data, 'groups').filter(isRecord).map((group) => ({
+    id: typeof group.id === 'string' ? group.id : undefined,
+    count: typeof group.count === 'number' ? group.count : undefined,
+    items: productObjectRefs(group.items),
+  }));
+}
+
+function reportLinks(data: Record<string, unknown> | undefined): NonNullable<ReportProjection['links']> {
+  return arrayField(data, 'links').filter(isRecord).map((link) => ({
+    id: typeof link.id === 'string' ? link.id : undefined,
+    href: typeof link.href === 'string' ? link.href : undefined,
+  }));
+}
+
+function arrayField(data: Record<string, unknown> | undefined, key: string): unknown[] {
+  const value = data?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function stringArrayField(data: Record<string, unknown> | undefined, key: string): string[] {
+  return arrayField(data, key).map(String);
+}
+
+function stringField(data: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = data?.[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function formatDate(value: string | undefined): string {
-  return value === undefined ? 'Pending' : new Date(value).toLocaleString();
+function productObjectRefs(value: unknown): ProductObjectRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isProductObjectRef);
+}
+
+function isProductObjectRef(value: unknown): value is ProductObjectRef {
+  if (!isRecord(value) || typeof value.type !== 'string' || typeof value.id !== 'string') return false;
+  if (value.type === 'development_plan_item') return typeof value.development_plan_id === 'string';
+  return true;
+}
+
+function uniqueReportObjectRefs(items: ProductObjectRef[]): ProductObjectRef[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.type}:${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function affectedLabel(items: ProductObjectRef[]): string {
+  if (items.length === 0) return 'No affected object refs';
+  return `${items.length} ${items.length === 1 ? 'object' : 'objects'}: ${objectTypeSummary(items)}`;
+}
+
+function objectTypeSummary(items: ProductObjectRef[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    counts.set(item.type, (counts.get(item.type) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([type, count]) => `${count} ${formatValue(type)}${count === 1 ? '' : 's'}`)
+    .join(', ');
+}
+
+function formatValue(value: string): string {
+  return value.replaceAll('_', ' ').replaceAll('-', ' ').replace(/\b\w/g, (match) => match.toUpperCase());
 }

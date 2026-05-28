@@ -30,6 +30,7 @@ const productSourceText = () =>
         (file) =>
           !file.endsWith('no-legacy-web-ui.test.ts') &&
           !file.endsWith('dev-tools-gating.test.tsx') &&
+          !file.endsWith('product-grade-first-viewport.test.tsx') &&
           !file.endsWith('project-management-routes.test.tsx'),
       ),
     )
@@ -176,7 +177,7 @@ describe('no legacy Web UI baggage', () => {
   });
 
   it('does not expose raw or debug-only controls on product Web surfaces', () => {
-    expect(productSourceText()).not.toMatch(
+    expect(activeWebSourceText()).not.toMatch(
       /raw JSON|raw replay|raw payload|Replay payload|Load raw replay|Object ID|manual ID|manual .*loader|direct id loading|debug-only/i,
     );
   });
@@ -189,6 +190,20 @@ describe('no legacy Web UI baggage', () => {
       'apps/web/src/styles.css',
       'apps/web/src/workbenchState.ts',
       'apps/web/src/shared/design-system/theme/css-variables.css',
+    ]) {
+      expect(existsSync(path), path).toBe(false);
+    }
+  });
+
+  it('removes retired generic product workspace layout primitives', () => {
+    for (const path of [
+      'apps/web/src/shared/layout/action-strip/action-strip.tsx',
+      'apps/web/src/shared/layout/priority-summary/priority-summary.tsx',
+      'apps/web/src/shared/layout/object-workspace/object-workspace.tsx',
+      'apps/web/src/shared/layout/queue-workspace/queue-workspace.tsx',
+      'apps/web/src/shared/layout/planning-table-workspace/planning-table-workspace.tsx',
+      'apps/web/src/shared/layout/gate-workspace/gate-workspace.tsx',
+      'apps/web/src/shared/layout/workspace-page/workspace-page.tsx',
     ]) {
       expect(existsSync(path), path).toBe(false);
     }

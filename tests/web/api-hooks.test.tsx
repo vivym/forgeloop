@@ -109,7 +109,7 @@ describe('Web product API hooks', () => {
       'requirements',
       { project_id: 'proj', limit: 25 },
     ]);
-    expect(queryKeys.requirement('req-1')).toEqual(['requirement', 'req-1']);
+    expect(queryKeys.requirement(requirementDetail.id)).toEqual(['requirement', requirementDetail.id]);
     expect(queryKeys.developmentPlan('development-plan-1')).toEqual(['development-plan', 'development-plan-1']);
     expect(queryKeys.developmentPlanItem('development-plan-1', 'item-1')).toEqual([
       'development-plan-item',
@@ -454,18 +454,18 @@ describe('Web product API hooks', () => {
     await waitFor(() => expect(myWork.result.current.isSuccess).toBe(true));
     expect(myWork.result.current.data?.items.map((item) => item.href)).toEqual(
       expect.arrayContaining([
-        '/requirements/req-1',
+        `/requirements/${requirementDetail.id}`,
         `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
       ]),
     );
 
     const requirements = renderHook(() => useRequirementsQuery({ project_id: projectId, limit: 100 }), { wrapper });
     await waitFor(() => expect(requirements.result.current.isSuccess).toBe(true));
-    expect(requirements.result.current.data?.items[0]?.ref).toEqual({ type: 'requirement', id: 'req-1' });
+    expect(requirements.result.current.data?.items[0]?.ref).toEqual(requirementDetail.ref);
 
-    const requirement = renderHook(() => useRequirementQuery('req-1'), { wrapper });
+    const requirement = renderHook(() => useRequirementQuery(requirementDetail.id), { wrapper });
     await waitFor(() => expect(requirement.result.current.isSuccess).toBe(true));
-    expect(requirement.result.current.data?.ref).toEqual({ type: 'requirement', id: 'req-1' });
+    expect(requirement.result.current.data?.ref).toEqual(requirementDetail.ref);
 
     expect(fetchMock).toHaveBeenCalledWith(
       `http://localhost:3000/query/my-work?project_id=${projectId}&actor_id=${actorId}`,
@@ -476,7 +476,7 @@ describe('Web product API hooks', () => {
       expect.objectContaining({ method: 'GET' }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/query/requirements/req-1',
+      `http://localhost:3000/query/requirements/${requirementDetail.id}`,
       expect.objectContaining({ method: 'GET' }),
     );
 
@@ -520,7 +520,14 @@ describe('Web product API hooks', () => {
     await expect(api.listExecutions({ project_id: projectId })).resolves.toEqual(
       expect.objectContaining({ items: expect.arrayContaining([expect.objectContaining({ id: execution.id })]) }),
     );
-    await expect(api.getExecution(execution.id)).resolves.toEqual(execution);
+    await expect(api.getExecution(execution.id)).resolves.toEqual(
+      expect.objectContaining({
+        id: execution.id,
+        ref: execution.ref,
+        status: execution.status,
+        development_plan_item_id: execution.development_plan_item_id,
+      }),
+    );
     await expect(api.listCodeReviewHandoffs({ project_id: projectId })).resolves.toEqual(
       expect.objectContaining({ items: expect.arrayContaining([expect.objectContaining({ id: codeReviewHandoff.id })]) }),
     );
@@ -528,13 +535,13 @@ describe('Web product API hooks', () => {
       expect.objectContaining({ items: expect.arrayContaining([expect.objectContaining({ id: qaHandoff.id })]) }),
     );
     await expect(api.listRequirements({ project_id: projectId, limit: 100 })).resolves.toEqual(requirementListResponse);
-    await expect(api.getRequirement('req-1')).resolves.toEqual(requirementDetail);
+    await expect(api.getRequirement(requirementDetail.id)).resolves.toEqual(requirementDetail);
     await expect(api.listInitiatives({ project_id: projectId, limit: 100 })).resolves.toEqual(initiativeListResponse);
-    await expect(api.getInitiative('init-1')).resolves.toEqual(initiativeDetail);
+    await expect(api.getInitiative(initiativeDetail.id)).resolves.toEqual(initiativeDetail);
     await expect(api.listTechDebt({ project_id: projectId, limit: 100 })).resolves.toEqual(techDebtListResponse);
-    await expect(api.getTechDebt('td-1')).resolves.toEqual(techDebtDetail);
+    await expect(api.getTechDebt(techDebtDetail.id)).resolves.toEqual(techDebtDetail);
     await expect(api.listBugs({ project_id: projectId, limit: 100 })).resolves.toEqual(bugListResponse);
-    await expect(api.getBug('bug-1')).resolves.toEqual(bugDetail);
+    await expect(api.getBug(bugDetail.id)).resolves.toEqual(bugDetail);
 
     expect(fetchMock).toHaveBeenCalledWith(
       `http://localhost:3000/query/executions/${execution.id}`,
@@ -548,10 +555,7 @@ describe('Web product API hooks', () => {
       'POST /work-items': { ...workItem, id: 'req-created', kind: 'requirement' },
       'POST /development-plans': { ...developmentPlan, id: 'development-plan-created' },
       [`POST /development-plans/${developmentPlan.id}/items`]: { ...developmentPlanItem, id: 'development-plan-item-created' },
-      'POST /development-plans/generate-draft': {
-        development_plan: developmentPlan,
-        revision: { id: developmentPlan.revision_id, development_plan_id: developmentPlan.id, revision_number: 1 },
-      },
+      'POST /development-plans/generate-draft': { ...developmentPlan, generation_state: 'draft_generated' },
     });
     const api = createForgeloopCommandApi();
 

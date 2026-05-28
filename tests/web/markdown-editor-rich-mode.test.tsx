@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttachmentRef } from '@forgeloop/contracts';
 
 import { ForgeMarkdownEditor } from '../../apps/web/src/shared/ui/markdown-editor';
+import { renderRoute } from './router-test-utils';
 
 const publicAttachmentFixture = (overrides: Partial<AttachmentRef> = {}): AttachmentRef => ({
   id: 'att-rich',
@@ -56,5 +58,41 @@ describe('ForgeMarkdownEditor rich editor events', () => {
     fireEvent.drop(editor, { dataTransfer: { files: [image], items: [], types: ['Files'] } });
 
     expect(onUploadAttachment).not.toHaveBeenCalled();
+  });
+
+  it('routes source object authoring through the shared ForgeMarkdownEditor wrapper', async () => {
+    const rendered = await renderRoute('/requirements/new');
+
+    expect(await rendered.findByRole('heading', { name: 'New Requirement' })).toBeTruthy();
+    expect(rendered.getByRole('region', { name: /narrative document/i })).toBeTruthy();
+    expect(rendered.getByRole('button', { name: /source mode/i })).toBeTruthy();
+    expect(rendered.getByRole('button', { name: /revisions/i })).toBeTruthy();
+    expect(rendered.queryByRole('textbox', { name: /narrative markdown/i })).toBeNull();
+  });
+
+  it('guards navigation away from dirty Spec and Execution Plan documents without submitting or approving', async () => {
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code']}
+        guardRouteTransitions
+        mode="edit"
+        objectRef={{
+          type: 'execution_plan_revision',
+          id: 'planrev-requirements-database-view-v1',
+          execution_plan_id: 'plan-requirements-database-view',
+        }}
+        onChange={vi.fn()}
+        onUploadAttachment={vi.fn()}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value="Draft"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /source mode/i }));
+    await userEvent.type(screen.getByRole('textbox', { name: /markdown source/i }), '\nUnsaved acceptance notes');
+
+    expect(screen.getByLabelText(/editor toolbar/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^approve/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^submit/i })).toBeNull();
   });
 });

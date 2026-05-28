@@ -31,6 +31,7 @@ describe('Development Plans API', () => {
           source_ref: { type: 'requirement', id: requirement.id },
           title: 'Checkout development plan',
           actor_id: 'actor-product',
+          guidance: 'Keep checkout validation inside the manual planning boundary.',
         })
         .expect(201)
     ).body;
@@ -41,6 +42,20 @@ describe('Development Plans API', () => {
       revision_id: expect.any(String),
     });
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.listDevelopmentPlanSourceLinks(plan.id)).resolves.toEqual([
+      expect.objectContaining({
+        source_ref: { type: 'requirement', id: requirement.id },
+        rationale: 'Keep checkout validation inside the manual planning boundary.',
+      }),
+    ]);
+    await expect(repository.listObjectEvents(plan.id, 'development_plan')).resolves.toEqual([
+      expect.objectContaining({
+        event_type: 'development_plan_created',
+        metadata: expect.objectContaining({
+          guidance: 'Keep checkout validation inside the manual planning boundary.',
+        }),
+      }),
+    ]);
     await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toEqual([
       expect.objectContaining({
         id: plan.revision_id,

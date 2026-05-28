@@ -279,6 +279,7 @@ export interface SpecRevision {
   revision_number: number;
   summary: string;
   content: string;
+  attachment_refs?: AttachmentRef[];
   background: string;
   goals: string[];
   scope_in: string[];

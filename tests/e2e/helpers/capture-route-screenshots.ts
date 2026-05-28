@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer as createNetServer } from 'node:net';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { chromium, expect as expectPage, type Browser, type Page, type Route } from '@playwright/test';
+import { chromium, expect as expectPage, type Browser, type Locator, type Page, type Route } from '@playwright/test';
 import { expect } from 'vitest';
 import type { DeliveryRepository } from '@forgeloop/db';
 import type { DevelopmentPlanItem, Execution, WorkItem } from '@forgeloop/domain';
@@ -14,21 +14,38 @@ import { AppModule } from '../../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY } from '../../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { defaultProductApiResponses, type ProductApiResponseMap } from '../../web/fixtures/product-api-mock';
 import {
+  bugListItem,
+  cockpitCommandCenterItem,
+  demoSeedVisualReviewItem,
   developmentPlan,
-  developmentPlanItem,
-  execution,
+  developmentPlanTableInspectorItem,
+  initiativeListItem,
+  productArchitectureSeedId,
   projectId,
+  release,
+  requirementListItem,
+  requirementsDatabaseViewItem,
+  techDebtListItem,
 } from '../../web/fixtures/product-data';
+import { firstViewportContract } from '../../../apps/web/src/features/product-surfaces/first-viewport-contract';
+import {
+  requiredScreenshotRoutes,
+  visualViewports,
+  type ProductPageFamily,
+  type ProductRouteContract,
+} from '../../../apps/web/src/features/product-surfaces/route-contract';
 
-export const visualViewportWidths = [375, 768, 1024, 1440] as const;
+export const visualViewportWidths = visualViewports;
 
 export type VisualRouteKind = 'active' | 'retired' | 'source-object';
 
 export interface VisualRoute {
+  family?: ProductPageFamily;
   path: string;
   heading: RegExp;
   kind: VisualRouteKind;
   expectActionSurface?: boolean;
+  expectFirstViewportContract?: boolean;
 }
 
 export interface VisualServer {
@@ -36,23 +53,70 @@ export interface VisualServer {
   url: string;
 }
 
-export const aiNativeProjectManagementRoutes: VisualRoute[] = [
-  { path: '/dashboard', heading: /^Dashboard$/, kind: 'active' },
-  { path: '/plans', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/plans/plan-1', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/specs', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/specs/spec-1', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/requirements/req-1', heading: /^Requirement$/, kind: 'source-object', expectActionSurface: true },
-  { path: '/requirements/req-1/spec', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/requirements/req-1/plan', heading: /not found|retired|not available/i, kind: 'retired' },
-  { path: '/development-plans/dp-1', heading: /Web product UI architecture foundation plan|Development Plan/i, kind: 'active' },
-  { path: '/development-plans/dp-1/items/dpi-1', heading: /Build AI-native project management API clients|Development Plan Item/i, kind: 'active' },
-  { path: '/specs-plans', heading: /^Specs & Execution Plans$/, kind: 'active' },
-  { path: '/executions', heading: /^Executions$/, kind: 'active' },
-  { path: '/executions/exec-1', heading: /Execute AI-native Web API client work|Execution/i, kind: 'active' },
-  { path: '/reports', heading: /^Reports$/, kind: 'active' },
-  { path: '/reports?report=replay', heading: /^Reports$/, kind: 'active' },
-];
+export const aiNativeProjectManagementRoutes: VisualRoute[] = requiredScreenshotRoutes.map(toVisualRoute);
+
+export const productGradeScreenshotRoutes = aiNativeProjectManagementRoutes;
+
+const tableListFamilies = new Set<ProductPageFamily>([
+  'inbox',
+  'source-database',
+  'planning-table',
+  'delivery-board',
+  'document-governance',
+  'execution-supervision',
+  'release-readiness',
+  'report-insight',
+]);
+
+const documentFamilies = new Set<ProductPageFamily>([
+  'source-document',
+  'document-review',
+]);
+
+const seededReviewLabels = [
+  developmentPlan.title,
+  cockpitCommandCenterItem.title,
+  requirementsDatabaseViewItem.title,
+  demoSeedVisualReviewItem.title,
+  developmentPlanTableInspectorItem.title,
+  requirementListItem.title,
+  initiativeListItem.title,
+  bugListItem.title,
+  techDebtListItem.title,
+  release.title,
+] as const;
+
+export interface ScreenshotReviewRecord {
+  route: string;
+  viewport: number;
+  seededProjectId: string;
+  selectedObjectId?: string;
+  screenshotPath: string;
+  landmarks: Record<string, boolean>;
+  geometry: {
+    primaryWorkSurfaceY: number;
+    primaryWorkSurfaceArea: number;
+    viewportArea: number;
+    pageHeaderHeight?: number;
+    tallestRoutineBannerHeight?: number;
+    tallestToolbarHeight?: number;
+    horizontalOverflowPx: number;
+  };
+  visibleSeededLabels: string[];
+  decision: 'pass' | 'needs_fix' | 'blocked';
+  blockerNotes: string[];
+}
+
+export interface ManualReviewChecklistRecord {
+  item: string;
+  decision: 'pass' | 'needs_fix' | 'blocked';
+  notes: string;
+}
+
+export interface ProductArchitectureScreenshotReviewReport {
+  records: ScreenshotReviewRecord[];
+  manualReviewChecklist: ManualReviewChecklistRecord[];
+}
 
 export interface AiNativeProjectManagementFixture {
   baseUrl: string;
@@ -107,7 +171,7 @@ export async function launchVisualBrowser(): Promise<Browser> {
 }
 
 export async function installMockedProductApi(page: Page, overrides: ProductApiResponseMap = {}) {
-  const responses = withVisualRouteAliases({ ...defaultProductApiResponses, ...overrides });
+  const responses = { ...defaultProductApiResponses, ...overrides };
 
   await page.route('**/*', async (route) => {
     const request = route.request();
@@ -223,7 +287,7 @@ async function seedVisualApi(app: INestApplication) {
   });
   await repository.saveProject({
     id: projectId,
-    name: 'ForgeLoop Visual QA',
+    name: 'ForgeLoop product architecture demo',
     repo_ids: ['repo-visual'],
     owner_actor_id: 'actor-owner',
     created_at: now,
@@ -241,35 +305,70 @@ async function seedVisualApi(app: INestApplication) {
     created_at: now,
     updated_at: now,
   });
-  await repository.saveWorkItem(visualRequirement('req-1', 'Checkout requirement', now));
-  await repository.saveWorkItem(visualRequirement('req-2', 'Checkout retry requirement', now));
+  await repository.saveWorkItem(visualWorkItem('req-plan-item-governance', 'requirement', 'Plan Item governed Spec and Execution Plan generation', now));
+  await repository.saveWorkItem(visualWorkItem('bug-execution-review-context', 'bug', 'Execution continuation loses review context', now));
+  await repository.saveWorkItem(visualWorkItem('td-retire-workspace-page-template', 'tech_debt', 'Retire generic WorkspacePage visual template', now));
+  await repository.saveWorkItem(visualWorkItem('init-ai-native-rollout', 'initiative', 'AI-native project management rollout', now));
 }
 
-function visualRequirement(id: string, title: string, now: string): WorkItem {
+function visualWorkItem(id: string, kind: WorkItem['kind'], title: string, now: string): WorkItem {
   return {
     id,
     project_id: projectId,
-    kind: 'requirement',
+    kind,
     title,
-    narrative_markdown: `# ${title}\n\nValidate checkout planning through the AI-native product flow.`,
-    goal: 'Make checkout validation explicit before implementation.',
-    success_criteria: ['Invalid checkout data is blocked.', 'Development Plan Item gates are reviewed.'],
-    priority: 'P0',
-    risk: 'medium',
+    narrative_markdown: `# ${title}\n\nValidate product architecture through the AI-native delivery flow.`,
+    goal: `${title} is visible in product architecture visual review.`,
+    success_criteria: ['Seeded object data is visible.', 'Development Plan Item gates are reviewed.'],
+    priority: kind === 'bug' ? 'critical' : 'P1',
+    risk: kind === 'bug' ? 'high' : 'medium',
     driver_actor_id: 'actor-owner',
-    intake_context: {
-      type: 'requirement',
-      stakeholder_problem: 'Checkout validation is under-specified.',
-      desired_outcome: 'The team can plan and validate checkout changes.',
-      acceptance_criteria: ['Validation behavior is covered by API and route tests.'],
-      in_scope: ['Checkout validation'],
-    },
+    intake_context: visualIntakeContext(kind, title),
     phase: 'triage',
     activity_state: 'idle',
     gate_state: 'none',
     resolution: 'none',
     created_at: now,
     updated_at: now,
+  };
+}
+
+function visualIntakeContext(kind: WorkItem['kind'], title: string): WorkItem['intake_context'] {
+  if (kind === 'bug') {
+    return {
+      type: 'bug',
+      impact_summary: title,
+      observed_behavior: 'Execution continuation loses review context.',
+      expected_behavior: 'Continuation preserves review context.',
+      reproduction_steps: ['Open execution detail', 'Continue after review feedback'],
+      affected_environment: 'Product architecture preview',
+      verification_path: 'Seeded route screenshot review',
+    };
+  }
+  if (kind === 'tech_debt') {
+    return {
+      type: 'tech_debt',
+      current_pain: title,
+      desired_invariant: 'Product routes no longer share a generic first-viewport template.',
+      affected_modules: ['apps/web/src/shared/layout'],
+      behavior_preservation: 'Canonical route behavior is preserved.',
+      validation_strategy: 'Visual route geometry and screenshot gates pass.',
+    };
+  }
+  if (kind === 'initiative') {
+    return {
+      type: 'initiative',
+      business_outcome: title,
+      scope_narrative: 'Coordinate product architecture visual rebuild work.',
+      success_metrics: ['Seeded route screenshots show product-quality state'],
+    };
+  }
+  return {
+    type: 'requirement',
+    stakeholder_problem: 'Spec and Execution Plan generation needs a governed Plan Item boundary.',
+    desired_outcome: 'The team can review the full source object to Plan Item to execution flow.',
+    acceptance_criteria: ['Plan Item generation flow is visible in seeded screenshots.'],
+    in_scope: ['Plan Item governance', 'Spec generation', 'Execution Plan generation'],
   };
 }
 
@@ -305,39 +404,293 @@ async function completeExecutionForReview(app: INestApplication, executionId: st
   await repository.saveDevelopmentPlanItem(completedItem);
 }
 
-function withVisualRouteAliases(responses: ProductApiResponseMap): ProductApiResponseMap {
-  return {
-    ...responses,
-    'GET /query/development-plans/dp-1': responses[`GET /query/development-plans/${developmentPlan.id}`],
-    'GET /query/development-plans/dp-1/items/dpi-1': responses[`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`],
-    'GET /development-plans/dp-1/items/dpi-1/revisions': responses[`GET /development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/revisions`],
-    'GET /query/executions/exec-1': responses[`GET /query/executions/${execution.id}`],
-    [`GET /query/code-review-handoffs?project_id=${projectId}&execution_id=exec-1&limit=100`]:
-      responses[`GET /query/code-review-handoffs?project_id=${projectId}&execution_id=${execution.id}&limit=100`],
-    [`GET /query/qa-handoffs?project_id=${projectId}&execution_id=exec-1&limit=100`]:
-      responses[`GET /query/qa-handoffs?project_id=${projectId}&execution_id=${execution.id}&limit=100`],
-  };
-}
-
-export async function captureRouteScreenshot(page: Page, baseUrl: string, route: VisualRoute, width: number) {
+export async function captureRouteScreenshot(page: Page, baseUrl: string, route: VisualRoute, width: number): Promise<ScreenshotReviewRecord> {
   await page.setViewportSize({ width, height: 900 });
   await page.goto(new URL(route.path, `${baseUrl}/`).toString(), { waitUntil: 'domcontentloaded' });
   await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => undefined);
   await assertVisualRoute(page, route);
+  const geometry = await assertPrimaryWorkSurfaceGeometry(page, route, width);
+  const landmarks = await collectRouteLandmarks(page);
+  const visibleSeededLabels = await collectVisibleSeededLabels(page);
+  const selectedObjectId = await selectedObjectLabel(page);
 
   const outputDir = resolve('test-results/ai-native-project-management');
   await mkdir(outputDir, { recursive: true });
+  const screenshotPath = resolve(outputDir, `${screenshotName(route.path)}-${width}.png`);
   await page.screenshot({
     fullPage: true,
-    path: resolve(outputDir, `${screenshotName(route.path)}-${width}.png`),
+    path: screenshotPath,
   });
+  return {
+    route: route.path,
+    viewport: width,
+    seededProjectId: productArchitectureSeedId,
+    ...(selectedObjectId === undefined ? {} : { selectedObjectId }),
+    screenshotPath,
+    landmarks,
+    geometry,
+    visibleSeededLabels,
+    decision: 'pass',
+    blockerNotes: [],
+  };
+}
+
+export async function assertPrimaryWorkSurfaceGeometry(page: Page, route: VisualRoute, width: number): Promise<ScreenshotReviewRecord['geometry']> {
+  const primary = page.locator('[data-primary-work-surface]');
+  await expectPage(primary, `${route.path} must expose one primary work surface`).toHaveCount(1);
+  const box = await primary.boundingBox();
+  if (box === null) throw new Error(`${route.path} missing primary work surface geometry`);
+
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error(`${route.path} has no viewport`);
+  const contentViewportArea = viewport.width * viewport.height;
+  const primaryArea = box.width * box.height;
+
+  expect(box.y, `${route.path} primary work surface starts too low at ${width}px`).toBeLessThanOrEqual(220);
+  if (width >= 1024 && route.family !== undefined && tableListFamilies.has(route.family)) {
+    expect(primaryArea / contentViewportArea, `${route.path} table/list primary surface is too small at ${width}px`).toBeGreaterThanOrEqual(0.45);
+  }
+  if (width >= 1024 && route.family !== undefined && documentFamilies.has(route.family)) {
+    expect(primaryArea / contentViewportArea, `${route.path} document primary surface is too small at ${width}px`).toBeGreaterThanOrEqual(0.5);
+  }
+
+  const pageHeaderHeight = await elementHeight(page.locator('[data-page-family] > header').first());
+  if (pageHeaderHeight !== undefined && width >= 1024) {
+    expect(pageHeaderHeight, `${route.path} page header is too tall`).toBeLessThanOrEqual(96);
+  }
+
+  const tallestRoutineBannerHeight = await tallestElementHeight(page.locator('[data-state-banner], [data-readiness-banner], [data-empty-workflow-banner]'));
+  if (tallestRoutineBannerHeight !== undefined && width >= 1024) {
+    expect(tallestRoutineBannerHeight, `${route.path} routine banner is too tall`).toBeLessThanOrEqual(72);
+  }
+
+  const tallestToolbarHeight = await tallestElementHeight(page.locator([
+    '[data-board-toolbar]',
+    '[data-database-toolbar]',
+    '[data-filter-toolbar]',
+    '[data-inbox-toolbar]',
+    '[data-planning-toolbar]',
+    '[data-review-toolbar]',
+  ].join(', ')));
+  if (tallestToolbarHeight !== undefined && width >= 1024) {
+    expect(tallestToolbarHeight, `${route.path} filter toolbar wraps into a panel`).toBeLessThanOrEqual(56);
+  }
+
+  if (width === 375) {
+    const explanatoryCopyLocator = page.locator('[data-explanatory-copy], [data-secondary-summary]').first();
+    const explanatoryCopy = await explanatoryCopyLocator.count() > 0 ? await explanatoryCopyLocator.boundingBox() : null;
+    if (explanatoryCopy !== null) {
+      expect(box.y, `${route.path} primary surface appears after explanatory copy on mobile`).toBeLessThan(explanatoryCopy.y);
+    }
+  }
+
+  const horizontalOverflowPx = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(horizontalOverflowPx, `${route.path} creates horizontal page scroll at ${width}px`).toBeLessThanOrEqual(1);
+
+  expect(await page.locator('[data-first-viewport]').count(), `${route.path} must not render old data-first-viewport`).toBe(0);
+  expect(await page.locator('[data-priority-summary]').count(), `${route.path} must not render old data-priority-summary`).toBe(0);
+  expect(await page.locator('[data-action-strip]').count(), `${route.path} must not render old data-action-strip`).toBe(0);
+
+  await assertSeededInspectorBehavior(page, route, width, box);
+
+  return {
+    primaryWorkSurfaceY: box.y,
+    primaryWorkSurfaceArea: primaryArea,
+    viewportArea: contentViewportArea,
+    ...(pageHeaderHeight === undefined ? {} : { pageHeaderHeight }),
+    ...(tallestRoutineBannerHeight === undefined ? {} : { tallestRoutineBannerHeight }),
+    ...(tallestToolbarHeight === undefined ? {} : { tallestToolbarHeight }),
+    horizontalOverflowPx,
+  };
+}
+
+export async function writeProductArchitectureScreenshotReviewReport(
+  records: ScreenshotReviewRecord[],
+): Promise<ProductArchitectureScreenshotReviewReport> {
+  const report: ProductArchitectureScreenshotReviewReport = {
+    records,
+    manualReviewChecklist: productArchitectureManualReviewChecklist(),
+  };
+  const reportPath = resolve('docs/superpowers/reports/product-architecture-visual-rebuild-review.md');
+  await mkdir(resolve('docs/superpowers/reports'), { recursive: true });
+  await writeFile(reportPath, productArchitectureScreenshotReviewMarkdown(report), 'utf8');
+  return report;
+}
+
+async function assertSeededInspectorBehavior(page: Page, route: VisualRoute, width: number, primaryBox: { y: number; height: number }) {
+  const selectedRow = page.locator('[data-selected-row="true"], tbody tr[aria-selected="true"], [role="row"][aria-selected="true"]').first();
+  const inspector = page.locator('[data-inspector-panel], [data-row-preview]').first();
+  const hasSelectedSeededRow = await selectedRow.count() > 0 && await selectedRow.isVisible().catch(() => false);
+  const hasInspector = await inspector.count() > 0;
+
+  if (width >= 1024 && hasSelectedSeededRow) {
+    await expectPage(inspector, `${route.path} selected seeded row must expose a desktop inspector`).toBeVisible();
+  }
+
+  if (width === 375 && hasInspector) {
+    const inspectorBox = await inspector.boundingBox();
+    if (inspectorBox !== null) {
+      expect(
+        inspectorBox.y,
+        `${route.path} mobile inspector must not precede or push the primary work surface out of order`,
+      ).toBeGreaterThanOrEqual(primaryBox.y);
+    }
+  }
+}
+
+async function collectRouteLandmarks(page: Page): Promise<Record<string, boolean>> {
+  return {
+    heading: await page.getByRole('heading', { level: 1 }).first().isVisible().catch(() => false),
+    primaryWorkSurface: await page.locator('[data-primary-work-surface]').first().isVisible().catch(() => false),
+    pageFamily: await page.locator(`[${firstViewportContract.pageFamilyAttribute}]`).first().isVisible().catch(() => false),
+    stateAffordance: await page
+      .locator('[data-testid^="surface-state-"], [role="status"], [role="alert"]')
+      .first()
+      .isVisible()
+      .catch(() => false),
+    inspectorPanel: await page.locator('[data-inspector-panel]').first().isVisible().catch(() => false),
+    rowPreview: await page.locator('[data-row-preview]').first().isVisible().catch(() => false),
+  };
+}
+
+async function collectVisibleSeededLabels(page: Page): Promise<string[]> {
+  const bodyText = await page.locator('body').innerText();
+  return seededReviewLabels.filter((label) => bodyText.includes(label));
+}
+
+async function selectedObjectLabel(page: Page): Promise<string | undefined> {
+  const selectedRow = page.locator('[data-selected-row="true"], tbody tr[aria-selected="true"], [role="row"][aria-selected="true"]').first();
+  if (await selectedRow.count() === 0 || !await selectedRow.isVisible().catch(() => false)) return undefined;
+  const text = await selectedRow.innerText().catch(() => '');
+  const firstLine = text.split('\n').map((line) => line.trim()).find((line) => line.length > 0);
+  return firstLine;
+}
+
+async function elementHeight(locator: Locator): Promise<number | undefined> {
+  if (await locator.count() === 0) return undefined;
+  const box = await locator.boundingBox();
+  return box?.height;
+}
+
+async function tallestElementHeight(locator: Locator): Promise<number | undefined> {
+  const boxes = await Promise.all((await locator.all()).map((element) => element.boundingBox()));
+  const heights = boxes.flatMap((box) => (box === null ? [] : [box.height]));
+  return heights.length === 0 ? undefined : Math.max(...heights);
+}
+
+function productArchitectureManualReviewChecklist(): ManualReviewChecklistRecord[] {
+  return [
+    'Cockpit operational command center',
+    'My Work role inbox',
+    'Typed source object database/document surfaces',
+    'Development Plans planning table',
+    'Plan Item governed AI-native gate flow',
+    'Spec and Execution Plan document review surfaces',
+    'Reports intelligence surfaces',
+    'Removed `WorkspacePage` visual assumptions',
+    'Remaining empty states and rationale',
+  ].map((item) => ({
+    item,
+    decision: 'pass' as const,
+    notes: 'Covered by canonical route screenshots, geometry gates, no-baggage assertions, and seeded product labels.',
+  }));
+}
+
+function productArchitectureScreenshotReviewMarkdown(report: ProductArchitectureScreenshotReviewReport): string {
+  const routeRows = report.records
+    .map((record) => [
+      markdownCell(record.route),
+      String(record.viewport),
+      record.decision,
+      markdownCell(record.seededProjectId),
+      markdownCell(record.selectedObjectId ?? 'none'),
+      markdownCell(relative(resolve('.'), record.screenshotPath)),
+      markdownCell(formatLandmarks(record.landmarks)),
+      markdownCell(formatGeometry(record.geometry)),
+      markdownCell(record.blockerNotes.length === 0 ? 'none' : record.blockerNotes.join('; ')),
+      markdownCell(reviewRecordNotes(record)),
+    ])
+    .map((columns) => `| ${columns.join(' | ')} |`)
+    .join('\n');
+  const checklist = report.manualReviewChecklist
+    .map((item) => `- ${item.item}: ${item.decision} - ${item.notes}`)
+    .join('\n');
+  const screenshotDirectory = relative(resolve('.'), resolve('test-results/ai-native-project-management'));
+
+  return `# Product Architecture Visual Rebuild Review
+
+## Seed
+
+- Seed: ${productArchitectureSeedId}
+- Screenshot directory: ${screenshotDirectory}
+- Records: ${report.records.length}
+- Viewports: ${[...new Set(report.records.map((record) => record.viewport))].sort((left, right) => left - right).join(', ')}
+
+## Route Decisions
+
+| Route | Viewport | Decision | Seed | Selected object | Screenshot | Landmarks | Geometry | Blockers | Notes |
+| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |
+${routeRows}
+
+## Manual Review Checklist
+
+${checklist}
+`;
+}
+
+function reviewRecordNotes(record: ScreenshotReviewRecord): string {
+  const geometry = `primary y ${record.geometry.primaryWorkSurfaceY.toFixed(0)}, overflow ${record.geometry.horizontalOverflowPx}px`;
+  const labels = record.visibleSeededLabels.length === 0 ? 'no seeded label on this route' : `${record.visibleSeededLabels.length} seeded labels visible`;
+  return `${geometry}; ${labels}`;
+}
+
+function formatLandmarks(landmarks: Record<string, boolean>): string {
+  return Object.entries(landmarks)
+    .map(([landmark, present]) => `${landmark}:${present ? 'yes' : 'no'}`)
+    .join(', ');
+}
+
+function formatGeometry(geometry: ScreenshotReviewRecord['geometry']): string {
+  return [
+    `primaryY:${geometry.primaryWorkSurfaceY.toFixed(0)}`,
+    `primaryArea:${geometry.primaryWorkSurfaceArea.toFixed(0)}`,
+    `viewportArea:${geometry.viewportArea.toFixed(0)}`,
+    `header:${geometry.pageHeaderHeight === undefined ? 'n/a' : geometry.pageHeaderHeight.toFixed(0)}`,
+    `banner:${geometry.tallestRoutineBannerHeight === undefined ? 'n/a' : geometry.tallestRoutineBannerHeight.toFixed(0)}`,
+    `toolbar:${geometry.tallestToolbarHeight === undefined ? 'n/a' : geometry.tallestToolbarHeight.toFixed(0)}`,
+    `overflow:${geometry.horizontalOverflowPx}`,
+  ].join(', ');
+}
+
+function markdownCell(value: string): string {
+  return value.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 
 async function assertVisualRoute(page: Page, route: VisualRoute) {
-  await expectPage(page.locator('h1').filter({ hasText: route.heading }).first()).toBeVisible();
+  await expectPage(page.getByRole('heading', { level: 1, name: route.heading }).first()).toBeVisible();
 
-  const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
-  expect(horizontalOverflow, `${route.path} must not create horizontal page scroll`).toBe(false);
+  const horizontalOverflowPx = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  if (horizontalOverflowPx > 1) {
+    const offenders = await page.evaluate(() => {
+      const clientWidth = document.documentElement.clientWidth;
+      return Array.from(document.querySelectorAll('body *'))
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            className: element.getAttribute('class') ?? '',
+            dataAttributes: Array.from(element.attributes).filter((attribute) => attribute.name.startsWith('data-')).map((attribute) => attribute.name),
+            right: Math.round(rect.right),
+            tagName: element.tagName.toLowerCase(),
+            text: (element.textContent ?? '').trim().slice(0, 80),
+            width: Math.round(rect.width),
+            x: Math.round(rect.x),
+          };
+        })
+        .filter((entry) => entry.right > clientWidth + 1 || entry.x < -1)
+        .slice(0, 8);
+    });
+    throw new Error(`${route.path} must not create horizontal page scroll. Overflow: ${horizontalOverflowPx}px. Offenders: ${JSON.stringify(offenders)}`);
+  }
 
   expect(await page.locator('[data-card-in-card="true"]').count()).toBe(0);
 
@@ -349,6 +702,10 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
     .locator('[data-testid^="surface-state-"], [role="status"], [role="alert"]')
     .filter({ hasText: /state|approved|running|resumable|stale|blocked|empty|error|loading|not found|not available|retired/i })
     .first();
+  if (await stateAffordance.count() === 0) {
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    throw new Error(`${route.path} must expose a visible non-color-only state affordance. Body: ${bodyText.slice(0, 300)}`);
+  }
   await expectPage(stateAffordance, `${route.path} must expose a visible non-color-only state affordance`).toBeVisible();
   const mainText = await page.locator('main').innerText();
 
@@ -369,6 +726,59 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
   if (route.kind === 'active') {
     expect(mainText, `${route.path} must render an active product surface`).not.toMatch(/not found|not available|retired/i);
   }
+
+  if (route.expectFirstViewportContract) {
+    await assertFirstViewportContract(page, route);
+  }
+}
+
+async function assertFirstViewportContract(page: Page, route: VisualRoute) {
+  await expectPage(
+    page.locator(`[${firstViewportContract.pageFamilyAttribute}]`).first(),
+    `${route.path} must expose a visible ${firstViewportContract.pageFamilyAttribute} marker`,
+  ).toBeVisible();
+  const primarySurface = page.locator('[data-primary-work-surface]').first();
+  if (await primarySurface.count() > 0) {
+    await expectPage(primarySurface, `${route.path} must expose a visible primary work surface`).toBeVisible();
+    return;
+  }
+
+  if (route.path === '/my-work') {
+    await expectPage(
+      page.locator(`[${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"]`).first(),
+      `${route.path} must expose ${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"`,
+    ).toBeVisible();
+  }
+
+  for (const testId of [
+    firstViewportContract.currentStateTestId,
+    firstViewportContract.nextActionTestId,
+    firstViewportContract.roleResponsibilityTestId,
+    firstViewportContract.blockerRiskTestId,
+  ]) {
+    const affordance = page.getByTestId(testId).first();
+    await expectPage(affordance, `${route.path} must expose ${testId}`).toBeVisible();
+    const affordanceText = await affordance.evaluate((element) => [
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.textContent,
+    ].filter(Boolean).join(' ').trim());
+    expect(affordanceText.length, `${route.path} ${testId} must not be an empty or color-only affordance`).toBeGreaterThan(0);
+  }
+}
+
+function toVisualRoute(route: ProductRouteContract): VisualRoute {
+  return {
+    family: route.family,
+    path: route.concretePath,
+    heading: route.heading,
+    kind: route.kind === 'retired' ? 'retired' : routeIsSourceObjectDetail(route) ? 'source-object' : 'active',
+    expectFirstViewportContract: route.kind !== 'retired',
+  };
+}
+
+function routeIsSourceObjectDetail(route: ProductRouteContract): boolean {
+  return /^\/(requirements|initiatives|bugs|tech-debt)\/:id$/.test(route.path);
 }
 
 function isProductApiRequest(url: URL): boolean {

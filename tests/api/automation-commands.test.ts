@@ -46,6 +46,7 @@ import {
 import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
 import { seedReadyExecutionPackage, succeededSelfReview } from '../helpers/delivery-runtime-fixtures';
 import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
+import { captureEnv, restoreEnv } from '../helpers/env-restore';
 
 const actorOwner = 'actor-owner';
 const actorReviewer = 'actor-reviewer';
@@ -988,15 +989,16 @@ const expectNoManualPathCommandWrites = async (
 
 describe('automation command boundaries', () => {
   const apps: INestApplication[] = [];
+  let envSnapshot: Record<string, string | undefined>;
 
   beforeEach(() => {
+    envSnapshot = captureEnv(['FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET', 'FORGELOOP_AUTOMATION_TEST_NOW']);
     process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET = automationSecret;
     process.env.FORGELOOP_AUTOMATION_TEST_NOW = automationTestNow;
   });
 
   afterEach(async () => {
-    delete process.env.FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET;
-    delete process.env.FORGELOOP_AUTOMATION_TEST_NOW;
+    restoreEnv(envSnapshot);
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 

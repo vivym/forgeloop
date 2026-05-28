@@ -21,6 +21,7 @@ export function BugsRoute() {
       error={query.error}
       isLoading={query.isLoading}
       items={query.data?.items ?? []}
+      planningHref="/development-plans/new"
       subtitle="Bug triage, repair planning, verification, and regression follow-up."
       title="Bugs"
     />
@@ -75,6 +76,7 @@ export function NewBugRoute() {
         { label: 'Bug Driver', name: 'driver_actor_id', input: 'input', defaultValue: actorId, required: true },
       ]}
       narrativeTemplate={'## Bug narrative\n\nDescribe impact, diagnosis notes, and verification evidence.'}
+      objectType="bug"
       onSubmit={async (values) => {
         const suspectedArea = emptyToUndefined(values.suspected_area);
         const api = createForgeloopCommandApi();

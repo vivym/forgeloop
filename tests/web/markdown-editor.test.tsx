@@ -5,8 +5,27 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { Link, createRoutesStub } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AttachmentRef } from '@forgeloop/contracts';
 
 import { ForgeMarkdownEditor } from '../../apps/web/src/shared/ui/markdown-editor';
+
+const publicAttachmentFixture = (overrides: Partial<AttachmentRef> = {}): AttachmentRef => ({
+  id: 'att-1',
+  owner_object_type: 'requirement',
+  owner_object_id: 'req-plan-item-governance',
+  linked_object_refs: [],
+  filename: 'flow.png',
+  content_type: 'image/png',
+  size_bytes: 128,
+  checksum_sha256: 'a'.repeat(64),
+  uploaded_by_actor_id: 'actor-product',
+  created_at: '2026-05-23T00:00:00.000Z',
+  evidence_category: 'image',
+  visibility: 'object',
+  safety_status: 'passed',
+  reference_status: 'active',
+  ...overrides,
+});
 
 describe('ForgeMarkdownEditor', () => {
   afterEach(() => {
@@ -107,6 +126,48 @@ describe('ForgeMarkdownEditor', () => {
 
     expect(screen.getByRole('heading', { name: 'Requirement brief' })).toBeTruthy();
     expect(screen.queryByLabelText(/editor toolbar/i)).toBeNull();
+  });
+
+  it('sanitizes unsafe script content while preserving code blocks, tables, links, and attachment image refs in preview', () => {
+    const previewAttachment = publicAttachmentFixture({
+      id: 'att-preview-flow',
+      owner_object_type: 'requirement',
+      owner_object_id: 'req-plan-item-governance',
+      filename: 'flow.png',
+      content_type: 'image/png',
+      alt_text: 'Preview flow',
+    });
+
+    render(
+      <ForgeMarkdownEditor
+        allowedBlocks={['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code']}
+        attachments={[previewAttachment]}
+        mode="read"
+        objectRef={{ type: 'requirement', id: 'req-plan-item-governance' }}
+        onChange={vi.fn()}
+        onUploadAttachment={vi.fn()}
+        validationPolicy={{ validation_version: '2026-05-23' }}
+        value={[
+          '# Requirement',
+          '<script>alert(1)</script>',
+          '[safe link](https://example.com)',
+          '| Gate | State |',
+          '| --- | --- |',
+          '| Spec | Approved |',
+          '```ts',
+          'const value = "<script>kept as code text";',
+          '```',
+          '![Preview flow](attachment://att-preview-flow)',
+        ].join('\n')}
+      />,
+    );
+
+    expect(document.querySelector('script')).toBeNull();
+    expect(screen.queryByText(/alert\(1\)/)).toBeNull();
+    expect(screen.getByRole('link', { name: /safe link/i }).getAttribute('href')).toBe('https://example.com');
+    expect(screen.getByRole('table').textContent).toMatch(/Spec/);
+    expect(screen.getByText(/const value/)).toBeTruthy();
+    expect(screen.getByRole('img', { name: /preview flow/i }).getAttribute('src')).toBe('attachment://att-preview-flow');
   });
 
   it('rejects unsafe source mode content before save', async () => {

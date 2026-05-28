@@ -12,6 +12,7 @@
     "dev:executor": "pnpm --filter @forgeloop/executor-gateway start:dev",
     "dev:worker": "pnpm --filter @forgeloop/workflow-worker start:dev",
     "dev:web": "pnpm --filter @forgeloop/web dev",
+    "preview:product-review": "tsx --tsconfig tsconfig.node.json scripts/product-review-preview.ts",
     "tail:run-events": "tsx --tsconfig tsconfig.node.json scripts/tail-run-events.ts",
     "automation:dogfood": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/automation-dogfood.ts",
     "db:push": "drizzle-kit push --config packages/db/drizzle.config.ts",

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from 'react';
 import { useBlocker, useInRouterContext } from 'react-router';
 import {
   MDXEditor,
@@ -48,6 +48,7 @@ export interface ForgeMarkdownEditorProps {
     debounceMs: number;
     onAutosaveDraft: (markdown: string) => void;
   };
+  guardRouteTransitions?: boolean;
   onChange: (markdown: string) => void;
   onSave?: (document: MarkdownDocument) => void | Promise<void>;
   onUploadAttachment: (file: File, objectRef: EditableObjectRef) => Promise<AttachmentRef>;
@@ -57,6 +58,7 @@ export function ForgeMarkdownEditor({
   allowedBlocks,
   attachments = [],
   autosave,
+  guardRouteTransitions = true,
   mode,
   objectRef,
   onChange,
@@ -81,7 +83,9 @@ export function ForgeMarkdownEditor({
   const [diffSelection, setDiffSelection] = useState<{ before: MarkdownRevision; after: MarkdownRevision }>();
   const [validationIssues, setValidationIssues] = useState<MarkdownValidationIssue[]>([]);
   const [uploadError, setUploadError] = useState<string>();
+  const [saveError, setSaveError] = useState<string>();
 
+  const imageUploadEnabled = mode === 'edit' && allowedBlocks.includes('image');
   const richEditorEnabled = mode === 'edit' && !sourceMode && isBrowserRuntime() && !isJsdomRuntime();
   const documentAttachments = mergeAttachmentRefs(attachments, uploadedAttachments);
   const dirty = draft !== savedValue;
@@ -133,10 +137,12 @@ export function ForgeMarkdownEditor({
     draftRef.current = nextDraft;
     setDraft(nextDraft);
     setValidationIssues([]);
+    setSaveError(undefined);
     onChange(nextDraft);
   }
 
   async function uploadImage(file: File): Promise<string> {
+    if (!imageUploadEnabled) throw new Error('Image uploads are not enabled for this document.');
     const attachment = await uploadAttachment(file);
     return `attachment://${attachment.id}`;
   }
@@ -157,7 +163,7 @@ export function ForgeMarkdownEditor({
   async function appendUploadedImage(file: File) {
     try {
       const attachment = await uploadAttachment(file);
-      appendMarkdown(attachmentMarkdownFor(attachment));
+      appendMarkdown(imageAttachmentMarkdownFor(attachment));
     } catch {
       // The visible upload error is set in uploadAttachment.
     }
@@ -172,6 +178,7 @@ export function ForgeMarkdownEditor({
   }
 
   async function handlePaste(event: ClipboardEvent<HTMLElement>) {
+    if (!imageUploadEnabled) return;
     const image = Array.from(event.clipboardData.files ?? []).find((file) => file.type.startsWith('image/'));
     if (image === undefined) return;
 
@@ -180,6 +187,7 @@ export function ForgeMarkdownEditor({
   }
 
   async function handleDrop(event: DragEvent<HTMLElement>) {
+    if (!imageUploadEnabled) return;
     const image = Array.from(event.dataTransfer.files ?? []).find((file) => file.type.startsWith('image/'));
     if (image === undefined) return;
 
@@ -197,6 +205,7 @@ export function ForgeMarkdownEditor({
 
   async function handleSave() {
     if (onSave === undefined) return;
+    setSaveError(undefined);
 
     const validation = validateEditorMarkdown({
       markdown: draft,
@@ -218,9 +227,14 @@ export function ForgeMarkdownEditor({
       attachment_refs: documentAttachments,
       validation_version: validationPolicy.validation_version,
     };
-    await onSave(document);
-    savedValueRef.current = validation.markdown;
-    setSavedValue(validation.markdown);
+    try {
+      await onSave(document);
+      savedValueRef.current = validation.markdown;
+      setSavedValue(validation.markdown);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSaveError(message);
+    }
   }
 
   const mdxPlugins = [
@@ -231,7 +245,7 @@ export function ForgeMarkdownEditor({
     tablePlugin(),
     linkPlugin(),
     linkDialogPlugin(),
-    imagePlugin({ imageUploadHandler: uploadImage }),
+    ...(imageUploadEnabled ? [imagePlugin({ imageUploadHandler: uploadImage })] : []),
     diffSourcePlugin({ viewMode: sourceMode ? 'source' : 'rich-text' }),
     toolbarPlugin({ toolbarContents: () => null, toolbarClassName: 'sr-only' }),
     markdownShortcutPlugin(),
@@ -261,25 +275,29 @@ export function ForgeMarkdownEditor({
           <Code2 aria-hidden="true" className="size-4" />
           {sourceMode ? 'Rich text' : 'Source'}
         </button>
-        <button
-          aria-label="Insert image"
-          className={toolbarButtonClass}
-          onClick={() => imageInputRef.current?.click()}
-          type="button"
-        >
-          <FileImage aria-hidden="true" className="size-4" />
-          Insert image
-        </button>
-        <label className="sr-only">
-          Image file
-          <input
-            ref={imageInputRef}
-            aria-label="Image file"
-            accept="image/*"
-            onChange={(event) => void handleImageFileChange(event.currentTarget.files?.[0])}
-            type="file"
-          />
-        </label>
+        {imageUploadEnabled ? (
+          <>
+            <button
+              aria-label="Insert image"
+              className={toolbarButtonClass}
+              onClick={() => imageInputRef.current?.click()}
+              type="button"
+            >
+              <FileImage aria-hidden="true" className="size-4" />
+              Insert image
+            </button>
+            <label className="sr-only">
+              Image file
+              <input
+                ref={imageInputRef}
+                aria-label="Image file"
+                accept="image/*"
+                onChange={(event) => void handleImageFileChange(event.currentTarget.files?.[0])}
+                type="file"
+              />
+            </label>
+          </>
+        ) : null}
         <button
           aria-controls="forge-markdown-editor-attachments"
           aria-expanded={showAttachments}
@@ -359,7 +377,7 @@ export function ForgeMarkdownEditor({
         />
       )}
 
-      <EditorFeedback issues={validationIssues} uploadError={uploadError} />
+      <EditorFeedback issues={validationIssues} saveError={saveError} uploadError={uploadError} />
 
       {showRevisions ? (
         <RevisionHistory
@@ -370,7 +388,7 @@ export function ForgeMarkdownEditor({
         />
       ) : null}
 
-      <RouteTransitionGuard enabled={dirty && mode === 'edit'} />
+      {guardRouteTransitions ? <RouteTransitionGuard enabled={dirty && mode === 'edit'} /> : null}
     </section>
   );
 }
@@ -400,12 +418,21 @@ function RouterTransitionBlocker({ enabled }: { enabled: boolean }) {
   return null;
 }
 
-function EditorFeedback({ issues, uploadError }: { issues: MarkdownValidationIssue[]; uploadError: string | undefined }) {
-  if (issues.length === 0 && uploadError === undefined) return null;
+function EditorFeedback({
+  issues,
+  saveError,
+  uploadError,
+}: {
+  issues: MarkdownValidationIssue[];
+  saveError: string | undefined;
+  uploadError: string | undefined;
+}) {
+  if (issues.length === 0 && uploadError === undefined && saveError === undefined) return null;
 
   return (
     <div className="rounded-md border border-danger/40 bg-danger/5 p-3 text-sm text-danger" role="alert">
       {uploadError === undefined ? null : <p>{uploadError}</p>}
+      {saveError === undefined ? null : <p>{saveError}</p>}
       {issues.map((issue) => (
         <p key={`${issue.code}-${issue.message}`}>{`${issue.code}: ${issue.message}`}</p>
       ))}
@@ -552,43 +579,201 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
 }
 
 type MarkdownPreviewBlock =
-  | { kind: 'heading'; level: 1 | 2 | 3 | 4; text: string }
-  | { kind: 'paragraph'; text: string };
+  | { kind: 'code'; code: string; language?: string | undefined }
+  | { kind: 'heading'; level: 1 | 2 | 3 | 4; children: MarkdownInlineNode[] }
+  | { kind: 'paragraph'; children: MarkdownInlineNode[] }
+  | { kind: 'table'; headers: MarkdownInlineNode[][]; rows: MarkdownInlineNode[][][] };
+
+type MarkdownInlineNode =
+  | { kind: 'code'; text: string }
+  | { kind: 'image'; alt: string; src: string; title?: string | undefined }
+  | { kind: 'link'; children: MarkdownInlineNode[]; href: string }
+  | { kind: 'text'; text: string };
 
 function MarkdownBlock({ block }: { block: MarkdownPreviewBlock }) {
   if (block.kind === 'paragraph') {
-    return <p>{block.text}</p>;
+    return <p>{renderInlineNodes(block.children)}</p>;
+  }
+
+  if (block.kind === 'code') {
+    return (
+      <pre className="overflow-auto rounded-md border border-border bg-surface-muted p-3 text-sm">
+        <code>{block.code}</code>
+      </pre>
+    );
+  }
+
+  if (block.kind === 'table') {
+    return (
+      <table>
+        <thead>
+          <tr>
+            {block.headers.map((header, index) => (
+              <th key={`header-${index}`}>{renderInlineNodes(header)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {block.rows.map((row, rowIndex) => (
+            <tr key={`row-${rowIndex}`}>
+              {row.map((cell, cellIndex) => (
+                <td key={`cell-${rowIndex}-${cellIndex}`}>{renderInlineNodes(cell)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
   }
 
   const className = cn('font-semibold text-text-primary', block.level === 1 ? 'text-2xl' : 'text-lg');
   switch (block.level) {
     case 1:
-      return <h1 className={className}>{block.text}</h1>;
+      return <h1 className={className}>{renderInlineNodes(block.children)}</h1>;
     case 2:
-      return <h2 className={className}>{block.text}</h2>;
+      return <h2 className={className}>{renderInlineNodes(block.children)}</h2>;
     case 3:
-      return <h3 className={className}>{block.text}</h3>;
+      return <h3 className={className}>{renderInlineNodes(block.children)}</h3>;
     case 4:
-      return <h4 className={className}>{block.text}</h4>;
+      return <h4 className={className}>{renderInlineNodes(block.children)}</h4>;
   }
 }
 
 function markdownToBlocks(markdown: string): MarkdownPreviewBlock[] {
   const blocks: MarkdownPreviewBlock[] = [];
-  for (const line of markdown.split(/\r?\n/)) {
+  const lines = markdown.split(/\r?\n/);
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] ?? '';
     const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
+    if (trimmed.length === 0) {
+      index += 1;
+      continue;
+    }
+
+    const codeFence = /^```([A-Za-z0-9_-]+)?\s*$/.exec(trimmed);
+    if (codeFence !== null) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^```\s*$/.test((lines[index] ?? '').trim())) {
+        codeLines.push(lines[index] ?? '');
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push({ kind: 'code', code: codeLines.join('\n'), language: codeFence[1] });
+      continue;
+    }
+
+    if (isUnsafeHtmlLine(trimmed)) {
+      index += 1;
+      if (/<script\b/i.test(trimmed) && !/<\/script\s*>/i.test(trimmed)) {
+        while (index < lines.length && !/<\/script\s*>/i.test(lines[index] ?? '')) {
+          index += 1;
+        }
+        if (index < lines.length) index += 1;
+      }
+      continue;
+    }
 
     const heading = /^(#{1,4})\s+(.+)$/.exec(trimmed);
     if (heading !== null) {
       const marker = heading[1] ?? '#';
-      blocks.push({ kind: 'heading', level: marker.length as 1 | 2 | 3 | 4, text: heading[2] ?? '' });
+      blocks.push({ kind: 'heading', level: marker.length as 1 | 2 | 3 | 4, children: parseInlineMarkdown(heading[2] ?? '') });
+      index += 1;
       continue;
     }
 
-    blocks.push({ kind: 'paragraph', text: trimmed });
+    if (isTableHeader(lines, index)) {
+      const headers = splitTableRow(trimmed).map(parseInlineMarkdown);
+      index += 2;
+      const rows: MarkdownInlineNode[][][] = [];
+      while (index < lines.length && isTableRow(lines[index] ?? '')) {
+        rows.push(splitTableRow(lines[index] ?? '').map(parseInlineMarkdown));
+        index += 1;
+      }
+      blocks.push({ kind: 'table', headers, rows });
+      continue;
+    }
+
+    blocks.push({ kind: 'paragraph', children: parseInlineMarkdown(trimmed) });
+    index += 1;
   }
   return blocks;
+}
+
+function renderInlineNodes(nodes: MarkdownInlineNode[]): ReactNode {
+  return nodes.map((node, index) => {
+    switch (node.kind) {
+      case 'code':
+        return <code key={`code-${index}`}>{node.text}</code>;
+      case 'image':
+        return <img alt={node.alt} key={`image-${index}`} src={node.src} title={node.title} />;
+      case 'link':
+        return (
+          <a href={safeLinkHref(node.href)} key={`link-${index}`}>
+            {renderInlineNodes(node.children)}
+          </a>
+        );
+      case 'text':
+        return node.text;
+    }
+  });
+}
+
+function parseInlineMarkdown(markdown: string): MarkdownInlineNode[] {
+  const nodes: MarkdownInlineNode[] = [];
+  const pattern = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(markdown)) !== null) {
+    if (match.index > cursor) nodes.push({ kind: 'text', text: markdown.slice(cursor, match.index) });
+    if (match[1] !== undefined && match[2] !== undefined) {
+      nodes.push({ kind: 'image', alt: match[1], src: safeImageSrc(match[2]), title: match[3] });
+    } else if (match[4] !== undefined && match[5] !== undefined) {
+      nodes.push({ kind: 'link', children: [{ kind: 'text', text: match[4] }], href: match[5] });
+    } else if (match[6] !== undefined) {
+      nodes.push({ kind: 'code', text: match[6] });
+    }
+    cursor = pattern.lastIndex;
+  }
+  if (cursor < markdown.length) nodes.push({ kind: 'text', text: markdown.slice(cursor) });
+  return nodes;
+}
+
+function isUnsafeHtmlLine(line: string): boolean {
+  return /<script\b/i.test(line) || /^<[^>]+>/.test(line);
+}
+
+function isTableHeader(lines: string[], index: number): boolean {
+  const current = lines[index]?.trim() ?? '';
+  const next = lines[index + 1]?.trim() ?? '';
+  return isTableRow(current) && /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(next);
+}
+
+function isTableRow(line: string): boolean {
+  return line.trim().includes('|');
+}
+
+function splitTableRow(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+}
+
+function safeLinkHref(href: string): string {
+  return /^(https?:\/\/|mailto:|attachment:\/\/)/i.test(href) ? href : '#';
+}
+
+function safeImageSrc(src: string): string {
+  return /^(https?:\/\/|attachment:\/\/)/i.test(src) ? src : '';
+}
+
+function imageAttachmentMarkdownFor(attachment: AttachmentRef): string {
+  if (!attachment.content_type.startsWith('image/')) return attachmentMarkdownFor(attachment);
+
+  const safeName = attachment.filename.replace(/[\]\n\r"]/g, ' ').trim() || attachment.id;
+  const alt = (attachment.alt_text ?? attachment.caption ?? safeName).replace(/[\]\n\r"]/g, ' ').trim() || safeName;
+  const caption = attachment.caption?.replace(/[\]\n\r"]/g, ' ').trim();
+  const target = `attachment://${attachment.id}`;
+  return caption === undefined || caption.length === 0 ? `![${alt}](${target})` : `![${alt}](${target} "${caption}")`;
 }
 
 function isBrowserRuntime() {

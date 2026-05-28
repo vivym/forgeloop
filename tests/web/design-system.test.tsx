@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs';
+
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -160,8 +162,23 @@ describe('design system primitives', () => {
     const heading = screen.getByRole('heading', { name: 'Release scope' });
     const section = heading.closest('section');
     expect(section).toBeTruthy();
+    expect(section?.getAttribute('data-section-variant')).toBe('plain');
     expect(section?.querySelector('section')).toBeNull();
     expectNoLegacyRenderedClasses();
+  });
+
+  it('documents product-grade layout composition anti-patterns', () => {
+    const guidelines = readFileSync('apps/web/src/shared/design-system/docs/component-guidelines.md', 'utf8');
+
+    expect(guidelines).toContain('Page sections are not cards');
+    expect(guidelines).toContain('data-card-in-card="true"');
+    expect(guidelines).toContain('data-metadata-card-sprawl="true"');
+    expect(guidelines).toContain('data-runtime-dominant-title="true"');
+    expect(guidelines).toContain('CompactMetadata');
+    expect(guidelines).toContain('current-state');
+    expect(guidelines).toContain('next-action');
+    expect(guidelines).toContain('role-responsibility');
+    expect(guidelines).toContain('blocker-risk');
   });
 
   it('keeps detail layout rail inline before content without legacy classes', () => {

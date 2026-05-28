@@ -1,4 +1,4 @@
-import { useEffect, useState, type HTMLAttributes, type ReactNode, type TdHTMLAttributes, type ThHTMLAttributes } from 'react';
+import { useEffect, useState, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type ReactNode, type TdHTMLAttributes, type ThHTMLAttributes } from 'react';
 
 import { cn } from '../../utils/cn';
 
@@ -42,34 +42,94 @@ export interface DataTableProps<T> {
   rows: T[];
   getRowKey: (row: T, index: number) => string;
   ariaLabel?: string;
+  density?: 'compact' | 'normal';
   emptyMessage?: ReactNode;
+  selectedRowKey?: string;
+  onSelectRow?: (row: T) => void;
+  stickyHeader?: boolean;
+  containedScroll?: boolean;
 }
 
-export function DataTable<T>({ ariaLabel, columns, rows, getRowKey, emptyMessage = 'No data' }: DataTableProps<T>) {
+export function DataTable<T>({
+  ariaLabel,
+  columns,
+  rows,
+  getRowKey,
+  density = 'normal',
+  emptyMessage = 'No data',
+  selectedRowKey,
+  onSelectRow,
+  stickyHeader = false,
+  containedScroll = true,
+}: DataTableProps<T>) {
   const renderResponsiveCards = useResponsiveCards();
+  const compact = density === 'compact';
+  const isSelectable = typeof onSelectRow === 'function';
+
+  const activateRow = (row: T) => onSelectRow?.(row);
+  const onActivationClick = (event: MouseEvent<HTMLElement>, row: T) => {
+    if (startedInInteractiveDescendant(event)) return;
+    activateRow(row);
+  };
+  const onActivationKeyDown = (event: KeyboardEvent<HTMLElement>, row: T) => {
+    if (startedInInteractiveDescendant(event)) return;
+    if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+      event.preventDefault();
+      activateRow(row);
+    }
+  };
 
   return (
-    <div className="grid min-w-0 max-w-full gap-3 overflow-x-auto">
+    <div
+      className={cn('grid min-w-0 max-w-full gap-3', containedScroll ? 'overflow-x-auto' : undefined)}
+      data-table-scroll-container=""
+    >
       <Table aria-label={ariaLabel} className="hidden md:table">
-        <TableHeader>
+        <TableHeader className={stickyHeader ? 'sticky top-0 z-sticky' : undefined}>
           <TableRow>
             {columns.map((column) => (
-              <TableHead key={column.key}>{column.header}</TableHead>
+              <TableHead
+                className={cn(compact ? 'px-3 py-2.5 text-xs' : undefined, stickyHeader ? 'sticky top-0 z-sticky bg-surface-muted' : undefined)}
+                key={column.key}
+              >
+                {column.header}
+              </TableHead>
             ))}
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.length ? (
-            rows.map((row, index) => (
-              <TableRow key={getRowKey(row, index)}>
-                {columns.map((column) => (
-                  <TableCell key={column.key}>{column.cell(row)}</TableCell>
-                ))}
-              </TableRow>
-            ))
+            rows.map((row, index) => {
+              const key = getRowKey(row, index);
+              const isSelected = selectedRowKey === key;
+
+              return (
+                <TableRow
+                  aria-selected={isSelectable ? (isSelected ? 'true' : 'false') : undefined}
+                  className={cn(
+                    isSelectable
+                      ? 'cursor-pointer transition-colors duration-fast ease-standard focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none hover:bg-surface-muted/70'
+                      : undefined,
+                    isSelected ? 'bg-primary-soft/70' : undefined,
+                  )}
+                  key={key}
+                  onClick={isSelectable ? (event) => onActivationClick(event, row) : undefined}
+                  onKeyDown={isSelectable ? (event) => onActivationKeyDown(event, row) : undefined}
+                  tabIndex={isSelectable ? 0 : undefined}
+                >
+                  {columns.map((column) => (
+                    <TableCell className={compact ? 'px-3 py-2.5' : undefined} key={column.key}>
+                      {column.cell(row)}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              );
+            })
           ) : (
             <TableRow>
-              <TableCell colSpan={columns.length}>{emptyMessage}</TableCell>
+              <TableCell className={compact ? 'px-3 py-2.5' : undefined} colSpan={columns.length}>
+                {emptyMessage}
+              </TableCell>
             </TableRow>
           )}
         </TableBody>
@@ -81,22 +141,54 @@ export function DataTable<T>({ ariaLabel, columns, rows, getRowKey, emptyMessage
         role="list"
       >
         {renderResponsiveCards && rows.length ? (
-          rows.map((row, index) => (
-            <article className="grid gap-3 rounded-card border border-border bg-surface p-4" key={getRowKey(row, index)} role="listitem">
-              {columns.map((column) => (
-                <div className="grid min-w-0 gap-1" key={column.key}>
-                  <span className="text-xs font-semibold uppercase text-text-muted">{column.header}</span>
-                  <span className="min-w-0 [overflow-wrap:anywhere] text-text-primary">{column.cell(row)}</span>
-                </div>
-              ))}
-            </article>
-          ))
+          rows.map((row, index) => {
+            const key = getRowKey(row, index);
+            const isSelected = selectedRowKey === key;
+
+            return (
+              <article
+                aria-current={isSelected ? 'true' : undefined}
+                className={cn(
+                  'grid gap-3 rounded-card border border-border bg-surface p-4',
+                  compact ? 'gap-2 p-3' : undefined,
+                  isSelectable
+                    ? 'cursor-pointer transition-colors duration-fast ease-standard focus-visible:outline-2 focus-visible:outline-primary motion-reduce:transition-none hover:bg-surface-raised'
+                    : undefined,
+                  isSelected ? 'border-primary/40 bg-primary-soft/50' : undefined,
+                )}
+                data-selected-row={isSelected ? 'true' : undefined}
+                key={key}
+                onClick={isSelectable ? (event) => onActivationClick(event, row) : undefined}
+                onKeyDown={isSelectable ? (event) => onActivationKeyDown(event, row) : undefined}
+                role="listitem"
+                tabIndex={isSelectable ? 0 : undefined}
+              >
+                {columns.map((column) => (
+                  <div className="grid min-w-0 gap-1" key={column.key}>
+                    <span className="text-xs font-semibold uppercase text-text-muted">{column.header}</span>
+                    <span className="min-w-0 [overflow-wrap:anywhere] text-text-primary">{column.cell(row)}</span>
+                  </div>
+                ))}
+              </article>
+            );
+          })
         ) : renderResponsiveCards ? (
           <p className="m-0 text-sm text-text-secondary">{emptyMessage}</p>
         ) : null}
       </div>
     </div>
   );
+}
+
+function startedInInteractiveDescendant(event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>): boolean {
+  if (!(event.target instanceof Element) || !(event.currentTarget instanceof Element)) return false;
+  if (event.target === event.currentTarget) return false;
+
+  const interactiveTarget = event.target.closest(
+    'a, button, input, select, textarea, summary, [role="button"], [role="link"], [role="menuitem"], [contenteditable="true"]',
+  );
+
+  return interactiveTarget !== null && event.currentTarget.contains(interactiveTarget);
 }
 
 function useResponsiveCards() {

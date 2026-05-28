@@ -1,53 +1,24 @@
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import { useSpecExecutionPlanQueueQuery } from '../../shared/api/hooks';
 import { useProjectContext } from '../../shared/context/project-context';
-import { InlineActions, PageHeader, Section } from '../../shared/layout';
-import { Badge, EmptyState, InlineNotice, StatusPill } from '../../shared/ui';
+import { CompactMetadata, DocumentGovernanceLayout, InlineActions, PreviewPane, ProductPage, Section } from '../../shared/layout';
+import { Badge, DataTable, EmptyState, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
-
-type QueueArtifactType = 'spec' | 'execution_plan';
-type QueueGroupId =
-  | 'spec-needs-generation'
-  | 'spec-needs-review'
-  | 'spec-approved'
-  | 'execution-plan-needs-generation'
-  | 'execution-plan-needs-review'
-  | 'execution-plan-approved'
-  | 'stale'
-  | 'blocked';
-type QueueRef = { type: string; id: string; title?: string; development_plan_id?: string };
-type QueueItem = {
-  id: string;
-  title: string;
-  artifact_type: QueueArtifactType;
-  status?: string;
-  gate_state?: string;
-  stale?: boolean;
-  blocked?: boolean;
-  reviewer_actor_id?: string;
-  age_label?: string;
-  risk?: string;
-  next_action?: string;
-  source_ref?: QueueRef;
-  development_plan_item_ref?: QueueRef;
-};
-
-const groups: Array<{ id: QueueGroupId; label: string }> = [
-  { id: 'spec-needs-generation', label: 'Spec needs generation' },
-  { id: 'spec-needs-review', label: 'Spec needs review' },
-  { id: 'spec-approved', label: 'Spec approved' },
-  { id: 'execution-plan-needs-generation', label: 'Execution Plan needs generation' },
-  { id: 'execution-plan-needs-review', label: 'Execution Plan needs review' },
-  { id: 'execution-plan-approved', label: 'Execution Plan approved' },
-  { id: 'stale', label: 'Stale' },
-  { id: 'blocked', label: 'Blocked' },
-];
+import {
+  specPlanQueueGroups,
+  specPlanQueueViewModel,
+  type SpecPlanQueueGroup,
+  type SpecPlanQueueItem,
+  type SpecPlanQueueRow,
+} from './spec-plan-view-model';
 
 const selectedSegmentClass =
   'inline-flex min-h-9 items-center justify-center rounded-md border border-primary bg-primary px-3 text-sm font-semibold text-white transition-colors duration-base ease-standard';
 const unselectedSegmentClass =
   'inline-flex min-h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-border-strong hover:bg-surface-muted';
+const secondaryLinkClass = 'text-sm font-semibold text-primary hover:underline';
 
 export function SpecExecutionPlanQueue() {
   const { projectId } = useProjectContext();
@@ -56,20 +27,45 @@ export function SpecExecutionPlanQueue() {
   const focusedDevelopmentPlanId = searchParams.get('development_plan_id');
   const focusedDevelopmentPlanItemId = searchParams.get('development_plan_item_id');
   const query = useSpecExecutionPlanQueueQuery({ project_id: projectId, limit: 100 });
-  const items = ((query.data?.items ?? []) as QueueItem[])
-    .filter((item) => (activeTab === 'specs' ? item.artifact_type === 'spec' : item.artifact_type === 'execution_plan'))
-    .filter((item) => isFocusedQueueItem(item, focusedDevelopmentPlanId, focusedDevelopmentPlanItemId));
-  const degradedSources = Array.isArray(query.data?.degraded_sources) ? (query.data.degraded_sources as string[]) : [];
+  const queueProjection = useMemo(
+    () => ({
+      items: (query.data?.items ?? []) as unknown as SpecPlanQueueItem[],
+      degraded_sources: Array.isArray(query.data?.degraded_sources) ? (query.data.degraded_sources as string[]) : [],
+    }),
+    [query.data?.degraded_sources, query.data?.items],
+  );
+  const baseViewModel = useMemo(() => specPlanQueueViewModel(queueProjection), [queueProjection]);
+  const rows = useMemo(
+    () => baseViewModel.rows
+      .filter((row) => (activeTab === 'specs' ? row.artifactType === 'spec' : row.artifactType === 'execution_plan'))
+      .filter((row) => isFocusedQueueRow(row, focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)),
+    [activeTab, baseViewModel.rows, focusedDevelopmentPlanId, focusedDevelopmentPlanItemId],
+  );
+  const groups = useMemo(() => specPlanQueueGroups(rows), [rows]);
+  const viewModel = useMemo(
+    () => specPlanQueueViewModel({ items: rows.map(rowToQueueItem), degraded_sources: queueProjection.degraded_sources }),
+    [queueProjection.degraded_sources, rows],
+  );
+  const [focusedRowKey, setFocusedRowKey] = useState<string | undefined>(undefined);
+  const focusedRow = rows.find((row) => row.id === focusedRowKey) ?? rows[0];
 
-  return (
-    <div className="grid gap-6">
-      <PageHeader
-        subtitle="Governance queue for item-scoped Spec and Execution Plan documents."
-        title="Specs & Execution Plans"
-      />
-      <SurfaceStateIndicator label="Specs & Execution Plans Queue" state={queueSurfaceState(query.isLoading, query.isError, items, degradedSources)} />
-      <Section title="Governance queue">
-        <InlineActions aria-label="Specs and Execution Plans tabs" role="tablist">
+  useEffect(() => {
+    if (rows.length === 0) {
+      setFocusedRowKey(undefined);
+      return;
+    }
+    if (focusedRowKey === undefined || !rows.some((row) => row.id === focusedRowKey)) {
+      setFocusedRowKey(rows[0]?.id);
+    }
+  }, [focusedRowKey, rows]);
+
+  const state = query.isLoading ? 'Loading governance queue' : query.isError ? 'Governance queue unavailable' : viewModel.currentState;
+  const blockerRisk = query.isError ? 'Document Reviews governance risk could not be loaded.' : viewModel.riskSignal;
+  const nextAction = focusedRow?.nextAction ?? viewModel.nextAction;
+  const roleResponsibility = focusedRow?.reviewer ?? viewModel.primaryActorOrRole;
+
+  const toolbar = (
+        <InlineActions aria-label="Document review tabs" role="tablist">
           <Link aria-selected={activeTab === 'specs'} className={activeTab === 'specs' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref('specs', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
             Specs
           </Link>
@@ -77,8 +73,19 @@ export function SpecExecutionPlanQueue() {
             Execution Plans
           </Link>
         </InlineActions>
-        {query.isLoading ? <InlineNotice title="Loading Specs & Execution Plans queue." tone="info" /> : null}
-        {query.isError ? <InlineNotice title="Specs & Execution Plans queue data is temporarily unavailable." tone="danger" /> : null}
+  );
+
+  return (
+    <ProductPage family="document-governance" heading="Document Reviews" toolbar={toolbar}>
+      <div className="grid gap-4">
+        <div className="sr-only">
+          <span>{state}</span>
+          <span>{blockerRisk}</span>
+          <span>{nextAction}</span>
+          <span>{`Reviewer: ${roleResponsibility}`}</span>
+        </div>
+        {query.isLoading ? <InlineNotice title="Loading Document Reviews queue." tone="info" /> : null}
+        {query.isError ? <InlineNotice title="Document Reviews queue data is temporarily unavailable." tone="danger" /> : null}
         {focusedDevelopmentPlanId !== null || focusedDevelopmentPlanItemId !== null ? (
           <InlineNotice
             description={queueFocusDescription(focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}
@@ -86,9 +93,133 @@ export function SpecExecutionPlanQueue() {
             tone="info"
           />
         ) : null}
-      </Section>
-      {!query.isError ? <GroupedQueue isLoading={query.isLoading} items={items} /> : null}
+        <DocumentGovernanceLayout
+          groups={query.isError ? undefined : <DocumentReviewGroups groups={groups} />}
+          inspector={query.isError ? undefined : <DocumentReviewInspector row={focusedRow} />}
+          queue={
+            <div className="grid min-w-0 gap-4">
+              <SurfaceStateIndicator label="Document Reviews Queue" state={queueSurfaceState(query.isLoading, query.isError, rows, queueProjection.degraded_sources)} />
+              {query.isError ? null : groups.map((group) => (
+                <SpecPlanGroup
+                  focusedRowKey={focusedRow?.id}
+                  group={group}
+                  isLoading={query.isLoading}
+                  key={group.id}
+                  onFocusRow={(row) => setFocusedRowKey(row.id)}
+                />
+              ))}
+              {rows.length === 0 && query.isLoading !== true ? (
+                <EmptyState description="No Spec or Execution Plan rows currently need governance action." title="No governance rows." />
+              ) : null}
+            </div>
+          }
+        />
+      </div>
+    </ProductPage>
+  );
+}
+
+function DocumentReviewGroups({ groups }: { groups: SpecPlanQueueGroup[] }) {
+  return (
+    <div className="flex flex-wrap gap-2" aria-label="Document review groups">
+      {groups.map((group) => (
+        <Badge key={group.id} tone={group.rows.length === 0 ? 'neutral' : 'info'}>
+          {group.label}: {group.rows.length}
+        </Badge>
+      ))}
     </div>
+  );
+}
+
+function SpecPlanGroup({
+  focusedRowKey,
+  group,
+  isLoading,
+  onFocusRow,
+}: {
+  focusedRowKey: string | undefined;
+  group: SpecPlanQueueGroup;
+  isLoading: boolean;
+  onFocusRow: (row: SpecPlanQueueRow) => void;
+}) {
+  return (
+    <Section aria-label={group.label} description={`${group.rows.length} row${group.rows.length === 1 ? '' : 's'}.`} title={group.label} variant="panel">
+      {isLoading ? <InlineNotice title={`Loading ${group.label.toLowerCase()} rows.`} tone="info" /> : null}
+      <DataTable
+        ariaLabel={group.label}
+        columns={specPlanColumns}
+        density="compact"
+        emptyMessage={`No ${group.label.toLowerCase()} rows.`}
+        getRowKey={(item) => item.id}
+        onSelectRow={onFocusRow}
+        rows={group.rows}
+        {...(focusedRowKey === undefined ? {} : { selectedRowKey: focusedRowKey })}
+        stickyHeader
+      />
+    </Section>
+  );
+}
+
+const specPlanColumns: DataTableColumn<SpecPlanQueueRow>[] = [
+  {
+    key: 'document',
+    header: 'Document',
+    cell: (row) => (
+      <div className="flex min-h-6 min-w-[14rem] max-w-[24rem] items-center gap-3" data-desktop-row-height="44-56" data-spec-plan-queue-row="">
+        <span className="truncate font-semibold text-text-primary">{row.title}</span>
+        <Link className={secondaryLinkClass} onClick={(event) => event.stopPropagation()} to={row.href}>
+          Open plan item
+        </Link>
+      </div>
+    ),
+  },
+  { key: 'artifact', header: 'Artifact', cell: (row) => <Badge tone="info">{row.artifactLabel}</Badge> },
+  { key: 'source', header: 'Source object', cell: (row) => row.sourceObject },
+  { key: 'planItem', header: 'Development Plan Item', cell: (row) => row.developmentPlanItem },
+  { key: 'gate', header: 'Gate status', cell: (row) => <StatusPill tone={statusTone(row)}>{row.gateStatus}</StatusPill> },
+  { key: 'reviewer', header: 'Reviewer', cell: (row) => row.reviewer },
+  { key: 'age', header: 'Age', cell: (row) => row.age },
+  { key: 'risk', header: 'Risk', cell: (row) => <Badge tone={riskTone(row.risk)}>{row.risk}</Badge> },
+  { key: 'action', header: 'Next action', cell: (row) => row.nextAction },
+];
+
+function DocumentReviewInspector({ row }: { row: SpecPlanQueueRow | undefined }) {
+  if (row === undefined) {
+    return (
+      <PreviewPane aria-label="Selected governance row" meta="No row selected" title="Selected governance row">
+        <p className="m-0 text-sm text-text-secondary">Select a governance row to inspect its document, gate, and command context.</p>
+      </PreviewPane>
+    );
+  }
+
+  return (
+    <PreviewPane
+      actions={
+        <Link className={unselectedSegmentClass} to={row.href}>
+          Open plan item
+        </Link>
+      }
+      aria-label="Selected governance row"
+      meta={`${row.artifactLabel} · ${row.groupLabel}`}
+      title="Selected governance row"
+    >
+      <div className="grid gap-3">
+        <p className="m-0 text-sm text-text-secondary">{row.documentSummary}</p>
+        <CompactMetadata
+          items={[
+            { label: 'Document summary', value: row.documentSummary },
+            { label: 'Gate status', value: row.gateStatus },
+            { label: 'Reviewer', value: row.reviewer },
+            { label: 'Development Plan Item', value: row.developmentPlanItem },
+            { label: 'Command', value: row.command },
+            { label: 'Source object', value: row.sourceObject },
+            { label: 'Plan item', value: row.developmentPlanItem },
+            { label: 'Age', value: row.age },
+            { label: 'Risk', value: row.risk },
+          ]}
+        />
+      </div>
+    </PreviewPane>
   );
 }
 
@@ -99,123 +230,35 @@ function tabHref(tab: 'specs' | 'plans', developmentPlanId: string | null, devel
   return `/specs-plans?${params.toString()}`;
 }
 
-function GroupedQueue({ isLoading, items }: { isLoading?: boolean; items: QueueItem[] }) {
-  const groupedItems = groupItems(items);
-
-  return (
-    <div className="grid gap-4">
-      {items.length === 0 && isLoading !== true ? (
-        <EmptyState description="No Spec or Execution Plan rows currently need governance action." title="No governance rows." />
-      ) : null}
-      {groups.map((group) => (
-        <Section
-          description={`${groupedItems[group.id].length} row${groupedItems[group.id].length === 1 ? '' : 's'}.`}
-          key={group.id}
-          title={group.label}
-        >
-          {isLoading === true ? (
-            <InlineNotice title={`Loading ${group.label.toLowerCase()} rows.`} tone="info" />
-          ) : groupedItems[group.id].length ? (
-            <div className="grid gap-3">
-              {groupedItems[group.id].map((item) => (
-                <QueueItemCard item={item} key={item.id} />
-              ))}
-            </div>
-          ) : (
-            <InlineNotice title={`No ${group.label.toLowerCase()} rows.`} />
-          )}
-        </Section>
-      ))}
-    </div>
-  );
-}
-
-function QueueItemCard({ item }: { item: QueueItem }) {
-  const detailHref = queueItemHref(item);
-
-  return (
-    <article className="grid gap-3 rounded-card border border-border bg-surface p-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="grid min-w-0 gap-2">
-          <h3 className="text-base font-semibold text-text-primary">{item.title}</h3>
-          <div className="flex flex-wrap gap-2">
-            <Badge tone="info">{item.artifact_type === 'spec' ? 'Spec' : 'Execution Plan'}</Badge>
-            <StatusPill tone={statusTone(item.status)}>{formatValue(item.status)}</StatusPill>
-            {item.blocked ? <Badge tone="warning">Blocked</Badge> : null}
-            {item.stale ? <Badge tone="warning">Stale</Badge> : null}
-          </div>
-        </div>
-        <Link className={unselectedSegmentClass} to={detailHref}>
-          Open plan item
-        </Link>
-      </div>
-      <dl className="grid gap-2 text-sm md:grid-cols-2 xl:grid-cols-3">
-        <Definition label="Source object" value={item.source_ref?.title ?? item.source_ref?.id ?? 'Not linked'} />
-        <Definition label="Development Plan Item" value={item.development_plan_item_ref?.title ?? item.development_plan_item_ref?.id ?? 'Not linked'} />
-        <Definition label="Reviewer" value={item.reviewer_actor_id ?? 'Unassigned'} />
-        <Definition label="Age" value={item.age_label ?? 'Not recorded'} />
-        <Definition label="Risk" value={formatValue(item.risk)} />
-        <Definition label="Next action" value={item.next_action ?? 'Review queue state'} />
-      </dl>
-    </article>
-  );
-}
-
-function Definition({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid gap-1 rounded-md border border-border bg-background p-3">
-      <dt className="text-text-secondary">{label}</dt>
-      <dd className="font-semibold text-text-primary">{value}</dd>
-    </div>
-  );
-}
-
-function groupItems(items: QueueItem[]): Record<QueueGroupId, QueueItem[]> {
-  const grouped: Record<QueueGroupId, QueueItem[]> = {
-    'spec-needs-generation': [],
-    'spec-needs-review': [],
-    'spec-approved': [],
-    'execution-plan-needs-generation': [],
-    'execution-plan-needs-review': [],
-    'execution-plan-approved': [],
-    stale: [],
-    blocked: [],
-  };
-  for (const item of items) {
-    grouped[groupForItem(item)].push(item);
-  }
-  return grouped;
-}
-
-function groupForItem(item: QueueItem): QueueGroupId {
-  const status = item.status?.toLowerCase();
-  const gateState = item.gate_state?.toLowerCase();
-  if (item.blocked || status === 'blocked' || gateState === 'blocked') return 'blocked';
-  if (item.stale || status === 'stale' || gateState === 'stale') return 'stale';
-  if (item.artifact_type === 'spec') {
-    if (status === 'approved' || gateState === 'approved') return 'spec-approved';
-    if (status === 'in_review' || status === 'submitted' || gateState === 'awaiting_review') return 'spec-needs-review';
-    return 'spec-needs-generation';
-  }
-  if (status === 'approved' || gateState === 'approved') return 'execution-plan-approved';
-  if (status === 'in_review' || status === 'submitted' || gateState === 'awaiting_review') return 'execution-plan-needs-review';
-  return 'execution-plan-needs-generation';
-}
-
-function queueItemHref(item: QueueItem): string {
-  const planId = item.development_plan_item_ref?.development_plan_id;
-  const itemId = item.development_plan_item_ref?.id;
-  const suffix = item.artifact_type === 'spec' ? 'spec' : 'execution-plan';
-  if (planId !== undefined && itemId !== undefined) {
-    return `/development-plans/${encodeURIComponent(planId)}/items/${encodeURIComponent(itemId)}/${suffix}`;
-  }
-  return `/specs-plans?tab=${item.artifact_type === 'spec' ? 'specs' : 'plans'}`;
-}
-
-function isFocusedQueueItem(item: QueueItem, developmentPlanId: string | null, developmentPlanItemId: string | null): boolean {
-  if (developmentPlanId !== null && item.development_plan_item_ref?.development_plan_id !== developmentPlanId) return false;
-  if (developmentPlanItemId !== null && item.development_plan_item_ref?.id !== developmentPlanItemId) return false;
+function isFocusedQueueRow(row: SpecPlanQueueRow, developmentPlanId: string | null, developmentPlanItemId: string | null): boolean {
+  if (developmentPlanId !== null && row.developmentPlanId !== developmentPlanId) return false;
+  if (developmentPlanItemId !== null && row.developmentPlanItemId !== developmentPlanItemId) return false;
   return true;
+}
+
+function rowToQueueItem(row: SpecPlanQueueRow): SpecPlanQueueItem {
+  return {
+    id: row.id,
+    artifact_type: row.artifactType,
+    title: row.title,
+    summary: row.documentSummary,
+    status: row.status,
+    gate_state: row.gateStatus,
+    reviewer_actor_id: row.reviewer,
+    age_label: row.age,
+    risk: row.risk,
+    stale: row.stale,
+    blocked: row.blocked,
+    next_action: row.nextAction,
+    command: row.command,
+    href: row.href,
+    source_ref: { title: row.sourceObject },
+    development_plan_item_ref: {
+      ...(row.developmentPlanItemId === undefined ? {} : { id: row.developmentPlanItemId }),
+      ...(row.developmentPlanId === undefined ? {} : { development_plan_id: row.developmentPlanId }),
+      title: row.developmentPlanItem,
+    },
+  };
 }
 
 function queueFocusDescription(developmentPlanId: string | null, developmentPlanItemId: string | null): string {
@@ -227,27 +270,31 @@ function queueFocusDescription(developmentPlanId: string | null, developmentPlan
   return 'Showing all governance rows.';
 }
 
-function queueSurfaceState(isLoading: boolean, isError: boolean, items: QueueItem[], degradedSources: string[]): SurfaceState | undefined {
+function queueSurfaceState(isLoading: boolean, isError: boolean, rows: SpecPlanQueueRow[], degradedSources: string[]): SurfaceState | undefined {
   if (isLoading) return 'loading';
   if (isError) return 'error';
-  if (items.length === 0) return 'empty';
-  const text = `${degradedSources.join(' ')} ${items.map((item) => `${item.status ?? ''} ${item.gate_state ?? ''}`).join(' ')}`.toLowerCase();
+  if (rows.length === 0) return 'empty';
+  const text = `${degradedSources.join(' ')} ${rows.map((row) => `${row.status} ${row.gateStatus}`).join(' ')}`.toLowerCase();
   if (text.includes('stale')) return 'stale';
-  if (items.some((item) => item.blocked) || text.includes('blocked')) return 'blocked';
+  if (rows.some((row) => row.blocked) || text.includes('blocked')) return 'blocked';
   if (text.includes('interrupted') || text.includes('resumable')) return 'resumable';
   if (text.includes('running')) return 'running';
   if (text.includes('approved')) return 'approved';
-  return undefined;
+  return 'approved';
 }
 
-function statusTone(status: string | undefined): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
-  if (status === 'approved' || status === 'accepted' || status === 'completed') return 'success';
-  if (status === 'blocked' || status === 'failed' || status === 'rejected') return 'danger';
-  if (status === 'in_review' || status === 'submitted' || status === 'running') return 'info';
-  if (status === 'stale' || status === 'changes_requested' || status === 'interrupted') return 'warning';
+function statusTone(row: SpecPlanQueueRow): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
+  const text = `${row.status} ${row.gateStatus}`.toLowerCase();
+  if (row.blocked || text.includes('blocked') || text.includes('failed') || text.includes('rejected')) return 'danger';
+  if (row.stale || text.includes('stale') || text.includes('changes requested')) return 'warning';
+  if (text.includes('approved') || text.includes('accepted')) return 'success';
+  if (text.includes('review') || text.includes('submitted')) return 'info';
   return 'neutral';
 }
 
-function formatValue(value: string | undefined): string {
-  return value === undefined ? 'Not recorded' : value.replaceAll('_', ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+function riskTone(risk: string): 'neutral' | 'warning' | 'danger' {
+  const text = risk.toLowerCase();
+  if (text.includes('critical') || text.includes('high')) return 'danger';
+  if (text.includes('medium') || text.includes('risk')) return 'warning';
+  return 'neutral';
 }

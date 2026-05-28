@@ -1,5 +1,5 @@
 import { createApiContext, type ForgeloopApiOptions } from './common';
-import { createWorkItemRequestSchema } from '@forgeloop/contracts';
+import { createWorkItemRequestSchema, type AttachmentRef } from '@forgeloop/contracts';
 import type {
   ActorCommandBody,
   AcknowledgeReleaseTestAcceptanceBody,
@@ -115,6 +115,7 @@ export type CreateTechDebtBody = TypedWorkItemCreateBody<'tech_debt'>;
 export type CreateBugBody = TypedWorkItemCreateBody<'bug'>;
 
 export interface CreateDevelopmentPlanBody extends ActorCommandBody {
+  guidance?: string;
   project_id: string;
   source_ref: SourceObjectRef;
   title: string;
@@ -239,6 +240,7 @@ export interface ExecutionPlanRevision {
   revision_number: number;
   summary: string;
   content: string;
+  attachment_refs?: AttachmentRef[];
   structured_document?: Record<string, unknown>;
   author_actor_id?: string;
   created_at?: string;
@@ -452,6 +454,10 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         method: 'PATCH',
         body,
       }),
+    getSpecRevision: (specRevisionId: string) =>
+      request<SpecRevision>(`/spec-revisions/${encodeURIComponent(specRevisionId)}`),
+    getExecutionPlanRevision: (executionPlanRevisionId: string) =>
+      request<ExecutionPlanRevision>(`/execution-plan-revisions/${encodeURIComponent(executionPlanRevisionId)}`),
     getEvidenceChain: (workItemId: string, reviewPacketId?: string) =>
       request<EvidenceChainResponse>(
         `/work-items/${encodeURIComponent(workItemId)}/evidence-chain${
@@ -495,6 +501,11 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
+    saveItemSpecDraft: (developmentPlanId: string, itemId: string, body: MarkdownDocument) =>
+      request<SpecRevision>(itemSpecPath(developmentPlanId, itemId, 'draft'), {
+        method: 'PATCH',
+        body,
+      }),
     compareItemSpecRevisions: (developmentPlanId: string, itemId: string, query: RevisionCompareQuery) =>
       request<StructuredRevisionDiff>(`${itemSpecPath(developmentPlanId, itemId, 'revisions/compare')}${queryString({ ...query })}`),
 
@@ -533,6 +544,11 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
+      }),
+    saveItemExecutionPlanDraft: (developmentPlanId: string, itemId: string, body: MarkdownDocument) =>
+      request<ExecutionPlanRevision>(itemExecutionPlanPath(developmentPlanId, itemId, 'draft'), {
+        method: 'PATCH',
+        body,
       }),
     compareItemExecutionPlanRevisions: (developmentPlanId: string, itemId: string, query: RevisionCompareQuery) =>
       request<StructuredRevisionDiff>(

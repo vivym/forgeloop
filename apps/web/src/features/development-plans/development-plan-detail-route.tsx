@@ -6,10 +6,11 @@ import { createForgeloopCommandApi } from '../../shared/api/commands';
 import { useDevelopmentPlanQuery } from '../../shared/api/hooks';
 import { queryKeys } from '../../shared/api/query-keys';
 import { useActorContext } from '../../shared/context/actor-context';
-import { PageHeader, Section } from '../../shared/layout';
-import { Badge, Button, Checkbox, Dialog, DialogPanel, Drawer, EmptyState, Field, InlineNotice, Input, StatusPill, Textarea } from '../../shared/ui';
+import { CompactMetadata, GateProgress, PlanningTableLayout, PreviewPane, ProductPage, Section } from '../../shared/layout';
+import { Badge, Button, Checkbox, Dialog, DialogPanel, Drawer, EmptyState, Field, InlineNotice, Input, Textarea } from '../../shared/ui';
 import { SurfaceStateIndicator } from '../project-management/surface-state';
-import { DevelopmentPlanTable, type DevelopmentPlanItemRow, formatValue, statusTone } from './development-plan-table';
+import { currentPlanItemGate, developmentPlanItemViewModel, itemGateProgress } from './development-plan-view-model';
+import { DevelopmentPlanTable, type DevelopmentPlanItemRow, formatValue } from './development-plan-table';
 
 type DevelopmentPlanProjection = {
   id: string;
@@ -36,8 +37,13 @@ export function DevelopmentPlanDetailRoute() {
   const [selectedItemId, setSelectedItemId] = useState<string>();
   const [status, setStatus] = useState<string>();
 
-  const rows = (plan?.items ?? []).map((item) => ({ ...item, development_plan_id: developmentPlanId ?? item.development_plan_id }));
+  const rows: DevelopmentPlanItemRow[] = (plan?.items ?? []).map((item) => ({
+    ...item,
+    development_plan_id: developmentPlanId ?? item.development_plan_id,
+    ...(plan?.source_refs === undefined ? {} : { source_refs: plan.source_refs }),
+  }));
   const selectedItem = rows.find((item) => item.id === selectedItemId) ?? rows[0];
+  const blockedCount = rows.filter((row) => rowHasBlocker(row)).length;
 
   async function addRow() {
     if (developmentPlanId === undefined) return;
@@ -86,35 +92,41 @@ export function DevelopmentPlanDetailRoute() {
   }
 
   return (
-    <div className="grid gap-6">
-      <PageHeader
-        actions={
-          <>
-            <Button onClick={() => setIsAddOpen(true)} type="button">Add row</Button>
-            <Button onClick={() => void generateMissingRows()} type="button" variant="secondary">Generate missing rows with AI</Button>
-            <Button onClick={() => setIsRegenerateOpen(true)} type="button" variant="secondary">Regenerate with AI</Button>
-            <Button onClick={() => setIsManifestOpen(true)} type="button" variant="secondary">Show context manifest</Button>
-          </>
-        }
-        subtitle={`Status ${formatValue(plan?.status)}. Source objects: ${sourceSummary(plan)}`}
-        title={plan?.title ?? 'Development Plan'}
-      />
-      <SurfaceStateIndicator label="Development Plan Page" state={developmentPlanSurfaceState(query.isLoading, query.isError, rows)} />
-      {status ? <InlineNotice title={status} tone="info" /> : null}
-      {query.isError ? <InlineNotice title="Development Plan could not be loaded." tone="danger" /> : null}
-      <Section
-        description="Rows are the governed unit that moves through boundary brainstorming, Spec, Execution Plan, execution, review, and QA."
-        title="Development Plan Items"
-      >
-        {plan === undefined && !query.isLoading ? (
-          <EmptyState title="Development Plan not found." />
-        ) : (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(18rem,0.85fr)]">
-            <DevelopmentPlanTable items={rows} selectedItemId={selectedItem?.id} onSelectItem={(item) => setSelectedItemId(item.id)} />
-            <SelectedPlanItemPanel item={selectedItem} />
+    <ProductPage
+      family="planning-table"
+      heading={plan?.title ?? 'Development Plan'}
+    >
+      <PlanningTableLayout
+        toolbar={
+          <div className="flex min-w-0 flex-wrap items-center gap-3 pb-1 lg:flex-nowrap lg:overflow-x-auto">
+            <PlanTableContext plan={plan} rowCount={rows.length} blockedCount={blockedCount} />
+            <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:flex-nowrap">
+              <Button onClick={() => setIsAddOpen(true)} type="button">Add row</Button>
+              <Button onClick={() => void generateMissingRows()} type="button" variant="secondary">Generate missing rows with AI</Button>
+              <Button onClick={() => setIsRegenerateOpen(true)} type="button" variant="secondary">Regenerate with AI</Button>
+              <Button onClick={() => setIsManifestOpen(true)} type="button" variant="secondary">Show context manifest</Button>
+            </div>
           </div>
-        )}
-      </Section>
+        }
+        table={
+          <div className="grid gap-3">
+            <SurfaceStateIndicator label="Development Plan Page" state={developmentPlanSurfaceState(query.isLoading, query.isError, rows)} />
+            {status ? <InlineNotice title={status} tone="info" /> : null}
+            {query.isError ? <InlineNotice title="Development Plan could not be loaded." tone="danger" /> : null}
+            <Section
+              description="Rows are the governed unit that moves through boundary brainstorming, Spec, Execution Plan, execution, review, and QA."
+              title="Development Plan Items"
+            >
+              {plan === undefined ? (
+                <EmptyState title={query.isLoading ? 'Loading Development Plan.' : 'Development Plan not found.'} />
+              ) : (
+                <DevelopmentPlanTable items={rows} selectedItemId={selectedItem?.id} onSelectItem={(item) => setSelectedItemId(item.id)} />
+              )}
+            </Section>
+          </div>
+        }
+        inspector={plan === undefined ? undefined : <SelectedPlanItemPanel item={selectedItem} />}
+      />
       <Dialog
         content={
           <DialogPanel>
@@ -169,6 +181,16 @@ export function DevelopmentPlanDetailRoute() {
         title="Context manifest"
         onOpenChange={setIsManifestOpen}
       />
+    </ProductPage>
+  );
+}
+
+function PlanTableContext({ blockedCount, plan, rowCount }: { blockedCount: number; plan: DevelopmentPlanProjection | undefined; rowCount: number }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-sm text-text-secondary lg:shrink-0 lg:flex-nowrap">
+      <p className="m-0">Status: {formatValue(plan?.status)}</p>
+      <p className="m-0">Source objects: {sourceSummary(plan)}</p>
+      <p className="m-0">{rowCount} Plan Items · {blockedCount} blocked</p>
     </div>
   );
 }
@@ -176,55 +198,67 @@ export function DevelopmentPlanDetailRoute() {
 function SelectedPlanItemPanel({ item }: { item: DevelopmentPlanItemRow | undefined }) {
   if (item === undefined) {
     return (
-      <aside className="rounded-card border border-border bg-background p-4">
+      <PreviewPane meta="No row selected" title="Selected Development Plan Item">
         <EmptyState title="Select a Development Plan row." />
-      </aside>
+      </PreviewPane>
     );
   }
 
-  return (
-    <aside className="grid content-start gap-4 rounded-card border border-border bg-background p-4" aria-label="Selected Development Plan Item">
-      <div className="grid gap-1">
-        <Badge tone={item.risk === 'high' || item.risk === 'critical' ? 'warning' : 'neutral'}>{formatValue(item.risk)}</Badge>
-        <h3 className="text-base font-semibold text-text-primary">{item.title}</h3>
-        <p className="text-sm text-text-secondary">{item.next_action ?? 'Review gate state'}</p>
-      </div>
-      <dl className="grid gap-2 text-sm">
-        {[
-          ['Responsible role', formatValue(item.responsible_role)],
-          ['Driver', item.driver_actor_id ?? 'Unassigned'],
-        ].map(([label, value]) => (
-          <div className="flex items-center justify-between gap-3" key={label}>
-            <dt className="text-text-secondary">{label}</dt>
-            <dd className="font-semibold text-text-primary">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <div className="grid gap-2">
-        <GateSnapshot label="Boundary" status={item.boundary_status} />
-        <GateSnapshot label="Spec" status={item.spec_status} />
-        <GateSnapshot label="Execution Plan" status={item.execution_plan_status} />
-        <GateSnapshot label="Execution" status={item.execution_status} />
-      </div>
-      <Link className="inline-flex min-h-10 items-center justify-center rounded-md border border-primary bg-primary px-4 text-sm font-semibold text-white" to={`/development-plans/${item.development_plan_id}/items/${item.id}`}>
-        Open selected item
-      </Link>
-    </aside>
-  );
-}
+  const viewModel = developmentPlanItemViewModel(item);
+  const currentGate = currentPlanItemGate(item);
+  const sourceContext = item.source_refs?.map((ref) => ref.title ?? ref.id).filter((value): value is string => value !== undefined).join(', ') || 'Source context unavailable';
 
-function GateSnapshot({ label, status }: { label: string; status: string | undefined }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface p-2">
-      <span className="text-sm font-semibold text-text-secondary">{label}</span>
-      <StatusPill tone={statusTone(status)}>{formatValue(status)}</StatusPill>
-    </div>
+    <PreviewPane
+      actions={
+        <Link className="inline-flex min-h-10 items-center justify-center rounded-md border border-primary bg-primary px-4 text-sm font-semibold text-white" to={`/development-plans/${item.development_plan_id}/items/${item.id}`}>
+          Open selected item
+        </Link>
+      }
+      aria-label="Selected Development Plan Item"
+      meta={`Current gate: ${currentGate.label} · ${formatValue(currentGate.state)}`}
+      title="Selected Development Plan Item"
+    >
+      <div className="grid content-start gap-4">
+        <div className="grid gap-1">
+          <Badge tone={item.risk === 'high' || item.risk === 'critical' ? 'warning' : 'neutral'}>{formatValue(item.risk)}</Badge>
+          <h3 className="text-base font-semibold text-text-primary">{item.title}</h3>
+          <p className="text-sm text-text-secondary">{viewModel.previewSummary}</p>
+          <p className="text-sm font-semibold text-text-primary">Next action: {viewModel.nextAction}</p>
+        </div>
+        <GateProgress
+          currentGateId={currentGate.label}
+          gates={itemGateProgress(item).map((gate) => ({ id: gate.label, label: gate.label, status: formatValue(gate.state) }))}
+        />
+        <CompactMetadata
+          items={[
+            { label: 'Current gate', value: `${currentGate.label}: ${formatValue(currentGate.state)}` },
+            { label: 'Blocker / risk', value: viewModel.riskSignal },
+            { label: 'Driver', value: viewModel.primaryActorOrRole },
+            { label: 'Source context', value: sourceContext },
+            { label: 'Gate evidence', value: viewModel.criticalEvidence[0]?.compactText ?? 'Gate evidence unavailable' },
+            ...viewModel.secondaryMetadata.map((metadata) => ({ label: metadata.label, value: metadata.value })),
+          ]}
+        />
+      </div>
+    </PreviewPane>
   );
 }
 
 function sourceSummary(plan: DevelopmentPlanProjection | undefined): string {
   if (plan?.source_refs?.length) return plan.source_refs.map((ref) => ref.title ?? ref.id).join(', ');
   return 'not linked';
+}
+
+function rowHasBlocker(row: DevelopmentPlanItemRow): boolean {
+  return [
+    row.boundary_status,
+    row.spec_status,
+    row.execution_plan_status,
+    row.execution_status,
+    row.review_status,
+    row.qa_handoff_status,
+  ].some((status) => status === 'blocked' || status === 'failed' || status === 'changes_requested');
 }
 
 function developmentPlanSurfaceState(

@@ -21,6 +21,7 @@ export function InitiativesRoute() {
       error={query.error}
       isLoading={query.isLoading}
       items={query.data?.items ?? []}
+      planningHref="/development-plans/new"
       subtitle="Strategic work intake and breakdown readiness."
       title="Initiatives"
     />
@@ -69,6 +70,7 @@ export function NewInitiativeRoute() {
         { label: 'Initiative Driver', name: 'driver_actor_id', input: 'input', defaultValue: actorId, required: true },
       ]}
       narrativeTemplate={'## Initiative narrative\n\nDescribe the coordination context and decision trail.'}
+      objectType="initiative"
       onSubmit={async (values) => {
         const scopeLines = splitLines(values.scope);
         const milestoneIntent = emptyToUndefined(values.milestone_intent);

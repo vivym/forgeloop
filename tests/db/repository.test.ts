@@ -1096,6 +1096,63 @@ describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
     expect(captures[2]?.set?.summary).toBeNull();
   });
 
+  it('persists durable execution supervision fields through the Drizzle mapping', async () => {
+    const { repository, captures } = createInsertCaptureRepository();
+    const execution: Execution = {
+      id: 'execution-supervision-1',
+      development_plan_item_id: 'development-plan-item-1',
+      execution_plan_revision_id: 'execution-plan-revision-1',
+      ref: { type: 'execution', id: 'execution-supervision-1', title: 'Supervised execution' },
+      development_plan_item_ref: {
+        type: 'development_plan_item',
+        id: 'development-plan-item-1',
+        development_plan_id: 'development-plan-1',
+        title: 'Supervised Plan Item',
+      },
+      execution_plan_revision_ref: {
+        type: 'execution_plan_revision',
+        id: 'execution-plan-revision-1',
+        execution_plan_id: 'execution-plan-1',
+        title: 'Supervised execution plan',
+      },
+      status: 'paused',
+      worker_state: 'resumable-worker',
+      current_step: 'Waiting for approval evidence',
+      stale: true,
+      blocked: true,
+      last_event_at: '2026-05-24T00:01:00.000Z',
+      last_event_summary: 'Custom checkpoint recorded by actor-reviewer.',
+      interrupt_history: [{ at: '2026-05-24T00:00:00.000Z', reason: 'Execution interrupted by actor-owner.' }],
+      continuation_history: [{ at: '2026-05-24T00:01:00.000Z', summary: 'Execution continued by actor-reviewer.' }],
+      evidence_refs: [],
+      runtime_evidence_refs: [],
+      pr_refs: [],
+      diff_refs: [],
+      test_evidence_refs: [],
+      created_at: '2026-05-24T00:00:00.000Z',
+      updated_at: '2026-05-24T00:01:00.000Z',
+    };
+
+    await repository.saveExecution(execution);
+
+    expect(captures[0]?.values).toMatchObject({
+      workerState: 'resumable-worker',
+      currentStep: 'Waiting for approval evidence',
+      stale: true,
+      blocked: true,
+      lastEventAt: '2026-05-24T00:01:00.000Z',
+      lastEventSummary: 'Custom checkpoint recorded by actor-reviewer.',
+    });
+    expect(captures[0]?.set).toMatchObject({
+      workerState: 'resumable-worker',
+      currentStep: 'Waiting for approval evidence',
+      stale: true,
+      blocked: true,
+      lastEventAt: '2026-05-24T00:01:00.000Z',
+      lastEventSummary: 'Custom checkpoint recorded by actor-reviewer.',
+    });
+  });
+
   it('writes omitted artifact trace subject fields as null', async () => {
     const { repository, captures } = createInsertCaptureRepository();
 
