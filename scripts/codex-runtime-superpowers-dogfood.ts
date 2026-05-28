@@ -269,6 +269,20 @@ const assertPublicSafeCodexAppServerPhaseEvidence = (
 const renderCodexAppServerPhaseEvidenceLine = (phase: CodexRuntimeDogfoodPhaseEvidence): string =>
   `- Phase ${phase.phase}: expected_schema=${phase.expected_output_schema_version} observed_schemas=${phase.observed_output_schema_versions.join(', ')} cleanup=${phase.cleanup_status} runtime_jobs=${phase.runtime_job_digests.join(', ')} app_server=${phase.app_server_evidence_digests.join(', ')}`;
 
+const assertBoundaryCoverageEvidence = (boundary: CodexRuntimeBoundaryDogfoodEvidence): void => {
+  if (
+    !Number.isInteger(boundary.ai_turn_count) ||
+    boundary.ai_turn_count < 0 ||
+    typeof boundary.follow_up_path_covered !== 'boolean' ||
+    typeof boundary.summary_request_change_path_covered !== 'boolean'
+  ) {
+    throw new CodexRuntimeSuperpowersDogfoodBlocker('codex_runtime_superpowers_boundary_coverage_evidence_missing', {
+      status: 'BLOCKED',
+      blocker_code: 'codex_runtime_superpowers_boundary_coverage_evidence_missing',
+    });
+  }
+};
+
 const optionalEnv = (env: EnvLike, key: string): string | undefined => {
   const value = env[key]?.trim();
   return value === undefined || value.length === 0 ? undefined : value;
@@ -672,6 +686,8 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
   await input.client.mutateDevelopmentPlanItem();
   const staleBoundaryCheck = await input.client.assertStaleBoundaryBlocksSpecGeneration();
   const rebasedBoundary = await input.client.completeBoundaryBrainstorming('rebase');
+  assertBoundaryCoverageEvidence(initialBoundary);
+  assertBoundaryCoverageEvidence(rebasedBoundary);
   const spec = await input.client.generateAndApproveSpec();
   const executionPlan = await input.client.generateAndApproveExecutionPlan();
   const execution = await input.client.startExecution();

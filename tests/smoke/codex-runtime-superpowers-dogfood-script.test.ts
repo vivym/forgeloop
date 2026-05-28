@@ -567,7 +567,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(() =>
       deriveCodexAppServerEvidence(
         collectCodexAppServerPhaseEvidence({
-          boundary: [{ ...boundaryEvidence, app_server_evidence_digests: [] }],
+          boundary: [{ ...boundaryEvidence, app_server_evidence_digests: [] }, boundaryRebaseEvidence],
           spec: { ...specEvidence, app_server_evidence_digests: [] },
           executionPlan: { ...executionPlanEvidence, app_server_evidence_digests: [] },
           execution: { ...executionEvidence, app_server_evidence_digests: [] },
@@ -624,6 +624,21 @@ describe('Codex runtime Superpowers dogfood script', () => {
 
     await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_boundary_coverage_missing',
+    });
+    expect(client.writeReport).not.toHaveBeenCalled();
+  });
+
+  it('blocks PASS orchestration when Boundary coverage evidence has malformed runtime types', async () => {
+    const client = completeDogfoodClientWithPhaseEvidence({
+      boundaryInitial: {
+        ai_turn_count: '3',
+        follow_up_path_covered: 'true',
+        summary_request_change_path_covered: 'true',
+      } as unknown as PhaseEvidenceOverride,
+    });
+
+    await expect(runCodexRuntimeSuperpowersDogfood({ client })).rejects.toMatchObject({
+      blockerCode: 'codex_runtime_superpowers_boundary_coverage_evidence_missing',
     });
     expect(client.writeReport).not.toHaveBeenCalled();
   });
@@ -1105,18 +1120,6 @@ describe('Codex runtime Superpowers dogfood script', () => {
       }
       if (method === 'POST' && path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/approve') {
         return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1' });
-      }
-      if (
-        method === 'POST' &&
-        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1/request-changes'
-      ) {
-        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1' });
-      }
-      if (
-        method === 'POST' &&
-        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/boundary-summary-revision-1-revised/approve'
-      ) {
-        return jsonResponse({ boundary_summary_revision_id: 'boundary-summary-revision-1-revised' });
       }
       if (
         method === 'POST' &&
