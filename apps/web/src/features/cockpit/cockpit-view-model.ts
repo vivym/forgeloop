@@ -187,7 +187,7 @@ export function dashboardCockpitViewModel(cockpit: DashboardCockpitProjection): 
     specExecutionPlanItems: categorizedItems(roleSelectedQueue, /spec|execution plan|plan review/i, {
       label: 'Spec / Execution Plan review',
       value: 'No pending review signal',
-      href: '/specs-plans',
+      href: '/reviews',
     }),
     qaReleaseAttentionItems: qaReleaseItems(sections, roleSelectedQueue),
     compactHealthIndicators,

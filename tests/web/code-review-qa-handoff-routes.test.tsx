@@ -7,20 +7,31 @@ import { codeReviewHandoff, developmentPlan, developmentPlanItem, execution, pro
 import { renderRoute } from './router-test-utils';
 
 describe('Code review and QA handoff route panels', () => {
-  it('renders Plan Item code review route as a code-review workspace', async () => {
+  it('does not render retired Plan Item code review route as a workspace', async () => {
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/dpi-cockpit-command-center/review`);
 
-    expect(await screen.findByRole('heading', { name: /Cockpit/i, level: 1 })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="code-review"]')).toBeTruthy();
-    expect(document.querySelector('[data-code-review-workspace][data-primary-work-surface]')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /not found|404/i })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="code-review"]')).toBeNull();
+    expect(document.querySelector('[data-code-review-workspace][data-primary-work-surface]')).toBeNull();
   });
 
-  it('renders Plan Item QA route as a qa-handoff workspace', async () => {
+  it('does not render retired Plan Item QA route as a workspace', async () => {
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/dpi-requirements-database-view/qa`);
 
-    expect(await screen.findByRole('heading', { name: /Requirements/i, level: 1 })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /not found|404/i })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeNull();
+    expect(document.querySelector('[data-qa-handoff-workspace][data-primary-work-surface]')).toBeNull();
+  });
+
+  it('renders top-level review and QA routes as valid workspaces', async () => {
+    const reviewsScreen = await renderRoute('/reviews');
+    expect(await reviewsScreen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="document-governance"]')).toBeTruthy();
+
+    const qaScreen = await renderRoute('/qa');
+    expect(await qaScreen.findByRole('heading', { name: 'QA' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeTruthy();
-    expect(document.querySelector('[data-qa-handoff-workspace][data-primary-work-surface]')).toBeTruthy();
+    expect(qaScreen.getByRole('heading', { name: 'QA queue' })).toBeTruthy();
   });
 
   it('renders code review and QA handoff controls from an execution detail', async () => {

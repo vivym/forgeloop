@@ -245,6 +245,9 @@ describe('product-grade route contract', () => {
       'apps/web/src/features/spec-plan/spec-execution-plan-queue.tsx',
       'apps/web/src/features/spec-plan/spec-plan-view-model.ts',
       'apps/web/src/features/development-plans/development-plan-view-model.ts',
+      'apps/web/src/features/my-work/my-work-view-model.ts',
+      'apps/web/src/features/cockpit/cockpit-view-model.ts',
+      'apps/web/src/features/board/board-route.tsx',
     ].map(readRepoFile).join('\n');
 
     expect(activeLinkSources).toContain('/reviews');

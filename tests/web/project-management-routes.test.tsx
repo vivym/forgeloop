@@ -42,7 +42,7 @@ const removedRoutes = [
   `/initiatives/${initiativeListItem.id}/plan`,
   '/packages',
   '/runs',
-  '/reviews',
+  '/specs-plans',
 ];
 
 const legacyOwnerPattern = new RegExp(`${['Work', 'Item', 'Owner'].join(' ')}|${['owner', 'actor', 'id'].join('_')}`);
@@ -62,7 +62,7 @@ const renderedProductRoutes = [
   `/requirements/${requirementListItem.id}`,
   `/development-plans/${developmentPlan.id}`,
   `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
-  '/specs-plans',
+  '/reviews',
   '/executions',
   '/reports',
 ] as const;
@@ -126,7 +126,7 @@ describe('project management route IA', () => {
   });
 
   it('renders Document Reviews as a governance queue instead of direct document browsers', async () => {
-    const screen = await renderRoute('/specs-plans');
+    const screen = await renderRoute('/reviews');
     expect(await screen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="document-governance"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-document-queue][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
@@ -139,12 +139,12 @@ describe('project management route IA', () => {
   });
 
   it('renders focused Document Reviews context from Development Plan Item links', async () => {
-    const screen = await renderRoute(`/specs-plans?development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`);
+    const screen = await renderRoute(`/reviews?development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`);
 
     expect(await screen.findByText(/Focused governance queue/i)).toBeTruthy();
     expect(await screen.findByText(new RegExp(`Development Plan Item ${developmentPlanItem.id}`, 'i'))).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Execution Plans' }).getAttribute('href')).toBe(
-      `/specs-plans?tab=plans&development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`,
+      `/reviews?tab=implementation-plans&development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`,
     );
   });
 

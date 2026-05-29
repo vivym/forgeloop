@@ -369,13 +369,13 @@ function typedObjectHref(ref: BoardObjectRef): string | undefined {
     case 'development_plan_item':
       return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
     case 'spec':
-      return `/specs-plans?spec_id=${encodeURIComponent(ref.id)}`;
+      return `/reviews?tab=specs&spec_id=${encodeURIComponent(ref.id)}`;
     case 'spec_revision':
-      return `/specs-plans?spec_revision_id=${encodeURIComponent(ref.id)}`;
+      return `/reviews?tab=specs&spec_revision_id=${encodeURIComponent(ref.id)}`;
     case 'execution_plan':
-      return `/specs-plans?execution_plan_id=${encodeURIComponent(ref.id)}`;
+      return `/reviews?tab=implementation-plans&execution_plan_id=${encodeURIComponent(ref.id)}`;
     case 'execution_plan_revision':
-      return `/specs-plans?execution_plan_revision_id=${encodeURIComponent(ref.id)}`;
+      return `/reviews?tab=implementation-plans&execution_plan_revision_id=${encodeURIComponent(ref.id)}`;
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
     case 'execution':

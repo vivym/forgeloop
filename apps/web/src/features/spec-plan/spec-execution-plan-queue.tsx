@@ -23,7 +23,7 @@ const secondaryLinkClass = 'text-sm font-semibold text-primary hover:underline';
 export function SpecExecutionPlanQueue({ basePath = '/reviews' }: { basePath?: string }) {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
-  const activeTab = searchParams.get('tab') === 'plans' ? 'plans' : 'specs';
+  const activeTab = searchParams.get('tab') === 'implementation-plans' ? 'implementation-plans' : 'specs';
   const focusedDevelopmentPlanId = searchParams.get('development_plan_id');
   const focusedDevelopmentPlanItemId = searchParams.get('development_plan_item_id');
   const query = useSpecExecutionPlanQueueQuery({ project_id: projectId, limit: 100 });
@@ -69,7 +69,7 @@ export function SpecExecutionPlanQueue({ basePath = '/reviews' }: { basePath?: s
           <Link aria-selected={activeTab === 'specs'} className={activeTab === 'specs' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref(basePath, 'specs', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
             Specs
           </Link>
-          <Link aria-selected={activeTab === 'plans'} className={activeTab === 'plans' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref(basePath, 'plans', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
+          <Link aria-selected={activeTab === 'implementation-plans'} className={activeTab === 'implementation-plans' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref(basePath, 'implementation-plans', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
             Execution Plans
           </Link>
         </InlineActions>
@@ -225,7 +225,7 @@ function DocumentReviewInspector({ row }: { row: SpecPlanQueueRow | undefined })
   );
 }
 
-function tabHref(basePath: string, tab: 'specs' | 'plans', developmentPlanId: string | null, developmentPlanItemId: string | null): string {
+function tabHref(basePath: string, tab: 'specs' | 'implementation-plans', developmentPlanId: string | null, developmentPlanItemId: string | null): string {
   const params = new URLSearchParams({ tab });
   if (developmentPlanId !== null) params.set('development_plan_id', developmentPlanId);
   if (developmentPlanItemId !== null) params.set('development_plan_item_id', developmentPlanItemId);

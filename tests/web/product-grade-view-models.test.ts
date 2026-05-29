@@ -457,7 +457,7 @@ describe('product-grade presentation view models', () => {
           typedSourceContext: ['Product workspace clarity and route-backed context'],
           artifacts: expect.arrayContaining([
             expect.objectContaining({ label: 'Spec', href: expect.stringContaining('/spec') }),
-            expect.objectContaining({ label: 'Execution Plan', href: expect.stringContaining('/execution-plan') }),
+            expect.objectContaining({ label: 'Implementation Plan Doc', href: expect.stringContaining('/implementation-plan') }),
             expect.objectContaining({ label: 'Execution', href: expect.stringContaining('/execution') }),
           ]),
         }),
@@ -538,6 +538,38 @@ describe('product-grade presentation view models', () => {
       riskSignal: expect.any(String),
       gateProgress: expect.any(Array),
     });
+  });
+
+  it('normalizes legacy Spec and Execution Plan queue hrefs to canonical review routes', () => {
+    const viewModel = specPlanQueueViewModel({
+      degraded_sources: [],
+      items: [
+        {
+          id: 'legacy-spec-href',
+          artifact_type: 'spec',
+          href: '/development-plans/legacy-plan/items/legacy-item/execution-plan',
+        },
+        {
+          id: 'legacy-execution-plan-href',
+          artifact_type: 'execution_plan',
+          href: '/development-plans/legacy-plan/items/legacy-item/execution-plan',
+        },
+        {
+          id: 'item-scoped-execution-plan',
+          artifact_type: 'execution_plan',
+          development_plan_item_ref: {
+            id: developmentPlanItem.id,
+            development_plan_id: developmentPlan.id,
+          },
+        },
+      ],
+    });
+
+    expect(viewModel.rows.map((row) => row.href)).toEqual([
+      '/reviews?tab=specs',
+      '/reviews?tab=implementation-plans',
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
+    ]);
   });
 
   it('projects Execution evidence and degrades missing PR, diff, and test refs', () => {

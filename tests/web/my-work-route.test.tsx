@@ -265,8 +265,8 @@ describe('My Work route', () => {
       },
     });
 
-    expect((await screen.findAllByRole('link', { name: /^Open Spec$/i }))[0]?.getAttribute('href')).toBe('/specs-plans');
-    expect(screen.getByRole('link', { name: /^Open Execution Plan$/i }).getAttribute('href')).toBe('/specs-plans');
+    expect((await screen.findAllByRole('link', { name: /^Open Spec$/i }))[0]?.getAttribute('href')).toBe('/reviews?tab=specs');
+    expect(screen.getByRole('link', { name: /^Open Execution Plan$/i }).getAttribute('href')).toBe('/reviews?tab=implementation-plans');
     expect(screen.getByRole('link', { name: /^Open Execution$/i }).getAttribute('href')).toBe(`/board?execution_id=${execution.id}`);
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href')).join(' ')).not.toMatch(/\/runtime|browser/i);
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Raw Replay Browser/i);

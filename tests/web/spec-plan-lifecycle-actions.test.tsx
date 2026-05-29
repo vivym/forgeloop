@@ -342,7 +342,7 @@ describe('Document Reviews route queue', () => {
         degraded_sources: [],
       },
     };
-    const routeScreen = await renderRoute('/specs-plans', { apiOverrides });
+    const routeScreen = await renderRoute('/reviews', { apiOverrides });
 
     expect(await routeScreen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
     for (const label of ['Needs generation', 'Needs review', 'Changes requested', 'Approved / ready', 'Stale / blocked']) {
@@ -355,12 +355,12 @@ describe('Document Reviews route queue', () => {
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
     );
     const plansTab = routeScreen.getByRole('tab', { name: 'Execution Plans' });
-    expect(plansTab.getAttribute('href')).toBe('/specs-plans?tab=plans');
+    expect(plansTab.getAttribute('href')).toBe('/reviews?tab=implementation-plans');
     cleanup();
-    const plansScreen = await renderRoute('/specs-plans?tab=plans', { apiOverrides });
+    const plansScreen = await renderRoute('/reviews?tab=implementation-plans', { apiOverrides });
     expect((await plansScreen.findAllByText(/Execution Plan needs review/i)).length).toBeGreaterThan(0);
     expect((await plansScreen.findAllByRole('link', { name: /open plan item/i })).map((link) => link.getAttribute('href'))).toContain(
-      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
     );
     expect(document.body.textContent).not.toMatch(/\/plans\/|\/specs\/|\/tasks\//);
   });

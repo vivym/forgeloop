@@ -210,8 +210,7 @@ function queueItemHref(item: SpecPlanQueueItem, artifactType: QueueArtifactType)
   if (planId !== undefined && itemId !== undefined) {
     return `/development-plans/${encodeURIComponent(planId)}/items/${encodeURIComponent(itemId)}/${suffix}`;
   }
-  if (item.href?.startsWith('/development-plans/') === true) return item.href;
-  return `/reviews?tab=${artifactType === 'spec' ? 'specs' : 'plans'}`;
+  return `/reviews?tab=${artifactType === 'spec' ? 'specs' : 'implementation-plans'}`;
 }
 
 function riskSignal(blockedCount: number, staleCount: number, highRiskCount: number): string {

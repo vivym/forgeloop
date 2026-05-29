@@ -146,9 +146,10 @@ export function typedHrefFor(ref: MyWorkQueueItem['object_ref']): string | undef
       return `/development-plans/${encodeURIComponent(ref.development_plan_id)}/items/${encodeURIComponent(ref.id)}`;
     case 'spec':
     case 'spec_revision':
+      return '/reviews?tab=specs';
     case 'execution_plan':
     case 'execution_plan_revision':
-      return '/specs-plans';
+      return '/reviews?tab=implementation-plans';
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
     case 'development_plan':

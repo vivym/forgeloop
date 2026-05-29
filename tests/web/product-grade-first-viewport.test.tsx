@@ -172,7 +172,6 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
   it('requires Development Plan Item gate routes to expose gate workspaces', async () => {
     for (const route of [
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
-      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`,
     ]) {
       const rendered = await renderRoute(route);
@@ -191,7 +190,7 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
   it('requires Spec and Execution Plan routes to expose document-review workspaces', async () => {
     for (const route of [
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
-      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
     ]) {
       const rendered = await renderRoute(route);
 
@@ -207,7 +206,7 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
 
 describe('Task 7 owner: Document Review, execution, release, and report route first-viewport contracts', () => {
   it('requires Document Reviews to expose a queue first viewport and preview workspace', async () => {
-    const rendered = await renderRoute('/specs-plans');
+    const rendered = await renderRoute('/reviews');
 
     expect(await rendered.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'document-governance', heading: 'Document Reviews' });
