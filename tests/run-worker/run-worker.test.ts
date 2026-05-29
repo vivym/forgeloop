@@ -1231,6 +1231,7 @@ describe('RunWorker', () => {
           terminal_status: 'succeeded',
           terminal_result_json: {
             task_kind: 'run_execution',
+            output_schema_version: 'codex_run_execution_result.v1',
             execution_package_id: executionPackage.id,
             execution_package_version: executionPackage.version,
             run_session_id: runSession.id,
@@ -1359,6 +1360,7 @@ describe('RunWorker', () => {
           terminal_status: 'succeeded',
           terminal_result_json: {
             task_kind: 'run_execution',
+            output_schema_version: 'codex_run_execution_result.v1',
             execution_package_id: executionPackage.id,
             execution_package_version: executionPackage.version,
             run_session_id: runSession.id,
@@ -1435,6 +1437,7 @@ describe('RunWorker', () => {
           terminal_status: 'succeeded',
           terminal_result_json: {
             task_kind: 'run_execution',
+            output_schema_version: 'codex_run_execution_result.v1',
             execution_package_id: executionPackage.id,
             execution_package_version: executionPackage.version,
             run_session_id: runSession.id,

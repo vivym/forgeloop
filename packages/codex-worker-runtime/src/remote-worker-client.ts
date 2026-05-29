@@ -6,6 +6,7 @@ import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
   codexGenerationTaskKinds,
+  type CodexDockerRuntimeEvidence,
   type CodexGenerationWorkloadV1,
   type CodexLaunchMaterialization,
   type CodexRunExecutionRuntimeJobResult,
@@ -577,7 +578,14 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         terminal,
         materialization,
       }, workspace);
-      const terminalResult = await runExecutionRuntimeJobTerminalResult(workerSession, job, workloadResponse.workload, workspace, resultDraft);
+      const terminalResult = await runExecutionRuntimeJobTerminalResult(
+        workerSession,
+        job,
+        workloadResponse.workload,
+        workspace,
+        resultDraft,
+        appServerSession.publicEvidence,
+      );
       validateCodexRuntimeJobTerminalResult(terminalResult as unknown as Record<string, unknown>);
       await driver.close?.();
       driver = undefined;
@@ -703,6 +711,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     workload: CodexRunExecutionWorkloadV1,
     workspace: WorkspaceBundleUnpackResult,
     draft: RunExecutionResultDraft,
+    runtimeEvidence: CodexDockerRuntimeEvidence,
   ): Promise<CodexRunExecutionRuntimeJobResult> => {
     const changedFiles =
       draft.patch === undefined
@@ -764,6 +773,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     }
     const terminalResult: CodexRunExecutionRuntimeJobResult = {
       task_kind: 'run_execution',
+      output_schema_version: 'codex_run_execution_result.v1',
       execution_package_id: workload.execution_package_id,
       execution_package_version: workload.execution_package_version,
       run_session_id: workload.run_session_id,
@@ -774,6 +784,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       ...(patchArtifact === undefined ? {} : { patch_artifact: patchArtifact }),
       check_results: draft.check_results,
       execution_artifacts: draft.execution_artifacts,
+      runtime_evidence: runtimeEvidence,
       public_summary: draft.public_summary,
     };
     validateCodexRuntimeJobTerminalResult(terminalResult as unknown as Record<string, unknown>);
