@@ -229,7 +229,7 @@
 - Delete: `apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/qa.tsx`
 - Delete: `apps/web/src/app/routes/specs-plans/index.tsx`
 
-- [ ] **Step 1: Write failing route contract expectations**
+- [x] **Step 1: Write failing route contract expectations**
 
 In `tests/web/product-grade-route-contract.test.tsx`, update the expected product route arrays so the only Plan Item child routes are:
 
@@ -257,13 +257,13 @@ expect(retiredRoutePaths.join('\n')).not.toMatch(/specs-plans|brainstorming|exec
 
 Keep legacy route strings out of `apps/web/src/features/product-surfaces/route-contract.ts`. If this test needs exact old path values, define them as a test-local negative route list and ensure they are not imported by route registration, screenshot registration, or navigation code.
 
-- [ ] **Step 2: Run the route contract test and verify it fails**
+- [x] **Step 2: Run the route contract test and verify it fails**
 
 Run: `pnpm test tests/web/product-grade-route-contract.test.tsx`
 
 Expected: FAIL because active routes still include `/specs-plans`, `/brainstorming`, `/execution-plan`, Plan Item `/review`, and Plan Item `/qa`, and top-level `/reviews`, `/qa`, and `/implementation-plan` are not registered.
 
-- [ ] **Step 3: Update the public route contract**
+- [x] **Step 3: Update the public route contract**
 
 In `apps/web/src/features/product-surfaces/route-contract.ts`, replace the old route with:
 
@@ -279,7 +279,7 @@ productRoute(
 
 Remove the active `brainstorming`, `review`, and `qa` child route entries. Replace old `/specs-plans` with top-level `/reviews` and `/qa`. Move `/reviews` out of the retired route list and redefine it as the new document review queue, not the old raw review-packet route. Remove `/reviews/:id` unless a future spec introduces a concrete review detail route. Do not add `retiredRoute(...)` entries for `/specs-plans`, `/brainstorming`, `/execution-plan`, Plan Item `/review`, or Plan Item `/qa`; no legacy route registry should survive this slice.
 
-- [ ] **Step 4: Update the React Router registry**
+- [x] **Step 4: Update the React Router registry**
 
 In `apps/web/src/app/routes.ts`, replace:
 
@@ -299,7 +299,7 @@ route('reviews', './routes/reviews/index.tsx'),
 route('qa', './routes/qa/index.tsx'),
 ```
 
-- [ ] **Step 5: Replace route wrapper files**
+- [x] **Step 5: Replace route wrapper files**
 
 Delete the old Plan Item `brainstorming.tsx`, `execution-plan.tsx`, `review.tsx`, and `qa.tsx` wrappers. Delete `routes/specs-plans/index.tsx`. Add `implementation-plan.tsx`:
 
@@ -325,11 +325,11 @@ import { QaRoute } from '../../../features/qa/qa-route';
 export default QaRoute;
 ```
 
-- [ ] **Step 6: Update router test utilities**
+- [x] **Step 6: Update router test utilities**
 
 In `tests/web/router-test-utils.tsx`, remove old child route imports and entries. Add the new `implementation-plan` route component.
 
-- [ ] **Step 7: Run focused route tests**
+- [x] **Step 7: Run focused route tests**
 
 Run:
 
@@ -339,7 +339,7 @@ pnpm test tests/web/product-grade-route-contract.test.tsx tests/web/product-work
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit route contract reset**
+- [x] **Step 8: Commit route contract reset**
 
 ```bash
 git add apps/web/src/app/routes.ts apps/web/src/app/routes/development-plans apps/web/src/app/routes/reviews apps/web/src/app/routes/qa apps/web/src/app/routes/specs-plans tests/web/product-grade-route-contract.test.tsx tests/web/router-test-utils.tsx tests/web/product-workspace-shell-boundaries.test.tsx apps/web/src/features/product-surfaces/route-contract.ts

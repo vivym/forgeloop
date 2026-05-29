@@ -488,7 +488,7 @@ describe('project management typed object contracts', () => {
         current_revision_id: 'spec-rev-2',
         approved_revision_id: 'spec-rev-2',
         updated_at: '2026-05-23T00:00:00.000Z',
-        href: '/specs-plans',
+        href: '/reviews',
       }),
     ).toMatchObject({
       entity_type: 'spec',

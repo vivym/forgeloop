@@ -122,6 +122,7 @@ export interface ProductWorkspaceScreenshotReviewReport {
 export interface AiNativeProjectManagementFixture {
   baseUrl: string;
   browser: Browser;
+  approvePlanItemBoundary: (developmentPlanId: string, itemId: string) => Promise<void>;
   completeExecutionForReview: (executionId: string) => Promise<void>;
   firstPlanItemId: (developmentPlanId: string) => Promise<string>;
   page: Page;
@@ -229,6 +230,7 @@ export async function startAiNativeProjectManagementFixture(): Promise<AiNativeP
   return {
     baseUrl: server.url,
     browser,
+    approvePlanItemBoundary: (developmentPlanId: string, itemId: string) => approvePlanItemBoundary(app, developmentPlanId, itemId),
     completeExecutionForReview: (executionId: string) => completeExecutionForReview(app, executionId),
     firstPlanItemId: (developmentPlanId: string) => firstPlanItemId(app, developmentPlanId),
     page,
@@ -381,6 +383,140 @@ async function firstPlanItemId(app: INestApplication, developmentPlanId: string)
   const firstItem = (await repository.listDevelopmentPlanItems(developmentPlanId))[0];
   if (firstItem === undefined) throw new Error(`Development Plan ${developmentPlanId} has no items`);
   return firstItem.id;
+}
+
+async function approvePlanItemBoundary(app: INestApplication, developmentPlanId: string, itemId: string): Promise<void> {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const plan = await repository.getDevelopmentPlan(developmentPlanId);
+  const item = await repository.getDevelopmentPlanItem(itemId);
+  if (plan === undefined || item === undefined || item.development_plan_id !== developmentPlanId) {
+    throw new Error(`Development Plan Item ${itemId} not found for ${developmentPlanId}`);
+  }
+  const at = new Date().toISOString();
+  const sessionId = `e2e-boundary-session-${item.id}`;
+  const sessionRevisionId = `e2e-boundary-session-revision-${item.id}`;
+  const boundarySummaryId = `e2e-boundary-summary-${item.id}`;
+  const boundarySummaryRevisionId = `e2e-boundary-summary-revision-${item.id}`;
+  const questionId = `e2e-boundary-question-${item.id}`;
+  const answerId = `e2e-boundary-answer-${item.id}`;
+  const decisionId = `e2e-boundary-decision-${item.id}`;
+  const contextManifestId = `e2e-context-manifest-${item.id}`;
+  const contextManifestRevisionId = `e2e-context-manifest-revision-${item.id}`;
+  const question = {
+    id: questionId,
+    text: 'Which source and code boundaries are in scope?',
+    author_id: 'ai',
+    created_at: at,
+    status: 'answered' as const,
+    required: true,
+    answered_by_answer_id: answerId,
+  };
+  const answer = {
+    id: answerId,
+    question_id: questionId,
+    text: 'Keep the change scoped to apps/web and route tests.',
+    actor_id: 'actor-owner',
+    actor_role: 'leader' as const,
+    created_at: at,
+  };
+  const decision = {
+    id: decisionId,
+    text: 'The approved boundary is limited to Web IA and route tests.',
+    actor_id: 'actor-owner',
+    actor_role: 'leader' as const,
+    source: 'leader' as const,
+    state: 'accepted' as const,
+    rationale: 'E2E fixture closes the boundary without restoring a retired public route.',
+    created_at: at,
+  };
+  await repository.saveBrainstormingSession({
+    id: sessionId,
+    revision_id: sessionRevisionId,
+    source_ref: item.source_ref,
+    development_plan_id: developmentPlanId,
+    development_plan_revision_id: plan.revision_id,
+    development_plan_item_id: item.id,
+    development_plan_item_revision_id: item.revision_id,
+    context_manifest_id: contextManifestId,
+    context_manifest_revision_id: contextManifestRevisionId,
+    leader_actor_id: 'actor-owner',
+    leader_delegate_actor_ids: [],
+    status: 'approved',
+    questions: [question],
+    answers: [answer],
+    decisions: [decision],
+    approval_state: 'approved',
+    boundary_summary_id: boundarySummaryId,
+    latest_summary_revision_id: boundarySummaryRevisionId,
+    approved_summary_revision_id: boundarySummaryRevisionId,
+    approver_actor_id: 'actor-owner',
+    approved_at: at,
+    closed_at: at,
+    created_at: at,
+    updated_at: at,
+  });
+  await repository.saveBoundaryQuestion({ ...question, session_id: sessionId, sequence: 1 });
+  await repository.saveBoundaryAnswer({ ...answer, session_id: sessionId, sequence: 1 });
+  await repository.saveBoundaryDecision({ ...decision, session_id: sessionId, sequence: 1 });
+  await repository.saveBoundarySummary({
+    id: boundarySummaryId,
+    revision_id: boundarySummaryRevisionId,
+    brainstorming_session_id: sessionId,
+    brainstorming_session_revision_id: sessionRevisionId,
+    development_plan_id: developmentPlanId,
+    development_plan_item_id: item.id,
+    development_plan_item_revision_id: item.revision_id,
+    source_ref: item.source_ref,
+    summary: '# Approved boundary\n\nKeep the change scoped to apps/web and route tests.',
+    approved_by_actor_id: 'actor-owner',
+    approved_at: at,
+    created_at: at,
+    updated_at: at,
+  });
+  await repository.saveBoundarySummaryRevision({
+    id: boundarySummaryRevisionId,
+    boundary_summary_id: boundarySummaryId,
+    session_id: sessionId,
+    session_revision_id: sessionRevisionId,
+    source_round_id: `e2e-boundary-round-${item.id}`,
+    development_plan_id: developmentPlanId,
+    development_plan_item_id: item.id,
+    development_plan_item_revision_id: item.revision_id,
+    revision_number: 1,
+    status: 'approved',
+    summary_markdown: '# Approved boundary\n\nKeep the change scoped to apps/web and route tests.',
+    confirmed_scope: ['apps/web', 'route tests'],
+    confirmed_out_of_scope: ['retired public child routes'],
+    accepted_assumptions: ['Boundary was approved by the fixture for route-contract e2e coverage.'],
+    open_risks: [],
+    validation_expectations: ['Run the AI-native planning happy path through QA handoff.'],
+    question_answer_snapshot: [{ question_id: questionId, answer_id: answerId, text: answer.text }],
+    decision_snapshot: [{ decision_id: decisionId, text: decision.text, rationale: decision.rationale }],
+    context_manifest_id: contextManifestId,
+    context_manifest_revision_id: contextManifestRevisionId,
+    approved_by_actor_id: 'actor-owner',
+    approved_at: at,
+    created_at: at,
+  });
+  await repository.appendObjectEvent({
+    id: `e2e-boundary-approved-event-${item.id}`,
+    object_type: 'development_plan_item',
+    object_id: item.id,
+    event_type: 'boundary_summary_approved',
+    actor_id: 'actor-owner',
+    metadata: {
+      boundary_summary_id: boundarySummaryId,
+      boundary_summary_revision_id: boundarySummaryRevisionId,
+      development_plan_item_revision_id: item.revision_id,
+    },
+    created_at: at,
+  });
+  await repository.saveDevelopmentPlanItem({
+    ...item,
+    boundary_status: 'approved',
+    next_action: 'generate_spec',
+    updated_at: at,
+  });
 }
 
 async function completeExecutionForReview(app: INestApplication, executionId: string): Promise<void> {
@@ -760,28 +896,12 @@ async function assertFirstViewportContract(page: Page, route: VisualRoute) {
     return;
   }
 
-  if (route.path === '/my-work') {
-    await expectPage(
-      page.locator(`[${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"]`).first(),
-      `${route.path} must expose ${firstViewportContract.workspaceLayoutAttribute}="queue-workspace"`,
-    ).toBeVisible();
+  for (const testId of firstViewportContract.forbiddenTestIds) {
+    await expectPage(page.getByTestId(testId), `${route.path} must not render retired ${testId} test id`).toHaveCount(0);
   }
 
-  for (const testId of [
-    firstViewportContract.currentStateTestId,
-    firstViewportContract.nextActionTestId,
-    firstViewportContract.roleResponsibilityTestId,
-    firstViewportContract.blockerRiskTestId,
-  ]) {
-    const affordance = page.getByTestId(testId).first();
-    await expectPage(affordance, `${route.path} must expose ${testId}`).toBeVisible();
-    const affordanceText = await affordance.evaluate((element) => [
-      element.getAttribute('aria-label'),
-      element.getAttribute('title'),
-      element.textContent,
-    ].filter(Boolean).join(' ').trim());
-    expect(affordanceText.length, `${route.path} ${testId} must not be an empty or color-only affordance`).toBeGreaterThan(0);
-  }
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  throw new Error(`${route.path} must expose a visible primary work surface. Body: ${bodyText.slice(0, 300)}`);
 }
 
 function toVisualRoute(route: ProductRouteContract): VisualRoute {

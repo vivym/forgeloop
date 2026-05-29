@@ -335,6 +335,49 @@ describe('Work Item delivery readiness', () => {
     expect(readiness.stages.find((stage) => stage.id === 'plan')).toMatchObject({ state: 'passed' });
   });
 
+  it('routes Spec and Implementation Plan Doc readiness artifacts through document review queues', () => {
+    const specReadiness = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        packages: [],
+        currentPlan: planFixture({ approved_revision_id: 'plan-r1', current_revision_id: 'plan-r1' }),
+        approvedPlanRevision: planRevisionFixture({ id: 'plan-r1' }),
+        activeLane: 'spec-approver',
+      }),
+    );
+    const executionReadiness = deriveWorkItemDeliveryReadiness(
+      readyInput({
+        packages: [],
+        currentPlan: planFixture({ approved_revision_id: 'plan-r1', current_revision_id: 'plan-r1' }),
+        approvedPlanRevision: planRevisionFixture({ id: 'plan-r1' }),
+        activeLane: 'requirements',
+      }),
+    );
+    const specHref = '/reviews?tab=specs&project_id=project-1';
+    const implementationPlanHref = '/reviews?tab=implementation-plans&project_id=project-1';
+
+    expect(JSON.stringify({ specReadiness, executionReadiness })).not.toContain('/specs-plans');
+    expect(specReadiness.stages.find((stage) => stage.id === 'spec')?.object_refs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ object_type: 'spec', href: specHref }),
+      ]),
+    );
+    expect(specReadiness.stages.find((stage) => stage.id === 'plan')?.object_refs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ object_type: 'execution_plan', href: implementationPlanHref }),
+      ]),
+    );
+    expect(specReadiness.next_actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: expect.objectContaining({ href: specHref }) }),
+      ]),
+    );
+    expect(executionReadiness.next_actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: expect.objectContaining({ href: implementationPlanHref }) }),
+      ]),
+    );
+  });
+
   it('marks initiative package stages not applicable without current packages', () => {
     const readiness = deriveWorkItemDeliveryReadiness(readyInput({ kind: 'initiative', packages: [] }));
     expect(readiness.stages.find((stage) => stage.id === 'packages')).toMatchObject({ state: 'not_applicable' });

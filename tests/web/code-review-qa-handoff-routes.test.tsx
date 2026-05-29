@@ -3,26 +3,10 @@
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { codeReviewHandoff, developmentPlan, developmentPlanItem, execution, projectId, qaHandoff } from './fixtures/product-data';
+import { codeReviewHandoff, developmentPlanItem, execution, projectId, qaHandoff } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('Code review and QA handoff route panels', () => {
-  it('does not render retired Plan Item code review route as a workspace', async () => {
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/dpi-cockpit-command-center/review`);
-
-    expect(await screen.findByRole('heading', { name: /not found|404/i })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="code-review"]')).toBeNull();
-    expect(document.querySelector('[data-code-review-workspace][data-primary-work-surface]')).toBeNull();
-  });
-
-  it('does not render retired Plan Item QA route as a workspace', async () => {
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/dpi-requirements-database-view/qa`);
-
-    expect(await screen.findByRole('heading', { name: /not found|404/i })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeNull();
-    expect(document.querySelector('[data-qa-handoff-workspace][data-primary-work-surface]')).toBeNull();
-  });
-
   it('renders top-level review and QA routes as valid workspaces', async () => {
     const reviewsScreen = await renderRoute('/reviews');
     expect(await reviewsScreen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();

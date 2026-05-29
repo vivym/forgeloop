@@ -66,7 +66,7 @@ const expectedProductRoutes = [
   '/reports/observation',
 ];
 
-const expectedRetiredSmokeRoutes = [
+const legacyRoutePaths = [
   '/dashboard',
   '/work-items',
   '/work-items/:id',
@@ -174,11 +174,11 @@ describe('product-grade route contract', () => {
     const commandPaths = productCommandItems.map((item) => item.path);
     expect(commandPaths).toEqual(expectedProductRoutes);
 
-    for (const route of retiredProductRoutes) {
-      expect(commandPaths).not.toContain(route.path);
+    expect(retiredProductRoutes).toEqual([]);
+    for (const routePath of legacyRoutePaths) {
+      expect(commandPaths).not.toContain(routePath);
     }
     expect(commandPaths).not.toContain('/dev-tools');
-    expect(retiredProductRoutes.map((route) => route.path)).toEqual(expectedRetiredSmokeRoutes);
   });
 
   it('requires screenshot fixtures for every route family', () => {
@@ -213,21 +213,15 @@ describe('product-grade route contract', () => {
 
   it('does not register retired product routes as active route config entries', () => {
     const activeRoutePaths = flattenProductRouteConfig(appRouteConfig);
-    const retiredRoutePaths = retiredProductRoutes.map((route) => route.path);
-    expect(activeRoutePaths).not.toContain('dashboard');
-    expect(activeRoutePaths).not.toContain('tasks');
-    expect(activeRoutePaths).not.toContain('work-items');
-    expect(activeRoutePaths).not.toContain('packages');
-    expect(activeRoutePaths).not.toContain('runs');
-    expect(activeRoutePaths).not.toContain('plans');
-    expect(activeRoutePaths).not.toContain('specs');
+    for (const routePath of legacyRoutePaths) {
+      expect(activeRoutePaths).not.toContain(routePath.replace(/^\//, ''));
+    }
     expect(activeRoutePaths.join('\n')).not.toMatch(/specs-plans|brainstorming|execution-plan|\/items\/[^/]+\/review$|\/items\/[^/]+\/qa$/);
-    expect(retiredRoutePaths.join('\n')).not.toMatch(/specs-plans|brainstorming|execution-plan|\/items\/[^/]+\/review$|\/items\/[^/]+\/qa$/);
   });
 
-  it('classifies retired query product modes as dev-only or rejected', () => {
-    expect(retiredProductRoutes.map((route) => route.path)).toEqual(expectedRetiredSmokeRoutes);
-    expect(retiredProductQueryStates).toContain('/reports?report=replay');
+  it('keeps legacy query product modes out of the product route contract', () => {
+    expect(retiredProductRoutes).toEqual([]);
+    expect(retiredProductQueryStates).toEqual([]);
   });
 
   it('classifies every registered public router path', () => {

@@ -1,4 +1,4 @@
-export type ProductRouteKind = 'product' | 'retired' | 'dev-tools';
+export type ProductRouteKind = 'product' | 'dev-tools';
 
 export type ProductPageFamily =
   | 'cockpit'
@@ -48,7 +48,7 @@ export interface ProductCommandItem {
   label: string;
   path: string;
   family: ProductPageFamily;
-  kind: Exclude<ProductRouteKind, 'retired'>;
+  kind: ProductRouteKind;
 }
 
 const requirementId = 'req-product-workspace-clarity';
@@ -75,18 +75,6 @@ function productRoute(
   heading: RegExp,
 ): ProductRouteContract {
   return { path, concretePath, label, family, kind: 'product', heading, viewports: visualViewports };
-}
-
-function retiredRoute(path: string, concretePath: string, label: string, family: ProductPageFamily): ProductRouteContract {
-  return {
-    path,
-    concretePath,
-    label,
-    family,
-    kind: 'retired',
-    heading: /not found|retired|not available/i,
-    viewports: visualViewports,
-  };
 }
 
 export const canonicalProductRoutes: readonly ProductRouteContract[] = [
@@ -161,23 +149,9 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
   productRoute('/reports/observation', '/reports/observation', 'Observation Report', 'report-insight', /Observation|Reports/i),
 ];
 
-export const retiredProductRoutes: readonly ProductRouteContract[] = [
-  retiredRoute('/dashboard', '/dashboard', 'Retired Dashboard', 'cockpit'),
-  retiredRoute('/work-items', '/work-items', 'Retired Work Items', 'inbox'),
-  retiredRoute('/work-items/:id', '/work-items/work-item-1', 'Retired Work Item Detail', 'source-document'),
-  retiredRoute('/packages', '/packages', 'Retired Packages', 'execution-supervision'),
-  retiredRoute('/packages/:id', '/packages/package-1', 'Retired Package Detail', 'execution-supervision'),
-  retiredRoute('/runs', '/runs', 'Retired Runs', 'execution-supervision'),
-  retiredRoute('/runs/:id', '/runs/run-1', 'Retired Run Detail', 'execution-supervision'),
-  retiredRoute('/plans', '/plans', 'Retired Plans', 'planning-table'),
-  retiredRoute('/plans/:id', '/plans/plan-1', 'Retired Plan Detail', 'planning-table'),
-  retiredRoute('/specs', '/specs', 'Retired Specs', 'document-governance'),
-  retiredRoute('/specs/:id', '/specs/spec-1', 'Retired Spec Detail', 'document-governance'),
-  retiredRoute('/tasks', '/tasks', 'Retired Tasks', 'inbox'),
-  retiredRoute('/tasks/:id', '/tasks/task-1', 'Retired Task Detail', 'gate-flow'),
-];
+export const retiredProductRoutes: readonly ProductRouteContract[] = [];
 
-export const retiredProductQueryStates = ['/reports?report=replay'] as const;
+export const retiredProductQueryStates: readonly string[] = [];
 
 export const requiredScreenshotRoutes: readonly ProductRouteContract[] = canonicalProductRoutes;
 

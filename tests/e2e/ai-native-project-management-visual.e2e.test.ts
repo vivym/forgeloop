@@ -74,13 +74,11 @@ describe('AI-native project management visual QA', () => {
           '/development-plans/new',
           '/development-plans/dp-product-workspace-core-surface-redesign',
           '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility',
-          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-typed-source-boundary/brainstorming',
           '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/spec',
-          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/execution-plan',
+          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/implementation-plan',
           '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-product-workspace-preview-state/execution',
-          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/review',
-          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-qa-shift-left-strategy/qa',
-          '/specs-plans',
+          '/reviews',
+          '/qa',
           '/executions',
           '/executions/exec-product-workspace-preview-active',
           '/board',
@@ -188,15 +186,7 @@ describe('AI-native project management visual QA', () => {
 
         const developmentPlanId = (await generatedPlan).id;
         const itemId = await fixture.firstPlanItemId(developmentPlanId);
-        await page.goto(`${baseUrl}/development-plans/${developmentPlanId}/items/${itemId}/brainstorming`);
-        await page.getByRole('button', { name: /start boundary brainstorming/i }).click();
-        await page.getByRole('textbox', { name: /answer boundary question/i }).fill('Keep the change scoped to apps/web and route tests.');
-        await page.getByRole('textbox', { name: /decision rationale/i }).fill('The approved boundary is limited to Web IA and route tests.');
-        await page.getByRole('button', { name: /answer boundary questions/i }).click();
-        await page.getByRole('button', { name: /record boundary decision/i }).click();
-        await page.getByRole('button', { name: /approve boundary/i }).click();
-        await expectPage(page.getByText(/boundary approved/i)).toBeVisible();
-
+        await fixture.approvePlanItemBoundary(developmentPlanId, itemId);
         await page.goto(`${baseUrl}/development-plans/${developmentPlanId}/items/${itemId}`);
         await page.getByRole('button', { name: /^generate spec$/i }).click();
         await expectPage(page.getByText(/generate spec command completed/i)).toBeVisible();

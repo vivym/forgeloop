@@ -89,8 +89,8 @@ describe('board, reports, and release readiness routes', () => {
     expect(boardHrefs).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
-    expect(boardHrefs).toContain(`/specs-plans?spec_id=${spec.id}`);
-    expect(boardHrefs).toContain(`/specs-plans?execution_plan_id=${executionPlan.id}`);
+    expect(boardHrefs).toContain(`/reviews?tab=specs&spec_id=${spec.id}`);
+    expect(boardHrefs).toContain(`/reviews?tab=implementation-plans&execution_plan_id=${executionPlan.id}`);
     expect(boardHrefs).not.toContain('/my-work');
     expect(screen.queryByRole('region', { name: 'Intake / Development Plan needed cards' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Execution cards' })).toBeNull();

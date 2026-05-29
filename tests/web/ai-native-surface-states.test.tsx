@@ -24,7 +24,7 @@ describe('AI-native surface states', () => {
     ['/my-work', 'My Work'],
     ['/board', 'Board'],
     ['/reports', 'Reports'],
-    ['/specs-plans', 'Document Reviews Queue'],
+    ['/reviews', 'Document Reviews Queue'],
     ['/executions', 'Executions Queue'],
     [`/executions/${execution.id}`, 'Execution Detail'],
   ] as const)('renders loading, empty, error, stale, blocked, approved, running, and resumable states for %s', async (route) => {
@@ -76,7 +76,7 @@ function overridesFor(route: string, state: SurfaceState): ProductApiResponseMap
   if (route === '/board') return boardOverrides(state);
   if (route === `/development-plans/${developmentPlan.id}`) return developmentPlanOverrides(state);
   if (route === `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`) return developmentPlanItemOverrides(state);
-  if (route === '/specs-plans') return specExecutionPlanQueueOverrides(state);
+  if (route === '/reviews') return specExecutionPlanQueueOverrides(state);
   if (route === '/executions') return executionsOverrides(state);
   if (route === `/executions/${execution.id}`) return executionDetailOverrides(state);
   return reportOverrides(state);

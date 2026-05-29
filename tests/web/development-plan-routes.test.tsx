@@ -380,10 +380,9 @@ describe('Development Plan routes', () => {
     expect(screen.queryByText(/Development Plan Item Detail: Approved state/i)).toBeNull();
   });
 
-  it('renders Development Plan Item overview, brainstorming, and execution as gate-flow workspaces', async () => {
+  it('renders Development Plan Item overview and execution as gate-flow workspaces', async () => {
     for (const route of [
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
-      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`,
     ]) {
       const screen = await renderRoute(route);
@@ -399,8 +398,8 @@ describe('Development Plan routes', () => {
     }
   });
 
-  it('renders Spec and Execution Plan focus routes as document review editors', async () => {
-    for (const focus of ['spec', 'execution-plan'] as const) {
+  it('renders Spec and Implementation Plan focus routes as document review editors', async () => {
+    for (const focus of ['spec', 'implementation-plan'] as const) {
       const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/${focus}`);
 
       expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
@@ -481,7 +480,7 @@ describe('Development Plan routes', () => {
 
   it('prioritizes the active gate body on Development Plan Item focus routes', async () => {
     for (const [route, title, bodyText] of [
-      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`, 'Boundary brainstorming', /Which source and code boundaries are in scope/i],
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, 'Gate summary', /Boundary|Spec|Execution/i],
       [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, 'Execution supervision', /Codex worker is rebuilding product workspace preview data/i],
     ] as const) {
       const screen = await renderRoute(route);
@@ -514,23 +513,6 @@ describe('Development Plan routes', () => {
     expect(document.activeElement).toBe(targetOpenItemLink);
     await user.keyboard('{Enter}');
     expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-  });
-
-  it('wires boundary brainstorming commands from the item gate detail', async () => {
-    const user = userEvent.setup();
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming`);
-
-    await user.click(await screen.findByRole('button', { name: /start boundary brainstorming/i }));
-    expect(await screen.findByText(/Brainstorming session started/i)).toBeTruthy();
-
-    await user.click(screen.getByRole('button', { name: /answer boundary questions/i }));
-    expect(await screen.findByText(/Boundary answer recorded/i)).toBeTruthy();
-
-    await user.click(screen.getByRole('button', { name: /record boundary decision/i }));
-    expect(await screen.findByText(/Boundary decision recorded/i)).toBeTruthy();
-
-    await user.click(screen.getByRole('button', { name: /approve boundary/i }));
-    expect(await screen.findByText(/Boundary approved/i)).toBeTruthy();
   });
 
   it('exposes item-scoped lifecycle actions only when their gate prerequisites are met', async () => {
@@ -899,76 +881,19 @@ describe('Development Plan routes', () => {
     expect(document.body.textContent).toMatch(/Release gate waits for an owning Release link/i);
   });
 
-  it('opens dedicated Review and QA routes from Plan Item gate cards', async () => {
+  it('routes Plan Item Review and QA gate cards to top-level queues', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
 
     await user.click(await screen.findByRole('button', { name: /^open code review$/i }));
-    expect(await screen.findByRole('heading', { name: /code review handoff/i })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="code-review"]')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="document-governance"]')).toBeTruthy();
 
     cleanup();
     const qaScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
     await user.click(await qaScreen.findByRole('button', { name: /^open qa handoff$/i }));
-    expect(await qaScreen.findByRole('heading', { name: /qa handoff/i })).toBeTruthy();
+    expect(await qaScreen.findByRole('heading', { name: 'QA' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeTruthy();
-  });
-
-  it('preserves execution-scoped handoff evidence on Review and QA item routes', async () => {
-    const completedExecution = {
-      id: 'exec-completed-for-review',
-      title: 'Completed execution for review',
-      status: 'completed',
-      evidence_refs: [{ type: 'execution', id: 'evidence-completed-review', title: 'Completed review evidence' }],
-      test_evidence_refs: [],
-    };
-    const retryExecution = {
-      id: 'exec-retry-not-reviewed',
-      title: 'Retry execution not reviewed',
-      status: 'completed',
-      evidence_refs: [{ type: 'execution', id: 'evidence-retry-wrong', title: 'Retry evidence should not render' }],
-      test_evidence_refs: [],
-    };
-    const item = itemOverride(
-      {
-        boundary_status: 'approved',
-        spec_status: 'approved',
-        execution_plan_status: 'approved',
-        execution_status: 'completed',
-        review_status: 'approved',
-        qa_handoff_status: 'pending',
-      },
-      {
-        executions: [retryExecution, completedExecution],
-        codeReview: {
-          execution_id: completedExecution.id,
-          status: 'approved',
-          verification_evidence_refs: [{ type: 'execution', id: 'evidence-completed-review', title: 'Completed review evidence' }],
-        },
-        qaHandoff: {
-          execution_id: completedExecution.id,
-          verification_evidence_refs: [{ type: 'execution', id: 'evidence-completed-review', title: 'Completed review evidence' }],
-        },
-      },
-    );
-
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/review`, {
-      apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: item,
-      },
-    });
-
-    expect((await screen.findAllByText(/Completed review evidence/i)).length).toBeGreaterThan(0);
-    expect(document.body.textContent).not.toContain('Retry evidence should not render');
-    cleanup();
-
-    const qaScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/qa`, {
-      apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: item,
-      },
-    });
-    expect((await qaScreen.findAllByText(/Completed review evidence/i)).length).toBeGreaterThan(0);
-    expect(document.body.textContent).not.toContain('Retry evidence should not render');
   });
 
   it('keeps Development Plan loaded state compact while Plan Item pages expose exceptional state', async () => {

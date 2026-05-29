@@ -252,6 +252,7 @@ describe('ProductAction contracts', () => {
       '/work-items/%252e%252e/%252e%252e/query/replay',
       '/work-items/%2Fwi_1',
       '/api/work-items/wi_1',
+      '/dashboard',
       '/workbench/bugs',
       '/workbench-old/bugs',
       '/work-items/wi_1/run',
@@ -259,12 +260,23 @@ describe('ProductAction contracts', () => {
       '/work-items/wi_1/approve',
       '/work-items/wi_1/request-changes',
       '/development-plans/development-plan-1/items/development-plan-item-1/spec/generate-draft',
+      '/development-plans/development-plan-1/items/development-plan-item-1/brainstorming',
+      '/development-plans/development-plan-1/items/development-plan-item-1/execution-plan',
       '/development-plans/development-plan-1/items/development-plan-item-1/execution-plan/generate-draft',
+      '/development-plans/development-plan-1/items/development-plan-item-1/review',
+      '/development-plans/development-plan-1/items/development-plan-item-1/qa',
+      '/development-plans/development-plan-1/items',
+      '/development-plans/new/items/development-plan-item-1',
+      '/development-plans/development-plan-1/items/development-plan-item-1/spec/extra',
       '/executions/exec-1/continue',
       '/executions/exec-1/interrupt',
       '/executions/exec-1/ready-for-code-review',
+      '/code-review-handoffs',
+      '/code-review-handoffs/cr-1',
       '/qa-handoffs/qa-1/accept',
       '/qa-handoffs/qa-1/block',
+      '/qa-handoffs',
+      '/qa-handoffs/qa-1',
       '/code-review-handoffs/cr-1/qa-handoff',
       '/execution-packages/pkg_1/run',
       '/lanes/bugs',
@@ -272,8 +284,10 @@ describe('ProductAction contracts', () => {
       '/packages/pkg_1',
       '/runs/run_1',
       '/reviews/review_1',
+      '/qa/qa_1',
       '/specs',
       '/plans',
+      '/reports?report=replay',
     ]) {
       expect(productActionSchema.safeParse({ ...validNavigateAction, target: { ...validObjectTarget, href } }).success).toBe(
         false,
@@ -300,13 +314,24 @@ describe('ProductAction contracts', () => {
         target: { kind: 'route', href: '/bugs?project_id=p1&kind=bug&blocked=true' },
       }).success,
     ).toBe(true);
-    expect(
-      productActionSchema.safeParse({
-        ...validNavigateAction,
-        target: { kind: 'route', href: '/code-review-handoffs?project_id=p1&reviewer_actor_id=actor-reviewer' },
-      }).success,
-    ).toBe(true);
-    for (const href of ['/executions/exec-1', '/qa-handoffs/qa-1', '/code-review-handoffs/cr-1']) {
+    for (const href of ['/reviews', '/qa']) {
+      expect(productActionSchema.safeParse({ ...validNavigateAction, target: { kind: 'route', href } }).success).toBe(
+        true,
+      );
+    }
+    for (const href of [
+      '/development-plans/development-plan-1/items/development-plan-item-1/spec',
+      '/development-plans/development-plan-1/items/development-plan-item-1/implementation-plan',
+      '/development-plans/development-plan-1/items/development-plan-item-1/execution',
+    ]) {
+      expect(
+        productActionSchema.safeParse({
+          ...validNavigateAction,
+          target: { ...validObjectTarget, object_type: 'development_plan_item', object_id: 'development-plan-item-1', href },
+        }).success,
+      ).toBe(true);
+    }
+    for (const href of ['/executions/exec-1']) {
       expect(productActionSchema.safeParse({ ...validNavigateAction, target: { ...validObjectTarget, href } }).success).toBe(
         true,
       );

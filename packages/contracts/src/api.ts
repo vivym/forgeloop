@@ -12,6 +12,9 @@ import { objectRefSchema } from './product-object-ref.js';
 type ProductParsedUrl = {
   origin: string;
   pathname: string;
+  searchParams: {
+    get(name: string): string | null;
+  };
 };
 
 declare const URL: {
@@ -134,23 +137,6 @@ export const productObjectTypeSchema = z.enum([
 ]);
 export type ProductObjectType = z.infer<typeof productObjectTypeSchema>;
 
-const productHrefPrefixes = [
-  '/dashboard',
-  '/my-work',
-  '/initiatives',
-  '/requirements',
-  '/bugs',
-  '/tech-debt',
-  '/specs-plans',
-  '/development-plans',
-  '/executions',
-  '/code-review-handoffs',
-  '/qa-handoffs',
-  '/board',
-  '/releases',
-  '/reports',
-] as const;
-
 const mutatingRouteSegments = new Set([
   'approve',
   'accept',
@@ -176,6 +162,8 @@ const mutatingRouteSegments = new Set([
 ]);
 
 const productHrefBaseUrl = 'https://forgeloop.local';
+const allowedPlanItemChildRouteSegments = new Set(['spec', 'implementation-plan', 'execution']);
+const reportRouteSegments = new Set(['delivery', 'quality', 'release-readiness', 'observation']);
 
 function decodeProductPathname(pathname: string): string | undefined {
   let decoded = pathname;
@@ -211,6 +199,68 @@ function isSafeProductPathname(pathname: string): boolean {
   return true;
 }
 
+function isDynamicProductRouteSegment(segment: string | undefined): segment is string {
+  return segment !== undefined && segment.length > 0 && segment !== 'new';
+}
+
+function isAllowedProductPathname(pathname: string): boolean {
+  const segments = pathname.split('/').filter(Boolean);
+  const [root, second, third, fourth, fifth] = segments;
+
+  if (segments.length === 0) {
+    return pathname === '/';
+  }
+
+  switch (root) {
+    case 'cockpit':
+    case 'my-work':
+    case 'reviews':
+    case 'qa':
+    case 'board':
+      return segments.length === 1;
+    case 'initiatives':
+    case 'requirements':
+    case 'bugs':
+    case 'tech-debt':
+      return (
+        segments.length === 1 ||
+        (segments.length === 2 && (second === 'new' || isDynamicProductRouteSegment(second))) ||
+        (segments.length === 3 && isDynamicProductRouteSegment(second) && third === 'evidence')
+      );
+    case 'development-plans':
+      return (
+        segments.length === 1 ||
+        (segments.length === 2 && (second === 'new' || isDynamicProductRouteSegment(second))) ||
+        (segments.length === 4 &&
+          isDynamicProductRouteSegment(second) &&
+          third === 'items' &&
+          isDynamicProductRouteSegment(fourth)) ||
+        (segments.length === 5 &&
+          isDynamicProductRouteSegment(second) &&
+          third === 'items' &&
+          isDynamicProductRouteSegment(fourth) &&
+          fifth !== undefined &&
+          allowedPlanItemChildRouteSegments.has(fifth))
+      );
+    case 'executions':
+      return segments.length === 1 || (segments.length === 2 && isDynamicProductRouteSegment(second));
+    case 'releases':
+      return (
+        segments.length === 1 ||
+        (segments.length === 2 && isDynamicProductRouteSegment(second)) ||
+        (segments.length === 3 && isDynamicProductRouteSegment(second) && third === 'evidence')
+      );
+    case 'reports':
+      return segments.length === 1 || (segments.length === 2 && second !== undefined && reportRouteSegments.has(second));
+    default:
+      return false;
+  }
+}
+
+function hasRetiredProductQueryState(url: ProductParsedUrl): boolean {
+  return url.pathname === '/reports' && url.searchParams.get('report') === 'replay';
+}
+
 export const productHrefSchema = nonEmptyTrimmedStringSchema.refine(
   (href) => {
     if (!href.startsWith('/') || href.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(href) || /[\s\\]/.test(href)) {
@@ -235,18 +285,13 @@ export const productHrefSchema = nonEmptyTrimmedStringSchema.refine(
       return false;
     }
 
-    if (url.origin !== productHrefBaseUrl || pathname === '/query' || pathname.startsWith('/query/')) {
-      return false;
-    }
-
-    const hasAllowedPrefix = productHrefPrefixes.some(
-      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-    );
-    if (!hasAllowedPrefix) {
-      return false;
-    }
-
-    if (pathname === '/specs' || pathname === '/plans' || pathname === '/reports/replay' || pathname.startsWith('/reports/replay/')) {
+    if (
+      url.origin !== productHrefBaseUrl ||
+      pathname === '/query' ||
+      pathname.startsWith('/query/') ||
+      hasRetiredProductQueryState(url) ||
+      !isAllowedProductPathname(pathname)
+    ) {
       return false;
     }
 
