@@ -2592,6 +2592,10 @@ describe('codex runtime control-plane APIs', () => {
             output_schema_version: 'spec_revision.v1',
           },
           terminal_result_json: {
+            task_kind: 'development_plan_item_spec_revision',
+            generated_payload: generatedPayload,
+            generated_payload_digest: generatedPayloadDigest,
+            public_summary: 'Generated a Spec revision.',
             output_schema_version: 'spec_revision.v1',
             runtime_evidence: {
               app_server_attempted: true,
@@ -2819,6 +2823,11 @@ describe('codex runtime control-plane APIs', () => {
             output_schema_version: 'codex_run_execution_result.v1',
           },
           terminal_result_json: {
+            task_kind: 'run_execution',
+            run_session_id: runSession.id,
+            workspace_bundle_digest: pendingWorkspaceBundle.archive_digest,
+            mounted_task_workspace_digest: codexCanonicalDigest('run-projection-mounted-workspace'),
+            changed_files: ['packages/domain/src/codex-runtime.ts'],
             output_schema_version: 'codex_run_execution_result.v1',
             runtime_evidence: {
               app_server_attempted: true,

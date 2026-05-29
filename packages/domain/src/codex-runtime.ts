@@ -1876,21 +1876,25 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
   if (input.task_kind !== 'run_execution') {
     throw unsafeCodexRuntimePublicValue('Codex run-execution terminal result task_kind is invalid.');
   }
-  if (input.output_schema_version !== 'codex_run_execution_result.v1') {
+  const normalizedInput =
+    input.output_schema_version === undefined
+      ? { ...input, output_schema_version: 'codex_run_execution_result.v1' }
+      : input;
+  if (normalizedInput.output_schema_version !== 'codex_run_execution_result.v1') {
     throw unsafeCodexRuntimePublicValue('Codex run-execution terminal result output_schema_version is invalid.');
   }
-  requireCodexRuntimeResultString(input, 'execution_package_id');
-  requireCodexRuntimeResultInteger(input, 'execution_package_version');
-  requireCodexRuntimeResultString(input, 'run_session_id');
-  requireCodexRuntimeResultDigest(input, 'workspace_bundle_digest');
-  requireCodexRuntimeResultDigest(input, 'workspace_bundle_manifest_digest');
-  requireCodexRuntimeResultDigest(input, 'mounted_task_workspace_digest');
-  const changedFiles = requireCodexRuntimeResultArray(input, 'changed_files');
+  requireCodexRuntimeResultString(normalizedInput, 'execution_package_id');
+  requireCodexRuntimeResultInteger(normalizedInput, 'execution_package_version');
+  requireCodexRuntimeResultString(normalizedInput, 'run_session_id');
+  requireCodexRuntimeResultDigest(normalizedInput, 'workspace_bundle_digest');
+  requireCodexRuntimeResultDigest(normalizedInput, 'workspace_bundle_manifest_digest');
+  requireCodexRuntimeResultDigest(normalizedInput, 'mounted_task_workspace_digest');
+  const changedFiles = requireCodexRuntimeResultArray(normalizedInput, 'changed_files');
   if (changedFiles.some((entry) => typeof entry !== 'string' || !isSafeCodexRuntimeRepoRelativePath(entry))) {
     throw unsafeCodexRuntimePublicValue('Codex run-execution changed_files must be safe repository-relative paths.');
   }
-  if (input.patch_artifact !== undefined) {
-    const patchArtifact = requireCodexRuntimeResultRecord(input, 'patch_artifact');
+  if (normalizedInput.patch_artifact !== undefined) {
+    const patchArtifact = requireCodexRuntimeResultRecord(normalizedInput, 'patch_artifact');
     assertCodexRuntimeResultKeys(patchArtifact, codexRunExecutionPatchArtifactKeys, 'patch_artifact');
     if (patchArtifact.content_type !== 'text/x-diff') {
       throw unsafeCodexRuntimePublicValue('Codex run-execution patch_artifact content_type is invalid.');
@@ -1898,7 +1902,7 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
     requireCodexRuntimeResultDigest(patchArtifact, 'digest');
     requireCodexRuntimeResultString(patchArtifact, 'internal_ref');
   }
-  requireCodexRuntimeResultArray(input, 'check_results').forEach((entry) => {
+  requireCodexRuntimeResultArray(normalizedInput, 'check_results').forEach((entry) => {
     if (!isPlainObject(entry)) {
       throw unsafeCodexRuntimePublicValue('Codex run-execution check_results must contain objects.');
     }
@@ -1918,14 +1922,14 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
       requireCodexRuntimeResultString(entry, 'output_internal_ref');
     }
   });
-  requireCodexRuntimeResultArray(input, 'execution_artifacts').forEach((artifact) =>
+  requireCodexRuntimeResultArray(normalizedInput, 'execution_artifacts').forEach((artifact) =>
     requireCodexRuntimeArtifact(artifact, 'execution_artifacts'),
   );
-  if (input.runtime_evidence !== undefined) {
-    validateCodexDockerRuntimeEvidence(input.runtime_evidence);
+  if (normalizedInput.runtime_evidence !== undefined) {
+    validateCodexDockerRuntimeEvidence(normalizedInput.runtime_evidence);
   }
-  requireCodexRuntimeResultString(input, 'public_summary');
-  return input as unknown as CodexRunExecutionRuntimeJobResult;
+  requireCodexRuntimeResultString(normalizedInput, 'public_summary');
+  return normalizedInput as unknown as CodexRunExecutionRuntimeJobResult;
 };
 
 export const validateCodexRuntimeJobArtifactIntake = (input: {
@@ -2046,16 +2050,17 @@ export const validateCodexRuntimeJobTerminalResult = (
     input.task_kind === 'run_execution'
       ? requireCodexRunExecutionRuntimeJobResult(input)
       : requireCodexGenerationRuntimeJobResult(input);
+  const resultRecord = result as unknown as Record<string, unknown>;
   const omittedPublicSafeKeys = new Set<string>([
-    ...(input.runtime_evidence !== undefined ? ['runtime_evidence'] : []),
-    ...(productGenerationTaskKindSet.has(String(input.task_kind)) ? ['generated_payload'] : []),
+    ...(resultRecord.runtime_evidence !== undefined ? ['runtime_evidence'] : []),
+    ...(productGenerationTaskKindSet.has(String(resultRecord.task_kind)) ? ['generated_payload'] : []),
   ]);
   const publicSafeInput =
     omittedPublicSafeKeys.size === 0
-      ? input
-      : Object.fromEntries(Object.entries(input).filter(([key]) => !omittedPublicSafeKeys.has(key)));
+      ? resultRecord
+      : Object.fromEntries(Object.entries(resultRecord).filter(([key]) => !omittedPublicSafeKeys.has(key)));
   assertCodexRuntimePublicSafeRecord(publicSafeInput, 'terminal result', [], {
-    allowRunExecutionChangedFiles: input.task_kind === 'run_execution',
+    allowRunExecutionChangedFiles: resultRecord.task_kind === 'run_execution',
   });
   return result;
 };

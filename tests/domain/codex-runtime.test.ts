@@ -888,6 +888,28 @@ describe('codex runtime domain contracts', () => {
     expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
   });
 
+  it('normalizes prior run-execution terminal results without output schema version', () => {
+    const priorRunExecutionResult = {
+      task_kind: 'run_execution',
+      execution_package_id: 'package-1',
+      execution_package_version: 3,
+      run_session_id: 'run-session-1',
+      workspace_bundle_digest: digestA,
+      workspace_bundle_manifest_digest: digestB,
+      mounted_task_workspace_digest: digestC,
+      changed_files: ['docs/runtime-report.md'],
+      check_results: [],
+      execution_artifacts: [],
+      runtime_evidence: runtimeEvidence(),
+      public_summary: 'Run execution completed with public-safe app-server evidence.',
+    };
+
+    expect(validateCodexRuntimeJobTerminalResult(priorRunExecutionResult)).toEqual({
+      ...priorRunExecutionResult,
+      output_schema_version: 'codex_run_execution_result.v1',
+    });
+  });
+
   it('rejects run-execution terminal runtime evidence without app-server execution mode', () => {
     const runExecutionResult = {
       task_kind: 'run_execution',

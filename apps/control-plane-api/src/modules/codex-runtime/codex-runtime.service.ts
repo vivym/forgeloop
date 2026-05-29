@@ -25,6 +25,7 @@ import {
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexGenerationRuntimeJobResult,
+  type CodexRunExecutionRuntimeJobResult,
   DomainError,
   type CodexLaunchLease,
   type CodexLaunchTarget,
@@ -271,10 +272,7 @@ type PublicRuntimeJob = Pick<
     schema_version?: unknown;
     output_schema_version?: unknown;
   };
-  terminal_result_json?: {
-    output_schema_version?: unknown;
-    runtime_evidence?: Record<string, unknown>;
-  };
+  terminal_result_json?: CodexGenerationRuntimeJobResult | CodexRunExecutionRuntimeJobResult;
   workspace_acquisition?: {
     workspace_acquisition_digest: string;
     schema_version?: unknown;
@@ -300,15 +298,7 @@ const publicRuntimeJobTerminalResult = (
   if (result === undefined) {
     return undefined;
   }
-  const publicResult: PublicRuntimeJob['terminal_result_json'] = {};
-  if (typeof result.output_schema_version === 'string') {
-    publicResult.output_schema_version = result.output_schema_version;
-  }
-  if (isRecord(result.runtime_evidence)) {
-    validateCodexDockerRuntimeEvidence(result.runtime_evidence);
-    publicResult.runtime_evidence = result.runtime_evidence;
-  }
-  return Object.keys(publicResult).length === 0 ? undefined : publicResult;
+  return validateCodexRuntimeJobTerminalResult(result);
 };
 
 const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
