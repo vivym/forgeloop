@@ -1197,7 +1197,7 @@ export class CodexRuntimeService {
     return (
       actionType === 'run_boundary_brainstorming_round' ||
       actionType === 'generate_development_plan_item_spec_revision' ||
-      actionType === 'generate_development_plan_item_execution_plan_revision'
+      actionType === 'generate_development_plan_item_implementation_plan_revision'
     );
   }
 

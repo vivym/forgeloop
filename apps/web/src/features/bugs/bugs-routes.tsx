@@ -7,14 +7,14 @@ import { useProjectContext } from '../../shared/context/project-context';
 import { Section } from '../../shared/layout';
 import { createNarrativeDocument, ObjectCreateForm } from '../project-management/object-forms';
 import { ObjectDetailLayout } from '../project-management/object-detail-layout';
-import { TypedSourceObjectList } from '../project-management/typed-source-object-list';
+import { TypedDocumentList } from '../project-management/typed-document-list';
 
 export function BugsRoute() {
   const { projectId } = useProjectContext();
   const query = useBugsQuery({ project_id: projectId, limit: 100 });
 
   return (
-    <TypedSourceObjectList
+    <TypedDocumentList
       createHref="/bugs/new"
       detailHref={(item) => `/bugs/${item.id}`}
       emptyMessage="No bugs match the current filters."

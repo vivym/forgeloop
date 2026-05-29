@@ -43,7 +43,7 @@ const activeWebSourceText = () =>
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
 
-const activeTypedSourceText = () =>
+const activeTypedDocumentText = () =>
   [
     'apps/web/src/features/project-management',
     'apps/web/src/features/requirements',
@@ -172,7 +172,6 @@ describe('no legacy Web UI baggage', () => {
       'apps/web/src/app/routes/work-items',
       'apps/web/src/app/routes/packages',
       'apps/web/src/app/routes/runs',
-      'apps/web/src/app/routes/reviews',
       'apps/web/src/features/product-lanes',
       'apps/web/src/features/pipeline',
       'apps/web/src/features/execution-packages/execution-package-routes.tsx',
@@ -185,12 +184,12 @@ describe('no legacy Web UI baggage', () => {
 
   it('does not keep removed top-level product route hrefs or labels on active Web surfaces', () => {
     expect(productSourceText()).not.toMatch(
-      /(?:to=|href=|href:|target:\s*{[\s\S]{0,120}href:)\s*['"`]\/(?:lanes|pipeline|work-items|packages|runs|reviews)(?:\/|\?|['"`])/,
+      /(?:to=|href=|href:|target:\s*{[\s\S]{0,120}href:)\s*['"`]\/(?:lanes|pipeline|work-items|packages|runs)(?:\/|\?|['"`])/,
     );
     expect(activeWebSourceText()).not.toMatch(
       /(?:to=|href=|href:|basePath=)\s*['"`]\/(?:specs|plans)(?:\?|['"`])/,
     );
-    expect(productSourceText()).not.toMatch(/>Lanes<|>Pipeline<|>Work Items<|>Packages<|>Runs<|>Reviews</);
+    expect(productSourceText()).not.toMatch(/>Lanes<|>Pipeline<|>Work Items<|>Packages<|>Runs</);
   });
 
   it('does not expose raw or debug-only controls on product Web surfaces', () => {
@@ -230,25 +229,25 @@ describe('no legacy Web UI baggage', () => {
     expect(legacyClassTokenMatches()).toEqual([]);
   });
 
-  it('does not keep generic typed source workspace copy in active typed source routes', () => {
-    expect(activeTypedSourceText()).not.toMatch(/source object database/i);
-    expect(activeTypedSourceText()).not.toMatch(/create source object/i);
-    expect(activeTypedSourceText()).not.toMatch(/plan source object/i);
-    expect(activeTypedSourceText()).not.toMatch(/source object context/i);
-    expect(activeTypedSourceText()).not.toMatch(/source context/i);
-    expect(activeTypedSourceText()).not.toMatch(/source intent/i);
-    expect(activeTypedSourceText()).not.toMatch(/source narrative document/i);
-    expect(activeTypedSourceText()).not.toMatch(/ready to author source/i);
-    expect(activeTypedSourceText()).not.toMatch(/work item owner/i);
-    expect(activeTypedSourceText()).not.toMatch(/\bdriver owns\b/i);
-    expect(activeTypedSourceText()).not.toMatch(/responsibility:\s*actor-owner/i);
-    expect(activeTypedSourceText()).not.toMatch(/requirement summary unavailable/i);
-    expect(activeTypedSourceText()).not.toMatch(/planning state unknown/i);
-    expect(activeTypedSourceText()).not.toMatch(/evidence unavailable/i);
+  it('does not keep generic typed document workspace copy in active typed document routes', () => {
+    expect(activeTypedDocumentText()).not.toMatch(/source document database/i);
+    expect(activeTypedDocumentText()).not.toMatch(/create source document/i);
+    expect(activeTypedDocumentText()).not.toMatch(/plan source document/i);
+    expect(activeTypedDocumentText()).not.toMatch(/source document context/i);
+    expect(activeTypedDocumentText()).not.toMatch(/planning input context/i);
+    expect(activeTypedDocumentText()).not.toMatch(/planning input intent/i);
+    expect(activeTypedDocumentText()).not.toMatch(/planning input narrative document/i);
+    expect(activeTypedDocumentText()).not.toMatch(/ready to author document/i);
+    expect(activeTypedDocumentText()).not.toMatch(/work item owner/i);
+    expect(activeTypedDocumentText()).not.toMatch(/\bdriver owns\b/i);
+    expect(activeTypedDocumentText()).not.toMatch(/responsibility:\s*actor-owner/i);
+    expect(activeTypedDocumentText()).not.toMatch(/requirement summary unavailable/i);
+    expect(activeTypedDocumentText()).not.toMatch(/planning state unknown/i);
+    expect(activeTypedDocumentText()).not.toMatch(/evidence unavailable/i);
   });
 
   it('does not keep generic Development Plan workspace copy or normal state banners', () => {
-    expect(activeDevelopmentPlanText()).not.toMatch(/source object context/i);
+    expect(activeDevelopmentPlanText()).not.toMatch(/source document context/i);
     expect(activeDevelopmentPlanText()).not.toMatch(/\b(?:add|save|preview|generate missing|regenerate missing|new) rows?\b/i);
     expect(activeDevelopmentPlanText()).not.toMatch(/normal loaded|normal approved|approved state|Development Plan Page/i);
   });
@@ -258,7 +257,7 @@ describe('no legacy Web UI baggage', () => {
 
     expect(source).not.toMatch(/Development Plan Item Detail/i);
     expect(source.match(/Gate progress/g) ?? []).toHaveLength(1);
-    expect(source).not.toMatch(/source object context/i);
+    expect(source).not.toMatch(/source document context/i);
     expect(source).not.toMatch(/>\s*(?:Package|Run|Trace)\s*</);
     expect(source).not.toMatch(/Open (?:Package|Run|Trace)\b|(?:Package|Run|Trace) unavailable\b/);
   });

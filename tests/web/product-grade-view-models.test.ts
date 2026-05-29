@@ -13,10 +13,10 @@ import {
   initiativeWorkspaceViewModel,
   requirementWorkspaceViewModel,
   techDebtWorkspaceViewModel,
-} from '../../apps/web/src/features/project-management/source-object-view-model';
+} from '../../apps/web/src/features/project-management/document-workspace-view-model';
 import { releaseViewModel } from '../../apps/web/src/features/releases/release-view-model';
 import { reportViewModel } from '../../apps/web/src/features/reports/report-view-model';
-import { specPlanQueueViewModel } from '../../apps/web/src/features/spec-plan/spec-plan-view-model';
+import { documentReviewQueueViewModel } from '../../apps/web/src/features/reviews/review-queue-view-model';
 import {
   actorId,
   developmentPlan,
@@ -37,8 +37,8 @@ import {
 } from './fixtures/product-data';
 import { defaultProductApiResponses } from './fixtures/product-api-mock';
 
-const specPlanQueueResponse = defaultProductApiResponses[
-  `GET /query/specs-execution-plans?project_id=${projectId}`
+const documentReviewQueueResponse = defaultProductApiResponses[
+  `GET /query/reviews?project_id=${projectId}`
 ] as {
   items: Array<Record<string, unknown>>;
   degraded_sources: string[];
@@ -63,10 +63,10 @@ describe('product-grade presentation view models', () => {
     });
     expect(row.nextAction).toContain('Plan Item');
     expect(row.nextAction).not.toContain('Spec');
-    expect(row.nextAction).not.toContain('Execution Plan');
+    expect(row.nextAction).not.toContain('Implementation Plan Doc');
   });
 
-  it('renders unavailable typed source relationship metadata truthfully instead of inventing ready coverage', () => {
+  it('renders unavailable typed document relationship metadata truthfully instead of inventing ready coverage', () => {
     const row = requirementWorkspaceViewModel.row({
       ...requirementDetail,
       relationship_refs: [],
@@ -171,7 +171,7 @@ describe('product-grade presentation view models', () => {
         kind: 'missing_spec_approval',
         severity: 'medium',
         stage_id: 'spec',
-        next_action: 'Approve Spec revision before execution planning',
+        next_action: 'Approve Spec revision before Implementation Plan Doc authoring',
       },
       {
         id: 'resume-interrupted-execution',
@@ -191,7 +191,7 @@ describe('product-grade presentation view models', () => {
         kind: 'stale_context',
         severity: 'low',
         stage_id: 'boundary',
-        next_action: 'Refresh stale cockpit source context',
+        next_action: 'Refresh stale cockpit planning input context',
       },
     ] as const;
     const model = cockpitCommandCenterViewModel({
@@ -209,7 +209,7 @@ describe('product-grade presentation view models', () => {
       sections: [
         { id: 'flow-health', label: 'Flow Health', value: 6 },
         { id: 'spec', label: 'Spec', value: 2 },
-        { id: 'execution-plan', label: 'Execution Plan', value: 1 },
+        { id: 'implementation_plan_doc', label: 'Implementation Plan Doc', value: 1 },
         { id: 'release-confidence', label: 'Release Confidence', value: 1 },
       ],
       next_actions: [
@@ -257,7 +257,7 @@ describe('product-grade presentation view models', () => {
     expect(model.flowStrip).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: 'spec', count: 2 }),
-        expect.objectContaining({ id: 'execution_plan', count: 1 }),
+        expect.objectContaining({ id: 'implementation_plan_doc', count: 1 }),
       ]),
     );
     expect(model.riskRail).toEqual(expect.arrayContaining([
@@ -454,7 +454,7 @@ describe('product-grade presentation view models', () => {
         id: developmentPlan.id,
         selectedPlanItem: expect.objectContaining({
           id: developmentPlan.items[0].id,
-          typedSourceContext: ['Product workspace clarity and route-backed context'],
+          typedDocumentContext: ['Product workspace clarity and route-backed context'],
           artifacts: expect.arrayContaining([
             expect.objectContaining({ label: 'Spec', href: expect.stringContaining('/spec') }),
             expect.objectContaining({ label: 'Implementation Plan Doc', href: expect.stringContaining('/implementation-plan') }),
@@ -503,7 +503,7 @@ describe('product-grade presentation view models', () => {
           ...developmentPlan.items[0],
           boundary_status: 'approved',
           spec_status: 'in_review',
-          execution_plan_status: 'missing',
+          implementation_plan_status: 'missing',
           execution_status: 'not_started',
           review_status: 'missing',
           qa_handoff_status: 'pending',
@@ -528,8 +528,8 @@ describe('product-grade presentation view models', () => {
     });
   });
 
-  it('projects Spec and Execution Plan governance queues', () => {
-    expect(specPlanQueueViewModel(specPlanQueueResponse)).toMatchObject({
+  it('projects Spec and Implementation Plan Doc governance queues', () => {
+    expect(documentReviewQueueViewModel(documentReviewQueueResponse)).toMatchObject({
       objectLabel: 'Document Reviews',
       objectType: 'Governance Queue',
       currentState: expect.any(String),
@@ -540,23 +540,29 @@ describe('product-grade presentation view models', () => {
     });
   });
 
-  it('normalizes legacy Spec and Execution Plan queue hrefs to canonical review routes', () => {
-    const viewModel = specPlanQueueViewModel({
+  it('projects canonical Spec and Implementation Plan Doc queue hrefs without legacy route aliases', () => {
+    const viewModel = documentReviewQueueViewModel({
       degraded_sources: [],
       items: [
         {
-          id: 'legacy-spec-href',
+          id: 'canonical-spec-href',
           artifact_type: 'spec',
-          href: '/development-plans/legacy-plan/items/legacy-item/execution-plan',
+          development_plan_item_ref: {
+            id: developmentPlanItem.id,
+            development_plan_id: developmentPlan.id,
+          },
         },
         {
-          id: 'legacy-execution-plan-href',
-          artifact_type: 'execution_plan',
-          href: '/development-plans/legacy-plan/items/legacy-item/execution-plan',
+          id: 'canonical-implementation-plan-doc-href',
+          artifact_type: 'implementation_plan_doc',
+          development_plan_item_ref: {
+            id: developmentPlanItem.id,
+            development_plan_id: developmentPlan.id,
+          },
         },
         {
-          id: 'item-scoped-execution-plan',
-          artifact_type: 'execution_plan',
+          id: 'item-scoped-implementation-plan-doc',
+          artifact_type: 'implementation_plan_doc',
           development_plan_item_ref: {
             id: developmentPlanItem.id,
             development_plan_id: developmentPlan.id,
@@ -566,8 +572,8 @@ describe('product-grade presentation view models', () => {
     });
 
     expect(viewModel.rows.map((row) => row.href)).toEqual([
-      '/reviews?tab=specs',
-      '/reviews?tab=implementation-plans',
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
     ]);
   });
@@ -705,11 +711,11 @@ describe('product-grade presentation view models', () => {
   it('keeps the fixture manifest populated for every dynamic product route family', () => {
     expect(productDynamicRouteFixtureManifest).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ family: 'source-document', objectType: 'requirement', objectId: requirementListItem.id }),
-        expect.objectContaining({ family: 'source-evidence', objectType: 'requirement', objectId: requirementListItem.id }),
-        expect.objectContaining({ family: 'source-evidence', objectType: 'initiative', objectId: initiativeListItem.id }),
-        expect.objectContaining({ family: 'source-evidence', objectType: 'bug', objectId: bugListItem.id }),
-        expect.objectContaining({ family: 'source-evidence', objectType: 'tech_debt', objectId: techDebtListItem.id }),
+        expect.objectContaining({ family: 'document-workspace', objectType: 'requirement', objectId: requirementListItem.id }),
+        expect.objectContaining({ family: 'document-evidence', objectType: 'requirement', objectId: requirementListItem.id }),
+        expect.objectContaining({ family: 'document-evidence', objectType: 'initiative', objectId: initiativeListItem.id }),
+        expect.objectContaining({ family: 'document-evidence', objectType: 'bug', objectId: bugListItem.id }),
+        expect.objectContaining({ family: 'document-evidence', objectType: 'tech_debt', objectId: techDebtListItem.id }),
         expect.objectContaining({ family: 'planning-table', objectType: 'development_plan' }),
         expect.objectContaining({ family: 'gate-flow', objectType: 'development_plan_item' }),
         expect.objectContaining({ family: 'execution-supervision', objectType: 'execution' }),

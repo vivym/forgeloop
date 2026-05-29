@@ -14,11 +14,11 @@ export const executions = pgTable('executions', {
     .notNull()
     .references(() => development_plan_items.id),
   developmentPlanItemRef: jsonb('development_plan_item_ref').$type<Execution['development_plan_item_ref']>().notNull(),
-  executionPlanRevisionId: uuid('execution_plan_revision_id')
+  implementationPlanRevisionId: uuid('execution_plan_revision_id')
     .notNull()
     .references(() => execution_plan_revisions.id),
-  executionPlanRevisionRef: jsonb('execution_plan_revision_ref')
-    .$type<Execution['execution_plan_revision_ref']>()
+  implementationPlanRevisionRef: jsonb('execution_plan_revision_ref')
+    .$type<Execution['implementation_plan_revision_ref']>()
     .notNull(),
   approvedSpecRevisionId: uuid('approved_spec_revision_id')
     .notNull()
@@ -51,7 +51,7 @@ export const code_review_handoffs = pgTable('code_review_handoffs', {
   developmentPlanItemId: uuid('development_plan_item_id')
     .notNull()
     .references(() => development_plan_items.id),
-  executionPlanRevisionId: uuid('execution_plan_revision_id')
+  implementationPlanRevisionId: uuid('execution_plan_revision_id')
     .notNull()
     .references(() => execution_plan_revisions.id),
   reviewerActorId: uuid('reviewer_actor_id')
@@ -86,8 +86,8 @@ export const qa_handoffs = pgTable('qa_handoffs', {
     .references(() => development_plan_items.id),
   developmentPlanItemRef: jsonb('development_plan_item_ref').$type<QaHandoff['development_plan_item_ref']>().notNull(),
   approvedSpecRevisionRef: jsonb('approved_spec_revision_ref').$type<QaHandoff['approved_spec_revision_ref']>().notNull(),
-  approvedExecutionPlanRevisionRef: jsonb('approved_execution_plan_revision_ref')
-    .$type<QaHandoff['approved_execution_plan_revision_ref']>()
+  approvedImplementationPlanRevisionRef: jsonb('approved_execution_plan_revision_ref')
+    .$type<QaHandoff['approved_implementation_plan_revision_ref']>()
     .notNull(),
   status: text('status').$type<QaHandoff['status']>().notNull(),
   acceptanceCriteria: jsonb('acceptance_criteria').$type<QaHandoff['acceptance_criteria']>().notNull(),

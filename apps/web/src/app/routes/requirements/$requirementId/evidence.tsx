@@ -13,7 +13,7 @@ export default function RequirementEvidenceRoute() {
       detailError={query.error}
       detailLoading={query.isLoading}
       objectLabel="Requirement"
-      sourceHref={requirementId === undefined ? undefined : `/requirements/${encodeURIComponent(requirementId)}`}
+      documentHref={requirementId === undefined ? undefined : `/requirements/${encodeURIComponent(requirementId)}`}
     />
   );
 }

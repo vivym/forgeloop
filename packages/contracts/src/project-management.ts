@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { productHrefSchema } from './api.js';
 import { attachmentRefSchema } from './attachments.js';
 import {
+  implementationPlanDocObjectRefSchema,
   objectRefSchema,
   productObjectRefSchema,
   productQueryObjectRefSchema,
@@ -23,7 +24,6 @@ const requirementObjectRefSchema = z.object({ type: z.literal('requirement'), id
 const techDebtObjectRefSchema = z.object({ type: z.literal('tech_debt'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const bugObjectRefSchema = z.object({ type: z.literal('bug'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const specObjectRefSchema = z.object({ type: z.literal('spec'), id: nonEmpty, title: nonEmpty.optional() }).strict();
-const executionPlanObjectRefSchema = z.object({ type: z.literal('execution_plan'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const releaseObjectRefSchema = z.object({ type: z.literal('release'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const executionObjectRefSchema = z.object({ type: z.literal('execution'), id: nonEmpty, title: nonEmpty.optional() }).strict();
 const codeReviewHandoffObjectRefSchema = z
@@ -478,7 +478,7 @@ export const downstreamGateSummarySchema = z
       .object({
         boundary: z.number().int().nonnegative(),
         spec: z.number().int().nonnegative(),
-        execution_plan: z.number().int().nonnegative(),
+        implementation_plan_doc: z.number().int().nonnegative(),
         execution: z.number().int().nonnegative(),
         code_review: z.number().int().nonnegative(),
         qa: z.number().int().nonnegative(),
@@ -520,11 +520,11 @@ const developmentPlanItemObjectRefSchema = z
   })
   .strict();
 const attachmentObjectRefSchema = z.object({ type: z.literal('attachment'), id: nonEmpty, title: nonEmpty.optional() }).strict();
-export const typedSourceReleaseEvidenceRefSchema = z
+export const typedDocumentReleaseEvidenceRefSchema = z
   .object({ type: z.literal('release_evidence'), id: nonEmpty, release_id: nonEmpty, title: nonEmpty.optional() })
   .strict();
-export type TypedSourceReleaseEvidenceRef = z.infer<typeof typedSourceReleaseEvidenceRefSchema>;
-export const typedSourceRelationshipRefSchema = z.discriminatedUnion('type', [
+export type TypedDocumentReleaseEvidenceRef = z.infer<typeof typedDocumentReleaseEvidenceRefSchema>;
+export const typedDocumentRelationshipRefSchema = z.discriminatedUnion('type', [
   initiativeObjectRefSchema,
   requirementObjectRefSchema,
   bugObjectRefSchema,
@@ -534,17 +534,17 @@ export const typedSourceRelationshipRefSchema = z.discriminatedUnion('type', [
   releaseObjectRefSchema,
   attachmentObjectRefSchema,
 ]);
-export type TypedSourceRelationshipRef = z.infer<typeof typedSourceRelationshipRefSchema>;
+export type TypedDocumentRelationshipRef = z.infer<typeof typedDocumentRelationshipRefSchema>;
 
-export const typedSourceEvidenceRefSchema = z.discriminatedUnion('type', [attachmentObjectRefSchema, typedSourceReleaseEvidenceRefSchema]);
-export type TypedSourceEvidenceRef = z.infer<typeof typedSourceEvidenceRefSchema>;
+export const typedDocumentEvidenceRefSchema = z.discriminatedUnion('type', [attachmentObjectRefSchema, typedDocumentReleaseEvidenceRefSchema]);
+export type TypedDocumentEvidenceRef = z.infer<typeof typedDocumentEvidenceRefSchema>;
 
-export const typedSourceAttachmentRefSchema = attachmentRefSchema
+export const typedDocumentAttachmentRefSchema = attachmentRefSchema
   .extend({
-    linked_object_refs: z.array(typedSourceRelationshipRefSchema).default([]),
+    linked_object_refs: z.array(typedDocumentRelationshipRefSchema).default([]),
   })
   .strict();
-export type TypedSourceAttachmentRef = z.infer<typeof typedSourceAttachmentRefSchema>;
+export type TypedDocumentAttachmentRef = z.infer<typeof typedDocumentAttachmentRefSchema>;
 
 const objectDetailBaseSchema = objectListItemBaseSchema
   .extend({
@@ -552,10 +552,10 @@ const objectDetailBaseSchema = objectListItemBaseSchema
     narrative_markdown: z.string(),
     linked_development_plans: z.array(developmentPlanObjectRefSchema),
     linked_plan_items: z.array(developmentPlanItemObjectRefSchema),
-    evidence_refs: z.array(typedSourceEvidenceRefSchema),
-    attachment_refs: z.array(typedSourceAttachmentRefSchema),
+    evidence_refs: z.array(typedDocumentEvidenceRefSchema),
+    attachment_refs: z.array(typedDocumentAttachmentRefSchema),
     audit: sourceAuditSchema,
-    relationship_refs: z.array(typedSourceRelationshipRefSchema),
+    relationship_refs: z.array(typedDocumentRelationshipRefSchema),
   })
   .strict();
 
@@ -572,7 +572,7 @@ const revisionSummarySchema = z
   })
   .strict();
 
-export const specPlanQueueItemSchema = z
+export const documentReviewQueueItemSchema = z
   .object({
     id: nonEmpty,
     entity_type: z.enum(['spec', 'plan']),
@@ -586,7 +586,7 @@ export const specPlanQueueItemSchema = z
     href: productHrefSchema.optional(),
   })
   .strict();
-export type SpecPlanQueueItem = z.infer<typeof specPlanQueueItemSchema>;
+export type DocumentReviewQueueItem = z.infer<typeof documentReviewQueueItemSchema>;
 
 export const specDetailSchema = z
   .object({
@@ -609,7 +609,7 @@ export type SpecDetail = z.infer<typeof specDetailSchema>;
 export const planDetailSchema = z
   .object({
     id: nonEmpty,
-    ref: executionPlanObjectRefSchema,
+    ref: implementationPlanDocObjectRefSchema,
     source_ref: objectRefSchema,
     title: nonEmpty,
     status: nonEmpty,

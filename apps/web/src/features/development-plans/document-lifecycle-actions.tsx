@@ -1,27 +1,27 @@
 import { useState } from 'react';
 
 import {
-  useApproveItemExecutionPlanMutation,
+  useApproveItemImplementationPlanMutation,
   useApproveItemSpecMutation,
-  useRequestItemExecutionPlanChangesMutation,
+  useRequestItemImplementationPlanChangesMutation,
   useRequestItemSpecChangesMutation,
-  useSubmitItemExecutionPlanForApprovalMutation,
+  useSubmitItemImplementationPlanForApprovalMutation,
   useSubmitItemSpecForApprovalMutation,
 } from '../../shared/api/hooks';
-import type { SpecPlan } from '../../shared/api/types';
+import type { ReviewableDocumentArtifact } from '../../shared/api/types';
 import { Button, InlineNotice, Textarea } from '../../shared/ui';
 
-export type SpecPlanLifecycleKind = 'spec' | 'plan';
+export type DocumentLifecycleKind = 'spec' | 'implementation-plan';
 
-export interface SpecPlanLifecycleActionsProps {
-  artifact: SpecPlan | null | undefined;
+export interface DocumentLifecycleActionsProps {
+  artifact: ReviewableDocumentArtifact | null | undefined;
   actorId: string;
   developmentPlanId?: string;
   itemId?: string;
-  kind: SpecPlanLifecycleKind;
+  kind: DocumentLifecycleKind;
 }
 
-export function isStrictlyApproved(artifact: SpecPlan | null | undefined) {
+export function isStrictlyApproved(artifact: ReviewableDocumentArtifact | null | undefined) {
   return Boolean(
     artifact &&
       artifact.status === 'approved' &&
@@ -31,7 +31,7 @@ export function isStrictlyApproved(artifact: SpecPlan | null | undefined) {
   );
 }
 
-function canSubmit(artifact: SpecPlan | null | undefined) {
+function canSubmit(artifact: ReviewableDocumentArtifact | null | undefined) {
   return Boolean(
     artifact &&
       artifact.current_revision_id &&
@@ -40,7 +40,7 @@ function canSubmit(artifact: SpecPlan | null | undefined) {
   );
 }
 
-function canReview(artifact: SpecPlan | null | undefined) {
+function canReview(artifact: ReviewableDocumentArtifact | null | undefined) {
   return Boolean(
     artifact &&
       artifact.current_revision_id &&
@@ -49,14 +49,14 @@ function canReview(artifact: SpecPlan | null | undefined) {
   );
 }
 
-export function SpecPlanLifecycleActions({
+export function DocumentLifecycleActions({
   actorId,
   artifact,
   developmentPlanId,
   itemId,
   kind,
-}: SpecPlanLifecycleActionsProps) {
-  const label = kind === 'spec' ? 'Spec' : 'Plan';
+}: DocumentLifecycleActionsProps) {
+  const label = kind === 'spec' ? 'Spec' : 'Implementation Plan Doc';
   const [approveRationale, setApproveRationale] = useState('');
   const [changeRationale, setChangeRationale] = useState('');
   const [lastError, setLastError] = useState<string | null>(null);
@@ -64,9 +64,9 @@ export function SpecPlanLifecycleActions({
   const submitSpec = useSubmitItemSpecForApprovalMutation(itemScopedInput);
   const approveSpec = useApproveItemSpecMutation(itemScopedInput);
   const requestSpecChanges = useRequestItemSpecChangesMutation(itemScopedInput);
-  const submitPlan = useSubmitItemExecutionPlanForApprovalMutation(itemScopedInput);
-  const approvePlan = useApproveItemExecutionPlanMutation(itemScopedInput);
-  const requestPlanChanges = useRequestItemExecutionPlanChangesMutation(itemScopedInput);
+  const submitPlan = useSubmitItemImplementationPlanForApprovalMutation(itemScopedInput);
+  const approvePlan = useApproveItemImplementationPlanMutation(itemScopedInput);
+  const requestPlanChanges = useRequestItemImplementationPlanChangesMutation(itemScopedInput);
   const submitMutation = kind === 'spec' ? submitSpec : submitPlan;
   const approveMutation = kind === 'spec' ? approveSpec : approvePlan;
   const requestChangesMutation = kind === 'spec' ? requestSpecChanges : requestPlanChanges;
@@ -199,12 +199,12 @@ export function SpecPlanLifecycleActions({
   );
 }
 
-function missingRevisionMessage(label: 'Spec' | 'Plan') {
+function missingRevisionMessage(label: 'Spec' | 'Implementation Plan Doc') {
   if (label === 'Spec') {
     return 'Create a current Spec revision before submitting for approval.';
   }
 
-  return 'Plan approval is available after a current Plan revision exists.';
+  return 'Implementation Plan Doc approval is available after a current Implementation Plan Doc revision exists.';
 }
 
 function LifecycleFeedback({ error, pending }: { error: string | null; pending: string | null }) {

@@ -343,7 +343,7 @@ export class ExecutionPackageService {
     if (mentionsDocsOnlyWork(revision) && !structuredFieldsPresent) {
       throw new BadRequestException({
         code: 'execution_plan_structured_policy_required',
-        message: 'Docs-only dogfood execution requires structured Execution Plan path policy fields.',
+        message: 'Docs-only dogfood execution requires structured Implementation Plan Doc path policy fields.',
       });
     }
 
@@ -359,12 +359,12 @@ export class ExecutionPackageService {
     if (mentionsDocsOnlyWork(revision) && !allowsDocsPath(allowedPaths ?? [])) {
       throw new BadRequestException({
         code: 'path_policy_docs_allowlist_required',
-        message: 'Docs-only dogfood execution requires docs/** in the approved Execution Plan allowed_paths.',
+        message: 'Docs-only dogfood execution requires docs/** in the approved Implementation Plan Doc allowed_paths.',
       });
     }
 
     return {
-      objective: revision.summary.trim().length > 0 ? revision.summary : `Execute Execution Plan revision ${revision.id}.`,
+      objective: revision.summary.trim().length > 0 ? revision.summary : `Execute Implementation Plan Doc revision ${revision.id}.`,
       required_checks:
         requiredChecks ??
         [
@@ -578,22 +578,22 @@ export class ExecutionPackageService {
       }
       const executionPlanRevision = this.requireFound(
         await repository.getExecutionPlanRevision(executionPackage.execution_plan_revision_id),
-        `ExecutionPlanRevision ${executionPackage.execution_plan_revision_id}`,
+        `Implementation Plan Doc revision ${executionPackage.execution_plan_revision_id}`,
       );
       this.packagePolicyFromExecutionPlanRevision(executionPlanRevision);
       if (executionPlanRevision.development_plan_item_id !== item.id) {
-        stale(`ExecutionPackage ${executionPackage.id} execution plan revision no longer belongs to the item`);
+        stale(`ExecutionPackage ${executionPackage.id} Implementation Plan Doc revision no longer belongs to the item`);
       }
       const executionPlan = this.requireFound(
         await repository.getExecutionPlan(executionPlanRevision.execution_plan_id),
-        `ExecutionPlan ${executionPlanRevision.execution_plan_id}`,
+        `Implementation Plan Doc ${executionPlanRevision.execution_plan_id}`,
       );
       if (
         executionPlan.status !== 'approved' ||
         executionPlan.approved_revision_id !== executionPlanRevision.id ||
         executionPlan.current_revision_id !== executionPlanRevision.id
       ) {
-        stale(`ExecutionPackage ${executionPackage.id} execution_plan_revision_id is not the current approved Execution Plan revision`);
+        stale(`ExecutionPackage ${executionPackage.id} runtime boundary is not the current approved Implementation Plan Doc revision`);
       }
       const specRevision = this.requireFound(
         await repository.getSpecRevision(executionPlanRevision.based_on_spec_revision_id),

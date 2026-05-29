@@ -223,7 +223,7 @@ function SelectedPlanItemPanel({ item }: { item: DevelopmentPlanItemRow | undefi
 
   const viewModel = developmentPlanItemViewModel(item);
   const currentGate = currentPlanItemGate(item);
-  const sourceContext = item.source_refs?.map((ref) => ref.title ?? ref.id).filter((value): value is string => value !== undefined).join(', ') || 'Typed refs unavailable';
+  const planningInputContext = item.source_refs?.map((ref) => ref.title ?? ref.id).filter((value): value is string => value !== undefined).join(', ') || 'Typed refs unavailable';
 
   return (
     <PreviewPane
@@ -254,7 +254,7 @@ function SelectedPlanItemPanel({ item }: { item: DevelopmentPlanItemRow | undefi
             { label: 'Driver', value: item.driver_actor_id ?? 'Unassigned' },
             { label: 'Responsible role', value: formatValue(item.responsible_role) },
             { label: 'Reviewer', value: item.reviewer_actor_id ?? 'Unassigned' },
-            { label: 'Typed source context', value: sourceContext },
+            { label: 'Typed document context', value: planningInputContext },
             { label: 'Gate evidence', value: viewModel.criticalEvidence[0]?.compactText ?? 'Gate evidence unavailable' },
             ...viewModel.secondaryMetadata.map((metadata) => ({ label: metadata.label, value: metadata.value })),
           ]}

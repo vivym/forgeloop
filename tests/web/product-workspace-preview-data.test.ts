@@ -60,7 +60,7 @@ describe('product workspace preview data', () => {
     });
     expect(executionPlanRevision).toMatchObject({
       id: 'planrev-requirements-database-view-v1',
-      summary: 'Requirements database view Execution Plan',
+      summary: 'Requirements database view Implementation Plan Doc',
     });
     expect(executionPackage).toMatchObject({
       id: 'pkg-product-workspace-preview-v1',
@@ -133,7 +133,7 @@ describe('product workspace preview data', () => {
     ).toEqual([]);
   });
 
-  it('keeps typed source lane actions governed by Plan Item routes', () => {
+  it('keeps typed document lane actions governed by Plan Item routes', () => {
     const response = defaultProductApiResponses[
       `GET /query/product-lanes/requirements?project_id=${productWorkspacePreviewSeedId}`
     ] as {

@@ -38,7 +38,7 @@ import {
 
 export { visualViewports };
 
-export type VisualRouteKind = 'active' | 'retired' | 'source-object';
+export type VisualRouteKind = 'active' | 'retired' | 'typed-document';
 
 export interface VisualRoute {
   family?: ProductPageFamily;
@@ -60,7 +60,7 @@ export const productGradeScreenshotRoutes = aiNativeProjectManagementRoutes;
 
 const tableListFamilies = new Set<ProductPageFamily>([
   'inbox',
-  'source-database',
+  'document-database',
   'planning-table',
   'delivery-board',
   'document-governance',
@@ -70,7 +70,7 @@ const tableListFamilies = new Set<ProductPageFamily>([
 ]);
 
 const documentFamilies = new Set<ProductPageFamily>([
-  'source-document',
+  'document-workspace',
   'document-review',
 ]);
 
@@ -371,10 +371,10 @@ function visualIntakeContext(kind: WorkItem['kind'], title: string): WorkItem['i
   return {
     type: 'requirement',
     stakeholder_problem: 'Product operators need route-backed planning, gate, execution, review, QA, and release context.',
-    desired_outcome: 'Every source object route opens with deterministic product workspace context.',
-    acceptance_criteria: ['Typed source routes expose planning coverage.'],
-    in_scope: ['Typed source workspaces', 'Development Plan routes', 'Plan Item gates'],
-    out_of_scope: ['External tracker synchronization', 'Direct source object execution'],
+    desired_outcome: 'Every typed document route opens with deterministic product workspace context.',
+    acceptance_criteria: ['Typed document routes expose planning coverage.'],
+    in_scope: ['Typed document workspaces', 'Development Plan routes', 'Plan Item gates'],
+    out_of_scope: ['External tracker synchronization', 'Direct typed document execution'],
   };
 }
 
@@ -728,10 +728,10 @@ function productWorkspaceManualReviewChecklist(): ManualReviewChecklistRecord[] 
   return [
     'Cockpit operational command center',
     'My Work role inbox',
-    'Typed source object database/document surfaces',
+    'Typed document database/document surfaces',
     'Development Plans planning table',
     'Plan Item governed AI-native gate flow',
-    'Spec and Execution Plan document review surfaces',
+    'Spec and Implementation Plan Doc review surfaces',
     'Reports intelligence surfaces',
     'Removed generic ProductPage visual assumptions',
     'Remaining empty states and rationale',
@@ -847,7 +847,7 @@ async function assertVisualRoute(page: Page, route: VisualRoute) {
   await assertNonColorStateAffordance(page, route);
   const mainText = await page.locator('main').innerText();
 
-  if (route.kind === 'source-object') {
+  if (route.kind === 'typed-document') {
     const roleLens = page.getByRole('radiogroup', { name: /role lens/i });
     await expectPage(roleLens).toBeVisible();
     for (const label of ['Product', 'Tech Lead', 'Developer', 'QA']) {
@@ -909,12 +909,12 @@ function toVisualRoute(route: ProductRouteContract): VisualRoute {
     family: route.family,
     path: route.concretePath,
     heading: route.heading,
-    kind: route.kind === 'retired' ? 'retired' : routeIsSourceObjectDetail(route) ? 'source-object' : 'active',
+    kind: route.kind === 'retired' ? 'retired' : routeIsTypedDocumentDetail(route) ? 'typed-document' : 'active',
     expectFirstViewportContract: route.kind !== 'retired',
   };
 }
 
-function routeIsSourceObjectDetail(route: ProductRouteContract): boolean {
+function routeIsTypedDocumentDetail(route: ProductRouteContract): boolean {
   return /^\/(requirements|initiatives|bugs|tech-debt)\/:id$/.test(route.path);
 }
 

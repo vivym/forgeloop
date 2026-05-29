@@ -49,7 +49,7 @@ export type CockpitAttentionItem = {
 
 export type CockpitFlowStage = {
   count: number;
-  id: 'boundary' | 'spec' | 'execution_plan' | 'execution' | 'code_review' | 'qa' | 'release';
+  id: 'boundary' | 'spec' | 'implementation_plan_doc' | 'execution' | 'code_review' | 'qa' | 'release';
   label: string;
 };
 
@@ -92,7 +92,7 @@ export interface DashboardCockpitViewModel extends ProductPageViewModel {
   roleSelectedQueue: ViewModelMetadata[];
   blockerAndStaleGates: ViewModelGate[];
   activeExecutionItems: ViewModelMetadata[];
-  specExecutionPlanItems: ViewModelMetadata[];
+  specImplementationPlanDocItems: ViewModelMetadata[];
   qaReleaseAttentionItems: ViewModelMetadata[];
   compactHealthIndicators: ViewModelMetadata[];
 }
@@ -184,8 +184,8 @@ export function dashboardCockpitViewModel(cockpit: DashboardCockpitProjection): 
       value: 'No active or resumable execution signal',
       href: '/executions',
     }),
-    specExecutionPlanItems: categorizedItems(roleSelectedQueue, /spec|execution plan|plan review/i, {
-      label: 'Spec / Execution Plan review',
+    specImplementationPlanDocItems: categorizedItems(roleSelectedQueue, /spec|implementation plan doc|plan review/i, {
+      label: 'Spec / Implementation Plan Doc review',
       value: 'No pending review signal',
       href: '/reviews',
     }),
@@ -276,7 +276,7 @@ function commandFlowStrip(
   return [
     { id: 'boundary', label: 'Boundary', count: flowStageCount('boundary', sections, attentionItems) },
     { id: 'spec', label: 'Spec', count: flowStageCount('spec', sections, attentionItems) },
-    { id: 'execution_plan', label: 'Execution Plan', count: flowStageCount('execution_plan', sections, attentionItems) },
+    { id: 'implementation_plan_doc', label: 'Implementation Plan Doc', count: flowStageCount('implementation_plan_doc', sections, attentionItems) },
     { id: 'execution', label: 'Execution', count: flowStageCount('execution', sections, attentionItems) },
     { id: 'code_review', label: 'Code Review', count: flowStageCount('code_review', sections, attentionItems) },
     { id: 'qa', label: 'QA', count: flowStageCount('qa', sections, attentionItems) },
@@ -395,7 +395,7 @@ function attentionRank(item: CockpitAttentionItem): number {
   if (item.kind === 'release_blocker') return 0;
   if (item.kind === 'code_review_changes') return 1;
   if (item.kind === 'qa_blocker') return 2;
-  if (item.kind === 'missing_spec_approval' || item.kind === 'missing_execution_plan_approval') return 3;
+  if (item.kind === 'missing_spec_approval' || item.kind === 'missing_implementation_plan_doc_approval') return 3;
   if (item.kind === 'resumable_execution') return 4;
   if (item.kind === 'stale_context') return 5;
   return 6;
@@ -406,7 +406,7 @@ function normalizeAttentionKind(kind: string | undefined): string | undefined {
     kind === 'release_blocker'
     || kind === 'code_review_changes'
     || kind === 'qa_blocker'
-    || kind === 'missing_execution_plan_approval'
+    || kind === 'missing_implementation_plan_doc_approval'
     || kind === 'missing_spec_approval'
     || kind === 'resumable_execution'
     || kind === 'stale_context'
@@ -419,7 +419,7 @@ function normalizeAttentionKind(kind: string | undefined): string | undefined {
 function inferSeverity(kind: string): string {
   if (kind === 'release_blocker') return 'critical';
   if (kind === 'code_review_changes' || kind === 'qa_blocker') return 'high';
-  if (kind === 'missing_spec_approval' || kind === 'missing_execution_plan_approval' || kind === 'resumable_execution') return 'medium';
+  if (kind === 'missing_spec_approval' || kind === 'missing_implementation_plan_doc_approval' || kind === 'resumable_execution') return 'medium';
   return 'low';
 }
 
@@ -442,7 +442,7 @@ function normalizeTypedRefType(type: string | undefined): CockpitAttentionItem['
 
 function normalizeStageId(value: string): CockpitFlowStage['id'] | undefined {
   const text = value.toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
-  if (text.includes('execution_plan') || text.includes('plan_approval')) return 'execution_plan';
+  if (text.includes('implementation_plan_doc') || text.includes('plan_approval')) return 'implementation_plan_doc';
   if (text.includes('code_review') || text.includes('review_changes')) return 'code_review';
   if (text.includes('boundary')) return 'boundary';
   if (text.includes('spec')) return 'spec';

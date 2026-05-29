@@ -147,8 +147,8 @@ export function typedHrefFor(ref: MyWorkQueueItem['object_ref']): string | undef
     case 'spec':
     case 'spec_revision':
       return '/reviews?tab=specs';
-    case 'execution_plan':
-    case 'execution_plan_revision':
+    case 'implementation_plan_doc':
+    case 'implementation_plan_revision':
       return '/reviews?tab=implementation-plans';
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
@@ -199,8 +199,8 @@ function attentionGroupFor(item: MyWorkQueueItem): AttentionGroupId {
     item.attention_reason.includes('tech_lead') ||
     item.object_ref.type === 'spec' ||
     item.object_ref.type === 'spec_revision' ||
-    item.object_ref.type === 'execution_plan' ||
-    item.object_ref.type === 'execution_plan_revision'
+    item.object_ref.type === 'implementation_plan_doc' ||
+    item.object_ref.type === 'implementation_plan_revision'
   ) {
     return 'tech-lead';
   }
@@ -235,8 +235,8 @@ function objectTypeLabel(type: MyWorkQueueItem['object_ref']['type']) {
     boundary_summary: 'Boundary Summary',
     spec: 'Spec',
     spec_revision: 'Spec Revision',
-    execution_plan: 'Execution Plan',
-    execution_plan_revision: 'Execution Plan Revision',
+    implementation_plan_doc: 'Implementation Plan Doc',
+    implementation_plan_revision: 'Implementation Plan Doc Revision',
     execution: 'Execution',
     code_review_handoff: 'Code Review Handoff',
     qa_handoff: 'QA Handoff',
@@ -262,7 +262,7 @@ function attentionReasonLabel(reason: string) {
 function blockingGateFor(item: MyWorkQueueItem): string {
   if (item.object_ref.type === 'development_plan_item') return 'Boundary';
   if (item.object_ref.type === 'spec' || item.object_ref.type === 'spec_revision') return 'Spec review';
-  if (item.object_ref.type === 'execution_plan' || item.object_ref.type === 'execution_plan_revision') return 'Execution Plan review';
+  if (item.object_ref.type === 'implementation_plan_doc' || item.object_ref.type === 'implementation_plan_revision') return 'Implementation Plan Doc review';
   if (item.object_ref.type === 'execution') return 'Execution supervision';
   if (item.object_ref.type === 'qa_handoff') return 'QA handoff';
   if (item.object_ref.type === 'release') return 'Release readiness';
@@ -442,8 +442,8 @@ const objectTypeLabels = new Set<MyWorkQueueItem['object_ref']['type']>([
   'boundary_summary',
   'spec',
   'spec_revision',
-  'execution_plan',
-  'execution_plan_revision',
+  'implementation_plan_doc',
+  'implementation_plan_revision',
   'execution',
   'code_review_handoff',
   'qa_handoff',

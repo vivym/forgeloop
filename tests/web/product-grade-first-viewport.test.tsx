@@ -54,7 +54,7 @@ describe('product-grade first viewport contract', () => {
     expect(rendered.getByText(/create \/ action/i)).toBeTruthy();
     expect(document.querySelector('[data-attention-queue][data-primary-work-surface]')).toBeTruthy();
     expect(document.querySelector('[data-attention-queue]')?.textContent).toMatch(/release blocker|code-review|QA|Spec|Codex/i);
-    expect(document.querySelector('[data-flow-strip]')?.textContent).toMatch(/Spec|Execution Plan|QA|Release/i);
+    expect(document.querySelector('[data-flow-strip]')?.textContent).toMatch(/Spec|Implementation Plan Doc|QA|Release/i);
     expect(document.querySelector('[data-risk-readiness-rail]')?.textContent).toMatch(/risk|readiness|release blocker|code-review|QA/i);
     expect(document.querySelector('[data-runtime-status]')?.textContent).toMatch(/active|resumable|Codex/i);
     const runtimeStatus = document.querySelector('[data-runtime-status]');
@@ -85,7 +85,7 @@ describe('product-grade first viewport contract', () => {
     expect(document.querySelector('[data-page-family="delivery-board"]')).toBeTruthy();
     expect(document.querySelector('[data-board-columns][data-primary-work-surface]')).toBeTruthy();
     expect(document.querySelector('[data-board-columns]')?.textContent).toMatch(
-      /Planning|Boundary|Spec|Execution Plan|Running|Review|QA|Release/,
+      /Planning|Boundary|Spec|Implementation Plan Doc|Running|Review|QA|Release/,
     );
     expect(document.querySelector('[data-board-columns]')?.textContent).toMatch(/next action|role|blocker|risk/i);
     expect(document.querySelector('[data-first-viewport]')).toBeNull();
@@ -93,39 +93,39 @@ describe('product-grade first viewport contract', () => {
   });
 });
 
-describe('Task 5 source object first viewport contracts', () => {
-  it('requires source object list routes to expose the database first-viewport contract', async () => {
+describe('Task 5 planning input first viewport contracts', () => {
+  it('requires planning input list routes to expose the database first-viewport contract', async () => {
     const rendered = await renderRoute('/requirements');
 
     expect(await rendered.findByRole('heading', { name: 'Requirements' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'source-database', heading: 'Requirements' });
+    expectFirstViewportContract(rendered, { pageFamily: 'document-database', heading: 'Requirements' });
     expect(document.querySelector('[data-product-shell="requirement-workspace"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-typed-source-toolbar]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-typed-source-table] [data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
-    expect(document.body.textContent).not.toMatch(/source object/i);
+    expect(document.querySelector('[data-typed-document-toolbar]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-typed-document-table] [data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.body.textContent).not.toMatch(/planning input/i);
   });
 
-  it('requires source object detail routes to expose the document first-viewport contract', async () => {
+  it('requires planning input detail routes to expose the document first-viewport contract', async () => {
     const rendered = await renderRoute(`/requirements/${requirementListItem.id}`);
 
     expect(await rendered.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
-    expectFirstViewportContract(rendered, { pageFamily: 'source-document', heading: 'Requirement' });
+    expectFirstViewportContract(rendered, { pageFamily: 'document-workspace', heading: 'Requirement' });
     expect(document.querySelector('[data-product-shell="requirement-workspace"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
-    expect(document.body.textContent).not.toMatch(/source object/i);
+    expect(document.body.textContent).not.toMatch(/planning input/i);
   });
 
-  it('requires source object evidence routes to expose evidence readiness before attachment lists', async () => {
+  it('requires planning input evidence routes to expose evidence readiness before attachment lists', async () => {
     const rendered = await renderRoute(`/requirements/${requirementListItem.id}/evidence`);
 
     expect(await rendered.findByRole('heading', { name: 'Requirement Evidence' })).toBeTruthy();
     await waitFor(() => expect(document.querySelector('[data-evidence-summary]')?.textContent ?? '').toMatch(/evidence ready/i));
-    expectFirstViewportContract(rendered, { pageFamily: 'source-evidence', heading: 'Requirement Evidence' });
+    expectFirstViewportContract(rendered, { pageFamily: 'document-evidence', heading: 'Requirement Evidence' });
     expect(document.querySelector('[data-product-shell="requirement-workspace"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-evidence-summary][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-evidence-summary]')?.textContent).toMatch(/evidence ready/i);
     expect(document.querySelector('[data-evidence-summary]')?.textContent).not.toMatch(/Evidence attachments|Raw artifact links/i);
-    expect(document.body.textContent).not.toMatch(/source object/i);
+    expect(document.body.textContent).not.toMatch(/planning input/i);
   });
 });
 
@@ -137,20 +137,20 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
     expectFirstViewportContract(rendered, { pageFamily: 'planning-table', heading: 'Development Plans' });
     expect(document.querySelector('[data-product-shell="development-plan-workspace"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-development-plan-summary-bar]')?.textContent).toMatch(/total plans|active plans|blocked items|review aging|execution in progress/i);
-    expect(document.querySelector('[data-development-plan-toolbar]')?.textContent).toMatch(/source type|role|driver|reviewer|gate|risk|release impact|status/i);
+    expect(document.querySelector('[data-development-plan-toolbar]')?.textContent).toMatch(/planning input type|role|driver|reviewer|gate|risk|release impact|status/i);
     expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-first-viewport]')).toBeNull();
-    expect(document.body.textContent).not.toMatch(/source object context|\brow\b/i);
+    expect(document.body.textContent).not.toMatch(/\brow\b/i);
   });
 
-  it('requires Development Plan authoring to expose source-context planning controls before downstream artifacts', async () => {
+  it('requires Development Plan authoring to expose planning input controls before downstream artifacts', async () => {
     const rendered = await renderRoute('/development-plans/new');
 
     expect(await rendered.findByRole('heading', { name: 'New Development Plan' })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'plan-authoring', heading: 'New Development Plan' });
-    expect(document.querySelector('[data-source-context-picker][data-primary-work-surface], [data-plan-preview][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-planning-input-picker][data-primary-work-surface], [data-plan-preview][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-first-viewport]')).toBeNull();
-    expect(document.querySelector('[data-source-context-picker]')?.textContent).toMatch(/source/i);
+    expect(document.querySelector('[data-planning-input-picker]')?.textContent).toMatch(/planning input/i);
     expect(document.body.textContent).toMatch(/generated only from Plan Items after boundary approval/i);
   });
 
@@ -166,7 +166,7 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
     expect(rendered.getByRole('region', { name: /selected plan item inspector/i })).toBeTruthy();
     expect(document.querySelector('[data-first-viewport]')).toBeNull();
     expect(document.querySelector('[data-plan-items-table]')?.textContent).toMatch(/Plan Item|gate|Resolve Spec review comments/i);
-    expect(document.body.textContent).not.toMatch(/source object context|\brow\b|Work Item Owner|owner_actor_id|\bTask\b/);
+    expect(document.body.textContent).not.toMatch(/planning input context|\brow\b|Work Item Owner|owner_actor_id|\bTask\b/);
   });
 
   it('requires Development Plan Item gate routes to expose gate workspaces', async () => {
@@ -187,7 +187,7 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
     }
   });
 
-  it('requires Spec and Execution Plan routes to expose document-review workspaces', async () => {
+  it('requires Spec and Implementation Plan Doc routes to expose document-review workspaces', async () => {
     for (const route of [
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
@@ -198,7 +198,7 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
       expectFirstViewportContract(rendered, { pageFamily: 'document-review', heading: developmentPlanItem.title });
       expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(document.querySelector('[data-first-viewport]')).toBeNull();
-      expect(document.querySelector('[data-document-surface]')?.textContent).toMatch(/Spec|Execution Plan|Save/i);
+      expect(document.querySelector('[data-document-surface]')?.textContent).toMatch(/Spec|Implementation Plan Doc|Save/i);
       cleanup();
     }
   });
@@ -222,7 +222,7 @@ describe('Task 7 owner: Document Review, execution, release, and report route fi
     expect(await rendered.findByRole('heading', { name: 'Executions' })).toBeTruthy();
     expectFirstViewportContract(rendered, { pageFamily: 'execution-supervision', heading: 'Executions' });
     expect(document.querySelector('[data-execution-lanes][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-execution-lanes]')?.textContent).toMatch(/worker state|allowed action|approved Execution Plan/i);
+    expect(document.querySelector('[data-execution-lanes]')?.textContent).toMatch(/worker state|allowed action|approved Implementation Plan Doc/i);
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|run session browser/i);
   });
 
@@ -254,7 +254,7 @@ describe('Task 7 owner: Document Review, execution, release, and report route fi
       expect(document.querySelector('[data-readiness-blockers]')?.textContent).toMatch(/scope|readiness|risk|approval|release owner/i);
       if (route.includes(release.id)) {
         expect(document.querySelector('[data-readiness-blockers]')?.textContent).toMatch(
-          /Spec|Execution Plan|execution|code review|QA|release blockers|evidence|rollback plan|observation/i,
+          /Spec|Implementation Plan Doc|execution|code review|QA|release blockers|evidence|rollback plan|observation/i,
         );
       }
       expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/tasks\b|\/packages\b|actor-release-owner/);

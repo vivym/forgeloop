@@ -62,7 +62,7 @@ describe('AI-native My Work, Board, and Reports', () => {
       'Planning',
       'Boundary',
       'Spec',
-      'Execution Plan',
+      'Implementation Plan Doc',
       'Running',
       'Review',
       'QA',
@@ -70,7 +70,7 @@ describe('AI-native My Work, Board, and Reports', () => {
     ]) {
       expect(screen.getByRole('region', { name: `${label} cards` })).toBeTruthy();
     }
-    expect(await screen.findByText(/Requirement/i)).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Planning cards' }).textContent).toMatch(/Requirement/i);
     expect((await screen.findAllByText(/Development Plan Item/i)).length).toBeGreaterThan(0);
     const boardContent = document.querySelector('#main-content')?.textContent ?? '';
     expect(boardContent).not.toMatch(/Intake \/ Development Plan needed|\bReady\b|\bActive\b|\bValidation\b|\bDone\b/);
@@ -110,7 +110,7 @@ describe('AI-native My Work, Board, and Reports', () => {
         'Development Plan throughput',
         'Brainstorming bottlenecks',
         'Spec review aging',
-        'Execution Plan review aging',
+        'Implementation Plan Doc review aging',
         'Execution outcomes',
         'Execution continuation',
         'Code review turnaround',

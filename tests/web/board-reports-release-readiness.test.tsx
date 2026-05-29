@@ -8,6 +8,7 @@ import {
   codeReviewHandoff,
   developmentPlan,
   developmentPlanItem,
+  execution,
   executionPlan,
   projectId,
   qaHandoff,
@@ -24,6 +25,16 @@ describe('board, reports, and release readiness routes', () => {
         [`GET /query/board?project_id=${projectId}&limit=100`]: {
           items: [
             ...boardCards,
+            {
+              id: `board:${execution.id}`,
+              object_ref: execution.ref,
+              title: execution.ref.title,
+              column_id: 'active',
+              status: execution.status,
+              risk: 'medium',
+              blocked: false,
+              href: `/executions/${execution.id}`,
+            },
             {
               id: `board:${codeReviewHandoff.id}`,
               object_ref: codeReviewHandoff.ref,
@@ -57,9 +68,9 @@ describe('board, reports, and release readiness routes', () => {
             },
             {
               id: `board:${executionPlan.id}`,
-              object_ref: { type: 'execution_plan', id: executionPlan.id, title: 'Execution Plan board card' },
-              title: 'Execution Plan board card',
-              column_id: 'execution_plan',
+              object_ref: { type: 'implementation_plan_doc', id: executionPlan.id, title: 'Implementation Plan Doc board card' },
+              title: 'Implementation Plan Doc board card',
+              column_id: 'implementation_plan_doc',
               status: 'approved',
               risk: 'medium',
               blocked: false,
@@ -72,25 +83,26 @@ describe('board, reports, and release readiness routes', () => {
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="delivery-board"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-board-columns][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
-    expect(await screen.findByText(/Requirement/i)).toBeTruthy();
-    for (const label of ['Planning', 'Boundary', 'Spec', 'Execution Plan', 'Running', 'Review', 'QA', 'Release']) {
+    for (const label of ['Planning', 'Boundary', 'Spec', 'Implementation Plan Doc', 'Running', 'Review', 'QA', 'Release']) {
       expect(screen.getByRole('region', { name: `${label} cards` })).toBeTruthy();
     }
-    expect(screen.getByRole('region', { name: 'Planning cards' }).textContent).toMatch(
-      /Requirement|Initiative|Tech Debt|Bug/,
-    );
-    expect(screen.getByRole('region', { name: 'Running cards' }).textContent).toMatch(/Execution/);
-    expect(screen.getByRole('region', { name: 'Review cards' }).textContent).toMatch(/Development Plan Item/);
-    expect(screen.getByRole('region', { name: 'Review cards' }).textContent).toMatch(/Code Review Handoff/);
-    expect(screen.getByRole('region', { name: 'QA cards' }).textContent).toMatch(/QA Handoff/);
-    expect(screen.getByRole('region', { name: 'Release cards' }).textContent).toMatch(/Release/);
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: 'Planning cards' }).textContent).toMatch(
+        /Requirement|Initiative|Tech Debt|Bug/,
+      );
+      expect(screen.getByRole('region', { name: 'Running cards' }).textContent).toMatch(/Execution/);
+      expect(screen.getByRole('region', { name: 'Review cards' }).textContent).toMatch(/Development Plan Item/);
+      expect(screen.getByRole('region', { name: 'Review cards' }).textContent).toMatch(/Code Review Handoff/);
+      expect(screen.getByRole('region', { name: 'QA cards' }).textContent).toMatch(/QA Handoff/);
+      expect(screen.getByRole('region', { name: 'Release cards' }).textContent).toMatch(/Release/);
+    });
     const mainContent = document.querySelector('#main-content') as HTMLElement;
     const boardHrefs = [...mainContent.querySelectorAll('a')].map((link) => link.getAttribute('href'));
     expect(boardHrefs).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
     expect(boardHrefs).toContain(`/reviews?tab=specs&spec_id=${spec.id}`);
-    expect(boardHrefs).toContain(`/reviews?tab=implementation-plans&execution_plan_id=${executionPlan.id}`);
+    expect(boardHrefs).toContain('/reviews?tab=implementation-plans');
     expect(boardHrefs).not.toContain('/my-work');
     expect(screen.queryByRole('region', { name: 'Intake / Development Plan needed cards' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Execution cards' })).toBeNull();
@@ -109,7 +121,7 @@ describe('board, reports, and release readiness routes', () => {
       await waitFor(() => {
         const readinessText = document.querySelector('[data-readiness-blockers]')?.textContent ?? '';
         expect(readinessText).toMatch(/scope|readiness|high-risk changes|approvals|launch disabled|rollback|release owner/i);
-        expect(readinessText).toMatch(/Spec|Execution Plan|execution|code review|QA|release blockers|evidence|rollback plan|observation/i);
+        expect(readinessText).toMatch(/Spec|Implementation Plan Doc|execution|code review|QA|release blockers|evidence|rollback plan|observation/i);
       });
       for (const label of ['Initiative', 'Requirement', 'Tech Debt', 'Development Plan Item', 'Bug']) {
         expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);

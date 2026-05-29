@@ -25,7 +25,7 @@ interface DevelopmentPlanItemProjection {
   affected_surfaces?: readonly string[];
   boundary_status?: string;
   spec_status?: string;
-  execution_plan_status?: string;
+  implementation_plan_status?: string;
   execution_status?: string;
   review_status?: string;
   qa_handoff_status?: string;
@@ -68,7 +68,7 @@ export interface DevelopmentPlanWorkspacePlanItemSummary {
   currentGate: string;
   blocker: string;
   nextAction: string;
-  typedSourceContext: string[];
+  typedDocumentContext: string[];
   artifacts: Array<{ label: string; href: string }>;
   evidenceLinks: Array<{ label: string; href: string }>;
   gateProgress: ViewModelGate[];
@@ -213,7 +213,7 @@ export function itemGateProgress(item: DevelopmentPlanItemProjection): ViewModel
   return [
     { label: 'Boundary', state: item.boundary_status ?? 'unavailable' },
     { label: 'Spec', state: item.spec_status ?? 'unavailable' },
-    { label: 'Execution Plan', state: item.execution_plan_status ?? 'unavailable' },
+    { label: 'Implementation Plan Doc', state: item.implementation_plan_status ?? 'unavailable' },
     { label: 'Execution', state: item.execution_status ?? 'unavailable' },
     { label: 'Review', state: item.review_status ?? 'unavailable' },
     { label: 'QA handoff', state: item.qa_handoff_status ?? 'unavailable' },
@@ -271,14 +271,14 @@ function normalizePlan(plan: DevelopmentPlanProjection, selectedPlanItemId: stri
 function normalizePlanItem(item: DevelopmentPlanItemProjection, plan: DevelopmentPlanProjection): DevelopmentPlanWorkspacePlanItemSummary {
   const currentGate = currentPlanItemGate(item);
   const nextAction = nextGateAction(item);
-  const typedSourceContext = typedSourceContextForPlan(plan);
+  const typedDocumentContext = typedDocumentContextForPlan(plan);
   return {
     id: item.id,
     title: item.title ?? item.id,
     currentGate: `${currentGate.label}: ${formatValue(currentGate.state)}`,
     blocker: blockerLabel(item),
     nextAction,
-    typedSourceContext,
+    typedDocumentContext,
     artifacts: planItemArtifacts(plan, item),
     evidenceLinks: planItemEvidenceLinks(plan, item),
     gateProgress: itemGateProgress(item),
@@ -317,7 +317,7 @@ function typedRefsForPlan(plan: DevelopmentPlanProjection): string[] {
   return plan.source_refs?.length ? plan.source_refs.map((ref) => ref.title ?? ref.id).filter(nonEmpty) : ['Typed refs unavailable'];
 }
 
-function typedSourceContextForPlan(plan: DevelopmentPlanProjection): string[] {
+function typedDocumentContextForPlan(plan: DevelopmentPlanProjection): string[] {
   const refs = typedRefsForPlan(plan);
   return refs.length > 0 ? refs : ['Typed refs unavailable'];
 }
@@ -328,7 +328,7 @@ function gateDistributionFor(items: readonly DevelopmentPlanWorkspacePlanItemSum
     const currentGate = item.currentGate.split(':')[0] ?? 'Unknown';
     counts.set(currentGate, (counts.get(currentGate) ?? 0) + 1);
   }
-  const gates = ['Boundary', 'Spec', 'Execution Plan', 'Execution', 'Review', 'QA handoff'];
+  const gates = ['Boundary', 'Spec', 'Implementation Plan Doc', 'Execution', 'Review', 'QA handoff'];
   return gates.map((gate) => `${gate} ${counts.get(gate) ?? 0}`).join(' · ');
 }
 
@@ -351,7 +351,7 @@ function summarizeReviewAging(plans: readonly DevelopmentPlanProjection[]): stri
 function blockerLabel(item: DevelopmentPlanItemProjection): string {
   if (item.boundary_status !== 'approved') return 'Boundary brainstorming pending';
   if (item.spec_status !== 'approved') return 'Spec approval pending';
-  if (item.execution_plan_status !== 'approved') return 'Execution Plan approval pending';
+  if (item.implementation_plan_status !== 'approved') return 'Implementation Plan Doc approval pending';
   if (item.execution_status !== 'completed') return 'Execution in progress';
   if (item.review_status !== 'approved') return 'Code review pending';
   if (item.qa_handoff_status !== 'approved' && item.qa_handoff_status !== 'accepted') return 'QA handoff pending';
@@ -361,7 +361,7 @@ function blockerLabel(item: DevelopmentPlanItemProjection): string {
 function nextGateAction(item: DevelopmentPlanItemProjection): string {
   if (item.boundary_status !== 'approved') return 'Complete boundary brainstorming';
   if (item.spec_status !== 'approved') return 'Review Spec';
-  if (item.execution_plan_status !== 'approved') return 'Review Execution Plan';
+  if (item.implementation_plan_status !== 'approved') return 'Review Implementation Plan Doc';
   if (item.execution_status !== 'completed') return 'Supervise execution';
   if (item.review_status !== 'approved') return 'Complete review';
   if (item.qa_handoff_status !== 'approved' && item.qa_handoff_status !== 'accepted') return 'Complete QA handoff';
@@ -372,7 +372,7 @@ function isBlockedPlanItemProjection(item: DevelopmentPlanItemProjection): boole
   return [
     item.boundary_status,
     item.spec_status,
-    item.execution_plan_status,
+    item.implementation_plan_status,
     item.execution_status,
     item.review_status,
     item.qa_handoff_status,
@@ -391,7 +391,7 @@ function emptyPlanItem(plan: DevelopmentPlanProjection): DevelopmentPlanWorkspac
     currentGate: 'Release: Ready',
     blocker: 'No Plan Items',
     nextAction: 'Add Plan Item',
-    typedSourceContext: typedSourceContextForPlan(plan),
+    typedDocumentContext: typedDocumentContextForPlan(plan),
     artifacts: [{ label: 'Plan', href: `/development-plans/${encodeURIComponent(plan.id)}` }],
     evidenceLinks: [],
     gateProgress: [],

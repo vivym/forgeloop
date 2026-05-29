@@ -3,9 +3,9 @@ export type ProductRouteKind = 'product' | 'dev-tools';
 export type ProductPageFamily =
   | 'cockpit'
   | 'inbox'
-  | 'source-database'
-  | 'source-document'
-  | 'source-evidence'
+  | 'document-database'
+  | 'document-workspace'
+  | 'document-evidence'
   | 'planning-table'
   | 'plan-authoring'
   | 'gate-workspace'
@@ -81,22 +81,22 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
   productRoute('/', '/', 'Cockpit', 'cockpit', /^Cockpit$/i),
   productRoute('/cockpit', '/cockpit', 'Cockpit', 'cockpit', /^Cockpit$/i),
   productRoute('/my-work', '/my-work', 'My Work', 'inbox', /^My Work$/i),
-  productRoute('/initiatives', '/initiatives', 'Initiatives', 'source-database', /^Initiatives$/i),
-  productRoute('/initiatives/new', '/initiatives/new', 'New Initiative', 'source-document', /Initiative/i),
-  productRoute('/initiatives/:id', `/initiatives/${initiativeId}`, 'Initiative', 'source-document', /^Initiative$/i),
-  productRoute('/initiatives/:id/evidence', `/initiatives/${initiativeId}/evidence`, 'Initiative Evidence', 'source-evidence', /Evidence/i),
-  productRoute('/requirements', '/requirements', 'Requirements', 'source-database', /^Requirements$/i),
-  productRoute('/requirements/new', '/requirements/new', 'New Requirement', 'source-document', /Requirement/i),
-  productRoute('/requirements/:id', `/requirements/${requirementId}`, 'Requirement', 'source-document', /^Requirement$/i),
-  productRoute('/requirements/:id/evidence', `/requirements/${requirementId}/evidence`, 'Requirement Evidence', 'source-evidence', /Evidence/i),
-  productRoute('/bugs', '/bugs', 'Bugs', 'source-database', /^Bugs$/i),
-  productRoute('/bugs/new', '/bugs/new', 'New Bug', 'source-document', /Bug/i),
-  productRoute('/bugs/:id', `/bugs/${bugId}`, 'Bug', 'source-document', /^Bug$/i),
-  productRoute('/bugs/:id/evidence', `/bugs/${bugId}/evidence`, 'Bug Evidence', 'source-evidence', /Evidence/i),
-  productRoute('/tech-debt', '/tech-debt', 'Tech Debt', 'source-database', /^Tech Debt$/i),
-  productRoute('/tech-debt/new', '/tech-debt/new', 'New Tech Debt', 'source-document', /Tech Debt/i),
-  productRoute('/tech-debt/:id', `/tech-debt/${techDebtId}`, 'Tech Debt', 'source-document', /^Tech Debt$/i),
-  productRoute('/tech-debt/:id/evidence', `/tech-debt/${techDebtId}/evidence`, 'Tech Debt Evidence', 'source-evidence', /Evidence/i),
+  productRoute('/initiatives', '/initiatives', 'Initiatives', 'document-database', /^Initiatives$/i),
+  productRoute('/initiatives/new', '/initiatives/new', 'New Initiative', 'document-workspace', /Initiative/i),
+  productRoute('/initiatives/:id', `/initiatives/${initiativeId}`, 'Initiative', 'document-workspace', /^Initiative$/i),
+  productRoute('/initiatives/:id/evidence', `/initiatives/${initiativeId}/evidence`, 'Initiative Evidence', 'document-evidence', /Evidence/i),
+  productRoute('/requirements', '/requirements', 'Requirements', 'document-database', /^Requirements$/i),
+  productRoute('/requirements/new', '/requirements/new', 'New Requirement', 'document-workspace', /Requirement/i),
+  productRoute('/requirements/:id', `/requirements/${requirementId}`, 'Requirement', 'document-workspace', /^Requirement$/i),
+  productRoute('/requirements/:id/evidence', `/requirements/${requirementId}/evidence`, 'Requirement Evidence', 'document-evidence', /Evidence/i),
+  productRoute('/bugs', '/bugs', 'Bugs', 'document-database', /^Bugs$/i),
+  productRoute('/bugs/new', '/bugs/new', 'New Bug', 'document-workspace', /Bug/i),
+  productRoute('/bugs/:id', `/bugs/${bugId}`, 'Bug', 'document-workspace', /^Bug$/i),
+  productRoute('/bugs/:id/evidence', `/bugs/${bugId}/evidence`, 'Bug Evidence', 'document-evidence', /Evidence/i),
+  productRoute('/tech-debt', '/tech-debt', 'Tech Debt', 'document-database', /^Tech Debt$/i),
+  productRoute('/tech-debt/new', '/tech-debt/new', 'New Tech Debt', 'document-workspace', /Tech Debt/i),
+  productRoute('/tech-debt/:id', `/tech-debt/${techDebtId}`, 'Tech Debt', 'document-workspace', /^Tech Debt$/i),
+  productRoute('/tech-debt/:id/evidence', `/tech-debt/${techDebtId}/evidence`, 'Tech Debt Evidence', 'document-evidence', /Evidence/i),
   productRoute('/development-plans', '/development-plans', 'Development Plans', 'planning-table', /^Development Plans$/i),
   productRoute('/development-plans/new', '/development-plans/new', 'New Development Plan', 'plan-authoring', /Development Plan/i),
   productRoute(

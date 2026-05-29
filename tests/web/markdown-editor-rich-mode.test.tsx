@@ -60,7 +60,7 @@ describe('ForgeMarkdownEditor rich editor events', () => {
     expect(onUploadAttachment).not.toHaveBeenCalled();
   });
 
-  it('routes source object authoring through the shared ForgeMarkdownEditor wrapper', async () => {
+  it('routes planning input authoring through the shared ForgeMarkdownEditor wrapper', async () => {
     const rendered = await renderRoute('/requirements/new');
 
     expect(await rendered.findByRole('heading', { name: 'New Requirement' })).toBeTruthy();
@@ -70,16 +70,16 @@ describe('ForgeMarkdownEditor rich editor events', () => {
     expect(rendered.queryByRole('textbox', { name: /narrative markdown/i })).toBeNull();
   });
 
-  it('guards navigation away from dirty Spec and Execution Plan documents without submitting or approving', async () => {
+  it('guards navigation away from dirty Spec and Implementation Plan Doc documents without submitting or approving', async () => {
     render(
       <ForgeMarkdownEditor
         allowedBlocks={['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code']}
         guardRouteTransitions
         mode="edit"
         objectRef={{
-          type: 'execution_plan_revision',
+          type: 'implementation_plan_revision',
           id: 'planrev-requirements-database-view-v1',
-          execution_plan_id: 'plan-requirements-database-view',
+          implementation_plan_id: 'plan-requirements-database-view',
         }}
         onChange={vi.fn()}
         onUploadAttachment={vi.fn()}

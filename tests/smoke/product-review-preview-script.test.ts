@@ -87,7 +87,7 @@ describe('product review preview script helpers', () => {
         'dpi-qa-shift-left-strategy',
         'dpi-release-blocker-closure',
         'dpi-requirements-database-view',
-        'dpi-typed-source-boundary',
+        'dpi-typed-document-boundary',
       ]),
     );
 

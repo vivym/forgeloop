@@ -74,7 +74,7 @@ export function BrainstormingPanel({
     await decisionMutation.mutateAsync({
       actor_id: actorId,
       text: 'The approved boundary is limited to the selected Development Plan Item.',
-      rationale: decisionRationale.trim() || 'This keeps Spec and Execution Plan generation item-scoped.',
+      rationale: decisionRationale.trim() || 'This keeps Spec and Implementation Plan Doc generation item-scoped.',
     });
     setLocalSession((existing) =>
       existing === undefined
@@ -86,7 +86,7 @@ export function BrainstormingPanel({
               {
                 id: `local-decision-${existing.decisions?.length ?? 0}`,
                 text: 'The approved boundary is limited to the selected Development Plan Item.',
-                rationale: decisionRationale.trim() || 'This keeps Spec and Execution Plan generation item-scoped.',
+                rationale: decisionRationale.trim() || 'This keeps Spec and Implementation Plan Doc generation item-scoped.',
               },
             ],
           },
@@ -98,8 +98,8 @@ export function BrainstormingPanel({
     await approveMutation.mutateAsync({
       actor_id: actorId,
       confirmed_scope: ['Selected Development Plan Item'],
-      confirmed_out_of_scope: ['Unlinked source-object direct artifact generation'],
-      accepted_assumptions: ['Source context is current'],
+      confirmed_out_of_scope: ['Unlinked document-workspace direct artifact generation'],
+      accepted_assumptions: ['Planning input context is current'],
       open_risks: [],
       validation_expectations: ['Reviewer can audit boundary decisions'],
       final_decision: 'Approved for Spec generation',

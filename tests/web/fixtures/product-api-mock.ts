@@ -77,8 +77,9 @@ const cockpitSpecRevisionFor = (revision: typeof specRevision, item: Pick<typeof
   return { ...publicRevision, scope_ref: scopeRefForItem(item), attachment_refs: [] };
 };
 
-const itemExecutionPlanRevisionFor = (revision: typeof executionPlanRevision) => ({
-  ...revision,
+const itemImplementationPlanRevisionFor = (revision: typeof executionPlanRevision) => ({
+  ...Object.fromEntries(Object.entries(revision).filter(([key]) => key !== 'execution_plan_id')),
+  implementation_plan_id: revision.execution_plan_id,
   attachment_refs: [],
 });
 
@@ -251,7 +252,7 @@ const developmentPlanItemRows = productWorkspaceDevelopmentPlanItems.map((item) 
   risk: item.risk,
   boundary_status: item.boundary_status,
   spec_status: item.spec_status,
-  execution_plan_status: item.execution_plan_status,
+  implementation_plan_status: item.implementation_plan_status,
   execution_status: item.execution_status,
   review_status: item.review_status,
   qa_handoff_status: item.qa_handoff_status,
@@ -294,14 +295,14 @@ const developmentPlanItemResponseFor = (item: (typeof developmentPlan.items)[num
     qa_owner_actor_id: 'actor-qa',
     testability_note: 'QA/Test Owner reviewed acceptance and validation expectations.',
   }],
-  execution_plans: [{ id: executionPlanRevision.execution_plan_id, artifact_type: 'execution_plan', title: executionPlanRevision.summary, current_revision_id: executionPlan.current_revision_id, approved_revision_id: executionPlan.approved_revision_id }],
+  implementation_plan_docs: [{ id: executionPlanRevision.execution_plan_id, artifact_type: 'implementation_plan_doc', title: executionPlanRevision.summary, current_revision_id: executionPlan.current_revision_id, approved_revision_id: executionPlan.approved_revision_id }],
   runtime_boundary: {
     type: 'execution_package',
     id: executionPackage.id,
     phase: executionPackage.phase,
     activity_state: executionPackage.activity_state,
     gate_state: executionPackage.gate_state,
-    execution_plan_revision_id: executionPackage.execution_plan_revision_id,
+    implementation_plan_revision_id: executionPackage.execution_plan_revision_id,
   },
   executions: [{ id: execution.id, title: execution.ref.title, status: execution.status }],
   code_review_handoffs: [{ id: codeReviewHandoff.id, title: codeReviewHandoff.ref.title, status: codeReviewHandoff.status }],
@@ -339,13 +340,13 @@ const developmentPlanItemSpecCompareResponses = Object.fromEntries(
   ]),
 );
 
-const developmentPlanItemExecutionPlanCompareResponses = Object.fromEntries(
+const developmentPlanItemImplementationPlanCompareResponses = Object.fromEntries(
   productWorkspaceDevelopmentPlanItems.map((item) => [
-    `GET /development-plans/${item.development_plan_id}/items/${item.id}/execution-plan/revisions/compare?base_revision_id=${executionPlanRevision.id}&compare_revision_id=${executionPlanRevision.id}`,
+    `GET /development-plans/${item.development_plan_id}/items/${item.id}/implementation-plan/revisions/compare?base_revision_id=${executionPlanRevision.id}&compare_revision_id=${executionPlanRevision.id}`,
     {
       base_revision_id: executionPlanRevision.id,
       compare_revision_id: executionPlanRevision.id,
-      summary: 'No Execution Plan revision changes in seeded product workspace data.',
+      summary: 'No Implementation Plan Doc revision changes in seeded product workspace data.',
       changed_sections: [],
     },
   ]),
@@ -552,7 +553,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
       status: plan.status,
       source_refs: plan.source_refs,
       item_count: plan.items.length,
-      blocked_count: plan.items.filter((item) => item.boundary_status === 'changes_requested' || item.spec_status === 'blocked' || item.execution_plan_status === 'blocked' || item.qa_handoff_status === 'blocked').length,
+      blocked_count: plan.items.filter((item) => item.boundary_status === 'changes_requested' || item.spec_status === 'blocked' || item.implementation_plan_status === 'blocked' || item.qa_handoff_status === 'blocked').length,
       responsible_role: plan.items[0]?.responsible_role ?? developmentPlanItem.responsible_role,
       responsible_roles: [...new Set(plan.items.map((item) => item.responsible_role))],
       driver_actor_id: plan.items[0]?.driver_actor_id ?? developmentPlanItem.driver_actor_id,
@@ -560,7 +561,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
       reviewer_actor_id: plan.items[0]?.reviewer_actor_id ?? developmentPlanItem.reviewer_actor_id,
       reviewer_actor_ids: [...new Set(plan.items.map((item) => item.reviewer_actor_id))],
       gate_state: 'execution',
-      gate_states: ['boundary', 'spec', 'execution_plan', 'execution', 'review', 'qa'],
+      gate_states: ['boundary', 'spec', 'implementation_plan_doc', 'execution', 'review', 'qa'],
       risk: plan.items[0]?.risk ?? developmentPlanItem.risk,
       risks: [...new Set(plan.items.map((item) => item.risk))],
       release_impact: plan.items[0]?.release_impact ?? developmentPlanItem.release_impact,
@@ -592,7 +593,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   ...developmentPlanItemResponses,
   ...developmentPlanItemRevisionResponses,
   ...developmentPlanItemSpecCompareResponses,
-  ...developmentPlanItemExecutionPlanCompareResponses,
+  ...developmentPlanItemImplementationPlanCompareResponses,
   [`GET /boundary-summaries/${boundarySummary.id}/revisions`]: [
     {
       ...boundarySummary,
@@ -604,7 +605,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
       decision_snapshot: brainstormingSession.decisions,
     },
   ],
-  [`GET /query/specs-execution-plans?project_id=${projectId}`]: {
+  [`GET /query/reviews?project_id=${projectId}`]: {
     items: [
       {
         id: 'spec-needs-generation',
@@ -628,8 +629,8 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
       },
       {
         id: executionPlanRevision.execution_plan_id,
-        artifact_type: 'execution_plan',
-        title: 'Execution Plan needs review',
+        artifact_type: 'implementation_plan_doc',
+        title: 'Implementation Plan Doc needs review',
         status: 'in_review',
         gate_state: 'awaiting_review',
         source_ref: developmentPlan.source_refs[0],
@@ -642,14 +643,14 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
         reviewer_actor_id: 'actor-reviewer',
         age_label: '45m',
         risk: developmentPlanItem.risk,
-        next_action: 'Review Execution Plan before execution.',
+        next_action: 'Review Implementation Plan Doc before execution.',
         href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
         updated_at: executionPlan.created_at,
       },
     ],
     degraded_sources: [],
   },
-  [`GET /query/specs-execution-plans?project_id=${projectId}&limit=100`]: {
+  [`GET /query/reviews?project_id=${projectId}&limit=100`]: {
     items: [
       {
         id: 'spec-needs-generation',
@@ -673,8 +674,8 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
       },
       {
         id: executionPlanRevision.execution_plan_id,
-        artifact_type: 'execution_plan',
-        title: 'Execution Plan needs review',
+        artifact_type: 'implementation_plan_doc',
+        title: 'Implementation Plan Doc needs review',
         status: 'in_review',
         gate_state: 'awaiting_review',
         source_ref: developmentPlan.source_refs[0],
@@ -687,7 +688,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
         reviewer_actor_id: 'actor-reviewer',
         age_label: '45m',
         risk: developmentPlanItem.risk,
-        next_action: 'Review Execution Plan before execution.',
+        next_action: 'Review Implementation Plan Doc before execution.',
         href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
         updated_at: executionPlan.created_at,
       },
@@ -840,9 +841,13 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   'POST /development-plans': developmentPlan,
   'POST /development-plans/generate-draft': { ...developmentPlan, generation_state: 'draft_generated' },
   [`POST /development-plans/${developmentPlan.id}/items`]: developmentPlanItem,
+  'POST /requirements': { ...workItem, id: 'req-created', kind: 'requirement' },
+  'POST /initiatives': { ...workItem, id: 'initiative-created', kind: 'initiative' },
+  'POST /tech-debt': { ...workItem, id: 'tech-debt-created', kind: 'tech_debt' },
+  'POST /bugs': { ...workItem, id: 'bug-created', kind: 'bug' },
   [`POST /development-plans/${developmentPlan.id}/regenerate-draft`]: { ...developmentPlan, revision_id: 'development-plan-revision-regenerated', generation_state: 'draft_regenerated' },
   [`GET /spec-revisions/${specRevision.id}`]: cockpitSpecRevisionFor(specRevision, workItem),
-  [`GET /execution-plan-revisions/${executionPlanRevision.id}`]: itemExecutionPlanRevisionFor(executionPlanRevision),
+  [`GET /implementation-plan-revisions/${executionPlanRevision.id}`]: itemImplementationPlanRevisionFor(executionPlanRevision),
   ...Object.fromEntries(
     developmentPlan.items.map((item) => [
       `PATCH /development-plans/${developmentPlan.id}/items/${item.id}/spec/draft`,
@@ -855,15 +860,15 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   ),
   ...Object.fromEntries(
     developmentPlan.items.map((item) => [
-      `PATCH /development-plans/${developmentPlan.id}/items/${item.id}/execution-plan/draft`,
+      `PATCH /development-plans/${developmentPlan.id}/items/${item.id}/implementation-plan/draft`,
       ({ init }: Parameters<ProductApiMockHandler>[0]) => ({
-        ...itemExecutionPlanRevisionFor(executionPlanRevision),
+        ...itemImplementationPlanRevisionFor(executionPlanRevision),
         id: `planrev-${item.id}-saved`,
         content: requestBody(init).markdown ?? executionPlanRevision.content,
       }),
     ]),
   ),
-  [`POST /source-objects/requirement/${requirementDetail.id}/development-plans/${developmentPlan.id}/link`]: {
+  [`POST /requirements/${requirementDetail.id}/development-plans/${developmentPlan.id}/link`]: {
     id: 'development-plan-source-link-product-workspace-preview',
     development_plan_id: developmentPlan.id,
     source_ref: developmentPlan.source_refs[0],
@@ -884,9 +889,9 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     compare_revision_id: specRevision.id,
     changed_fields: [],
   },
-  [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-requirements-database-view'].id}/execution-plan/generate-draft`]: {
+  [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-requirements-database-view'].id}/implementation-plan/generate-draft`]: {
     id: executionPlanRevision.id,
-    execution_plan_id: executionPlan.id,
+    implementation_plan_id: executionPlan.id,
     development_plan_item_id: developmentPlanItemsById['dpi-requirements-database-view'].id,
     based_on_spec_revision_id: specRevision.id,
     revision_number: 1,
@@ -894,7 +899,7 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     content: planRevision.content,
     created_at: planRevision.created_at,
   },
-  [`GET /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-requirements-database-view'].id}/execution-plan/revisions/compare?base_revision_id=${executionPlanRevision.id}&compare_revision_id=${executionPlanRevision.id}`]: {
+  [`GET /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-requirements-database-view'].id}/implementation-plan/revisions/compare?base_revision_id=${executionPlanRevision.id}&compare_revision_id=${executionPlanRevision.id}`]: {
     base_revision_id: executionPlanRevision.id,
     compare_revision_id: executionPlanRevision.id,
     changed_fields: [],

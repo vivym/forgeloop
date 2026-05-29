@@ -9,13 +9,13 @@ import { SurfaceStateIndicator, type SurfaceState } from '../project-management/
 
 type BoardObjectRef = BoardCard['object_ref'];
 type BoardProductCard = BoardCard;
-type BoardGateColumnId = 'intake' | 'boundary' | 'spec' | 'execution-plan' | 'execution' | 'review' | 'qa' | 'release';
+type BoardGateColumnId = 'intake' | 'boundary' | 'spec' | 'implementation-plan' | 'execution' | 'review' | 'qa' | 'release';
 
 const boardGateColumns: readonly { id: BoardGateColumnId; label: string; description: string }[] = [
-  { id: 'intake', label: 'Planning', description: 'Source objects waiting for planning scope.' },
+  { id: 'intake', label: 'Planning', description: 'Requirements, initiatives, bugs, and tech debt waiting for planning scope.' },
   { id: 'boundary', label: 'Boundary', description: 'Brainstorming and boundary approval.' },
   { id: 'spec', label: 'Spec', description: 'Spec generation and technical review.' },
-  { id: 'execution-plan', label: 'Execution Plan', description: 'Plan generation and implementation review.' },
+  { id: 'implementation-plan', label: 'Implementation Plan Doc', description: 'Implementation plan document generation and review.' },
   { id: 'execution', label: 'Running', description: 'Codex worker supervision.' },
   { id: 'review', label: 'Review', description: 'Code review and risk handoff.' },
   { id: 'qa', label: 'QA', description: 'Test handoff and acceptance.' },
@@ -188,13 +188,13 @@ function gateColumnIdFor(card: BoardProductCard): BoardGateColumnId {
     case 'brainstorming_session':
     case 'boundary_summary':
       return 'boundary';
-    case 'execution_plan':
-      return 'execution-plan';
+    case 'implementation_plan_doc':
+      return 'implementation-plan';
     case 'spec':
     case 'spec_revision':
       return 'spec';
-    case 'execution_plan_revision':
-      return 'execution-plan';
+    case 'implementation_plan_revision':
+      return 'implementation-plan';
     case 'execution':
       return 'execution';
     case 'code_review_handoff':
@@ -213,7 +213,7 @@ function developmentPlanItemGateColumn(card: BoardProductCard): BoardGateColumnI
   if (text.includes('release')) return 'release';
   if (text.includes('qa')) return 'qa';
   if (text.includes('review')) return 'review';
-  if (text.includes('execution_plan') || text.includes('execution plan')) return 'execution-plan';
+  if (text.includes('implementation_plan_doc') || text.includes('implementation plan doc')) return 'implementation-plan';
   if (text.includes('spec')) return 'spec';
   if (text.includes('boundary') || text.includes('brainstorm')) return 'boundary';
   if (text.includes('running') || text.includes('execute') || text.includes('execution') || text.includes('monitor') || text.includes('continue')) return 'execution';
@@ -222,7 +222,7 @@ function developmentPlanItemGateColumn(card: BoardProductCard): BoardGateColumnI
   const [boundary, spec, executionPlan, execution] = statusParts;
   if (boundary !== undefined && boundary !== 'approved') return 'boundary';
   if (spec !== undefined && spec !== 'approved') return 'spec';
-  if (executionPlan !== undefined && executionPlan !== 'approved') return 'execution-plan';
+  if (executionPlan !== undefined && executionPlan !== 'approved') return 'implementation-plan';
   if (execution !== undefined && execution !== 'completed') return 'execution';
   return 'release';
 }
@@ -241,10 +241,10 @@ function objectLabel(type: BoardObjectRef['type']): string {
       return 'Boundary Summary';
     case 'spec':
       return 'Spec';
-    case 'execution_plan':
-      return 'Execution Plan';
-    case 'execution_plan_revision':
-      return 'Execution Plan Revision';
+    case 'implementation_plan_doc':
+      return 'Implementation Plan Doc';
+    case 'implementation_plan_revision':
+      return 'Implementation Plan Doc Revision';
     case 'spec_revision':
       return 'Spec Revision';
     case 'qa_handoff':
@@ -276,9 +276,9 @@ function nextActionFor(card: BoardProductCard): string {
     case 'spec':
     case 'spec_revision':
       return 'Review Spec';
-    case 'execution_plan':
-    case 'execution_plan_revision':
-      return 'Review Execution Plan';
+    case 'implementation_plan_doc':
+    case 'implementation_plan_revision':
+      return 'Review Implementation Plan Doc';
     case 'execution':
       return 'Inspect execution';
     case 'code_review_handoff':
@@ -309,8 +309,8 @@ function roleFor(card: BoardProductCard): string {
     case 'boundary_summary':
     case 'spec':
     case 'spec_revision':
-    case 'execution_plan':
-    case 'execution_plan_revision':
+    case 'implementation_plan_doc':
+    case 'implementation_plan_revision':
       return 'Technical lead';
     case 'execution':
       return 'Developer';
@@ -333,7 +333,7 @@ function roleForGate(gate: BoardGateColumnId): string {
       return 'Product driver';
     case 'boundary':
     case 'spec':
-    case 'execution-plan':
+    case 'implementation-plan':
       return 'Technical lead';
     case 'execution':
       return 'Developer';
@@ -372,10 +372,9 @@ function typedObjectHref(ref: BoardObjectRef): string | undefined {
       return `/reviews?tab=specs&spec_id=${encodeURIComponent(ref.id)}`;
     case 'spec_revision':
       return `/reviews?tab=specs&spec_revision_id=${encodeURIComponent(ref.id)}`;
-    case 'execution_plan':
-      return `/reviews?tab=implementation-plans&execution_plan_id=${encodeURIComponent(ref.id)}`;
-    case 'execution_plan_revision':
-      return `/reviews?tab=implementation-plans&execution_plan_revision_id=${encodeURIComponent(ref.id)}`;
+    case 'implementation_plan_doc':
+    case 'implementation_plan_revision':
+      return '/reviews?tab=implementation-plans';
     case 'release':
       return `/releases/${encodeURIComponent(ref.id)}`;
     case 'execution':
@@ -392,7 +391,10 @@ function typedObjectHref(ref: BoardObjectRef): string | undefined {
 }
 
 function isSafeBoardHref(href: string | undefined): href is string {
-  return href !== undefined && href.startsWith('/') && !/^\/(?:tasks|plans|specs|packages)(?:\/|$)/.test(href);
+  return href !== undefined
+    && href.startsWith('/')
+    && !/^\/(?:tasks|plans|specs|packages)(?:\/|$)/.test(href)
+    && !/[?&](?:execution|implementation)_plan(?:_revision)?_id=/.test(href);
 }
 
 function titleCase(value: string): string {

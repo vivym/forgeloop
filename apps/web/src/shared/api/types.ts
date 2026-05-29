@@ -92,7 +92,7 @@ export type {
   RequestReleaseChangesRequest,
   RequirementDetail,
   RequirementListItem,
-  SourceObjectRef,
+  PlanningInputRef,
   TechDebtDetail,
   TechDebtListItem,
   Execution,
@@ -263,7 +263,7 @@ export type ExecutorType = 'mock' | 'local_codex';
 export type ReviewSeverity = 'minor' | 'major' | 'critical';
 
 export type WorkItem = WorkItemCockpitResponse['item'];
-export type SpecPlan = NonNullable<WorkItemCockpitResponse['current_spec']>;
+export type ReviewableDocumentArtifact = NonNullable<WorkItemCockpitResponse['current_spec']>;
 
 export interface SpecRevision {
   id: string;

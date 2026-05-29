@@ -5,8 +5,8 @@ import type { EditableObjectRef, MarkdownBlockKind, MarkdownDocument } from '@fo
 import { BugWorkspace, DocumentWorkspaceLayout, InitiativeWorkspace, ProductPage, RequirementWorkspace, Section, TechDebtWorkspace } from '../../shared/layout';
 import { Button, Field, ForgeMarkdownEditor, InlineNotice, Input, Textarea } from '../../shared/ui';
 
-type SourceAuthoringObjectType = 'bug' | 'initiative' | 'requirement' | 'tech_debt';
-type SourceAuthoringObjectRef =
+type DocumentAuthoringObjectType = 'bug' | 'initiative' | 'requirement' | 'tech_debt';
+type DocumentAuthoringObjectRef =
   | Extract<EditableObjectRef, { type: 'bug' }>
   | Extract<EditableObjectRef, { type: 'initiative' }>
   | Extract<EditableObjectRef, { type: 'requirement' }>
@@ -24,7 +24,7 @@ export interface ObjectCreateFormProps {
   cancelHref: string;
   fields: ObjectFormField[];
   narrativeTemplate: string;
-  objectType: SourceAuthoringObjectType;
+  objectType: DocumentAuthoringObjectType;
   onSubmit: (values: Record<string, string>) => void | Promise<void>;
   subtitle: string;
   title: string;
@@ -104,10 +104,10 @@ export function ObjectCreateForm({ cancelHref, fields, narrativeTemplate, object
     void navigate(cancelHref);
   }
 
-  const objectLabel = sourceObjectLabel(objectType);
+  const objectLabel = documentLabel(objectType);
 
   return (
-    <ProductPage family="source-document" ariaLabel={title}>
+    <ProductPage family="document-workspace" ariaLabel={title}>
       <h1 className="mb-3 text-xl font-semibold text-text-primary">{title}</h1>
       <DiscardChangesPrompt bypassRef={intentionalExitRef} enabled={dirty} />
       <CreateFormShell
@@ -194,7 +194,7 @@ function CreateFormShell({
   objectType,
   table,
 }: {
-  objectType: SourceAuthoringObjectType;
+  objectType: DocumentAuthoringObjectType;
   table: ReactNode;
 }) {
   switch (objectType) {
@@ -209,7 +209,7 @@ function CreateFormShell({
   }
 }
 
-function sourceObjectLabel(objectType: SourceAuthoringObjectType): string {
+function documentLabel(objectType: DocumentAuthoringObjectType): string {
   if (objectType === 'tech_debt') return 'Tech Debt';
   return objectType.replace(/\b\w/g, (match) => match.toUpperCase());
 }
@@ -242,11 +242,11 @@ function NarrativeDocumentField({
   onChange,
   value,
 }: {
-  objectType: SourceAuthoringObjectType;
+  objectType: DocumentAuthoringObjectType;
   onChange: (value: string) => void;
   value: string;
 }) {
-  const objectLabel = sourceObjectLabel(objectType);
+  const objectLabel = documentLabel(objectType);
   return (
     <section aria-label={`${objectLabel} narrative document`} className="grid gap-3 rounded-md border border-border bg-surface p-4">
       <div className="grid gap-1">
@@ -257,10 +257,10 @@ function NarrativeDocumentField({
         allowedBlocks={createNarrativeBlocks}
         guardRouteTransitions={false}
         mode="edit"
-        objectRef={draftSourceObjectRef(objectType)}
+        objectRef={draftPlanningInputRef(objectType)}
         onChange={onChange}
         onUploadAttachment={async () => {
-          throw new Error(`Image uploads are available after the ${sourceObjectLabel(objectType)} is created.`);
+          throw new Error(`Image uploads are available after the ${documentLabel(objectType)} is created.`);
         }}
         validationPolicy={{ validation_version: '2026-05-23' }}
         value={value}
@@ -269,16 +269,16 @@ function NarrativeDocumentField({
   );
 }
 
-function draftSourceObjectRef(type: SourceAuthoringObjectType): SourceAuthoringObjectRef {
+function draftPlanningInputRef(type: DocumentAuthoringObjectType): DocumentAuthoringObjectRef {
   switch (type) {
     case 'bug':
-      return { type, id: 'draft-source-object' };
+      return { type, id: 'draft-document-workspace' };
     case 'initiative':
-      return { type, id: 'draft-source-object' };
+      return { type, id: 'draft-document-workspace' };
     case 'requirement':
-      return { type, id: 'draft-source-object' };
+      return { type, id: 'draft-document-workspace' };
     case 'tech_debt':
-      return { type, id: 'draft-source-object' };
+      return { type, id: 'draft-document-workspace' };
   }
 }
 

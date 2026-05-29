@@ -185,9 +185,9 @@ const productObjectHref = (objectType: ProductObjectType, objectId: string): str
       return '/reviews?tab=specs';
     case 'spec_revision':
       return undefined;
-    case 'execution_plan':
+    case 'implementation_plan_doc':
       return '/reviews?tab=implementation-plans';
-    case 'execution_plan_revision':
+    case 'implementation_plan_revision':
       return undefined;
     case 'execution':
       return `/executions/${objectId}`;
@@ -221,10 +221,10 @@ const specRevisionArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, ob
   objectRef('spec_revision', objectId, specArtifactHref(input.workItem), title);
 
 const planArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
-  objectRef('execution_plan', objectId, implementationPlanArtifactHref(input.workItem), title);
+  objectRef('implementation_plan_doc', objectId, implementationPlanArtifactHref(input.workItem), title);
 
 const planRevisionArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
-  objectRef('execution_plan_revision', objectId, implementationPlanArtifactHref(input.workItem), title);
+  objectRef('implementation_plan_revision', objectId, implementationPlanArtifactHref(input.workItem), title);
 
 const blocker = (
   stageId: DeliveryStageId,
@@ -411,8 +411,8 @@ const releaseBlockerObjectRef = (
     case 'development_plan_item':
     case 'brainstorming_session':
     case 'boundary_summary':
-    case 'execution_plan':
-    case 'execution_plan_revision':
+    case 'implementation_plan_doc':
+    case 'implementation_plan_revision':
     case 'execution':
     case 'code_review_handoff':
     case 'qa_handoff':
@@ -420,9 +420,9 @@ const releaseBlockerObjectRef = (
     case 'attachment':
       return objectRef(objectType, objectId, productObjectHref(objectType, objectId));
     case 'plan':
-      return objectRef('execution_plan', objectId, implementationPlanArtifactHref(workItem));
+      return objectRef('implementation_plan_doc', objectId, implementationPlanArtifactHref(workItem));
     case 'plan_revision':
-      return objectRef('execution_plan_revision', objectId, implementationPlanArtifactHref(workItem));
+      return objectRef('implementation_plan_revision', objectId, implementationPlanArtifactHref(workItem));
     case 'execution_package':
       return objectRef('execution', objectId, '/executions');
     case 'review_packet':
@@ -1250,7 +1250,7 @@ const actionForLane = (
         scopeRef: workItemScopeRef(input.workItem),
         planRevisionId: input.approvedPlanRevision.id,
         target: objectTarget(
-          'execution_plan_revision',
+          'implementation_plan_revision',
           input.approvedPlanRevision.id,
           implementationPlanArtifactHref(input.workItem),
         ),

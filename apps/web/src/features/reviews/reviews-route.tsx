@@ -1,5 +1,5 @@
-import { SpecExecutionPlanQueue } from '../spec-plan/spec-execution-plan-queue';
+import { DocumentReviewQueue } from './document-review-queue';
 
 export function ReviewsRoute() {
-  return <SpecExecutionPlanQueue basePath="/reviews" />;
+  return <DocumentReviewQueue basePath="/reviews" />;
 }

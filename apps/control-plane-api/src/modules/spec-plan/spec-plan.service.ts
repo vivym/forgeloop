@@ -59,7 +59,10 @@ export type PublicSpecRevision = Omit<SpecRevision, 'work_item_id' | 'structured
   scope_ref: ObjectRef;
 };
 export type PublicPlanRevision = Omit<PlanRevision, 'work_item_id' | 'structured_document' | 'artifact_refs'> & { scope_ref: ObjectRef };
-export type PublicExecutionPlanRevision = Omit<ExecutionPlanRevision, 'structured_document'> & { attachment_refs: AttachmentRef[] };
+export type PublicImplementationPlanRevision = Omit<ExecutionPlanRevision, 'structured_document' | 'execution_plan_id'> & {
+  attachment_refs: AttachmentRef[];
+  implementation_plan_id: string;
+};
 export type ProductGenerationScheduleResult = ProductGenerationRuntimeScheduleResult;
 export type ProductGenerationApplyResult<T> =
   | { applied: true; revision: T }
@@ -179,7 +182,7 @@ export class SpecPlanService {
     });
   }
 
-  async generateItemExecutionPlanRevisionRuntime(
+  async generateItemImplementationPlanRevisionRuntime(
     developmentPlanId: string,
     itemId: string,
     dto: SubmitForApprovalCommandDto,
@@ -189,8 +192,8 @@ export class SpecPlanService {
       const replayed = await this.replayAppliedProductGenerationSchedule(
         repository,
         itemId,
-        'item_execution_plan_runtime_draft_generated',
-        'generate_development_plan_item_execution_plan_revision',
+        'item_implementation_plan_runtime_draft_generated',
+        'generate_development_plan_item_implementation_plan_revision',
         actorId,
       );
       if (replayed !== undefined) {
@@ -199,7 +202,7 @@ export class SpecPlanService {
       const { plan, item, workItem, boundary, boundaryRevision, brainstormingSession } =
         await this.requireApprovedBoundaryRevision(developmentPlanId, itemId, repository, { requireCurrentItemRevision: false });
       if ((await this.findItemExecutionPlan(item.id, repository)) !== undefined) {
-        throw new ConflictException(`Development Plan Item ${item.id} already has an Execution Plan`);
+        throw new ConflictException(`Development Plan Item ${item.id} already has an Implementation Plan Doc`);
       }
       const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
       this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
@@ -227,7 +230,7 @@ export class SpecPlanService {
         },
       );
       await repository.saveContextManifest(contextManifest);
-      const actionInput = this.executionPlanGenerationActionInput({
+      const actionInput = this.implementationPlanGenerationActionInput({
         plan,
         item,
         workItem,
@@ -244,11 +247,11 @@ export class SpecPlanService {
         repository,
         action_run: {
           id: this.id('automation-action-run'),
-          action_type: 'generate_development_plan_item_execution_plan_revision',
+          action_type: 'generate_development_plan_item_implementation_plan_revision',
           target_object_type: 'development_plan_item',
           target_object_id: item.id,
           target_revision_id: item.revision_id,
-          target_status: item.execution_plan_status,
+          target_status: item.implementation_plan_status,
           idempotency_key: `development-plan-item-execution-plan-generation:${item.id}:${item.revision_id}:${boundaryRevision.id}:${specRevision.id}:${actorId}`,
           automation_scope: automationScope,
           automation_settings_version: 1,
@@ -609,7 +612,7 @@ export class SpecPlanService {
     await this.requirePlanItem(developmentPlanId, itemId);
     const base = await this.requireItemSpecRevision(itemId, query.base_revision_id);
     const compare = await this.requireItemSpecRevision(itemId, query.compare_revision_id);
-    return this.revisionDiff(query, base, compare);
+    return this.revisionDiff(query, this.publicSpecRevisionSnapshot(base), this.publicSpecRevisionSnapshot(compare));
   }
 
   async writeGeneratedItemSpecRevision(input: {
@@ -716,11 +719,11 @@ export class SpecPlanService {
     });
   }
 
-  async generateItemExecutionPlanDraft(
+  async generateItemImplementationPlanDraft(
     developmentPlanId: string,
     itemId: string,
     dto: SubmitForApprovalCommandDto,
-  ): Promise<ExecutionPlanRevision> {
+  ): Promise<PublicImplementationPlanRevision> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
       const { plan, item, workItem, boundary, brainstormingSession } = await this.requireApprovedBoundary(
         developmentPlanId,
@@ -729,7 +732,7 @@ export class SpecPlanService {
         { requireCurrentItemRevision: false },
       );
       if ((await this.findItemExecutionPlan(item.id, repository)) !== undefined) {
-        throw new ConflictException(`Development Plan Item ${item.id} already has an Execution Plan`);
+        throw new ConflictException(`Development Plan Item ${item.id} already has an Implementation Plan Doc`);
       }
       const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
       this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
@@ -760,39 +763,39 @@ export class SpecPlanService {
       const revision = await this.saveExecutionPlanRevisionWithRepository(
         repository,
         executionPlan,
-        this.itemExecutionPlanDraftInput(workItem, item, specRevision, contextManifest, dto.actor_id),
+        this.itemImplementationPlanDraftInput(workItem, item, specRevision, contextManifest, dto.actor_id),
       );
       await repository.saveExecutionPlan({ ...executionPlan, current_revision_id: revision.id, updated_at: this.now() });
       await this.updateDevelopmentPlanItemArtifactStatus(
         repository,
         plan,
         item,
-        'execution_plan_status',
+        'implementation_plan_status',
         'draft',
-        'execution_plan_draft_generated',
+        'implementation_plan_draft_generated',
         dto.actor_id,
       );
       await this.eventWithRepository(
         repository,
         'development_plan_item',
         item.id,
-        'item_execution_plan_draft_generated',
+        'item_implementation_plan_draft_generated',
         dto.actor_id,
         {
-          execution_plan_id: executionPlan.id,
-          execution_plan_revision_id: revision.id,
+          implementation_plan_id: executionPlan.id,
+          implementation_plan_revision_id: revision.id,
           context_manifest_id: contextManifest.id,
         },
       );
-      return revision;
+      return this.toPublicImplementationPlanRevision(revision, repository);
     });
   }
 
-  async regenerateItemExecutionPlanDraft(
+  async regenerateItemImplementationPlanDraft(
     developmentPlanId: string,
     itemId: string,
     dto: RegenerateArtifactDraftCommandDto,
-  ): Promise<ExecutionPlanRevision> {
+  ): Promise<PublicImplementationPlanRevision> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
       const { plan, item, workItem, boundary, brainstormingSession } = await this.requireApprovedBoundary(
         developmentPlanId,
@@ -802,7 +805,7 @@ export class SpecPlanService {
       );
       const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
       if (executionPlan.status === 'approved') {
-        throw new ConflictException(`Approved Execution Plan ${executionPlan.id} cannot be regenerated`);
+        throw new ConflictException(`Approved Implementation Plan Doc ${executionPlan.id} cannot be regenerated`);
       }
       const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
       this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
@@ -828,41 +831,41 @@ export class SpecPlanService {
       const revision = await this.saveExecutionPlanRevisionWithRepository(
         repository,
         draftPlan,
-        this.itemExecutionPlanDraftInput(workItem, item, specRevision, contextManifest, dto.actor_id, dto.feedback),
+        this.itemImplementationPlanDraftInput(workItem, item, specRevision, contextManifest, dto.actor_id, dto.feedback),
       );
       await repository.saveExecutionPlan({ ...draftPlan, current_revision_id: revision.id, updated_at: this.now() });
       await this.updateDevelopmentPlanItemArtifactStatus(
         repository,
         plan,
         item,
-        'execution_plan_status',
+        'implementation_plan_status',
         'draft',
-        'execution_plan_draft_regenerated',
+        'implementation_plan_draft_regenerated',
         dto.actor_id,
       );
       await this.eventWithRepository(
         repository,
         'development_plan_item',
         item.id,
-        'item_execution_plan_draft_regenerated',
+        'item_implementation_plan_draft_regenerated',
         dto.actor_id,
         {
-          execution_plan_id: executionPlan.id,
-          execution_plan_revision_id: revision.id,
+          implementation_plan_id: executionPlan.id,
+          implementation_plan_revision_id: revision.id,
           context_manifest_id: contextManifest.id,
           feedback: dto.feedback,
           preserve_prior_decisions: dto.preserve_prior_decisions,
         },
       );
-      return revision;
+      return this.toPublicImplementationPlanRevision(revision, repository);
     });
   }
 
-  async saveItemExecutionPlanDraft(
+  async saveItemImplementationPlanDraft(
     developmentPlanId: string,
     itemId: string,
     document: MarkdownDocument,
-  ): Promise<PublicExecutionPlanRevision> {
+  ): Promise<PublicImplementationPlanRevision> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
       const { plan, item, workItem } = await this.requirePlanItem(developmentPlanId, itemId, repository);
       const actorId = item.driver_actor_id ?? workItem.driver_actor_id;
@@ -872,7 +875,7 @@ export class SpecPlanService {
         this.requireExecutionPlanCurrentRevision(executionPlan),
         repository,
       );
-      this.requireDocumentObjectRef(document, 'execution_plan_revision', currentRevision.id);
+      this.requireDocumentObjectRef(document, 'implementation_plan_revision', currentRevision.id);
       const validatedDocument = await this.markdownDocuments.validateForWrite(document);
       const draftDocument = {
         ...validatedDocument,
@@ -896,35 +899,35 @@ export class SpecPlanService {
       const updatedPlan = { ...draftPlan, current_revision_id: revision.id, updated_at: this.now() };
       await repository.saveExecutionPlan(updatedPlan);
       await this.linkMarkdownAttachmentsToRevision(repository, draftDocument.attachment_refs, {
-        type: 'execution_plan_revision',
+        type: 'implementation_plan_revision',
         id: revision.id,
-        execution_plan_id: executionPlan.id,
+        implementation_plan_id: executionPlan.id,
       });
       await this.updateDevelopmentPlanItemArtifactStatus(
         repository,
         plan,
         item,
-        'execution_plan_status',
+        'implementation_plan_status',
         'draft',
-        'execution_plan_draft_saved',
+        'implementation_plan_draft_saved',
         actorId,
       );
       await this.eventWithRepository(
         repository,
-        'execution_plan_revision',
+        'implementation_plan_revision',
         revision.id,
-        'execution_plan_draft_saved',
+        'implementation_plan_draft_saved',
         actorId,
         {
-          execution_plan_id: executionPlan.id,
+          implementation_plan_id: executionPlan.id,
           previous_revision_id: currentRevision.id,
         },
       );
-      return this.toPublicExecutionPlanRevision(revision, repository);
+      return this.toPublicImplementationPlanRevision(revision, repository);
     });
   }
 
-  async submitItemExecutionPlanForApproval(
+  async submitItemImplementationPlanForApproval(
     developmentPlanId: string,
     itemId: string,
     dto: SubmitForApprovalCommandDto,
@@ -934,9 +937,9 @@ export class SpecPlanService {
       await this.requireApprovedItemSpec(item, repository);
       const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
       const revisionId = this.requireExecutionPlanCurrentRevision(executionPlan);
-      await this.requireRevisionNotRejected(revisionId, 'execution_plan_revision', repository);
+      await this.requireRevisionNotRejected(revisionId, 'implementation_plan_revision', repository);
       if (executionPlan.status !== 'draft' && executionPlan.status !== 'changes_requested') {
-        throw new BadRequestException(`Execution Plan ${executionPlan.id} cannot be submitted from ${executionPlan.status}`);
+        throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} cannot be submitted from ${executionPlan.status}`);
       }
       const updated: ExecutionPlanDocument = { ...executionPlan, status: 'in_review', updated_at: this.now() };
       await repository.saveExecutionPlan(updated);
@@ -944,17 +947,17 @@ export class SpecPlanService {
         repository,
         plan,
         item,
-        'execution_plan_status',
+        'implementation_plan_status',
         'in_review',
-        'execution_plan_submitted_for_approval',
+        'implementation_plan_submitted_for_approval',
         dto.actor_id,
       );
-      await this.historyWithRepository(repository, 'execution_plan', executionPlan.id, executionPlan.status, updated.status, dto.actor_id);
+      await this.historyWithRepository(repository, 'implementation_plan_doc', executionPlan.id, executionPlan.status, updated.status, dto.actor_id);
       return updated;
     });
   }
 
-  async approveItemExecutionPlan(
+  async approveItemImplementationPlan(
     developmentPlanId: string,
     itemId: string,
     dto: ApproveArtifactCommandDto,
@@ -964,7 +967,7 @@ export class SpecPlanService {
       const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
       const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
       if (executionPlan.status !== 'in_review') {
-        throw new BadRequestException(`Execution Plan ${executionPlan.id} is not awaiting approval`);
+        throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} is not awaiting approval`);
       }
       const currentRevisionId = this.requireExecutionPlanCurrentRevision(executionPlan);
       const currentRevision = await this.requireItemExecutionPlanRevision(item.id, currentRevisionId, repository);
@@ -983,19 +986,19 @@ export class SpecPlanService {
         repository,
         plan,
         item,
-        'execution_plan_status',
+        'implementation_plan_status',
         'approved',
-        'execution_plan_approved',
+        'implementation_plan_approved',
         reviewerActorId,
       );
-      await this.historyWithRepository(repository, 'execution_plan', executionPlan.id, executionPlan.status, updated.status, reviewerActorId);
+      await this.historyWithRepository(repository, 'implementation_plan_doc', executionPlan.id, executionPlan.status, updated.status, reviewerActorId);
       await this.decisionWithRepository(
         repository,
-        'execution_plan',
+        'implementation_plan_doc',
         executionPlan.id,
         reviewerActorId,
         'approved',
-        dto.rationale ?? 'Execution Plan approved.',
+        dto.rationale ?? 'Implementation Plan Doc approved.',
       );
       const project = this.requireFound(await repository.getProject(plan.project_id), `Project ${plan.project_id}`);
       await this.executionPackages.createOrReuseItemExecutionPackage(repository, {
@@ -1012,7 +1015,7 @@ export class SpecPlanService {
     });
   }
 
-  async requestItemExecutionPlanChanges(
+  async requestItemImplementationPlanChanges(
     developmentPlanId: string,
     itemId: string,
     dto: RequestArtifactChangesCommandDto,
@@ -1021,7 +1024,7 @@ export class SpecPlanService {
       const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
       const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
       if (executionPlan.status !== 'in_review') {
-        throw new BadRequestException(`Execution Plan ${executionPlan.id} is not awaiting approval`);
+        throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} is not awaiting approval`);
       }
       const updated: ExecutionPlanDocument = { ...executionPlan, status: 'changes_requested', updated_at: this.now() };
       await repository.saveExecutionPlan(updated);
@@ -1029,18 +1032,18 @@ export class SpecPlanService {
         repository,
         plan,
         item,
-        'execution_plan_status',
+        'implementation_plan_status',
         'changes_requested',
-        'execution_plan_changes_requested',
+        'implementation_plan_changes_requested',
         dto.actor_id,
       );
-      await this.historyWithRepository(repository, 'execution_plan', executionPlan.id, executionPlan.status, updated.status, dto.actor_id);
-      await this.decisionWithRepository(repository, 'execution_plan', executionPlan.id, dto.actor_id, 'changes_requested', dto.rationale);
+      await this.historyWithRepository(repository, 'implementation_plan_doc', executionPlan.id, executionPlan.status, updated.status, dto.actor_id);
+      await this.decisionWithRepository(repository, 'implementation_plan_doc', executionPlan.id, dto.actor_id, 'changes_requested', dto.rationale);
       return updated;
     });
   }
 
-  async rejectItemExecutionPlan(
+  async rejectItemImplementationPlan(
     developmentPlanId: string,
     itemId: string,
     dto: RejectArtifactCommandDto,
@@ -1049,7 +1052,7 @@ export class SpecPlanService {
       const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
       const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
       if (executionPlan.status !== 'in_review') {
-        throw new BadRequestException(`Execution Plan ${executionPlan.id} is not awaiting approval`);
+        throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} is not awaiting approval`);
       }
       const revisionId = this.requireExecutionPlanCurrentRevision(executionPlan);
       const updated: ExecutionPlanDocument = { ...executionPlan, status: 'changes_requested', updated_at: this.now() };
@@ -1058,29 +1061,29 @@ export class SpecPlanService {
         repository,
         plan,
         item,
-        'execution_plan_status',
+        'implementation_plan_status',
         'changes_requested',
-        'execution_plan_rejected',
+        'implementation_plan_rejected',
         dto.actor_id,
       );
       await this.eventWithRepository(
         repository,
-        'execution_plan_revision',
+        'implementation_plan_revision',
         revisionId,
-        'execution_plan_revision_rejected',
+        'implementation_plan_revision_rejected',
         dto.actor_id,
         {
-          execution_plan_id: executionPlan.id,
+          implementation_plan_id: executionPlan.id,
           rationale: dto.rationale,
         },
       );
-      await this.historyWithRepository(repository, 'execution_plan', executionPlan.id, executionPlan.status, updated.status, dto.actor_id);
-      await this.decisionWithRepository(repository, 'execution_plan', executionPlan.id, dto.actor_id, 'changes_requested', dto.rationale);
+      await this.historyWithRepository(repository, 'implementation_plan_doc', executionPlan.id, executionPlan.status, updated.status, dto.actor_id);
+      await this.decisionWithRepository(repository, 'implementation_plan_doc', executionPlan.id, dto.actor_id, 'changes_requested', dto.rationale);
       return updated;
     });
   }
 
-  async compareItemExecutionPlanRevisions(
+  async compareItemImplementationPlanRevisions(
     developmentPlanId: string,
     itemId: string,
     query: RevisionCompareQueryDto,
@@ -1088,10 +1091,10 @@ export class SpecPlanService {
     await this.requirePlanItem(developmentPlanId, itemId);
     const base = await this.requireItemExecutionPlanRevision(itemId, query.base_revision_id);
     const compare = await this.requireItemExecutionPlanRevision(itemId, query.compare_revision_id);
-    return this.revisionDiff(query, base, compare);
+    return this.revisionDiff(query, this.publicImplementationPlanRevisionSnapshot(base), this.publicImplementationPlanRevisionSnapshot(compare));
   }
 
-  async writeGeneratedItemExecutionPlanRevision(input: {
+  async writeGeneratedItemImplementationPlanRevision(input: {
     actionRun: AutomationActionRun;
     generated: GeneratedExecutionPlanRevisionV1;
     runtime_job_id: string;
@@ -1099,7 +1102,7 @@ export class SpecPlanService {
     const precondition = this.productGenerationPrecondition(input.actionRun);
     if (
       precondition === undefined ||
-      input.actionRun.action_type !== 'generate_development_plan_item_execution_plan_revision' ||
+      input.actionRun.action_type !== 'generate_development_plan_item_implementation_plan_revision' ||
       input.actionRun.target_object_type !== 'development_plan_item' ||
       input.actionRun.precondition_fingerprint !== codexCanonicalDigest(precondition)
     ) {
@@ -1110,7 +1113,7 @@ export class SpecPlanService {
         repository,
         input.actionRun.id,
         input.runtime_job_id,
-        'execution_plan_revision',
+        'implementation_plan_revision',
       );
       if (prior !== undefined) {
         return { applied: true, revision: prior };
@@ -1168,20 +1171,20 @@ export class SpecPlanService {
         repository,
         loaded.plan,
         loaded.item,
-        'execution_plan_status',
+        'implementation_plan_status',
         'draft',
-        'execution_plan_runtime_generation_applied',
+        'implementation_plan_runtime_generation_applied',
         String(precondition.requested_by_actor_id),
       );
       await this.eventWithRepository(
         repository,
         'development_plan_item',
         loaded.item.id,
-        'item_execution_plan_runtime_draft_generated',
+        'item_implementation_plan_runtime_draft_generated',
         String(precondition.requested_by_actor_id),
         {
-          execution_plan_id: executionPlan.id,
-          execution_plan_revision_id: revision.id,
+          implementation_plan_id: executionPlan.id,
+          implementation_plan_revision_id: revision.id,
           based_on_spec_revision_id: approvedSpecRevision.id,
           context_manifest_id: loaded.contextManifest.id,
           runtime_job_id: input.runtime_job_id,
@@ -1190,7 +1193,7 @@ export class SpecPlanService {
       );
       await this.eventWithRepository(repository, 'automation_action_run', input.actionRun.id, 'product_generation_result_applied', String(precondition.requested_by_actor_id), {
         runtime_job_id: input.runtime_job_id,
-        generated_object_type: 'execution_plan_revision',
+        generated_object_type: 'implementation_plan_revision',
         generated_revision_id: revision.id,
       });
       return { applied: true, revision };
@@ -1252,8 +1255,8 @@ export class SpecPlanService {
     );
   }
 
-  async getPublicExecutionPlanRevision(executionPlanRevisionId: string): Promise<PublicExecutionPlanRevision> {
-    return this.toPublicExecutionPlanRevision(await this.getExecutionPlanRevision(executionPlanRevisionId));
+  async getPublicImplementationPlanRevision(executionPlanRevisionId: string): Promise<PublicImplementationPlanRevision> {
+    return this.toPublicImplementationPlanRevision(await this.getExecutionPlanRevision(executionPlanRevisionId));
   }
 
   private withPlanItemMutation<T>(
@@ -1426,7 +1429,7 @@ export class SpecPlanService {
     const itemId = item.id;
     const spec = await this.findItemSpec(itemId, repository);
     if (spec === undefined) {
-      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Execution Plan: spec_not_approved`);
+      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Implementation Plan Doc: spec_not_approved`);
     }
     const approvedRevisionId = spec.approved_revision_id;
     const specRevision = approvedRevisionId === undefined ? undefined : await repository.getSpecRevision(approvedRevisionId);
@@ -1436,7 +1439,7 @@ export class SpecPlanService {
       ...(specRevision === undefined ? {} : { specRevision }),
     });
     if (!gate.ok || spec.current_revision_id !== approvedRevisionId) {
-      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Execution Plan: ${gate.ok ? 'approved_spec_not_current' : gate.reason}`);
+      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Implementation Plan Doc: ${gate.ok ? 'approved_spec_not_current' : gate.reason}`);
     }
     return { spec, specRevision: specRevision! };
   }
@@ -1456,7 +1459,7 @@ export class SpecPlanService {
       specRevision.boundary_summary_id !== boundary.id ||
       this.revisionStructuredBoundarySummaryRevisionId(specRevision) !== boundary.revision_id
     ) {
-      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Execution Plan: stale_boundary_summary_revision`);
+      throw new BadRequestException(`Development Plan Item ${itemId} cannot generate Implementation Plan Doc: stale_boundary_summary_revision`);
     }
   }
 
@@ -1466,7 +1469,7 @@ export class SpecPlanService {
   ): Promise<void> {
     if (!(await this.currentItemRevisionAtApprovedSpecGate(item, repository))) {
       throw new BadRequestException(
-        `Development Plan Item ${item.id} cannot generate Execution Plan: approved_spec_not_current_item_revision`,
+        `Development Plan Item ${item.id} cannot generate Implementation Plan Doc: approved_spec_not_current_item_revision`,
       );
     }
   }
@@ -1481,8 +1484,8 @@ export class SpecPlanService {
     return (
       currentRevision?.change_reason === 'spec_approved' &&
       currentRevision.snapshot.spec_status === 'approved' &&
-      currentRevision.snapshot.execution_plan_status === 'missing' &&
-      currentRevision.snapshot.next_action === 'generate_execution_plan'
+      currentRevision.snapshot.implementation_plan_status === 'missing' &&
+      currentRevision.snapshot.next_action === 'generate_implementation_plan'
     );
   }
 
@@ -1514,7 +1517,7 @@ export class SpecPlanService {
     const executionPlanId = events
       .slice()
       .reverse()
-      .map((event) => event.metadata.execution_plan_id)
+      .map((event) => event.metadata.implementation_plan_id)
       .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
     return executionPlanId === undefined ? undefined : repository.getExecutionPlan(executionPlanId);
   }
@@ -1522,7 +1525,7 @@ export class SpecPlanService {
   private async requireItemExecutionPlan(itemId: string, repository: DeliveryRepository): Promise<ExecutionPlanDocument> {
     const executionPlan = await this.findItemExecutionPlan(itemId, repository);
     if (executionPlan === undefined) {
-      throw new NotFoundException(`Development Plan Item ${itemId} has no Execution Plan`);
+      throw new NotFoundException(`Development Plan Item ${itemId} has no Implementation Plan Doc`);
     }
     return executionPlan;
   }
@@ -1537,8 +1540,8 @@ export class SpecPlanService {
     actorId: string;
   }) {
     const precondition = {
-      source_object_ref: input.item.source_ref,
-      source_object_revision_id: input.workItem.updated_at,
+      source_ref: input.item.source_ref,
+      source_revision_id: input.workItem.updated_at,
       development_plan_id: input.plan.id,
       development_plan_revision_id: input.plan.revision_id,
       development_plan_item_id: input.item.id,
@@ -1565,7 +1568,7 @@ export class SpecPlanService {
     };
   }
 
-  private executionPlanGenerationActionInput(input: {
+  private implementationPlanGenerationActionInput(input: {
     plan: DevelopmentPlan;
     item: DevelopmentPlanItem;
     workItem: WorkItem;
@@ -1576,8 +1579,8 @@ export class SpecPlanService {
     actorId: string;
   }) {
     const precondition = {
-      source_object_ref: input.item.source_ref,
-      source_object_revision_id: input.workItem.updated_at,
+      source_ref: input.item.source_ref,
+      source_revision_id: input.workItem.updated_at,
       development_plan_id: input.plan.id,
       development_plan_revision_id: input.plan.revision_id,
       development_plan_item_id: input.item.id,
@@ -1639,7 +1642,7 @@ export class SpecPlanService {
       boundary_approved_at: input.boundary.approved_at,
       ...(input.approvedSpecRevisionId === undefined ? {} : { approved_spec_revision_id: input.approvedSpecRevisionId }),
       sources: [
-        { type: 'source_object_revision', ref: `${input.workItem.kind}:${input.workItem.id}`, digest: input.workItem.updated_at },
+        { type: 'planning_input_revision', ref: `${input.workItem.kind}:${input.workItem.id}`, digest: input.workItem.updated_at },
         { type: 'development_plan', ref: input.plan.id, digest: input.plan.revision_id },
         { type: 'development_plan_item', ref: input.item.id, digest: input.item.revision_id },
         { type: 'brainstorming_session', ref: input.brainstormingSession.id, digest: input.brainstormingSession.revision_id },
@@ -1712,7 +1715,7 @@ export class SpecPlanService {
         affected_surface_refs: this.publicSafeRefs('affected-surface', input.item.affected_surfaces),
         affected_surfaces_digest: codexCanonicalDigest(input.item.affected_surfaces),
       },
-      source_object: {
+      planning_input: {
         ref: input.item.source_ref,
         revision_id: input.workItem.updated_at,
         title: this.runtimeSafeText(input.workItem.title),
@@ -1861,12 +1864,12 @@ export class SpecPlanService {
       background: workItem.goal,
       goals: [workItem.goal],
       scope_in: [item.summary, ...item.affected_surfaces],
-      scope_out: ['Direct Work Item Spec or Execution Plan creation compatibility'],
+      scope_out: ['Direct Work Item Spec or Implementation Plan Doc creation compatibility'],
       acceptance_criteria: [...workItem.success_criteria],
       risk_notes: [workItem.risk, ...item.dependency_hints],
       test_strategy_summary: 'Validate item-scoped Spec gate behavior with API and contract tests.',
       ...(qaOwnerActorId === undefined ? {} : { qa_owner_actor_id: qaOwnerActorId }),
-      testability_note: `QA/Test Owner must validate ${item.title} against acceptance criteria before execution planning.`,
+      testability_note: `QA/Test Owner must validate ${item.title} against acceptance criteria before Implementation Plan Doc generation.`,
       risk_scenarios: item.dependency_hints.length > 0 ? item.dependency_hints : [`${item.risk} risk Plan Item requires focused validation.`],
       structured_document: {
         generated_by: 'mock_item_spec_draft_adapter',
@@ -1879,7 +1882,7 @@ export class SpecPlanService {
     };
   }
 
-  private itemExecutionPlanDraftInput(
+  private itemImplementationPlanDraftInput(
     workItem: WorkItem,
     item: DevelopmentPlanItem,
     specRevision: SpecRevision,
@@ -1890,7 +1893,7 @@ export class SpecPlanService {
     const feedbackLine = feedback === undefined ? '' : `\n\nRegeneration feedback: ${feedback}`;
     return {
       based_on_spec_revision_id: specRevision.id,
-      summary: `Draft execution plan for ${item.title}`,
+      summary: `Draft Implementation Plan Doc for ${item.title}`,
       content:
         [
           `Implement approved Spec revision ${specRevision.id}.`,
@@ -1912,7 +1915,7 @@ export class SpecPlanService {
     repository: DeliveryRepository,
     plan: DevelopmentPlan,
     item: DevelopmentPlanItem,
-    field: 'spec_status' | 'execution_plan_status',
+    field: 'spec_status' | 'implementation_plan_status',
     status: DevelopmentPlanItem['spec_status'],
     changeReason: string,
     actorId: string | undefined,
@@ -1937,21 +1940,21 @@ export class SpecPlanService {
   }
 
   private nextActionForItemStatus(
-    field: 'spec_status' | 'execution_plan_status',
+    field: 'spec_status' | 'implementation_plan_status',
     status: DevelopmentPlanItem['spec_status'],
   ): string {
     if (field === 'spec_status') {
       if (status === 'draft') return 'submit_spec_for_approval';
       if (status === 'in_review') return 'review_spec';
-      if (status === 'approved') return 'generate_execution_plan';
+      if (status === 'approved') return 'generate_implementation_plan';
       if (status === 'changes_requested') return 'regenerate_spec';
       return 'generate_spec';
     }
-    if (status === 'draft') return 'submit_execution_plan_for_approval';
-    if (status === 'in_review') return 'review_execution_plan';
+    if (status === 'draft') return 'submit_implementation_plan_for_approval';
+    if (status === 'in_review') return 'review_implementation_plan';
     if (status === 'approved') return 'start_execution';
-    if (status === 'changes_requested') return 'regenerate_execution_plan';
-    return 'generate_execution_plan';
+    if (status === 'changes_requested') return 'regenerate_implementation_plan';
+    return 'generate_implementation_plan';
   }
 
   private async saveDevelopmentPlanItemRevision(
@@ -1997,7 +2000,7 @@ export class SpecPlanService {
         title: item.title,
         boundary_status: item.boundary_status,
         spec_status: item.spec_status,
-        execution_plan_status: item.execution_plan_status,
+        implementation_plan_status: item.implementation_plan_status,
         execution_status: item.execution_status,
       })),
       change_reason: changeReason,
@@ -2111,8 +2114,8 @@ export class SpecPlanService {
     return (
       actionRun.target_object_id === loaded.item.id &&
       actionRun.target_revision_id === loaded.item.revision_id &&
-      JSON.stringify(precondition.source_object_ref) === JSON.stringify(loaded.item.source_ref) &&
-      String(precondition.source_object_revision_id) === loaded.workItem.updated_at &&
+      JSON.stringify(precondition.source_ref) === JSON.stringify(loaded.item.source_ref) &&
+      String(precondition.source_revision_id) === loaded.workItem.updated_at &&
       String(precondition.development_plan_id) === loaded.plan.id &&
       String(precondition.development_plan_revision_id) === loaded.plan.revision_id &&
       String(precondition.development_plan_item_id) === loaded.item.id &&
@@ -2223,7 +2226,7 @@ export class SpecPlanService {
     repository: DeliveryRepository,
     actionRunId: string,
     runtimeJobId: string,
-    objectType: 'spec_revision' | 'execution_plan_revision',
+    objectType: 'spec_revision' | 'implementation_plan_revision',
   ): Promise<T | undefined> {
     const applied = (await repository.listObjectEvents(actionRunId, 'automation_action_run')).find(
       (event) =>
@@ -2257,9 +2260,9 @@ export class SpecPlanService {
     revisionId: string,
     repository: DeliveryRepository = this.repository,
   ): Promise<ExecutionPlanRevision> {
-    const revision = this.requireFound(await repository.getExecutionPlanRevision(revisionId), `Execution Plan Revision ${revisionId}`);
+    const revision = this.requireFound(await repository.getExecutionPlanRevision(revisionId), `Implementation Plan Revision ${revisionId}`);
     if (revision.development_plan_item_id !== itemId) {
-      throw new NotFoundException(`Execution Plan Revision ${revisionId} not found`);
+      throw new NotFoundException(`Implementation Plan Revision ${revisionId} not found`);
     }
     return revision;
   }
@@ -2286,14 +2289,14 @@ export class SpecPlanService {
 
   private requireExecutionPlanCurrentRevision(executionPlan: ExecutionPlanDocument): string {
     if (executionPlan.current_revision_id === undefined) {
-      throw new BadRequestException(`Execution Plan ${executionPlan.id} has no current revision`);
+      throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} has no current revision`);
     }
     return executionPlan.current_revision_id;
   }
 
   private async requireRevisionNotRejected(
     revisionId: string,
-    objectType: 'spec_revision' | 'execution_plan_revision',
+    objectType: 'spec_revision' | 'implementation_plan_revision',
     repository: DeliveryRepository,
   ): Promise<void> {
     const rejected = (await repository.listObjectEvents(revisionId, objectType)).some((event) =>
@@ -2365,20 +2368,36 @@ export class SpecPlanService {
     return { ...publicRevision, scope_ref: await this.scopeRefForWorkItemId(workItemId) };
   }
 
-  private async toPublicExecutionPlanRevision(
+  private publicSpecRevisionSnapshot(revision: SpecRevision): Record<string, unknown> {
+    const {
+      work_item_id: _workItemId,
+      structured_document: _structuredDocument,
+      artifact_refs: _artifactRefs,
+      ...snapshot
+    } = revision;
+    return snapshot;
+  }
+
+  private async toPublicImplementationPlanRevision(
     revision: ExecutionPlanRevision,
     repository: DeliveryRepository = this.repository,
-  ): Promise<PublicExecutionPlanRevision> {
-    const { structured_document: _structuredDocument, ...publicRevision } = revision;
+  ): Promise<PublicImplementationPlanRevision> {
+    const { execution_plan_id: executionPlanId, structured_document: _structuredDocument, ...publicRevision } = revision;
     return {
       ...publicRevision,
-      attachment_refs: await this.publicAttachmentsForObject(repository, 'execution_plan_revision', revision.id),
+      implementation_plan_id: executionPlanId,
+      attachment_refs: await this.publicAttachmentsForObject(repository, 'implementation_plan_revision', revision.id),
     };
+  }
+
+  private publicImplementationPlanRevisionSnapshot(revision: ExecutionPlanRevision): Record<string, unknown> {
+    const { execution_plan_id: executionPlanId, structured_document: _structuredDocument, ...snapshot } = revision;
+    return { ...snapshot, implementation_plan_id: executionPlanId };
   }
 
   private async publicAttachmentsForObject(
     repository: DeliveryRepository,
-    objectType: 'spec_revision' | 'execution_plan_revision',
+    objectType: 'spec_revision' | 'implementation_plan_revision',
     objectId: string,
   ): Promise<AttachmentRef[]> {
     return (await repository.listAttachmentsForObject(objectType, objectId)).map((attachment) => this.attachments.toPublicRef(attachment));
@@ -2386,7 +2405,7 @@ export class SpecPlanService {
 
   private requireDocumentObjectRef(
     document: MarkdownDocument,
-    expectedType: 'spec_revision' | 'execution_plan_revision',
+    expectedType: 'spec_revision' | 'implementation_plan_revision',
     expectedRevisionId: string,
   ): void {
     if (document.object_ref.type !== expectedType || document.object_ref.id !== expectedRevisionId) {
@@ -2397,7 +2416,7 @@ export class SpecPlanService {
   private async linkMarkdownAttachmentsToRevision(
     repository: DeliveryRepository,
     attachments: AttachmentRef[],
-    objectRef: Extract<ObjectRef, { type: 'spec_revision' | 'execution_plan_revision' }>,
+    objectRef: Extract<ObjectRef, { type: 'spec_revision' | 'implementation_plan_revision' }>,
   ): Promise<void> {
     await Promise.all(attachments.map((attachment) => repository.linkAttachmentToObject(attachment.id, objectRef)));
   }

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rebuild the public ForgeLoop product model around typed source documents, Development Plans, Plan Items, Superpowers Spec Docs, Implementation Plan Docs, and governed execution with no public legacy route, label, DTO, or fixture baggage.
+**Goal:** Rebuild the public ForgeLoop product model around typed planning input documents, Development Plans, Plan Items, Superpowers Spec Docs, Implementation Plan Docs, and governed execution with no public legacy route, label, DTO, or fixture baggage.
 
 **Architecture:** Treat document-native terminology as the public contract and isolate any remaining persistence/runtime `execution_plan` names behind explicit server-side adapters. The public path becomes `Requirement/Bug/Tech Debt/Initiative Document -> Development Plan -> Plan Item -> Brainstorming Session -> Spec Doc -> Implementation Plan Doc -> Execution Package -> Codex Run -> Review/QA/Release`, with Plan Item as the only public object that can enter Spec, Implementation Plan Doc, execution, review, QA, and release gates.
 
@@ -25,6 +25,11 @@
 - Internal persistence tables may keep physical table names only when they are hidden behind adapter functions and never appear in public UI, public route contracts, Web DTOs, fixtures, or product tests.
 - The checkbox steps inside an Implementation Plan Doc remain Markdown document content. This plan does not extract them into structured task records.
 - Review, QA, and Release remain Plan Item lifecycle stages or top-level queues in this slice. They are not dedicated Plan Item child routes.
+
+## Execution Notes
+
+- Completed as one atomic no-baggage migration instead of the per-task commit cadence shown below, because public route/API/DTO/test renames crossed task boundaries and needed one coherent verification pass.
+- Final verification covered the full suite and package builds: `pnpm test`, `pnpm --filter @forgeloop/web build`, `pnpm --filter @forgeloop/control-plane-api build`, `pnpm --filter @forgeloop/codex-runtime build`, and `git diff --check`.
 
 ## File Structure Map
 
@@ -88,14 +93,15 @@
 
 ### Source Document Workspaces
 
-- Modify `apps/web/src/features/project-management/source-object-view-model.ts`
-  - Rename public/test-facing concepts from "source object" to concrete typed document terminology.
+- Delete the retired generic planning input view model file under `apps/web/src/features/project-management/`
+  - Replace it with document-native workspace projections.
   - Keep adapter names private if renaming the directory is too broad for this slice.
 - Modify `apps/web/src/features/project-management/object-detail-layout.tsx`
   - Ensure Requirement/Bug/Tech Debt/Initiative detail pages are document-first.
-  - Keep only Development Plan create/link actions on typed source document pages.
-  - Remove or rename public "Source object" copy and the generic `/source-objects/...` command path.
-- Modify `apps/web/src/features/project-management/typed-source-object-list.tsx`
+  - Keep only Development Plan create/link actions on typed planning input pages.
+  - Remove public generic planning input copy and command paths.
+- Delete the retired generic planning input list file under `apps/web/src/features/project-management/`
+  - Replace it with a typed document list.
   - Keep dense type-specific document tables.
   - Ensure every visible label uses `Requirement`, `Bug`, `Tech Debt`, or `Initiative`.
 - Modify `apps/web/src/features/project-management/object-forms.tsx`
@@ -371,7 +377,7 @@ git commit -m "feat: reset document-native plan item routes"
 - Test: `tests/web/board-reports-release-readiness.test.tsx`
 - Test: `tests/web/executions-routes.test.tsx`
 
-- [ ] **Step 1: Write failing UI expectations**
+- [x] **Step 1: Write failing UI expectations**
 
 Update `tests/web/development-plan-routes.test.tsx` so the document review route loop uses:
 
@@ -390,7 +396,7 @@ for (const focus of ['spec', 'implementation-plan'] as const) {
 
 Update all public expectations in focused Web tests from `Execution Plan` to `Implementation Plan Doc`.
 
-- [ ] **Step 2: Run focused Web tests and verify they fail**
+- [x] **Step 2: Run focused Web tests and verify they fail**
 
 Run:
 
@@ -400,7 +406,7 @@ pnpm test tests/web/development-plan-routes.test.tsx tests/web/spec-plan-lifecyc
 
 Expected: FAIL because existing UI still renders `Execution Plan` and calls `/execution-plan`.
 
-- [ ] **Step 3: Rename Web command API methods and paths**
+- [x] **Step 3: Rename Web command API methods and paths**
 
 In `apps/web/src/shared/api/commands.ts`, replace `itemExecutionPlanPath(...)` with:
 
@@ -430,7 +436,7 @@ export interface ImplementationPlanRevision {
 
 All item document methods should use `ImplementationPlan` in the method name and `/implementation-plan` in the path.
 
-- [ ] **Step 4: Rename Plan Item gate model**
+- [x] **Step 4: Rename Plan Item gate model**
 
 In `apps/web/src/features/development-plans/plan-item-gates.tsx`, change:
 
@@ -454,7 +460,7 @@ Compare Implementation Plan Doc revisions
 
 Keep the state machine preconditions unchanged: approved Spec Doc and required QA/test strategy still gate Implementation Plan Doc generation.
 
-- [ ] **Step 5: Rename Plan Item detail focus**
+- [x] **Step 5: Rename Plan Item detail focus**
 
 In `apps/web/src/features/development-plans/development-plan-item-detail-route.tsx`:
 
@@ -474,7 +480,7 @@ type DevelopmentPlanItemFocus = 'overview' | 'spec' | 'implementation-plan' | 'e
 
 Move the old `brainstorming` focus behavior into the overview workspace: when the current gate is boundary work, `ActiveGateBody` should render `BrainstormingPanel` inside the Plan Item overview instead of requiring a `/brainstorming` child route.
 
-- [ ] **Step 6: Rename view model fields at the Web boundary**
+- [x] **Step 6: Rename view model fields at the Web boundary**
 
 In `apps/web/src/features/development-plans/development-plan-view-model.ts`, replace the local projection contract and all public reads so Web only accepts `implementation_plan_status`:
 
@@ -489,7 +495,7 @@ interface DevelopmentPlanItemProjection {
 
 Delete `execution_plan_status` from this Web projection instead of keeping a fallback. Public view models, table columns, artifact labels, blockers, next actions, and gate summaries must say `Implementation Plan Doc`. If storage still has `executionPlanStatus`, convert it in `packages/db/src/queries/project-management-queries.ts` before the response reaches Web.
 
-- [ ] **Step 7: Move and rename the review queue surface**
+- [x] **Step 7: Move and rename the review queue surface**
 
 Create `apps/web/src/features/reviews/review-queue-view-model.ts` from the active queue logic and use:
 
@@ -509,11 +515,11 @@ Regenerate Implementation Plan Doc
 
 Create `apps/web/src/features/reviews/document-review-queue.tsx` from the active queue UI. Change the second tab to `Implementation Plan Docs`, route query parameter to `tab=implementation-plans`, and link the page from `/reviews`. Delete the old `apps/web/src/features/spec-plan/spec-execution-plan-queue.tsx`, `spec-plan-view-model.ts`, and `specs-plans-route.tsx` files after the new route is wired.
 
-- [ ] **Step 8: Update adjacent public surfaces**
+- [x] **Step 8: Update adjacent public surfaces**
 
 Replace product-facing `Execution Plan` copy in board, cockpit, execution, release, and reports tests and source files with `Implementation Plan Doc`. Do not rename `Execution Package` when the text is explicitly runtime/developer context.
 
-- [ ] **Step 9: Run focused UI tests**
+- [x] **Step 9: Run focused UI tests**
 
 Run:
 
@@ -523,7 +529,7 @@ pnpm test tests/web/development-plan-routes.test.tsx tests/web/spec-plan-lifecyc
 
 Expected: PASS.
 
-- [ ] **Step 10: Commit UI terminology reset**
+- [x] **Step 10: Commit UI terminology reset**
 
 ```bash
 git add apps/web/src tests/web
@@ -546,7 +552,7 @@ git commit -m "feat: expose implementation plan docs in web UI"
 - Test: `tests/contracts/project-management-contracts.test.ts`
 - Test: `tests/contracts/project-management-readiness.test.ts`
 
-- [ ] **Step 1: Write failing public contract tests**
+- [x] **Step 1: Write failing public contract tests**
 
 In `tests/contracts/project-management-contracts.test.ts`, add assertions that public Plan Item contracts parse `implementation_plan_status` and reject `execution_plan_status`:
 
@@ -585,7 +591,7 @@ await request(app.getHttpServer())
   .expect(404);
 ```
 
-- [ ] **Step 2: Run focused contract/API tests and verify they fail**
+- [x] **Step 2: Run focused contract/API tests and verify they fail**
 
 Run:
 
@@ -595,13 +601,13 @@ pnpm test tests/contracts/project-management-contracts.test.ts tests/api/spec-pl
 
 Expected: FAIL because public schemas and controllers still expose `execution_plan`.
 
-- [ ] **Step 3: Update public Zod contracts**
+- [x] **Step 3: Update public Zod contracts**
 
 In `packages/contracts/src/ai-project-management.ts`, rename the public field:
 
 ```ts
 implementation_plan_status: artifactReviewStatusSchema,
-source_refs: z.array(sourceObjectRefSchema).min(1),
+source_refs: z.array(planningInputRefSchema).min(1),
 ```
 
 Remove `execution_plan_status` from the public `developmentPlanItemSchema`.
@@ -618,7 +624,7 @@ z.object({
 }).strict()
 ```
 
-- [ ] **Step 4: Update public Markdown route validation**
+- [x] **Step 4: Update public Markdown route validation**
 
 In `packages/contracts/src/markdown-document.ts`, replace the route segment allow-list:
 
@@ -628,7 +634,7 @@ In `packages/contracts/src/markdown-document.ts`, replace the route segment allo
 
 Do not keep `execution-plan` in the public route allow-list.
 
-- [ ] **Step 5: Update public controller endpoints**
+- [x] **Step 5: Update public controller endpoints**
 
 In `apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts`, rename endpoints:
 
@@ -647,7 +653,7 @@ In `apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts`, renam
 
 Remove the old controller methods instead of keeping aliases.
 
-- [ ] **Step 6: Update service public method names and serializers**
+- [x] **Step 6: Update service public method names and serializers**
 
 In `apps/control-plane-api/src/modules/spec-plan/spec-plan.service.ts`, public methods called by the controller must use `ImplementationPlan` names. If the repository layer still uses execution-plan tables, isolate that in private helpers:
 
@@ -671,7 +677,7 @@ private implementationPlanRevisionFromStorage(revision: ExecutionPlanRevision): 
 
 The adapter is private and must not leak old field names to API responses.
 
-- [ ] **Step 7: Rename review query endpoint**
+- [x] **Step 7: Rename review query endpoint**
 
 In `apps/control-plane-api/src/modules/query/query.controller.ts`, replace:
 
@@ -687,7 +693,7 @@ with:
 
 In `packages/db/src/queries/project-management-queries.ts`, serialize review queue rows with `artifact_type: 'implementation_plan_doc'` for Implementation Plan Doc rows.
 
-- [ ] **Step 8: Run API and contract tests**
+- [x] **Step 8: Run API and contract tests**
 
 Run:
 
@@ -697,7 +703,7 @@ pnpm test tests/contracts/project-management-contracts.test.ts tests/contracts/p
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit public API contract reset**
+- [x] **Step 9: Commit public API contract reset**
 
 ```bash
 git add packages/contracts apps/control-plane-api/src/modules/spec-plan apps/control-plane-api/src/modules/query packages/db/src/queries tests/contracts tests/api
@@ -720,7 +726,7 @@ git commit -m "feat: expose implementation plan doc contracts"
 - Test: `tests/web/development-plan-routes.test.tsx`
 - Test: `tests/db/brainstorming-repository.test.ts`
 
-- [ ] **Step 1: Write failing Development Plan document body tests**
+- [x] **Step 1: Write failing Development Plan document body tests**
 
 In `tests/api/development-plans.test.ts`, add a test proving Development Plans persist Markdown body content through create and query:
 
@@ -756,7 +762,7 @@ expect(document.querySelector('[data-development-plan-document]')?.textContent).
 expect(document.querySelector('[data-plan-items-table][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
 ```
 
-- [ ] **Step 2: Run document body tests and verify they fail**
+- [x] **Step 2: Run document body tests and verify they fail**
 
 Run:
 
@@ -766,7 +772,7 @@ pnpm test tests/api/development-plans.test.ts tests/web/development-plan-routes.
 
 Expected: FAIL because Development Plans currently expose title/status/source refs/items but no persisted Markdown body surface.
 
-- [ ] **Step 3: Add Development Plan body fields to contracts, domain, and storage**
+- [x] **Step 3: Add Development Plan body fields to contracts, domain, and storage**
 
 In `packages/contracts/src/ai-project-management.ts`, add this field to `developmentPlanSchema`:
 
@@ -788,7 +794,7 @@ bodyMarkdown: text('body_markdown').notNull().default(''),
 
 to `development_plans`, and add the matching `bodyMarkdown` column to `development_plan_revisions`.
 
-- [ ] **Step 4: Persist and serialize Development Plan body content**
+- [x] **Step 4: Persist and serialize Development Plan body content**
 
 In `apps/control-plane-api/src/modules/development-plans/development-plans.controller.ts`, allow `body_markdown` on create/generate draft commands.
 
@@ -797,14 +803,14 @@ In `apps/control-plane-api/src/modules/development-plans/development-plans.servi
 ```md
 # Development strategy
 
-## Source documents
+## Planning Input Documents
 
 ## Delivery slices
 
 ## Risks and release considerations
 ```
 
-- [ ] **Step 5: Render Development Plan as document plus table**
+- [x] **Step 5: Render Development Plan as document plus table**
 
 In `apps/web/src/features/development-plans/development-plan-detail-route.tsx`, render a first-class Development Plan document surface near the top of the workspace:
 
@@ -821,7 +827,7 @@ In `apps/web/src/features/development-plans/development-plan-detail-route.tsx`, 
 
 The Plan Item table remains the primary planning workspace (`data-plan-items-table` keeps `data-primary-work-surface`). The Development Plan document must be labeled `Development Plan`, never `Implementation Plan Doc`.
 
-- [ ] **Step 6: Write failing Plan Item invariant tests**
+- [x] **Step 6: Write failing Plan Item invariant tests**
 
 In `tests/api/development-plans.test.ts`, add tests:
 
@@ -852,7 +858,7 @@ expect(response.body.items[0]).toMatchObject({
 });
 ```
 
-- [ ] **Step 7: Run focused invariant tests and verify they fail**
+- [x] **Step 7: Run focused invariant tests and verify they fail**
 
 Run:
 
@@ -862,7 +868,7 @@ pnpm test tests/api/development-plans.test.ts tests/api/project-management-query
 
 Expected: FAIL because Plan Item source refs are currently singular or not validated at the public boundary.
 
-- [ ] **Step 8: Add domain validators**
+- [x] **Step 8: Add domain validators**
 
 In `packages/domain/src/development-plan.ts`, add:
 
@@ -873,8 +879,8 @@ export type PlanItemInvariantReason =
   | 'plan_item_source_refs_not_subset';
 
 export function validatePlanItemSourceRefs(input: {
-  parentSourceRefs: readonly SourceObjectRef[];
-  itemSourceRefs: readonly SourceObjectRef[];
+  parentSourceRefs: readonly PlanningInputRef[];
+  itemSourceRefs: readonly PlanningInputRef[];
 }): GateResult<PlanItemInvariantReason> {
   if (input.itemSourceRefs.length === 0) return { ok: false, reason: 'plan_item_source_refs_missing' };
   const parentKeys = new Set(input.parentSourceRefs.map(sourceRefKey));
@@ -883,17 +889,17 @@ export function validatePlanItemSourceRefs(input: {
 }
 ```
 
-- [ ] **Step 9: Update contracts and service input**
+- [x] **Step 9: Update contracts and service input**
 
 Update Plan Item create body to require:
 
 ```ts
-source_refs: z.array(sourceObjectRefSchema).min(1)
+source_refs: z.array(planningInputRefSchema).min(1)
 ```
 
 In `apps/control-plane-api/src/modules/development-plans/development-plans.service.ts`, call `validatePlanItemSourceRefs(...)` before saving. Fail closed with `ConflictException` for subset violations.
 
-- [ ] **Step 10: Update storage and mappers**
+- [x] **Step 10: Update storage and mappers**
 
 Update `packages/db/src/schema/development-plan.ts` so `development_plan_items` stores non-empty `sourceRefs`:
 
@@ -903,11 +909,11 @@ sourceRefs: jsonb('source_refs').$type<DevelopmentPlanItem['source_refs']>().not
 
 No public DTO or fixture may expose `source_ref` for Plan Items after this task.
 
-- [ ] **Step 11: Update Web item creation**
+- [x] **Step 11: Update Web item creation**
 
-In `apps/web/src/features/development-plans/development-plan-detail-route.tsx`, require at least one typed source ref when adding a Plan Item. Pass `source_refs` to `createDevelopmentPlanItem(...)`.
+In `apps/web/src/features/development-plans/development-plan-detail-route.tsx`, require at least one planning input ref when adding a Plan Item. Pass `source_refs` to `createDevelopmentPlanItem(...)`.
 
-- [ ] **Step 12: Run document body and invariant tests**
+- [x] **Step 12: Run document body and invariant tests**
 
 Run:
 
@@ -917,7 +923,7 @@ pnpm test tests/api/development-plans.test.ts tests/api/project-management-query
 
 Expected: PASS.
 
-- [ ] **Step 13: Commit document-backed planning and invariant enforcement**
+- [x] **Step 13: Commit document-backed planning and invariant enforcement**
 
 ```bash
 git add packages/domain packages/db/src/schema/development-plan.ts apps/control-plane-api/src/modules/development-plans apps/web/src tests/api tests/contracts
@@ -928,8 +934,10 @@ git commit -m "feat: make development plans document backed"
 
 **Files:**
 - Modify: `apps/web/src/features/project-management/object-detail-layout.tsx`
-- Modify: `apps/web/src/features/project-management/typed-source-object-list.tsx`
-- Modify: `apps/web/src/features/project-management/source-object-view-model.ts`
+- Delete the retired generic planning input list file under `apps/web/src/features/project-management/`
+- Delete the retired generic planning input view model file under `apps/web/src/features/project-management/`
+- Add: `apps/web/src/features/project-management/typed-document-list.tsx`
+- Add: `apps/web/src/features/project-management/document-workspace-view-model.ts`
 - Modify: `apps/web/src/features/project-management/object-forms.tsx`
 - Modify: `apps/web/src/features/project-management/object-evidence-route.tsx`
 - Modify: `apps/web/src/shared/api/commands.ts`
@@ -942,7 +950,7 @@ git commit -m "feat: make development plans document backed"
 - Test: `tests/api/development-plans.test.ts`
 - Test: `tests/api/executions.test.ts`
 
-- [ ] **Step 1: Write failing source document tests**
+- [x] **Step 1: Write failing planning input document tests**
 
 In `tests/web/project-management-routes.test.tsx`, assert each typed document detail page:
 
@@ -953,12 +961,12 @@ expect(screen.getByRole('button', { name: /generate development plan draft with 
 expect(screen.queryByRole('button', { name: /generate spec/i })).toBeNull();
 expect(screen.queryByRole('button', { name: /generate implementation plan doc/i })).toBeNull();
 expect(screen.queryByRole('button', { name: /^start execution$/i })).toBeNull();
-expect(document.body.textContent).not.toMatch(/source object|source context|execution plan/i);
+expect(document.body.textContent).not.toMatch(/legacy planning input copy|old planning context copy|execution plan/i);
 ```
 
-Add command API expectations that no Web command path includes `/source-objects/`.
+Add command API expectations that no Web command path includes the removed generic planning input command route.
 
-In `tests/api/spec-plan-service.test.ts`, add fail-closed negative API tests proving every concrete typed source document cannot generate downstream documents directly:
+In `tests/api/spec-plan-service.test.ts`, add fail-closed negative API tests proving every concrete planning input document cannot generate downstream documents directly:
 
 ```ts
 const typedSourceDocs = [
@@ -978,7 +986,7 @@ for (const doc of typedSourceDocs) {
 }
 ```
 
-In `tests/api/executions.test.ts`, add fail-closed negative API tests proving every concrete typed source document cannot start execution directly:
+In `tests/api/executions.test.ts`, add fail-closed negative API tests proving every concrete planning input document cannot start execution directly:
 
 ```ts
 for (const doc of typedSourceDocs) {
@@ -1050,7 +1058,7 @@ await expectStartExecutionToFail('stale_execution_package_revision');
 
 These tests must prove the Codex run is not enqueued unless approved Spec Doc revision, approved Implementation Plan Doc revision, current Plan Item revision, and runnable Execution Package boundary all exist.
 
-- [ ] **Step 2: Run focused source document tests and verify they fail**
+- [x] **Step 2: Run focused planning input document tests and verify they fail**
 
 Run:
 
@@ -1058,13 +1066,13 @@ Run:
 pnpm test tests/web/project-management-routes.test.tsx tests/web/product-grade-first-viewport.test.tsx tests/api/spec-plan-service.test.ts tests/api/development-plans.test.ts tests/api/executions.test.ts
 ```
 
-Expected: FAIL on remaining generic source-object wording, old downstream artifact copy, and any forbidden direct API mutation that is still accidentally routable.
+Expected: FAIL on remaining generic typed-document wording, old downstream artifact copy, and any forbidden direct API mutation that is still accidentally routable.
 
-The fail-closed matrix must cover all four source document types (`requirements`, `bugs`, `tech-debt`, `initiatives`) against all three forbidden downstream mutations (`spec/generate-draft`, `implementation-plan/generate-draft`, `execution/start`).
+The fail-closed matrix must cover all four planning input document types (`requirements`, `bugs`, `tech-debt`, `initiatives`) against all three forbidden downstream mutations (`spec/generate-draft`, `implementation-plan/generate-draft`, `execution/start`).
 
-- [ ] **Step 3: Replace generic source-object Web command path**
+- [x] **Step 3: Replace generic typed-document Web command path**
 
-In `apps/web/src/shared/api/commands.ts`, replace `linkSourceObjectToDevelopmentPlan(...)` with concrete helpers:
+In `apps/web/src/shared/api/commands.ts`, replace the retired generic Development Plan link helper with concrete helpers:
 
 ```ts
 linkRequirementToDevelopmentPlan(requirementId, developmentPlanId, body)
@@ -1082,9 +1090,9 @@ Paths should be:
 /initiatives/:initiativeId/development-plans/:developmentPlanId/link
 ```
 
-Do not keep `/source-objects/...` in Web commands.
+Do not keep the removed generic planning input route in Web commands.
 
-- [ ] **Step 4: Update source document detail actions**
+- [x] **Step 4: Update planning input detail actions**
 
 In `object-detail-layout.tsx`, switch by `detail.ref.type` and call the matching concrete link helper. Change the downstream gate notice to:
 
@@ -1096,9 +1104,9 @@ In `object-detail-layout.tsx`, switch by `detail.ref.type` and call the matching
 />
 ```
 
-- [ ] **Step 5: Tighten typed source list and detail copy**
+- [x] **Step 5: Tighten typed planning input list and detail copy**
 
-In `typed-source-object-list.tsx` and `source-object-view-model.ts`, keep visible labels concrete:
+In `typed-document-list.tsx` and `document-workspace-view-model.ts`, keep visible labels concrete:
 
 ```ts
 Requirement Driver
@@ -1109,21 +1117,21 @@ Planning coverage
 Plan Item coverage
 ```
 
-Avoid public strings `source object`, `source context`, `source intent`, and generic `owner`.
+Avoid public strings that expose old generic source terminology or generic `owner`.
 
-- [ ] **Step 6: Add concrete backend link endpoints**
+- [x] **Step 6: Add concrete backend link endpoints**
 
-In `apps/control-plane-api/src/modules/development-plans/development-plans.controller.ts`, add concrete link endpoints that call the same service with concrete source refs. Remove the generic `/source-objects/...` route.
+In `apps/control-plane-api/src/modules/development-plans/development-plans.controller.ts`, add concrete link endpoints that call the same service with concrete planning input refs. Remove the generic planning input route.
 
-- [ ] **Step 7: Assert forbidden direct mutations fail closed at the API layer**
+- [x] **Step 7: Assert forbidden direct mutations fail closed at the API layer**
 
-In `apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts`, do not add any typed source document document-generation route. The tests from Step 1 should pass by returning 404 for direct typed source to Spec Doc or Implementation Plan Doc generation.
+In `apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts`, do not add any planning input document-generation route. The tests from Step 1 should pass by returning 404 for direct planning input to Spec Doc or Implementation Plan Doc generation.
 
 In `apps/control-plane-api/src/modules/development-plans/development-plans.controller.ts`, do not add Development Plan-level Spec Doc, Implementation Plan Doc, or execution routes. Only Plan Item routes under `/development-plans/:developmentPlanId/items/:itemId/...` may call those services.
 
 In `apps/control-plane-api/src/modules/executions/executions.service.ts`, keep the existing Plan Item execution preconditions, rename public-facing `execution_plan_*` response fields and error messages to `implementation_plan_*`, and keep Execution Package graph validation before `runControlService.enqueueRunWithRepository(...)`. Add controller-level tests so there is no `/development-plans/:developmentPlanId/execution/start`, no `/requirements/:id/execution/start`, no `/bugs/:id/execution/start`, no `/tech-debt/:id/execution/start`, and no `/initiatives/:id/execution/start` route.
 
-- [ ] **Step 8: Run focused source tests**
+- [x] **Step 8: Run focused source tests**
 
 Run:
 
@@ -1133,11 +1141,11 @@ pnpm test tests/web/project-management-routes.test.tsx tests/api/project-managem
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit source document reset**
+- [x] **Step 9: Commit planning input document reset**
 
 ```bash
 git add apps/web/src/features/project-management apps/web/src/shared/api/commands.ts apps/control-plane-api/src/modules/development-plans tests/web tests/api
-git commit -m "feat: make source documents document first"
+git commit -m "feat: make planning input documents document first"
 ```
 
 ## Task 6: Expose Brainstorming Session As The Plan Item Boundary Artifact
@@ -1153,7 +1161,7 @@ git commit -m "feat: make source documents document first"
 - Test: `tests/db/brainstorming-repository.test.ts`
 - Test: `tests/web/development-plan-routes.test.tsx`
 
-- [ ] **Step 1: Write failing brainstorming artifact tests**
+- [x] **Step 1: Write failing brainstorming artifact tests**
 
 In `tests/web/development-plan-routes.test.tsx`, assert the Plan Item overview shows the Boundary/Brainstorming artifact when boundary work is current:
 
@@ -1165,7 +1173,7 @@ expect(document.querySelector('[data-brainstorming-session-artifact]')?.textCont
 
 In `tests/api/brainstorming.test.ts`, assert returned session data includes `development_plan_id`, `development_plan_item_id`, questions, answers, decisions, summary revision ids, and generated Spec Doc link when available.
 
-- [ ] **Step 2: Run focused tests and verify they fail**
+- [x] **Step 2: Run focused tests and verify they fail**
 
 Run:
 
@@ -1175,7 +1183,7 @@ pnpm test tests/api/brainstorming.test.ts tests/web/development-plan-routes.test
 
 Expected: FAIL because the Web panel currently shows only a thin session summary.
 
-- [ ] **Step 3: Extend public brainstorming session projection**
+- [x] **Step 3: Extend public brainstorming session projection**
 
 In `packages/domain/src/brainstorming.ts` and `apps/control-plane-api/src/modules/brainstorming/brainstorming.service.ts`, ensure the public response has:
 
@@ -1196,7 +1204,7 @@ In `packages/domain/src/brainstorming.ts` and `apps/control-plane-api/src/module
 }
 ```
 
-- [ ] **Step 4: Render artifact details in the Plan Item workspace**
+- [x] **Step 4: Render artifact details in the Plan Item workspace**
 
 In `brainstorming-panel.tsx`, wrap the session artifact in:
 
@@ -1206,7 +1214,7 @@ In `brainstorming-panel.tsx`, wrap the session artifact in:
 
 Show compact sections for Session, Questions, Answers, Decisions, Boundary Summary, Resume, and Generated Spec Doc. Use existing `Button`, `StatusPill`, and `InlineNotice` components.
 
-- [ ] **Step 5: Ensure generated Spec links use Plan Item routes**
+- [x] **Step 5: Ensure generated Spec links use Plan Item routes**
 
 When a Spec Doc link exists, the href must be:
 
@@ -1214,9 +1222,9 @@ When a Spec Doc link exists, the href must be:
 `/development-plans/${developmentPlanId}/items/${itemId}/spec`
 ```
 
-No source document page should link directly to Spec generation.
+No planning input document page should link directly to Spec generation.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run:
 
@@ -1226,7 +1234,7 @@ pnpm test tests/api/brainstorming.test.ts tests/db/brainstorming-repository.test
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit brainstorming artifact surface**
+- [x] **Step 7: Commit brainstorming artifact surface**
 
 ```bash
 git add apps/web/src/features/brainstorming apps/web/src/features/development-plans packages/domain/src/brainstorming.ts packages/db/src/schema/brainstorming.ts apps/control-plane-api/src/modules/brainstorming packages/db/src/queries tests/api tests/db tests/web
@@ -1243,7 +1251,7 @@ git commit -m "feat: expose brainstorming as plan item artifact"
 - Modify: `tests/e2e/ai-native-project-management-visual.e2e.test.ts`
 - Modify: `scripts/product-review-preview.ts` if it hard-codes routes.
 
-- [ ] **Step 1: Write failing no-baggage guards**
+- [x] **Step 1: Write failing no-baggage guards**
 
 In `tests/web/no-legacy-web-ui.test.ts`, add public Web scans:
 
@@ -1255,7 +1263,7 @@ const activeProductAndFixtureText = () =>
     .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
 
-expect(activeWebSourceText()).not.toMatch(/execution-plan|Execution Plan|execution_plan_status|source object|source-objects/i);
+expect(activeWebSourceText()).not.toMatch(/execution-plan|Execution Plan|execution_plan_status|legacy planning input copy/i);
 expect(activeProductAndFixtureText()).not.toMatch(/\/development-plans\/[^"']+\/items\/[^"']+\/(?:brainstorming|execution-plan|review|qa)/);
 ```
 
@@ -1268,7 +1276,7 @@ expect(activeWebSourceText()).not.toMatch(/Execution Package Browser|raw Executi
 In `tests/naming/delivery-naming.test.ts`, add a product-surface guard that ignores internal DB schema files but scans `apps/web`, `tests/web`, `packages/contracts`, and API controller route strings.
 Dedicated negative assertion files such as `tests/web/product-grade-route-contract.test.tsx`, `tests/web/no-legacy-web-ui.test.ts`, and API 404 tests may contain legacy literals only inside explicit rejection assertions; do not exclude fixtures, route registrations, navigation, API clients, public contracts, or controller route decorators.
 
-- [ ] **Step 2: Run naming guards and verify they fail**
+- [x] **Step 2: Run naming guards and verify they fail**
 
 Run:
 
@@ -1278,7 +1286,7 @@ pnpm test tests/web/no-legacy-web-ui.test.ts tests/naming/delivery-naming.test.t
 
 Expected: FAIL until fixtures, tests, route strings, and public contracts are fully migrated.
 
-- [ ] **Step 3: Update seeded preview data**
+- [x] **Step 3: Update seeded preview data**
 
 In `tests/web/fixtures/product-data.ts`:
 
@@ -1297,7 +1305,7 @@ In `tests/web/fixtures/product-data.ts`:
   - QA pending and blocked;
   - release readiness blockers.
 
-- [ ] **Step 4: Update API mocks and screenshot routes**
+- [x] **Step 4: Update API mocks and screenshot routes**
 
 In `tests/web/fixtures/product-api-mock.ts`, update mocked endpoints:
 
@@ -1310,7 +1318,7 @@ PATCH /development-plans/:developmentPlanId/items/:itemId/implementation-plan/dr
 
 In `tests/e2e/ai-native-project-management-visual.e2e.test.ts`, ensure screenshot routes come from the updated `requiredScreenshotRoutes`.
 
-- [ ] **Step 5: Run full public Web test set**
+- [x] **Step 5: Run full public Web test set**
 
 Run:
 
@@ -1320,7 +1328,7 @@ pnpm test tests/web/product-grade-route-contract.test.tsx tests/web/product-grad
 
 Expected: PASS.
 
-- [ ] **Step 6: Run naming guard**
+- [x] **Step 6: Run naming guard**
 
 Run:
 
@@ -1330,7 +1338,7 @@ pnpm test tests/naming/delivery-naming.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit fixtures and guards**
+- [x] **Step 7: Commit fixtures and guards**
 
 ```bash
 git add tests/web tests/e2e tests/naming scripts
@@ -1342,7 +1350,7 @@ git commit -m "test: lock document-native product model"
 **Files:**
 - All files changed in Tasks 1-7.
 
-- [ ] **Step 1: Run contract/API focused suite**
+- [x] **Step 1: Run contract/API focused suite**
 
 Run:
 
@@ -1352,7 +1360,7 @@ pnpm test tests/contracts/project-management-contracts.test.ts tests/contracts/p
 
 Expected: PASS.
 
-- [ ] **Step 2: Run Web focused suite**
+- [x] **Step 2: Run Web focused suite**
 
 Run:
 
@@ -1362,7 +1370,7 @@ pnpm test tests/web/product-grade-route-contract.test.tsx tests/web/product-grad
 
 Expected: PASS.
 
-- [ ] **Step 3: Run naming guard**
+- [x] **Step 3: Run naming guard**
 
 Run:
 
@@ -1372,7 +1380,7 @@ pnpm test tests/naming/delivery-naming.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 4: Run full test suite**
+- [x] **Step 4: Run full test suite**
 
 Run:
 
@@ -1382,7 +1390,7 @@ pnpm test
 
 Expected: PASS.
 
-- [ ] **Step 5: Run build**
+- [x] **Step 5: Run build**
 
 Run:
 
@@ -1392,7 +1400,7 @@ pnpm build
 
 Expected: PASS.
 
-- [ ] **Step 6: Run whitespace check**
+- [x] **Step 6: Run whitespace check**
 
 Run:
 
@@ -1402,7 +1410,7 @@ git diff --check
 
 Expected: no output and exit 0.
 
-- [ ] **Step 7: Optional visual preview**
+- [x] **Step 7: Optional visual preview**
 
 Run:
 
@@ -1420,9 +1428,9 @@ Expected: app starts with updated routes. Manually inspect:
 - `/reviews?tab=implementation-plans`
 - `/executions`
 
-The first viewport must show real work content and must not show `Execution Plan`, `/execution-plan`, `source object`, `Work Item Owner`, generic `Task`, raw package/run browsers, or direct source document to Spec/Implementation Plan Doc/execution actions.
+The first viewport must show real work content and must not show `Execution Plan`, `/execution-plan`, old generic planning input copy, `Work Item Owner`, generic `Task`, raw package/run browsers, or direct planning input to Spec/Implementation Plan Doc/execution actions.
 
-- [ ] **Step 8: Final commit if verification changes were needed**
+- [x] **Step 8: Final commit if verification changes were needed**
 
 ```bash
 git status --short

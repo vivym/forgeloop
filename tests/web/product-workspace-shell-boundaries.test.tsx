@@ -52,7 +52,7 @@ describe('product workspace shell boundaries', () => {
     const shellSource = readRepoFile(shellFile);
 
     expect(shellSource).toContain('export interface CockpitCommandCenterProps');
-    expect(shellSource).toContain('export interface TypedSourceWorkspaceProps');
+    expect(shellSource).toContain('export interface TypedDocumentWorkspaceProps');
     expect(shellSource).toContain('export interface DevelopmentPlanWorkspaceProps');
     expect(shellSource).toContain('export interface PlanItemGateWorkspaceProps');
     expect(shellSource).toContain('attentionQueue: ReactNode');

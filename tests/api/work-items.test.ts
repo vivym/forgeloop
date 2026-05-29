@@ -112,17 +112,17 @@ describe('Work Item product API', () => {
     }
   });
 
-  it('creates a typed source object from the route source type without accepting body kind', async () => {
+  it('creates a Requirement document from the concrete route without accepting body kind', async () => {
     const project = await createProject();
 
-    const sourceObject = (
+    const createdRequirement = (
       await request(app.getHttpServer())
-        .post('/source-objects/requirement')
+        .post('/requirements')
         .send({
           project_id: project.id,
           title: 'Create runtime dogfood source',
-          goal: 'Seed a canonical source object for the product loop.',
-          success_criteria: ['The created object uses the route source type.'],
+          goal: 'Seed a canonical Requirement for the product loop.',
+          success_criteria: ['The created object uses the route planning input type.'],
           priority: 'P0',
           risk: 'high',
           driver_actor_id: 'actor-driver',
@@ -131,22 +131,22 @@ describe('Work Item product API', () => {
         .expect(201)
     ).body;
 
-    expect(sourceObject).toMatchObject({
+    expect(createdRequirement).toMatchObject({
       project_id: project.id,
       kind: 'requirement',
       title: 'Create runtime dogfood source',
       driver_actor_id: 'actor-driver',
       intake_context: intakeContextByKind.requirement,
     });
-    expect(sourceObject).not.toHaveProperty('owner_actor_id');
+    expect(createdRequirement).not.toHaveProperty('owner_actor_id');
 
     await request(app.getHttpServer())
-      .post('/source-objects/requirement')
+      .post('/requirements')
       .send({
         project_id: project.id,
         kind: 'requirement',
         title: 'Reject duplicated source kind',
-        goal: 'The source type belongs to the route.',
+        goal: 'The route-derived planning input type is authoritative.',
         success_criteria: ['body.kind is not accepted.'],
         priority: 'P0',
         risk: 'high',
@@ -156,7 +156,7 @@ describe('Work Item product API', () => {
       .expect(400);
 
     await request(app.getHttpServer())
-      .post('/source-objects/requirement')
+      .post('/requirements')
       .send({
         project_id: project.id,
         title: 'Reject mismatched source intake',

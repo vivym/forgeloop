@@ -363,7 +363,7 @@ describe('Work Item delivery readiness', () => {
     );
     expect(specReadiness.stages.find((stage) => stage.id === 'plan')?.object_refs).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ object_type: 'execution_plan', href: implementationPlanHref }),
+        expect.objectContaining({ object_type: 'implementation_plan_doc', href: implementationPlanHref }),
       ]),
     );
     expect(specReadiness.next_actions).toEqual(
@@ -562,7 +562,7 @@ describe('Work Item delivery readiness', () => {
     expect(releaseStage?.blockers).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: 'missing_linked_release' })]));
   });
 
-  it('uses typed source object routes for pre-release blocker object links', () => {
+  it('uses typed document routes for pre-release blocker object links', () => {
     const readiness = deriveWorkItemDeliveryReadiness(readyInput({ linkedRelease: null }));
 
     expect(readiness.stages.find((stage) => stage.id === 'release_readiness')).toMatchObject({

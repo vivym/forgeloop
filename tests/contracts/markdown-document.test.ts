@@ -120,7 +120,7 @@ describe('MarkdownDocument validation', () => {
       '[bad initiative spec](/initiatives/init-1/spec)',
       '[bad specs plans](/specs-plans)',
       '[bad plan item brainstorming](/development-plans/dp-1/items/dpi-1/brainstorming)',
-      '[bad plan item execution plan](/development-plans/dp-1/items/dpi-1/execution-plan)',
+      '[bad plan item implementation plan extra](/development-plans/dp-1/items/dpi-1/implementation-plan/extra)',
       '[bad plan item review](/development-plans/dp-1/items/dpi-1/review)',
       '[bad plan item qa](/development-plans/dp-1/items/dpi-1/qa)',
       '[bad specs root](/specs)',

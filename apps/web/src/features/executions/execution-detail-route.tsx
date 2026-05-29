@@ -123,7 +123,7 @@ function ExecutionEvidence({
     <Section actions={<StatusPill tone={viewModel.statusTone}>{viewModel.status}</StatusPill>} title="Execution evidence" variant="panel">
       <div className="grid gap-4">
         <dl className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-3">
-          <Definition label="Approved Execution Plan revision" value={viewModel.approvedExecutionPlanRevision} />
+          <Definition label="Approved Implementation Plan Doc revision" value={viewModel.approvedImplementationPlanRevision} />
           <Definition label="Linked Plan Item" value={viewModel.developmentPlanItem} />
           <Definition label="Worker state" value={viewModel.workerState} />
           <Definition label="Current step" value={viewModel.currentStep} />

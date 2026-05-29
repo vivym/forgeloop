@@ -13,7 +13,7 @@ export interface CockpitCommandCenterProps extends Omit<ProductWorkspaceShellPro
   runtimeRail?: ReactNode;
 }
 
-export interface TypedSourceWorkspaceProps extends Omit<ProductWorkspaceShellProps, 'children'> {
+export interface TypedDocumentWorkspaceProps extends Omit<ProductWorkspaceShellProps, 'children'> {
   inspector?: ReactNode;
   table: ReactNode;
   toolbar?: ReactNode;
@@ -73,38 +73,38 @@ export function CockpitCommandCenter({
   );
 }
 
-function TypedSourceWorkspace({ inspector, table, toolbar, ...props }: TypedSourceWorkspaceProps & { 'data-product-shell': string }) {
+function TypedDocumentWorkspace({ inspector, table, toolbar, ...props }: TypedDocumentWorkspaceProps & { 'data-product-shell': string }) {
   const hasInspector = hasRenderableSlot(inspector);
   const hasToolbar = hasRenderableSlot(toolbar);
 
   return (
     <ProductWorkspaceShell {...props}>
-      {hasToolbar ? <div className="min-w-0 overflow-x-auto" data-typed-source-toolbar="">{toolbar}</div> : null}
+      {hasToolbar ? <div className="min-w-0 overflow-x-auto" data-typed-document-toolbar="">{toolbar}</div> : null}
       <div
         className={cn('grid min-w-0 gap-4', hasInspector ? 'lg:grid-cols-[minmax(28rem,1fr)_20rem]' : undefined)}
-        data-typed-source-layout=""
+        data-typed-document-layout=""
       >
-        <section className="min-w-0" data-typed-source-table="">{table}</section>
-        {hasInspector ? <aside className="min-w-0" data-typed-source-inspector="">{inspector}</aside> : null}
+        <section className="min-w-0" data-typed-document-table="">{table}</section>
+        {hasInspector ? <aside className="min-w-0" data-typed-document-inspector="">{inspector}</aside> : null}
       </div>
     </ProductWorkspaceShell>
   );
 }
 
-export function RequirementWorkspace(props: TypedSourceWorkspaceProps) {
-  return <TypedSourceWorkspace {...props} data-product-shell="requirement-workspace" />;
+export function RequirementWorkspace(props: TypedDocumentWorkspaceProps) {
+  return <TypedDocumentWorkspace {...props} data-product-shell="requirement-workspace" />;
 }
 
-export function InitiativeWorkspace(props: TypedSourceWorkspaceProps) {
-  return <TypedSourceWorkspace {...props} data-product-shell="initiative-workspace" />;
+export function InitiativeWorkspace(props: TypedDocumentWorkspaceProps) {
+  return <TypedDocumentWorkspace {...props} data-product-shell="initiative-workspace" />;
 }
 
-export function BugWorkspace(props: TypedSourceWorkspaceProps) {
-  return <TypedSourceWorkspace {...props} data-product-shell="bug-workspace" />;
+export function BugWorkspace(props: TypedDocumentWorkspaceProps) {
+  return <TypedDocumentWorkspace {...props} data-product-shell="bug-workspace" />;
 }
 
-export function TechDebtWorkspace(props: TypedSourceWorkspaceProps) {
-  return <TypedSourceWorkspace {...props} data-product-shell="tech-debt-workspace" />;
+export function TechDebtWorkspace(props: TypedDocumentWorkspaceProps) {
+  return <TypedDocumentWorkspace {...props} data-product-shell="tech-debt-workspace" />;
 }
 
 export function DevelopmentPlanWorkspace({ inspector, table, toolbar, ...props }: DevelopmentPlanWorkspaceProps) {

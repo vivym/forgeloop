@@ -14,9 +14,9 @@ export const actorId = 'actor-owner';
 export const requirementIntakeContext = {
   type: 'requirement',
   stakeholder_problem: 'Product operators need the workspace to explain what is ready, blocked, and owned without falling back to generic delivery pages.',
-  desired_outcome: 'Every source object route opens with route-backed planning, execution, review, QA, and release context.',
-  acceptance_criteria: ['Typed source routes use deterministic fixture data', 'Plan Item gates expose eligible next actions only'],
-  in_scope: ['Typed source workspaces', 'Development Plan routes', 'Plan Item gate fixtures'],
+  desired_outcome: 'Every planning input route opens with route-backed planning, execution, review, QA, and release context.',
+  acceptance_criteria: ['Typed document routes use deterministic fixture data', 'Plan Item gates expose eligible next actions only'],
+  in_scope: ['Typed document workspaces', 'Development Plan routes', 'Plan Item gate fixtures'],
 } as const;
 
 export const workItem = {
@@ -24,8 +24,8 @@ export const workItem = {
   project_id: projectId,
   kind: 'requirement',
   title: 'Product workspace clarity and route-backed context',
-  goal: 'Make the product workspace explain current delivery state from typed source objects through release readiness.',
-  success_criteria: ['Typed source context is visible', 'Plan Item generation and gate state stay item-scoped'],
+  goal: 'Make the product workspace explain current delivery state from typed planning inputs through release readiness.',
+  success_criteria: ['Typed document context is visible', 'Plan Item generation and gate state stay item-scoped'],
   priority: 'critical',
   risk: 'medium',
   driver_actor_id: actorId,
@@ -96,9 +96,9 @@ export const planRevision = {
   plan_id: plan.id,
   work_item_id: workItem.id,
   revision_number: 1,
-  summary: 'Requirements database view Execution Plan',
+  summary: 'Requirements database view Implementation Plan Doc',
   content: 'Replace the Requirements list with a database view that keeps Plan Item governance visible.',
-  implementation_summary: 'Use canonical source object rows with fixture-backed evidence and generation links.',
+  implementation_summary: 'Use canonical planning input rows with fixture-backed evidence and generation links.',
   split_strategy: 'Database view task with no cockpit layout migration.',
   dependency_order: ['tests/web/fixtures', 'apps/web/src/features/requirements'],
   test_matrix: ['pnpm vitest run tests/web/api-hooks.test.tsx', 'pnpm --filter @forgeloop/web typecheck'],
@@ -127,7 +127,7 @@ export const cockpitCommandCenterItem = {
   affected_surfaces: ['apps/web/src/features/cockpit'],
   boundary_status: 'approved',
   spec_status: 'in_review',
-  execution_plan_status: 'missing',
+  implementation_plan_status: 'missing',
   execution_status: 'not_started',
   review_status: 'changes_requested',
   qa_handoff_status: 'missing',
@@ -139,16 +139,16 @@ export const requirementsDatabaseViewItem = {
   id: 'dpi-requirements-database-view',
   revision_id: 'dpirev-requirements-database-view-v1',
   title: 'Replace Requirements list with database view',
-  summary: 'Turn Requirements into a source-object database with generation and evidence affordances.',
+  summary: 'Turn Requirements into a document-workspace database with generation and evidence affordances.',
   dependency_hints: ['Plan Item governed generation flow must stay visible'],
   affected_surfaces: ['apps/web/src/features/requirements'],
   boundary_status: 'approved',
   spec_status: 'approved',
-  execution_plan_status: 'approved',
+  implementation_plan_status: 'approved',
   execution_status: 'ready',
   review_status: 'missing',
   qa_handoff_status: 'pending',
-  next_action: 'Use the approved Execution Plan to start database view implementation.',
+  next_action: 'Use the approved Implementation Plan Doc to start database view implementation.',
 } as const;
 
 export const productWorkspacePreviewItem = {
@@ -161,7 +161,7 @@ export const productWorkspacePreviewItem = {
   affected_surfaces: ['tests/web/fixtures', 'tests/e2e/helpers'],
   boundary_status: 'approved',
   spec_status: 'approved',
-  execution_plan_status: 'approved',
+  implementation_plan_status: 'approved',
   execution_status: 'running',
   review_status: 'in_review',
   qa_handoff_status: 'pending',
@@ -178,7 +178,7 @@ export const developmentPlanTableInspectorItem = {
   affected_surfaces: ['apps/web/src/features/development-plans'],
   boundary_status: 'changes_requested',
   spec_status: 'blocked',
-  execution_plan_status: 'blocked',
+  implementation_plan_status: 'blocked',
   execution_status: 'not_started',
   review_status: 'missing',
   qa_handoff_status: 'missing',
@@ -208,15 +208,15 @@ export const developmentPlan = {
 export const additionalDevelopmentPlanItems = [
   {
     ...developmentPlanItemBase,
-    id: 'dpi-typed-source-boundary',
-    revision_id: 'dpirev-typed-source-boundary-v1',
-    title: 'Define typed source workspace boundaries',
-    summary: 'Lock Requirement, Initiative, Bug, and Tech Debt routes to typed source workspaces.',
-    dependency_hints: ['Typed source projections are expanded'],
+    id: 'dpi-typed-document-boundary',
+    revision_id: 'dpirev-typed-document-boundary-v1',
+    title: 'Define typed document workspace boundaries',
+    summary: 'Lock Requirement, Initiative, Bug, and Tech Debt routes to typed document workspaces.',
+    dependency_hints: ['Typed document projections are expanded'],
     affected_surfaces: ['apps/web/src/features/project-management'],
     boundary_status: 'approved',
     spec_status: 'approved',
-    execution_plan_status: 'approved',
+    implementation_plan_status: 'approved',
     execution_status: 'completed',
     review_status: 'approved',
     qa_handoff_status: 'accepted',
@@ -227,12 +227,12 @@ export const additionalDevelopmentPlanItems = [
     id: 'dpi-plan-item-gate-eligibility',
     revision_id: 'dpirev-plan-item-gate-eligibility-v1',
     title: 'Enforce Plan Item action eligibility',
-    summary: 'Disable execution until boundary, Spec, Execution Plan, QA, and package evidence are present.',
+    summary: 'Disable execution until boundary, Spec, Implementation Plan Doc, QA, and package evidence are present.',
     dependency_hints: ['Bug reproduction is linked'],
     affected_surfaces: ['apps/web/src/features/development-plans/plan-item-gates.tsx'],
     boundary_status: 'approved',
     spec_status: 'approved',
-    execution_plan_status: 'in_review',
+    implementation_plan_status: 'in_review',
     execution_status: 'blocked',
     review_status: 'changes_requested',
     qa_handoff_status: 'blocked',
@@ -242,13 +242,13 @@ export const additionalDevelopmentPlanItems = [
     ...developmentPlanItemBase,
     id: 'dpi-qa-shift-left-strategy',
     revision_id: 'dpirev-qa-shift-left-strategy-v1',
-    title: 'Expose QA strategy before execution planning',
+    title: 'Expose QA strategy before Implementation Plan Doc authoring',
     summary: 'Make QA owner participation visible before release-impacting execution starts.',
     dependency_hints: ['Release-impacting Plan Items require QA strategy'],
     affected_surfaces: ['apps/web/src/features/qa'],
     boundary_status: 'approved',
     spec_status: 'in_review',
-    execution_plan_status: 'missing',
+    implementation_plan_status: 'missing',
     execution_status: 'not_started',
     review_status: 'missing',
     qa_handoff_status: 'pending',
@@ -265,7 +265,7 @@ export const additionalDevelopmentPlanItems = [
     affected_surfaces: ['apps/web/src/features/releases'],
     boundary_status: 'approved',
     spec_status: 'approved',
-    execution_plan_status: 'approved',
+    implementation_plan_status: 'approved',
     execution_status: 'interrupted',
     review_status: 'approved',
     qa_handoff_status: 'blocked',
@@ -316,7 +316,7 @@ export const brainstormingSession = {
     {
       id: 'brainstorming-answer-product-workspace-preview',
       question_id: 'brainstorming-question-product-workspace-preview',
-      text: 'Show source objects, four Plan Items, running execution, review, QA, release, and delivery risk.',
+      text: 'Show planning inputs, four Plan Items, running execution, review, QA, release, and delivery risk.',
       actor_id: actorId,
       created_at: '2026-05-18T00:15:00.000Z',
     },
@@ -326,7 +326,7 @@ export const brainstormingSession = {
       id: 'brainstorming-decision-product-workspace-preview',
       text: 'Development Plan Item remains the product execution boundary.',
       actor_id: 'actor-tech-lead',
-      rationale: 'The visual review needs seeded state across Spec, Execution Plan, execution, review, QA, and release.',
+      rationale: 'The visual review needs seeded state across Spec, Implementation Plan Doc, execution, review, QA, and release.',
       created_at: '2026-05-18T00:16:00.000Z',
     },
   ],
@@ -352,7 +352,7 @@ export const boundarySummary = {
 } as const;
 
 export const executionPlan = {
-  id: 'execution-plan-requirements-database-view',
+  id: 'implementation-plan-doc-requirements-database-view',
   development_plan_item_id: requirementsDatabaseViewItem.id,
   status: 'approved',
   current_revision_id: 'planrev-requirements-database-view-v1',
@@ -365,19 +365,19 @@ export const executionPlan = {
 
 export const executionPlanRevision = {
   id: 'planrev-requirements-database-view-v1',
-  execution_plan_id: 'execution-plan-requirements-database-view',
+  implementation_plan_id: 'implementation-plan-doc-requirements-database-view',
   development_plan_item_id: requirementsDatabaseViewItem.id,
   based_on_spec_revision_id: specRevision.id,
   revision_number: 1,
-  summary: 'Requirements database view Execution Plan',
-  content: 'Implement the Requirements database view using Plan Item governed source-object data.',
+  summary: 'Requirements database view Implementation Plan Doc',
+  content: 'Implement the Requirements database view using Plan Item governed document-workspace data.',
   created_at: '2026-05-18T00:17:40.000Z',
 } as const;
 
 export const execution = {
   id: 'exec-product-workspace-preview-active',
   development_plan_item_id: developmentPlanItem.id,
-  execution_plan_revision_id: executionPlanRevision.id,
+  implementation_plan_revision_id: executionPlanRevision.id,
   approved_spec_revision_id: specRevision.id,
   title: 'Codex worker is rebuilding product workspace preview data',
   ref: { type: 'execution', id: 'exec-product-workspace-preview-active', title: 'Codex worker is rebuilding product workspace preview data' },
@@ -387,10 +387,10 @@ export const execution = {
     development_plan_id: developmentPlan.id,
     title: developmentPlanItem.title,
   },
-  execution_plan_revision_ref: {
-    type: 'execution_plan_revision',
+  implementation_plan_revision_ref: {
+    type: 'implementation_plan_revision',
     id: executionPlanRevision.id,
-    execution_plan_id: executionPlan.id,
+    implementation_plan_id: executionPlan.id,
     title: executionPlanRevision.summary,
   },
   approved_spec_revision_ref: { type: 'spec_revision', id: specRevision.id, spec_id: spec.id, title: specRevision.summary },
@@ -436,7 +436,7 @@ export const codeReviewHandoff = {
   ref: { type: 'code_review_handoff', id: 'review-cockpit-requested-changes', title: 'Requested changes on Cockpit layout density' },
   execution_id: execution.id,
   development_plan_item_id: cockpitCommandCenterItem.id,
-  execution_plan_revision_id: executionPlanRevision.id,
+  implementation_plan_revision_id: executionPlanRevision.id,
   reviewer_actor_id: 'actor-reviewer',
   status: 'changes_requested',
   summary: 'Cockpit layout density needs tighter information hierarchy before visual review approval.',
@@ -463,7 +463,7 @@ export const qaHandoff = {
     title: requirementsDatabaseViewItem.title,
   },
   approved_spec_revision_ref: { type: 'spec_revision', id: specRevision.id, spec_id: spec.id, title: specRevision.summary },
-  approved_execution_plan_revision_ref: execution.execution_plan_revision_ref,
+  approved_implementation_plan_revision_ref: execution.implementation_plan_revision_ref,
   status: 'pending',
   acceptance_criteria: ['MDX image insertion acceptance is visible from Requirements authoring'],
   test_strategy: 'Run fixture and route smoke tests for the Requirements database view.',
@@ -616,7 +616,7 @@ export const release = {
   org_id: 'org-product-workspace-preview',
   project_id: projectId,
   title: 'Product workspace preview release',
-  scope_summary: 'Seeded source objects, Plan Items, execution, review, QA, and release data for product workspace visual review.',
+  scope_summary: 'Seeded planning inputs, Plan Items, execution, review, QA, and release data for product workspace visual review.',
   release_owner_actor_id: 'actor-release-owner',
   release_type: 'standard',
   phase: 'approval',
@@ -656,7 +656,7 @@ export const requirementListItem = {
   driver_actor_id: actorId,
   planning_coverage: { development_plan_count: 1, plan_item_count: 1, uncovered: false },
   downstream_gate_summary: {
-    current_gate_counts: { boundary: 0, spec: 0, execution_plan: 0, execution: 1, code_review: 0, qa: 0, release: 0 },
+    current_gate_counts: { boundary: 0, spec: 0, implementation_plan_doc: 0, execution: 1, code_review: 0, qa: 0, release: 0 },
     blocker_count: 0,
   },
   last_meaningful_update_at: '2026-05-18T01:00:00.000Z',
@@ -763,7 +763,7 @@ export const initiativeListItem = {
   last_meaningful_update_at: '2026-05-18T01:01:00.000Z',
   next_action: 'Review workspace redesign Development Plan',
   release_refs: [{ type: 'release', id: release.id, title: release.title }],
-  business_outcome: 'Coordinate the product workspace redesign across typed source, Plan Item gate, QA, and release routes.',
+  business_outcome: 'Coordinate the product workspace redesign across typed document, Plan Item gate, QA, and release routes.',
   updated_at: '2026-05-18T01:01:00.000Z',
 } as const;
 
@@ -781,7 +781,7 @@ export const initiativeDetail = {
   next_action: initiativeListItem.next_action,
   release_refs: initiativeListItem.release_refs,
   updated_at: initiativeListItem.updated_at,
-  narrative_markdown: 'Coordinate the product workspace redesign so source objects, Development Plans, Plan Items, execution, review, QA, and release routes read as one delivery system.',
+  narrative_markdown: 'Coordinate the product workspace redesign so planning inputs, Development Plans, Plan Items, execution, review, QA, and release routes read as one delivery system.',
   linked_development_plans: [{ type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title }],
   linked_plan_items: [
     {
@@ -870,7 +870,7 @@ export const bugListItem = {
   driver_actor_id: actorId,
   planning_coverage: { development_plan_count: 1, plan_item_count: 1, uncovered: false },
   downstream_gate_summary: {
-    current_gate_counts: { boundary: 0, spec: 0, execution_plan: 0, execution: 0, code_review: 1, qa: 0, release: 0 },
+    current_gate_counts: { boundary: 0, spec: 0, implementation_plan_doc: 0, execution: 0, code_review: 1, qa: 0, release: 0 },
     blocker_count: 1,
   },
   last_meaningful_update_at: '2026-05-18T01:04:00.000Z',
@@ -895,7 +895,7 @@ export const bugDetail = {
   next_action: bugListItem.next_action,
   release_refs: bugListItem.release_refs,
   updated_at: bugListItem.updated_at,
-  narrative_markdown: 'Plan Item actions must stay disabled until boundary, Spec, Execution Plan, QA participation, and internal package evidence are complete.',
+  narrative_markdown: 'Plan Item actions must stay disabled until boundary, Spec, Implementation Plan Doc, QA participation, and internal package evidence are complete.',
   linked_development_plans: [{ type: 'development_plan', id: developmentPlan.id, title: developmentPlan.title }],
   linked_plan_items: [
     {
@@ -916,7 +916,7 @@ export const bugDetail = {
   ],
   audit: { created_at: '2026-05-18T01:04:00.000Z', updated_at: '2026-05-18T01:04:00.000Z', updated_by_actor_id: actorId },
   observed_behavior: 'The Plan Item route exposes execution affordances before all gate evidence is approved.',
-  expected_behavior: 'Execution actions remain disabled until boundary, Spec, Execution Plan, QA strategy, and package evidence are complete.',
+  expected_behavior: 'Execution actions remain disabled until boundary, Spec, Implementation Plan Doc, QA strategy, and package evidence are complete.',
   reproduction_steps: ['Open the Plan Item gate route', 'Inspect the execution action before QA participation is recorded'],
   severity: bugListItem.severity,
   affected_surfaces: bugListItem.affected_surfaces,
@@ -956,7 +956,7 @@ const requirementListItemFor = ({
   driver_actor_id: actorId,
   planning_coverage: { development_plan_count: 1, plan_item_count: planItemCount, uncovered: false },
   downstream_gate_summary: {
-    current_gate_counts: { boundary: 1, spec: 1, execution_plan: 1, execution: 1, code_review: 1, qa: 1, release: 0 },
+    current_gate_counts: { boundary: 1, spec: 1, implementation_plan_doc: 1, execution: 1, code_review: 1, qa: 1, release: 0 },
     blocker_count: blockerCount,
   },
   last_meaningful_update_at: '2026-05-18T01:06:00.000Z',
@@ -1026,12 +1026,12 @@ const requirementDetailFor = (
 
 export const aiNativeDeliveryFlowRequirementDetail = requirementDetailFor(
   aiNativeDeliveryFlowRequirement,
-  'The AI-native delivery flow keeps Development Plan and Plan Item gates as the visible bridge between source objects and execution.',
+  'The AI-native delivery flow keeps Development Plan and Plan Item gates as the visible bridge between planning inputs and execution.',
 );
 
 export const qaShiftLeftRequirementDetail = requirementDetailFor(
   qaShiftLeftRequirement,
-  'QA participation must appear before execution planning can be considered complete for release-impacting work.',
+  'QA participation must appear before Implementation Plan Doc authoring can be considered complete for release-impacting work.',
 );
 
 export const releaseReadinessRequirementDetail = requirementDetailFor(
@@ -1240,7 +1240,7 @@ export const releaseReadinessDetail = {
   ],
 } as const;
 
-export const sourceObjectEvidenceRefs = {
+export const documentEvidenceRefs = {
   requirement: [
     { type: 'attachment', id: 'att-requirement-flow-image', title: 'Plan Item generation flow' },
   ],
@@ -1855,7 +1855,7 @@ export const reportLinks = [
   'development-plan-throughput',
   'brainstorming-bottlenecks',
   'spec-review-aging',
-  'execution-plan-review-aging',
+  'implementation-plan-doc-review-aging',
   'execution-continuation',
   'execution-outcomes',
   'code-review',
@@ -1892,7 +1892,7 @@ export const reportFixtures = {
     generated_at: '2026-05-18T01:05:00.000Z',
     groups: [
       { id: 'draft_or_active', count: developmentPlan.items.length, items: [execution.development_plan_item_ref] },
-      { id: 'approved_items', count: developmentPlan.items.filter((item) => item.execution_plan_status === 'approved').length, items: [execution.development_plan_item_ref] },
+      { id: 'approved_items', count: developmentPlan.items.filter((item) => item.implementation_plan_status === 'approved').length, items: [execution.development_plan_item_ref] },
     ],
     links: reportLinks,
     degraded_sources: [],
@@ -1949,60 +1949,60 @@ export const reportFixtures = {
 
 export const productDynamicRouteFixtureManifest = [
   {
-    family: 'source-document',
+    family: 'document-workspace',
     route: `/requirements/${requirementDetail.id}`,
     objectType: 'requirement',
     objectId: requirementDetail.id,
     fixture: 'requirementDetail',
-    evidenceFixture: 'sourceObjectEvidenceRefs.requirement',
+    evidenceFixture: 'documentEvidenceRefs.requirement',
   },
   {
-    family: 'source-document',
+    family: 'document-workspace',
     route: `/initiatives/${initiativeDetail.id}`,
     objectType: 'initiative',
     objectId: initiativeDetail.id,
     fixture: 'initiativeDetail',
-    evidenceFixture: 'sourceObjectEvidenceRefs.initiative',
+    evidenceFixture: 'documentEvidenceRefs.initiative',
   },
   {
-    family: 'source-document',
+    family: 'document-workspace',
     route: `/bugs/${bugDetail.id}`,
     objectType: 'bug',
     objectId: bugDetail.id,
     fixture: 'bugDetail',
-    evidenceFixture: 'sourceObjectEvidenceRefs.bug',
+    evidenceFixture: 'documentEvidenceRefs.bug',
   },
   {
-    family: 'source-document',
+    family: 'document-workspace',
     route: `/tech-debt/${techDebtDetail.id}`,
     objectType: 'tech_debt',
     objectId: techDebtDetail.id,
     fixture: 'techDebtDetail',
-    evidenceFixture: 'sourceObjectEvidenceRefs.techDebt',
+    evidenceFixture: 'documentEvidenceRefs.techDebt',
   },
   {
-    family: 'source-evidence',
+    family: 'document-evidence',
     route: `/requirements/${requirementDetail.id}/evidence`,
     objectType: 'requirement',
     objectId: requirementDetail.id,
     fixture: 'requirementDetail.evidence_refs',
   },
   {
-    family: 'source-evidence',
+    family: 'document-evidence',
     route: `/initiatives/${initiativeDetail.id}/evidence`,
     objectType: 'initiative',
     objectId: initiativeDetail.id,
     fixture: 'initiativeDetail.evidence_refs',
   },
   {
-    family: 'source-evidence',
+    family: 'document-evidence',
     route: `/bugs/${bugDetail.id}/evidence`,
     objectType: 'bug',
     objectId: bugDetail.id,
     fixture: 'bugDetail.evidence_refs',
   },
   {
-    family: 'source-evidence',
+    family: 'document-evidence',
     route: `/tech-debt/${techDebtDetail.id}/evidence`,
     objectType: 'tech_debt',
     objectId: techDebtDetail.id,

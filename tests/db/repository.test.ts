@@ -630,11 +630,11 @@ describe('DeliveryRepository in-memory adapter', () => {
         revision_id: 'development-plan-item-revision-legacy',
         title: 'Legacy item',
       },
-      execution_plan_revision_id: executionPlanRevision.id,
-      execution_plan_revision_ref: {
-        type: 'execution_plan_revision',
+      implementation_plan_revision_id: executionPlanRevision.id,
+      implementation_plan_revision_ref: {
+        type: 'implementation_plan_revision',
         id: executionPlanRevision.id,
-        execution_plan_id: executionPlan.id,
+        implementation_plan_id: executionPlan.id,
         title: executionPlanRevision.summary,
       },
       status: 'running',
@@ -695,11 +695,11 @@ describe('DeliveryRepository in-memory adapter', () => {
         revision_id: 'development-plan-item-revision-broken',
         title: 'Broken item',
       },
-      execution_plan_revision_id: executionPlanRevision.id,
-      execution_plan_revision_ref: {
-        type: 'execution_plan_revision',
+      implementation_plan_revision_id: executionPlanRevision.id,
+      implementation_plan_revision_ref: {
+        type: 'implementation_plan_revision',
         id: executionPlanRevision.id,
-        execution_plan_id: executionPlanRevision.execution_plan_id,
+        implementation_plan_id: executionPlanRevision.execution_plan_id,
         title: executionPlanRevision.summary,
       },
       status: 'running',
@@ -1101,7 +1101,7 @@ describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
     const execution: Execution = {
       id: 'execution-supervision-1',
       development_plan_item_id: 'development-plan-item-1',
-      execution_plan_revision_id: 'execution-plan-revision-1',
+      implementation_plan_revision_id: 'execution-plan-revision-1',
       ref: { type: 'execution', id: 'execution-supervision-1', title: 'Supervised execution' },
       development_plan_item_ref: {
         type: 'development_plan_item',
@@ -1109,11 +1109,11 @@ describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
         development_plan_id: 'development-plan-1',
         title: 'Supervised Plan Item',
       },
-      execution_plan_revision_ref: {
-        type: 'execution_plan_revision',
+      implementation_plan_revision_ref: {
+        type: 'implementation_plan_revision',
         id: 'execution-plan-revision-1',
-        execution_plan_id: 'execution-plan-1',
-        title: 'Supervised execution plan',
+        implementation_plan_id: 'execution-plan-1',
+        title: 'Supervised Implementation Plan Doc',
       },
       status: 'paused',
       worker_state: 'resumable-worker',

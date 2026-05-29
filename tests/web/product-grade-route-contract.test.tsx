@@ -193,8 +193,8 @@ describe('product-grade route contract', () => {
     const retiredHeadings = [
       'Build AI-native project management API clients',
       'Web product UI architecture foundation plan',
-      'Specs & Execution Plans',
-      'Specs and Execution Plans',
+      'Specs & Implementation Plan Docs',
+      'Specs and Implementation Plan Docs',
     ];
 
     for (const route of requiredScreenshotRoutes) {
@@ -207,8 +207,8 @@ describe('product-grade route contract', () => {
   it('uses the approved primary navigation labels', () => {
     const labels = productNavigationGroups({ devToolsEnabled: false }).flatMap((group) => group.items.map((item) => item.label));
     expect(labels).toContain('Document Reviews');
-    expect(labels).not.toContain('Specs & Execution Plans');
-    expect(labels).not.toContain('Specs and Execution Plans');
+    expect(labels).not.toContain('Specs & Implementation Plan Docs');
+    expect(labels).not.toContain('Specs and Implementation Plan Docs');
   });
 
   it('does not register retired product routes as active route config entries', () => {
@@ -236,8 +236,8 @@ describe('product-grade route contract', () => {
   it('keeps active product link builders on canonical document-native routes', () => {
     const activeLinkSources = [
       'apps/web/src/features/reviews/reviews-route.tsx',
-      'apps/web/src/features/spec-plan/spec-execution-plan-queue.tsx',
-      'apps/web/src/features/spec-plan/spec-plan-view-model.ts',
+      'apps/web/src/features/reviews/document-review-queue.tsx',
+      'apps/web/src/features/reviews/review-queue-view-model.ts',
       'apps/web/src/features/development-plans/development-plan-view-model.ts',
       'apps/web/src/features/my-work/my-work-view-model.ts',
       'apps/web/src/features/cockpit/cockpit-view-model.ts',

@@ -7,14 +7,14 @@ import { useProjectContext } from '../../shared/context/project-context';
 import { Section } from '../../shared/layout';
 import { createNarrativeDocument, ObjectCreateForm } from '../project-management/object-forms';
 import { ObjectDetailLayout } from '../project-management/object-detail-layout';
-import { TypedSourceObjectList } from '../project-management/typed-source-object-list';
+import { TypedDocumentList } from '../project-management/typed-document-list';
 
 export function TechDebtRoute() {
   const { projectId } = useProjectContext();
   const query = useTechDebtQuery({ project_id: projectId, limit: 100 });
 
   return (
-    <TypedSourceObjectList
+    <TypedDocumentList
       createHref="/tech-debt/new"
       detailHref={(item) => `/tech-debt/${item.id}`}
       emptyMessage="No tech debt items match the current filters."

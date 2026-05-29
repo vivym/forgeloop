@@ -108,7 +108,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   if (isLoading) {
     return (
-      <ProductPage family="source-document" ariaLabel={objectLabel}>
+      <ProductPage family="document-workspace" ariaLabel={objectLabel}>
         <h1 className="mb-3 text-xl font-semibold text-text-primary">{objectLabel}</h1>
         <TypedDetailShell
           objectType={objectTypeForLabel(objectLabel)}
@@ -129,7 +129,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   if (error || detail === undefined) {
     return (
-      <ProductPage family="source-document" ariaLabel={objectLabel}>
+      <ProductPage family="document-workspace" ariaLabel={objectLabel}>
         <h1 className="mb-3 text-xl font-semibold text-text-primary">{objectLabel}</h1>
         <TypedDetailShell
           objectType={objectTypeForLabel(objectLabel)}
@@ -148,7 +148,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
     );
   }
 
-  const sourceRef = sourceObjectRefFor(detail);
+  const sourceRef = planningInputRefFor(detail);
   const driverLabel = driverLabelFor(detail.ref.type);
   const evidenceRefs = detail.evidence_refs ?? [];
   const attachmentRefs = detail.attachment_refs ?? [];
@@ -158,7 +158,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
   const stateText = `${objectLabel} ${statusLabel(detail.status)}`;
   const nextActionTitle = developmentPlanItem ? 'Open item-scoped gate' : 'Create planning table';
   const nextActionDescription = developmentPlanItem
-    ? 'Select the linked Development Plan Item to continue boundary brainstorming, Spec, Execution Plan, and execution gates.'
+    ? 'Select the linked Development Plan Item to continue boundary brainstorming, Spec, Implementation Plan Doc, and execution gates.'
     : 'Create or link a Development Plan before downstream technical work can start.';
   const runAction = async (operation: () => Promise<unknown>, successMessage: string) => {
     setActionState({ status: 'running', message: 'Command is running.' });
@@ -255,7 +255,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
                     ? undefined
                     : void runAction(
                         async () => {
-                          await createForgeloopCommandApi().linkSourceObjectToDevelopmentPlan(sourceRef.type, sourceRef.id, selectedDevelopmentPlanId, {
+                          await createForgeloopCommandApi().linkPlanningInputToDevelopmentPlan(sourceRef.type, sourceRef.id, selectedDevelopmentPlanId, {
                             actor_id: actorId,
                             rationale: `Linked from ${objectLabel} workspace.`,
                           });
@@ -302,7 +302,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
         />
       ) : null}
       <InlineNotice
-        description="Spec and Execution Plan generation are disabled here because they require an approved boundary on a selected Development Plan Item."
+        description="Spec and Implementation Plan Doc generation are disabled here because they require an approved boundary on a selected Development Plan Item."
         title="Downstream artifact gates"
         tone="neutral"
       />
@@ -311,7 +311,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
 
   return (
     <ProductPage
-      family="source-document"
+      family="document-workspace"
       ariaLabel={objectLabel}
     >
       <h1 className="mb-3 text-xl font-semibold text-text-primary">{objectLabel}</h1>
@@ -338,7 +338,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
                   </div>
                 }
                 aria-label={`${objectLabel} narrative document`}
-                description="Edit the durable narrative here; downstream Spec and Execution Plan work starts from a Development Plan Item."
+                description="Edit the durable narrative here; downstream Spec and Implementation Plan Doc work starts from a Development Plan Item."
                 title={detail.title}
                 variant="panel"
               >
@@ -449,7 +449,7 @@ export function ObjectDetailLayout<T extends ProjectObjectDetail>({
               </Section>
             ),
           },
-          { label: 'Documents', value: 'documents', content: <GatePlaceholder label="Spec and Execution Plan documents" /> },
+          { label: 'Documents', value: 'documents', content: <GatePlaceholder label="Spec and Implementation Plan Doc documents" /> },
           { label: 'Execution', value: 'execution', content: <GatePlaceholder label="Execution" /> },
           { label: 'QA', value: 'qa', content: <GatePlaceholder label="QA" /> },
           { label: 'Release', value: 'release', content: <GatePlaceholder label="Release" /> },
@@ -465,7 +465,7 @@ function GatePlaceholder({ label }: { label: string }) {
   return (
     <Section title={label}>
       <InlineNotice
-        description="Choose a Development Plan Item to operate this gate. Typed source workspaces do not generate downstream artifacts directly."
+        description="Choose a Development Plan Item to operate this gate. Typed document workspaces do not generate downstream artifacts directly."
         title="Item-scoped gate"
         tone="neutral"
       />
@@ -567,7 +567,7 @@ function statusLabel(status: string): string {
   return status.replaceAll('/', ' / ');
 }
 
-function sourceObjectRefFor(detail: ProjectObjectDetail) {
+function planningInputRefFor(detail: ProjectObjectDetail) {
   if (
     detail.ref.type === 'initiative' ||
     detail.ref.type === 'requirement' ||

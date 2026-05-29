@@ -194,12 +194,12 @@ describe('AI-native project management visual QA', () => {
         await expectPage(page.getByText(/submit spec command completed/i)).toBeVisible();
         await page.getByRole('button', { name: /^approve spec$/i }).click();
         await expectPage(page.getByText(/approve spec command completed/i)).toBeVisible();
-        await page.getByRole('button', { name: /^generate execution plan$/i }).click();
-        await expectPage(page.getByText(/generate execution plan command completed/i)).toBeVisible();
-        await page.getByRole('button', { name: /submit execution plan for review/i }).click();
-        await expectPage(page.getByText(/submit execution plan command completed/i)).toBeVisible();
-        await page.getByRole('button', { name: /^approve execution plan$/i }).click();
-        await expectPage(page.getByText(/approve execution plan command completed/i)).toBeVisible();
+        await page.getByRole('button', { name: /^generate implementation plan doc$/i }).click();
+        await expectPage(page.getByText(/generate implementation plan doc command completed/i)).toBeVisible();
+        await page.getByRole('button', { name: /submit implementation plan doc for review/i }).click();
+        await expectPage(page.getByText(/submit implementation plan doc command completed/i)).toBeVisible();
+        await page.getByRole('button', { name: /^approve implementation plan doc$/i }).click();
+        await expectPage(page.getByText(/approve implementation plan doc command completed/i)).toBeVisible();
         const startExecutionResponse = page.waitForResponse(
           (response) => response.request().method() === 'POST' && /\/execution\/start$/.test(new URL(response.url()).pathname) && response.status() === 201,
         );
@@ -253,7 +253,7 @@ async function assertNoRenderedBaggage(page: Page, path: string) {
 
   if (path === '/development-plans/new') {
     expect(bodyText, `${path} must render a real authoring workspace`).toContain('AI generation guidance');
-    expect(bodyText, `${path} must avoid old source picker placeholder`).not.toContain('Pick a source object first');
+    expect(bodyText, `${path} must avoid old source picker placeholder`).not.toContain('Pick a typed document first');
     expect(bodyText, `${path} must preserve item-scoped downstream generation`).toContain('generated only from Plan Items after boundary approval');
   }
 

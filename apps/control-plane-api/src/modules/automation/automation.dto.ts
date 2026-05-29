@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { generatedPackageDraftSetSchema } from '@forgeloop/codex-runtime';
-import { artifactRefSchema, sourceObjectRefSchema } from '@forgeloop/contracts';
+import { artifactRefSchema, planningInputRefSchema } from '@forgeloop/contracts';
 import { codexCanonicalDigest, type AutomationActionRun, type AutomationActionRunStatus, type AutomationScope } from '@forgeloop/domain';
 import type {
   RuntimeSnapshotBlockerRow,
@@ -63,8 +63,8 @@ const projectRuntimeSnapshotActionInputSchema = z
 
 const productGenerationPreconditionFingerprintJsonSchema = z
   .object({
-    source_object_ref: sourceObjectRefSchema,
-    source_object_revision_id: nonBlankString,
+    source_ref: planningInputRefSchema,
+    source_revision_id: nonBlankString,
     development_plan_id: nonBlankString,
     development_plan_revision_id: nonBlankString,
     development_plan_item_id: nonBlankString,
@@ -96,7 +96,7 @@ const specRevisionPreconditionFingerprintJsonSchema = productGenerationPrecondit
   })
   .strict();
 
-const executionPlanRevisionPreconditionFingerprintJsonSchema = productGenerationPreconditionFingerprintJsonSchema
+const implementationPlanRevisionPreconditionFingerprintJsonSchema = productGenerationPreconditionFingerprintJsonSchema
   .extend({
     boundary_session_id: nonBlankString,
     boundary_session_revision_id: nonBlankString,
@@ -191,7 +191,7 @@ const generateDevelopmentPlanItemSpecRevisionActionInputSchema = z
     ]),
   );
 
-const generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema = z
+const generateDevelopmentPlanItemImplementationPlanRevisionActionInputSchema = z
   .object({
     development_plan_id: nonBlankString,
     development_plan_revision_id: nonBlankString,
@@ -204,7 +204,7 @@ const generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema = z
     context_manifest_id: nonBlankString,
     context_manifest_revision_id: nonBlankString,
     requested_by_actor_id: nonBlankString,
-    precondition_fingerprint_json: executionPlanRevisionPreconditionFingerprintJsonSchema,
+    precondition_fingerprint_json: implementationPlanRevisionPreconditionFingerprintJsonSchema,
   })
   .strict()
   .superRefine((input, ctx) =>
@@ -280,8 +280,8 @@ const createAutomationActionRunUnionSchema = z.discriminatedUnion('action_type',
   z
     .object({
       ...createAutomationActionRunBaseShape,
-      action_type: z.literal('generate_development_plan_item_execution_plan_revision'),
-      action_input_json: generateDevelopmentPlanItemExecutionPlanRevisionActionInputSchema,
+      action_type: z.literal('generate_development_plan_item_implementation_plan_revision'),
+      action_input_json: generateDevelopmentPlanItemImplementationPlanRevisionActionInputSchema,
     })
     .strict(),
 ]);
@@ -289,7 +289,7 @@ const createAutomationActionRunUnionSchema = z.discriminatedUnion('action_type',
 const productGenerationActionTypes = new Set([
   'run_boundary_brainstorming_round',
   'generate_development_plan_item_spec_revision',
-  'generate_development_plan_item_execution_plan_revision',
+  'generate_development_plan_item_implementation_plan_revision',
 ]);
 
 export const createAutomationActionRunSchema = createAutomationActionRunUnionSchema.superRefine((input, ctx) => {
@@ -331,7 +331,7 @@ export const claimNextAutomationActionRunSchema = z
         'project_runtime_snapshot',
         'run_boundary_brainstorming_round',
         'generate_development_plan_item_spec_revision',
-        'generate_development_plan_item_execution_plan_revision',
+        'generate_development_plan_item_implementation_plan_revision',
       ])
       .optional(),
     project_id: nonBlankString.optional(),
