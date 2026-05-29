@@ -107,12 +107,9 @@ describe('product workspace shell boundaries', () => {
     ['/development-plans', 'development-plan-workspace'],
     [`/development-plans/${developmentPlan.id}`, 'development-plan-workspace'],
     [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}`, 'plan-item-gate-workspace'],
-    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/brainstorming`, 'plan-item-gate-workspace'],
     [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/spec`, 'plan-item-gate-workspace'],
-    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/execution-plan`, 'plan-item-gate-workspace'],
+    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/implementation-plan`, 'plan-item-gate-workspace'],
     [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/execution`, 'plan-item-gate-workspace'],
-    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/review`, 'plan-item-gate-workspace'],
-    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/qa`, 'plan-item-gate-workspace'],
   ] as const)('renders %s inside the typed product shell %s', async (route, shellMarker) => {
     await renderRoute(route);
 

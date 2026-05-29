@@ -37,13 +37,11 @@ const expectedProductRoutes = [
   '/development-plans/new',
   '/development-plans/:id',
   '/development-plans/:id/items/:itemId',
-  '/development-plans/:id/items/:itemId/brainstorming',
   '/development-plans/:id/items/:itemId/spec',
-  '/development-plans/:id/items/:itemId/execution-plan',
+  '/development-plans/:id/items/:itemId/implementation-plan',
   '/development-plans/:id/items/:itemId/execution',
-  '/development-plans/:id/items/:itemId/review',
-  '/development-plans/:id/items/:itemId/qa',
-  '/specs-plans',
+  '/reviews',
+  '/qa',
   '/executions',
   '/executions/:id',
   '/board',
@@ -65,8 +63,6 @@ const expectedRetiredSmokeRoutes = [
   '/packages/:id',
   '/runs',
   '/runs/:id',
-  '/reviews',
-  '/reviews/:id',
   '/plans',
   '/plans/:id',
   '/specs',
@@ -108,13 +104,11 @@ const expectedConcreteScreenshotRoutes = [
   '/development-plans/new',
   '/development-plans/dp-product-workspace-core-surface-redesign',
   '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility',
-  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-typed-source-boundary/brainstorming',
   '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/spec',
-  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/execution-plan',
+  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/implementation-plan',
   '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-product-workspace-preview-state/execution',
-  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/review',
-  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-qa-shift-left-strategy/qa',
-  '/specs-plans',
+  '/reviews',
+  '/qa',
   '/executions',
   '/executions/exec-product-workspace-preview-active',
   '/board',
@@ -208,14 +202,16 @@ describe('product-grade route contract', () => {
 
   it('does not register retired product routes as active route config entries', () => {
     const activeRoutePaths = flattenProductRouteConfig(appRouteConfig);
+    const retiredRoutePaths = retiredProductRoutes.map((route) => route.path);
     expect(activeRoutePaths).not.toContain('dashboard');
     expect(activeRoutePaths).not.toContain('tasks');
     expect(activeRoutePaths).not.toContain('work-items');
     expect(activeRoutePaths).not.toContain('packages');
     expect(activeRoutePaths).not.toContain('runs');
-    expect(activeRoutePaths).not.toContain('reviews');
     expect(activeRoutePaths).not.toContain('plans');
     expect(activeRoutePaths).not.toContain('specs');
+    expect(activeRoutePaths.join('\n')).not.toMatch(/specs-plans|brainstorming|execution-plan|\/items\/[^/]+\/review$|\/items\/[^/]+\/qa$/);
+    expect(retiredRoutePaths.join('\n')).not.toMatch(/specs-plans|brainstorming|execution-plan|\/items\/[^/]+\/review$|\/items\/[^/]+\/qa$/);
   });
 
   it('classifies retired query product modes as dev-only or rejected', () => {
@@ -229,6 +225,6 @@ describe('product-grade route contract', () => {
 
     expect(registeredPaths.filter((path) => !classified.has(path))).toEqual([]);
     expect(duplicateProductRoutePaths(registeredPaths)).toEqual([]);
-    expect(registeredPaths.join('\n')).not.toMatch(/(^|\/)(dashboard|tasks|work-items|packages|runs|reviews|plans|specs)(\/|$)/);
+    expect(registeredPaths.join('\n')).not.toMatch(/(^|\/)(dashboard|tasks|work-items|packages|runs|plans|specs)(\/|$)/);
   });
 });

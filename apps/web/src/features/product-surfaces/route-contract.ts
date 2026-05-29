@@ -56,11 +56,9 @@ const initiativeId = 'init-product-workspace-redesign';
 const bugId = 'bug-plan-item-action-eligibility';
 const techDebtId = 'td-retire-generic-product-page';
 const developmentPlanId = 'dp-product-workspace-core-surface-redesign';
-const boundaryItemId = 'dpi-typed-source-boundary';
 const reviewItemId = 'dpi-plan-item-gate-eligibility';
-const executionPlanItemId = 'dpi-requirements-database-view';
+const implementationPlanItemId = 'dpi-requirements-database-view';
 const executionItemId = 'dpi-product-workspace-preview-state';
-const qaItemId = 'dpi-qa-shift-left-strategy';
 const executionId = 'exec-product-workspace-preview-active';
 const releaseId = 'rel-product-workspace-preview';
 
@@ -68,8 +66,6 @@ const developmentPlanHeading = /^Product workspace core surface redesign$/i;
 const actionEligibilityItemHeading = /^Enforce Plan Item action eligibility$/i;
 const requirementsDatabaseItemHeading = /^Replace Requirements list with database view$/i;
 const productWorkspacePreviewItemHeading = /^Seed product workspace state for visual review$/i;
-const typedSourceBoundaryItemHeading = /^Define typed source workspace boundaries$/i;
-const qaShiftLeftItemHeading = /^Expose QA strategy before execution planning$/i;
 
 function productRoute(
   path: string,
@@ -130,13 +126,6 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
     actionEligibilityItemHeading,
   ),
   productRoute(
-    '/development-plans/:id/items/:itemId/brainstorming',
-    `/development-plans/${developmentPlanId}/items/${boundaryItemId}/brainstorming`,
-    'Boundary Brainstorming',
-    'gate-workspace',
-    typedSourceBoundaryItemHeading,
-  ),
-  productRoute(
     '/development-plans/:id/items/:itemId/spec',
     `/development-plans/${developmentPlanId}/items/${reviewItemId}/spec`,
     'Spec',
@@ -144,9 +133,9 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
     actionEligibilityItemHeading,
   ),
   productRoute(
-    '/development-plans/:id/items/:itemId/execution-plan',
-    `/development-plans/${developmentPlanId}/items/${executionPlanItemId}/execution-plan`,
-    'Execution Plan',
+    '/development-plans/:id/items/:itemId/implementation-plan',
+    `/development-plans/${developmentPlanId}/items/${implementationPlanItemId}/implementation-plan`,
+    'Implementation Plan Doc',
     'document-review',
     requirementsDatabaseItemHeading,
   ),
@@ -157,21 +146,8 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
     'execution-supervision',
     productWorkspacePreviewItemHeading,
   ),
-  productRoute(
-    '/development-plans/:id/items/:itemId/review',
-    `/development-plans/${developmentPlanId}/items/${reviewItemId}/review`,
-    'Code Review',
-    'code-review',
-    actionEligibilityItemHeading,
-  ),
-  productRoute(
-    '/development-plans/:id/items/:itemId/qa',
-    `/development-plans/${developmentPlanId}/items/${qaItemId}/qa`,
-    'QA Handoff',
-    'qa-handoff',
-    qaShiftLeftItemHeading,
-  ),
-  productRoute('/specs-plans', '/specs-plans', 'Document Reviews', 'document-governance', /^Document Reviews$/i),
+  productRoute('/reviews', '/reviews', 'Document Reviews', 'document-governance', /^Document Reviews$/i),
+  productRoute('/qa', '/qa', 'QA', 'qa-handoff', /^QA$/i),
   productRoute('/executions', '/executions', 'Executions', 'execution-supervision', /^Executions$/i),
   productRoute('/executions/:id', `/executions/${executionId}`, 'Execution', 'execution-supervision', productWorkspacePreviewItemHeading),
   productRoute('/board', '/board', 'Board', 'delivery-board', /^Board$/i),
@@ -193,8 +169,6 @@ export const retiredProductRoutes: readonly ProductRouteContract[] = [
   retiredRoute('/packages/:id', '/packages/package-1', 'Retired Package Detail', 'execution-supervision'),
   retiredRoute('/runs', '/runs', 'Retired Runs', 'execution-supervision'),
   retiredRoute('/runs/:id', '/runs/run-1', 'Retired Run Detail', 'execution-supervision'),
-  retiredRoute('/reviews', '/reviews', 'Retired Reviews', 'code-review'),
-  retiredRoute('/reviews/:id', '/reviews/review-1', 'Retired Review Detail', 'code-review'),
   retiredRoute('/plans', '/plans', 'Retired Plans', 'planning-table'),
   retiredRoute('/plans/:id', '/plans/plan-1', 'Retired Plan Detail', 'planning-table'),
   retiredRoute('/specs', '/specs', 'Retired Specs', 'document-governance'),

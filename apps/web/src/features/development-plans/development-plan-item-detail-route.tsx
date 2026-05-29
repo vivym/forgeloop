@@ -49,7 +49,7 @@ export function DevelopmentPlanItemSpecRoute() {
   return <DevelopmentPlanItemSurface focus="spec" />;
 }
 
-export function DevelopmentPlanItemExecutionPlanRoute() {
+export function DevelopmentPlanItemImplementationPlanRoute() {
   return <DevelopmentPlanItemSurface focus="execution-plan" />;
 }
 
