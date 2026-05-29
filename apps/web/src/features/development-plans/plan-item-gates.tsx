@@ -177,12 +177,12 @@ export function PlanItemGateSummary({ item }: { item: DevelopmentPlanItemProject
 export function planItemGateModels(item: DevelopmentPlanItemProjection): PlanItemGateModel[] {
   const href = (suffix: string) => `${itemHref(item)}${suffix}`;
   return [
-    gateConfig('boundary', 'Boundary', item.boundary_status, href('/brainstorming'), true),
+    gateConfig('boundary', 'Boundary', item.boundary_status, itemHref(item), true),
     gateConfig('spec', 'Spec', item.spec_status, href('/spec'), isApproved(item.boundary_status)),
-    gateConfig('execution-plan', 'Execution Plan', item.execution_plan_status, href('/execution-plan'), isApproved(item.spec_status) && hasRequiredSpecQaStrategy(item)),
+    gateConfig('execution-plan', 'Execution Plan', item.execution_plan_status, href('/implementation-plan'), isApproved(item.spec_status) && hasRequiredSpecQaStrategy(item)),
     gateConfig('execution', 'Execution', item.execution_status, href('/execution'), isApproved(item.execution_plan_status) && hasRunnableExecutionBoundary(item)),
-    gateConfig('code-review', 'Code Review', item.review_status, href('/review'), item.execution_status === 'completed' || isReviewOpen(item.review_status)),
-    gateConfig('qa-handoff', 'QA handoff', item.qa_handoff_status, href('/qa'), item.review_status === 'approved' || isQaOpen(item.qa_handoff_status)),
+    gateConfig('code-review', 'Code Review', item.review_status, '/reviews', item.execution_status === 'completed' || isReviewOpen(item.review_status)),
+    gateConfig('qa-handoff', 'QA handoff', item.qa_handoff_status, '/qa', item.review_status === 'approved' || isQaOpen(item.qa_handoff_status)),
     gateConfig('release', 'Release', undefined, releaseHref(item), (item.qa_handoff_status === 'accepted' || item.qa_handoff_status === 'approved') && hasLinkedRelease(item)),
   ];
 }

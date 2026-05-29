@@ -14,6 +14,8 @@ import {
 } from '../../apps/web/src/features/product-surfaces/route-contract';
 import { productNavigationGroups } from '../../apps/web/src/shared/navigation/product-navigation';
 import { productWorkspacePreviewScenario } from './fixtures/product-data';
+import { planItemGateModels } from '../../apps/web/src/features/development-plans/plan-item-gates';
+import { itemHref } from '../../apps/web/src/features/development-plans/development-plan-table';
 import { duplicateProductRoutePaths, flattenProductRouteConfig } from './helpers/product-route-config';
 
 const repoRoot = process.cwd();
@@ -248,5 +250,20 @@ describe('product-grade route contract', () => {
     expect(activeLinkSources).toContain('/reviews');
     expect(activeLinkSources).toContain('implementation-plan');
     expect(activeLinkSources).not.toMatch(/\/specs-plans|\/execution-plan|\/items\/[^`'"]+\/review\b|\/items\/[^`'"]+\/qa\b/);
+  });
+
+  it('keeps Plan Item gate model links on registered public routes', () => {
+    const [item] = productWorkspacePreviewScenario.developmentPlanItems;
+    expect(item).toBeDefined();
+
+    const gateHrefs = planItemGateModels(item).map((gate) => gate.href);
+    const itemBaseHref = itemHref(item);
+
+    expect(gateHrefs).toContain(`${itemBaseHref}/spec`);
+    expect(gateHrefs).toContain(`${itemBaseHref}/implementation-plan`);
+    expect(gateHrefs).toContain(`${itemBaseHref}/execution`);
+    expect(gateHrefs).toContain('/reviews');
+    expect(gateHrefs).toContain('/qa');
+    expect(gateHrefs.join('\n')).not.toMatch(/brainstorming|execution-plan|\/items\/[^/]+\/review$|\/items\/[^/]+\/qa$/);
   });
 });
