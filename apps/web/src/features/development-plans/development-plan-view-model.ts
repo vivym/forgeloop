@@ -298,10 +298,10 @@ function planItemArtifacts(plan: DevelopmentPlanProjection, item: DevelopmentPla
   return [
     { label: 'Boundary', href: `${base}` },
     { label: 'Spec', href: `${base}/spec` },
-    { label: 'Execution Plan', href: `${base}/execution-plan` },
+    { label: 'Implementation Plan Doc', href: `${base}/implementation-plan` },
     { label: 'Execution', href: `${base}/execution` },
-    { label: 'Review', href: `${base}/review` },
-    { label: 'QA', href: `${base}/qa` },
+    { label: 'Review', href: '/reviews' },
+    { label: 'QA', href: '/qa' },
   ];
 }
 

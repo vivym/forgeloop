@@ -20,7 +20,7 @@ const unselectedSegmentClass =
   'inline-flex min-h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-border-strong hover:bg-surface-muted';
 const secondaryLinkClass = 'text-sm font-semibold text-primary hover:underline';
 
-export function SpecExecutionPlanQueue() {
+export function SpecExecutionPlanQueue({ basePath = '/reviews' }: { basePath?: string }) {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') === 'plans' ? 'plans' : 'specs';
@@ -66,10 +66,10 @@ export function SpecExecutionPlanQueue() {
 
   const toolbar = (
         <InlineActions aria-label="Document review tabs" role="tablist">
-          <Link aria-selected={activeTab === 'specs'} className={activeTab === 'specs' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref('specs', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
+          <Link aria-selected={activeTab === 'specs'} className={activeTab === 'specs' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref(basePath, 'specs', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
             Specs
           </Link>
-          <Link aria-selected={activeTab === 'plans'} className={activeTab === 'plans' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref('plans', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
+          <Link aria-selected={activeTab === 'plans'} className={activeTab === 'plans' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref(basePath, 'plans', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
             Execution Plans
           </Link>
         </InlineActions>
@@ -225,11 +225,11 @@ function DocumentReviewInspector({ row }: { row: SpecPlanQueueRow | undefined })
   );
 }
 
-function tabHref(tab: 'specs' | 'plans', developmentPlanId: string | null, developmentPlanItemId: string | null): string {
+function tabHref(basePath: string, tab: 'specs' | 'plans', developmentPlanId: string | null, developmentPlanItemId: string | null): string {
   const params = new URLSearchParams({ tab });
   if (developmentPlanId !== null) params.set('development_plan_id', developmentPlanId);
   if (developmentPlanItemId !== null) params.set('development_plan_item_id', developmentPlanItemId);
-  return `/specs-plans?${params.toString()}`;
+  return `${basePath}?${params.toString()}`;
 }
 
 function isFocusedQueueRow(row: SpecPlanQueueRow, developmentPlanId: string | null, developmentPlanItemId: string | null): boolean {

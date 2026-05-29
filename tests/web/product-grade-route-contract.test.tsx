@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import appRouteConfig from '../../apps/web/src/app/routes';
@@ -12,6 +15,12 @@ import {
 import { productNavigationGroups } from '../../apps/web/src/shared/navigation/product-navigation';
 import { productWorkspacePreviewScenario } from './fixtures/product-data';
 import { duplicateProductRoutePaths, flattenProductRouteConfig } from './helpers/product-route-config';
+
+const repoRoot = process.cwd();
+
+function readRepoFile(path: string) {
+  return readFileSync(join(repoRoot, path), 'utf8');
+}
 
 const expectedProductRoutes = [
   '/',
@@ -226,5 +235,18 @@ describe('product-grade route contract', () => {
     expect(registeredPaths.filter((path) => !classified.has(path))).toEqual([]);
     expect(duplicateProductRoutePaths(registeredPaths)).toEqual([]);
     expect(registeredPaths.join('\n')).not.toMatch(/(^|\/)(dashboard|tasks|work-items|packages|runs|plans|specs)(\/|$)/);
+  });
+
+  it('keeps active product link builders on canonical document-native routes', () => {
+    const activeLinkSources = [
+      'apps/web/src/features/reviews/reviews-route.tsx',
+      'apps/web/src/features/spec-plan/spec-execution-plan-queue.tsx',
+      'apps/web/src/features/spec-plan/spec-plan-view-model.ts',
+      'apps/web/src/features/development-plans/development-plan-view-model.ts',
+    ].map(readRepoFile).join('\n');
+
+    expect(activeLinkSources).toContain('/reviews');
+    expect(activeLinkSources).toContain('implementation-plan');
+    expect(activeLinkSources).not.toMatch(/\/specs-plans|\/execution-plan|\/items\/[^`'"]+\/review\b|\/items\/[^`'"]+\/qa\b/);
   });
 });

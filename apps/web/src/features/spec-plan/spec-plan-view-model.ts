@@ -206,12 +206,12 @@ function groupForItem(item: SpecPlanQueueItem): SpecPlanQueueGroupId {
 function queueItemHref(item: SpecPlanQueueItem, artifactType: QueueArtifactType): string {
   const planId = item.development_plan_item_ref?.development_plan_id;
   const itemId = item.development_plan_item_ref?.id;
-  const suffix = artifactType === 'spec' ? 'spec' : 'execution-plan';
+  const suffix = artifactType === 'spec' ? 'spec' : 'implementation-plan';
   if (planId !== undefined && itemId !== undefined) {
     return `/development-plans/${encodeURIComponent(planId)}/items/${encodeURIComponent(itemId)}/${suffix}`;
   }
   if (item.href?.startsWith('/development-plans/') === true) return item.href;
-  return `/specs-plans?tab=${artifactType === 'spec' ? 'specs' : 'plans'}`;
+  return `/reviews?tab=${artifactType === 'spec' ? 'specs' : 'plans'}`;
 }
 
 function riskSignal(blockedCount: number, staleCount: number, highRiskCount: number): string {
