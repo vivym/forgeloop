@@ -2,15 +2,35 @@
 
 ## Status
 
-Draft for user review.
+Blocker-reviewed design draft.
 
 ## Context
 
 The current product workspace redesign improved route structure and removed several legacy product-surface terms, but the visual and product model still feel wrong because the hierarchy is not document-native enough.
 
-This spec supersedes the object-relationship and naming portions of `docs/superpowers/specs/2026-05-27-product-workspace-core-surface-redesign-design.md`. It keeps that spec's intent to make Development Plan the planning bridge and Plan Item the governed delivery workspace, but tightens the model so Requirement, Bug, Tech Debt, Initiative, Spec, and Implementation Plan are all document-native artifacts where appropriate.
+This spec supersedes the object-relationship and naming portions of `docs/superpowers/specs/2026-05-27-product-workspace-core-surface-redesign-design.md`. It keeps that spec's intent to make Development Plan the planning bridge and Plan Item the governed delivery workspace, but tightens the model so Requirement, Bug, Tech Debt, Initiative, Spec, and Implementation Plan Doc are all document-native artifacts where appropriate.
 
 The PRD's older shorthand delivery line describes the high-level delivery sequence. This spec makes the missing planning bridge explicit: source documents do not proceed directly to implementation documents. They first feed a Development Plan, and a Plan Item then enters the Superpowers document workflow.
+
+### Authority And Conflict Resolution
+
+For the next implementation plan, this spec is authoritative for:
+
+- public product hierarchy;
+- artifact naming;
+- source document, Development Plan, and Plan Item relationships;
+- source document to Plan Item gate eligibility;
+- public route direction for Spec, Implementation Plan Doc, and Execution entry points.
+
+`docs/superpowers/specs/2026-05-27-product-workspace-core-surface-redesign-design.md` remains authoritative only for visual-system, page-shell, seeded-preview, and screenshot acceptance details that do not conflict with this document-native model.
+
+When the PRD or an older spec uses a shorter Work Item to Spec to Plan delivery line, implementation must interpret that as the expanded product path in this spec:
+
+```text
+typed source document -> Development Plan -> Plan Item -> Spec Doc -> Implementation Plan Doc -> Execution Package -> Codex Run
+```
+
+The PRD's `Work Item` term remains a conceptual umbrella. Public UI and route contracts in this redesign must use concrete source document types and must not reintroduce generic work-item pages, generic owner language, or direct source document to Spec, Implementation Plan Doc, or execution actions.
 
 The corrected product model must align with the Superpowers workflow:
 
@@ -50,7 +70,7 @@ Requirement / Bug / Tech Debt / Initiative Document(s)
 
 This hierarchy is mandatory.
 
-No Requirement, Bug, Tech Debt, or Initiative document may skip directly to Spec, Implementation Plan, Execution Package, or execution.
+No Requirement, Bug, Tech Debt, or Initiative document may skip directly to Spec, Implementation Plan Doc, Execution Package, or execution.
 
 ## Terminology
 
@@ -74,6 +94,27 @@ Each source document has:
 - links to Development Plans and downstream delivery artifacts.
 
 The body is not a secondary description field. It is the product context authority.
+
+### Public Source Document Contract
+
+Requirement, Bug, Tech Debt, and Initiative must be concrete document-native public types. Each public DTO, route loader, fixture, and route-contract test for these types must expose the concrete type, not a generic cross-role wrapper.
+
+Minimum public fields:
+
+- stable concrete document id;
+- concrete type;
+- title;
+- MDX/Markdown body or persisted body reference;
+- type-specific properties;
+- `driver_actor_id`;
+- intake context;
+- attachment and image refs;
+- linked Development Plans;
+- downstream Plan Item coverage;
+- latest meaningful activity;
+- next action.
+
+If older storage tables or domain abstractions remain underneath implementation, they are internal persistence details behind an adapter. No public DTO, route data, fixture, copy, test name, or primary UI affordance may expose the older generic source-data model, generic owner semantics, or generic work-item pages.
 
 ### Development Plan
 
@@ -100,6 +141,15 @@ Brainstorming -> Spec Doc -> Implementation Plan Doc -> Execution
 ```
 
 A Plan Item may reference one or more source documents. It is not a structured task list. It is a governed delivery slice.
+
+Plan Item invariants:
+
+- every Plan Item belongs to exactly one Development Plan;
+- Plan Items are created only inside their parent Development Plan;
+- every Plan Item must reference at least one source document;
+- a Plan Item's source refs must be a subset of its parent Development Plan's linked source documents, unless the same operation first adds the missing source refs to the parent plan;
+- every Spec Doc, Implementation Plan Doc, Execution entry, review record, QA handoff, and release readiness link created for a Plan Item must carry `developmentPlanId` and `planItemId`;
+- orphan Plan Items, global Plan Item routes, and Plan Item artifacts without a parent Development Plan are invalid.
 
 ### Spec Doc
 
@@ -215,9 +265,48 @@ Recommended layout:
 
 The current active stage should dominate the center. Adjacent stages should remain visible but compact.
 
+### Plan Item Gate Contract
+
+Plan Item workflow state must be explicit. Implementations may choose exact enum names, but route actions and disabled states must preserve this progression:
+
+```text
+Planned
+  -> Brainstorming Active
+  -> Boundary Confirmed
+  -> Spec Doc Draft
+  -> Spec Doc In Review
+  -> Spec Doc Approved
+  -> Implementation Plan Doc Draft
+  -> Implementation Plan Doc In Review
+  -> Implementation Plan Doc Approved
+  -> Execution Ready
+  -> Execution Running / Interrupted / Review Ready
+  -> Code Review Requested / Changes Requested / Approved
+  -> QA Pending / QA Blocked / QA Accepted
+  -> Release Ready / Released
+```
+
+Gate preconditions:
+
+- Brainstorming can start only for a Plan Item with a parent Development Plan and at least one linked source document.
+- Spec Doc generation can start only after the Plan Item boundary has been confirmed through brainstorming.
+- Spec Doc approval must exist before Implementation Plan Doc generation starts.
+- Implementation Plan Doc approval must exist before execution can become ready.
+- Execution readiness requires an approved Spec Doc revision, an approved Implementation Plan Doc revision, required QA/test-strategy participation for the Plan Item's risk class, and a validated runnable internal Execution Package boundary.
+- Code review, QA, and release readiness must link back to the Plan Item and approved document revisions that produced the execution.
+
+Forbidden mutations must fail closed at the route/API layer, not only disappear from the UI:
+
+- source document to Spec Doc generation;
+- source document to Implementation Plan Doc generation;
+- source document to execution;
+- Development Plan body to execution;
+- Plan Item execution without approved document revisions;
+- Plan Item execution without a runnable internal Execution Package boundary.
+
 ### Document Review Workspace
 
-Spec and Implementation Plan review should be document review, not form review.
+Spec Doc and Implementation Plan Doc review should be document review, not form review.
 
 Review surfaces must support:
 
@@ -292,8 +381,8 @@ Public UI must not use:
 
 - the old work-item ownership label;
 - generic `owner` for source documents or Plan Items;
-- generic `source object` as the primary page label;
-- `Development Plan` to mean the Superpowers implementation plan;
+- generic source-data wrapper labels as primary page labels;
+- `Development Plan` to mean the Superpowers Implementation Plan Doc;
 - `Task` for Plan Item unless a future spec introduces structured task extraction;
 - `Execution Package` as primary navigation;
 - old subsystem names, old priority-code labels, placeholder sample copy, or other historical baggage terms.
@@ -305,13 +394,48 @@ Product contracts must move toward the following conceptual model:
 - Source documents have document body content, typed properties, attachments, and downstream links.
 - Development Plans have document body content plus child Plan Items.
 - Plan Items have source document refs and workflow artifact refs.
+- Brainstorming Sessions are Plan Item workflow artifacts with status, transcript or question/answer log, confirmed boundary decisions, source document context, Development Plan context, resume pointer, and generated Spec Doc revision link.
 - Spec Doc revisions are document artifacts owned by Plan Items.
 - Implementation Plan Doc revisions are document artifacts owned by Plan Items.
 - Execution Packages reference Plan Items, approved Spec Doc revisions, approved Implementation Plan Doc revisions, policies, checks, source refs, and evidence refs.
 
 No public API should force the frontend to infer document-first concepts from generic work-item records.
 
+Document artifacts must keep their Markdown bodies as first-class persisted content. Structured status, review, and lifecycle fields exist to govern the documents; they do not replace the documents as the source of truth.
+
 Implementation may be staged across commits for reviewability, but the finished slice must not keep public compatibility aliases, old product labels, or dual navigation paths.
+
+## Implementation Slicing
+
+This redesign is large enough that the implementation plan should split it into governed slices. Each slice may land as a reviewable commit sequence, but the accepted product surface for that slice must not expose old labels, compatibility routes, or alternate public paths.
+
+Recommended implementation order:
+
+1. **Contract And Naming Reset**
+   - lock the document-native terminology in route-contract, navigation, and copy guards;
+   - make `/development-plans/:developmentPlanId/items/:planItemId/implementation-plan` the canonical public Implementation Plan Doc route;
+   - remove any public alternate route with the older plan label instead of keeping redirects or aliases;
+   - preserve internal execution-package and storage names only where they are runtime implementation details.
+2. **Source Document Workspaces**
+   - make Requirement, Bug, Tech Debt, and Initiative detail pages document-first with MDX/Markdown bodies;
+   - keep type-specific list columns, filters, properties, attachment affordances, and planning coverage;
+   - prevent any source document action from generating Spec, generating Implementation Plan Doc, or starting execution directly.
+3. **Development Plan Workspace**
+   - make Development Plan a document-backed planning artifact with a concise rationale body and a Plan Item table;
+   - support manual and AI-assisted planning without turning AI generation into the whole product metaphor;
+   - keep source document coverage and Plan Item coverage visible.
+4. **Plan Item Lifecycle Workspace**
+   - make Plan Item the only public workspace that can enter Brainstorming, Spec Doc, Implementation Plan Doc, Execution, Review, QA, and Release readiness;
+   - keep the current stage dominant and adjacent stages compact;
+   - make all actions gate-aware and disabled until upstream approvals exist.
+5. **Document Review Workspaces**
+   - represent Spec Doc and Implementation Plan Doc as Markdown artifacts with revisions, diffs, comments, approval decisions, and owning Plan Item links;
+   - use the existing MDXEditor direction rather than introducing a new block editor in this slice;
+   - keep checkbox implementation steps inside the Markdown document instead of extracting structured task records.
+6. **Execution And Evidence Integration**
+   - validate or materialize the internal Execution Package only after approved document revisions exist;
+   - show Codex run state, interruption/continue controls, PR/review evidence, QA handoff, and release linkage from the Plan Item execution context;
+   - keep Execution Package details in runtime/developer context panels rather than primary navigation.
 
 ## Visual Design Direction
 
@@ -353,6 +477,16 @@ Recommended public route families:
 - `/qa`
 - `/releases`
 
+This list is canonical for document-native parent/child entry points. It does not remove the typed source `/new` and `/:id/evidence` routes required by `docs/superpowers/specs/2026-05-27-product-workspace-core-surface-redesign-design.md`. `canonicalProductRoutes` and `requiredScreenshotRoutes` must include index, new, detail, and evidence routes for Requirement, Initiative, Bug, and Tech Debt.
+
+Dedicated Plan Item child routes in this slice are:
+
+- `/development-plans/:developmentPlanId/items/:planItemId/spec`;
+- `/development-plans/:developmentPlanId/items/:planItemId/implementation-plan`;
+- `/development-plans/:developmentPlanId/items/:planItemId/execution`.
+
+Review, QA, and Release readiness remain stages inside the Plan Item workspace or top-level queues unless a later route spec introduces dedicated child routes.
+
 Routes should preserve the parent-child relationship in breadcrumbs:
 
 ```text
@@ -382,11 +516,11 @@ Requirement Doc -> Development Plan -> Plan Item -> Execution
 - External Jira, Linear, Notion, GitHub Issues, or document sync.
 - Full evolution-loop / retrospective learning surfaces.
 - Replacing Execution Package as the internal runtime authority.
-- Supporting backward-compatible public labels for the old generic source-object model.
+- Supporting backward-compatible public labels for the old generic source-data model.
 
 ## Locked Naming Decisions
 
 - Public navigation may use `Spec` when the page is visibly document-native; artifact labels, review surfaces, and audit trails should use `Spec Doc` when ambiguity matters.
-- Public UI must retire the older execution-plan wording as the product-facing name for the Superpowers `writing-plans` output. Use `Implementation Plan Doc`.
+- Public UI must retire the older plan-output wording as the product-facing name for the Superpowers `writing-plans` output. Use `Implementation Plan Doc`.
 - Existing internal names may be migrated in implementation order, but no public route, copy, test fixture, or contract should preserve the misleading label once this redesign lands.
 - Development Plan must support persisted document body content from the start. The first implementation may pair a concise Markdown rationale body with a structured Plan Item table, but the object is still a document-backed planning artifact rather than a plain table.
