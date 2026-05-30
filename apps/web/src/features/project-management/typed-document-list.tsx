@@ -16,9 +16,9 @@ import {
   initiativeWorkspaceViewModel,
   requirementWorkspaceViewModel,
   techDebtWorkspaceViewModel,
-  type TypedSourceWorkspaceDefinition,
-  type TypedSourceWorkspaceRow,
-} from './source-object-view-model';
+  type TypedDocumentWorkspaceDefinition,
+  type TypedDocumentWorkspaceRow,
+} from './document-workspace-view-model';
 
 type ProjectObjectRef = {
   development_plan_id?: string | undefined;
@@ -64,7 +64,7 @@ export interface ProjectObjectListItem {
 type TypedWorkspaceKind = 'bug' | 'initiative' | 'requirement' | 'tech_debt';
 type ViewMode = 'dense' | 'preview';
 
-export interface TypedSourceObjectListProps<T extends ProjectObjectListItem> {
+export interface TypedDocumentListProps<T extends ProjectObjectListItem> {
   createHref: string;
   detailHref: (item: T) => string;
   emptyMessage: string;
@@ -77,7 +77,7 @@ export interface TypedSourceObjectListProps<T extends ProjectObjectListItem> {
   workspaceKind: TypedWorkspaceKind;
 }
 
-export function TypedSourceObjectList<T extends ProjectObjectListItem>({
+export function TypedDocumentList<T extends ProjectObjectListItem>({
   createHref,
   detailHref,
   emptyMessage,
@@ -88,7 +88,7 @@ export function TypedSourceObjectList<T extends ProjectObjectListItem>({
   subtitle,
   title,
   workspaceKind,
-}: TypedSourceObjectListProps<T>) {
+}: TypedDocumentListProps<T>) {
   const adapter = adapterFor(workspaceKind);
   const rows = useMemo(
     () => items.map((item) => adapter.row(item, detailHref(item))),
@@ -132,12 +132,12 @@ export function TypedSourceObjectList<T extends ProjectObjectListItem>({
 
   return (
     <ObjectList
-      className="typed-source-workspace"
-      family="source-database"
+      className="typed-document-workspace"
+      family="document-database"
       heading={title}
       Workspace={workspace.Component}
       toolbar={
-        <TypedSourceToolbar
+        <TypedDocumentToolbar
           driverFilter={driverFilter}
           planningCoverageFilter={planningCoverageFilter}
           priorityFilter={priorityFilter}
@@ -163,11 +163,11 @@ export function TypedSourceObjectList<T extends ProjectObjectListItem>({
       table={
         <section className="grid min-w-0 content-start gap-3 lg:min-h-[70vh]" data-primary-work-surface="">
           {filteredRows.length === 0 && !isLoading && !error ? (
-            <TypedSourceEmptyState createHref={createHref} definition={adapter.definition} description={emptyMessage} planningHref={planningHref} />
+            <TypedDocumentEmptyState createHref={createHref} definition={adapter.definition} description={emptyMessage} planningHref={planningHref} />
           ) : null}
           <DataTable
             ariaLabel={adapter.definition.tableAriaLabel}
-            columns={typedSourceColumns(adapter.definition)}
+            columns={typedDocumentColumns(adapter.definition)}
             density="compact"
             emptyMessage={null}
             getRowKey={(item) => item.id}
@@ -176,12 +176,12 @@ export function TypedSourceObjectList<T extends ProjectObjectListItem>({
             {...(focusedRow?.id === undefined ? {} : { selectedRowKey: focusedRow.id })}
             stickyHeader
           />
-          <TypedSourceActions createHref={createHref} definition={adapter.definition} planningHref={planningHref} />
+          <TypedDocumentActions createHref={createHref} definition={adapter.definition} planningHref={planningHref} />
           {isLoading ? <InlineNotice title={`Loading ${title.toLowerCase()}.`} tone="info" /> : null}
           {error ? <InlineNotice title={`${title} could not be loaded.`} tone="danger" /> : null}
         </section>
       }
-      inspector={viewMode === 'preview' ? <TypedSourceInspector definition={adapter.definition} row={focusedRow} subtitle={subtitle} /> : undefined}
+      inspector={viewMode === 'preview' ? <TypedDocumentInspector definition={adapter.definition} row={focusedRow} subtitle={subtitle} /> : undefined}
     />
   );
 }
@@ -212,7 +212,7 @@ function workspaceFor(kind: TypedWorkspaceKind): { Component: (props: { toolbar:
   }
 }
 
-function TypedSourceToolbar({
+function TypedDocumentToolbar({
   driverFilter,
   onDriverFilter,
   onPlanningCoverageFilter,
@@ -249,7 +249,7 @@ function TypedSourceToolbar({
   releaseFilter: string;
   riskFilter: string;
   roleFilter: string;
-  rows: TypedSourceWorkspaceRow[];
+  rows: TypedDocumentWorkspaceRow[];
   search: string;
   statusFilter: string;
   title: string;
@@ -301,7 +301,7 @@ function FilterGroup({
   );
 }
 
-function typedSourceColumns(definition: TypedSourceWorkspaceDefinition): DataTableColumn<TypedSourceWorkspaceRow>[] {
+function typedDocumentColumns(definition: TypedDocumentWorkspaceDefinition): DataTableColumn<TypedDocumentWorkspaceRow>[] {
   return [
     {
       key: 'title',
@@ -319,7 +319,7 @@ function typedSourceColumns(definition: TypedSourceWorkspaceDefinition): DataTab
     { key: 'priority', header: 'Priority', cell: (item) => item.priority },
     { key: 'risk', header: 'Risk', cell: (item) => <Badge tone={riskTone(item.risk)}>{riskLabel(item.risk)}</Badge> },
     { key: 'driver', header: definition.driverLabel, cell: (item) => item.driver },
-    ...definition.typeSpecificColumns.map((column): DataTableColumn<TypedSourceWorkspaceRow> => ({
+    ...definition.typeSpecificColumns.map((column): DataTableColumn<TypedDocumentWorkspaceRow> => ({
       key: column.key,
       header: column.header,
       cell: (item) => item[column.field] ?? 'Unavailable',
@@ -332,13 +332,13 @@ function typedSourceColumns(definition: TypedSourceWorkspaceDefinition): DataTab
   ];
 }
 
-function TypedSourceActions({
+function TypedDocumentActions({
   createHref,
   definition,
   planningHref,
 }: {
   createHref: string;
-  definition: TypedSourceWorkspaceDefinition;
+  definition: TypedDocumentWorkspaceDefinition;
   planningHref: string;
 }) {
   return (
@@ -353,34 +353,34 @@ function TypedSourceActions({
   );
 }
 
-function TypedSourceEmptyState({
+function TypedDocumentEmptyState({
   createHref,
   definition,
   description,
   planningHref,
 }: {
   createHref: string;
-  definition: TypedSourceWorkspaceDefinition;
+  definition: TypedDocumentWorkspaceDefinition;
   description: string;
   planningHref: string;
 }) {
   return (
     <EmptyState
-      actions={<TypedSourceActions createHref={createHref} definition={definition} planningHref={planningHref} />}
-      data-typed-source-empty-state=""
+      actions={<TypedDocumentActions createHref={createHref} definition={definition} planningHref={planningHref} />}
+      data-typed-document-empty-state=""
       description={description === definition.emptyTitle ? 'Adjust filters or create a typed planning input.' : description}
       title={definition.emptyTitle}
     />
   );
 }
 
-function TypedSourceInspector({
+function TypedDocumentInspector({
   definition,
   row,
   subtitle,
 }: {
-  definition: TypedSourceWorkspaceDefinition;
-  row: TypedSourceWorkspaceRow | undefined;
+  definition: TypedDocumentWorkspaceDefinition;
+  row: TypedDocumentWorkspaceRow | undefined;
   subtitle: string;
 }) {
   if (row === undefined) {

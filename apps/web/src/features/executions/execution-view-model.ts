@@ -2,7 +2,7 @@ import type { ProductPageViewModel, ViewModelAction, ViewModelEvidence } from '.
 import type { ProductObjectRef } from '../../shared/api/types';
 
 type EvidenceRef = { id?: string; title?: string };
-type ProductRef = ProductObjectRef & { development_plan_id?: string; execution_plan_id?: string };
+type ProductRef = ProductObjectRef & { development_plan_id?: string; implementation_plan_id?: string };
 
 export type ExecutionLaneId = 'active' | 'resumable' | 'review-pending' | 'failed-blocked' | 'completed-recent';
 
@@ -21,8 +21,8 @@ export interface ExecutionProjection {
   stale?: boolean;
   blocked?: boolean;
   development_plan_item_ref?: ProductRef;
-  execution_plan_revision_id?: string;
-  execution_plan_revision_ref?: ProductRef;
+  implementation_plan_revision_id?: string;
+  implementation_plan_revision_ref?: ProductRef;
   evidence_refs?: ProductRef[];
   runtime_evidence_refs?: readonly EvidenceRef[];
   pr_refs?: readonly EvidenceRef[];
@@ -41,7 +41,7 @@ export interface ExecutionSupervisionRow {
   href: string;
   title: string;
   laneId: ExecutionLaneId;
-  approvedExecutionPlanRevision: string;
+  approvedImplementationPlanRevision: string;
   developmentPlanItem: string;
   developmentPlanItemHref: string | undefined;
   workerState: string;
@@ -59,7 +59,7 @@ export interface ExecutionSupervisionDetail extends ProductPageViewModel {
   title: string;
   status: string;
   statusTone: 'neutral' | 'success' | 'warning' | 'danger' | 'info';
-  approvedExecutionPlanRevision: string;
+  approvedImplementationPlanRevision: string;
   developmentPlanItem: string;
   developmentPlanItemHref: string | undefined;
   workerState: string;
@@ -89,7 +89,7 @@ export function executionSupervisionRow(execution: ExecutionProjection): Executi
     href: execution.href ?? `/executions/${execution.id}`,
     title: productTitle(execution),
     laneId: executionLane(execution),
-    approvedExecutionPlanRevision: executionPlanRevisionLabel(execution),
+    approvedImplementationPlanRevision: implementationPlanRevisionLabel(execution),
     developmentPlanItem: developmentPlanItemLabel(execution),
     developmentPlanItemHref: developmentPlanItemHref(execution),
     workerState: formatValue(execution.worker_state ?? execution.status),
@@ -112,20 +112,20 @@ export function executionSupervisionDetail(execution: ExecutionProjection): Exec
   const lastEvent = lastMeaningfulEvent(execution);
   const evidenceSummary = executionEvidenceSummary(execution);
   const planItem = developmentPlanItemLabel(execution);
-  const planRevision = executionPlanRevisionLabel(execution);
+  const implementationPlanRevision = implementationPlanRevisionLabel(execution);
 
   return {
     id: execution.id,
     title,
     objectLabel: title,
     objectType: 'Execution supervision',
-    currentState: `Worker state ${state}; approved Execution Plan ${planRevision}`,
+    currentState: `Worker state ${state}; approved Implementation Plan Doc ${implementationPlanRevision}`,
     nextAction: `Allowed action: ${nextActionLabel(actions)}`,
     disabledReason: disabledReasons(actions).join(' '),
     primaryActorOrRole: `Linked Plan Item: ${planItem}`,
     riskSignal: executionRiskSignal(execution),
     gateProgress: [
-      { label: 'Approved Execution Plan revision', state: planRevision },
+      { label: 'Approved Implementation Plan Doc revision', state: implementationPlanRevision },
       { label: 'Development Plan Item', state: planItem, href: developmentPlanItemHref(execution) },
       { label: 'Worker state', state },
     ],
@@ -138,7 +138,7 @@ export function executionSupervisionDetail(execution: ExecutionProjection): Exec
     timelineSummary: lastEvent,
     status: formatValue(execution.status),
     statusTone: statusTone(execution.status ?? execution.worker_state),
-    approvedExecutionPlanRevision: planRevision,
+    approvedImplementationPlanRevision: implementationPlanRevision,
     developmentPlanItem: planItem,
     developmentPlanItemHref: developmentPlanItemHref(execution),
     workerState: state,
@@ -182,7 +182,7 @@ function executionActions(execution: ExecutionProjection, surface: 'list' | 'det
       kind: 'retry',
       label: 'Retry execution',
       enabled: false,
-      disabledReason: 'Retry unavailable: inspect execution evidence before restarting from the approved Execution Plan path.',
+      disabledReason: 'Retry unavailable: inspect execution evidence before restarting from the approved Implementation Plan Doc path.',
     },
     {
       id: 'inspect',
@@ -227,7 +227,7 @@ function executionLane(execution: ExecutionProjection): ExecutionLaneId {
 function productTitle(execution: ExecutionProjection): string {
   const planItem = execution.development_plan_item_ref?.title;
   if (isPresent(planItem)) return planItem;
-  const planRevision = execution.execution_plan_revision_ref?.title;
+  const planRevision = execution.implementation_plan_revision_ref?.title;
   if (isPresent(planRevision)) return planRevision;
   const refTitle = execution.ref?.title;
   if (isPresent(refTitle)) return refTitle;
@@ -236,9 +236,9 @@ function productTitle(execution: ExecutionProjection): string {
   return 'Execution supervision';
 }
 
-function executionPlanRevisionLabel(execution: ExecutionProjection): string {
-  if (isPresent(execution.execution_plan_revision_ref?.title)) return execution.execution_plan_revision_ref.title;
-  return execution.execution_plan_revision_ref?.id !== undefined || execution.execution_plan_revision_id !== undefined ? 'Linked revision' : 'Not linked';
+function implementationPlanRevisionLabel(execution: ExecutionProjection): string {
+  if (isPresent(execution.implementation_plan_revision_ref?.title)) return execution.implementation_plan_revision_ref.title;
+  return execution.implementation_plan_revision_ref?.id !== undefined || execution.implementation_plan_revision_id !== undefined ? 'Linked revision' : 'Not linked';
 }
 
 function developmentPlanItemLabel(execution: ExecutionProjection): string {
@@ -307,7 +307,7 @@ function historySummary<T extends { at?: string }>(history: readonly T[] | undef
 function compactMetadata(execution: ExecutionProjection): string {
   const ids = [
     `execution id ${execution.id}`,
-    execution.execution_plan_revision_ref?.id === undefined ? undefined : `revision id ${execution.execution_plan_revision_ref.id}`,
+    execution.implementation_plan_revision_ref?.id === undefined ? undefined : `revision id ${execution.implementation_plan_revision_ref.id}`,
   ];
   return ids.filter(isPresent).join(' · ');
 }

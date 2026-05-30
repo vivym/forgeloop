@@ -13,7 +13,7 @@ export default function BugEvidenceRoute() {
       detailError={query.error}
       detailLoading={query.isLoading}
       objectLabel="Bug"
-      sourceHref={bugId === undefined ? undefined : `/bugs/${encodeURIComponent(bugId)}`}
+      documentHref={bugId === undefined ? undefined : `/bugs/${encodeURIComponent(bugId)}`}
     />
   );
 }

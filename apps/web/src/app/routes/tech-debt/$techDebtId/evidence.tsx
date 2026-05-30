@@ -13,7 +13,7 @@ export default function TechDebtEvidenceRoute() {
       detailError={query.error}
       detailLoading={query.isLoading}
       objectLabel="Tech Debt"
-      sourceHref={techDebtId === undefined ? undefined : `/tech-debt/${encodeURIComponent(techDebtId)}`}
+      documentHref={techDebtId === undefined ? undefined : `/tech-debt/${encodeURIComponent(techDebtId)}`}
     />
   );
 }

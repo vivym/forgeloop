@@ -24,8 +24,8 @@ export interface CodexRuntimeSuperpowersDogfoodCliConfig {
   runExecutionRuntimeProfileId?: string;
   runExecutionCredentialBindingId?: string;
   projectId: string;
-  sourceObjectType: 'requirement' | 'initiative' | 'bug' | 'tech_debt';
-  sourceObjectId: string;
+  planningInputType: 'requirement' | 'initiative' | 'bug' | 'tech_debt';
+  planningInputId: string;
   leaderActorId: string;
   reviewerActorId: string;
   repoId?: string;
@@ -61,7 +61,7 @@ export interface CodexRuntimeImportEvidence {
 }
 
 export interface CodexRuntimeSuperpowersDogfoodSeed {
-  source_object_id: string;
+  planning_input_id: string;
   development_plan_id: string;
   development_plan_item_id: string;
 }
@@ -103,8 +103,8 @@ export interface CodexRuntimeSpecDogfoodEvidence extends CodexRuntimePhaseDogfoo
   spec_revision_id: string;
 }
 
-export interface CodexRuntimeExecutionPlanDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
-  execution_plan_revision_id: string;
+export interface CodexRuntimeImplementationPlanDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
+  implementation_plan_revision_id: string;
 }
 
 export interface CodexRuntimeExecutionDogfoodEvidence extends CodexRuntimePhaseDogfoodEvidence {
@@ -121,7 +121,7 @@ export interface CodexRuntimeSuperpowersDogfoodReport {
   boundary_brainstorming_session_id: string;
   boundary_summary_revision_id: string;
   spec_revision_id: string;
-  execution_plan_revision_id: string;
+  implementation_plan_revision_id: string;
   execution_id: string;
   runtime_profile_revision_digests: Sha256Digest[];
   credential_binding_version_digests: Sha256Digest[];
@@ -193,12 +193,12 @@ export interface CodexRuntimeSuperpowersDogfoodClient {
   importCodexRuntime: () => Promise<CodexRuntimeImportEvidence>;
   smokeGenerationWorker: () => Promise<void>;
   startNoSharedFilesystemRunWorker: () => Promise<void>;
-  seedSourceAndDevelopmentPlanItem: () => Promise<CodexRuntimeSuperpowersDogfoodSeed>;
+  seedPlanningInputAndDevelopmentPlanItem: () => Promise<CodexRuntimeSuperpowersDogfoodSeed>;
   completeBoundaryBrainstorming: (mode: 'initial' | 'rebase') => Promise<CodexRuntimeBoundaryDogfoodEvidence>;
   mutateDevelopmentPlanItem: () => Promise<void>;
   assertStaleBoundaryBlocksSpecGeneration: () => Promise<{ blocked: true; blocker_code: 'STALE_BOUNDARY_SUMMARY' }>;
   generateAndApproveSpec: () => Promise<CodexRuntimeSpecDogfoodEvidence>;
-  generateAndApproveExecutionPlan: () => Promise<CodexRuntimeExecutionPlanDogfoodEvidence>;
+  generateAndApproveImplementationPlanDoc: () => Promise<CodexRuntimeImplementationPlanDogfoodEvidence>;
   startExecution: () => Promise<CodexRuntimeExecutionDogfoodEvidence>;
   writeReport: (report: CodexRuntimeSuperpowersDogfoodReport, markdown: string) => Promise<{ report_path: string }>;
 }
@@ -396,10 +396,23 @@ const uniqueStrings = (values: readonly string[]): string[] => [...new Set(value
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
+const planningInputCreatePath = (planningInputType: CodexRuntimeSuperpowersDogfoodCliConfig['planningInputType']): string => {
+  switch (planningInputType) {
+    case 'requirement':
+      return '/requirements';
+    case 'initiative':
+      return '/initiatives';
+    case 'bug':
+      return '/bugs';
+    case 'tech_debt':
+      return '/tech-debt';
+  }
+};
+
 export const collectCodexAppServerPhaseEvidence = (input: {
   boundary: CodexRuntimeBoundaryDogfoodEvidence[];
   spec: CodexRuntimeSpecDogfoodEvidence;
-  executionPlan: CodexRuntimeExecutionPlanDogfoodEvidence;
+  executionPlan: CodexRuntimeImplementationPlanDogfoodEvidence;
   execution: CodexRuntimeExecutionDogfoodEvidence;
 }): CodexRuntimeDogfoodPhaseEvidence[] =>
   [
@@ -489,7 +502,7 @@ export const loadCodexRuntimeSuperpowersDogfoodCliConfig = (
     'FORGELOOP_CONTROL_PLANE_URL',
     'FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID',
     'FORGELOOP_CODEX_DOGFOOD_PROJECT_ID',
-    'FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID',
+    'FORGELOOP_CODEX_DOGFOOD_PLANNING_INPUT_ID',
   ];
   const missing = requiredKeys.filter((key) => optionalEnv(env, key) === undefined);
   if (missing.length > 0) {
@@ -514,12 +527,12 @@ export const loadCodexRuntimeSuperpowersDogfoodCliConfig = (
     controlPlaneUrl: optionalEnv(env, 'FORGELOOP_CONTROL_PLANE_URL')!.replace(/\/$/, ''),
     actorId: optionalEnv(env, 'FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID')!,
     projectId: optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_PROJECT_ID')!,
-    sourceObjectType: (optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_TYPE') ?? 'requirement') as
+    planningInputType: (optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_PLANNING_INPUT_TYPE') ?? 'requirement') as
       | 'requirement'
       | 'initiative'
       | 'bug'
       | 'tech_debt',
-    sourceObjectId: optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID')!,
+    planningInputId: optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_PLANNING_INPUT_ID')!,
     leaderActorId: optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_LEADER_ACTOR_ID') ?? optionalEnv(env, 'FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID')!,
     reviewerActorId:
       optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REVIEWER_ACTOR_ID') ?? optionalEnv(env, 'FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID')!,
@@ -576,7 +589,7 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
     boundary_brainstorming_session_id: report.boundary_brainstorming_session_id,
     boundary_summary_revision_id: report.boundary_summary_revision_id,
     spec_revision_id: report.spec_revision_id,
-    execution_plan_revision_id: report.execution_plan_revision_id,
+    implementation_plan_revision_id: report.implementation_plan_revision_id,
     execution_id: report.execution_id,
     rebased_session_id: report.stale_boundary_negative_check.rebased_session_id,
     rebased_boundary_summary_revision_id: report.stale_boundary_negative_check.rebased_boundary_summary_revision_id,
@@ -611,7 +624,7 @@ export const renderCodexRuntimeSuperpowersDogfoodReport = (report: CodexRuntimeS
     `- Boundary Brainstorming Session: ${report.boundary_brainstorming_session_id}`,
     `- Boundary Summary Revision: ${report.boundary_summary_revision_id}`,
     `- Spec Revision: ${report.spec_revision_id}`,
-    `- Execution Plan Revision: ${report.execution_plan_revision_id}`,
+    `- Implementation Plan Doc Revision: ${report.implementation_plan_revision_id}`,
     `- Execution: ${report.execution_id}`,
     `- Runtime profile revision digests: ${report.runtime_profile_revision_digests.join(', ')}`,
     `- Credential binding version digests: ${report.credential_binding_version_digests.join(', ')}`,
@@ -720,7 +733,7 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
 }): Promise<{ report: CodexRuntimeSuperpowersDogfoodReport; reportPath: string }> => {
   const dogfoodWorktreeBase = input.client.dogfoodWorktreeBase();
   try {
-    const seed = await input.client.seedSourceAndDevelopmentPlanItem();
+    const seed = await input.client.seedPlanningInputAndDevelopmentPlanItem();
     const importedRuntime = await input.client.importCodexRuntime();
     await input.client.smokeGenerationWorker();
     await input.client.startNoSharedFilesystemRunWorker();
@@ -731,7 +744,7 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
     assertBoundaryCoverageEvidence(initialBoundary);
     assertBoundaryCoverageEvidence(rebasedBoundary);
     const spec = await input.client.generateAndApproveSpec();
-    const executionPlan = await input.client.generateAndApproveExecutionPlan();
+    const executionPlan = await input.client.generateAndApproveImplementationPlanDoc();
     const execution = await input.client.startExecution();
     const boundaryAiTurnCount = initialBoundary.ai_turn_count + rebasedBoundary.ai_turn_count;
     const followUpCovered = initialBoundary.follow_up_path_covered || rebasedBoundary.follow_up_path_covered;
@@ -757,7 +770,7 @@ export const runCodexRuntimeSuperpowersDogfood = async (input: {
       boundary_brainstorming_session_id: rebasedBoundary.session_id,
       boundary_summary_revision_id: rebasedBoundary.approved_summary_revision_id,
       spec_revision_id: spec.spec_revision_id,
-      execution_plan_revision_id: executionPlan.execution_plan_revision_id,
+      implementation_plan_revision_id: executionPlan.implementation_plan_revision_id,
       execution_id: execution.execution_id,
       runtime_profile_revision_digests: importedRuntime.runtime_profile_revision_digests,
       credential_binding_version_digests: importedRuntime.credential_binding_version_digests,
@@ -1029,7 +1042,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
   let boundarySessionId: string | undefined;
   let boundarySummaryRevisionId: string | undefined = config.boundarySummaryRevisionId;
   let specRevisionId: string | undefined;
-  let executionPlanRevisionId: string | undefined;
+  let implementationPlanRevisionId: string | undefined;
   let cachedBoundarySession: BoundarySessionApiResponse | undefined;
   const env = deps.env ?? process.env;
   const fetchDeps: Pick<CodexRuntimeSuperpowersDogfoodHttpClientDeps, 'fetchImpl'> =
@@ -1043,12 +1056,12 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     }
     return value;
   };
-  const replaceDogfoodScope = (projectId: string, sourceObjectId: string): void => {
+  const replaceDogfoodScope = (projectId: string, planningInputId: string): void => {
     config.projectId = projectId;
-    config.sourceObjectId = sourceObjectId;
+    config.planningInputId = planningInputId;
     env.FORGELOOP_CODEX_DOGFOOD_PROJECT_ID = projectId;
     env.FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID = projectId;
-    env.FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID = sourceObjectId;
+    env.FORGELOOP_CODEX_DOGFOOD_PLANNING_INPUT_ID = planningInputId;
     if (config.repoId !== undefined) {
       env.FORGELOOP_CODEX_DOGFOOD_REPO_ID = config.repoId;
       env.FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID = config.repoId;
@@ -1074,7 +1087,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
   };
   type DevelopmentPlanItemProjection = {
     specs?: Array<{ current_revision_id?: string; approved_revision_id?: string; id?: string }>;
-    execution_plans?: Array<{ current_revision_id?: string; approved_revision_id?: string; id?: string }>;
+    implementation_plan_docs?: Array<{ current_revision_id?: string; approved_revision_id?: string; id?: string }>;
     executions?: Array<{
       id: string;
       runtime_evidence?: {
@@ -1477,9 +1490,9 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     const item = await fetchDevelopmentPlanItemProjection();
     return item.specs?.[0]?.approved_revision_id ?? item.specs?.[0]?.current_revision_id;
   };
-  const currentExecutionPlanRevisionId = async (): Promise<string | undefined> => {
+  const currentImplementationPlanRevisionId = async (): Promise<string | undefined> => {
     const item = await fetchDevelopmentPlanItemProjection();
-    return item.execution_plans?.[0]?.approved_revision_id ?? item.execution_plans?.[0]?.current_revision_id;
+    return item.implementation_plan_docs?.[0]?.approved_revision_id ?? item.implementation_plan_docs?.[0]?.current_revision_id;
   };
   const fetchExecutionRuntimeEvidence = async (executionId: string): Promise<{
     workspace_bundle_digest: Sha256Digest;
@@ -1586,7 +1599,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
 					FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: config.projectId,
 					FORGELOOP_CODEX_DOGFOOD_REPO_ID: config.repoId,
 					FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: config.repoId,
-					FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: config.sourceObjectId,
+					FORGELOOP_CODEX_DOGFOOD_PLANNING_INPUT_ID: config.planningInputId,
 				});
         env.FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID = String(summary.generation_runtime_profile_id);
         env.FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID = String(summary.generation_credential_binding_id);
@@ -1626,7 +1639,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       }
       await invokeRemoteWorkerOnce('run_execution');
     },
-    async seedSourceAndDevelopmentPlanItem() {
+    async seedPlanningInputAndDevelopmentPlanItem() {
       if (config.autoSeedProductSource === true) {
         const project = await requestJson<{ id: string }>(config, '/projects', {
           method: 'POST',
@@ -1635,7 +1648,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
             owner_actor_id: config.actorId,
           },
         }, fetchDeps);
-        replaceDogfoodScope(project.id, config.sourceObjectId);
+        replaceDogfoodScope(project.id, config.planningInputId);
         if (config.repoId !== undefined && config.repoLocalPath !== undefined && config.repoBaseCommitSha !== undefined) {
           await requestJson(config, `/projects/${encodeURIComponent(config.projectId)}/repos`, {
             method: 'POST',
@@ -1648,32 +1661,32 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
             },
           }, fetchDeps);
         }
-        const sourceObject = await requestJson<{ id: string }>(config, `/source-objects/${encodeURIComponent(config.sourceObjectType)}`, {
+        const planningInput = await requestJson<{ id: string }>(config, planningInputCreatePath(config.planningInputType), {
           method: 'POST',
           body: {
             project_id: config.projectId,
-            title: 'Codex runtime Superpowers dogfood source',
+            title: 'Codex runtime Superpowers dogfood planning input',
             goal: 'Validate the strict Superpowers product loop through centralized Codex runtime distribution.',
-            success_criteria: ['Boundary, Spec, Execution Plan, and Execution complete through runtime-backed product APIs.'],
+            success_criteria: ['Boundary, Spec, Implementation Plan Doc, and Execution complete through runtime-backed product APIs.'],
             priority: 'P0',
             risk: 'high',
             driver_actor_id: config.actorId,
             intake_context: {
               type: 'requirement',
-              stakeholder_problem: 'Codex runtime closure needs a real product source object.',
-              desired_outcome: 'The dogfood loop creates all product artifacts from a typed source object.',
+              stakeholder_problem: 'Codex runtime closure needs a real product planning input.',
+              desired_outcome: 'The dogfood loop creates all product artifacts from a typed planning input.',
               acceptance_criteria: ['The strict dogfood script completes without fixture-only source ids.'],
               in_scope: ['Codex runtime Superpowers dogfood'],
             },
           },
         }, fetchDeps);
-        replaceDogfoodScope(config.projectId, sourceObject.id);
+        replaceDogfoodScope(config.projectId, planningInput.id);
       }
       const plan = await requestJson<{ id: string }>(config, '/development-plans', {
         method: 'POST',
         body: {
           project_id: config.projectId,
-          source_ref: { type: config.sourceObjectType, id: config.sourceObjectId },
+          source_ref: { type: config.planningInputType, id: config.planningInputId },
           title: 'Codex Runtime Superpowers Dogfood',
           actor_id: config.actorId,
         },
@@ -1687,6 +1700,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
           responsible_role: 'tech_lead',
           driver_actor_id: config.actorId,
           reviewer_actor_id: config.reviewerActorId,
+          source_refs: [{ type: config.planningInputType, id: config.planningInputId }],
           risk: 'high',
           dependency_hints: [],
           affected_surfaces: ['codex-runtime', 'superpowers'],
@@ -1695,7 +1709,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       }, fetchDeps);
       developmentPlanItemId = item.id;
       return {
-        source_object_id: config.sourceObjectId,
+        planning_input_id: config.planningInputId,
         development_plan_id: plan.id,
         development_plan_item_id: item.id,
       };
@@ -1949,7 +1963,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         cleanup_status: await runtimeJobCleanupStatus(runtimeJobId),
       };
     },
-    async generateAndApproveExecutionPlan() {
+    async generateAndApproveImplementationPlanDoc() {
       const planId = requireState(developmentPlanId, 'codex_runtime_superpowers_dogfood_plan_missing');
       const itemId = requireState(developmentPlanItemId, 'codex_runtime_superpowers_dogfood_item_missing');
       const scheduled = await requestJson<{ action_run?: { id?: string }; runtime_job?: { id?: string } }>(
@@ -1966,10 +1980,10 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         scheduled.runtime_job?.id,
         'codex_runtime_superpowers_dogfood_execution_plan_runtime_job_missing',
       );
-      executionPlanRevisionId = await invokeRemoteWorkerUntil({
+      implementationPlanRevisionId = await invokeRemoteWorkerUntil({
         targetKind: 'generation',
-        blockerCode: 'codex_runtime_superpowers_dogfood_execution_plan_revision_id_missing',
-        observe: currentExecutionPlanRevisionId,
+        blockerCode: 'codex_runtime_superpowers_dogfood_implementation_plan_revision_id_missing',
+        observe: currentImplementationPlanRevisionId,
         runtimeJobId: () => runtimeJobId,
         actionRunId: () => actionRunId,
       });
@@ -1979,15 +1993,15 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       }, fetchDeps);
       await requestJson(config, `/development-plans/${planId}/items/${itemId}/execution-plan/approve`, {
         method: 'POST',
-        body: { actor_id: config.reviewerActorId, rationale: 'Strict dogfood Execution Plan approved.' },
+        body: { actor_id: config.reviewerActorId, rationale: 'Strict dogfood Implementation Plan Doc approved.' },
       }, fetchDeps);
-      executionPlanRevisionId = (await currentExecutionPlanRevisionId()) ?? executionPlanRevisionId;
+      implementationPlanRevisionId = (await currentImplementationPlanRevisionId()) ?? implementationPlanRevisionId;
       const revisionId = requireState(
-        executionPlanRevisionId,
+        implementationPlanRevisionId,
         'codex_runtime_superpowers_dogfood_execution_plan_revision_missing',
       );
       return {
-        execution_plan_revision_id: revisionId,
+        implementation_plan_revision_id: revisionId,
         output_schema_versions: await runtimeJobOutputSchemaVersions(runtimeJobId),
         app_server_evidence_digests: await runtimeJobAppServerEvidenceDigests(runtimeJobId),
         runtime_job_digests: [runtimeJobDigestFromId(runtimeJobId)],

@@ -79,7 +79,7 @@ export async function seedApprovedExecutionPlan(
         kind: 'requirement',
         title: 'Build product execution supervision',
         goal: 'Move item execution through code review and QA handoff.',
-        success_criteria: ['Execution starts only from an approved item Execution Plan.'],
+        success_criteria: ['Execution starts only from an approved item Implementation Plan Doc.'],
         priority: 'P0',
         risk: 'medium',
         driver_actor_id: executionActorOwner,

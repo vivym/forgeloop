@@ -182,12 +182,12 @@ const productObjectHref = (objectType: ProductObjectType, objectId: string): str
     case 'tech_debt':
       return `/tech-debt/${objectId}`;
     case 'spec':
-      return '/specs-plans';
+      return '/reviews?tab=specs';
     case 'spec_revision':
       return undefined;
-    case 'execution_plan':
-      return '/specs-plans';
-    case 'execution_plan_revision':
+    case 'implementation_plan_doc':
+      return '/reviews?tab=implementation-plans';
+    case 'implementation_plan_revision':
       return undefined;
     case 'execution':
       return `/executions/${objectId}`;
@@ -209,19 +209,22 @@ const productObjectHref = (objectType: ProductObjectType, objectId: string): str
   }
 };
 
-const specPlanArtifactHref = (workItem: WorkItem): string => `/specs-plans?project_id=${encodeURIComponent(workItem.project_id)}`;
+const specArtifactHref = (workItem: WorkItem): string => `/reviews?tab=specs&project_id=${encodeURIComponent(workItem.project_id)}`;
+
+const implementationPlanArtifactHref = (workItem: WorkItem): string =>
+  `/reviews?tab=implementation-plans&project_id=${encodeURIComponent(workItem.project_id)}`;
 
 const specArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
-  objectRef('spec', objectId, specPlanArtifactHref(input.workItem), title);
+  objectRef('spec', objectId, specArtifactHref(input.workItem), title);
 
 const specRevisionArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
-  objectRef('spec_revision', objectId, specPlanArtifactHref(input.workItem), title);
+  objectRef('spec_revision', objectId, specArtifactHref(input.workItem), title);
 
 const planArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
-  objectRef('execution_plan', objectId, specPlanArtifactHref(input.workItem), title);
+  objectRef('implementation_plan_doc', objectId, implementationPlanArtifactHref(input.workItem), title);
 
 const planRevisionArtifactObjectRef = (input: WorkItemDeliveryReadinessInput, objectId: string, title?: string): DeliveryObjectRef =>
-  objectRef('execution_plan_revision', objectId, specPlanArtifactHref(input.workItem), title);
+  objectRef('implementation_plan_revision', objectId, implementationPlanArtifactHref(input.workItem), title);
 
 const blocker = (
   stageId: DeliveryStageId,
@@ -408,8 +411,8 @@ const releaseBlockerObjectRef = (
     case 'development_plan_item':
     case 'brainstorming_session':
     case 'boundary_summary':
-    case 'execution_plan':
-    case 'execution_plan_revision':
+    case 'implementation_plan_doc':
+    case 'implementation_plan_revision':
     case 'execution':
     case 'code_review_handoff':
     case 'qa_handoff':
@@ -417,9 +420,9 @@ const releaseBlockerObjectRef = (
     case 'attachment':
       return objectRef(objectType, objectId, productObjectHref(objectType, objectId));
     case 'plan':
-      return objectRef('execution_plan', objectId, specPlanArtifactHref(workItem));
+      return objectRef('implementation_plan_doc', objectId, implementationPlanArtifactHref(workItem));
     case 'plan_revision':
-      return objectRef('execution_plan_revision', objectId, specPlanArtifactHref(workItem));
+      return objectRef('implementation_plan_revision', objectId, implementationPlanArtifactHref(workItem));
     case 'execution_package':
       return objectRef('execution', objectId, '/executions');
     case 'review_packet':
@@ -1093,7 +1096,7 @@ const actionForLane = (
   if (laneId === 'spec-approver') {
     const target = input.currentSpec === null
       ? objectTarget(workItemProductObjectType(input.workItem), input.workItem.id, workItemProductHref(input.workItem))
-      : objectTarget('spec', input.currentSpec.id, specPlanArtifactHref(input.workItem));
+      : objectTarget('spec', input.currentSpec.id, specArtifactHref(input.workItem));
     return [
       navigateAction({
         id: `open-spec-plan-readiness-${input.workItem.id}`,
@@ -1246,7 +1249,11 @@ const actionForLane = (
         label: 'Start execution',
         scopeRef: workItemScopeRef(input.workItem),
         planRevisionId: input.approvedPlanRevision.id,
-        target: objectTarget('execution_plan_revision', input.approvedPlanRevision.id, specPlanArtifactHref(input.workItem)),
+        target: objectTarget(
+          'implementation_plan_revision',
+          input.approvedPlanRevision.id,
+          implementationPlanArtifactHref(input.workItem),
+        ),
       }),
     );
   }

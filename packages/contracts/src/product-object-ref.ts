@@ -2,18 +2,31 @@ import { z } from 'zod';
 
 const nonEmpty = z.string().trim().min(1);
 
-const sourceObjectRefOptions = [
+const planningInputRefOptions = [
   z.object({ type: z.literal('initiative'), id: nonEmpty, revision_id: nonEmpty.optional(), title: nonEmpty.optional() }).strict(),
   z.object({ type: z.literal('requirement'), id: nonEmpty, revision_id: nonEmpty.optional(), title: nonEmpty.optional() }).strict(),
   z.object({ type: z.literal('bug'), id: nonEmpty, revision_id: nonEmpty.optional(), title: nonEmpty.optional() }).strict(),
   z.object({ type: z.literal('tech_debt'), id: nonEmpty, revision_id: nonEmpty.optional(), title: nonEmpty.optional() }).strict(),
 ] as const;
 
-export const sourceObjectRefSchema = z.discriminatedUnion('type', sourceObjectRefOptions);
-export type SourceObjectRef = z.infer<typeof sourceObjectRefSchema>;
+export const planningInputRefSchema = z.discriminatedUnion('type', planningInputRefOptions);
+export type PlanningInputRef = z.infer<typeof planningInputRefSchema>;
+
+export const implementationPlanDocObjectRefSchema = z
+  .object({ type: z.literal('implementation_plan_doc'), id: nonEmpty, title: nonEmpty.optional() })
+  .strict();
+
+export const implementationPlanRevisionObjectRefSchema = z
+  .object({
+    type: z.literal('implementation_plan_revision'),
+    id: nonEmpty,
+    implementation_plan_id: nonEmpty.optional(),
+    title: nonEmpty.optional(),
+  })
+  .strict();
 
 export const productObjectRefSchema = z.discriminatedUnion('type', [
-  ...sourceObjectRefOptions,
+  ...planningInputRefOptions,
   z.object({ type: z.literal('development_plan'), id: nonEmpty, revision_id: nonEmpty.optional(), title: nonEmpty.optional() }).strict(),
   z
     .object({
@@ -28,15 +41,8 @@ export const productObjectRefSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('boundary_summary'), id: nonEmpty, revision_id: nonEmpty.optional(), title: nonEmpty.optional() }).strict(),
   z.object({ type: z.literal('spec'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
   z.object({ type: z.literal('spec_revision'), id: nonEmpty, spec_id: nonEmpty, title: nonEmpty.optional() }).strict(),
-  z.object({ type: z.literal('execution_plan'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
-  z
-    .object({
-      type: z.literal('execution_plan_revision'),
-      id: nonEmpty,
-      execution_plan_id: nonEmpty,
-      title: nonEmpty.optional(),
-    })
-    .strict(),
+  implementationPlanDocObjectRefSchema,
+  implementationPlanRevisionObjectRefSchema,
   z.object({ type: z.literal('execution'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
   z.object({ type: z.literal('code_review_handoff'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
   z.object({ type: z.literal('qa_handoff'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
@@ -70,8 +76,8 @@ export const editableObjectRefSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('spec_revision'), id: nonEmpty, spec_id: nonEmpty.optional() }).strict(),
   z.object({ type: z.literal('development_plan'), id: nonEmpty }).strict(),
   z.object({ type: z.literal('development_plan_item'), id: nonEmpty, development_plan_id: nonEmpty }).strict(),
-  z.object({ type: z.literal('execution_plan'), id: nonEmpty }).strict(),
-  z.object({ type: z.literal('execution_plan_revision'), id: nonEmpty, execution_plan_id: nonEmpty.optional() }).strict(),
+  z.object({ type: z.literal('implementation_plan_doc'), id: nonEmpty }).strict(),
+  z.object({ type: z.literal('implementation_plan_revision'), id: nonEmpty, implementation_plan_id: nonEmpty.optional() }).strict(),
   z.object({ type: z.literal('execution'), id: nonEmpty }).strict(),
   z.object({ type: z.literal('release'), id: nonEmpty }).strict(),
 ]);

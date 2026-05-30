@@ -13,7 +13,7 @@ export default function InitiativeEvidenceRoute() {
       detailError={query.error}
       detailLoading={query.isLoading}
       objectLabel="Initiative"
-      sourceHref={initiativeId === undefined ? undefined : `/initiatives/${encodeURIComponent(initiativeId)}`}
+      documentHref={initiativeId === undefined ? undefined : `/initiatives/${encodeURIComponent(initiativeId)}`}
     />
   );
 }

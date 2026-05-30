@@ -31,7 +31,7 @@ const claimConflictBody = {
 const productGenerationActionTypes = new Set([
   'run_boundary_brainstorming_round',
   'generate_development_plan_item_spec_revision',
-  'generate_development_plan_item_execution_plan_revision',
+  'generate_development_plan_item_implementation_plan_revision',
 ]);
 
 const conflict = (body: Record<string, string>): HttpException => new HttpException(body, HttpStatus.CONFLICT);

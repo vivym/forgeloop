@@ -58,11 +58,11 @@ const validGeneratedExecutionPlanRevision = () => ({
   required_checks: [{ check_id: 'unit', command: 'pnpm test', timeout_seconds: 120, blocks_review: true }],
   rollback_notes: 'Revert generated runtime slices.',
   handoff_criteria: ['Tests pass'],
-  public_summary: 'Generated a draft Execution Plan revision.',
+  public_summary: 'Generated a draft Implementation Plan Doc revision.',
 });
 
 describe('Superpowers generation result payloads', () => {
-  it('accepts Boundary round, Spec revision, and Execution Plan revision payloads', () => {
+  it('accepts Boundary round, Spec revision, and Implementation Plan Doc revision payloads', () => {
     expect(validateBoundaryRoundRuntimeResult(validBoundaryRoundResult())).toMatchObject({
       schema_version: 'boundary_round_result.v1',
       needs_leader_input: true,

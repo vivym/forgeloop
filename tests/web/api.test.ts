@@ -546,7 +546,7 @@ describe('Forgeloop web API client', () => {
     );
   });
 
-  it('whitelists source-object query filters before sending requests', async () => {
+  it('whitelists document-workspace query filters before sending requests', async () => {
     const fetchMock = vi.fn(async () =>
       new Response(
         JSON.stringify({

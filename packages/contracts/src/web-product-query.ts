@@ -86,7 +86,7 @@ export const productListItemSchema = z
       .optional(),
     release_state: z
       .object({
-        source_object_count: z.number().int().nonnegative().default(0),
+        planning_input_count: z.number().int().nonnegative().default(0),
         delivery_evidence_count: z.number().int().nonnegative().default(0),
         rollout_complete: z.boolean().default(false),
         rollback_complete: z.boolean().default(false),

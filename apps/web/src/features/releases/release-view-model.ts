@@ -45,7 +45,7 @@ export function releaseViewModel(input: { release: ReleaseProjection; readiness:
     riskSignal: readiness.ready ? 'Release ready' : `${readiness.disabled_reasons?.length ?? 1} release blocker(s)`,
     gateProgress: [
       { label: 'Spec', state: evidenceState(readiness.required_review_evidence) },
-      { label: 'Execution Plan', state: evidenceState(readiness.required_review_evidence) },
+      { label: 'Implementation Plan Doc', state: evidenceState(readiness.required_review_evidence) },
       { label: 'Execution', state: evidenceState(readiness.package_run_evidence) },
       { label: 'Code review', state: evidenceState(readiness.required_review_evidence), disabledReason: launchDisabledReason },
       { label: 'QA', state: evidenceState(readiness.required_test_acceptance_evidence), disabledReason: firstEvidenceDisabledReason(readiness) },

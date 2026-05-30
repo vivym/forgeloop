@@ -21,7 +21,7 @@ export {
   type CockpitCommandCenterProps,
   type DevelopmentPlanWorkspaceProps,
   type PlanItemGateWorkspaceProps,
-  type TypedSourceWorkspaceProps,
+  type TypedDocumentWorkspaceProps,
 } from './product-workspace-shells';
 export {
   CockpitLayout,
@@ -40,7 +40,7 @@ export {
   ReleaseEvidenceLayout,
   ReleaseReadinessLayout,
   ReportInsightLayout,
-  SourceEvidenceLayout,
+  DocumentEvidenceLayout,
 } from './page-families/page-families';
 export { PreviewPane, type PreviewPaneProps } from './preview-pane/preview-pane';
 export { ProductPage, type ProductPageProps } from './product-page/product-page';

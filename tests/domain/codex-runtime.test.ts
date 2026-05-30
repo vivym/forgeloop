@@ -141,7 +141,7 @@ const generatedExecutionPlanRevisionPayload = () => ({
   schema_version: 'execution_plan_revision.v1',
   development_plan_item_id: 'item-1',
   based_on_spec_revision_id: 'spec-rev-1',
-  summary: 'Generated Execution Plan revision',
+  summary: 'Generated Implementation Plan Doc revision',
   content_markdown: 'Implement the approved Spec in focused slices.',
   implementation_sequence: ['Add schemas', 'Wire worker dispatch'],
   validation_strategy: ['Run targeted runtime tests'],
@@ -157,7 +157,7 @@ const generatedExecutionPlanRevisionPayload = () => ({
   ],
   rollback_notes: 'Revert generated runtime changes.',
   handoff_criteria: ['Targeted tests pass'],
-  public_summary: 'Generated an Execution Plan revision.',
+  public_summary: 'Generated an Implementation Plan Doc revision.',
 });
 
 const generationTerminalResult = (taskKind: string, generatedPayload: Record<string, unknown>) => ({

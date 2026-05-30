@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router';
 import type { AttachmentRef, AttachmentUploadMetadata, EditableObjectRef, MarkdownDocument } from '@forgeloop/contracts';
 
 import { createForgeloopAttachmentApi } from '../../shared/api/attachments';
-import { createForgeloopCommandApi, type ExecutionPlanRevision } from '../../shared/api/commands';
+import { createForgeloopCommandApi, type ImplementationPlanRevision } from '../../shared/api/commands';
 import {
   useBoundarySummaryRevisionsQuery,
   useDevelopmentPlanItemQuery,
@@ -13,11 +13,9 @@ import {
 import { queryKeys } from '../../shared/api/query-keys';
 import type { ProductObjectRef, SpecRevision } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
-import { CodeReviewLayout, CompactMetadata, DocumentReviewLayout, PlanItemGateWorkspace as SharedPlanItemGateWorkspace, ProductPage, QaHandoffLayout, Section } from '../../shared/layout';
+import { CompactMetadata, DocumentReviewLayout, PlanItemGateWorkspace as SharedPlanItemGateWorkspace, ProductPage, Section } from '../../shared/layout';
 import { ForgeMarkdownEditor, InlineNotice, StatusPill } from '../../shared/ui';
 import { BrainstormingPanel } from '../brainstorming/brainstorming-panel';
-import { CodeReviewHandoffPanel, type CodeReviewHandoffProjection } from '../code-review/code-review-handoff-panel';
-import { QaHandoffPanel, type QaHandoffProjection } from '../qa/qa-handoff-panel';
 import {
   BoundarySummaryRevisionHistory,
   PlanItemGateSummary,
@@ -41,28 +39,16 @@ export function DevelopmentPlanItemDetailRoute() {
   return <DevelopmentPlanItemSurface focus="overview" />;
 }
 
-export function DevelopmentPlanItemBrainstormingRoute() {
-  return <DevelopmentPlanItemSurface focus="brainstorming" />;
-}
-
 export function DevelopmentPlanItemSpecRoute() {
   return <DevelopmentPlanItemSurface focus="spec" />;
 }
 
-export function DevelopmentPlanItemExecutionPlanRoute() {
-  return <DevelopmentPlanItemSurface focus="execution-plan" />;
+export function DevelopmentPlanItemImplementationPlanRoute() {
+  return <DevelopmentPlanItemSurface focus="implementation-plan" />;
 }
 
 export function DevelopmentPlanItemExecutionRoute() {
   return <DevelopmentPlanItemSurface focus="execution" />;
-}
-
-export function DevelopmentPlanItemReviewRoute() {
-  return <DevelopmentPlanItemSurface focus="review" />;
-}
-
-export function DevelopmentPlanItemQaRoute() {
-  return <DevelopmentPlanItemSurface focus="qa" />;
 }
 
 function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus }) {
@@ -180,50 +166,12 @@ function DevelopmentPlanItemFocusedLayout({
     />
   );
 
-  if (focus === 'spec' || focus === 'execution-plan') {
+  if (focus === 'spec' || focus === 'implementation-plan') {
     return (
       <SharedPlanItemGateWorkspace
         evidence={evidenceRail}
         gateRail={gateRail}
         workspace={<ItemDocumentReviewSurface developmentPlanId={developmentPlanId} focus={focus} item={item} itemId={itemId} routeChrome={routeChrome()} />}
-      />
-    );
-  }
-
-  if (focus === 'review') {
-    const handoff = codeReviewHandoffFor(item);
-    const execution = executionSummaryFor(item, handoff?.execution_id);
-    return (
-      <SharedPlanItemGateWorkspace
-        evidence={evidenceRail}
-        gateRail={gateRail}
-        workspace={
-          <CodeReviewLayout
-            workspace={<div className="grid gap-3">{routeChrome(execution.id)}<CodeReviewHandoffPanel execution={execution} handoff={handoff} /></div>}
-            evidence={<EvidenceSideContext executionId={execution.id} item={item} />}
-            controls={<ReviewDecisionSummary status={handoff?.status ?? item.review_status} />}
-          />
-        }
-      />
-    );
-  }
-
-  if (focus === 'qa') {
-    const initialCodeReview = codeReviewHandoffFor(item);
-    const handoff = qaHandoffFor(item, initialCodeReview?.execution_id);
-    const execution = executionSummaryFor(item, handoff?.execution_id ?? initialCodeReview?.execution_id);
-    const codeReview = codeReviewHandoffFor(item, handoff?.execution_id ?? execution.id);
-    return (
-      <SharedPlanItemGateWorkspace
-        evidence={evidenceRail}
-        gateRail={gateRail}
-        workspace={
-          <QaHandoffLayout
-            workspace={<div className="grid gap-3">{routeChrome(execution.id)}<QaHandoffPanel codeReview={codeReview} execution={execution} handoff={handoff} /></div>}
-            evidence={<EvidenceSideContext executionId={execution.id} item={item} />}
-            controls={<ReviewDecisionSummary status={handoff?.status ?? item.qa_handoff_status} />}
-          />
-        }
       />
     );
   }
@@ -434,7 +382,7 @@ function ItemDocumentReviewSurface({
   routeChrome,
 }: {
   developmentPlanId: string | undefined;
-  focus: 'spec' | 'execution-plan';
+  focus: 'spec' | 'implementation-plan';
   item: DevelopmentPlanItemProjection;
   itemId: string | undefined;
   routeChrome: ReactNode;
@@ -444,12 +392,12 @@ function ItemDocumentReviewSurface({
   const commandApi = useMemo(() => createForgeloopCommandApi(), []);
   const attachmentApi = useMemo(() => createForgeloopAttachmentApi(), []);
   const fallbackRevision = useMemo(() => documentRevisionFor(item, focus), [focus, item]);
-  const revisionQuery = useQuery<SpecRevision | ExecutionPlanRevision>({
+  const revisionQuery = useQuery<SpecRevision | ImplementationPlanRevision>({
     queryKey: ['item-document-revision', focus, fallbackRevision.id],
     queryFn: async () =>
       focus === 'spec'
         ? commandApi.getSpecRevision(fallbackRevision.id)
-        : commandApi.getExecutionPlanRevision(fallbackRevision.id),
+        : commandApi.getImplementationPlanRevision(fallbackRevision.id),
     enabled: fallbackRevision.id.length > 0,
   });
   const loadedRevision = useMemo(
@@ -478,7 +426,7 @@ function ItemDocumentReviewSurface({
     const saved =
       focus === 'spec'
         ? await commandApi.saveItemSpecDraft(developmentPlanId, itemId, document)
-        : await commandApi.saveItemExecutionPlanDraft(developmentPlanId, itemId, document);
+        : await commandApi.saveItemImplementationPlanDraft(developmentPlanId, itemId, document);
     const nextRevision = { ...documentRevisionFor(item, focus, saved), status: 'draft' };
     setDocumentRevision(nextRevision);
     setMarkdown(nextRevision.markdown);
@@ -487,7 +435,7 @@ function ItemDocumentReviewSurface({
       queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlan(developmentPlanId) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItem(developmentPlanId, itemId) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId) }),
-      queryClient.invalidateQueries({ queryKey: ['spec-execution-plan-queue'] }),
+      queryClient.invalidateQueries({ queryKey: ['document-review-queue'] }),
     ]);
   }
 
@@ -592,14 +540,14 @@ function ActiveGateBody({
   return (
     <div data-active-gate-body="" data-testid="active-gate-workspace">
       <div data-testid="full-gate-body">
-      {renderGateBody(focus === 'overview' ? 'overview' : focus, { developmentPlanId, item, itemId, session })}
+        {renderGateBody(focus, { developmentPlanId, item, itemId, session })}
       </div>
     </div>
   );
 }
 
 function renderGateBody(
-  body: DevelopmentPlanItemFocus | 'review',
+  body: DevelopmentPlanItemFocus,
   context: {
     developmentPlanId: string | undefined;
     item: DevelopmentPlanItemProjection;
@@ -609,40 +557,30 @@ function renderGateBody(
 ): ReactNode {
   switch (body) {
     case 'overview':
-      return <PlanItemGateSummary item={context.item} />;
-    case 'brainstorming':
-      return <BrainstormingPanel developmentPlanId={context.developmentPlanId} itemId={context.itemId} session={context.session} />;
+      return (
+        <div className="grid gap-4">
+          <PlanItemGateSummary item={context.item} />
+          {!isCompleteStatus(context.item.boundary_status) ? (
+            <BrainstormingPanel developmentPlanId={context.developmentPlanId} itemId={context.itemId} session={context.session} />
+          ) : null}
+        </div>
+      );
     case 'spec':
       return (
         <Section title="Spec document">
           <ArtifactList items={context.item.specs ?? []} empty="No Spec document generated yet." />
         </Section>
       );
-    case 'execution-plan':
+    case 'implementation-plan':
       return (
-        <Section title="Execution Plan document">
-          <ArtifactList items={context.item.execution_plans ?? []} empty="No Execution Plan document generated yet." />
+        <Section title="Implementation Plan Doc">
+          <ArtifactList items={context.item.implementation_plan_docs ?? []} empty="No Implementation Plan Doc generated yet." />
         </Section>
       );
     case 'execution':
       return (
         <Section title="Execution supervision">
           <ArtifactList items={context.item.executions ?? []} empty="No execution started yet." />
-        </Section>
-      );
-    case 'review':
-      return (
-        <Section title="Code review and QA handoff">
-          <div className="grid gap-2 text-sm text-text-secondary">
-            <p>Review status: <StatusPill tone="info">{statusLabel(context.item.review_status)}</StatusPill></p>
-            <ArtifactList items={context.item.qa_handoffs ?? []} empty="No QA handoff created yet." />
-          </div>
-        </Section>
-      );
-    case 'qa':
-      return (
-        <Section title="QA handoff">
-          <ArtifactList items={context.item.qa_handoffs ?? []} empty="No QA handoff created yet." />
         </Section>
       );
   }
@@ -715,22 +653,14 @@ function DocumentGateState({ status }: { status: string | undefined }) {
   );
 }
 
-function DocumentCommentSummary({ focus, item }: { focus: 'spec' | 'execution-plan'; item: DevelopmentPlanItemProjection }) {
+function DocumentCommentSummary({ focus, item }: { focus: 'spec' | 'implementation-plan'; item: DevelopmentPlanItemProjection }) {
   return (
     <Section title="Comment summary" variant="subtle">
       <p className="text-sm text-text-secondary">
         {focus === 'spec'
           ? item.next_action ?? 'Review Spec comments before approval.'
-          : item.next_action ?? 'Review Execution Plan comments before approval.'}
+          : item.next_action ?? 'Review Implementation Plan Doc comments before approval.'}
       </p>
-    </Section>
-  );
-}
-
-function ReviewDecisionSummary({ status }: { status: string | undefined }) {
-  return (
-    <Section title="Decision state" variant="subtle">
-      <p className="text-sm text-text-secondary">Current handoff status: {statusLabel(status)}.</p>
     </Section>
   );
 }
@@ -742,13 +672,13 @@ type ItemDocumentRevision = {
   label: string;
   markdown: string;
   status: string | undefined;
-  type: 'spec_revision' | 'execution_plan_revision';
+  type: 'spec_revision' | 'implementation_plan_revision';
 };
 
 function documentRevisionFor(
   item: DevelopmentPlanItemProjection,
-  focus: 'spec' | 'execution-plan',
-  loadedRevision?: SpecRevision | ExecutionPlanRevision,
+  focus: 'spec' | 'implementation-plan',
+  loadedRevision?: SpecRevision | ImplementationPlanRevision,
 ): ItemDocumentRevision {
   if (focus === 'spec') {
     const spec = item.specs?.[0];
@@ -764,18 +694,18 @@ function documentRevisionFor(
     };
   }
 
-  const executionPlan = item.execution_plans?.[0];
+  const executionPlan = item.implementation_plan_docs?.[0];
   const revisionId = executionPlan?.current_revision_id ?? executionPlan?.approved_revision_id ?? `planrev-${item.id}`;
   return {
     attachment_refs: loadedRevision?.attachment_refs ?? [],
-    document_id: loadedRevision !== undefined && 'execution_plan_id' in loadedRevision
-      ? loadedRevision.execution_plan_id
-      : executionPlan?.id ?? `execution-plan-${item.id}`,
+    document_id: loadedRevision !== undefined && 'implementation_plan_id' in loadedRevision
+      ? loadedRevision.implementation_plan_id
+      : executionPlan?.id ?? `implementation-plan-${item.id}`,
     id: loadedRevision?.id ?? revisionId,
-    label: 'Execution Plan document',
-    markdown: loadedRevision?.content ?? [`# ${executionPlan?.title ?? 'Execution Plan document'}`, item.summary ?? '', item.next_action ?? 'Review Execution Plan gate state.'].filter(Boolean).join('\n\n'),
-    status: item.execution_plan_status,
-    type: 'execution_plan_revision',
+    label: 'Implementation Plan Doc',
+    markdown: loadedRevision?.content ?? [`# ${executionPlan?.title ?? 'Implementation Plan Doc'}`, item.summary ?? '', item.next_action ?? 'Review Implementation Plan Doc gate state.'].filter(Boolean).join('\n\n'),
+    status: item.implementation_plan_status,
+    type: 'implementation_plan_revision',
   };
 }
 
@@ -783,7 +713,7 @@ function documentRevisionObjectRef(revision: ItemDocumentRevision): EditableObje
   if (revision.type === 'spec_revision') {
     return { type: 'spec_revision', id: revision.id, spec_id: revision.document_id };
   }
-  return { type: 'execution_plan_revision', id: revision.id, execution_plan_id: revision.document_id };
+  return { type: 'implementation_plan_revision', id: revision.id, implementation_plan_id: revision.document_id };
 }
 
 function documentRevisionAttachmentMetadata(objectRef: EditableObjectRef, file: File): AttachmentUploadMetadata {
@@ -803,146 +733,20 @@ function readableAttachmentLabel(filename: string): string {
   return withoutExtension.length === 0 ? filename : withoutExtension.replace(/[-_]+/g, ' ');
 }
 
-type ItemExecutionSummary = Parameters<typeof CodeReviewHandoffPanel>[0]['execution'];
-
-function executionSummaryFor(item: DevelopmentPlanItemProjection, executionId?: string): ItemExecutionSummary {
-  const execution = executionFor(item, executionId);
-  const resolvedExecutionId = execution?.id ?? executionId ?? `execution-${item.id}`;
-  const evidenceRefs = executionEvidenceRefs(item, resolvedExecutionId);
-  const fallbackEvidenceRefs: ProductObjectRef[] = [
-    { type: 'execution', id: resolvedExecutionId, title: 'Linked execution evidence' },
-  ];
-  const developmentPlanId = item.development_plan_ref?.id ?? item.development_plan_id ?? 'unknown-development-plan';
-  const executionPlanRevisionId = item.execution_plans?.[0]?.approved_revision_id ?? item.execution_plans?.[0]?.current_revision_id;
-  const executionPlanRevisionRef = execution?.execution_plan_revision_ref ?? executionPlanRevisionRefFor(item);
-  const resolvedExecutionPlanRevisionId = execution?.execution_plan_revision_id ?? executionPlanRevisionId;
-  return {
-    id: resolvedExecutionId,
-    development_plan_item_id: item.id,
-    development_plan_item_ref: execution?.development_plan_item_ref ?? {
-      type: 'development_plan_item' as const,
-      id: item.id,
-      title: item.title,
-      development_plan_id: developmentPlanId,
-    },
-    evidence_refs: evidenceRefs.length > 0 ? evidenceRefs : fallbackEvidenceRefs,
-    ...(resolvedExecutionPlanRevisionId === undefined ? {} : { execution_plan_revision_id: resolvedExecutionPlanRevisionId }),
-    ...(executionPlanRevisionRef === undefined ? {} : { execution_plan_revision_ref: executionPlanRevisionRef }),
-    ...((execution?.status ?? item.execution_status) === undefined ? {} : { status: execution?.status ?? item.execution_status }),
-  };
-}
-
-function executionFor(item: DevelopmentPlanItemProjection, executionId?: string) {
-  if (executionId !== undefined) {
-    return item.executions?.find((execution) => execution.id === executionId);
-  }
-  return item.executions?.[0];
-}
-
-function executionPlanRevisionRefFor(item: DevelopmentPlanItemProjection): ProductObjectRef & { execution_plan_id?: string } | undefined {
-  const executionPlan = item.execution_plans?.[0];
-  const revisionId = executionPlan?.approved_revision_id ?? executionPlan?.current_revision_id;
-  if (revisionId === undefined) return undefined;
-  return {
-    type: 'execution_plan_revision',
-    id: revisionId,
-    execution_plan_id: executionPlan?.id ?? `execution-plan-${item.id}`,
-    ...(executionPlan?.title === undefined ? {} : { title: executionPlan.title }),
-  };
-}
-
-function codeReviewHandoffFor(item: DevelopmentPlanItemProjection, executionId?: string): CodeReviewHandoffProjection | undefined {
-  const handoff = handoffForExecution(item.code_review_handoffs, executionId);
-  if (handoff === undefined) return undefined;
-  const handoffExecutionId = handoff.execution_id ?? executionId ?? executionSummaryFor(item).id;
-  return {
-    id: handoff.id,
-    execution_id: handoffExecutionId,
-    verification_evidence_refs: handoff.verification_evidence_refs ?? executionEvidenceRefs(item, handoffExecutionId),
-    comments: handoff.comments ?? (handoff.title === undefined ? [] : [handoff.title]),
-    ...(handoff.execution_plan_revision_id === undefined ? {} : { execution_plan_revision_id: handoff.execution_plan_revision_id }),
-    ...(handoff.reviewer_actor_id === undefined ? {} : { reviewer_actor_id: handoff.reviewer_actor_id }),
-    ...(handoff.status === undefined ? {} : { status: handoff.status }),
-    ...((handoff.summary ?? handoff.title) === undefined ? {} : { summary: handoff.summary ?? handoff.title }),
-    ...(handoff.changed_surfaces === undefined && item.affected_surfaces === undefined ? {} : { changed_surfaces: handoff.changed_surfaces ?? item.affected_surfaces }),
-    ...(handoff.changes_requested === undefined ? {} : { changes_requested: handoff.changes_requested }),
-    ...(handoff.audited_exception === undefined ? {} : { audited_exception: handoff.audited_exception }),
-  };
-}
-
-function qaHandoffFor(item: DevelopmentPlanItemProjection, executionId?: string): QaHandoffProjection | undefined {
-  const handoff = handoffForExecution(item.qa_handoffs, executionId);
-  if (handoff === undefined) return undefined;
-  const handoffExecutionId = handoff.execution_id ?? executionId ?? executionSummaryFor(item).id;
-  const developmentPlanId = item.development_plan_ref?.id ?? item.development_plan_id ?? 'unknown-development-plan';
-  const sourceRef = handoff.source_ref ?? sourceRefForHandoff(item);
-  const executionPlanRevisionRef = handoff.approved_execution_plan_revision_ref ?? executionPlanRevisionRefFor(item);
-  return {
-    id: handoff.id,
-    execution_id: handoffExecutionId,
-    development_plan_item_id: handoff.development_plan_item_id ?? item.id,
-    development_plan_item_ref: handoff.development_plan_item_ref ?? {
-      type: 'development_plan_item' as const,
-      id: item.id,
-      title: item.title,
-      development_plan_id: developmentPlanId,
-    },
-    acceptance_criteria: handoff.acceptance_criteria ?? [item.summary ?? 'Plan Item acceptance remains satisfied.'],
-    test_strategy: handoff.test_strategy ?? 'Focused route, editor, review, and QA handoff checks.',
-    verification_evidence_refs: handoff.verification_evidence_refs ?? executionEvidenceRefs(item, handoffExecutionId),
-    known_risks: handoff.known_risks ?? (item.risk === undefined ? [] : [item.risk]),
-    ...(sourceRef === undefined ? {} : { source_ref: sourceRef }),
-    ...(handoff.approved_spec_revision_ref === undefined ? {} : { approved_spec_revision_ref: handoff.approved_spec_revision_ref }),
-    ...(executionPlanRevisionRef === undefined ? {} : { approved_execution_plan_revision_ref: executionPlanRevisionRef }),
-    ...(handoff.status === undefined ? {} : { status: handoff.status }),
-    ...(handoff.changed_surfaces === undefined && item.affected_surfaces === undefined ? {} : { changed_surfaces: handoff.changed_surfaces ?? item.affected_surfaces }),
-    ...((handoff.release_impact ?? item.release_impact) === undefined ? {} : { release_impact: handoff.release_impact ?? item.release_impact }),
-    ...(handoff.audited_exception === undefined ? {} : { audited_exception: handoff.audited_exception }),
-  };
-}
-
-function handoffForExecution<T extends { execution_id?: string }>(handoffs: T[] | undefined, executionId?: string): T | undefined {
-  if (handoffs === undefined) return undefined;
-  if (executionId !== undefined) {
-    return handoffs.find((handoff) => handoff.execution_id === executionId) ?? handoffs[0];
-  }
-  return handoffs[0];
-}
-
-function sourceRefForHandoff(item: DevelopmentPlanItemProjection): ProductObjectRef | undefined {
-  const sourceRef = item.source_ref;
-  if (
-    sourceRef === undefined ||
-    (sourceRef.type !== 'initiative' && sourceRef.type !== 'requirement' && sourceRef.type !== 'bug' && sourceRef.type !== 'tech_debt')
-  ) {
-    return undefined;
-  }
-  return {
-    type: sourceRef.type,
-    id: sourceRef.id,
-    ...(sourceRef.title === undefined ? {} : { title: sourceRef.title }),
-  };
-}
-
-type DevelopmentPlanItemFocus = 'overview' | 'brainstorming' | 'spec' | 'execution-plan' | 'execution' | 'review' | 'qa';
+type DevelopmentPlanItemFocus = 'overview' | 'spec' | 'implementation-plan' | 'execution';
 
 function pageFamilyForFocus(focus: DevelopmentPlanItemFocus) {
-  if (focus === 'spec' || focus === 'execution-plan') return 'document-review';
-  if (focus === 'review') return 'code-review';
-  if (focus === 'qa') return 'qa-handoff';
+  if (focus === 'spec' || focus === 'implementation-plan') return 'document-review';
   return 'gate-workspace';
 }
 
 function currentGateIdFor(item: DevelopmentPlanItemProjection, focus: DevelopmentPlanItemFocus): PlanItemGateModel['id'] {
   if (focus !== 'overview') {
-    if (focus === 'brainstorming') return 'boundary';
-    if (focus === 'review') return 'code-review';
-    if (focus === 'qa') return 'qa-handoff';
     return focus;
   }
   if (!isCompleteStatus(item.boundary_status)) return 'boundary';
   if (!isCompleteStatus(item.spec_status)) return 'spec';
-  if (!isCompleteStatus(item.execution_plan_status)) return 'execution-plan';
+  if (!isCompleteStatus(item.implementation_plan_status)) return 'implementation-plan';
   if (!isCompleteStatus(item.execution_status)) return 'execution';
   if (!isCompleteStatus(item.review_status)) return 'code-review';
   return 'qa-handoff';
@@ -971,6 +775,13 @@ function isCompleteStatus(status: string | undefined): boolean {
 function executionEvidenceRefs(item: DevelopmentPlanItemProjection, executionId?: string) {
   const execution = executionFor(item, executionId);
   return [...(execution?.evidence_refs ?? []), ...(execution?.test_evidence_refs ?? [])];
+}
+
+function executionFor(item: DevelopmentPlanItemProjection, executionId?: string) {
+  if (executionId !== undefined) {
+    return item.executions?.find((execution) => execution.id === executionId);
+  }
+  return item.executions?.[0];
 }
 
 function firstBoundaryRevision(item: DevelopmentPlanItemProjection | undefined): BoundarySummaryRevision | undefined {

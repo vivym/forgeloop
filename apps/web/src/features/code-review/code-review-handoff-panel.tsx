@@ -12,16 +12,16 @@ type ProductRef = ProductObjectRef;
 type ExecutionSummary = {
   id: string;
   development_plan_item_id?: string;
-  execution_plan_revision_id?: string;
+  implementation_plan_revision_id?: string;
   development_plan_item_ref?: ProductRef & { development_plan_id?: string };
-  execution_plan_revision_ref?: ProductRef & { execution_plan_id?: string };
+  implementation_plan_revision_ref?: ProductRef & { implementation_plan_id?: string };
   evidence_refs?: ProductRef[];
   status?: string;
 };
 export type CodeReviewHandoffProjection = {
   id: string;
   execution_id: string;
-  execution_plan_revision_id?: string;
+  implementation_plan_revision_id?: string;
   reviewer_actor_id?: string;
   status?: string;
   summary?: string;
@@ -106,7 +106,7 @@ export function CodeReviewHandoffPanel({
         {message ? <InlineNotice title={message} tone="success" /> : null}
         <dl className="grid gap-3 text-sm">
           <Definition label="Execution" value={execution.development_plan_item_ref?.title ?? 'Linked execution'} />
-          <Definition label="Approved Execution Plan revision" value={execution.execution_plan_revision_ref?.title ?? (execution.execution_plan_revision_id === undefined ? 'Not linked' : 'Linked revision')} />
+          <Definition label="Approved Implementation Plan Doc revision" value={execution.implementation_plan_revision_ref?.title ?? (execution.implementation_plan_revision_id === undefined ? 'Not linked' : 'Linked revision')} />
           <Definition label="Reviewer" value={handoff?.reviewer_actor_id === undefined ? 'Unassigned' : 'Assigned reviewer'} />
           <Definition label="Changed surfaces" value={changedSurfaces.join(', ')} />
           <Definition label="Verification evidence" value={evidenceRefs.map(evidenceLabel).join(', ')} />

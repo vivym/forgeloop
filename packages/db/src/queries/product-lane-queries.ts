@@ -215,7 +215,7 @@ const specPlanItem = async (
   item: SpecPlan,
   workItem: WorkItem,
 ): Promise<ProductLaneProjectionItem> => {
-  const objectType: ProductObjectType = item.entity_type === 'spec' ? 'spec' : 'execution_plan';
+  const objectType: ProductObjectType = item.entity_type === 'spec' ? 'spec' : 'implementation_plan_doc';
   const [revision, decisions] = await Promise.all([
     item.current_revision_id === undefined
       ? undefined
@@ -240,7 +240,7 @@ const specPlanItem = async (
       projectId: workItem.project_id,
       updatedAt: item.updated_at,
       workItem,
-      surfaceType: item.entity_type === 'spec' ? 'spec' : 'execution_plan',
+      surfaceType: item.entity_type === 'spec' ? 'spec' : 'implementation_plan_doc',
       phase: item.entity_type,
       status: item.gate_state,
       gateState: item.gate_state,
@@ -248,7 +248,7 @@ const specPlanItem = async (
       actorIdValues: approvalActorIds,
       blocked: item.gate_state === 'changes_requested',
     },
-    [openObjectAction(laneId, objectType, item.id, `Open ${objectType === 'spec' ? 'Spec' : 'Execution Plan'}`, artifactHref)],
+    [openObjectAction(laneId, objectType, item.id, `Open ${objectType === 'spec' ? 'Spec' : 'Implementation Plan Doc'}`, artifactHref)],
   );
 };
 

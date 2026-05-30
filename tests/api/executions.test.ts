@@ -27,7 +27,7 @@ describe('Executions API', () => {
     await app.close();
   });
 
-  it('starts execution only from an approved Execution Plan revision, links the approved Spec chain, and enqueues a run session', async () => {
+  it('starts execution only from an approved Implementation Plan Doc revision, links the approved Spec chain, and enqueues a run session', async () => {
     const requiredChecks = [
       {
         check_id: 'docs-verify',
@@ -59,14 +59,14 @@ describe('Executions API', () => {
 
     expect(execution).toMatchObject({
       development_plan_item_id: item.id,
-      execution_plan_revision_id: executionPlanRevision.id,
-      execution_plan_revision_ref: expect.objectContaining({ id: executionPlanRevision.id }),
+      implementation_plan_revision_id: executionPlanRevision.id,
+      implementation_plan_revision_ref: expect.objectContaining({ id: executionPlanRevision.id }),
       approved_spec_revision_id: specRevision.id,
       approved_spec_revision_ref: expect.objectContaining({ id: specRevision.id, spec_id: specRevision.spec_id }),
       status: 'running',
       evidence_refs: expect.arrayContaining([
         expect.objectContaining({ type: 'spec_revision', id: specRevision.id }),
-        expect.objectContaining({ type: 'execution_plan_revision', id: executionPlanRevision.id }),
+        expect.objectContaining({ type: 'implementation_plan_revision', id: executionPlanRevision.id }),
       ]),
       runtime_evidence_refs: expect.arrayContaining([
         expect.objectContaining({ type: 'execution_package' }),
@@ -130,7 +130,7 @@ describe('Executions API', () => {
     });
   });
 
-  it('starts execution after the item revision advances through Spec and Execution Plan approvals', async () => {
+  it('starts execution after the item revision advances through Spec and Implementation Plan Doc approvals', async () => {
     const { developmentPlan, item, specRevision, executionPlanRevision } = await seedApprovedExecutionPlan(app);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const boundary = await repository.getBoundarySummary(specRevision.boundary_summary_id!);
@@ -154,7 +154,7 @@ describe('Executions API', () => {
       ...item,
       revision_id: 'development-plan-item-revision-after-execution-plan-approval',
       spec_status: 'approved' as const,
-      execution_plan_status: 'approved' as const,
+      implementation_plan_status: 'approved' as const,
       next_action: 'start_execution',
       updated_at: '2026-05-05T00:01:00.000Z',
     };
@@ -164,7 +164,7 @@ describe('Executions API', () => {
       development_plan_id: currentItem.development_plan_id,
       revision_number: 2,
       snapshot: currentItem,
-      change_reason: 'execution_plan_approved',
+      change_reason: 'implementation_plan_approved',
       edited_by_actor_id: executionActorDeveloper,
       created_at: currentItem.updated_at,
     };
@@ -180,21 +180,21 @@ describe('Executions API', () => {
 
     expect(execution).toMatchObject({
       development_plan_item_id: item.id,
-      execution_plan_revision_id: executionPlanRevision.id,
+      implementation_plan_revision_id: executionPlanRevision.id,
       approved_spec_revision_id: specRevision.id,
       status: 'running',
     });
     await expect(repository.listRunSessions()).resolves.toHaveLength(1);
   });
 
-  it('fails closed when the item advances after Execution Plan approval before execution starts', async () => {
+  it('fails closed when the item advances after Implementation Plan Doc approval before execution starts', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const driftedItem = {
       ...item,
       revision_id: 'development-plan-item-revision-after-unrelated-edit',
       spec_status: 'approved' as const,
-      execution_plan_status: 'approved' as const,
+      implementation_plan_status: 'approved' as const,
       next_action: 'start_execution',
       updated_at: '2026-05-05T00:01:00.000Z',
     };
@@ -216,7 +216,7 @@ describe('Executions API', () => {
       .send({ actor_id: executionActorDeveloper })
       .expect(400)
       .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('approved_execution_plan_not_current_item_revision');
+        expect(JSON.stringify(body)).toContain('approved_implementation_plan_not_current_item_revision');
       });
     await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
@@ -359,10 +359,10 @@ describe('Executions API', () => {
     );
   });
 
-  it('fails docs-only dogfood execution before launch when the approved Execution Plan omits docs allowlist', async () => {
+  it('fails docs-only dogfood execution before launch when the approved Implementation Plan Doc omits docs allowlist', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app, {
       executionPlanRevisionSummary: 'Apply docs-only strict dogfood closure',
-      executionPlanRevisionContent: 'This is a docs-only dogfood execution plan.',
+      executionPlanRevisionContent: 'This is a docs-only dogfood Implementation Plan Doc.',
       executionPlanStructuredDocument: {
         implementation_sequence: ['Update docs/superpowers/reports/dogfood.md'],
         validation_strategy: ['Verify docs-only mutation'],
@@ -392,7 +392,7 @@ describe('Executions API', () => {
     await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
-  it('fails closed for missing, draft, stale, or unapproved Execution Plan revisions', async () => {
+  it('fails closed for missing, draft, stale, or unapproved Implementation Plan Doc revisions', async () => {
     const { developmentPlan, item, executionPlan } = await seedApprovedExecutionPlan(app);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const server = app.getHttpServer();

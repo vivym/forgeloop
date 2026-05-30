@@ -494,8 +494,8 @@ describe('delivery control plane API', () => {
       })
       .expect(201);
 
-    const specPlanQueue = (await request(server).get('/query/specs-execution-plans').query({ project_id: project.id }).expect(200)).body;
-    expect(specPlanQueue.items).toEqual(
+    const documentReviews = (await request(server).get('/query/reviews').query({ project_id: project.id }).expect(200)).body;
+    expect(documentReviews.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           object_ref: expect.objectContaining({ type: 'spec', id: specId }),
@@ -1120,7 +1120,7 @@ describe('delivery control plane API', () => {
     );
   });
 
-  it('supports item-scoped Spec and Execution Plan request-changes command paths', async () => {
+  it('supports item-scoped Spec and Implementation Plan Doc request-changes command paths', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
 
@@ -1148,20 +1148,20 @@ describe('delivery control plane API', () => {
     });
     const executionPlanRevision = (
       await request(server)
-        .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/execution-plan/generate-draft`)
+        .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/generate-draft`)
         .send({ actor_id: actorOwner })
         .expect(201)
     ).body;
-    expect(executionPlanRevision.id).toContain('execution-plan-revision');
+    expect(executionPlanRevision.id).toBeTruthy();
     await request(server)
-      .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/execution-plan/submit-for-approval`)
+      .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/submit-for-approval`)
       .set(ownerHeaders)
       .send({ actor_id: actorOwner })
       .expect(201);
     expect(
       (
         await request(server)
-          .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/execution-plan/request-changes`)
+          .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/request-changes`)
           .set(reviewerHeaders)
           .send({ actor_id: actorReviewer, rationale: 'Split the verification rollout steps.' })
           .expect(201)

@@ -32,9 +32,9 @@ export class SpecPlanController {
     return this.specPlanService.getPublicPlanRevision(planRevisionId);
   }
 
-  @Get('execution-plan-revisions/:executionPlanRevisionId')
-  getExecutionPlanRevision(@Param('executionPlanRevisionId') executionPlanRevisionId: string) {
-    return this.specPlanService.getPublicExecutionPlanRevision(executionPlanRevisionId);
+  @Get('implementation-plan-revisions/:implementationPlanRevisionId')
+  getImplementationPlanRevision(@Param('implementationPlanRevisionId') implementationPlanRevisionId: string) {
+    return this.specPlanService.getPublicImplementationPlanRevision(implementationPlanRevisionId);
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/spec/generate-draft')
@@ -118,84 +118,84 @@ export class SpecPlanController {
     return this.specPlanService.compareItemSpecRevisions(developmentPlanId, itemId, query);
   }
 
-  @Post('development-plans/:developmentPlanId/items/:itemId/execution-plan/generate-draft')
-  generateItemExecutionPlanDraft(
+  @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/generate-draft')
+  generateItemImplementationPlanDraft(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
     @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
   ) {
-    return this.specPlanService.generateItemExecutionPlanDraft(developmentPlanId, itemId, body);
+    return this.specPlanService.generateItemImplementationPlanDraft(developmentPlanId, itemId, body);
   }
 
-  @Post('development-plans/:developmentPlanId/items/:itemId/execution-plan-revisions/generate')
-  generateItemExecutionPlanRevisionRuntime(
+  @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan-revisions/generate')
+  generateItemImplementationPlanRevisionRuntime(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
     @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
   ) {
-    return this.specPlanService.generateItemExecutionPlanRevisionRuntime(developmentPlanId, itemId, body);
+    return this.specPlanService.generateItemImplementationPlanRevisionRuntime(developmentPlanId, itemId, body);
   }
 
-  @Post('development-plans/:developmentPlanId/items/:itemId/execution-plan/submit-for-approval')
-  submitItemExecutionPlan(
+  @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/submit-for-approval')
+  submitItemImplementationPlan(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
     @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
   ) {
-    return this.specPlanService.submitItemExecutionPlanForApproval(developmentPlanId, itemId, body);
+    return this.specPlanService.submitItemImplementationPlanForApproval(developmentPlanId, itemId, body);
   }
 
-  @Post('development-plans/:developmentPlanId/items/:itemId/execution-plan/approve')
-  approveItemExecutionPlan(
+  @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/approve')
+  approveItemImplementationPlan(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
     @Body(new ZodValidationPipe(approveArtifactCommandSchema)) body: ApproveArtifactCommandDto,
   ) {
-    return this.specPlanService.approveItemExecutionPlan(developmentPlanId, itemId, body);
+    return this.specPlanService.approveItemImplementationPlan(developmentPlanId, itemId, body);
   }
 
-  @Post('development-plans/:developmentPlanId/items/:itemId/execution-plan/request-changes')
-  requestItemExecutionPlanChanges(
+  @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/request-changes')
+  requestItemImplementationPlanChanges(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
     @Body(new ZodValidationPipe(requestArtifactChangesCommandSchema)) body: RequestArtifactChangesCommandDto,
   ) {
-    return this.specPlanService.requestItemExecutionPlanChanges(developmentPlanId, itemId, body);
+    return this.specPlanService.requestItemImplementationPlanChanges(developmentPlanId, itemId, body);
   }
 
-  @Post('development-plans/:developmentPlanId/items/:itemId/execution-plan/reject')
-  rejectItemExecutionPlan(
+  @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/reject')
+  rejectItemImplementationPlan(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
     @Body(new ZodValidationPipe(rejectArtifactCommandSchema)) body: RejectArtifactCommandDto,
   ) {
-    return this.specPlanService.rejectItemExecutionPlan(developmentPlanId, itemId, body);
+    return this.specPlanService.rejectItemImplementationPlan(developmentPlanId, itemId, body);
   }
 
-  @Post('development-plans/:developmentPlanId/items/:itemId/execution-plan/regenerate-draft')
-  regenerateItemExecutionPlanDraft(
+  @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/regenerate-draft')
+  regenerateItemImplementationPlanDraft(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
     @Body(new ZodValidationPipe(regenerateArtifactDraftCommandSchema)) body: RegenerateArtifactDraftCommandDto,
   ) {
-    return this.specPlanService.regenerateItemExecutionPlanDraft(developmentPlanId, itemId, body);
+    return this.specPlanService.regenerateItemImplementationPlanDraft(developmentPlanId, itemId, body);
   }
 
-  @Patch('development-plans/:developmentPlanId/items/:itemId/execution-plan/draft')
-  saveItemExecutionPlanDraft(
+  @Patch('development-plans/:developmentPlanId/items/:itemId/implementation-plan/draft')
+  saveItemImplementationPlanDraft(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
     @Body(new ZodValidationPipe(markdownDocumentSchema)) body: MarkdownDocument,
   ) {
-    return this.specPlanService.saveItemExecutionPlanDraft(developmentPlanId, itemId, body);
+    return this.specPlanService.saveItemImplementationPlanDraft(developmentPlanId, itemId, body);
   }
 
-  @Get('development-plans/:developmentPlanId/items/:itemId/execution-plan/revisions/compare')
-  compareItemExecutionPlanRevisions(
+  @Get('development-plans/:developmentPlanId/items/:itemId/implementation-plan/revisions/compare')
+  compareItemImplementationPlanRevisions(
     @Param('developmentPlanId') developmentPlanId: string,
     @Param('itemId') itemId: string,
     @Query(new ZodValidationPipe(revisionCompareQuerySchema)) query: RevisionCompareQueryDto,
   ) {
-    return this.specPlanService.compareItemExecutionPlanRevisions(developmentPlanId, itemId, query);
+    return this.specPlanService.compareItemImplementationPlanRevisions(developmentPlanId, itemId, query);
   }
 }

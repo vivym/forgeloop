@@ -125,7 +125,7 @@ export class ProductGenerationResultService {
           outcome = { applied: false, reason: 'public_unsafe_payload' };
           break;
         }
-        const result = await this.specPlanService.writeGeneratedItemExecutionPlanRevision({
+        const result = await this.specPlanService.writeGeneratedItemImplementationPlanRevision({
           actionRun,
           runtime_job_id: input.runtimeJobId,
           generated,
@@ -264,7 +264,7 @@ export class ProductGenerationResultService {
     return (
       actionType === 'run_boundary_brainstorming_round' ||
       actionType === 'generate_development_plan_item_spec_revision' ||
-      actionType === 'generate_development_plan_item_execution_plan_revision'
+      actionType === 'generate_development_plan_item_implementation_plan_revision'
     );
   }
 

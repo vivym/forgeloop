@@ -13,7 +13,7 @@ describe('Executions routes', () => {
         [`GET /query/executions?project_id=${projectId}&limit=100`]: {
           degraded_sources: [],
           items: [
-            executionRow('active', { status: 'running', worker_state: 'running', current_step: 'Applying approved Execution Plan' }),
+            executionRow('active', { status: 'running', worker_state: 'running', current_step: 'Applying approved Implementation Plan Doc' }),
             executionRow('resumable', { status: 'interrupted', worker_state: 'resumable', current_step: 'Paused at review checkpoint' }),
             executionRow('review', { status: 'awaiting_code_review', worker_state: 'completed', current_step: 'Waiting for code review handoff' }),
             executionRow('blocked', { status: 'blocked', worker_state: 'blocked', current_step: 'Fix failing route test' }),
@@ -32,7 +32,7 @@ describe('Executions routes', () => {
     expect((await screen.findAllByText(executionPlanRevision.summary)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(developmentPlanItem.title)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Worker state/i)).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/Applying approved Execution Plan/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Applying approved Implementation Plan Doc/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Last event/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Product workspace preview data PR/i)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/Allowed action/i)).length).toBeGreaterThan(0);
@@ -55,7 +55,7 @@ describe('Executions routes', () => {
     expect(document.body.textContent).toMatch(/PR, diff, and test evidence/i);
     expect(document.body.textContent).toMatch(/Linked Plan Item/i);
     expect(document.body.textContent).toMatch(/Continue disabled: execution is currently running/i);
-    expect(document.body.textContent).toMatch(/Retry unavailable: inspect execution evidence before restarting from the approved Execution Plan path/i);
+    expect(document.body.textContent).toMatch(/Retry unavailable: inspect execution evidence before restarting from the approved Implementation Plan Doc path/i);
     expect(await screen.findByRole('button', { name: /interrupt execution/i })).toBeTruthy();
     expect((await screen.findByRole('button', { name: /continue execution/i }) as HTMLButtonElement).disabled).toBe(true);
     expect((await screen.findByRole('button', { name: /retry execution/i }) as HTMLButtonElement).disabled).toBe(true);

@@ -508,10 +508,10 @@ function productRouteSegmentsAllowed(segments: string[]): boolean {
   const [root, second, third, fourth] = segments;
 
   switch (root) {
-    case 'dashboard':
     case 'my-work':
     case 'board':
-    case 'specs-plans':
+    case 'reviews':
+    case 'qa':
       return segments.length === 1;
     case 'requirements':
       return segmentedObjectRouteAllowed(segments, { allowNew: true, childRoutes: ['evidence'] });
@@ -536,7 +536,7 @@ function productRouteSegmentsAllowed(segments: string[]): boolean {
         isDynamicIdSegment(second) &&
         third === 'items' &&
         isDynamicIdSegment(fourth) &&
-        ['brainstorming', 'spec', 'execution-plan', 'execution'].includes(segments[4] ?? '')
+        ['spec', 'implementation-plan', 'execution'].includes(segments[4] ?? '')
       );
     case 'executions':
       return segments.length === 1 || (segments.length === 2 && isDynamicIdSegment(second));

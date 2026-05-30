@@ -35,7 +35,7 @@ export interface ExecutionPlanRevision {
 
 export interface Execution extends ContractExecution {
   development_plan_item_id: string;
-  execution_plan_revision_id: string;
+  implementation_plan_revision_id: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -99,17 +99,17 @@ export type ExecutionStartGateReason =
   | 'testability_note_missing'
   | 'acceptance_criteria_missing'
   | 'test_strategy_summary_missing'
-  | 'execution_plan_not_approved'
-  | 'approved_execution_plan_revision_missing'
-  | 'approved_execution_plan_revision_not_loaded'
-  | 'execution_plan_revision_not_approved_revision'
+  | 'implementation_plan_not_approved'
+  | 'approved_implementation_plan_revision_missing'
+  | 'approved_implementation_plan_revision_not_loaded'
+  | 'implementation_plan_revision_not_approved_revision'
   | 'execution_package_boundary_missing'
   | 'execution_package_not_runnable'
   | 'execution_package_scope_mismatch'
   | 'execution_package_policy_missing';
 
 export function canStartExecutionFromApprovedExecutionPlan(input: {
-  item?: Pick<DevelopmentPlanItem, 'id' | 'boundary_status' | 'spec_status' | 'execution_plan_status' | 'risk' | 'release_impact' | 'affected_surfaces'>;
+  item?: Pick<DevelopmentPlanItem, 'id' | 'boundary_status' | 'spec_status' | 'implementation_plan_status' | 'risk' | 'release_impact' | 'affected_surfaces'>;
   spec?: Spec;
   specRevision?: SpecRevision;
   executionPlan: ExecutionPlanDocument;
@@ -144,16 +144,16 @@ export function canStartExecutionFromApprovedExecutionPlan(input: {
     return { ok: false, reason: 'spec_not_approved' };
   }
   if (input.executionPlan.status !== 'approved' || input.executionPlan.approved_by_actor_id === undefined) {
-    return { ok: false, reason: 'execution_plan_not_approved' };
+    return { ok: false, reason: 'implementation_plan_not_approved' };
   }
   if (input.executionPlan.approved_revision_id === undefined) {
-    return { ok: false, reason: 'approved_execution_plan_revision_missing' };
+    return { ok: false, reason: 'approved_implementation_plan_revision_missing' };
   }
   if (input.executionPlanRevision === undefined) {
-    return { ok: false, reason: 'approved_execution_plan_revision_not_loaded' };
+    return { ok: false, reason: 'approved_implementation_plan_revision_not_loaded' };
   }
   if (input.executionPlanRevision.id !== input.executionPlan.approved_revision_id) {
-    return { ok: false, reason: 'execution_plan_revision_not_approved_revision' };
+    return { ok: false, reason: 'implementation_plan_revision_not_approved_revision' };
   }
   if (input.executionPackage !== undefined) {
     if (

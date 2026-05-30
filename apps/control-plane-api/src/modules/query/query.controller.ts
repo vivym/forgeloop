@@ -43,9 +43,9 @@ export class QueryController {
     return this.service.getDevelopmentPlan(developmentPlanId);
   }
 
-  @Get('specs-execution-plans')
-  listSpecsExecutionPlans(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
-    return this.service.listSpecsExecutionPlans(query);
+  @Get('reviews')
+  listDocumentReviews(@Query(new ZodValidationPipe(productListQuerySchema)) query: ProductListQuery) {
+    return this.service.listDocumentReviews(query);
   }
 
   @Get('executions')

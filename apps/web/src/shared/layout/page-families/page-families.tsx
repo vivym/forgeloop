@@ -119,7 +119,7 @@ export function DocumentWorkspaceLayout({
   );
 }
 
-export function SourceEvidenceLayout({
+export function DocumentEvidenceLayout({
   attachments,
   rawDetails,
   summary,
@@ -162,23 +162,23 @@ export function PlanningTableLayout({ inspector, table, toolbar }: { inspector?:
 export function PlanAuthoringLayout({
   aiAssist,
   preview,
-  primarySurface = 'source-context',
-  sourceContext,
+  primarySurface = 'planning-input',
+  planningInputContext,
 }: {
   aiAssist?: ReactNode;
   preview?: ReactNode;
-  primarySurface?: 'source-context' | 'preview';
-  sourceContext: ReactNode;
+  primarySurface?: 'planning-input' | 'preview';
+  planningInputContext: ReactNode;
 }) {
   const hasAiAssist = hasRenderableSlot(aiAssist);
   const hasPreview = hasRenderableSlot(preview);
-  const effectivePrimarySurface = primarySurface === 'preview' && !hasPreview ? 'source-context' : primarySurface;
+  const effectivePrimarySurface = primarySurface === 'preview' && !hasPreview ? 'planning-input' : primarySurface;
   const hasAuthoringRail = hasAiAssist || hasPreview;
-  const sourceContextNode =
-    effectivePrimarySurface === 'source-context' ? (
-      <PrimarySurface data-source-context-picker="">{sourceContext}</PrimarySurface>
+  const planningInputContextNode =
+    effectivePrimarySurface === 'planning-input' ? (
+      <PrimarySurface data-planning-input-picker="">{planningInputContext}</PrimarySurface>
     ) : (
-      <section data-source-context-picker="">{sourceContext}</section>
+      <section data-planning-input-picker="">{planningInputContext}</section>
     );
   const previewNode =
     !hasPreview ? null : effectivePrimarySurface === 'preview' ? (
@@ -189,7 +189,7 @@ export function PlanAuthoringLayout({
 
   return (
     <div className={cn('grid gap-4', hasAuthoringRail ? 'xl:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1fr)]' : undefined)}>
-      {sourceContextNode}
+      {planningInputContextNode}
       {hasAuthoringRail ? (
         <section className="grid min-w-0 content-start gap-3">
           {hasAiAssist ? <div data-ai-assist-panel="">{aiAssist}</div> : null}

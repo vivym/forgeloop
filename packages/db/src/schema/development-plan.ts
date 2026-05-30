@@ -78,7 +78,7 @@ export const development_plan_items = pgTable('development_plan_items', {
   affectedSurfaces: jsonb('affected_surfaces').$type<DevelopmentPlanItem['affected_surfaces']>().notNull(),
   boundaryStatus: text('boundary_status').$type<DevelopmentPlanItem['boundary_status']>().notNull(),
   specStatus: text('spec_status').$type<DevelopmentPlanItem['spec_status']>().notNull(),
-  executionPlanStatus: text('execution_plan_status').$type<DevelopmentPlanItem['execution_plan_status']>().notNull(),
+  implementationPlanStatus: text('execution_plan_status').$type<DevelopmentPlanItem['implementation_plan_status']>().notNull(),
   executionStatus: text('execution_status').$type<DevelopmentPlanItem['execution_status']>().notNull(),
   reviewStatus: text('review_status').$type<DevelopmentPlanItem['review_status']>().notNull(),
   qaHandoffStatus: text('qa_handoff_status').$type<DevelopmentPlanItem['qa_handoff_status']>().notNull(),

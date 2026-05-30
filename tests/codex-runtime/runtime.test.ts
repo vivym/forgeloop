@@ -256,7 +256,7 @@ describe('createCodexGenerationRuntime', () => {
     expect(() => validateGeneratedSpecRevision(extractSingleJsonObject(contractJson))).not.toThrow();
   });
 
-  it('uses approved Spec revision id from the signed context in Execution Plan contracts', async () => {
+  it('uses approved Spec revision id from the signed context in Implementation Plan Doc contracts', async () => {
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const runtime = createCodexGenerationRuntime({
       mode: 'app_server',
@@ -280,7 +280,7 @@ describe('createCodexGenerationRuntime', () => {
               schema_version: 'execution_plan_revision.v1',
               development_plan_item_id: 'item-1',
               based_on_spec_revision_id: 'spec-revision-1',
-              summary: 'Generated Execution Plan revision',
+              summary: 'Generated Implementation Plan Doc revision',
               content_markdown: 'Implement the approved Spec.',
               implementation_sequence: ['Update scoped implementation'],
               validation_strategy: ['Run focused tests'],
@@ -289,7 +289,7 @@ describe('createCodexGenerationRuntime', () => {
               required_checks: [{ check_id: 'focused-tests', command: 'pnpm test', timeout_seconds: 120, blocks_review: true }],
               rollback_notes: 'Revert scoped changes if validation fails.',
               handoff_criteria: ['Required checks pass'],
-              public_summary: 'Generated an Execution Plan revision.',
+              public_summary: 'Generated an Implementation Plan Doc revision.',
             }),
           };
           yield { type: 'turn_completed', status: 'completed' };

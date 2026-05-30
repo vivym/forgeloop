@@ -267,7 +267,7 @@ describeIfDb('durable revision lookup', () => {
     expect(planRevisionResponse.body.id).toBe(planRevisionId);
   });
 
-  it('generates item-scoped execution plan drafts after restart', async () => {
+  it('generates item-scoped Implementation Plan Doc drafts after restart', async () => {
     const firstApp = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(firstApp);
     const seed = await seedApprovedSpecItem(firstApp, workItem.id);
@@ -276,7 +276,7 @@ describeIfDb('durable revision lookup', () => {
 
     const secondApp = await createDurableApp();
     await request(secondApp.getHttpServer())
-      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/execution-plan/generate-draft`)
+      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorOwner })
       .expect(201);
   });
@@ -331,13 +331,13 @@ describeIfDb('durable revision lookup', () => {
     });
 
     const response = await request(app.getHttpServer())
-      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/execution-plan/generate-draft`)
+      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorOwner })
       .expect(400);
     expect(response.body.message).toContain('approved_spec_not_current');
   });
 
-  it('returns 400 when the approved spec revision row is missing for item-scoped execution plan generation', async () => {
+  it('returns 400 when the approved spec revision row is missing for item-scoped Implementation Plan Doc generation', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
     const seed = await seedApprovedSpecItem(app, workItem.id);
@@ -349,7 +349,7 @@ describeIfDb('durable revision lookup', () => {
     });
 
     const response = await request(app.getHttpServer())
-      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/execution-plan/generate-draft`)
+      .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorOwner })
       .expect(400);
     expect(response.body.message).toContain('approved_spec_revision_not_loaded');

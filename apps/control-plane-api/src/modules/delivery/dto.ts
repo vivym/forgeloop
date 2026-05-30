@@ -42,7 +42,7 @@ export type CreateProjectRepoDto = z.infer<typeof createProjectRepoSchema>;
 export const createWorkItemSchema = createWorkItemRequestSchema;
 export type CreateWorkItemDto = z.infer<typeof createWorkItemSchema>;
 
-export const createSourceObjectSchema = z
+export const createTypedDocumentSchema = z
   .object({
     project_id: nonEmptyString,
     title: nonEmptyString,
@@ -54,10 +54,10 @@ export const createSourceObjectSchema = z
     intake_context: workItemIntakeContextSchema,
   })
   .strict();
-export type CreateSourceObjectDto = z.infer<typeof createSourceObjectSchema>;
+export type CreateTypedDocumentDto = z.infer<typeof createTypedDocumentSchema>;
 
-export const sourceObjectTypeSchema = workItemKindSchema;
-export type SourceObjectTypeDto = z.infer<typeof sourceObjectTypeSchema>;
+export const typedDocumentTypeSchema = workItemKindSchema;
+export type TypedDocumentTypeDto = z.infer<typeof typedDocumentTypeSchema>;
 
 export const updateWorkItemSchema = patchWorkItemRequestSchema;
 export type UpdateWorkItemDto = z.infer<typeof updateWorkItemSchema>;

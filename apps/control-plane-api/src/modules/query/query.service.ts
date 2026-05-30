@@ -82,7 +82,7 @@ export class QueryService {
     );
   }
 
-  listSpecsExecutionPlans(query: ProductListQuery) {
+  listDocumentReviews(query: ProductListQuery) {
     return listProjectSpecsExecutionPlans(this.repository, query);
   }
 

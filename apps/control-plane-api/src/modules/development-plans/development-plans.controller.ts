@@ -1,5 +1,5 @@
 import { Body, Controller, Inject, Param, Patch, Post } from '@nestjs/common';
-import { sourceObjectRefSchema } from '@forgeloop/contracts';
+import { planningInputRefSchema } from '@forgeloop/contracts';
 import { z } from 'zod';
 
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
@@ -11,7 +11,7 @@ const sourceTypeSchema = z.enum(['initiative', 'requirement', 'bug', 'tech_debt'
 const createDevelopmentPlanCommandSchema = z
   .object({
     project_id: nonEmptyString,
-    source_ref: sourceObjectRefSchema,
+    source_ref: planningInputRefSchema,
     title: nonEmptyString,
     actor_id: nonEmptyString.optional(),
     guidance: nonEmptyString.optional(),
@@ -46,7 +46,7 @@ const updateDevelopmentPlanItemCommandSchema = z
 const generateDevelopmentPlanDraftCommandSchema = z
   .object({
     project_id: nonEmptyString,
-    source_ref: sourceObjectRefSchema,
+    source_ref: planningInputRefSchema,
     actor_id: nonEmptyString.optional(),
     guidance: nonEmptyString.optional(),
   })
@@ -73,7 +73,7 @@ type UpdateDevelopmentPlanItemCommandDto = z.infer<typeof updateDevelopmentPlanI
 type GenerateDevelopmentPlanDraftCommandDto = z.infer<typeof generateDevelopmentPlanDraftCommandSchema>;
 type RegenerateDevelopmentPlanDraftCommandDto = z.infer<typeof regenerateDevelopmentPlanDraftCommandSchema>;
 type LinkDevelopmentPlanCommandDto = z.infer<typeof linkDevelopmentPlanCommandSchema>;
-type SourceObjectType = z.infer<typeof sourceTypeSchema>;
+type PlanningInputType = z.infer<typeof sourceTypeSchema>;
 
 @Controller()
 export class DevelopmentPlansController {
@@ -116,14 +116,49 @@ export class DevelopmentPlansController {
     return this.service.regenerateDevelopmentPlanDraft(developmentPlanId, body);
   }
 
-  @Post('source-objects/:sourceType/:sourceId/development-plans/:developmentPlanId/link')
-  linkSourceObjectToDevelopmentPlan(
-    @Param('sourceType', new ZodValidationPipe(sourceTypeSchema)) sourceType: SourceObjectType,
-    @Param('sourceId') sourceId: string,
+  @Post('requirements/:requirementId/development-plans/:developmentPlanId/link')
+  linkRequirementToDevelopmentPlan(
+    @Param('requirementId') requirementId: string,
     @Param('developmentPlanId') developmentPlanId: string,
     @Body(new ZodValidationPipe(linkDevelopmentPlanCommandSchema)) body: LinkDevelopmentPlanCommandDto,
   ) {
-    return this.service.linkSourceObjectToDevelopmentPlan({
+    return this.linkPlanningInputToDevelopmentPlan('requirement', requirementId, developmentPlanId, body);
+  }
+
+  @Post('initiatives/:initiativeId/development-plans/:developmentPlanId/link')
+  linkInitiativeToDevelopmentPlan(
+    @Param('initiativeId') initiativeId: string,
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Body(new ZodValidationPipe(linkDevelopmentPlanCommandSchema)) body: LinkDevelopmentPlanCommandDto,
+  ) {
+    return this.linkPlanningInputToDevelopmentPlan('initiative', initiativeId, developmentPlanId, body);
+  }
+
+  @Post('tech-debt/:techDebtId/development-plans/:developmentPlanId/link')
+  linkTechDebtToDevelopmentPlan(
+    @Param('techDebtId') techDebtId: string,
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Body(new ZodValidationPipe(linkDevelopmentPlanCommandSchema)) body: LinkDevelopmentPlanCommandDto,
+  ) {
+    return this.linkPlanningInputToDevelopmentPlan('tech_debt', techDebtId, developmentPlanId, body);
+  }
+
+  @Post('bugs/:bugId/development-plans/:developmentPlanId/link')
+  linkBugToDevelopmentPlan(
+    @Param('bugId') bugId: string,
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Body(new ZodValidationPipe(linkDevelopmentPlanCommandSchema)) body: LinkDevelopmentPlanCommandDto,
+  ) {
+    return this.linkPlanningInputToDevelopmentPlan('bug', bugId, developmentPlanId, body);
+  }
+
+  private linkPlanningInputToDevelopmentPlan(
+    sourceType: PlanningInputType,
+    sourceId: string,
+    developmentPlanId: string,
+    body: LinkDevelopmentPlanCommandDto,
+  ) {
+    return this.service.linkPlanningInputToDevelopmentPlan({
       source_type: sourceType,
       source_id: sourceId,
       development_plan_id: developmentPlanId,

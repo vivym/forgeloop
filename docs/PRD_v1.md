@@ -226,7 +226,7 @@ Work Item 不是单一职责角色，而是 Initiative、Requirement、Bug、Tec
 - Owner
 - 成功标准
 - 所属 Project / Stream
-- 关联 Spec / Plan / Release
+- 关联 Development Plan / Plan Item / Spec Doc / Implementation Plan Doc / Release
 
 ### 8.3 Spec
 表示需求的正式定义文档，是执行和验收的上游依据。
@@ -265,7 +265,7 @@ Work Item 不是单一职责角色，而是 Initiative、Requirement、Bug、Tec
 - 对于产品、需求方、管理者、发布负责人等角色，系统仍应以 Work Item / Release 等业务对象为主要观察对象。
 
 关键字段包括：
-- 对应 Work Item / Spec / Plan
+- 对应 Source Document / Plan Item / Spec Doc / Implementation Plan Doc
 - 执行目标
 - 涉及模块与边界
 - 允许修改范围
@@ -287,7 +287,7 @@ Work Item 不是单一职责角色，而是 Initiative、Requirement、Bug、Tec
 
 关键字段包括：
 - 改动摘要
-- 对应 Spec / Plan 节点
+- 对应 Spec Doc / Implementation Plan Doc 节点
 - 关键 Diff
 - AI 自审结果
 - 独立 AI Reviewer 结论
@@ -678,7 +678,7 @@ Work Item 不是单一职责角色，而是 Initiative、Requirement、Bug、Tec
 
 ### 12.5 多端联调质量策略
 - 多端项目应优先采用 Contract-first / Mock-first 协作方式，将接口、数据结构、错误码、状态机与关键交互约束前移到 Spec 与 Plan 阶段。
-- 系统应支持从 Spec / Plan 自动生成联调契约、Mock 资产、示例数据与联调检查项。
+- 系统应支持从 Spec Doc / Implementation Plan Doc 自动生成联调契约、Mock 资产、示例数据与联调检查项。
 - 联调质量不应只依赖最终阶段的手工验证，而应通过契约测试、集成测试、跨端验证 gate 与环境 readiness 联合保障。
 
 ---
@@ -934,7 +934,7 @@ graph TD
 
 说明：
 - Project / Stream 是容器层，承载 Work Item、Iteration / Milestone 与 Release。
-- Work Item 是跨角色主对象，进入 Spec / Plan 后被拆分为 Execution Packages。
+- Work Item 是跨角色概念抽象，具体 Source Documents 进入 Development Plan / Plan Item / Spec Doc / Implementation Plan Doc 后被拆分为 Execution Packages。
 - Execution Package 是研发执行层主对象，贯穿 Review、联调、测试与发布。
 - Release 聚合多个 Work Item 与 Execution Package 的交付结果。
 - Incident、Replay、Rule / Skill / Template Proposal 构成进化主线，并反哺下一轮交付。
@@ -1077,10 +1077,12 @@ stateDiagram-v2
 # Spec: <需求名称>
 
 ## 1. 基本信息
-- Work Item ID:
+- Source Document refs:
+- Development Plan ID:
+- Plan Item ID:
 - 类型: Requirement / Bug / Tech Debt / Initiative
 - Project / Stream:
-- Work Item Driver（Requirement / Bug / Tech Debt / Initiative）:
+- Source Document Driver（Requirement / Bug / Tech Debt / Initiative）:
 - Spec Approver:
 - QA / Test Owner:
 - 优先级:
@@ -1150,8 +1152,8 @@ stateDiagram-v2
 - 风险 2：影响 / 概率 / 缓解措施
 
 ### 7.2 未决问题
-- 问题 1：Owner / 截止时间
-- 问题 2：Owner / 截止时间
+- 问题 1：Responsible role / 截止时间
+- 问题 2：Responsible role / 截止时间
 
 ## 8. 发布与观测要求
 - Feature Flag:
@@ -1166,14 +1168,16 @@ stateDiagram-v2
 - 结论:
 ```
 
-### 16.8.2 Implementation Plan 模板
+### 16.8.2 Implementation Plan Doc 模板
 ```markdown
-# Implementation Plan: <需求名称>
+# Implementation Plan Doc: <需求名称>
 
 ## 1. 基本信息
-- 对应 Work Item:
-- 对应 Spec:
-- Plan Owner:
+- Source Document refs:
+- Development Plan ID:
+- Plan Item ID:
+- 对应 Spec Doc:
+- Plan Item Driver:
 - Reviewer:
 - QA Owner:
 - 风险等级:
@@ -1202,7 +1206,7 @@ stateDiagram-v2
 - 关键路径判断：
 
 ## 6. 测试矩阵
-| 层级 | 范围 | Owner | 自动化方式 | Gate |
+| 层级 | 范围 | Responsible role | 自动化方式 | Gate |
 |---|---|---|---|---|
 | Unit Test |  |  |  |  |
 | Integration Test |  |  |  |  |
@@ -1233,10 +1237,12 @@ stateDiagram-v2
 
 ## 1. 基本信息
 - Package ID:
-- 对应 Work Item:
-- 对应 Spec / Plan:
+- Source Document refs:
+- Development Plan ID:
+- Plan Item ID:
+- 对应 Spec Doc / Implementation Plan Doc:
 - Surface Type:
-- Owner:
+- Execution Owner:
 - Reviewer:
 - QA Owner:
 - 风险等级:
@@ -1292,7 +1298,8 @@ stateDiagram-v2
 
 ## 1. 基本信息
 - Package ID:
-- Work Item:
+- Source Document refs:
+- Plan Item ID:
 - Reviewer:
 - 风险等级:
 - Surface Type:
@@ -1302,9 +1309,9 @@ stateDiagram-v2
 - 关键改动点：
 - 关键文件 / Module：
 
-## 3. 与 Spec / Plan 对齐情况
+## 3. 与 Spec Doc / Implementation Plan Doc 对齐情况
 - 对应 Spec 章节：
-- 对应 Plan 步骤：
+- 对应 Implementation Plan Doc 步骤：
 - 是否存在偏离：
 
 ## 4. 测试与验证摘要
@@ -1327,7 +1334,7 @@ stateDiagram-v2
 ## 6. 人工 Reviewer 关注点
 - 需要重点判断的问题：
 - 是否需要补测试：
-- 是否需要回退 Plan / Spec：
+- 是否需要回退 Spec Doc / Implementation Plan Doc：
 
 ## 7. 审查结论
 - [ ] Approved
@@ -1344,7 +1351,7 @@ stateDiagram-v2
 # Daily Replay / Coaching Brief: <用户姓名> / <日期>
 
 ## 1. 今日概览
-- 今日参与 Work Items:
+- 今日参与 Source Documents / Plan Items:
 - 今日参与 Execution Packages:
 - 今日 Review 数量:
 - 今日联调 / 测试 / 发布参与情况:
@@ -1390,7 +1397,7 @@ stateDiagram-v2
 - 影响范围:
 - 发现方式:
 - 关联 Release:
-- 关联 Work Item / Execution Package:
+- 关联 Source Document / Plan Item / Execution Package:
 
 ## 2. 现象与影响
 - 用户影响：
@@ -1405,7 +1412,7 @@ stateDiagram-v2
 ## 4. 根因分析
 - 直接原因：
 - 深层原因：
-- 是哪个环节最早引入问题：Spec / Plan / Package / Review / Test / Release / Observation
+- 是哪个环节最早引入问题：Spec Doc / Implementation Plan Doc / Execution Package / Review / Test / Release / Observation
 - 是哪个环节本可拦截但未拦截：
 
 ## 5. 处置过程
@@ -1416,7 +1423,7 @@ stateDiagram-v2
 
 ## 6. 问题分层归因
 - Spec 问题：
-- Plan 问题：
+- Implementation Plan Doc 问题：
 - Execution 问题：
 - Review 问题：
 - Test / QA 问题：
@@ -1431,7 +1438,7 @@ stateDiagram-v2
 - Workflow / Gate Proposal:
 
 ## 8. 后续跟踪
-- Owner:
+- Responsible role:
 - 截止时间:
 - 验证方式:
 ```
@@ -1441,6 +1448,12 @@ stateDiagram-v2
 - 模板字段应支持按团队、项目类型、风险等级、Surface Type 做裁剪与扩展。
 - 中文为主，技术术语可保留英文，以兼顾团队阅读习惯与工程表达准确性。
 - 模板不是静态文档，而应与 Work Item、Execution Package、Release、Replay 等对象双向关联。
+
+### 16.8.8 Document-native 模板约束
+- 对于 `docs/superpowers/specs/2026-05-29-document-native-product-model-redesign-design.md` 覆盖的产品切片，生成或公开展示的 Spec 与 Implementation Plan Doc 模板必须以 Source Document refs、Development Plan ID、Plan Item ID 作为上游定位字段。
+- 生成或公开展示的文档不得使用泛化 Owner 字段承载推进责任。应按上下文使用 Requirement Driver、Bug Driver、Tech Debt Driver、Initiative Driver、Plan Item Driver、Reviewer、QA / Test Owner、Release Owner 或 Execution Owner。
+- PRD 中较早的 Work Item 到 Spec 到 Implementation Plan 简写，在该切片中必须解释为：Requirement / Bug / Tech Debt / Initiative Document(s) -> Development Plan -> Plan Item -> Spec Doc -> Implementation Plan Doc -> Execution Package。
+- 泛化 Work Item 仍可作为概念抽象和内部汇总口径，但不得成为该切片的公开路由、主导航、表单模板或主要文档字段。
 
 ## 17. 未来扩展方向
 

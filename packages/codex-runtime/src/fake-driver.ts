@@ -260,12 +260,12 @@ export const createFakeGeneratedExecutionPlanRevision = (
     promptVersion: executionPlanRevisionPromptVersion,
     outputSchemaVersion: executionPlanRevisionOutputSchemaVersion,
     generationArtifacts: [],
-    publicSummary: 'Fake Execution Plan revision generated.',
+    publicSummary: 'Fake Implementation Plan Doc revision generated.',
     generated: {
       schema_version: 'execution_plan_revision.v1',
       development_plan_item_id: developmentPlanItemId,
       based_on_spec_revision_id: basedOnSpecRevisionId,
-      summary: 'Draft Execution Plan revision for the approved Spec',
+      summary: 'Draft Implementation Plan Doc revision for the approved Spec',
       content_markdown: 'Implement the approved Spec in focused package slices with explicit validation.',
       implementation_sequence: ['Add package schemas', 'Wire runtime methods', 'Run targeted validation'],
       validation_strategy: ['pnpm vitest run tests/codex-runtime/payloads.test.ts tests/codex-runtime/runtime.test.ts --pool=forks --no-file-parallelism --maxWorkers=1'],
@@ -281,7 +281,7 @@ export const createFakeGeneratedExecutionPlanRevision = (
       ],
       rollback_notes: 'Revert the generated codex-runtime package changes.',
       handoff_criteria: ['Targeted codex-runtime tests pass'],
-      public_summary: 'Generated a fake draft Execution Plan revision.',
+      public_summary: 'Generated a fake draft Implementation Plan Doc revision.',
     },
   };
 };

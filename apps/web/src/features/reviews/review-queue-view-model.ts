@@ -1,16 +1,16 @@
 import type { ProductPageViewModel, ViewModelGate } from '../product-surfaces/view-model-types';
 
-type QueueArtifactType = 'spec' | 'execution_plan';
-export type SpecPlanQueueGroupId = 'needs-generation' | 'needs-review' | 'changes-requested' | 'approved-ready' | 'stale-blocked';
+type QueueArtifactType = 'spec' | 'implementation_plan_doc';
+export type DocumentReviewQueueGroupId = 'needs-generation' | 'needs-review' | 'changes-requested' | 'approved-ready' | 'stale-blocked';
 
-interface SpecPlanRef {
+interface DocumentReviewRef {
   type?: string;
   id?: string;
   title?: string;
   development_plan_id?: string;
 }
 
-export interface SpecPlanQueueItem {
+export interface DocumentReviewQueueItem {
   id: string;
   artifact_type?: QueueArtifactType | string;
   title?: string;
@@ -25,24 +25,24 @@ export interface SpecPlanQueueItem {
   next_action?: string;
   command?: string;
   href?: string;
-  source_ref?: SpecPlanRef;
-  development_plan_item_ref?: SpecPlanRef;
+  source_ref?: DocumentReviewRef;
+  development_plan_item_ref?: DocumentReviewRef;
   updated_at?: string;
 }
 
-interface SpecPlanQueueProjection {
-  items?: readonly SpecPlanQueueItem[];
+interface DocumentReviewQueueProjection {
+  items?: readonly DocumentReviewQueueItem[];
   degraded_sources?: readonly string[];
 }
 
-export interface SpecPlanQueueRow {
+export interface DocumentReviewQueueRow {
   id: string;
   artifactType: QueueArtifactType;
   artifactLabel: string;
   title: string;
-  groupId: SpecPlanQueueGroupId;
+  groupId: DocumentReviewQueueGroupId;
   groupLabel: string;
-  sourceObject: string;
+  sourceInput: string;
   developmentPlanItem: string;
   reviewer: string;
   age: string;
@@ -60,18 +60,18 @@ export interface SpecPlanQueueRow {
   searchText: string;
 }
 
-export interface SpecPlanQueueGroup {
-  id: SpecPlanQueueGroupId;
+export interface DocumentReviewQueueGroup {
+  id: DocumentReviewQueueGroupId;
   label: string;
-  rows: SpecPlanQueueRow[];
+  rows: DocumentReviewQueueRow[];
 }
 
-export interface SpecPlanQueueViewModel extends ProductPageViewModel {
-  rows: SpecPlanQueueRow[];
-  groups: SpecPlanQueueGroup[];
+export interface DocumentReviewQueueViewModel extends ProductPageViewModel {
+  rows: DocumentReviewQueueRow[];
+  groups: DocumentReviewQueueGroup[];
 }
 
-export const specPlanQueueGroupDefinitions: Array<{ id: SpecPlanQueueGroupId; label: string }> = [
+export const documentReviewQueueGroupDefinitions: Array<{ id: DocumentReviewQueueGroupId; label: string }> = [
   { id: 'needs-generation', label: 'Needs generation' },
   { id: 'needs-review', label: 'Needs review' },
   { id: 'changes-requested', label: 'Changes requested' },
@@ -79,14 +79,14 @@ export const specPlanQueueGroupDefinitions: Array<{ id: SpecPlanQueueGroupId; la
   { id: 'stale-blocked', label: 'Stale / blocked' },
 ];
 
-export function specPlanQueueViewModel(queue: SpecPlanQueueProjection): SpecPlanQueueViewModel {
+export function documentReviewQueueViewModel(queue: DocumentReviewQueueProjection): DocumentReviewQueueViewModel {
   const items = queue.items ?? [];
-  const rows = items.map(specPlanQueueRow);
+  const rows = items.map(documentReviewQueueRow);
   const firstRow = rows[0];
   const blockedCount = rows.filter((row) => row.blocked).length;
   const staleCount = rows.filter((row) => row.stale).length;
   const highRiskCount = rows.filter((row) => /high|critical/i.test(row.risk)).length;
-  const activeGroupCount = specPlanQueueGroups(rows).filter((group) => group.rows.length > 0).length;
+  const activeGroupCount = documentReviewQueueGroups(rows).filter((group) => group.rows.length > 0).length;
 
   return {
     objectLabel: 'Document Reviews',
@@ -94,7 +94,7 @@ export function specPlanQueueViewModel(queue: SpecPlanQueueProjection): SpecPlan
     currentState: queue.degraded_sources?.length
       ? 'Degraded governance signal'
       : `${rows.length} governance row${rows.length === 1 ? '' : 's'} across ${activeGroupCount} queue group${activeGroupCount === 1 ? '' : 's'}`,
-    nextAction: firstRow?.nextAction ?? 'No pending Spec or Execution Plan action',
+    nextAction: firstRow?.nextAction ?? 'No pending Spec or Implementation Plan Doc action',
     disabledReason: undefined,
     primaryActorOrRole: firstRow?.reviewer ?? 'Technical reviewer',
     riskSignal: riskSignal(blockedCount, staleCount, highRiskCount),
@@ -108,44 +108,44 @@ export function specPlanQueueViewModel(queue: SpecPlanQueueProjection): SpecPlan
     ],
     secondaryMetadata: [
       { label: 'Spec rows', value: String(rows.filter((row) => row.artifactType === 'spec').length) },
-      { label: 'Execution Plan rows', value: String(rows.filter((row) => row.artifactType === 'execution_plan').length) },
+      { label: 'Implementation Plan Doc rows', value: String(rows.filter((row) => row.artifactType === 'implementation_plan_doc').length) },
       { label: 'Stale rows', value: String(staleCount) },
       { label: 'Blocked rows', value: String(blockedCount) },
     ],
     previewSummary: firstRow?.documentSummary ?? 'Queue empty',
     timelineSummary: queue.degraded_sources?.length ? `Degraded sources: ${queue.degraded_sources.join(', ')}` : 'Queue projection current',
     rows,
-    groups: specPlanQueueGroups(rows),
+    groups: documentReviewQueueGroups(rows),
   };
 }
 
-export function specPlanQueueGroups(rows: readonly SpecPlanQueueRow[]): SpecPlanQueueGroup[] {
-  return specPlanQueueGroupDefinitions.map((definition) => ({
+export function documentReviewQueueGroups(rows: readonly DocumentReviewQueueRow[]): DocumentReviewQueueGroup[] {
+  return documentReviewQueueGroupDefinitions.map((definition) => ({
     ...definition,
     rows: rows.filter((row) => row.groupId === definition.id),
   }));
 }
 
-export function specPlanQueueRow(item: SpecPlanQueueItem): SpecPlanQueueRow {
-  const artifactType = item.artifact_type === 'execution_plan' ? 'execution_plan' : 'spec';
+export function documentReviewQueueRow(item: DocumentReviewQueueItem): DocumentReviewQueueRow {
+  const artifactType = item.artifact_type === 'implementation_plan_doc' ? 'implementation_plan_doc' : 'spec';
   const groupId = groupForItem(item);
-  const groupLabel = specPlanQueueGroupDefinitions.find((group) => group.id === groupId)?.label ?? 'Needs review';
+  const groupLabel = documentReviewQueueGroupDefinitions.find((group) => group.id === groupId)?.label ?? 'Needs review';
   const status = formatValue(item.status);
   const gateStatus = formatValue(item.gate_state);
-  const sourceObject = refLabel(item.source_ref, 'Source object not linked');
+  const sourceInput = refLabel(item.source_ref, 'Planning input not linked');
   const developmentPlanItem = refLabel(item.development_plan_item_ref, 'Development Plan Item not linked');
   const developmentPlanId = item.development_plan_item_ref?.development_plan_id;
   const developmentPlanItemId = item.development_plan_item_ref?.id;
   const title = item.title ?? `${artifactLabel(artifactType)} governance row`;
   const nextAction = item.next_action ?? defaultNextAction(artifactType, groupId);
-  const row: SpecPlanQueueRow = {
+  const row: DocumentReviewQueueRow = {
     id: item.id,
     artifactType,
     artifactLabel: artifactLabel(artifactType),
     title,
     groupId,
     groupLabel,
-    sourceObject,
+    sourceInput,
     developmentPlanItem,
     reviewer: item.reviewer_actor_id ?? 'Unassigned reviewer',
     age: item.age_label ?? relativeAge(item.updated_at),
@@ -158,7 +158,7 @@ export function specPlanQueueRow(item: SpecPlanQueueItem): SpecPlanQueueRow {
     command: item.command ?? defaultCommand(artifactType, groupId),
     ...(developmentPlanId === undefined ? {} : { developmentPlanId }),
     ...(developmentPlanItemId === undefined ? {} : { developmentPlanItemId }),
-    documentSummary: item.summary ?? `${title} for ${developmentPlanItem} from ${sourceObject}.`,
+    documentSummary: item.summary ?? `${title} for ${developmentPlanItem} from ${sourceInput}.`,
     href: queueItemHref(item, artifactType),
     searchText: '',
   };
@@ -168,7 +168,7 @@ export function specPlanQueueRow(item: SpecPlanQueueItem): SpecPlanQueueRow {
       row.title,
       row.artifactLabel,
       row.groupLabel,
-      row.sourceObject,
+      row.sourceInput,
       row.developmentPlanItem,
       row.reviewer,
       row.age,
@@ -182,16 +182,16 @@ export function specPlanQueueRow(item: SpecPlanQueueItem): SpecPlanQueueRow {
   };
 }
 
-function gateProgress(rows: readonly SpecPlanQueueRow[]): ViewModelGate[] {
+function gateProgress(rows: readonly DocumentReviewQueueRow[]): ViewModelGate[] {
   if (rows.length === 0) return [{ label: 'Governance', state: 'empty' }];
-  return specPlanQueueGroups(rows).map((group) => ({
+  return documentReviewQueueGroups(rows).map((group) => ({
     label: group.label,
     state: group.rows.length === 0 ? 'empty' : `${group.rows.length} row${group.rows.length === 1 ? '' : 's'}`,
     owner: firstAssignedReviewer(group.rows),
   }));
 }
 
-function groupForItem(item: SpecPlanQueueItem): SpecPlanQueueGroupId {
+function groupForItem(item: DocumentReviewQueueItem): DocumentReviewQueueGroupId {
   const status = normalized(item.status);
   const gateState = normalized(item.gate_state);
   if (item.blocked === true || item.stale === true || status === 'blocked' || status === 'stale' || gateState === 'blocked' || gateState === 'stale') {
@@ -203,15 +203,14 @@ function groupForItem(item: SpecPlanQueueItem): SpecPlanQueueGroupId {
   return 'needs-generation';
 }
 
-function queueItemHref(item: SpecPlanQueueItem, artifactType: QueueArtifactType): string {
+function queueItemHref(item: DocumentReviewQueueItem, artifactType: QueueArtifactType): string {
   const planId = item.development_plan_item_ref?.development_plan_id;
   const itemId = item.development_plan_item_ref?.id;
-  const suffix = artifactType === 'spec' ? 'spec' : 'execution-plan';
+  const suffix = artifactType === 'spec' ? 'spec' : 'implementation-plan';
   if (planId !== undefined && itemId !== undefined) {
     return `/development-plans/${encodeURIComponent(planId)}/items/${encodeURIComponent(itemId)}/${suffix}`;
   }
-  if (item.href?.startsWith('/development-plans/') === true) return item.href;
-  return `/specs-plans?tab=${artifactType === 'spec' ? 'specs' : 'plans'}`;
+  return `/reviews?tab=${artifactType === 'spec' ? 'specs' : 'implementation-plans'}`;
 }
 
 function riskSignal(blockedCount: number, staleCount: number, highRiskCount: number): string {
@@ -221,31 +220,31 @@ function riskSignal(blockedCount: number, staleCount: number, highRiskCount: num
   return 'No stale or blocked governance signal';
 }
 
-function firstAssignedReviewer(rows: readonly SpecPlanQueueRow[]): string | undefined {
+function firstAssignedReviewer(rows: readonly DocumentReviewQueueRow[]): string | undefined {
   return rows.find((row) => row.reviewer !== 'Unassigned reviewer')?.reviewer;
 }
 
 function artifactLabel(artifactType: QueueArtifactType): string {
-  return artifactType === 'spec' ? 'Spec' : 'Execution Plan';
+  return artifactType === 'spec' ? 'Spec' : 'Implementation Plan Doc';
 }
 
-function defaultNextAction(artifactType: QueueArtifactType, groupId: SpecPlanQueueGroupId): string {
-  if (groupId === 'needs-generation') return artifactType === 'spec' ? 'Generate Spec from approved boundary.' : 'Generate Execution Plan from approved Spec.';
+function defaultNextAction(artifactType: QueueArtifactType, groupId: DocumentReviewQueueGroupId): string {
+  if (groupId === 'needs-generation') return artifactType === 'spec' ? 'Generate Spec from approved boundary.' : 'Generate Implementation Plan Doc from approved Spec.';
   if (groupId === 'needs-review') return `Review ${artifactLabel(artifactType)} revision.`;
   if (groupId === 'changes-requested') return `Revise ${artifactLabel(artifactType)} and resubmit.`;
-  if (groupId === 'approved-ready') return artifactType === 'spec' ? 'Generate or review the Execution Plan.' : 'Start execution from the approved plan.';
+  if (groupId === 'approved-ready') return artifactType === 'spec' ? 'Generate or review the Implementation Plan Doc.' : 'Start execution from the approved Implementation Plan Doc.';
   return `Resolve stale or blocked ${artifactLabel(artifactType)} governance.`;
 }
 
-function defaultCommand(artifactType: QueueArtifactType, groupId: SpecPlanQueueGroupId): string {
-  if (groupId === 'needs-generation') return artifactType === 'spec' ? 'Generate Spec' : 'Generate Execution Plan';
-  if (groupId === 'needs-review') return artifactType === 'spec' ? 'Review Spec' : 'Review Execution Plan';
-  if (groupId === 'changes-requested') return artifactType === 'spec' ? 'Revise Spec' : 'Revise Execution Plan';
-  if (groupId === 'approved-ready') return artifactType === 'spec' ? 'Open Spec gate' : 'Open Execution Plan gate';
-  return artifactType === 'spec' ? 'Regenerate Spec' : 'Regenerate Execution Plan';
+function defaultCommand(artifactType: QueueArtifactType, groupId: DocumentReviewQueueGroupId): string {
+  if (groupId === 'needs-generation') return artifactType === 'spec' ? 'Generate Spec' : 'Generate Implementation Plan Doc';
+  if (groupId === 'needs-review') return artifactType === 'spec' ? 'Review Spec' : 'Review Implementation Plan Doc';
+  if (groupId === 'changes-requested') return artifactType === 'spec' ? 'Revise Spec' : 'Revise Implementation Plan Doc';
+  if (groupId === 'approved-ready') return artifactType === 'spec' ? 'Open Spec gate' : 'Open Implementation Plan Doc gate';
+  return artifactType === 'spec' ? 'Regenerate Spec' : 'Regenerate Implementation Plan Doc';
 }
 
-function refLabel(ref: SpecPlanRef | undefined, fallback: string): string {
+function refLabel(ref: DocumentReviewRef | undefined, fallback: string): string {
   if (ref?.title !== undefined && ref.title.trim().length > 0) return ref.title;
   if (ref?.id !== undefined && ref.id.trim().length > 0) return ref.id;
   return fallback;

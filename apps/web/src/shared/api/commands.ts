@@ -44,12 +44,12 @@ import type {
   RunSession,
   BugDetail,
   InitiativeDetail,
-  SpecPlan,
+  ReviewableDocumentArtifact,
   SpecRevision,
   StartReleaseObservingBody,
   SubmitForApprovalBody,
   RequirementDetail,
-  SourceObjectRef,
+  PlanningInputRef,
   TechDebtDetail,
   QaHandoff,
   UnlinkReleaseScopeBody,
@@ -104,6 +104,19 @@ const releaseActorId = (body: { actor_id: string }) => body.actor_id;
 const actorCommandActorId = (body: ActorCommandBody) => body.actor_id;
 const reviewDecisionActorId = (body: ReviewDecisionBody) => body.reviewed_by_actor_id;
 const actorRequest = (actorId: string | undefined) => (actorId === undefined ? {} : { actorId });
+const planningInputPath = (sourceType: PlanningInputRef['type'], sourceId: string) => {
+  const encodedId = encodeURIComponent(sourceId);
+  switch (sourceType) {
+    case 'requirement':
+      return `/requirements/${encodedId}`;
+    case 'initiative':
+      return `/initiatives/${encodedId}`;
+    case 'bug':
+      return `/bugs/${encodedId}`;
+    case 'tech_debt':
+      return `/tech-debt/${encodedId}`;
+  }
+};
 
 type TypedWorkItemCreateBody<K extends CreateWorkItemBody['kind']> = Omit<CreateWorkItemBody, 'kind' | 'intake_context'> & {
   intake_context: Extract<WorkItemIntakeContext, { type: K }>;
@@ -117,7 +130,7 @@ export type CreateBugBody = TypedWorkItemCreateBody<'bug'>;
 export interface CreateDevelopmentPlanBody extends ActorCommandBody {
   guidance?: string;
   project_id: string;
-  source_ref: SourceObjectRef;
+  source_ref: PlanningInputRef;
   title: string;
 }
 
@@ -135,11 +148,11 @@ export interface CreateDevelopmentPlanItemBody {
 
 export interface GenerateDevelopmentPlanDraftBody extends ActorCommandBody {
   project_id: string;
-  source_ref: SourceObjectRef;
+  source_ref: PlanningInputRef;
   guidance?: string;
 }
 
-export interface LinkSourceObjectToDevelopmentPlanBody extends ActorCommandBody {
+export interface LinkPlanningInputToDevelopmentPlanBody extends ActorCommandBody {
   rationale?: string;
 }
 
@@ -220,7 +233,7 @@ export interface StructuredRevisionDiff {
   compare_snapshot?: Record<string, unknown>;
 }
 
-export interface ExecutionPlanDocument {
+export interface ImplementationPlanDocument {
   id: string;
   development_plan_item_id: string;
   status: 'draft' | 'in_review' | 'approved' | 'changes_requested' | 'stale' | 'blocked';
@@ -232,9 +245,9 @@ export interface ExecutionPlanDocument {
   updated_at?: string;
 }
 
-export interface ExecutionPlanRevision {
+export interface ImplementationPlanRevision {
   id: string;
-  execution_plan_id: string;
+  implementation_plan_id: string;
   development_plan_item_id: string;
   based_on_spec_revision_id: string;
   revision_number: number;
@@ -249,8 +262,8 @@ export interface ExecutionPlanRevision {
 const itemSpecPath = (developmentPlanId: string, itemId: string, suffix: string) =>
   `/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}/spec/${suffix}`;
 
-const itemExecutionPlanPath = (developmentPlanId: string, itemId: string, suffix: string) =>
-  `/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}/execution-plan/${suffix}`;
+const itemImplementationPlanPath = (developmentPlanId: string, itemId: string, suffix: string) =>
+  `/development-plans/${encodeURIComponent(developmentPlanId)}/items/${encodeURIComponent(itemId)}/implementation-plan/${suffix}`;
 
 export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
   const { baseUrl, request } = createApiContext(options);
@@ -348,24 +361,24 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
     createWorkItem: async (body: CreateWorkItemBody) =>
       request<WorkItem>('/work-items', { method: 'POST', body: createWorkItemRequestSchema.parse(body) }),
     createRequirement: (body: CreateRequirementBody) =>
-      request<WorkItem>('/work-items', {
+      request<WorkItem>('/requirements', {
         method: 'POST',
-        body: createWorkItemRequestSchema.parse({ ...body, kind: 'requirement' }),
+        body,
       }),
     createInitiative: (body: CreateInitiativeBody) =>
-      request<WorkItem>('/work-items', {
+      request<WorkItem>('/initiatives', {
         method: 'POST',
-        body: createWorkItemRequestSchema.parse({ ...body, kind: 'initiative' }),
+        body,
       }),
     createTechDebt: (body: CreateTechDebtBody) =>
-      request<WorkItem>('/work-items', {
+      request<WorkItem>('/tech-debt', {
         method: 'POST',
-        body: createWorkItemRequestSchema.parse({ ...body, kind: 'tech_debt' }),
+        body,
       }),
     createBug: (body: CreateBugBody) =>
-      request<WorkItem>('/work-items', {
+      request<WorkItem>('/bugs', {
         method: 'POST',
-        body: createWorkItemRequestSchema.parse({ ...body, kind: 'bug' }),
+        body,
       }),
     createDevelopmentPlan: (body: CreateDevelopmentPlanBody) =>
       request<DevelopmentPlan>('/development-plans', {
@@ -390,14 +403,14 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         body,
         ...actorRequest(body.actor_id),
       }),
-    linkSourceObjectToDevelopmentPlan: (
-      sourceType: SourceObjectRef['type'],
+    linkPlanningInputToDevelopmentPlan: (
+      sourceType: PlanningInputRef['type'],
       sourceId: string,
       developmentPlanId: string,
-      body: LinkSourceObjectToDevelopmentPlanBody,
+      body: LinkPlanningInputToDevelopmentPlanBody,
     ) =>
       request<Record<string, unknown>>(
-        `/source-objects/${encodeURIComponent(sourceType)}/${encodeURIComponent(sourceId)}/development-plans/${encodeURIComponent(developmentPlanId)}/link`,
+        `${planningInputPath(sourceType, sourceId)}/development-plans/${encodeURIComponent(developmentPlanId)}/link`,
         {
           method: 'POST',
           body,
@@ -456,8 +469,8 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
       }),
     getSpecRevision: (specRevisionId: string) =>
       request<SpecRevision>(`/spec-revisions/${encodeURIComponent(specRevisionId)}`),
-    getExecutionPlanRevision: (executionPlanRevisionId: string) =>
-      request<ExecutionPlanRevision>(`/execution-plan-revisions/${encodeURIComponent(executionPlanRevisionId)}`),
+    getImplementationPlanRevision: (implementationPlanRevisionId: string) =>
+      request<ImplementationPlanRevision>(`/implementation-plan-revisions/${encodeURIComponent(implementationPlanRevisionId)}`),
     getEvidenceChain: (workItemId: string, reviewPacketId?: string) =>
       request<EvidenceChainResponse>(
         `/work-items/${encodeURIComponent(workItemId)}/evidence-chain${
@@ -472,25 +485,25 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         ...actorRequest(body.actor_id),
       }),
     submitItemSpecForApproval: (developmentPlanId: string, itemId: string, body: SubmitForApprovalBody) =>
-      request<SpecPlan>(itemSpecPath(developmentPlanId, itemId, 'submit-for-approval'), {
+      request<ReviewableDocumentArtifact>(itemSpecPath(developmentPlanId, itemId, 'submit-for-approval'), {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
     approveItemSpec: (developmentPlanId: string, itemId: string, body: ApproveArtifactBody) =>
-      request<SpecPlan>(itemSpecPath(developmentPlanId, itemId, 'approve'), {
+      request<ReviewableDocumentArtifact>(itemSpecPath(developmentPlanId, itemId, 'approve'), {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
     requestItemSpecChanges: (developmentPlanId: string, itemId: string, body: RequestArtifactChangesBody) =>
-      request<SpecPlan>(itemSpecPath(developmentPlanId, itemId, 'request-changes'), {
+      request<ReviewableDocumentArtifact>(itemSpecPath(developmentPlanId, itemId, 'request-changes'), {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
     rejectItemSpec: (developmentPlanId: string, itemId: string, body: RequestArtifactChangesBody) =>
-      request<SpecPlan>(itemSpecPath(developmentPlanId, itemId, 'reject'), {
+      request<ReviewableDocumentArtifact>(itemSpecPath(developmentPlanId, itemId, 'reject'), {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
@@ -509,50 +522,50 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
     compareItemSpecRevisions: (developmentPlanId: string, itemId: string, query: RevisionCompareQuery) =>
       request<StructuredRevisionDiff>(`${itemSpecPath(developmentPlanId, itemId, 'revisions/compare')}${queryString({ ...query })}`),
 
-    generateItemExecutionPlanDraft: (developmentPlanId: string, itemId: string, body: ActorCommandBody = {}) =>
-      request<ExecutionPlanRevision>(itemExecutionPlanPath(developmentPlanId, itemId, 'generate-draft'), {
+    generateItemImplementationPlanDraft: (developmentPlanId: string, itemId: string, body: ActorCommandBody = {}) =>
+      request<ImplementationPlanRevision>(itemImplementationPlanPath(developmentPlanId, itemId, 'generate-draft'), {
         method: 'POST',
         body,
         ...actorRequest(body.actor_id),
       }),
-    submitItemExecutionPlanForApproval: (developmentPlanId: string, itemId: string, body: SubmitForApprovalBody) =>
-      request<ExecutionPlanDocument>(itemExecutionPlanPath(developmentPlanId, itemId, 'submit-for-approval'), {
+    submitItemImplementationPlanForApproval: (developmentPlanId: string, itemId: string, body: SubmitForApprovalBody) =>
+      request<ImplementationPlanDocument>(itemImplementationPlanPath(developmentPlanId, itemId, 'submit-for-approval'), {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    approveItemExecutionPlan: (developmentPlanId: string, itemId: string, body: ApproveArtifactBody) =>
-      request<ExecutionPlanDocument>(itemExecutionPlanPath(developmentPlanId, itemId, 'approve'), {
+    approveItemImplementationPlan: (developmentPlanId: string, itemId: string, body: ApproveArtifactBody) =>
+      request<ImplementationPlanDocument>(itemImplementationPlanPath(developmentPlanId, itemId, 'approve'), {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    requestItemExecutionPlanChanges: (developmentPlanId: string, itemId: string, body: RequestArtifactChangesBody) =>
-      request<ExecutionPlanDocument>(itemExecutionPlanPath(developmentPlanId, itemId, 'request-changes'), {
+    requestItemImplementationPlanChanges: (developmentPlanId: string, itemId: string, body: RequestArtifactChangesBody) =>
+      request<ImplementationPlanDocument>(itemImplementationPlanPath(developmentPlanId, itemId, 'request-changes'), {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    rejectItemExecutionPlan: (developmentPlanId: string, itemId: string, body: RequestArtifactChangesBody) =>
-      request<ExecutionPlanDocument>(itemExecutionPlanPath(developmentPlanId, itemId, 'reject'), {
+    rejectItemImplementationPlan: (developmentPlanId: string, itemId: string, body: RequestArtifactChangesBody) =>
+      request<ImplementationPlanDocument>(itemImplementationPlanPath(developmentPlanId, itemId, 'reject'), {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    regenerateItemExecutionPlanDraft: (developmentPlanId: string, itemId: string, body: RegenerateArtifactDraftBody) =>
-      request<ExecutionPlanRevision>(itemExecutionPlanPath(developmentPlanId, itemId, 'regenerate-draft'), {
+    regenerateItemImplementationPlanDraft: (developmentPlanId: string, itemId: string, body: RegenerateArtifactDraftBody) =>
+      request<ImplementationPlanRevision>(itemImplementationPlanPath(developmentPlanId, itemId, 'regenerate-draft'), {
         method: 'POST',
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    saveItemExecutionPlanDraft: (developmentPlanId: string, itemId: string, body: MarkdownDocument) =>
-      request<ExecutionPlanRevision>(itemExecutionPlanPath(developmentPlanId, itemId, 'draft'), {
+    saveItemImplementationPlanDraft: (developmentPlanId: string, itemId: string, body: MarkdownDocument) =>
+      request<ImplementationPlanRevision>(itemImplementationPlanPath(developmentPlanId, itemId, 'draft'), {
         method: 'PATCH',
         body,
       }),
-    compareItemExecutionPlanRevisions: (developmentPlanId: string, itemId: string, query: RevisionCompareQuery) =>
+    compareItemImplementationPlanRevisions: (developmentPlanId: string, itemId: string, query: RevisionCompareQuery) =>
       request<StructuredRevisionDiff>(
-        `${itemExecutionPlanPath(developmentPlanId, itemId, 'revisions/compare')}${queryString({ ...query })}`,
+        `${itemImplementationPlanPath(developmentPlanId, itemId, 'revisions/compare')}${queryString({ ...query })}`,
       ),
 
     startItemExecution: (developmentPlanId: string, itemId: string, body: ActorCommandBody) =>

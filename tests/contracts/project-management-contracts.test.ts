@@ -24,7 +24,7 @@ import {
   requirementDetailSchema,
   requirementListItemSchema,
   specDetailSchema,
-  specPlanQueueItemSchema,
+  documentReviewQueueItemSchema,
   techDebtDetailSchema,
   techDebtListItemSchema,
   myWorkQueueItemSchema,
@@ -46,13 +46,17 @@ describe('project management typed object contracts', () => {
     });
     expect(
       productObjectRefSchema.parse({
-        type: 'execution_plan_revision',
+        type: 'implementation_plan_revision',
         id: 'epr-1',
-        execution_plan_id: 'ep-1',
+        implementation_plan_id: 'ep-1',
       }),
     ).toMatchObject({
-      type: 'execution_plan_revision',
+      type: 'implementation_plan_revision',
     });
+    expect(() => productObjectRefSchema.parse({ type: 'execution_plan', id: 'ep-1' })).toThrow();
+    expect(() =>
+      productObjectRefSchema.parse({ type: 'execution_plan_revision', id: 'epr-1', execution_plan_id: 'ep-1' }),
+    ).toThrow();
     expect(() => productObjectRefSchema.parse({ type: 'work_item', id: 'wi-1' })).toThrow();
     expect(() => productObjectRefSchema.parse({ type: 'task', id: 'task-1' })).toThrow();
     expect(() => productObjectRefSchema.parse({ type: 'plan', id: 'plan-1' })).toThrow();
@@ -126,7 +130,7 @@ describe('project management typed object contracts', () => {
     expect(session.approval_state).toBe('approved');
   });
 
-  it('models item-scoped Spec and Execution Plan context manifests without Work Item refs', () => {
+  it('models item-scoped Spec and Implementation Plan Doc context manifests without Work Item refs', () => {
     const manifest = contextManifestSchema.parse({
       id: 'cm-1',
       revision_id: 'cm-rev-1',
@@ -143,7 +147,7 @@ describe('project management typed object contracts', () => {
       boundary_approved_at: '2026-05-24T00:03:00.000Z',
       approved_spec_revision_id: 'spec-rev-1',
       sources: [
-        { type: 'source_object_revision', ref: 'requirement:req-1', digest: 'req-rev-1' },
+        { type: 'planning_input_revision', ref: 'requirement:req-1', digest: 'req-rev-1' },
         { type: 'development_plan_item', ref: 'dpi-1', digest: 'dpi-rev-1' },
         { type: 'boundary_summary', ref: 'boundary-1', digest: 'boundary-rev-1' },
         { type: 'repository_path', ref: '/workspace/forgeloop', digest: 'abc123' },
@@ -160,7 +164,7 @@ describe('project management typed object contracts', () => {
     expect(JSON.stringify(manifest)).not.toContain('"type":"work_item"');
   });
 
-  it('models product Executions with item and Execution Plan revision identity', () => {
+  it('models product Executions with item and Implementation Plan Doc revision identity', () => {
     const execution = executionSchema.parse({
       id: 'exec-1',
       development_plan_item_id: 'dpi-1',
@@ -171,7 +175,7 @@ describe('project management typed object contracts', () => {
         spec_id: 'spec-1',
         title: 'Approved Spec',
       },
-      execution_plan_revision_id: 'epr-1',
+      implementation_plan_revision_id: 'epr-1',
       ref: { type: 'execution', id: 'exec-1', title: 'Execution for item' },
       development_plan_item_ref: {
         type: 'development_plan_item',
@@ -180,14 +184,14 @@ describe('project management typed object contracts', () => {
         revision_id: 'dpi-rev-1',
         title: 'Plan item',
       },
-      execution_plan_revision_ref: {
-        type: 'execution_plan_revision',
+      implementation_plan_revision_ref: {
+        type: 'implementation_plan_revision',
         id: 'epr-1',
-        execution_plan_id: 'ep-1',
-        title: 'Approved Execution Plan',
+        implementation_plan_id: 'ep-1',
+        title: 'Approved Implementation Plan Doc',
       },
       status: 'running',
-      evidence_refs: [{ type: 'execution_plan_revision', id: 'epr-1', execution_plan_id: 'ep-1' }],
+      evidence_refs: [{ type: 'implementation_plan_revision', id: 'epr-1', implementation_plan_id: 'ep-1' }],
       runtime_evidence_refs: [{ type: 'execution_package', id: 'pkg-1' }],
       created_at: '2026-05-24T00:04:00.000Z',
       updated_at: '2026-05-24T00:05:00.000Z',
@@ -195,12 +199,12 @@ describe('project management typed object contracts', () => {
 
     expect(execution).toMatchObject({
       development_plan_item_id: 'dpi-1',
-      execution_plan_revision_id: 'epr-1',
+      implementation_plan_revision_id: 'epr-1',
     });
     expect(() =>
       executionSchema.parse({
         ...execution,
-        execution_plan_revision_id: undefined,
+        implementation_plan_revision_id: undefined,
       }),
     ).toThrow();
   });
@@ -476,9 +480,9 @@ describe('project management typed object contracts', () => {
     ).toThrow();
   });
 
-  it('exposes product-safe Spec and Plan read models with typed refs', () => {
+  it('exposes product-safe Spec and Implementation Plan Doc read models with typed refs', () => {
     expect(
-      specPlanQueueItemSchema.parse({
+      documentReviewQueueItemSchema.parse({
         id: 'spec-queue-1',
         entity_type: 'spec',
         title: 'Checkout Spec',
@@ -488,7 +492,7 @@ describe('project management typed object contracts', () => {
         current_revision_id: 'spec-rev-2',
         approved_revision_id: 'spec-rev-2',
         updated_at: '2026-05-23T00:00:00.000Z',
-        href: '/specs-plans',
+        href: '/reviews',
       }),
     ).toMatchObject({
       entity_type: 'spec',
@@ -522,7 +526,7 @@ describe('project management typed object contracts', () => {
     expect(
       planDetailSchema.parse({
         id: 'plan-1',
-        ref: { type: 'execution_plan', id: 'plan-1' },
+        ref: { type: 'implementation_plan_doc', id: 'plan-1' },
         source_ref: { type: 'requirement', id: 'req-1' },
         title: 'Checkout Plan',
         status: 'approved',
@@ -532,13 +536,13 @@ describe('project management typed object contracts', () => {
         based_on_spec_revision_id: 'spec-rev-2',
       }),
     ).toMatchObject({
-      ref: { type: 'execution_plan', id: 'plan-1' },
+      ref: { type: 'implementation_plan_doc', id: 'plan-1' },
     });
   });
 
-  it('rejects Spec and Plan read models with legacy work_item refs or owner fields', () => {
+  it('rejects Spec and Implementation Plan Doc read models with legacy work_item refs or owner fields', () => {
     expect(() =>
-      specPlanQueueItemSchema.parse({
+      documentReviewQueueItemSchema.parse({
         id: 'spec-queue-legacy',
         entity_type: 'spec',
         title: 'Legacy Spec',
@@ -563,7 +567,7 @@ describe('project management typed object contracts', () => {
     expect(() =>
       planDetailSchema.parse({
         id: 'plan-legacy',
-        ref: { type: 'execution_plan', id: 'plan-legacy' },
+        ref: { type: 'implementation_plan_doc', id: 'plan-legacy' },
         source_ref: { type: 'work_item', id: 'wi-1' },
         title: 'Legacy Plan',
         status: 'approved',
@@ -576,7 +580,7 @@ describe('project management typed object contracts', () => {
     const now = '2026-05-27T08:00:00.000Z';
     const planningCoverage = { development_plan_count: 1, plan_item_count: 3, uncovered: false };
     const downstreamGateSummary = {
-      current_gate_counts: { boundary: 1, spec: 1, execution_plan: 1, execution: 0, code_review: 0, qa: 0, release: 0 },
+      current_gate_counts: { boundary: 1, spec: 1, implementation_plan_doc: 1, execution: 0, code_review: 0, qa: 0, release: 0 },
       blocker_count: 1,
     };
 
@@ -678,14 +682,14 @@ describe('project management typed object contracts', () => {
     const later = '2026-05-27T08:30:00.000Z';
     const planning_coverage = { development_plan_count: 1, plan_item_count: 3, uncovered: false };
     const downstream_gate_summary = {
-      current_gate_counts: { boundary: 1, spec: 1, execution_plan: 1, execution: 0, code_review: 0, qa: 0, release: 0 },
+      current_gate_counts: { boundary: 1, spec: 1, implementation_plan_doc: 1, execution: 0, code_review: 0, qa: 0, release: 0 },
       blocker_count: 1,
     };
     const sharedDetailFields = {
       priority: 'high',
       risk: 'high',
       driver_actor_id: 'actor-product',
-      narrative_markdown: 'Typed source narrative.',
+      narrative_markdown: 'Typed document narrative.',
       planning_coverage,
       downstream_gate_summary,
       linked_development_plans: [{ type: 'development_plan', id: 'dp-core', title: 'Core redesign plan' }],
@@ -880,7 +884,7 @@ describe('project management typed object contracts', () => {
         affected_surfaces: [],
         boundary_status: 'in_progress',
         spec_status: 'missing',
-        execution_plan_status: 'missing',
+        implementation_plan_status: 'missing',
         execution_status: 'not_started',
         review_status: 'missing',
         qa_handoff_status: 'missing',
@@ -892,6 +896,28 @@ describe('project management typed object contracts', () => {
       leader_actor_id: 'actor-leader',
       leader_delegate_actor_ids: ['actor-delegate'],
     });
+    expect(() =>
+      developmentPlanItemSchema.parse({
+        id: 'item-1',
+        development_plan_id: 'plan-1',
+        revision_id: 'item-rev-1',
+        title: 'Runtime closure',
+        summary: 'Close runtime dogfood',
+        responsible_role: 'tech_lead',
+        risk: 'high',
+        dependency_hints: [],
+        affected_surfaces: [],
+        boundary_status: 'in_progress',
+        spec_status: 'missing',
+        legacy_plan_status: 'missing',
+        execution_status: 'not_started',
+        review_status: 'missing',
+        qa_handoff_status: 'missing',
+        release_impact: 'release_scoped',
+        next_action: 'boundary_brainstorming',
+        updated_at: '2026-05-25T00:00:00.000Z',
+      }),
+    ).toThrow();
   });
 
   it('accepts Boundary Brainstorming session process fields and Leader snapshot', () => {
@@ -978,7 +1004,7 @@ describe('project management typed object contracts', () => {
       executionSchema.parse({
         id: 'execution-1',
         development_plan_item_id: 'item-1',
-        execution_plan_revision_id: 'execution-plan-rev-1',
+        implementation_plan_revision_id: 'implementation-plan-rev-1',
         ref: { type: 'execution', id: 'execution-1' },
         development_plan_item_ref: {
           type: 'development_plan_item',
@@ -986,10 +1012,10 @@ describe('project management typed object contracts', () => {
           development_plan_id: 'plan-1',
           revision_id: 'item-rev-1',
         },
-        execution_plan_revision_ref: {
-          type: 'execution_plan_revision',
-          id: 'execution-plan-rev-1',
-          execution_plan_id: 'execution-plan-1',
+        implementation_plan_revision_ref: {
+          type: 'implementation_plan_revision',
+          id: 'implementation-plan-rev-1',
+          implementation_plan_id: 'implementation-plan-1',
         },
         status: 'running',
         evidence_refs: [],
@@ -1016,7 +1042,7 @@ describe('project management typed object contracts', () => {
           id: 'spec-rev-1',
           spec_id: 'spec-1',
         },
-        execution_plan_revision_id: 'execution-plan-rev-1',
+        implementation_plan_revision_id: 'implementation-plan-rev-1',
         ref: { type: 'execution', id: 'execution-1' },
         development_plan_item_ref: {
           type: 'development_plan_item',
@@ -1024,10 +1050,10 @@ describe('project management typed object contracts', () => {
           development_plan_id: 'plan-1',
           revision_id: 'item-rev-1',
         },
-        execution_plan_revision_ref: {
-          type: 'execution_plan_revision',
-          id: 'execution-plan-rev-1',
-          execution_plan_id: 'execution-plan-1',
+        implementation_plan_revision_ref: {
+          type: 'implementation_plan_revision',
+          id: 'implementation-plan-rev-1',
+          implementation_plan_id: 'implementation-plan-1',
         },
         status: 'running',
         evidence_refs: [{ type: 'spec_revision', id: 'spec-rev-1', spec_id: 'spec-1' }],
@@ -1054,7 +1080,7 @@ describe('project management typed object contracts', () => {
           id: 'spec-rev-2',
           spec_id: 'spec-1',
         },
-        execution_plan_revision_id: 'execution-plan-rev-1',
+        implementation_plan_revision_id: 'implementation-plan-rev-1',
         ref: { type: 'execution', id: 'execution-1' },
         development_plan_item_ref: {
           type: 'development_plan_item',
@@ -1062,10 +1088,10 @@ describe('project management typed object contracts', () => {
           development_plan_id: 'plan-1',
           revision_id: 'item-rev-1',
         },
-        execution_plan_revision_ref: {
-          type: 'execution_plan_revision',
-          id: 'execution-plan-rev-1',
-          execution_plan_id: 'execution-plan-1',
+        implementation_plan_revision_ref: {
+          type: 'implementation_plan_revision',
+          id: 'implementation-plan-rev-1',
+          implementation_plan_id: 'implementation-plan-1',
         },
         status: 'running',
         evidence_refs: [{ type: 'spec_revision', id: 'spec-rev-1', spec_id: 'spec-1' }],

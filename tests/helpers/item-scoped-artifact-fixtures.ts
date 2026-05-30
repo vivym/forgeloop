@@ -120,19 +120,19 @@ export async function seedItemScopedSpecPlan(
     affected_surfaces: ['tests'],
     boundary_status: 'approved',
     spec_status: specStatus,
-    execution_plan_status: executionPlanStatus,
+    implementation_plan_status: executionPlanStatus,
     execution_status: 'not_started',
     review_status: 'not_started',
     qa_handoff_status: 'not_started',
     release_impact: 'release_scoped',
-    next_action: options.includePlan === false ? 'generate_execution_plan' : 'start_execution',
+    next_action: options.includePlan === false ? 'generate_implementation_plan' : 'start_execution',
     created_at: now,
     updated_at: now,
   };
   await repository.saveDevelopmentPlanItem(item);
   const itemRevisionChangeReason =
     executionPlanStatus === 'approved'
-      ? 'execution_plan_approved'
+      ? 'implementation_plan_approved'
       : specStatus === 'approved' && options.includePlan === false
         ? 'spec_approved'
         : 'item_scoped_fixture_created';

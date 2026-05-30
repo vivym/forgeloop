@@ -135,7 +135,7 @@ export class ExecutionsService {
       });
       await this.eventWithRepository(repository, 'execution', linkedExecution.id, 'execution_started', dto.actor_id, {
         development_plan_item_id: context.item.id,
-        execution_plan_revision_id: context.executionPlanRevision.id,
+        implementation_plan_revision_id: context.executionPlanRevision.id,
         execution_package_id: executionPackage.id,
         run_session_id: run.run_session_id,
       });
@@ -233,7 +233,7 @@ export class ExecutionsService {
         ref: { type: 'code_review_handoff', id: '', title: `Code review for ${item.title}` },
         execution_id: execution.id,
         development_plan_item_id: item.id,
-        execution_plan_revision_id: execution.execution_plan_revision_id,
+        implementation_plan_revision_id: execution.implementation_plan_revision_id,
         reviewer_actor_id: reviewerActorId,
         status: 'in_review',
         summary: dto.summary,
@@ -388,8 +388,8 @@ export class ExecutionsService {
       );
       const plan = this.requireFound(await repository.getDevelopmentPlan(item.development_plan_id), `DevelopmentPlan ${item.development_plan_id}`);
       const executionPlanRevision = this.requireFound(
-        await repository.getExecutionPlanRevision(handoff.execution_plan_revision_id),
-        `ExecutionPlanRevision ${handoff.execution_plan_revision_id}`,
+        await repository.getExecutionPlanRevision(handoff.implementation_plan_revision_id),
+        `Implementation Plan Doc revision ${handoff.implementation_plan_revision_id}`,
       );
       const specRevision = this.requireFound(
         await repository.getSpecRevision(executionPlanRevision.based_on_spec_revision_id),
@@ -411,10 +411,10 @@ export class ExecutionsService {
           title: item.title,
         },
         approved_spec_revision_ref: { type: 'spec_revision', id: specRevision.id, spec_id: specRevision.spec_id, title: specRevision.summary },
-        approved_execution_plan_revision_ref: {
-          type: 'execution_plan_revision',
+        approved_implementation_plan_revision_ref: {
+          type: 'implementation_plan_revision',
           id: executionPlanRevision.id,
-          execution_plan_id: executionPlanRevision.execution_plan_id,
+          implementation_plan_id: executionPlanRevision.execution_plan_id,
           title: executionPlanRevision.summary,
         },
         status: 'pending',
@@ -534,20 +534,20 @@ export class ExecutionsService {
       .slice()
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0];
     if (executionPlan === undefined) {
-      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: execution_plan_missing`);
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: implementation_plan_missing`);
     }
     const revision =
       executionPlan.approved_revision_id === undefined
         ? undefined
         : await repository.getExecutionPlanRevision(executionPlan.approved_revision_id);
     if (revision === undefined) {
-      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_execution_plan_revision_not_loaded`);
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_implementation_plan_revision_not_loaded`);
     }
     if (executionPlan.current_revision_id !== executionPlan.approved_revision_id) {
-      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_execution_plan_revision_not_current`);
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: approved_implementation_plan_revision_not_current`);
     }
     if (revision.development_plan_item_id !== item.id || revision.execution_plan_id !== executionPlan.id) {
-      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: execution_plan_revision_mismatch`);
+      throw new BadRequestException(`DevelopmentPlanItem ${item.id} cannot start execution: implementation_plan_revision_mismatch`);
     }
     const specRevision = this.requireFound(
       await repository.getSpecRevision(revision.based_on_spec_revision_id),
@@ -587,7 +587,7 @@ export class ExecutionsService {
   ): Promise<void> {
     if (!(await this.currentItemRevisionAtApprovedExecutionPlanGate(item, repository))) {
       throw new BadRequestException(
-        `DevelopmentPlanItem ${item.id} cannot start execution: approved_execution_plan_not_current_item_revision`,
+        `DevelopmentPlanItem ${item.id} cannot start execution: approved_implementation_plan_not_current_item_revision`,
       );
     }
   }
@@ -600,9 +600,9 @@ export class ExecutionsService {
       (revision) => revision.id === item.revision_id,
     );
     return (
-      currentRevision?.change_reason === 'execution_plan_approved' &&
+      currentRevision?.change_reason === 'implementation_plan_approved' &&
       currentRevision.snapshot.spec_status === 'approved' &&
-      currentRevision.snapshot.execution_plan_status === 'approved' &&
+      currentRevision.snapshot.implementation_plan_status === 'approved' &&
       (currentRevision.snapshot.execution_status === 'not_started' || currentRevision.snapshot.execution_status === 'ready') &&
       currentRevision.snapshot.next_action === 'start_execution'
     );
@@ -724,11 +724,11 @@ export class ExecutionsService {
         revision_id: context.item.revision_id,
         title: context.item.title,
       },
-      execution_plan_revision_id: context.executionPlanRevision.id,
-      execution_plan_revision_ref: {
-        type: 'execution_plan_revision',
+      implementation_plan_revision_id: context.executionPlanRevision.id,
+      implementation_plan_revision_ref: {
+        type: 'implementation_plan_revision',
         id: context.executionPlanRevision.id,
-        execution_plan_id: context.executionPlan.id,
+        implementation_plan_id: context.executionPlan.id,
         title: context.executionPlanRevision.summary,
       },
       approved_spec_revision_id: context.specRevision.id,
@@ -754,9 +754,9 @@ export class ExecutionsService {
           title: context.specRevision.summary,
         },
         {
-          type: 'execution_plan_revision',
+          type: 'implementation_plan_revision',
           id: context.executionPlanRevision.id,
-          execution_plan_id: context.executionPlan.id,
+          implementation_plan_id: context.executionPlan.id,
           title: context.executionPlanRevision.summary,
         },
       ],
@@ -774,12 +774,12 @@ export class ExecutionsService {
   private async findItemExecution(
     repository: DeliveryRepository,
     itemId: string,
-    executionPlanRevisionId: string,
+    implementationPlanRevisionId: string,
   ): Promise<Execution | undefined> {
     return (await repository.listExecutions()).find(
       (execution) =>
         execution.development_plan_item_id === itemId &&
-        execution.execution_plan_revision_id === executionPlanRevisionId &&
+        execution.implementation_plan_revision_id === implementationPlanRevisionId &&
         execution.status !== 'completed' &&
         execution.status !== 'failed',
     );
@@ -898,7 +898,7 @@ export class ExecutionsService {
         title: planItem.title,
         boundary_status: planItem.boundary_status,
         spec_status: planItem.spec_status,
-        execution_plan_status: planItem.execution_plan_status,
+        implementation_plan_status: planItem.implementation_plan_status,
         execution_status: planItem.execution_status,
       })),
       change_reason: input.changeReason,

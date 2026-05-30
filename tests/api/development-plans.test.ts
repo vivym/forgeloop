@@ -88,7 +88,7 @@ describe('Development Plans API', () => {
       source_ref: { type: 'requirement', id: requirement.id },
       boundary_status: 'not_started',
       spec_status: 'missing',
-      execution_plan_status: 'missing',
+      implementation_plan_status: 'missing',
       execution_status: 'not_started',
       review_status: 'missing',
       qa_handoff_status: 'missing',
@@ -129,14 +129,14 @@ describe('Development Plans API', () => {
     await expect(repository.listDevelopmentPlans(project.id)).resolves.toEqual([]);
   });
 
-  it('links an existing Development Plan from a source object without creating a duplicate', async () => {
+  it('links an existing Development Plan from a Bug without creating a duplicate', async () => {
     const { project, requirement, bug } = await seedRequirementAndBug(app);
     const server = app.getHttpServer();
     const plan = await createDevelopmentPlan(app, { project_id: project.id, source_ref: { type: 'requirement', id: requirement.id } });
 
     const link = (
       await request(server)
-        .post(`/source-objects/bug/${bug.id}/development-plans/${plan.id}/link`)
+        .post(`/bugs/${bug.id}/development-plans/${plan.id}/link`)
         .send({ actor_id: 'actor-product', rationale: 'Bug belongs to the same checkout plan.' })
         .expect(201)
     ).body;
@@ -158,7 +158,7 @@ describe('Development Plans API', () => {
 
     const duplicateLink = (
       await request(server)
-        .post(`/source-objects/bug/${bug.id}/development-plans/${plan.id}/link`)
+        .post(`/bugs/${bug.id}/development-plans/${plan.id}/link`)
         .send({ actor_id: 'actor-product', rationale: 'Idempotent relationship.' })
         .expect(201)
     ).body;
@@ -194,7 +194,7 @@ describe('Development Plans API', () => {
           development_plan_id: generated.id,
           boundary_status: 'not_started',
           spec_status: 'missing',
-          execution_plan_status: 'missing',
+          implementation_plan_status: 'missing',
           execution_status: 'not_started',
         }),
       ]),
@@ -261,7 +261,7 @@ describe('Development Plans API', () => {
     expect(regenerated.generation_state).toBe(regeneratedRevisions.at(-1)?.generation_state);
   });
 
-  it('rejects unsupported public source object types', async () => {
+  it('rejects unsupported public source ref types', async () => {
     const { project, requirement } = await seedRequirement(app);
 
     await request(app.getHttpServer())

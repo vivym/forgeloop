@@ -220,8 +220,8 @@ const executionPlanListItem = (
   item: DevelopmentPlanItem,
 ): ProductListItem => ({
   id: executionPlan.id,
-  object: objectRef('execution_plan', executionPlan.id, `${item.title} Execution Plan`),
-  title: `${item.title} Execution Plan`,
+  object: objectRef('implementation_plan_doc', executionPlan.id, `${item.title} Implementation Plan Doc`),
+  title: `${item.title} Implementation Plan Doc`,
   status: executionPlan.status,
   risk: item.risk,
   parent: developmentPlanItemRef(item),
@@ -239,8 +239,8 @@ const legacyPlanListItem = async (repository: DeliveryRepository, plan: Plan): P
     }
     return {
       id: plan.id,
-      object: objectRef('execution_plan', plan.id, `${workItem.title} Execution Plan`),
-      title: `${workItem.title} Execution Plan`,
+      object: objectRef('implementation_plan_doc', plan.id, `${workItem.title} Implementation Plan Doc`),
+      title: `${workItem.title} Implementation Plan Doc`,
       status: plan.status,
       gate_state: plan.gate_state,
       resolution: plan.resolution,
@@ -253,8 +253,8 @@ const legacyPlanListItem = async (repository: DeliveryRepository, plan: Plan): P
 
   return {
     id: plan.id,
-    object: objectRef('execution_plan', plan.id, `${context.item.title} Execution Plan`),
-    title: `${context.item.title} Execution Plan`,
+    object: objectRef('implementation_plan_doc', plan.id, `${context.item.title} Implementation Plan Doc`),
+    title: `${context.item.title} Implementation Plan Doc`,
     status: plan.status,
     gate_state: plan.gate_state,
     resolution: plan.resolution,
@@ -377,7 +377,7 @@ const releaseListItem = (release: Release): ProductListItem => ({
   release_owner_actor_id: release.release_owner_actor_id,
   related: release.work_item_ids.map((id) => objectRef('requirement', id)),
   release_state: {
-    source_object_count: release.work_item_ids.length,
+    planning_input_count: release.work_item_ids.length,
     delivery_evidence_count: release.execution_package_ids.length,
     rollout_complete: release.phase === 'observing' || release.phase === 'completed' || release.phase === 'closed',
     rollback_complete: release.resolution === 'rolled_back',

@@ -760,7 +760,7 @@ describe('product lane projections', () => {
         resolveLaneFilters('spec-approver', { project_id: planSeed.project.id, actor_id: actorReviewer }),
       ),
     ).resolves.toMatchObject({
-      items: [expect.objectContaining({ object: { type: 'execution_plan', id: planSeed.plan.id } })],
+      items: [expect.objectContaining({ object: { type: 'implementation_plan_doc', id: planSeed.plan.id } })],
       summary: expect.objectContaining({ total: 1 }),
     });
     await expect(

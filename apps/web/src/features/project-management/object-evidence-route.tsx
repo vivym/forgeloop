@@ -9,7 +9,7 @@ import {
   ProductPage,
   RequirementWorkspace,
   Section,
-  SourceEvidenceLayout,
+  DocumentEvidenceLayout,
   TechDebtWorkspace,
 } from '../../shared/layout';
 import { EvidenceAttachments, InlineNotice, StatusPill } from '../../shared/ui';
@@ -24,7 +24,7 @@ type EvidenceRef = {
 
 type RelationshipRef = EvidenceRef;
 
-export interface SourceEvidenceDetail {
+export interface DocumentEvidenceDetail {
   id: string;
   ref: EditableObjectRef;
   title: string;
@@ -38,12 +38,12 @@ export interface SourceEvidenceDetail {
   release_refs?: RelationshipRef[] | undefined;
 }
 
-export interface ObjectEvidenceRouteProps<T extends SourceEvidenceDetail> {
+export interface ObjectEvidenceRouteProps<T extends DocumentEvidenceDetail> {
   detail: T | undefined;
   detailError?: Error | null;
   detailLoading: boolean;
   objectLabel: string;
-  sourceHref: string | undefined;
+  documentHref: string | undefined;
 }
 
 type EvidenceReadiness = {
@@ -53,21 +53,21 @@ type EvidenceReadiness = {
   unavailable: EvidenceRef[];
 };
 
-export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
+export function ObjectEvidenceRoute<T extends DocumentEvidenceDetail>({
   detail,
   detailError,
   detailLoading,
   objectLabel,
-  sourceHref,
+  documentHref,
 }: ObjectEvidenceRouteProps<T>) {
   const readiness = useMemo(() => evidenceReadiness(detail), [detail]);
   const heading = `${objectLabel} Evidence`;
 
   if (detailLoading) {
     return (
-      <ProductPage family="source-evidence" ariaLabel={heading}>
+      <ProductPage family="document-evidence" ariaLabel={heading}>
         <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
-        <SourceEvidenceLayout
+        <DocumentEvidenceLayout
           summary={
             <Section aria-label="Evidence readiness summary" title="Evidence readiness summary" variant="panel">
               <SurfaceStateIndicator label={heading} state="loading" />
@@ -81,9 +81,9 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
 
   if (detailError || detail === undefined) {
     return (
-      <ProductPage family="source-evidence" ariaLabel={heading}>
+      <ProductPage family="document-evidence" ariaLabel={heading}>
         <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
-        <SourceEvidenceLayout
+        <DocumentEvidenceLayout
           summary={
             <Section aria-label="Evidence readiness summary" title="Evidence readiness summary" variant="panel">
               <SurfaceStateIndicator label={heading} state={detailError ? 'error' : 'empty'} />
@@ -100,18 +100,18 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
   const releaseRefs = detail.release_refs ?? [];
   const allEvidenceCount = readiness.relevant.length + readiness.missing.length + readiness.stale.length + readiness.unavailable.length;
   const needsAttention = readiness.missing.length > 0 || readiness.stale.length > 0 || readiness.unavailable.length > 0;
-  const sourceLink = sourceHref ?? '#';
+  const documentLink = documentHref ?? '#';
 
   return (
     <ProductPage
-      family="source-evidence"
+      family="document-evidence"
       ariaLabel={heading}
     >
       <h1 className="mb-3 text-xl font-semibold text-text-primary">{heading}</h1>
       <TypedEvidenceShell
         objectType={detail.ref.type}
         table={
-          <SourceEvidenceLayout
+          <DocumentEvidenceLayout
             summary={
               <Section
                 aria-label="Evidence readiness summary"
@@ -122,10 +122,10 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
                 <div className="grid gap-3">
                   <div className="grid gap-2 text-sm text-text-secondary">
                     <span className="font-semibold text-text-primary">{needsAttention ? 'Resolve evidence gaps' : 'Evidence ready'}</span>
-                    <span>Review evidence readiness here; Spec and Execution Plan gates remain item-scoped.</span>
+                    <span>Review evidence readiness here; Spec and Implementation Plan Doc gates remain item-scoped.</span>
                     <span>{`Risk ${detail.risk ?? 'unscored'} / ${needsAttention ? 'Evidence needs attention' : 'No evidence blocker'}`}</span>
                     <span>{`${driverLabelFor(detail.ref.type)} / ${detail.driver_actor_id ?? 'Unavailable'}`}</span>
-                    <Link className="font-semibold text-primary hover:underline" to={sourceLink}>
+                    <Link className="font-semibold text-primary hover:underline" to={documentLink}>
                       Open {objectLabel}
                     </Link>
                   </div>
@@ -175,7 +175,7 @@ export function ObjectEvidenceRoute<T extends SourceEvidenceDetail>({
                   <RelationshipLinks refs={[...relationshipRefs, ...releaseRefs]} />
                 </Section>
                 <Section aria-label="Scoped artifact references" title="Scoped artifact references" variant="subtle">
-                  <EvidenceRefList emptyText="No scoped evidence references." label="Evidence references" refs={sourceEvidenceRefs(detail)} tone="neutral" />
+                  <EvidenceRefList emptyText="No scoped evidence references." label="Evidence references" refs={documentEvidenceRefs(detail)} tone="neutral" />
                 </Section>
               </div>
             }
@@ -299,12 +299,12 @@ function RelationshipLinks({ refs }: { refs: RelationshipRef[] }) {
   );
 }
 
-function evidenceReadiness(detail: SourceEvidenceDetail | undefined): EvidenceReadiness {
+function evidenceReadiness(detail: DocumentEvidenceDetail | undefined): EvidenceReadiness {
   if (detail === undefined) {
     return emptyReadiness();
   }
 
-  const evidenceRefs = sourceEvidenceRefs(detail);
+  const evidenceRefs = documentEvidenceRefs(detail);
   const attachments = detail.attachment_refs ?? [];
   const attachmentsById = new Map(attachments.map((attachment) => [attachment.id, attachment]));
   const referencedAttachmentIds = new Set(evidenceRefs.filter((ref) => ref.type === 'attachment' && ref.id !== undefined).map((ref) => ref.id as string));
@@ -333,7 +333,7 @@ function evidenceReadiness(detail: SourceEvidenceDetail | undefined): EvidenceRe
   }
 
   if (evidenceRefs.length === 0 && attachments.length === 0) {
-    readiness.missing.push({ type: detail.ref.type, id: detail.id, title: 'No source evidence recorded' });
+    readiness.missing.push({ type: detail.ref.type, id: detail.id, title: 'No document evidence recorded' });
   }
 
   return {
@@ -344,7 +344,7 @@ function evidenceReadiness(detail: SourceEvidenceDetail | undefined): EvidenceRe
   };
 }
 
-function sourceEvidenceRefs(detail: SourceEvidenceDetail): EvidenceRef[] {
+function documentEvidenceRefs(detail: DocumentEvidenceDetail): EvidenceRef[] {
   return uniqueRefs(detail.evidence_refs ?? []);
 }
 

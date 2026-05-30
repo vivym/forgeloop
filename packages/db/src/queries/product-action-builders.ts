@@ -73,12 +73,12 @@ const productLaneRouteHref: Record<ProductLaneId, string> = {
   bugs: '/bugs',
   'tech-debt': '/tech-debt',
   initiatives: '/initiatives',
-  'spec-approver': '/specs-plans',
+  'spec-approver': '/reviews',
   'execution-owner': '/executions',
-  reviewer: '/executions',
-  'qa-test-owner': '/reports/quality',
+  reviewer: '/reviews',
+  'qa-test-owner': '/qa',
   'release-owner': '/releases',
-  manager: '/dashboard',
+  manager: '/cockpit',
 };
 
 export const laneTarget = (laneId: ProductLaneId): ProductActionTarget => ({
