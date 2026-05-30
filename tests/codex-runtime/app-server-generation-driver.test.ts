@@ -121,7 +121,7 @@ describe('AppServerGenerationDriver', () => {
     });
   });
 
-  it('does not send a partial app-server output schema without a complete strict schema', async () => {
+  it('sends a complete bare app-server output schema when one is provided', async () => {
     const request = vi.fn(async (method: string) => {
       if (method === 'thread/start') {
         return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } };
@@ -141,10 +141,29 @@ describe('AppServerGenerationDriver', () => {
       taskKind: 'boundary_brainstorming_round',
       prompt: '{}',
       outputSchemaVersion: 'boundary_round_result.v1',
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['schema_version', 'session_id'],
+        properties: {
+          schema_version: { type: 'string', enum: ['boundary_round_result.v1'] },
+          session_id: { type: 'string' },
+        },
+      },
     });
 
     const turnStartParams = request.mock.calls[1]?.[1] as Record<string, unknown>;
-    expect(turnStartParams).not.toHaveProperty('outputSchema');
+    expect(turnStartParams.outputSchema).not.toHaveProperty('name');
+    expect(turnStartParams.outputSchema).not.toHaveProperty('schema');
+    expect(turnStartParams.outputSchema).not.toHaveProperty('strict');
+    expect(turnStartParams.outputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['schema_version', 'session_id'],
+      properties: {
+        schema_version: { type: 'string', enum: ['boundary_round_result.v1'] },
+      },
+    });
   });
 
   it('binds generation lease to sandbox policy and hard limits', async () => {
@@ -377,7 +396,7 @@ describe('AppServerGenerationDriver', () => {
     expect(result.extractedJson).toMatchObject({ schema_version: 'plan_draft.v1' });
   });
 
-  it('accepts a completed final agent message followed by idle without turn completion', async () => {
+  it('waits for turn completion after an idle thread notification with final text', async () => {
     const transport: CodexAppServerTransport = {
       async request(method) {
         if (method === 'thread/start') {
@@ -401,6 +420,10 @@ describe('AppServerGenerationDriver', () => {
         yield {
           method: 'thread/status/changed',
           params: { threadId: 'thread-1', status: { type: 'idle' } },
+        };
+        yield {
+          method: 'turn/completed',
+          params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', items: [] } },
         };
       },
     };
@@ -522,6 +545,193 @@ describe('AppServerGenerationDriver', () => {
     await expect(
       driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' }),
     ).rejects.toThrow(/codex_generation_usage_limited/);
+  });
+
+  it('remembers app-server error notifications before a failed turn completes', async () => {
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        }
+        return { turnId: 'turn-1' };
+      },
+      notifications: async function* () {
+        yield {
+          method: 'error',
+          params: {
+            error: {
+              message: 'You have hit your usage limit.',
+              codexErrorInfo: 'usageLimitExceeded',
+            },
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            willRetry: false,
+          },
+        };
+        yield {
+          method: 'turn/completed',
+          params: {
+            turn: {
+              status: 'failed',
+            },
+          },
+        };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+
+    await expect(
+      driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' }),
+    ).rejects.toThrow(/codex_generation_usage_limited/);
+  });
+
+  it.each([
+    ['string category', 'badRequest', 'app_server_bad_request'],
+    ['object category', { httpConnectionFailed: { httpStatusCode: 401 } }, 'app_server_http_connection_failed'],
+  ])('preserves public-safe app-server error notification categories from %s', async (_name, codexErrorInfo, expectedSubcode) => {
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+        }
+        return { turnId: 'turn-1' };
+      },
+      notifications: async function* () {
+        yield {
+          method: 'error',
+          params: {
+            error: {
+              message: 'Provider request failed.',
+              codexErrorInfo,
+              additionalDetails: 'redacted',
+            },
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            willRetry: false,
+          },
+        };
+        yield {
+          method: 'turn/completed',
+          params: {
+            turn: {
+              status: 'failed',
+            },
+          },
+        };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+
+    await expect(
+      driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' }),
+    ).rejects.toMatchObject({
+      message: 'codex_generation_turn_failed',
+      publicResultJson: {
+        status: 422,
+        code: 'codex_generation_turn_failed',
+        failure_subcode: expectedSubcode,
+      },
+    });
+  });
+
+  it('retries a transient app-server failed-attempt turn after governed interruption', async () => {
+    const consumedMethods: string[] = [];
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/start') {
+        return { threadId: `thread-${request.mock.calls.filter(([calledMethod]) => calledMethod === 'thread/start').length}`, effectiveConfig: { sandbox: { type: 'readOnly' } } };
+      }
+      if (method === 'turn/start') {
+        return { turnId: `turn-${request.mock.calls.filter(([calledMethod]) => calledMethod === 'turn/start').length}` };
+      }
+      return { acknowledged: true };
+    });
+    let notificationStreams = 0;
+    const transport: CodexAppServerTransport = {
+      request,
+      notifications: async function* () {
+        notificationStreams += 1;
+        if (notificationStreams === 1) {
+          yield {
+            method: 'error',
+            params: {
+              error: {
+                message: 'redacted provider failed attempts',
+                codexErrorInfo: 'responseTooManyFailedAttempts',
+              },
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              willRetry: false,
+            },
+          };
+          yield {
+            method: 'turn/completed',
+            params: {
+              turn: { id: 'turn-1', status: 'failed' },
+            },
+          };
+          return;
+        }
+        yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"ok"}' };
+        yield { type: 'turn_completed', status: 'completed' };
+      },
+      async close() {},
+    };
+    const safety: CodexGenerationRuntimeSafety = {
+      ...fakeSafety(),
+      async consumeGenerationCommand(input) {
+        consumedMethods.push(input.method);
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: safety, maxTurnAttempts: 2 });
+
+    const result = await driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' });
+
+    expect(result.extractedJson).toMatchObject({ schema_version: 'plan_draft.v1' });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      'thread/start',
+      'turn/start',
+      'turn/interrupt',
+      'thread/start',
+      'turn/start',
+    ]);
+    expect(request).toHaveBeenCalledWith('turn/interrupt', { threadId: 'thread-1', turnId: 'turn-1' });
+    expect(consumedMethods).toEqual(['thread/start', 'turn/start', 'turn/interrupt', 'thread/start', 'turn/start']);
+  });
+
+  it('does not retry app-server usage-limit turn failures', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/start') {
+        return { threadId: 'thread-1', effectiveConfig: { sandbox: { type: 'readOnly' } } };
+      }
+      if (method === 'turn/start') {
+        return { turnId: 'turn-1' };
+      }
+      return { acknowledged: true };
+    });
+    const transport: CodexAppServerTransport = {
+      request,
+      notifications: async function* () {
+        yield {
+          method: 'turn/completed',
+          params: {
+            turn: {
+              status: 'failed',
+              error: {
+                message: 'You have hit your usage limit.',
+                codexErrorInfo: 'usageLimitExceeded',
+              },
+            },
+          },
+        };
+      },
+      async close() {},
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety(), maxTurnAttempts: 2 });
+
+    await expect(
+      driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' }),
+    ).rejects.toThrow(/codex_generation_usage_limited/);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/start', 'turn/start', 'turn/interrupt']);
   });
 
   it('rejects invalid or multiple generated JSON objects', async () => {

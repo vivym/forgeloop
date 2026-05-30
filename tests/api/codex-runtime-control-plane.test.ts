@@ -877,17 +877,17 @@ describe('codex runtime control-plane APIs', () => {
     };
     await signedSetupPost(app, '/internal/codex-runtime/profiles', unpinned, 'profile-unpinned').expect(400);
 
-    const secretConfig = profileBody();
-    secretConfig.revision = {
-      ...secretConfig.revision,
-      codex_config_toml: 'auth_token = "do-not-store-here"\n',
-      codex_config_digest: codexCanonicalDigest('auth_token = "do-not-store-here"\n'),
+    const interpolatedConfig = profileBody();
+    interpolatedConfig.revision = {
+      ...interpolatedConfig.revision,
+      codex_config_toml: 'auth_token = "${OPENAI_API_KEY}"\n',
+      codex_config_digest: codexCanonicalDigest('auth_token = "${OPENAI_API_KEY}"\n'),
     };
-    secretConfig.revision = {
-      ...secretConfig.revision,
-      profile_digest: codexRuntimeProfileRevisionDigest(secretConfig.revision),
+    interpolatedConfig.revision = {
+      ...interpolatedConfig.revision,
+      profile_digest: codexRuntimeProfileRevisionDigest(interpolatedConfig.revision),
     };
-    await signedSetupPost(app, '/internal/codex-runtime/profiles', secretConfig, 'profile-secret-config').expect(400);
+    await signedSetupPost(app, '/internal/codex-runtime/profiles', interpolatedConfig, 'profile-interpolated-config').expect(400);
 
     const weakAssertions = profileBody();
     weakAssertions.revision = {

@@ -36,6 +36,7 @@ import { InMemoryDeliveryRepository, type DeliveryRepository } from '../packages
 import type { AutomationActionRun, Plan, PlanRevision, Project, Spec, WorkItem } from '../packages/domain/src/index';
 import { createLeasedDockerCodexGenerationRuntime, createRemoteCodexGenerationRuntime } from '../apps/automation-daemon/src/generation-runtime';
 import {
+  codexRuntimeDogfoodBootstrapTokenForTarget,
   loadCodexRuntimeDogfoodBootstrapConfig,
   runCodexRuntimeDogfoodBootstrap,
   type CodexRuntimeDogfoodBootstrapConfig,
@@ -316,6 +317,13 @@ const createDogfoodLocalDockerGenerationRuntime = async (input: {
   const generationCredentialBindingId = String(bootstrapSummary.generation_credential_binding_id);
   const generationWorkerIdentity = String(bootstrapSummary.generation_worker_identity ?? `${bootstrapConfig.workerIdentity}-generation`);
   const workerId = optionalNonBlankEnv(process.env, 'FORGELOOP_CODEX_WORKER_ID') ?? generationWorkerIdentity;
+  const generationAllowedScope = { project_id: bootstrapConfig.allowedScope.project_id };
+  const generationAllowedCapabilities = {
+    target_kinds: ['generation'],
+    docker_image_digests: [dockerImageDigest],
+    network_policy_digests: [networkPolicyDigest],
+    network_provider_config_digests: [networkProviderConfigDigest],
+  };
   const workerTempRoot = requiredDogfoodEnv('FORGELOOP_WORKER_TEMP_ROOT');
   const generationArtifactRoot = requiredDogfoodEnv('FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
   const dockerBin = optionalNonBlankEnv(process.env, 'FORGELOOP_DOCKER_BIN') ?? 'docker';
@@ -329,9 +337,13 @@ const createDogfoodLocalDockerGenerationRuntime = async (input: {
     workerId,
     workerIdentity: generationWorkerIdentity,
     version: 'automation-dogfood-local-docker',
-    bootstrapToken: bootstrapConfig.workerBootstrapToken,
+    bootstrapToken: codexRuntimeDogfoodBootstrapTokenForTarget(bootstrapConfig.workerBootstrapToken, {
+      workerIdentity: generationWorkerIdentity,
+      allowedScope: generationAllowedScope,
+      allowedCapabilities: generationAllowedCapabilities,
+    }),
     bootstrapTokenVersion: bootstrapConfig.workerBootstrapTokenVersion,
-    authorizedScopes: [bootstrapConfig.allowedScope],
+    authorizedScopes: [generationAllowedScope],
     capabilities: ['generation'],
     dockerImageDigests: [dockerImageDigest],
     networkPolicyDigests: [networkPolicyDigest],
@@ -451,7 +463,15 @@ const createDogfoodRemoteOutboundGenerationRuntime = async (input: {
   const networkProviderConfigDigest = String(bootstrapSummary.network_provider_config_digest);
   const generationRuntimeProfileId = String(bootstrapSummary.generation_runtime_profile_id);
   const generationCredentialBindingId = String(bootstrapSummary.generation_credential_binding_id);
-  const workerId = optionalNonBlankEnv(process.env, 'FORGELOOP_CODEX_WORKER_ID') ?? bootstrapConfig.workerIdentity;
+  const generationWorkerIdentity = String(bootstrapSummary.generation_worker_identity ?? bootstrapConfig.workerIdentity);
+  const workerId = optionalNonBlankEnv(process.env, 'FORGELOOP_CODEX_WORKER_ID') ?? generationWorkerIdentity;
+  const generationAllowedScope = { project_id: bootstrapConfig.allowedScope.project_id };
+  const generationAllowedCapabilities = {
+    target_kinds: ['generation'],
+    docker_image_digests: [dockerImageDigest],
+    network_policy_digests: [networkPolicyDigest],
+    network_provider_config_digests: [networkProviderConfigDigest],
+  };
   const workerTempRoot = requiredDogfoodEnv('FORGELOOP_WORKER_TEMP_ROOT');
   const dockerBin = optionalNonBlankEnv(process.env, 'FORGELOOP_DOCKER_BIN') ?? 'docker';
   const now = () => new Date().toISOString();
@@ -479,12 +499,16 @@ const createDogfoodRemoteOutboundGenerationRuntime = async (input: {
   let remoteWorkerRunning = true;
   const worker = createRemoteCodexWorkerClient({
     workerId,
-    workerIdentity: bootstrapConfig.workerIdentity,
+    workerIdentity: generationWorkerIdentity,
     version: 'automation-dogfood-remote-outbound',
-    bootstrapToken: bootstrapConfig.workerBootstrapToken,
+    bootstrapToken: codexRuntimeDogfoodBootstrapTokenForTarget(bootstrapConfig.workerBootstrapToken, {
+      workerIdentity: generationWorkerIdentity,
+      allowedScope: generationAllowedScope,
+      allowedCapabilities: generationAllowedCapabilities,
+    }),
     bootstrapTokenVersion: bootstrapConfig.workerBootstrapTokenVersion,
     workerTempRoot,
-    allowedScopes: [{ project_id: bootstrapConfig.allowedScope.project_id }],
+    allowedScopes: [generationAllowedScope],
     capabilities: ['generation'],
     dockerImageDigests: [dockerImageDigest],
     networkPolicyDigests: [networkPolicyDigest],

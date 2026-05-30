@@ -646,6 +646,7 @@ export class SpecPlanService {
         return { applied: false, reason: 'stale_precondition_fingerprint' };
       }
 
+      const qaOwnerActorId = loaded.item.reviewer_actor_id ?? loaded.item.driver_actor_id ?? loaded.workItem.driver_actor_id;
       const spec = {
         ...(transitionSpecPlan(undefined, {
           type: 'create',
@@ -672,6 +673,8 @@ export class SpecPlanService {
         acceptance_criteria: input.generated.acceptance_criteria,
         risk_notes: input.generated.risks,
         test_strategy_summary: input.generated.test_strategy.join('\n'),
+        ...(qaOwnerActorId === undefined ? {} : { qa_owner_actor_id: qaOwnerActorId }),
+        testability_note: `QA/Test Owner must validate ${loaded.item.title} against acceptance criteria before execution planning.`,
         structured_document: {
           generated_by: 'codex_runtime_development_plan_item_spec_revision',
           runtime_job_id: input.runtime_job_id,

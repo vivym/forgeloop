@@ -37,6 +37,19 @@ const validPlanJson = JSON.stringify({
   rollback_notes: 'Revert package commits',
 });
 
+const validSpecJson = JSON.stringify({
+  schema_version: 'spec_draft.v1',
+  summary: 'Spec summary',
+  content: 'Spec body',
+  background: 'Spec background',
+  goals: ['Define behavior'],
+  scope_in: ['API behavior'],
+  scope_out: ['Release automation'],
+  acceptance_criteria: ['Spec accepted'],
+  risk_notes: ['Keep public-safe'],
+  test_strategy_summary: 'Run focused tests',
+});
+
 const boundaryInput = {
   ...planInput,
   promptVersion: 'boundary-round.app-server.v1',
@@ -52,12 +65,101 @@ const validBoundaryJson = JSON.stringify({
   schema_version: 'boundary_round_result.v1',
   session_id: 'boundary-session-1',
   round_id: 'round-1',
-  questions: [{ text: 'Confirm API scope?', required: true }],
-  proposed_decisions: [{ text: 'Keep execution out of scope.' }],
+  questions: [{ text: 'Confirm API scope?', required: true, rationale: 'This answer is needed before approving the boundary.' }],
+  proposed_decisions: [{ text: 'Keep execution out of scope.', rationale: 'This round only closes boundary.' }],
   needs_leader_input: true,
   public_summary: 'Generated boundary round.',
   artifacts: [],
 });
+
+const validBoundarySummaryJson = JSON.stringify({
+  schema_version: 'boundary_round_result.v1',
+  session_id: 'boundary-session-1',
+  round_id: 'round-1',
+  questions: [],
+  proposed_decisions: [
+    {
+      text: 'Proceed with a docs-only strict dogfood execution boundary.',
+      rationale: 'Leader input confirms centralized runtime distribution and no CLI fallback.',
+    },
+  ],
+  summary_proposal: {
+    summary_markdown:
+      'Validate the Superpowers product loop through centralized Codex runtime distribution, using Dockerized app-server workers and no host-local worker configuration.',
+    confirmed_scope: ['Boundary Brainstorming, Spec revision, Execution Plan revision, and Execution are in scope'],
+    confirmed_out_of_scope: ['Direct CLI fallback and host-local worker Codex configuration are out of scope'],
+    accepted_assumptions: ['The approved Development Plan Item revision remains current'],
+    open_risks: ['Generated product text must remain public-safe'],
+    validation_expectations: ['Strict dogfood produces a public-safe report and no-shared-filesystem execution evidence'],
+  },
+  needs_leader_input: false,
+  public_summary: 'Boundary Summary proposal generated for Leader approval.',
+  artifacts: [],
+});
+
+const validSpecRevisionJson = JSON.stringify({
+  schema_version: 'spec_revision.v1',
+  development_plan_item_id: 'item-1',
+  boundary_summary_revision_id: 'boundary-summary-revision-1',
+  summary: 'Generated Spec revision',
+  content_markdown: 'Implement the approved boundary.',
+  problem_context: 'The Development Plan Item needs a Spec revision.',
+  scope_in: ['Spec generation'],
+  scope_out: ['Execution'],
+  acceptance_criteria: ['Draft Spec revision is created'],
+  test_strategy: ['API writer tests'],
+  risks: ['Stale boundary'],
+  assumptions: ['Leader approved boundary summary'],
+  unresolved_questions: [],
+  public_summary: 'Generated a Spec revision.',
+});
+
+const validExecutionPlanRevisionJson = JSON.stringify({
+  schema_version: 'execution_plan_revision.v1',
+  development_plan_item_id: 'item-1',
+  based_on_spec_revision_id: 'spec-revision-1',
+  summary: 'Generated Execution Plan revision',
+  content_markdown: 'Implement the approved Spec.',
+  implementation_sequence: ['Update scoped implementation'],
+  validation_strategy: ['Run focused tests'],
+  allowed_paths: ['docs/superpowers/reports'],
+  forbidden_paths: ['apps'],
+  required_checks: [{ check_id: 'focused-tests', command: 'pnpm test', timeout_seconds: 120, blocks_review: true }],
+  rollback_notes: 'Revert scoped changes if validation fails.',
+  handoff_criteria: ['Required checks pass'],
+  public_summary: 'Generated an Execution Plan revision.',
+});
+
+const strictObjectSchemaIssues = (schema: unknown, path = '$'): string[] => {
+  if (schema === null || typeof schema !== 'object') {
+    return [];
+  }
+  if (Array.isArray(schema)) {
+    return schema.flatMap((entry, index) => strictObjectSchemaIssues(entry, `${path}[${index}]`));
+  }
+  const record = schema as Record<string, unknown>;
+  const issues: string[] = [];
+  if (record.type === 'object') {
+    if (record.additionalProperties !== false) {
+      issues.push(`${path}:additionalProperties`);
+    }
+    const properties = record.properties;
+    const required = record.required;
+    const propertyKeys =
+      properties !== null && typeof properties === 'object' && !Array.isArray(properties) ? Object.keys(properties).sort() : [];
+    const requiredKeys = Array.isArray(required) ? required.filter((entry): entry is string => typeof entry === 'string').sort() : [];
+    if (JSON.stringify(propertyKeys) !== JSON.stringify(requiredKeys)) {
+      issues.push(`${path}:required`);
+    }
+  }
+  if ('minLength' in record || 'minimum' in record) {
+    issues.push(`${path}:unsupported_constraint`);
+  }
+  return [
+    ...issues,
+    ...Object.entries(record).flatMap(([key, value]) => strictObjectSchemaIssues(value, `${path}.${key}`)),
+  ];
+};
 
 describe('createCodexGenerationRuntime', () => {
   it('uses app-server transport and action-scoped safety for Plan generation', async () => {
@@ -101,6 +203,16 @@ describe('createCodexGenerationRuntime', () => {
     expect(endpoints).toEqual(['unix:/tmp/codex-app-server.sock']);
     expect(requests.map((request) => request.method)).toEqual(['thread/start', 'turn/start']);
     expect(requests[0]?.params).toMatchObject({ approvalPolicy: 'never', sandbox: 'read-only' });
+    expect(requests[1]?.params.outputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: expect.arrayContaining(['schema_version', 'summary', 'content', 'dependency_order']),
+      properties: {
+        schema_version: { type: 'string', enum: ['plan_draft.v1'] },
+        dependency_order: { type: 'array', items: { type: 'string' } },
+      },
+    });
+    expect(JSON.stringify(requests[1]?.params.outputSchema)).not.toContain('"const"');
   });
 
   it('uses app-server transport for Boundary Brainstorming round generation', async () => {
@@ -144,9 +256,175 @@ describe('createCodexGenerationRuntime', () => {
     expect(promptText).toContain('"session_id"');
     expect(promptText).toContain('"round_id"');
     expect(promptText).toContain('"questions"');
+    expect(promptText).not.toContain('config/auth material');
+    expect(promptText).not.toContain('auth material');
+    expect(promptText).not.toContain('config material');
+    expect(promptText).not.toContain('secret values');
+    expect(promptText).not.toContain('logs');
     expect(promptText).toContain('"context": {');
     expect(promptText).toContain('"session_id": "boundary-session-1"');
     expect(promptText).toContain('"round_id": "round-1"');
+    expect(requests[1]?.params).not.toHaveProperty('outputSchema');
+  });
+
+  it('allows a Boundary Summary proposal only after the start round', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 8_192,
+      rawNotificationLimitBytes: 16_384,
+      transportFactory: (): CodexAppServerTransport => ({
+        async request(method, params) {
+          requests.push({ method, params });
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          }
+          return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+        },
+        notifications: async function* () {
+          yield { type: 'assistant_message_delta', delta: validBoundarySummaryJson };
+          yield { type: 'turn_completed', status: 'completed' };
+        },
+        async close() {},
+      }),
+    });
+
+    await runtime.generateBoundaryBrainstormingRound({
+      ...boundaryInput,
+      context: {
+        ...boundaryInput.context,
+        operation: 'continue',
+        leader_input: { summary: 'Continue after Leader answers.' },
+      },
+    });
+
+    const turnInput = requests[1]?.params.input;
+    const promptText = Array.isArray(turnInput) && typeof turnInput[0]?.text === 'string' ? turnInput[0].text : '';
+    expect(requests[1]?.params).not.toHaveProperty('outputSchema');
+    expect(promptText).toContain('Only include "summary_proposal" when the boundary is ready for Leader approval.');
+    expect(promptText).toContain('"needs_leader_input": false');
+    expect(promptText).toContain('"needs_leader_input": true');
+    expect(promptText).toContain('Do not include "summary_proposal" when asking follow-up questions.');
+    expect(promptText).toContain('"summary_proposal": {');
+    const outputSchema = requests[1]?.params.outputSchema as {
+      properties?: { summary_proposal?: unknown };
+    };
+    expect(outputSchema).toBeUndefined();
+  });
+
+  it('keeps Boundary Brainstorming continue rounds AI-led instead of forcing an app-server summary schema', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 8_192,
+      rawNotificationLimitBytes: 16_384,
+      transportFactory: (): CodexAppServerTransport => ({
+        async request(method, params) {
+          requests.push({ method, params });
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          }
+          return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+        },
+        notifications: async function* () {
+          yield {
+            type: 'assistant_message_delta',
+            delta: JSON.stringify({
+              schema_version: 'boundary_round_result.v1',
+              session_id: 'boundary-session-1',
+              round_id: 'round-2',
+              questions: [
+                {
+                  text: 'Which validation evidence should gate the execution boundary?',
+                  required: true,
+                  rationale: 'The Leader answer is needed before proposing a Boundary Summary.',
+                },
+              ],
+              proposed_decisions: [],
+              needs_leader_input: true,
+              public_summary: 'Boundary follow-up question generated.',
+              artifacts: [],
+            }),
+          };
+          yield { type: 'turn_completed', status: 'completed' };
+        },
+        async close() {},
+      }),
+    });
+
+    await runtime.generateBoundaryBrainstormingRound({
+      ...boundaryInput,
+      context: {
+        ...boundaryInput.context,
+        operation: 'continue',
+        leader_input: { summary: 'Continue after Leader answers.' },
+      },
+    });
+
+    const turnInput = requests[1]?.params.input;
+    const promptText = Array.isArray(turnInput) && typeof turnInput[0]?.text === 'string' ? turnInput[0].text : '';
+    expect(requests[1]?.params).not.toHaveProperty('outputSchema');
+    expect(promptText).toContain('"needs_leader_input": true');
+    expect(promptText).toContain('"questions": [');
+    expect(promptText).toContain('Ask another focused follow-up question');
+    expect(promptText).toContain('Only include "summary_proposal" when the boundary is ready for Leader approval.');
+    expect(promptText).toContain('"summary_proposal": {');
+  });
+
+  it('sends supported strict app-server schemas that fit the OpenAI structured output subset', async () => {
+    const capturedSchemas: Record<string, unknown>[] = [];
+    const runtimeFor = (assistantJson: string) =>
+      createCodexGenerationRuntime({
+        mode: 'app_server',
+        appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+        artifactRoot: '/tmp/forgeloop-artifacts',
+        timeoutMs: 250,
+        outputLimitBytes: 8_192,
+        rawNotificationLimitBytes: 16_384,
+        transportFactory: (): CodexAppServerTransport => ({
+          async request(method, params) {
+            if (method === 'thread/start') {
+              return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+            }
+            if (params.outputSchema !== undefined) {
+              capturedSchemas.push(params.outputSchema as Record<string, unknown>);
+            }
+            return { turnId: `turn-${capturedSchemas.length}`, effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          },
+          notifications: async function* () {
+            yield { type: 'assistant_message_delta', delta: assistantJson };
+            yield { type: 'turn_completed', status: 'completed' };
+          },
+          async close() {},
+        }),
+      });
+
+    await runtimeFor(validSpecJson).generateSpecDraft({ ...planInput, outputSchemaVersion: 'spec_draft.v1' });
+    await runtimeFor(validPlanJson).generatePlanDraft(planInput);
+    await runtimeFor(validBoundaryJson).generateBoundaryBrainstormingRound(boundaryInput);
+    await runtimeFor(validSpecRevisionJson).generateDevelopmentPlanItemSpecRevision({
+      ...planInput,
+      outputSchemaVersion: 'spec_revision.v1',
+    });
+    await runtimeFor(validExecutionPlanRevisionJson).generateDevelopmentPlanItemExecutionPlanRevision({
+      ...planInput,
+      outputSchemaVersion: 'execution_plan_revision.v1',
+    });
+
+    expect(capturedSchemas).toHaveLength(4);
+    for (const outputSchema of capturedSchemas) {
+      expect(outputSchema).not.toHaveProperty('name');
+      expect(outputSchema).not.toHaveProperty('schema');
+      expect(outputSchema).not.toHaveProperty('strict');
+      expect(JSON.stringify(outputSchema)).not.toContain('structured_document');
+      expect(strictObjectSchemaIssues(outputSchema)).toEqual([]);
+    }
   });
 
   it('keeps Boundary Brainstorming start contracts question-first even when Leader input says rebase', async () => {
@@ -189,6 +467,43 @@ describe('createCodexGenerationRuntime', () => {
     const promptText = Array.isArray(turnInput) && typeof turnInput[0]?.text === 'string' ? turnInput[0].text : '';
     expect(promptText).toContain('"needs_leader_input": true');
     expect(promptText).not.toContain('"summary_proposal"');
+    expect(promptText).not.toContain('Boundary Summary proposal generated for Leader approval.');
+  });
+
+  it('keeps generated Spec and Plan prompts aligned with strict app-server schemas', async () => {
+    const prompts: string[] = [];
+    const runtimeFor = (assistantJson: string) =>
+      createCodexGenerationRuntime({
+        mode: 'app_server',
+        appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+        artifactRoot: '/tmp/forgeloop-artifacts',
+        timeoutMs: 250,
+        outputLimitBytes: 4_096,
+        rawNotificationLimitBytes: 8_192,
+        transportFactory: (): CodexAppServerTransport => ({
+          async request(method, params) {
+            if (method === 'thread/start') {
+              return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+            }
+            const input = params.input;
+            if (Array.isArray(input) && typeof input[0]?.text === 'string') {
+              prompts.push(input[0].text);
+            }
+            return { turnId: `turn-${prompts.length}`, effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          },
+          notifications: async function* () {
+            yield { type: 'assistant_message_delta', delta: assistantJson };
+            yield { type: 'turn_completed', status: 'completed' };
+          },
+          async close() {},
+        }),
+      });
+
+    await runtimeFor(validSpecJson).generateSpecDraft({ ...planInput, outputSchemaVersion: 'spec_draft.v1' });
+    await runtimeFor(validPlanJson).generatePlanDraft(planInput);
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts.join('\n')).not.toContain('structured_document');
   });
 
   it('places exact product-generation JSON contract after request context', async () => {
@@ -212,20 +527,7 @@ describe('createCodexGenerationRuntime', () => {
           yield {
             type: 'assistant_message_delta',
             delta: JSON.stringify({
-              schema_version: 'spec_revision.v1',
-              development_plan_item_id: 'item-1',
-              boundary_summary_revision_id: 'boundary-summary-revision-1',
-              summary: 'Generated Spec revision',
-              content_markdown: 'Implement the approved boundary.',
-              problem_context: 'The Development Plan Item needs a Spec revision.',
-              scope_in: ['Spec generation'],
-              scope_out: ['Execution'],
-              acceptance_criteria: ['Draft Spec revision is created'],
-              test_strategy: ['API writer tests'],
-              risks: ['Stale boundary'],
-              assumptions: ['Leader approved boundary summary'],
-              unresolved_questions: [],
-              public_summary: 'Generated a Spec revision.',
+              ...JSON.parse(validSpecRevisionJson),
             }),
           };
           yield { type: 'turn_completed', status: 'completed' };
@@ -277,19 +579,7 @@ describe('createCodexGenerationRuntime', () => {
           yield {
             type: 'assistant_message_delta',
             delta: JSON.stringify({
-              schema_version: 'execution_plan_revision.v1',
-              development_plan_item_id: 'item-1',
-              based_on_spec_revision_id: 'spec-revision-1',
-              summary: 'Generated Execution Plan revision',
-              content_markdown: 'Implement the approved Spec.',
-              implementation_sequence: ['Update scoped implementation'],
-              validation_strategy: ['Run focused tests'],
-              allowed_paths: ['docs/superpowers/reports'],
-              forbidden_paths: ['apps'],
-              required_checks: [{ check_id: 'focused-tests', command: 'pnpm test', timeout_seconds: 120, blocks_review: true }],
-              rollback_notes: 'Revert scoped changes if validation fails.',
-              handoff_criteria: ['Required checks pass'],
-              public_summary: 'Generated an Execution Plan revision.',
+              ...JSON.parse(validExecutionPlanRevisionJson),
             }),
           };
           yield { type: 'turn_completed', status: 'completed' };
@@ -325,6 +615,56 @@ describe('createCodexGenerationRuntime', () => {
     const contractText = promptText.slice(promptText.indexOf('Output schema contract:'));
     const contractJson = contractText.slice(contractText.indexOf('{'));
     expect(() => validateGeneratedExecutionPlanRevision(extractSingleJsonObject(contractJson))).not.toThrow();
+  });
+
+  it('uses a workflow-safe default path policy for Execution Plan contracts when context omits one', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: (): CodexAppServerTransport => ({
+        async request(method, params) {
+          requests.push({ method, params });
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          }
+          return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+        },
+        notifications: async function* () {
+          yield {
+            type: 'assistant_message_delta',
+            delta: JSON.stringify({
+              ...JSON.parse(validExecutionPlanRevisionJson),
+              allowed_paths: ['docs/**'],
+              forbidden_paths: ['.git/**', 'node_modules/**'],
+            }),
+          };
+          yield { type: 'turn_completed', status: 'completed' };
+        },
+        async close() {},
+      }),
+    });
+
+    await runtime.generateDevelopmentPlanItemExecutionPlanRevision({
+      ...planInput,
+      promptVersion: 'development-plan-item-execution-plan-revision.app-server.v1',
+      outputSchemaVersion: 'execution_plan_revision.v1',
+      context: {
+        development_plan_item: { id: 'item-1' },
+        approved_spec_revision: { id: 'spec-revision-1' },
+      },
+    });
+
+    const turnInput = requests[1]?.params.input;
+    const promptText = Array.isArray(turnInput) && typeof turnInput[0]?.text === 'string' ? turnInput[0].text : '';
+    expect(promptText).toContain('"allowed_paths": [');
+    expect(promptText).toContain('"docs/**"');
+    expect(promptText).toContain('".git/**"');
+    expect(promptText).not.toContain('"**"');
   });
 
   it('maps app-server schema-invalid Plan output to generated_output_schema_invalid', async () => {
@@ -384,6 +724,45 @@ describe('createCodexGenerationRuntime', () => {
       code: 'generated_output_ambiguous',
       retryable: true,
       publicResultJson: { status: 422, code: 'generated_output_ambiguous' },
+    });
+  });
+
+  it('preserves public-safe Codex app-server error categories', async () => {
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: () => ({
+        async request(method) {
+          if (method === 'thread/start') {
+            return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+          }
+          throw {
+            code: -32602,
+            message: 'request rejected',
+            data: {
+              error: {
+                codexErrorInfo: 'badRequest',
+              },
+            },
+          };
+        },
+        notifications: async function* () {},
+        async close() {},
+      }),
+    });
+
+    await expect(runtime.generatePlanDraft(planInput)).rejects.toMatchObject({
+      code: 'codex_generation_turn_failed',
+      retryable: true,
+      publicResultJson: {
+        status: 422,
+        code: 'codex_generation_turn_failed',
+        failure_subcode: 'app_server_bad_request',
+      },
     });
   });
 

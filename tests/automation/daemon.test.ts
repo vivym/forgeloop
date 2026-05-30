@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { codexCanonicalDigest } from '../../packages/domain/src/index';
-import { createCodexGenerationRuntime, createFakePackageDraftSet } from '../../packages/codex-runtime/src/index';
+import {
+  createCodexGenerationRuntime,
+  createFakeBoundaryRoundRuntimeResult,
+  createFakeGeneratedExecutionPlanRevision,
+  createFakeGeneratedSpecRevision,
+  createFakePackageDraftSet,
+  createFakePlanDraft,
+  createFakeSpecDraft,
+} from '../../packages/codex-runtime/src/index';
 import { generationPlanningForDaemon, loadAutomationDaemonConfig } from '../../apps/automation-daemon/src/config';
 import { AutomationDaemon, type AutomationDaemonClient } from '../../apps/automation-daemon/src/automation-daemon';
 import {
@@ -275,6 +283,142 @@ const generatedRemotePackageDrafts = () =>
       repos: [{ repo_id: 'repo-1' }],
     }).generated.packages.map((pkg) => ({ ...pkg, allowed_paths: [], forbidden_paths: [] })),
   });
+
+type RemoteGenerationTaskFixture = {
+  method:
+    | 'generateSpecDraft'
+    | 'generatePlanDraft'
+    | 'generatePackageDrafts'
+    | 'generateBoundaryBrainstormingRound'
+    | 'generateDevelopmentPlanItemSpecRevision'
+    | 'generateDevelopmentPlanItemExecutionPlanRevision';
+  taskKind:
+    | 'spec_draft'
+    | 'plan_draft'
+    | 'package_drafts'
+    | 'boundary_brainstorming_round'
+    | 'development_plan_item_spec_revision'
+    | 'development_plan_item_execution_plan_revision';
+  promptVersion: string;
+  outputSchemaVersion: string;
+  context: Record<string, unknown>;
+  generatedPayload: Record<string, unknown>;
+};
+
+const remoteGenerationTaskFixtures = (): RemoteGenerationTaskFixture[] => [
+  {
+    method: 'generateSpecDraft',
+    taskKind: 'spec_draft',
+    promptVersion: 'spec-draft.remote.v1',
+    outputSchemaVersion: 'spec_draft.v1',
+    context: {
+      work_item: {
+        id: 'work-item-1',
+        title: 'Remote Spec draft',
+        goal: 'Generate a Spec draft through remote runtime',
+        success_criteria: ['Spec draft payload exists'],
+      },
+    },
+    generatedPayload: createFakeSpecDraft({
+      work_item: {
+        id: 'work-item-1',
+        title: 'Remote Spec draft',
+        goal: 'Generate a Spec draft through remote runtime',
+        success_criteria: ['Spec draft payload exists'],
+      },
+    }).generated,
+  },
+  {
+    method: 'generatePlanDraft',
+    taskKind: 'plan_draft',
+    promptVersion: 'plan-draft.remote.v1',
+    outputSchemaVersion: 'plan_draft.v1',
+    context: {
+      work_item: {
+        id: 'work-item-1',
+        title: 'Remote Plan draft',
+        goal: 'Generate a Plan draft through remote runtime',
+        success_criteria: ['Plan draft payload exists'],
+      },
+      spec_revision: { id: 'spec-revision-1', risk_notes: ['Keep remote runtime gated'] },
+    },
+    generatedPayload: {
+      ...createFakePlanDraft({
+        work_item: {
+          id: 'work-item-1',
+          title: 'Remote Plan draft',
+          goal: 'Generate a Plan draft through remote runtime',
+          success_criteria: ['Plan draft payload exists'],
+        },
+        spec_revision: { id: 'spec-revision-1', risk_notes: ['Keep remote runtime gated'] },
+      }).generated,
+      dependency_order: ['design-slice', 'validation-slice'],
+      test_matrix: ['Focused runtime validation', 'Remote worker validation'],
+    },
+  },
+  {
+    method: 'generatePackageDrafts',
+    taskKind: 'package_drafts',
+    promptVersion: 'package-drafts.remote.v1',
+    outputSchemaVersion: 'package_drafts.v1',
+    context: { context_version: 'generation_context.package.v1' },
+    generatedPayload: generatedRemotePackageDrafts(),
+  },
+  {
+    method: 'generateBoundaryBrainstormingRound',
+    taskKind: 'boundary_brainstorming_round',
+    promptVersion: 'boundary-round.remote.v1',
+    outputSchemaVersion: 'boundary_round_result.v1',
+    context: { session_id: 'boundary-session-1', round_id: 'boundary-round-1' },
+    generatedPayload: createFakeBoundaryRoundRuntimeResult({
+      session_id: 'boundary-session-1',
+      round_id: 'boundary-round-1',
+    }).generated,
+  },
+  {
+    method: 'generateDevelopmentPlanItemSpecRevision',
+    taskKind: 'development_plan_item_spec_revision',
+    promptVersion: 'development-plan-item-spec-revision.remote.v1',
+    outputSchemaVersion: 'spec_revision.v1',
+    context: {
+      development_plan_item_id: 'development-plan-item-1',
+      approved_boundary_summary_revision_id: 'boundary-summary-revision-1',
+    },
+    generatedPayload: createFakeGeneratedSpecRevision({
+      development_plan_item_id: 'development-plan-item-1',
+      approved_boundary_summary_revision_id: 'boundary-summary-revision-1',
+    }).generated,
+  },
+  {
+    method: 'generateDevelopmentPlanItemExecutionPlanRevision',
+    taskKind: 'development_plan_item_execution_plan_revision',
+    promptVersion: 'development-plan-item-execution-plan-revision.remote.v1',
+    outputSchemaVersion: 'execution_plan_revision.v1',
+    context: {
+      development_plan_item_id: 'development-plan-item-1',
+      approved_spec_revision_id: 'spec-revision-1',
+      allowed_paths: ['docs/**'],
+      forbidden_paths: ['.git/**', 'node_modules/**'],
+    },
+    generatedPayload: {
+      ...createFakeGeneratedExecutionPlanRevision({
+        development_plan_item_id: 'development-plan-item-1',
+        approved_spec_revision_id: 'spec-revision-1',
+        allowed_paths: ['docs/**'],
+        forbidden_paths: ['.git/**', 'node_modules/**'],
+      }).generated,
+      validation_strategy: ['Run focused runtime validation', 'Run remote worker validation'],
+      required_checks: [
+        {
+          check_id: 'focused-runtime-validation',
+          command: 'pnpm test',
+          timeout_seconds: 120,
+          blocks_review: true,
+        },
+      ],
+    },
+  },
+];
 
 describe('automation daemon loop', () => {
   it('loads required config and path-list roots from the environment', () => {
@@ -580,6 +724,125 @@ describe('automation daemon loop', () => {
     });
     expect(client.calls.map((call) => call.method)).toContain('ensurePackageDrafts');
     expect(client.calls.map((call) => call.method)).toContain('completeAction');
+  });
+
+  it('routes every generation runtime method through remote runtime jobs with task-specific validation', async () => {
+    for (const fixture of remoteGenerationTaskFixtures()) {
+      const remoteCalls: Array<{ method: string; args: unknown[] }> = [];
+      const runtime = createRemoteCodexGenerationRuntime({
+        runtimeProfileId: 'profile-1',
+        credentialBindingId: 'credential-binding-1',
+        waitTimeoutMs: 60_000,
+        pollIntervalMs: 1_000,
+        actionClaimRenewalMs: 30_000,
+        now: () => '2026-05-23T00:00:00.000Z',
+        sleep: async () => undefined,
+        controlPlaneClient: {
+          getStatus: async (input) => {
+            remoteCalls.push({ method: 'getStatus', args: [input] });
+            return {
+              runtime_profile_revision_id: 'profile-rev-1',
+              runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+              credential_binding_id: 'credential-binding-1',
+              credential_binding_version_id: 'credential-version-1',
+              credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+              docker_image_digest: `sha256:${'3'.repeat(64)}`,
+              network_policy_digest: `sha256:${'4'.repeat(64)}`,
+            };
+          },
+          createRuntimeJob: async (input) => {
+            remoteCalls.push({ method: 'createRuntimeJob', args: [input] });
+            return {
+              runtime_job: { id: String(input.runtime_job_id), status: 'queued' },
+              replayed: false,
+            };
+          },
+          renewAutomationActionRunClaim: async (actionRunId, input) => {
+            remoteCalls.push({ method: 'renewAutomationActionRunClaim', args: [actionRunId, input] });
+            return { action_run: { id: actionRunId, status: 'running' } };
+          },
+          getRuntimeJob: async (jobId) => {
+            remoteCalls.push({ method: 'getRuntimeJob', args: [jobId] });
+            return {
+              runtime_job: {
+                id: jobId,
+                status: 'terminal',
+                terminal_status: 'succeeded',
+                terminal_reason_code: 'codex_runtime_job_succeeded',
+                terminal_result_json: {
+                  task_kind: fixture.taskKind,
+                  prompt_version: fixture.promptVersion,
+                  output_schema_version: fixture.outputSchemaVersion,
+                  generated_payload: fixture.generatedPayload,
+                  generated_payload_digest: codexCanonicalDigest(fixture.generatedPayload),
+                  generation_artifacts: [],
+                  public_summary: `Remote runtime generated ${fixture.taskKind}.`,
+                },
+              },
+            };
+          },
+          cancelRuntimeJob: async (jobId, input) => {
+            remoteCalls.push({ method: 'cancelRuntimeJob', args: [jobId, input] });
+            return {};
+          },
+        },
+      });
+      const input = {
+        actionRunId: `${fixture.taskKind}-action-run`,
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: fixture.context,
+        promptVersion: fixture.promptVersion,
+        outputSchemaVersion: fixture.outputSchemaVersion,
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run' as const,
+          actionRunId: `${fixture.taskKind}-action-run`,
+          actionType: 'ensure_package_drafts' as const,
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: `${fixture.taskKind}-idempotency`,
+        },
+      };
+
+      const result =
+        fixture.method === 'generateSpecDraft'
+          ? await runtime.generateSpecDraft(input)
+          : fixture.method === 'generatePlanDraft'
+            ? await runtime.generatePlanDraft(input)
+            : fixture.method === 'generatePackageDrafts'
+              ? await runtime.generatePackageDrafts(input)
+              : fixture.method === 'generateBoundaryBrainstormingRound'
+                ? await runtime.generateBoundaryBrainstormingRound(input)
+                : fixture.method === 'generateDevelopmentPlanItemSpecRevision'
+                  ? await runtime.generateDevelopmentPlanItemSpecRevision(input)
+                  : await runtime.generateDevelopmentPlanItemExecutionPlanRevision(input);
+
+      expect(result).toMatchObject({
+        taskKind: fixture.taskKind,
+        promptVersion: fixture.promptVersion,
+        outputSchemaVersion: fixture.outputSchemaVersion,
+        generated: fixture.generatedPayload,
+      });
+      expect(remoteCalls.map((call) => call.method)).toEqual([
+        'getStatus',
+        'createRuntimeJob',
+        'renewAutomationActionRunClaim',
+        'getRuntimeJob',
+      ]);
+      expect(remoteCalls.find((call) => call.method === 'createRuntimeJob')?.args[0]).toMatchObject({
+        input_json: {
+          task_kind: fixture.taskKind,
+          prompt_version: fixture.promptVersion,
+          output_schema_version: fixture.outputSchemaVersion,
+        },
+        workspace_acquisition_json: {
+          signed_context_json: fixture.context,
+        },
+      });
+    }
   });
 
   it('cancels the remote runtime job when action claim renewal is lost while waiting', async () => {

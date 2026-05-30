@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url';
 
 import { signAutomationRequest } from '../packages/automation/src/index';
 import { codexCanonicalDigest } from '../packages/domain/src/index';
+import {
+  codexRuntimeDogfoodBootstrapTokenForTarget,
+  codexRuntimeDogfoodWorkerIdentityForTarget,
+} from './codex-runtime-dogfood-bootstrap';
 
 export const codexRuntimeSuperpowersDogfoodCommand =
   'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-superpowers-dogfood.ts';
@@ -161,6 +165,11 @@ export interface CodexRuntimeSuperpowersDogfoodBlockerReport {
   runtime_job_terminal_status?: string;
   runtime_job_reason_code?: string;
   runtime_job_failure_subcode?: string;
+  runtime_job_failure_stage?: string;
+  runtime_job_runtime_target_kind?: string;
+  runtime_job_app_server_started?: boolean;
+  runtime_job_runtime_evidence_digest?: Sha256Digest;
+  runtime_job_failure_public_summary?: string;
   action_run_id?: string;
   action_run_status?: string;
   run_session_id?: string;
@@ -211,6 +220,10 @@ const unsafeReportFragments = [
   hostCodexHomeFragment,
   '.codex',
   'OPENAI_API_KEY',
+  'auth_json',
+  'auth.json',
+  'config.toml',
+  'experimental_bearer_token',
   'Bearer ',
   'http://',
   'https://',
@@ -232,6 +245,9 @@ const assertPublicSafeReport = (markdown: string): void => {
   if (unsafeFragment !== undefined) {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${unsafeFragment}`);
   }
+  if (/\bsk-[A-Za-z0-9_.-]+\b/.test(markdown)) {
+    throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:token');
+  }
 };
 
 function assertSha256Digest(value: string, label: string): asserts value is Sha256Digest {
@@ -250,8 +266,25 @@ function assertNonEmptySha256Digests(values: readonly string[], label: string): 
 }
 
 function assertPublicSafeId(value: string, label: string): void {
-  if (!publicIdPattern.test(value) || value.includes('..')) {
+  if (
+    !publicIdPattern.test(value) ||
+    value.includes('..') ||
+    /\bsk-[A-Za-z0-9_.-]+\b/.test(value) ||
+    /(?:api[_-]?key|token|secret|auth(?:orization)?|password|credential|experimental_bearer_token|auth_json|auth\.json|config\.toml|raw_config|raw_auth)/i.test(value)
+  ) {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
+  }
+}
+
+function assertPublicSafeMissingEnv(values: readonly string[]): void {
+  if (
+    values.some(
+      (value) =>
+        !/^FORGELOOP_[A-Z0-9_]+(?:=1)?$/.test(value) ||
+        /(?:api[_-]?key|token|secret|auth|credential|config|password)/i.test(value),
+    )
+  ) {
+    throw new Error('codex_runtime_superpowers_dogfood_report_unsafe:missing_env');
   }
 }
 
@@ -263,6 +296,19 @@ function assertPublicSafeChangedFile(value: string): void {
 
 function assertPublicSafeCleanupStatus(value: string, label: string): asserts value is CodexRuntimeDogfoodCleanupStatus {
   if (value !== 'completed' && value !== 'blocked') {
+    throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
+  }
+}
+
+function assertPublicSafeSummary(value: string, label: string): void {
+  if (
+    value.length === 0 ||
+    value.length > 240 ||
+    /\bsk-[A-Za-z0-9_.-]+\b/.test(value) ||
+    /(?:api[_-]?key|token|secret|auth(?:orization)?|password|credential|experimental_bearer_token|auth_json|auth\.json|config\.toml|raw_config|raw_auth|\/Users\/|\/tmp\/|localhost|127\.0\.0\.1|https?:\/\/|docker-exec:)/i.test(
+      value,
+    )
+  ) {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
   }
 }
@@ -365,10 +411,17 @@ export const sanitizeCodexRemoteWorkerDogfoodEnv = (
     delete sanitized[key];
   }
   const baseWorkerIdentity = optionalEnv(env, 'FORGELOOP_WORKER_IDENTITY');
-  if (baseWorkerIdentity !== undefined) {
-    const targetSuffix = targetKind === 'generation' ? 'generation' : 'run-execution';
-    sanitized.FORGELOOP_WORKER_IDENTITY = `${baseWorkerIdentity}-${targetSuffix}`;
-    sanitized.FORGELOOP_CODEX_WORKER_ID = `${baseWorkerIdentity}-${targetSuffix}`;
+  const targetSpecificWorkerIdentity =
+    targetKind === 'generation'
+      ? optionalEnv(env, 'FORGELOOP_CODEX_GENERATION_WORKER_IDENTITY')
+      : optionalEnv(env, 'FORGELOOP_CODEX_RUN_EXECUTION_WORKER_IDENTITY');
+  if (targetSpecificWorkerIdentity !== undefined) {
+    sanitized.FORGELOOP_WORKER_IDENTITY = targetSpecificWorkerIdentity;
+    sanitized.FORGELOOP_CODEX_WORKER_ID = targetSpecificWorkerIdentity;
+  } else if (baseWorkerIdentity !== undefined) {
+    const workerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget(baseWorkerIdentity, targetKind);
+    sanitized.FORGELOOP_WORKER_IDENTITY = workerIdentity;
+    sanitized.FORGELOOP_CODEX_WORKER_ID = workerIdentity;
   }
   const projectId = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_PROJECT_ID') ?? optionalEnv(env, 'FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID');
   const repoId = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_ID') ?? optionalEnv(env, 'FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID');
@@ -381,10 +434,52 @@ export const sanitizeCodexRemoteWorkerDogfoodEnv = (
   if (targetKind === 'generation' && projectId !== undefined) {
     sanitized.FORGELOOP_CODEX_WORKER_CAPABILITIES = 'generation';
     sanitized.FORGELOOP_CODEX_WORKER_SCOPES_JSON = JSON.stringify([{ project_id: projectId }]);
+    if (
+      sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN !== undefined &&
+      sanitized.FORGELOOP_WORKER_IDENTITY !== undefined &&
+      sanitized.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST !== undefined &&
+      sanitized.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST !== undefined &&
+      sanitized.FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS !== undefined
+    ) {
+      sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN = codexRuntimeDogfoodBootstrapTokenForTarget(
+        sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN,
+        {
+          workerIdentity: sanitized.FORGELOOP_WORKER_IDENTITY,
+          allowedScope: { project_id: projectId },
+          allowedCapabilities: {
+            target_kinds: ['generation'],
+            docker_image_digests: [sanitized.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST],
+            network_policy_digests: [sanitized.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST],
+            network_provider_config_digests: [sanitized.FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS],
+          },
+        },
+      );
+    }
   }
   if (targetKind === 'run_execution' && projectId !== undefined && repoId !== undefined) {
     sanitized.FORGELOOP_CODEX_WORKER_CAPABILITIES = 'run_execution';
     sanitized.FORGELOOP_CODEX_WORKER_SCOPES_JSON = JSON.stringify([{ project_id: projectId, repo_id: repoId }]);
+    if (
+      sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN !== undefined &&
+      sanitized.FORGELOOP_WORKER_IDENTITY !== undefined &&
+      sanitized.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST !== undefined &&
+      sanitized.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST !== undefined &&
+      sanitized.FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS !== undefined
+    ) {
+      sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN = codexRuntimeDogfoodBootstrapTokenForTarget(
+        sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN,
+        {
+          workerIdentity: sanitized.FORGELOOP_WORKER_IDENTITY,
+          allowedScope: { project_id: projectId, repo_id: repoId },
+          allowedCapabilities: {
+            target_kinds: ['run_execution'],
+            docker_image_digests: [sanitized.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST],
+            network_policy_digests: [sanitized.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST],
+            network_provider_config_digests: [sanitized.FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS],
+          },
+        },
+      );
+    }
   }
   return sanitized;
 };
@@ -657,6 +752,8 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
     runtime_job_terminal_status: report.runtime_job_terminal_status,
     runtime_job_reason_code: report.runtime_job_reason_code,
     runtime_job_failure_subcode: report.runtime_job_failure_subcode,
+    runtime_job_failure_stage: report.runtime_job_failure_stage,
+    runtime_job_runtime_target_kind: report.runtime_job_runtime_target_kind,
     action_run_id: report.action_run_id,
     action_run_status: report.action_run_status,
     run_session_id: report.run_session_id,
@@ -669,6 +766,15 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
   }
   if (report.cleanup_status !== undefined) {
     assertPublicSafeCleanupStatus(report.cleanup_status, 'cleanup_status');
+  }
+  if (report.runtime_job_runtime_evidence_digest !== undefined) {
+    assertSha256Digest(report.runtime_job_runtime_evidence_digest, 'runtime_job_runtime_evidence_digest');
+  }
+  if (report.runtime_job_failure_public_summary !== undefined) {
+    assertPublicSafeSummary(report.runtime_job_failure_public_summary, 'runtime_job_failure_public_summary');
+  }
+  if (report.missing_env !== undefined) {
+    assertPublicSafeMissingEnv(report.missing_env);
   }
   if (report.dogfood_worktree_base !== undefined) {
     if (report.dogfood_worktree_base.mode !== 'isolated_main_worktree') {
@@ -686,7 +792,7 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
     `- Strict blocker: ${report.blocker_code}`,
     ...(report.missing_env === undefined || report.missing_env.length === 0
       ? []
-      : [`- Missing configuration: ${report.missing_env.join(', ')}`]),
+      : [`- Missing configuration count: ${report.missing_env.length}`]),
     ...(report.product_api_status === undefined ? [] : [`- Product API status: ${report.product_api_status}`]),
     ...(report.product_api_reason === undefined ? [] : [`- Product API reason: ${report.product_api_reason}`]),
     ...(report.runtime_job_id === undefined ? [] : [`- Runtime job: ${report.runtime_job_id}`]),
@@ -697,6 +803,21 @@ export const renderCodexRuntimeSuperpowersDogfoodBlockerReport = (
     ...(report.runtime_job_failure_subcode === undefined
       ? []
       : [`- Runtime job failure subcode: ${report.runtime_job_failure_subcode}`]),
+    ...(report.runtime_job_failure_stage === undefined
+      ? []
+      : [`- Runtime job failure stage: ${report.runtime_job_failure_stage}`]),
+    ...(report.runtime_job_runtime_target_kind === undefined
+      ? []
+      : [`- Runtime job target kind: ${report.runtime_job_runtime_target_kind}`]),
+    ...(report.runtime_job_app_server_started === undefined
+      ? []
+      : [`- Runtime job app-server started: ${String(report.runtime_job_app_server_started)}`]),
+    ...(report.runtime_job_runtime_evidence_digest === undefined
+      ? []
+      : [`- Runtime job evidence digest: ${report.runtime_job_runtime_evidence_digest}`]),
+    ...(report.runtime_job_failure_public_summary === undefined
+      ? []
+      : [`- Runtime job failure summary: ${report.runtime_job_failure_public_summary}`]),
     ...(report.action_run_id === undefined ? [] : [`- Automation action run: ${report.action_run_id}`]),
     ...(report.action_run_status === undefined ? [] : [`- Automation action run status: ${report.action_run_status}`]),
     ...(report.run_session_id === undefined ? [] : [`- Run session: ${report.run_session_id}`]),
@@ -1036,6 +1157,23 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl };
   const invokeRemoteWorkerOnce = deps.runRemoteWorkerOnce ?? ((targetKind) => runRemoteWorkerOnce(env, targetKind));
   const invokeBootstrapImport = deps.runBootstrapImport ?? runBootstrapImport;
+  const syncWorkerRuntimeDigestsFromBootstrap = (summary: Record<string, unknown>): void => {
+    const dockerImageDigest = typeof summary.docker_image_digest === 'string' ? summary.docker_image_digest : undefined;
+    if (dockerImageDigest !== undefined) {
+      env.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST = dockerImageDigest;
+      env.FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS = dockerImageDigest;
+    }
+    const networkPolicyDigest = typeof summary.network_policy_digest === 'string' ? summary.network_policy_digest : undefined;
+    if (networkPolicyDigest !== undefined) {
+      env.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST = networkPolicyDigest;
+      env.FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS = networkPolicyDigest;
+    }
+    const networkProviderConfigDigest =
+      typeof summary.network_provider_config_digest === 'string' ? summary.network_provider_config_digest : undefined;
+    if (networkProviderConfigDigest !== undefined) {
+      env.FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS = networkProviderConfigDigest;
+    }
+  };
 
   const requireState = (value: string | undefined, code: string): string => {
     if (value === undefined) {
@@ -1199,6 +1337,32 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     const subcode = artifacts.find((artifact) => artifact.kind === 'startup_failure_evidence')?.metadata_json?.failure_subcode;
     return subcode === undefined || !publicIdPattern.test(subcode) ? undefined : subcode;
   };
+  const runtimeJobFailureDiagnostics = (
+    artifacts: readonly RuntimeJobArtifactProjection[],
+  ): Partial<CodexRuntimeSuperpowersDogfoodBlockerReport> => {
+    const metadata = artifacts.find((artifact) => artifact.kind === 'startup_failure_evidence')?.metadata_json;
+    if (metadata === undefined) {
+      return {};
+    }
+    const failureStage = metadata.failure_stage;
+    const runtimeTargetKind = metadata.runtime_target_kind;
+    const appServerStarted = metadata.app_server_started;
+    const runtimeEvidenceDigest = metadata.runtime_evidence_digest;
+    const publicSummary = metadata.public_summary;
+    return {
+      ...(typeof failureStage === 'string' && publicIdPattern.test(failureStage)
+        ? { runtime_job_failure_stage: failureStage }
+        : {}),
+      ...(typeof runtimeTargetKind === 'string' && publicIdPattern.test(runtimeTargetKind)
+        ? { runtime_job_runtime_target_kind: runtimeTargetKind }
+        : {}),
+      ...(typeof appServerStarted === 'boolean' ? { runtime_job_app_server_started: appServerStarted } : {}),
+      ...(typeof runtimeEvidenceDigest === 'string' && /^sha256:[a-f0-9]{64}$/.test(runtimeEvidenceDigest)
+        ? { runtime_job_runtime_evidence_digest: runtimeEvidenceDigest as Sha256Digest }
+        : {}),
+      ...(typeof publicSummary === 'string' ? { runtime_job_failure_public_summary: publicSummary } : {}),
+    };
+  };
   const publicSchemaVersion = (value: unknown): string | undefined =>
     typeof value === 'string' && publicIdPattern.test(value) ? value : undefined;
   const runtimeJobOutputSchemaVersions = async (runtimeJobId: string): Promise<string[]> => {
@@ -1261,7 +1425,8 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
     if (runtimeJobId === undefined) {
       return { terminalSucceeded: true };
     }
-    const runtimeJob = await fetchRuntimeJob(runtimeJobId);
+    const diagnostic = await fetchRuntimeJobWithArtifacts(runtimeJobId);
+    const runtimeJob = diagnostic.runtime_job;
     if (runtimeJob.status !== 'terminal') {
       return { terminalSucceeded: false };
     }
@@ -1274,6 +1439,11 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       runtime_job_id: runtimeJob.id,
       ...(runtimeJob.terminal_status === undefined ? {} : { runtime_job_terminal_status: runtimeJob.terminal_status }),
       ...(runtimeJob.terminal_reason_code === undefined ? {} : { runtime_job_reason_code: runtimeJob.terminal_reason_code }),
+      ...(() => {
+        const failureSubcode = runtimeJobFailureSubcode(diagnostic.artifacts);
+        return failureSubcode === undefined ? {} : { runtime_job_failure_subcode: failureSubcode };
+      })(),
+      ...runtimeJobFailureDiagnostics(diagnostic.artifacts),
     });
   };
   const runtimeJobIdForRunExecution = async (executionPackageId: string, runSessionId: string): Promise<string | undefined> => {
@@ -1373,6 +1543,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
             const failureSubcode = runtimeJobFailureSubcode(runtimeJobDiagnostic.artifacts);
             return failureSubcode === undefined ? {} : { runtime_job_failure_subcode: failureSubcode };
           })()),
+      ...(runtimeJobDiagnostic === undefined ? {} : runtimeJobFailureDiagnostics(runtimeJobDiagnostic.artifacts)),
       ...(runSession.failure_reason === undefined || !publicIdPattern.test(runSession.failure_reason)
         ? {}
         : { run_session_failure_reason: runSession.failure_reason }),
@@ -1423,7 +1594,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       await answerBoundaryQuestionById(
         session.id,
         question.id,
-        'Preserve a docs-only dogfood report scope, centralized Codex runtime config/auth distribution, and no shared filesystem worker execution.',
+        'Preserve a docs-only dogfood report scope, centralized Codex settings and credential distribution, and no shared filesystem worker execution. Keep the Boundary Summary in product terms and omit raw local filenames, runtime addresses, and private credential contents.',
       );
     }
     return questions.length;
@@ -1461,7 +1632,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
         body: {
           actor_id: config.leaderActorId,
           feedback_markdown:
-            'Revise the Boundary Summary to explicitly cover Codex-led follow-up evidence, centralized config/auth distribution, no-shared-filesystem execution, and docs-only mutation constraints.',
+            'Revise the Boundary Summary to explicitly cover Codex-led follow-up evidence, centralized Codex settings and credential distribution, no-shared-filesystem execution, and docs-only mutation constraints. Keep the revision public-safe: describe the product boundary without raw local filenames, runtime addresses, or private credential contents.',
         },
       },
       fetchDeps,
@@ -1574,24 +1745,33 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       await sleep(config.remoteRuntimeJobPollIntervalMs ?? 1_000);
     }
   };
+  const refreshRemoteWorkerForScheduling = (targetKind: 'generation' | 'run_execution'): Promise<void> =>
+    invokeRemoteWorkerOnceWithinDeadline(targetKind, Date.now() + (config.remoteRuntimeJobWaitTimeoutMs ?? 600_000));
 
   return {
     dogfoodWorktreeBase() {
       return config.dogfood_worktree_base;
     },
-		async importCodexRuntime() {
-			if (!config.skipBootstrap) {
-				const summary = await invokeBootstrapImport({
-					FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: config.projectId,
-					FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: config.projectId,
-					FORGELOOP_CODEX_DOGFOOD_REPO_ID: config.repoId,
-					FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: config.repoId,
-					FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: config.sourceObjectId,
-				});
-        env.FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID = String(summary.generation_runtime_profile_id);
+			async importCodexRuntime() {
+				if (!config.skipBootstrap) {
+					const summary = await invokeBootstrapImport({
+						FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: config.projectId,
+						FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: config.projectId,
+						FORGELOOP_CODEX_DOGFOOD_REPO_ID: config.repoId,
+						FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: config.repoId,
+						FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: config.sourceObjectId,
+					});
+	        if (typeof summary.generation_worker_identity === 'string' && summary.generation_worker_identity.length > 0) {
+	          env.FORGELOOP_CODEX_GENERATION_WORKER_IDENTITY = summary.generation_worker_identity;
+	        }
+	        if (typeof summary.run_execution_worker_identity === 'string' && summary.run_execution_worker_identity.length > 0) {
+	          env.FORGELOOP_CODEX_RUN_EXECUTION_WORKER_IDENTITY = summary.run_execution_worker_identity;
+	        }
+	        env.FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID = String(summary.generation_runtime_profile_id);
         env.FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID = String(summary.generation_credential_binding_id);
         env.FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID = String(summary.run_execution_runtime_profile_id);
         env.FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID = String(summary.run_execution_credential_binding_id);
+        syncWorkerRuntimeDigestsFromBootstrap(summary);
         return {
           runtime_profile_revision_digests: [
             digestFromPublicId(String(summary.generation_runtime_profile_revision_id)),
@@ -1713,6 +1893,7 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
       const appServerEvidenceDigests: Sha256Digest[] = [];
       const cleanupStatuses: CodexRuntimeDogfoodCleanupStatus[] = [];
       const maxAiTurns = config.boundaryMaxAiTurns ?? 8;
+      await refreshRemoteWorkerForScheduling('generation');
       const session =
         mode === 'initial'
           ? await requestJson<{ id: string }>(config, `/development-plans/${planId}/items/${itemId}/boundary-brainstorming`, {

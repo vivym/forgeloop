@@ -1404,6 +1404,47 @@ describe('codex runtime repository behavior', () => {
     });
   });
 
+  it('rejects duplicate active bootstrap token hash and version across ids', async () => {
+    const repository = createRepository();
+    const input = {
+      id: 'bootstrap-token-generation',
+      worker_identity: 'local-worker-generation',
+      bootstrap_token_hash: tokenHash('bootstrap-token-shared-raw'),
+      bootstrap_token_version: 1,
+      status: 'active' as const,
+      allowed_scopes_json: [{ project_id: 'project-1' }],
+      allowed_capabilities_json: {
+        target_kinds: ['generation'],
+        docker_image_digests: [`sha256:${'a'.repeat(64)}`],
+        network_policy_digests: [codexCanonicalDigest(profileRevision().revision.network_policy)],
+        network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
+      },
+      created_by_actor_id: 'actor-admin',
+      created_at: now,
+      expires_at: expiresAt,
+    };
+
+    await expect(repository.createCodexWorkerBootstrapToken(input)).resolves.toMatchObject({
+      id: input.id,
+      token_hash: input.bootstrap_token_hash,
+    });
+    await expect(
+      repository.createCodexWorkerBootstrapToken({
+        ...input,
+        id: 'bootstrap-token-run-execution',
+        worker_identity: 'local-worker-run-execution',
+        allowed_scopes_json: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+        allowed_capabilities_json: {
+          ...input.allowed_capabilities_json,
+          target_kinds: ['run_execution'],
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_worker_registration_denied',
+    });
+  });
+
   it('rejects bootstrap token replay from replacing an existing worker session', async () => {
     const repository = createRepository();
     const { sessionToken, worker } = await seedWorker(repository);

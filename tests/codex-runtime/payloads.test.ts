@@ -77,6 +77,19 @@ describe('Superpowers generation result payloads', () => {
     });
   });
 
+  it('accepts strict app-server Boundary output with null summary proposal', () => {
+    const parsed = validateBoundaryRoundRuntimeResult({
+      ...validBoundaryRoundResult(),
+      summary_proposal: null,
+    });
+
+    expect(parsed).toMatchObject({
+      schema_version: 'boundary_round_result.v1',
+      needs_leader_input: true,
+    });
+    expect(parsed.summary_proposal).toBeUndefined();
+  });
+
   it('allows ordinary product endpoint wording while still rejecting raw runtime endpoints', () => {
     expect(
       validateGeneratedSpecRevision({
@@ -84,6 +97,30 @@ describe('Superpowers generation result payloads', () => {
         content_markdown: 'Document the API endpoint contract for product callers. Endpoint: /api/items.',
       }),
     ).toMatchObject({ schema_version: 'spec_revision.v1' });
+  });
+
+  it('allows product text about centralized Codex config and auth distribution without raw material', () => {
+    expect(
+      validateBoundaryRoundRuntimeResult({
+        ...validBoundaryRoundResult(),
+        proposed_decisions: [
+          {
+            text: 'Preserve centralized Codex runtime config/auth distribution.',
+            rationale: 'Leader confirmed centralized configuration and authentication distribution.',
+          },
+        ],
+        summary_proposal: {
+          summary_markdown:
+            'Validate centralized Codex runtime config/auth distribution through isolated Dockerized app-server workers.',
+          confirmed_scope: ['Centralized config/auth distribution'],
+          confirmed_out_of_scope: ['Host-local worker config/auth dependencies'],
+          accepted_assumptions: ['Config/auth is centrally distributed per task'],
+          open_risks: ['Generated product text must remain public-safe'],
+          validation_expectations: ['Dogfood report remains public-safe'],
+        },
+        public_summary: 'Boundary Summary proposal generated for centralized config/auth distribution.',
+      }),
+    ).toMatchObject({ schema_version: 'boundary_round_result.v1' });
   });
 
   it('allows UUID product ids and plan commands or paths that contain release/deploy wording', () => {

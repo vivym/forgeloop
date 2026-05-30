@@ -6,6 +6,10 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  codexRuntimeDogfoodBootstrapTokenForTarget,
+  codexRuntimeDogfoodWorkerIdentityForTarget,
+} from '../../scripts/codex-runtime-dogfood-bootstrap';
+import {
   CodexRuntimeSuperpowersDogfoodBlocker,
   FilesystemCodexRuntimeSuperpowersDogfoodReporter,
   codexRuntimeSuperpowersDogfoodCommand,
@@ -974,6 +978,9 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(markdown).toContain('Codex Runtime Superpowers Dogfood');
     expect(markdown).toContain('Status: BLOCKED');
     expect(markdown).toContain('codex_runtime_superpowers_dogfood_config_missing');
+    expect(markdown).toContain('Missing configuration count: 2');
+    expect(markdown).not.toContain('FORGELOOP_CONTROL_PLANE_URL');
+    expect(markdown).not.toContain('FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID');
     expect(markdown).not.toContain('/Users/');
     expect(markdown).not.toContain('/tmp/');
     expect(markdown).not.toContain('~/.codex');
@@ -1236,6 +1243,10 @@ describe('Codex runtime Superpowers dogfood script', () => {
   it('auto-seeds the product source before runtime bootstrap in strict dogfood mode', async () => {
     const requests: Array<{ method: string; path: string; body?: unknown }> = [];
     const bootstrapPatches: Array<Record<string, string | undefined> | undefined> = [];
+    const dogfoodEnv: Record<string, string | undefined> = {};
+    const dockerImageDigest = digest('bootstrap-docker-image');
+    const networkPolicyDigest = digest('bootstrap-network-policy');
+    const networkProviderConfigDigest = digest('bootstrap-network-provider-config');
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const parsedUrl = new URL(String(url));
       const path = parsedUrl.pathname;
@@ -1278,8 +1289,12 @@ describe('Codex runtime Superpowers dogfood script', () => {
             run_execution_runtime_profile_id: 'profile-run',
             run_execution_runtime_profile_revision_id: 'profile-run-revision',
             run_execution_credential_binding_id: 'binding-run',
+            docker_image_digest: dockerImageDigest,
+            network_policy_digest: networkPolicyDigest,
+            network_provider_config_digest: networkProviderConfigDigest,
           };
         },
+        env: dogfoodEnv,
       },
     );
 
@@ -1303,6 +1318,14 @@ describe('Codex runtime Superpowers dogfood script', () => {
       FORGELOOP_CODEX_DOGFOOD_REPO_ID: 'repo-1',
       FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: 'repo-1',
       FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'work-item-created',
+    });
+    expect(bootstrapPatches).toHaveLength(1);
+    expect(dogfoodEnv).toMatchObject({
+      FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: dockerImageDigest,
+      FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS: dockerImageDigest,
+      FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: networkPolicyDigest,
+      FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS: networkPolicyDigest,
+      FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS: networkProviderConfigDigest,
     });
   });
 
@@ -1342,11 +1365,35 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(markdown).not.toContain('DevelopmentPlanItem development-plan-item-1');
   });
 
+  it.each([
+    ['product_api_reason', { product_api_reason: 'experimental_bearer_token' }],
+    ['product_api_reason', { product_api_reason: 'api_key_missing' }],
+    ['product_api_reason', { product_api_reason: 'auth_failed' }],
+    ['runtime_job_failure_subcode', { runtime_job_failure_subcode: 'sk-channel-test-token' }],
+    ['runtime_job_reason_code', { runtime_job_reason_code: 'auth_json' }],
+    ['runtime_job_failure_stage', { runtime_job_failure_stage: 'auth_failed' }],
+    ['runtime_job_runtime_target_kind', { runtime_job_runtime_target_kind: 'experimental_bearer_token' }],
+    ['runtime_job_failure_public_summary', { runtime_job_failure_public_summary: 'Failed with config.toml auth secret.' }],
+    ['missing_env', { missing_env: ['FORGELOOP_CODEX_AUTH_JSON_PATH'] }],
+  ] as const)('rejects unsafe blocker report field %s', (_label, overrides) => {
+    expect(() =>
+      renderCodexRuntimeSuperpowersDogfoodBlockerReport({
+        status: 'BLOCKED',
+        blocker_code: 'codex_runtime_superpowers_runtime_job_failed',
+        ...overrides,
+      }),
+    ).toThrow(/codex_runtime_superpowers_dogfood_report_unsafe/);
+  });
+
   it('sanitizes import-only host Codex env before invoking no-shared remote workers', () => {
     const baseEnv = {
       FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
       FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
       FORGELOOP_WORKER_IDENTITY: 'codex-worker',
+      FORGELOOP_WORKER_BOOTSTRAP_TOKEN: 'worker-bootstrap-token',
+      FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: digest('docker-image'),
+      FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: digest('network-policy'),
+      FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS: digest('network-provider-config'),
       FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
       FORGELOOP_CODEX_DOGFOOD_REPO_ID: 'repo-1',
       FORGELOOP_CODEX_CONFIG_TOML_PATH: '/Users/dev/.codex/config.toml',
@@ -1356,15 +1403,30 @@ describe('Codex runtime Superpowers dogfood script', () => {
       FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS: '/Users/dev/repo',
     };
     const sanitized = sanitizeCodexRemoteWorkerDogfoodEnv(baseEnv);
+    const generationWorkerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget('codex-worker', 'generation');
+    const runExecutionWorkerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget('codex-worker', 'run_execution');
 
     expect(sanitized).toMatchObject({
       FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
       FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
-      FORGELOOP_WORKER_IDENTITY: 'codex-worker-generation',
-      FORGELOOP_CODEX_WORKER_ID: 'codex-worker-generation',
+      FORGELOOP_WORKER_IDENTITY: generationWorkerIdentity,
+      FORGELOOP_CODEX_WORKER_ID: generationWorkerIdentity,
       FORGELOOP_CODEX_WORKER_CAPABILITIES: 'generation',
       FORGELOOP_CODEX_WORKER_SCOPES_JSON: JSON.stringify([{ project_id: 'project-1' }]),
     });
+    expect(sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN).toBe(
+      codexRuntimeDogfoodBootstrapTokenForTarget('worker-bootstrap-token', {
+        workerIdentity: generationWorkerIdentity,
+        allowedScope: { project_id: 'project-1' },
+        allowedCapabilities: {
+          target_kinds: ['generation'],
+          docker_image_digests: [digest('docker-image')],
+          network_policy_digests: [digest('network-policy')],
+          network_provider_config_digests: [digest('network-provider-config')],
+        },
+      }),
+    );
+    expect(sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN).not.toBe(baseEnv.FORGELOOP_WORKER_BOOTSTRAP_TOKEN);
     expect(sanitized.FORGELOOP_CODEX_CONFIG_TOML_PATH).toBeUndefined();
     expect(sanitized.FORGELOOP_CODEX_AUTH_JSON_PATH).toBeUndefined();
     expect(sanitized.FORGELOOP_CODEX_HOME).toBeUndefined();
@@ -1373,11 +1435,113 @@ describe('Codex runtime Superpowers dogfood script', () => {
 
     const runWorkerEnv = sanitizeCodexRemoteWorkerDogfoodEnv(baseEnv, 'run_execution');
     expect(runWorkerEnv).toMatchObject({
-      FORGELOOP_WORKER_IDENTITY: 'codex-worker-run-execution',
-      FORGELOOP_CODEX_WORKER_ID: 'codex-worker-run-execution',
+      FORGELOOP_WORKER_IDENTITY: runExecutionWorkerIdentity,
+      FORGELOOP_CODEX_WORKER_ID: runExecutionWorkerIdentity,
       FORGELOOP_CODEX_WORKER_CAPABILITIES: 'run_execution',
       FORGELOOP_CODEX_WORKER_SCOPES_JSON: JSON.stringify([{ project_id: 'project-1', repo_id: 'repo-1' }]),
     });
+    expect(runWorkerEnv.FORGELOOP_WORKER_BOOTSTRAP_TOKEN).toBe(
+      codexRuntimeDogfoodBootstrapTokenForTarget('worker-bootstrap-token', {
+        workerIdentity: runExecutionWorkerIdentity,
+        allowedScope: { project_id: 'project-1', repo_id: 'repo-1' },
+        allowedCapabilities: {
+          target_kinds: ['run_execution'],
+          docker_image_digests: [digest('docker-image')],
+          network_policy_digests: [digest('network-policy')],
+          network_provider_config_digests: [digest('network-provider-config')],
+        },
+      }),
+    );
+    expect(runWorkerEnv.FORGELOOP_WORKER_BOOTSTRAP_TOKEN).not.toBe(sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN);
+
+    const targetSpecificEnv = sanitizeCodexRemoteWorkerDogfoodEnv(
+      {
+        ...baseEnv,
+        FORGELOOP_CODEX_GENERATION_WORKER_IDENTITY: generationWorkerIdentity,
+      },
+      'generation',
+    );
+    expect(targetSpecificEnv.FORGELOOP_WORKER_IDENTITY).toBe(generationWorkerIdentity);
+    expect(targetSpecificEnv.FORGELOOP_CODEX_WORKER_ID).toBe(generationWorkerIdentity);
+    expect(targetSpecificEnv.FORGELOOP_WORKER_BOOTSTRAP_TOKEN).toBe(
+      codexRuntimeDogfoodBootstrapTokenForTarget('worker-bootstrap-token', {
+        workerIdentity: generationWorkerIdentity,
+        allowedScope: { project_id: 'project-1' },
+        allowedCapabilities: {
+          target_kinds: ['generation'],
+          docker_image_digests: [digest('docker-image')],
+          network_policy_digests: [digest('network-policy')],
+          network_provider_config_digests: [digest('network-provider-config')],
+        },
+      }),
+    );
+  });
+
+  it('refreshes the generation worker immediately before scheduling Boundary brainstorming', async () => {
+    const events: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const parsedUrl = new URL(String(url));
+      const path = parsedUrl.pathname;
+      const method = init?.method ?? 'GET';
+      events.push(`${method} ${path}`);
+
+      if (method === 'POST' && path === '/development-plans') {
+        return jsonResponse({ id: 'development-plan-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items') {
+        return jsonResponse({ id: 'item-1' });
+      }
+      if (method === 'POST' && path === '/development-plans/development-plan-1/items/item-1/boundary-brainstorming') {
+        return jsonResponse({ id: 'boundary-session-1' });
+      }
+      if (method === 'GET' && path === '/boundary-brainstorming-sessions/boundary-session-1') {
+        return jsonResponse({
+          id: 'boundary-session-1',
+          status: events.includes(
+            'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/summary-1/request-changes',
+          )
+            ? 'summary_proposed'
+            : 'summary_proposed',
+          latest_summary_revision_id: events.includes(
+            'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/summary-1/request-changes',
+          )
+            ? 'summary-2'
+            : 'summary-1',
+          questions: [],
+        });
+      }
+      if (
+        method === 'POST' &&
+        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/summary-1/request-changes'
+      ) {
+        return jsonResponse({ boundary_summary_revision_id: 'summary-1' });
+      }
+      if (
+        method === 'POST' &&
+        path === '/boundary-brainstorming-sessions/boundary-session-1/summary-revisions/summary-2/approve'
+      ) {
+        return jsonResponse({ boundary_summary_revision_id: 'summary-2' });
+      }
+      throw new Error(`unexpected request ${method} ${path}`);
+    });
+    const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
+      boundaryHttpClientConfig(),
+      {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        runRemoteWorkerOnce: async (targetKind) => {
+          events.push(`worker:${targetKind ?? 'generation'}`);
+        },
+      },
+    );
+
+    await client.seedSourceAndDevelopmentPlanItem();
+    await client.completeBoundaryBrainstorming('initial');
+
+    const workerIndex = events.indexOf('worker:generation');
+    const boundaryStartIndex = events.indexOf('POST /development-plans/development-plan-1/items/item-1/boundary-brainstorming');
+    expect(workerIndex).toBeGreaterThanOrEqual(0);
+    expect(boundaryStartIndex).toBeGreaterThanOrEqual(0);
+    expect(workerIndex).toBeLessThan(boundaryStartIndex);
   });
 
   it('drives Boundary brainstorming from session state through follow-up and summary revision loops', async () => {
@@ -1551,7 +1715,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       blocker_code: 'STALE_BOUNDARY_SUMMARY',
     });
 
-    expect(workerCalls).toEqual(['generation', 'generation', 'generation', 'generation']);
+    expect(workerCalls).toEqual(['generation', 'generation', 'generation', 'generation', 'generation']);
     const requestOrder = requests.map((request) => `${request.method} ${request.path}`);
     const boundaryApproveRequest =
       'POST /boundary-brainstorming-sessions/boundary-session-1/summary-revisions/summary-2/approve';
@@ -1790,7 +1954,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_boundary_max_turns_exceeded',
     });
-    expect(workerCalls).toEqual(['generation']);
+    expect(workerCalls).toEqual(['generation', 'generation']);
   });
 
   it('blocks when the Boundary state loop exhausts bounded iterations', async () => {
@@ -1893,7 +2057,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     await client.seedSourceAndDevelopmentPlanItem();
     await client.completeBoundaryBrainstorming('initial');
 
-    expect(workerCalls).toEqual(['generation']);
+    expect(workerCalls).toEqual(['generation', 'generation']);
     expect(requests).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1944,6 +2108,19 @@ describe('Codex runtime Superpowers dogfood script', () => {
             terminal_status: 'failed',
             terminal_reason_code: 'generated_output_schema_invalid',
           },
+          artifacts: [
+            {
+              kind: 'startup_failure_evidence',
+              metadata_json: {
+                failure_subcode: 'generated_output_schema_invalid',
+                failure_stage: 'generation_runtime_turn',
+                runtime_target_kind: 'generation',
+                app_server_started: true,
+                runtime_evidence_digest: digest('runtime-evidence'),
+                public_summary: 'Remote Codex app-server startup or generation failed.',
+              },
+            },
+          ],
         });
       }
       throw new Error(`unexpected request ${method} ${path}`);
@@ -1970,10 +2147,16 @@ describe('Codex runtime Superpowers dogfood script', () => {
         runtime_job_id: 'runtime-job-1',
         runtime_job_terminal_status: 'failed',
         runtime_job_reason_code: 'generated_output_schema_invalid',
+        runtime_job_failure_subcode: 'generated_output_schema_invalid',
+        runtime_job_failure_stage: 'generation_runtime_turn',
+        runtime_job_runtime_target_kind: 'generation',
+        runtime_job_app_server_started: true,
+        runtime_job_runtime_evidence_digest: digest('runtime-evidence'),
+        runtime_job_failure_public_summary: 'Remote Codex app-server startup or generation failed.',
       },
     });
 
-    expect(workerCalls).toEqual(['generation']);
+    expect(workerCalls).toEqual(['generation', 'generation']);
     expect(requests).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
