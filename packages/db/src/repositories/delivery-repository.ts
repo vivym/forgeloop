@@ -518,6 +518,11 @@ export interface ListCodexRuntimeJobArtifactsInput {
   runtime_job_id: string;
 }
 
+export interface GetCodexRuntimeJobArtifactByInternalRefInput {
+  runtime_job_id: string;
+  internal_ref: string;
+}
+
 export interface CreatePendingWorkspaceBundleArtifactInput extends PendingWorkspaceBundleReplayInput {}
 
 export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
@@ -1377,6 +1382,9 @@ export interface DeliveryRepository {
   bindReservedCodexRuntimeJobArtifact(input: BindReservedCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
   createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
   listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]>;
+  getCodexRuntimeJobArtifactByInternalRef(
+    input: GetCodexRuntimeJobArtifactByInternalRefInput,
+  ): Promise<CodexRuntimeJobArtifact | undefined>;
   createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void>;
   getWorkspaceBundleDownloadForRuntimeJob(input: GetWorkspaceBundleDownloadForRuntimeJobInput): Promise<WorkspaceBundleDownloadForRuntimeJob>;
   cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob>;

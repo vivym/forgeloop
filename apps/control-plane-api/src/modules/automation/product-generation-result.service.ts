@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { Buffer } from 'node:buffer';
 import {
   validateBoundaryRoundRuntimeResult,
   validateGeneratedExecutionPlanRevision,
@@ -11,11 +12,12 @@ import {
   type AutomationActionRun,
   type CodexGenerationRuntimeJobResult,
   type CodexRuntimeJob,
+  type InternalArtifactObject,
 } from '@forgeloop/domain';
-import type { DeliveryRepository } from '@forgeloop/db';
+import { LocalInternalArtifactStore, type DeliveryRepository } from '@forgeloop/db';
 
 import { BrainstormingService } from '../brainstorming/brainstorming.service';
-import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
+import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../core/control-plane-tokens';
 import { SpecPlanService } from '../spec-plan/spec-plan.service';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -35,11 +37,20 @@ export type ProductGenerationResultApplyOutcome =
 
 @Injectable()
 export class ProductGenerationResultService {
+  private readonly internalArtifacts: LocalInternalArtifactStore;
+
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
+    @Inject(INTERNAL_ARTIFACT_STORE_ROOT) internalArtifactStoreRoot: string,
     @Inject(BrainstormingService) private readonly brainstormingService: BrainstormingService,
     @Inject(SpecPlanService) private readonly specPlanService: SpecPlanService,
-  ) {}
+  ) {
+    this.internalArtifacts = new LocalInternalArtifactStore({
+      root: internalArtifactStoreRoot,
+      repository: this.repository,
+      requestId: 'product-generation-result',
+    });
+  }
 
   async handleGenerationRuntimeTerminal(input: {
     runtimeJobId: string;
@@ -184,19 +195,34 @@ export class ProductGenerationResultService {
     if (!this.generatedPayloadIsArtifactRef(terminalResult.generated_payload)) {
       return terminalResult.generated_payload;
     }
-    const ref = this.generatedPayloadArtifactRef(terminalResult.generated_payload, terminalResult.generated_payload_digest);
+    const ref = this.generatedPayloadArtifactRef(terminalResult.generated_payload);
     if (ref === undefined) {
       return undefined;
     }
-    const artifact = (await this.repository.listCodexRuntimeJobArtifacts({ runtime_job_id: runtimeJobId })).find(
-      (candidate) =>
-        candidate.kind === 'generated_payload' &&
-        candidate.content_type === 'application/json' &&
-        candidate.digest === terminalResult.generated_payload_digest &&
-        candidate.internal_ref === ref.internal_ref,
-    );
-    const generatedPayload = artifact?.metadata_json.generated_payload;
-    if (!isRecord(generatedPayload) || codexCanonicalDigest(generatedPayload) !== terminalResult.generated_payload_digest) {
+    const artifact = await this.repository.getCodexRuntimeJobArtifactByInternalRef({
+      runtime_job_id: runtimeJobId,
+      internal_ref: ref.internal_ref,
+    });
+    if (
+      artifact === undefined ||
+      artifact.kind !== 'generated_payload' ||
+      artifact.content_type !== 'application/json' ||
+      artifact.digest !== ref.digest
+    ) {
+      return undefined;
+    }
+    const stored = await this.readGeneratedPayloadArtifact(artifact.internal_ref);
+    if (
+      stored === undefined ||
+      stored.artifact.id !== artifact.internal_artifact_object_id ||
+      stored.artifact.digest !== artifact.digest ||
+      stored.artifact.content_type !== artifact.content_type ||
+      stored.artifact.size_bytes !== String(artifact.size_bytes)
+    ) {
+      return undefined;
+    }
+    const generatedPayload = stored.payload;
+    if (codexCanonicalDigest(generatedPayload) !== terminalResult.generated_payload_digest) {
       return undefined;
     }
     return generatedPayload;
@@ -204,8 +230,7 @@ export class ProductGenerationResultService {
 
   private generatedPayloadArtifactRef(
     payload: Record<string, unknown>,
-    expectedDigest: string,
-  ): { internal_ref: string } | undefined {
+  ): { internal_ref: string; digest: string } | undefined {
     if (!isRecord(payload.artifact)) {
       return undefined;
     }
@@ -213,12 +238,27 @@ export class ProductGenerationResultService {
     if (
       artifact.kind !== 'generated_payload' ||
       artifact.content_type !== 'application/json' ||
-      artifact.digest !== expectedDigest ||
+      typeof artifact.digest !== 'string' ||
       typeof artifact.internal_ref !== 'string'
     ) {
       return undefined;
     }
-    return { internal_ref: artifact.internal_ref };
+    return { internal_ref: artifact.internal_ref, digest: artifact.digest };
+  }
+
+  private async readGeneratedPayloadArtifact(
+    internalRef: string,
+  ): Promise<{ artifact: InternalArtifactObject; payload: Record<string, unknown> } | undefined> {
+    try {
+      const stored = await this.internalArtifacts.getObject(internalRef);
+      const parsed: unknown = JSON.parse(Buffer.from(stored.bytes).toString('utf8'));
+      if (!isRecord(parsed)) {
+        return undefined;
+      }
+      return { artifact: stored.artifact, payload: parsed };
+    } catch {
+      return undefined;
+    }
   }
 
   private now(): string {

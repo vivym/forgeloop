@@ -147,6 +147,7 @@ import type {
   ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
   ListCodexCredentialBindingReadinessCandidatesInput,
   ListCodexRuntimeJobArtifactsInput,
+  GetCodexRuntimeJobArtifactByInternalRefInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
@@ -2031,6 +2032,38 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       .filter((artifact) => artifact.runtime_job_id === input.runtime_job_id)
       .sort(byCreatedAtThenId)
       .map((artifact) => this.codexRuntimeJobArtifactPublic(artifact, record));
+  }
+
+  async getCodexRuntimeJobArtifactByInternalRef(
+    input: GetCodexRuntimeJobArtifactByInternalRefInput,
+  ): Promise<CodexRuntimeJobArtifact | undefined> {
+    const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    if (record === undefined) {
+      return undefined;
+    }
+    const artifact = valuesFor(this.codexRuntimeJobArtifacts).find(
+      (candidate) => candidate.runtime_job_id === input.runtime_job_id && candidate.internal_ref === input.internal_ref,
+    );
+    if (artifact === undefined) {
+      return undefined;
+    }
+    const object =
+      artifact.internal_artifact_object_id === undefined ? undefined : this.internalArtifactObjects.get(artifact.internal_artifact_object_id);
+    if (
+      object === undefined ||
+      object.deleted_at !== undefined ||
+      object.ref !== artifact.internal_ref ||
+      object.owner_type !== 'codex_runtime_job' ||
+      object.owner_id !== input.runtime_job_id ||
+      object.kind !== 'codex_runtime_job_artifact' ||
+      object.artifact_id !== artifact.id ||
+      object.digest !== artifact.digest ||
+      object.content_type !== artifact.content_type ||
+      object.size_bytes !== String(artifact.size_bytes)
+    ) {
+      return undefined;
+    }
+    return this.codexRuntimeJobArtifactPublic(artifact, record);
   }
 
   async createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {

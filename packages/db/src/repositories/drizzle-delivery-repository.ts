@@ -219,6 +219,7 @@ import type {
   ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
   ListCodexCredentialBindingReadinessCandidatesInput,
   ListCodexRuntimeJobArtifactsInput,
+  GetCodexRuntimeJobArtifactByInternalRefInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
@@ -2035,6 +2036,50 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .where(eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id))
       .orderBy(asc(codex_runtime_job_artifacts.createdAt), asc(codex_runtime_job_artifacts.id));
     return rows.map((row) => runtimeJobArtifactFromDbRecord(fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>), job));
+  }
+
+  async getCodexRuntimeJobArtifactByInternalRef(
+    input: GetCodexRuntimeJobArtifactByInternalRefInput,
+  ): Promise<CodexRuntimeJobArtifact | undefined> {
+    const [jobRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+      .limit(1);
+    if (jobRow === undefined) {
+      return undefined;
+    }
+    const job = fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>);
+    const [artifactRow] = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(
+        and(
+          eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id),
+          eq(codex_runtime_job_artifacts.internalRef, input.internal_ref),
+        ),
+      )
+      .limit(1);
+    if (artifactRow === undefined) {
+      return undefined;
+    }
+    const artifact = fromDbRecord<CodexRuntimeJobArtifactDbRecord>(artifactRow as Record<string, unknown>);
+    const object =
+      artifact.internal_artifact_object_id === undefined ? undefined : await this.getInternalArtifactObjectById(artifact.internal_artifact_object_id);
+    if (
+      object === undefined ||
+      object.ref !== artifact.internal_ref ||
+      object.owner_type !== 'codex_runtime_job' ||
+      object.owner_id !== input.runtime_job_id ||
+      object.kind !== 'codex_runtime_job_artifact' ||
+      object.artifact_id !== artifact.id ||
+      object.digest !== artifact.digest ||
+      object.content_type !== artifact.content_type ||
+      object.size_bytes !== String(artifact.size_bytes)
+    ) {
+      return undefined;
+    }
+    return runtimeJobArtifactFromDbRecord(artifact, job);
   }
 
   async createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
