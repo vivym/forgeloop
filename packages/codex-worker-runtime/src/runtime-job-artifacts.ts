@@ -34,17 +34,17 @@ export const jsonRuntimeJobArtifactUpload = (input: {
     throw new Error('codex_runtime_job_artifact_payload_unserializable');
   }
   const bytes = Buffer.from(encoded, 'utf8');
-  const generatedPayloadDigest = codexCanonicalDigest(input.payload);
+  const digest = sha256(bytes);
   return {
     artifact_idempotency_key: codexCanonicalDigest({
       kind: input.kind,
       name: input.name,
-      digest: generatedPayloadDigest,
+      digest,
     }),
     kind: input.kind,
     name: input.name,
     content_type: 'application/json',
-    digest: sha256(bytes),
+    digest,
     size_bytes: bytes.byteLength,
     bytes,
     ...(input.metadata === undefined ? {} : { metadata_json: input.metadata }),

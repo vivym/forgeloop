@@ -462,6 +462,13 @@ describe('remote codex worker client', () => {
       expect(artifact.bytes).toBeInstanceOf(Uint8Array);
       expect(artifact.digest).toBe(rawDigest(artifact.bytes as Uint8Array));
       expect(artifact.size_bytes).toBe((artifact.bytes as Uint8Array).byteLength);
+      expect(artifact.artifact_idempotency_key).toBe(
+        codexCanonicalDigest({
+          kind: artifact.kind,
+          name: artifact.name,
+          digest: artifact.digest,
+        }),
+      );
     }
     expect(terminalized[0]).toMatchObject({
       launch_lease_id: 'lease-1',
