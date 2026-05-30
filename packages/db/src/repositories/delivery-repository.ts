@@ -333,6 +333,15 @@ export interface PendingWorkspaceBundleInput {
   expires_at: string;
 }
 
+export interface PendingWorkspaceBundleReplayInput extends PendingWorkspaceBundleInput {
+  id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  archive_bytes_base64?: string;
+  request_digest: string;
+  created_at: string;
+}
+
 export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
   runtime_job_id: string;
   launch_lease_id: string;
@@ -353,7 +362,7 @@ export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
   input_digest: string;
   workspace_acquisition_json?: Record<string, unknown>;
   workspace_acquisition_digest?: string;
-  pending_workspace_bundle?: PendingWorkspaceBundleInput;
+  pending_workspace_bundle?: PendingWorkspaceBundleReplayInput;
   action_type?: string;
   action_attempt?: number;
   action_claim_token_hash?: string;
@@ -509,14 +518,7 @@ export interface ListCodexRuntimeJobArtifactsInput {
   runtime_job_id: string;
 }
 
-export interface CreatePendingWorkspaceBundleArtifactInput extends PendingWorkspaceBundleInput {
-  id: string;
-  run_session_id: string;
-  execution_package_id: string;
-  archive_bytes_base64?: string;
-  request_digest: string;
-  created_at: string;
-}
+export interface CreatePendingWorkspaceBundleArtifactInput extends PendingWorkspaceBundleReplayInput {}
 
 export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
   runtime_job_id: string;
@@ -531,7 +533,9 @@ export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
 
 export interface WorkspaceBundleDownloadForRuntimeJob {
   bundle_id: string;
-  archive_bytes_base64: string;
+  archive_bytes_base64?: string;
+  archive_ref: string;
+  internal_artifact_object_id?: string;
   archive_digest: string;
   manifest_digest: string;
   content_type: 'application/vnd.forgeloop.workspace-bundle';

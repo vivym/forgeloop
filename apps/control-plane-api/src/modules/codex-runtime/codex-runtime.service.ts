@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import {
   BadRequestException,
@@ -41,7 +41,12 @@ import {
   type CodexRuntimeTargetKind,
   type CodexPublicBlockerCode,
 } from '@forgeloop/domain';
-import { LocalInternalArtifactStore, type CodexLaunchFenceSnapshot, type DeliveryRepository } from '@forgeloop/db';
+import {
+  LocalInternalArtifactStore,
+  type CodexLaunchFenceSnapshot,
+  type DeliveryRepository,
+  type PendingWorkspaceBundleReplayInput,
+} from '@forgeloop/db';
 
 import { ProductGenerationResultService } from '../automation/product-generation-result.service';
 import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../core/control-plane-tokens';
@@ -79,6 +84,32 @@ import type {
 const unsafeDbCredentialStoreEnv = 'FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE';
 const workerSessionReplayWindowMs = 5 * 60 * 1000;
 
+const pendingWorkspaceBundleReplayInput = (
+  input: CreateCodexRuntimeJobDto['pending_workspace_bundle'],
+): PendingWorkspaceBundleReplayInput | undefined => {
+  if (input === undefined) {
+    return undefined;
+  }
+  return {
+    id: input.id,
+    bundle_id: input.bundle_id,
+    run_session_id: input.run_session_id,
+    execution_package_id: input.execution_package_id,
+    pending_artifact_ref: input.pending_artifact_ref,
+    ...(input.internal_artifact_object_id === undefined ? {} : { internal_artifact_object_id: input.internal_artifact_object_id }),
+    archive_digest: input.archive_digest,
+    manifest_digest: input.manifest_digest,
+    ...(input.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: input.archive_bytes_base64 }),
+    run_worker_lease_id: input.run_worker_lease_id,
+    size_bytes: input.size_bytes,
+    workspace_acquisition_digest: input.workspace_acquisition_digest,
+    workspace_acquisition_json: input.workspace_acquisition_json,
+    expires_at: input.expires_at,
+    request_digest: input.request_digest,
+    created_at: input.created_at,
+  };
+};
+
 type ActiveLaunchFence =
   | {
       kind: 'generation';
@@ -104,6 +135,7 @@ type ActiveLaunchFence =
     };
 
 const nowIso = (): string => process.env.FORGELOOP_AUTOMATION_TEST_NOW ?? new Date().toISOString();
+const rawSha256 = (bytes: Uint8Array): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const launchLeaseTtlMs = 10 * 60 * 1000;
 const workerSessionTtlMs = 15 * 60 * 1000;
@@ -734,6 +766,7 @@ export class CodexRuntimeService {
     );
     const inputDigest = codexRuntimeJobInputDigest(input.input_json);
     const workspaceAcquisitionDigest = codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json);
+    const pendingWorkspaceBundle = pendingWorkspaceBundleReplayInput(input.pending_workspace_bundle);
     const result = await this.repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
       runtime_job_id: input.runtime_job_id,
       launch_lease_id: input.launch_lease_id,
@@ -754,7 +787,7 @@ export class CodexRuntimeService {
       input_digest: inputDigest,
       ...(input.workspace_acquisition_json === undefined ? {} : { workspace_acquisition_json: input.workspace_acquisition_json }),
       ...(workspaceAcquisitionDigest === undefined ? {} : { workspace_acquisition_digest: workspaceAcquisitionDigest }),
-      ...(input.pending_workspace_bundle === undefined ? {} : { pending_workspace_bundle: input.pending_workspace_bundle }),
+      ...(pendingWorkspaceBundle === undefined ? {} : { pending_workspace_bundle: pendingWorkspaceBundle }),
       ...(input.action_type === undefined ? {} : { action_type: input.action_type }),
       ...(input.action_attempt === undefined ? {} : { action_attempt: input.action_attempt }),
       ...(fence.snapshot.action_claim_token_hash === undefined ? {} : { action_claim_token_hash: fence.snapshot.action_claim_token_hash }),
@@ -1122,7 +1155,7 @@ export class CodexRuntimeService {
     assertWorkerBodyDigest(query);
     const now = nowIso();
     assertFreshWorkerNonceTimestamp(query.nonce_timestamp, now);
-    return this.repository.getWorkspaceBundleDownloadForRuntimeJob({
+    const download = await this.repository.getWorkspaceBundleDownloadForRuntimeJob({
       runtime_job_id: jobId,
       bundle_id: bundleId,
       worker_id: workerId,
@@ -1136,6 +1169,31 @@ export class CodexRuntimeService {
       ),
       now,
     });
+    if (download.internal_artifact_object_id === undefined) {
+      if (download.archive_bytes_base64 === undefined) {
+        throw new BadRequestException('Workspace bundle bytes were rejected');
+      }
+      return {
+        ...download,
+        bytes: Buffer.from(download.archive_bytes_base64, 'base64'),
+      };
+    }
+    const stored = await this.internalArtifacts.getObject(download.archive_ref);
+    if (
+      stored.artifact.id !== download.internal_artifact_object_id ||
+      stored.artifact.kind !== 'workspace_bundle' ||
+      stored.artifact.owner_type !== 'run_session' ||
+      stored.artifact.ref !== download.archive_ref ||
+      stored.artifact.digest !== download.archive_digest ||
+      stored.artifact.size_bytes !== String(download.size_bytes) ||
+      rawSha256(stored.bytes) !== download.archive_digest
+    ) {
+      throw new BadRequestException('Workspace bundle bytes were rejected');
+    }
+    return {
+      ...download,
+      bytes: Buffer.from(stored.bytes),
+    };
   }
 
   async getRuntimeJobControl(workerId: string, jobId: string, query: CodexRuntimeWorkerQueryDto) {

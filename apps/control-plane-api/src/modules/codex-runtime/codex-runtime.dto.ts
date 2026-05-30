@@ -319,15 +319,22 @@ const workspaceBundleAcquisitionSchema = z.object({
   expires_at: z.string().min(1),
 }).strict();
 const pendingWorkspaceBundleSchema = z.object({
+  id: z.string().min(1),
   bundle_id: z.string().min(1),
+  run_session_id: z.string().min(1),
+  execution_package_id: z.string().min(1),
   pending_artifact_ref: z.string().min(1),
+  internal_artifact_object_id: z.string().min(1).optional(),
   archive_digest: sha256DigestSchema,
   manifest_digest: sha256DigestSchema,
+  archive_bytes_base64: z.string().min(1).optional(),
   run_worker_lease_id: z.string().min(1),
   size_bytes: z.number().int().positive(),
   workspace_acquisition_digest: sha256DigestSchema,
   workspace_acquisition_json: workspaceBundleAcquisitionSchema,
   expires_at: z.string().min(1),
+  request_digest: sha256DigestSchema,
+  created_at: z.string().min(1),
 }).strict();
 
 export const createCodexRuntimeJobSchema = z.object({

@@ -153,6 +153,7 @@ import type {
   MaterializeCodexRuntimeJobInput,
   MaterializeCodexLaunchLeaseInput,
   PendingWorkspaceBundleInput,
+  PendingWorkspaceBundleReplayInput,
   PollCodexRuntimeJobsInput,
   DeliveryRepository,
   RecoverStaleCodexRuntimeJobsInput,
@@ -253,6 +254,18 @@ const workspaceBundleAcquisitionMatches = (
   value.manifest_digest === expected.manifest_digest &&
   value.size_bytes === expected.size_bytes &&
   value.expires_at === expected.expires_at;
+const workspaceBundleArchiveManifestDigest = (archiveBytes: Uint8Array): string | undefined => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(archiveBytes).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || parsed.schema_version !== 'workspace_bundle_archive.v1' || !isRecord(parsed.manifest)) {
+    return undefined;
+  }
+  return rawSha256(JSON.stringify(parsed.manifest));
+};
 const objectRefIdentityMatches = (left: ObjectRef | undefined, right: ObjectRef): boolean =>
   left?.type === right.type && left.id === right.id;
 
@@ -2025,6 +2038,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     const runSession = this.runSessions.get(input.run_session_id);
     const archiveBytes =
       input.archive_bytes_base64 === undefined ? undefined : Buffer.from(input.archive_bytes_base64, 'base64');
+    const object =
+      input.internal_artifact_object_id === undefined ? undefined : this.internalArtifactObjects.get(input.internal_artifact_object_id);
     if (
       activeLease === undefined ||
       runSession === undefined ||
@@ -2032,7 +2047,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       activeLease.id !== input.run_worker_lease_id ||
       activeLease.status !== 'active' ||
       activeLease.expires_at <= input.created_at ||
-      (archiveBytes === undefined && input.internal_artifact_object_id === undefined)
+      input.internal_artifact_object_id === undefined
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle fence was rejected.');
     }
@@ -2051,7 +2066,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.workspace_acquisition_json.manifest_digest !== input.manifest_digest ||
       input.workspace_acquisition_json.size_bytes !== input.size_bytes ||
       !workspaceBundleAcquisitionMatches(input.workspace_acquisition_json, input) ||
-      input.workspace_acquisition_digest !== codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json)
+      input.workspace_acquisition_digest !== codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json) ||
+      (input.internal_artifact_object_id !== undefined &&
+        (object === undefined ||
+          object.ref !== input.pending_artifact_ref ||
+          object.kind !== 'workspace_bundle' ||
+          object.owner_type !== 'run_session' ||
+          object.owner_id !== input.run_session_id ||
+          object.artifact_id !== input.bundle_id ||
+          object.digest !== input.archive_digest ||
+          object.size_bytes !== String(input.size_bytes) ||
+          object.content_type !== 'application/vnd.forgeloop.workspace-bundle' ||
+          object.metadata_json.manifest_digest !== input.manifest_digest ||
+          object.metadata_json.execution_package_id !== input.execution_package_id ||
+          object.metadata_json.run_worker_lease_id !== input.run_worker_lease_id))
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle artifact was rejected.');
     }
@@ -2090,12 +2118,23 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         existing.status === 'pending' &&
         existing.runtime_job_id === undefined &&
         existing.run_session_id === input.run_session_id &&
-        existing.execution_package_id === input.execution_package_id
+        existing.execution_package_id === input.execution_package_id &&
+        existing.id === input.id &&
+        existing.request_digest === input.request_digest &&
+        existing.pending_artifact_ref === input.pending_artifact_ref &&
+        existing.internal_artifact_object_id === input.internal_artifact_object_id &&
+        existing.archive_digest === input.archive_digest &&
+        existing.manifest_digest === input.manifest_digest &&
+        existing.run_worker_lease_id === input.run_worker_lease_id &&
+        existing.size_bytes === input.size_bytes &&
+        existing.expires_at === input.expires_at &&
+        existing.workspace_acquisition_digest === input.workspace_acquisition_digest &&
+        valuesEqual(existing.workspace_acquisition_json, input.workspace_acquisition_json) &&
+        existing.archive_bytes_base64 === input.archive_bytes_base64
       ) {
-        this.codexPendingWorkspaceBundles.set(input.bundle_id, clone(pending));
         return;
       }
-      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle replay was rejected.');
+      throw codexDenied('codex_runtime_job_unavailable', 'workspace_bundle_idempotency_drift');
     }
     this.codexPendingWorkspaceBundles.set(input.bundle_id, clone(pending));
   }
@@ -2157,16 +2196,23 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle download was denied.');
     }
-    if (pending.archive_bytes_base64 === undefined) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
-    }
-    const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
-    if (archiveBytes.byteLength !== pending.size_bytes || rawSha256(archiveBytes) !== pending.archive_digest) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
+    if (pending.archive_bytes_base64 !== undefined) {
+      const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
+      if (
+        archiveBytes.byteLength !== pending.size_bytes ||
+        rawSha256(archiveBytes) !== pending.archive_digest ||
+        workspaceBundleArchiveManifestDigest(archiveBytes) !== pending.manifest_digest
+      ) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
+      }
     }
     return {
       bundle_id: pending.bundle_id,
-      archive_bytes_base64: pending.archive_bytes_base64,
+      ...(pending.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: pending.archive_bytes_base64 }),
+      archive_ref: pending.pending_artifact_ref,
+      ...(pending.internal_artifact_object_id === undefined
+        ? {}
+        : { internal_artifact_object_id: pending.internal_artifact_object_id }),
       archive_digest: pending.archive_digest,
       manifest_digest: pending.manifest_digest,
       content_type: 'application/vnd.forgeloop.workspace-bundle',
@@ -5964,7 +6010,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   private codexRuntimePendingBundleReplayMatches(
     record: CodexRuntimeJobPrivateRecord,
-    input: PendingWorkspaceBundleInput | undefined,
+    input: PendingWorkspaceBundleReplayInput | undefined,
   ): boolean {
     const stored = record.pending_workspace_bundle;
     if (stored === undefined || input === undefined) {
@@ -5976,7 +6022,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         : this.codexRuntimeJobArtifacts.get(record.workspace_bundle_artifact_id);
     return (
       artifact !== undefined &&
+      stored.runtime_job_id === record.job.id &&
+      stored.status === 'bound' &&
       artifact.runtime_job_id === stored.runtime_job_id &&
+      artifact.runtime_job_id === record.job.id &&
       artifact.kind === 'workspace_bundle' &&
       artifact.name === stored.bundle_id &&
       artifact.digest === stored.archive_digest &&
@@ -5987,16 +6036,22 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       artifact.metadata_json.run_worker_lease_id === stored.run_worker_lease_id &&
       artifact.metadata_json.workspace_acquisition_digest === stored.workspace_acquisition_digest &&
       artifact.size_bytes === stored.size_bytes &&
+      stored.id === input.id &&
       stored.bundle_id === input.bundle_id &&
+      stored.run_session_id === input.run_session_id &&
+      stored.execution_package_id === input.execution_package_id &&
       stored.pending_artifact_ref === input.pending_artifact_ref &&
       stored.internal_artifact_object_id === input.internal_artifact_object_id &&
       stored.archive_digest === input.archive_digest &&
       stored.manifest_digest === input.manifest_digest &&
+      stored.archive_bytes_base64 === input.archive_bytes_base64 &&
       stored.run_worker_lease_id === input.run_worker_lease_id &&
       stored.size_bytes === input.size_bytes &&
       stored.workspace_acquisition_digest === input.workspace_acquisition_digest &&
       valuesEqual(stored.workspace_acquisition_json, input.workspace_acquisition_json) &&
-      stored.expires_at === input.expires_at
+      stored.expires_at === input.expires_at &&
+      stored.request_digest === input.request_digest &&
+      stored.created_at === input.created_at
     );
   }
 
@@ -6332,18 +6387,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       existing !== undefined &&
       existing.status === 'pending' &&
       existing.runtime_job_id === undefined &&
+      existing.id === pending.id &&
       existing.bundle_id === pending.bundle_id &&
+      existing.run_session_id === pending.run_session_id &&
+      existing.execution_package_id === pending.execution_package_id &&
       existing.pending_artifact_ref === pending.pending_artifact_ref &&
       existing.internal_artifact_object_id === pending.internal_artifact_object_id &&
       existing.archive_digest === pending.archive_digest &&
       existing.manifest_digest === pending.manifest_digest &&
+      existing.archive_bytes_base64 === pending.archive_bytes_base64 &&
       existing.run_worker_lease_id === pending.run_worker_lease_id &&
       existing.size_bytes === pending.size_bytes &&
       existing.expires_at === pending.expires_at &&
       existing.workspace_acquisition_digest === pending.workspace_acquisition_digest &&
       valuesEqual(existing.workspace_acquisition_json, pending.workspace_acquisition_json) &&
       existing.run_session_id === input.target.target_id &&
-      existing.execution_package_id === input.execution_package_id
+      existing.execution_package_id === input.execution_package_id &&
+      existing.request_digest === pending.request_digest &&
+      existing.created_at === pending.created_at
     );
   }
 

@@ -403,6 +403,10 @@ export interface RunRuntimeMetadata {
   remote_runtime_job_id?: string;
   remote_run_worker_lease_id?: string;
   remote_workspace_bundle_id?: string;
+  remote_workspace_bundle_artifact_record_id?: string;
+  remote_workspace_bundle_artifact_request_digest?: string;
+  remote_workspace_bundle_created_at?: IsoDateTime;
+  remote_workspace_internal_artifact_object_id?: string;
   remote_workspace_bundle_digest?: string;
   remote_workspace_manifest_digest?: string;
   remote_workspace_bundle_size_bytes?: number;

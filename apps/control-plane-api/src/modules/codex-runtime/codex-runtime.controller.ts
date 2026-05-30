@@ -343,7 +343,7 @@ export class CodexRuntimeController {
     response.setHeader('content-length', String(download.size_bytes));
     response.setHeader('x-forgeloop-workspace-bundle-digest', download.archive_digest);
     response.setHeader('x-forgeloop-workspace-bundle-manifest-digest', download.manifest_digest);
-    return new StreamableFile(Buffer.from(download.archive_bytes_base64, 'base64'));
+    return new StreamableFile(download.bytes);
   }
 
   @Get('/internal/codex-workers/:workerId/runtime-jobs/:jobId/control')

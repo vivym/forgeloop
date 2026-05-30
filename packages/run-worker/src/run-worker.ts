@@ -2,7 +2,13 @@ import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
 import type { ArtifactRef, ChangedFile, CheckResult, ExecutorFailure, ExecutorResult, SelfReviewInput, SelfReviewResult } from '@forgeloop/contracts';
-import type { DeliveryRepository, PendingWorkspaceBundleInput } from '../../db/src/index.js';
+import {
+  LocalInternalArtifactStore,
+  type CreatePendingWorkspaceBundleArtifactInput,
+  type DeliveryRepository,
+  type PendingWorkspaceBundleInput,
+  type PendingWorkspaceBundleReplayInput,
+} from '../../db/src/index.js';
 import {
   codexCanonicalDigest,
   codexWorkspaceAcquisitionDigest,
@@ -61,12 +67,14 @@ export interface RunWorkerInput {
   evidenceCollector: (input: LocalCodexEvidenceInput) => Promise<ExecutorResult>;
   selfReview: (input: SelfReviewInput) => Promise<SelfReviewResult>;
   remoteRunExecutionClient?: RemoteRunExecutionClient;
+  internalArtifactStore?: LocalInternalArtifactStore;
   now?: () => IsoDateTime;
   heartbeatIntervalMs?: number;
   commandPollIntervalMs?: number;
   leaseDurationMs?: number;
   idleThresholdMs?: number;
   artifactRoot?: string;
+  internalArtifactStoreRoot?: string;
   allowExecFallback?: boolean;
   remoteRunExecutionWaitTimeoutMs?: number;
   remoteRunExecutionPollIntervalMs?: number;
@@ -282,6 +290,24 @@ const isInsidePath = (root: string, child: string): boolean => {
   return childRelative === '' || (!childRelative.startsWith('..') && !childRelative.startsWith('/'));
 };
 
+const defaultInternalArtifactStoreRoot = (): string => {
+  const root = process.env.FORGELOOP_ARTIFACT_STORE_ROOT?.trim();
+  if (root === undefined || root.length === 0) {
+    throw new Error('FORGELOOP_ARTIFACT_STORE_ROOT is required for pending workspace bundles');
+  }
+  return root;
+};
+
+const createRunWorkerInternalArtifactStore = (
+  repository: DeliveryRepository,
+  root = defaultInternalArtifactStoreRoot(),
+): LocalInternalArtifactStore =>
+  new LocalInternalArtifactStore({
+    root,
+    repository,
+    requestId: 'run-worker-workspace-bundle',
+  });
+
 const stableUuidFromDigest = (input: Record<string, unknown>): string => {
   const hex = codexCanonicalDigest(input).slice('sha256:'.length);
   const variant = (8 + (Number.parseInt(hex[16]!, 16) % 4)).toString(16);
@@ -335,11 +361,13 @@ export const createRunWorkerPendingWorkspaceBundleArtifact = async (input: {
   expiresAt: string;
   maxSizeBytes?: number;
   extraFiles?: readonly WorkspaceBundleFileInput[];
+  internalArtifactStore?: LocalInternalArtifactStore;
 }): Promise<{
-  pending_workspace_bundle: PendingWorkspaceBundleInput;
+  pending_workspace_bundle: PendingWorkspaceBundleReplayInput;
   archive_digest: string;
   manifest_digest: string;
   size_bytes: number;
+  pending_artifact_record: CreatePendingWorkspaceBundleArtifactInput;
 }> => {
   if (
     input.runWorkerLease.status !== 'active' ||
@@ -368,7 +396,7 @@ export const createRunWorkerPendingWorkspaceBundleArtifact = async (input: {
   }
   const archiveDigest = workspaceBundleArchiveDigest(archiveBytes);
   const manifestDigest = workspaceBundleManifestDigest(manifest);
-  const pendingArtifactRef = `artifact:codex-pending-bundles:${input.bundleId}`;
+  const pendingArtifactRef = `artifact://internal/workspace_bundle/run_session/${input.runSession.id}/${input.bundleId}`;
   const workspaceAcquisitionJson = {
     schema_version: 'workspace_bundle_acquisition.v1',
     bundle_id: input.bundleId,
@@ -378,37 +406,64 @@ export const createRunWorkerPendingWorkspaceBundleArtifact = async (input: {
     size_bytes: archiveBytes.byteLength,
     expires_at: input.expiresAt,
   };
+  const workspaceAcquisitionDigest = codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!;
+  const stored = await (input.internalArtifactStore ?? createRunWorkerInternalArtifactStore(input.repository)).putObject({
+    artifact_id: input.bundleId,
+    kind: 'workspace_bundle',
+    owner_type: 'run_session',
+    owner_id: input.runSession.id,
+    visibility: 'internal',
+    content_type: 'application/vnd.forgeloop.workspace-bundle',
+    declared_size_bytes: String(archiveBytes.byteLength),
+    declared_artifact_digest: archiveDigest,
+    idempotency_key: input.bundleId,
+    metadata_json: {
+      manifest_digest: manifestDigest,
+      execution_package_id: input.executionPackage.id,
+      run_worker_lease_id: input.runWorkerLease.id,
+      workspace_acquisition_digest: workspaceAcquisitionDigest,
+    },
+    created_by_actor_type: 'codex_worker',
+    created_by_actor_id: input.runWorkerLease.worker_id,
+    now: input.now,
+    max_size_bytes: input.maxSizeBytes ?? 100 * 1024 * 1024,
+    bytes: archiveBytes,
+  });
   const pendingWorkspaceBundle: PendingWorkspaceBundleInput = {
     bundle_id: input.bundleId,
     pending_artifact_ref: pendingArtifactRef,
+    internal_artifact_object_id: stored.id,
     archive_digest: archiveDigest,
     manifest_digest: manifestDigest,
     run_worker_lease_id: input.runWorkerLease.id,
     size_bytes: archiveBytes.byteLength,
-    workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+    workspace_acquisition_digest: workspaceAcquisitionDigest,
     workspace_acquisition_json: workspaceAcquisitionJson,
     expires_at: input.expiresAt,
   };
-  await input.repository.createPendingWorkspaceBundleArtifact({
+  const pendingArtifactRecord: CreatePendingWorkspaceBundleArtifactInput = {
     ...pendingWorkspaceBundle,
     id: stableUuidFromDigest({ kind: 'pending_workspace_bundle', bundle_id: input.bundleId }),
     run_session_id: input.runSession.id,
     execution_package_id: input.executionPackage.id,
-    archive_bytes_base64: archiveBytes.toString('base64'),
+    internal_artifact_object_id: stored.id,
     request_digest: codexCanonicalDigest({
       run_session_id: input.runSession.id,
       execution_package_id: input.executionPackage.id,
       bundle_id: input.bundleId,
       archive_digest: archiveDigest,
       manifest_digest: manifestDigest,
+      internal_artifact_object_id: stored.id,
     }),
     created_at: input.now,
-  });
+  };
+  await input.repository.createPendingWorkspaceBundleArtifact(pendingArtifactRecord);
   return {
-    pending_workspace_bundle: pendingWorkspaceBundle,
+    pending_workspace_bundle: pendingArtifactRecord,
     archive_digest: archiveDigest,
     manifest_digest: manifestDigest,
     size_bytes: archiveBytes.byteLength,
+    pending_artifact_record: pendingArtifactRecord,
   };
 };
 
@@ -580,25 +635,38 @@ const executorResultFromRemoteRunExecution = (input: {
 
 const pendingWorkspaceBundleFromRuntimeMetadata = (
   runtimeMetadata: RunRuntimeMetadata,
+  runSessionId: string,
+  executionPackageId: string,
   runWorkerLeaseId: string,
-): PendingWorkspaceBundleInput | undefined => {
+): PendingWorkspaceBundleReplayInput | undefined => {
   if (
     typeof runtimeMetadata.remote_workspace_bundle_id !== 'string' ||
     typeof runtimeMetadata.remote_run_worker_lease_id !== 'string' ||
     runtimeMetadata.remote_run_worker_lease_id !== runWorkerLeaseId ||
+    typeof runtimeMetadata.remote_workspace_bundle_artifact_record_id !== 'string' ||
+    typeof runtimeMetadata.remote_workspace_bundle_artifact_request_digest !== 'string' ||
+    typeof runtimeMetadata.remote_workspace_bundle_created_at !== 'string' ||
     typeof runtimeMetadata.remote_workspace_bundle_digest !== 'string' ||
     typeof runtimeMetadata.remote_workspace_manifest_digest !== 'string' ||
     typeof runtimeMetadata.remote_workspace_bundle_size_bytes !== 'number' ||
     typeof runtimeMetadata.remote_workspace_bundle_expires_at !== 'string' ||
     typeof runtimeMetadata.remote_workspace_acquisition_digest !== 'string' ||
     !isRecord(runtimeMetadata.remote_workspace_acquisition_json) ||
-    typeof runtimeMetadata.remote_workspace_acquisition_json.archive_ref !== 'string'
+    typeof runtimeMetadata.remote_workspace_acquisition_json.archive_ref !== 'string' ||
+    runtimeMetadata.remote_workspace_acquisition_json.archive_ref !==
+      `artifact://internal/workspace_bundle/run_session/${runSessionId}/${runtimeMetadata.remote_workspace_bundle_id}`
   ) {
     return undefined;
   }
   return {
+    id: runtimeMetadata.remote_workspace_bundle_artifact_record_id,
     bundle_id: runtimeMetadata.remote_workspace_bundle_id,
+    run_session_id: runSessionId,
+    execution_package_id: executionPackageId,
     pending_artifact_ref: runtimeMetadata.remote_workspace_acquisition_json.archive_ref,
+    ...(typeof runtimeMetadata.remote_workspace_internal_artifact_object_id === 'string'
+      ? { internal_artifact_object_id: runtimeMetadata.remote_workspace_internal_artifact_object_id }
+      : {}),
     archive_digest: runtimeMetadata.remote_workspace_bundle_digest,
     manifest_digest: runtimeMetadata.remote_workspace_manifest_digest,
     run_worker_lease_id: runWorkerLeaseId,
@@ -606,6 +674,8 @@ const pendingWorkspaceBundleFromRuntimeMetadata = (
     workspace_acquisition_digest: runtimeMetadata.remote_workspace_acquisition_digest,
     workspace_acquisition_json: runtimeMetadata.remote_workspace_acquisition_json,
     expires_at: runtimeMetadata.remote_workspace_bundle_expires_at,
+    request_digest: runtimeMetadata.remote_workspace_bundle_artifact_request_digest,
+    created_at: runtimeMetadata.remote_workspace_bundle_created_at,
   };
 };
 
@@ -669,6 +739,8 @@ export class RunWorker {
   private readonly evidenceCollector: RunWorkerInput['evidenceCollector'];
   private readonly selfReview: RunWorkerInput['selfReview'];
   private readonly remoteRunExecutionClient: RunWorkerInput['remoteRunExecutionClient'];
+  private readonly internalArtifactStore: LocalInternalArtifactStore | undefined;
+  private readonly internalArtifactStoreRoot: string | undefined;
   private readonly now: () => string;
   private readonly heartbeatIntervalMs: number;
   private readonly commandPollIntervalMs: number;
@@ -689,6 +761,8 @@ export class RunWorker {
     this.evidenceCollector = input.evidenceCollector;
     this.selfReview = input.selfReview;
     this.remoteRunExecutionClient = input.remoteRunExecutionClient;
+    this.internalArtifactStore = input.internalArtifactStore;
+    this.internalArtifactStoreRoot = input.internalArtifactStoreRoot;
     this.now = input.now ?? nowIso;
     this.heartbeatIntervalMs = input.heartbeatIntervalMs ?? 5_000;
     this.commandPollIntervalMs = input.commandPollIntervalMs ?? 750;
@@ -992,11 +1066,14 @@ export class RunWorker {
       runtimeMetadata.remote_runtime_job_id === remoteWorkload.runtimeJobId &&
       runtimeMetadata.launch_lease_id === remoteWorkload.launchLeaseId;
     let runtimeJobId = persistedRemoteFenceMatches ? runtimeMetadata.remote_runtime_job_id : undefined;
-    let pendingBundle = persistedRemoteFenceMatches ? pendingWorkspaceBundleFromRuntimeMetadata(runtimeMetadata, runWorkerLeaseId) : undefined;
+    let pendingBundle = persistedRemoteFenceMatches
+      ? pendingWorkspaceBundleFromRuntimeMetadata(runtimeMetadata, activeRunSession.id, executionPackage.id, runWorkerLeaseId)
+      : undefined;
     let workspaceBundleDigest = pendingBundle?.archive_digest;
     if (pendingBundle === undefined || workspaceBundleDigest === undefined) {
       const bundle = await createRunWorkerPendingWorkspaceBundleArtifact({
         repository: this.repository,
+        internalArtifactStore: this.internalArtifactStore ?? createRunWorkerInternalArtifactStore(this.repository, this.internalArtifactStoreRoot),
         runSession: activeRunSession,
         executionPackage,
         runWorkerLease: {
@@ -1025,13 +1102,21 @@ export class RunWorker {
         remote_workspace_manifest_digest: bundle.manifest_digest,
         remote_workspace_bundle_size_bytes: bundle.size_bytes,
         remote_workspace_bundle_expires_at: bundle.pending_workspace_bundle.expires_at,
+        remote_workspace_bundle_artifact_record_id: bundle.pending_artifact_record.id,
+        remote_workspace_bundle_artifact_request_digest: bundle.pending_artifact_record.request_digest,
+        remote_workspace_bundle_created_at: bundle.pending_artifact_record.created_at,
+        ...(bundle.pending_workspace_bundle.internal_artifact_object_id === undefined
+          ? {}
+          : { remote_workspace_internal_artifact_object_id: bundle.pending_workspace_bundle.internal_artifact_object_id }),
         remote_workspace_acquisition_digest: bundle.pending_workspace_bundle.workspace_acquisition_digest,
         remote_workspace_acquisition_json: bundle.pending_workspace_bundle.workspace_acquisition_json,
       });
       runtimeMetadata = activeRunSession.runtime_metadata!;
       runtimeJobId = remoteWorkload.runtimeJobId;
-      pendingBundle = bundle.pending_workspace_bundle;
+      pendingBundle = bundle.pending_artifact_record;
       workspaceBundleDigest = bundle.archive_digest;
+    } else {
+      await this.repository.createPendingWorkspaceBundleArtifact(pendingBundle);
     }
     runtimeJobId = await this.createRemoteRunExecutionJob({
       runSession: activeRunSession,
@@ -1144,7 +1229,7 @@ export class RunWorker {
     runSession: RunSession;
     executionPackage: ExecutionPackage;
     lease: OwnedRun;
-    bundle: PendingWorkspaceBundleInput;
+      bundle: PendingWorkspaceBundleReplayInput;
     expiresAt: string;
     remoteWorkload: RemoteRunExecutionWorkloadInput;
   }): Promise<string> {
@@ -1198,9 +1283,12 @@ export class RunWorker {
         repo_id: runSpec.repo.repo_id,
       },
       runtime_profile_revision_id: requiredRemoteStatusString(runtimeStatus, 'runtime_profile_revision_id'),
+      runtime_profile_digest: requiredRemoteStatusString(runtimeStatus, 'runtime_profile_digest'),
       credential_binding_id: requiredRemoteStatusString(runtimeStatus, 'credential_binding_id'),
       credential_binding_version_id: requiredRemoteStatusString(runtimeStatus, 'credential_binding_version_id'),
       credential_payload_digest: requiredRemoteStatusString(runtimeStatus, 'credential_payload_digest'),
+      docker_image_digest: requiredRemoteStatusString(runtimeStatus, 'docker_image_digest'),
+      network_policy_digest: requiredRemoteStatusString(runtimeStatus, 'network_policy_digest'),
       input_json: workload,
       workspace_acquisition_json: input.bundle.workspace_acquisition_json,
       pending_workspace_bundle: input.bundle,
