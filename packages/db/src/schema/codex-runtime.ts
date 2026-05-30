@@ -13,6 +13,7 @@ import type {
 } from '@forgeloop/domain';
 
 import { timestampColumn } from './_shared';
+import { internal_artifact_objects } from './internal-artifact';
 
 export const codex_runtime_profiles = pgTable(
   'codex_runtime_profiles',
@@ -385,6 +386,7 @@ export const codex_runtime_job_artifacts = pgTable(
     contentType: text('content_type').notNull(),
     digest: text('digest').notNull(),
     internalRef: text('internal_ref').notNull(),
+    internalArtifactObjectId: uuid('internal_artifact_object_id').references(() => internal_artifact_objects.id),
     sizeBytes: integer('size_bytes').notNull(),
     metadataJson: jsonb('metadata_json').$type<Record<string, unknown>>().notNull(),
     requestDigest: text('request_digest'),
@@ -407,9 +409,10 @@ export const codex_pending_workspace_bundles = pgTable(
     runWorkerLeaseId: text('run_worker_lease_id').notNull(),
     status: text('status').notNull(),
     pendingArtifactRef: text('pending_artifact_ref').notNull(),
+    internalArtifactObjectId: uuid('internal_artifact_object_id').references(() => internal_artifact_objects.id),
     archiveDigest: text('archive_digest').notNull(),
     manifestDigest: text('manifest_digest').notNull(),
-    archiveBytesBase64: text('archive_bytes_base64').notNull(),
+    archiveBytesBase64: text('archive_bytes_base64'),
     sizeBytes: integer('size_bytes').notNull(),
     workspaceAcquisitionDigest: text('workspace_acquisition_digest').notNull(),
     workspaceAcquisitionJson: jsonb('workspace_acquisition_json').$type<Record<string, unknown>>().notNull(),

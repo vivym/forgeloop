@@ -289,6 +289,7 @@ export interface CodexRuntimeJobArtifact {
   content_type: string;
   digest: string;
   internal_ref: string;
+  internal_artifact_object_id?: string;
   size_bytes: number;
   metadata_json: Record<string, unknown>;
   created_at: IsoDateTime;

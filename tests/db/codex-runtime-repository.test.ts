@@ -774,9 +774,10 @@ const createRuntimeJobArtifact = (
     name: 'generated-payload.json',
     content_type: 'application/json',
     digest: tokenHash(`artifact-digest-${runtimeJobId}`),
-    internal_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/11111111-1111-4111-8111-${
+    internal_ref: `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${runtimeJobId}/11111111-1111-4111-8111-${
       runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'
     }`,
+    internal_artifact_object_id: `33333333-3333-4333-8333-${runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'}`,
     size_bytes: 128,
     metadata_json: {},
     request_digest: tokenHash(`artifact-request-${runtimeJobId}`),
@@ -2133,7 +2134,8 @@ describe('codex runtime repository behavior', () => {
       content_type: 'application/json',
       digest: tokenHash('artifact-digest-runtime-job-1'),
       size_bytes: 128,
-      internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/11111111-1111-4111-8111-111111111111',
+      internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/11111111-1111-4111-8111-111111111111',
+      internal_artifact_object_id: '33333333-3333-4333-8333-111111111111',
     });
     await expect(repository.listCodexRuntimeJobArtifacts({ runtime_job_id: 'runtime-job-1' })).resolves.toEqual([artifact]);
     await expect(
@@ -2154,7 +2156,7 @@ describe('codex runtime repository behavior', () => {
         nonce: 'artifact-same-digest-different-key-runtime-job-1',
         artifact_id: conflictingArtifactId,
         artifact_idempotency_key: 'artifact-runtime-job-1-conflict',
-        internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${conflictingArtifactId}`,
+        internal_ref: `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/${conflictingArtifactId}`,
         request_digest: tokenHash('artifact-same-digest-different-key-request-runtime-job-1'),
       }),
     ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
@@ -2198,7 +2200,7 @@ describe('codex runtime repository behavior', () => {
               name: 'generated-payload.json',
               content_type: 'application/json',
               digest: generatedPayloadDigest,
-              internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+              internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated_payload',
             },
           },
           generated_payload_digest: generatedPayloadDigest,
@@ -2265,7 +2267,7 @@ describe('codex runtime repository behavior', () => {
               name: 'generated-payload.json',
               content_type: 'application/json',
               digest: tokenHash('invented-artifact'),
-              internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/worker-invented',
+              internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/worker-invented',
             },
           ],
         },
@@ -3400,7 +3402,7 @@ describe('codex runtime repository behavior', () => {
     const workspaceAcquisitionJson = {
       schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: 'pending-bundle-1',
-      archive_ref: 'artifact:codex-pending-bundles:pending-bundle-1',
+      archive_ref: 'artifact://internal/workspace_bundle/run_session/runtime-run-session-1/pending-bundle-1',
       archive_digest: bytesDigest(archiveBytes),
       manifest_digest: tokenHash('bundle-manifest-1'),
       size_bytes: archiveBytes.byteLength,
@@ -3491,6 +3493,304 @@ describe('codex runtime repository behavior', () => {
     });
   });
 
+  it('rejects run-execution runtime job create when pending bundle object id differs from stored bundle', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const run = runSession({
+      id: 'runtime-run-session-pending-object-mismatch',
+      execution_package_id: 'runtime-execution-package-pending-object-mismatch',
+    });
+    await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+    await repository.saveRunSession(run);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: run.id,
+      worker_id: 'run-worker-pending-object-mismatch',
+      lease_token: 'run-worker-token-pending-object-mismatch',
+      now,
+      expires_at: expiresAt,
+    });
+    const archiveBytes = Buffer.from('bundle-archive-pending-object-mismatch');
+    const workspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: 'pending-bundle-object-mismatch',
+      archive_ref:
+        'artifact://internal/workspace_bundle/run_session/runtime-run-session-pending-object-mismatch/pending-bundle-object-mismatch',
+      archive_digest: bytesDigest(archiveBytes),
+      manifest_digest: tokenHash('bundle-manifest-pending-object-mismatch'),
+      size_bytes: archiveBytes.byteLength,
+      expires_at: expiresAt,
+    };
+    const pendingBundle = {
+      bundle_id: 'pending-bundle-object-mismatch',
+      pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+      internal_artifact_object_id: '66666666-6666-4666-8666-666666666666',
+      archive_digest: workspaceAcquisitionJson.archive_digest,
+      manifest_digest: workspaceAcquisitionJson.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: archiveBytes.byteLength,
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+      workspace_acquisition_json: workspaceAcquisitionJson,
+      expires_at: expiresAt,
+    };
+    await repository.createPendingWorkspaceBundleArtifact({
+      ...pendingBundle,
+      id: '66666666-6666-4666-8666-666666666665',
+      run_session_id: run.id,
+      execution_package_id: run.execution_package_id,
+      archive_bytes_base64: archiveBytes.toString('base64'),
+      request_digest: tokenHash('pending-workspace-request-object-mismatch'),
+      created_at: now,
+    });
+    const input = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-run-execution-pending-object-mismatch',
+        launch_lease_id: 'runtime-launch-lease-run-execution-pending-object-mismatch',
+        envelope_id: 'runtime-envelope-run-execution-pending-object-mismatch',
+        job_request_id: 'runtime-job-request-run-execution-pending-object-mismatch',
+        target: generationTarget({
+          target_type: 'run_session',
+          target_kind: 'run_execution',
+          target_id: run.id,
+        }),
+        action_type: undefined,
+        action_attempt: undefined,
+        action_claim_token_hash: undefined,
+        precondition_fingerprint: undefined,
+        execution_package_id: run.execution_package_id,
+        run_worker_lease_id: runWorkerLease.id,
+        run_worker_lease_token_hash: tokenHash('run-worker-token-pending-object-mismatch'),
+        run_session_status: 'running',
+        run_session_updated_at: now,
+        execution_package_version: 1,
+        input_json: { task: 'run package', public_ref: 'artifact://runtime/run-input-pending-object-mismatch' },
+        input_digest: tokenHash('runtime-run-input-pending-object-mismatch'),
+        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+        workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+        pending_workspace_bundle: {
+          ...pendingBundle,
+          internal_artifact_object_id: '66666666-6666-4666-8666-000000000000',
+        },
+      },
+      { capabilities: ['run_execution'] },
+    );
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('rejects byte-less workspace bundle downloads until object-store resolution is wired', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const run = runSession({
+      id: 'runtime-run-session-byteless',
+      execution_package_id: 'runtime-execution-package-byteless',
+    });
+    await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+    await repository.saveRunSession(run);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: run.id,
+      worker_id: 'run-worker-byteless',
+      lease_token: 'run-worker-token-byteless',
+      now,
+      expires_at: expiresAt,
+    });
+    const archiveBytes = Buffer.from('bundle-archive-byteless');
+    const workspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: 'pending-bundle-byteless',
+      archive_ref: 'artifact://internal/workspace_bundle/run_session/runtime-run-session-byteless/pending-bundle-byteless',
+      archive_digest: bytesDigest(archiveBytes),
+      manifest_digest: tokenHash('bundle-manifest-byteless'),
+      size_bytes: archiveBytes.byteLength,
+      expires_at: expiresAt,
+    };
+    const pendingBundle = {
+      bundle_id: 'pending-bundle-byteless',
+      pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+      internal_artifact_object_id: '44444444-4444-4444-8444-444444444444',
+      archive_digest: workspaceAcquisitionJson.archive_digest,
+      manifest_digest: workspaceAcquisitionJson.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: archiveBytes.byteLength,
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+      workspace_acquisition_json: workspaceAcquisitionJson,
+      expires_at: expiresAt,
+    };
+    await repository.createPendingWorkspaceBundleArtifact({
+      ...pendingBundle,
+      id: '44444444-4444-4444-8444-444444444443',
+      run_session_id: run.id,
+      execution_package_id: run.execution_package_id,
+      request_digest: tokenHash('pending-workspace-request-byteless'),
+      created_at: now,
+    });
+    const input = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-run-execution-byteless',
+        launch_lease_id: 'runtime-launch-lease-run-execution-byteless',
+        envelope_id: 'runtime-envelope-run-execution-byteless',
+        job_request_id: 'runtime-job-request-run-execution-byteless',
+        target: generationTarget({
+          target_type: 'run_session',
+          target_kind: 'run_execution',
+          target_id: run.id,
+        }),
+        action_type: undefined,
+        action_attempt: undefined,
+        action_claim_token_hash: undefined,
+        precondition_fingerprint: undefined,
+        execution_package_id: run.execution_package_id,
+        run_worker_lease_id: runWorkerLease.id,
+        run_worker_lease_token_hash: tokenHash('run-worker-token-byteless'),
+        run_session_status: 'running',
+        run_session_updated_at: now,
+        execution_package_version: 1,
+        input_json: { task: 'run package', public_ref: 'artifact://runtime/run-input-byteless' },
+        input_digest: tokenHash('runtime-run-input-byteless'),
+        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+        workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+        pending_workspace_bundle: pendingBundle,
+      },
+      { capabilities: ['run_execution'] },
+    );
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+    await acceptRuntimeJob(repository, input.runtime_job_id, {
+      nonce: 'accept-nonce-runtime-job-run-execution-byteless',
+      idempotency_key: 'accept-runtime-job-run-execution-byteless',
+      request_digest: tokenHash('accept-request-runtime-job-run-execution-byteless'),
+    });
+
+    await expect(
+      repository.getWorkspaceBundleDownloadForRuntimeJob({
+        runtime_job_id: input.runtime_job_id,
+        bundle_id: pendingBundle.bundle_id,
+        worker_id: input.worker_id,
+        worker_session_token: 'session-token-1',
+        nonce: 'download-nonce-byteless',
+        nonce_timestamp: later,
+        replay_protection: {
+          method: 'GET',
+          path: `/codex/runtime-jobs/${input.runtime_job_id}/workspace-bundles/${pendingBundle.bundle_id}`,
+          body_digest: tokenHash('download-byteless'),
+        },
+        now: later,
+      }),
+    ).rejects.toThrow(/Runtime job workspace bundle bytes were rejected/);
+  });
+
+  it('rejects in-memory workspace bundle downloads when artifact object binding drifts from pending bundle', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const run = runSession({
+      id: 'runtime-run-session-object-drift',
+      execution_package_id: 'runtime-execution-package-object-drift',
+    });
+    await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+    await repository.saveRunSession(run);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: run.id,
+      worker_id: 'run-worker-object-drift',
+      lease_token: 'run-worker-token-object-drift',
+      now,
+      expires_at: expiresAt,
+    });
+    const archiveBytes = Buffer.from('bundle-archive-object-drift');
+    const workspaceAcquisitionJson = {
+      schema_version: 'workspace_bundle_acquisition.v1',
+      bundle_id: 'pending-bundle-object-drift',
+      archive_ref: 'artifact://internal/workspace_bundle/run_session/runtime-run-session-object-drift/pending-bundle-object-drift',
+      archive_digest: bytesDigest(archiveBytes),
+      manifest_digest: tokenHash('bundle-manifest-object-drift'),
+      size_bytes: archiveBytes.byteLength,
+      expires_at: expiresAt,
+    };
+    const pendingBundle = {
+      bundle_id: 'pending-bundle-object-drift',
+      pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+      internal_artifact_object_id: '55555555-5555-4555-8555-555555555555',
+      archive_digest: workspaceAcquisitionJson.archive_digest,
+      manifest_digest: workspaceAcquisitionJson.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: archiveBytes.byteLength,
+      workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+      workspace_acquisition_json: workspaceAcquisitionJson,
+      expires_at: expiresAt,
+    };
+    await repository.createPendingWorkspaceBundleArtifact({
+      ...pendingBundle,
+      id: '55555555-5555-4555-8555-555555555554',
+      run_session_id: run.id,
+      execution_package_id: run.execution_package_id,
+      archive_bytes_base64: archiveBytes.toString('base64'),
+      request_digest: tokenHash('pending-workspace-request-object-drift'),
+      created_at: now,
+    });
+    const input = await runtimeJobInput(
+      repository,
+      {
+        runtime_job_id: 'runtime-job-run-execution-object-drift',
+        launch_lease_id: 'runtime-launch-lease-run-execution-object-drift',
+        envelope_id: 'runtime-envelope-run-execution-object-drift',
+        job_request_id: 'runtime-job-request-run-execution-object-drift',
+        target: generationTarget({
+          target_type: 'run_session',
+          target_kind: 'run_execution',
+          target_id: run.id,
+        }),
+        action_type: undefined,
+        action_attempt: undefined,
+        action_claim_token_hash: undefined,
+        precondition_fingerprint: undefined,
+        execution_package_id: run.execution_package_id,
+        run_worker_lease_id: runWorkerLease.id,
+        run_worker_lease_token_hash: tokenHash('run-worker-token-object-drift'),
+        run_session_status: 'running',
+        run_session_updated_at: now,
+        execution_package_version: 1,
+        input_json: { task: 'run package', public_ref: 'artifact://runtime/run-input-object-drift' },
+        input_digest: tokenHash('runtime-run-input-object-drift'),
+        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+        workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+        pending_workspace_bundle: pendingBundle,
+      },
+      { capabilities: ['run_execution'] },
+    );
+    await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+    await acceptRuntimeJob(repository, input.runtime_job_id, {
+      nonce: 'accept-nonce-runtime-job-run-execution-object-drift',
+      idempotency_key: 'accept-runtime-job-run-execution-object-drift',
+      request_digest: tokenHash('accept-request-runtime-job-run-execution-object-drift'),
+    });
+    for (const [artifactId, artifact] of runtimeJobArtifactBindings(repository)) {
+      if (artifact.kind === 'workspace_bundle') {
+        runtimeJobArtifactBindings(repository).set(artifactId, {
+          ...artifact,
+          internal_artifact_object_id: '55555555-5555-4555-8555-000000000000',
+        });
+      }
+    }
+
+    await expect(
+      repository.getWorkspaceBundleDownloadForRuntimeJob({
+        runtime_job_id: input.runtime_job_id,
+        bundle_id: pendingBundle.bundle_id,
+        worker_id: input.worker_id,
+        worker_session_token: 'session-token-1',
+        nonce: 'download-nonce-object-drift',
+        nonce_timestamp: later,
+        replay_protection: {
+          method: 'GET',
+          path: `/codex/runtime-jobs/${input.runtime_job_id}/workspace-bundles/${pendingBundle.bundle_id}`,
+          body_digest: tokenHash('download-object-drift'),
+        },
+        now: later,
+      }),
+    ).rejects.toThrow(/Runtime job workspace bundle download was denied/);
+  });
+
   it('requires run-execution runtime jobs to carry strong run-worker fences', async () => {
     const repository = createRepository(createEnvelopeSealer());
     const run = runSession({
@@ -3515,7 +3815,7 @@ describe('codex runtime repository behavior', () => {
     const workspaceAcquisitionJson = {
       schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: 'pending-bundle-missing-fence',
-      archive_ref: 'artifact:codex-pending-bundles:pending-bundle-missing-fence',
+      archive_ref: 'artifact://internal/workspace_bundle/run_session/runtime-run-session-missing-fence/pending-bundle-missing-fence',
       archive_digest: bytesDigest(archiveBytes),
       manifest_digest: tokenHash('bundle-manifest-missing-fence'),
       size_bytes: archiveBytes.byteLength,
