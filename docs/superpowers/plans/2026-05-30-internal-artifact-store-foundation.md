@@ -40,13 +40,14 @@ Out of scope:
 
 - Create `packages/domain/src/internal-artifacts.ts`
   - Owns `InternalArtifactKind`, `InternalArtifactOwnerType`, `InternalArtifactVisibility`, `InternalArtifactObject`, canonical ref builder/parser, base64url ref transport helpers, error-code helpers, and public-schema separation helpers.
+  - Owns the shared runtime artifact upload proof payload builder used by both control-plane API and `@forgeloop/codex-worker-runtime`.
 - Modify `packages/domain/src/codex-runtime.ts`
   - Uses the new internal runtime artifact ref validator for terminal runtime artifact refs without widening public `ArtifactRef`.
   - Keeps legacy `artifact://codex-runtime-jobs/...` acceptance only behind an explicit migration helper used by repository terminal validation.
 - Modify `packages/domain/src/index.ts`
   - Exports internal artifact contracts.
 - Test `tests/domain/internal-artifacts.test.ts`
-  - Covers ref parse/build, invalid path segments, base64url transport, public schema separation, and legacy-runtime-ref migration helper.
+  - Covers ref parse/build, invalid path segments, base64url transport, runtime artifact upload proof payload shape, public schema separation, and legacy-runtime-ref migration helper.
 - Modify `tests/domain/codex-runtime.test.ts`
   - Covers terminal result validation for canonical internal refs and rejection of old-prefix refs outside migration helper.
 
@@ -135,7 +136,7 @@ Out of scope:
 
 - Modify `packages/codex-worker-runtime/src/runtime-job-artifacts.ts`
   - `RuntimeJobArtifactUploadInput` carries bytes in addition to metadata.
-  - `jsonRuntimeJobArtifactUpload` returns canonical JSON bytes and digest derived from the bytes.
+  - `jsonRuntimeJobArtifactUpload` returns JSON bytes plus an artifact byte digest derived from those exact bytes. Generated-payload canonical digests stay separate.
 - Modify `packages/codex-worker-runtime/src/control-plane-client.ts`
   - Sends artifact bytes using `application/octet-stream` plus metadata/proof headers or multipart with `metadata` and `file`.
   - Keeps existing JSON worker proof for non-artifact routes.
@@ -179,6 +180,9 @@ Out of scope:
 - Schema evolution for Wave 1 keeps `internal_artifact_object_id` nullable on existing runtime binding tables so pre-Wave-1 rows remain readable through the explicit migration adapters. Repository/service code must require non-null `internal_artifact_object_id` for every new runtime artifact or pending workspace bundle write after Wave 1 lands.
 - Wave 1 does not backfill durable old rows. Existing rows retain their legacy refs/DB bytes until a later backfill-or-tombstone runbook before Wave 4.
 - Keep all byte digests as `sha256:{64 lowercase hex}`.
+- Store object `digest`, upload metadata `digest`, and `declared_artifact_digest` always mean raw SHA-256 over the exact uploaded bytes.
+- `generated_payload_digest` means `codexCanonicalDigest(parsedGeneratedPayload)` and is intentionally separate from the artifact byte digest. A `generated_payload_ref.v1.artifact.digest` value must match the runtime artifact binding byte digest, not `generated_payload_digest`.
+- Worker `body_digest` signs the canonical metadata/proof carrier without raw bytes; it is distinct from both artifact byte digest and generated-payload canonical digest.
 - Keep API/store DTO `size_bytes` values as decimal strings. Runtime binding domain objects may continue to expose bounded `size_bytes: number` where existing runtime code expects it.
 
 ## Task 1: Domain Internal Artifact Contracts
@@ -202,6 +206,7 @@ import {
   encodeInternalArtifactRefBase64Url,
   isInternalArtifactRefString,
   parseInternalArtifactRef,
+  runtimeArtifactUploadProofPayload,
 } from '@forgeloop/domain';
 
 describe('internal artifact refs', () => {
@@ -239,6 +244,49 @@ describe('internal artifact refs', () => {
   it('round-trips refs through base64url transport encoding', () => {
     const ref = 'artifact://internal/workspace_bundle/run_session/run-session-1/bundle-1';
     expect(decodeInternalArtifactRefBase64Url(encodeInternalArtifactRefBase64Url(ref))).toBe(ref);
+  });
+
+  it('builds a stable runtime artifact upload proof payload without raw bytes', () => {
+    expect(
+      runtimeArtifactUploadProofPayload({
+        method: 'POST',
+        path: '/internal/codex-workers/worker-1/runtime-jobs/runtime-job-1/artifacts',
+        worker_id: 'worker-1',
+        runtime_job_id: 'runtime-job-1',
+        metadata: {
+          schema_version: 'codex_runtime_job_artifact_upload.v2',
+          worker_session_token: 'session-1',
+          nonce: 'nonce-1',
+          nonce_timestamp: '2026-05-30T00:00:00.000Z',
+          artifact_idempotency_key: 'artifact-key-1',
+          kind: 'generated_payload',
+          name: 'payload.json',
+          content_type: 'application/json',
+          digest: 'sha256:' + 'a'.repeat(64),
+          size_bytes: '12',
+          metadata_json: { schema_version: 'generated_payload_metadata.v1' },
+        },
+      }),
+    ).toEqual({
+      schema_version: 'runtime_artifact_upload_proof.v1',
+      method: 'POST',
+      path: '/internal/codex-workers/worker-1/runtime-jobs/runtime-job-1/artifacts',
+      worker_id: 'worker-1',
+      runtime_job_id: 'runtime-job-1',
+      worker_session_token: 'session-1',
+      nonce: 'nonce-1',
+      nonce_timestamp: '2026-05-30T00:00:00.000Z',
+      upload: {
+        schema_version: 'codex_runtime_job_artifact_upload.v2',
+        artifact_idempotency_key: 'artifact-key-1',
+        kind: 'generated_payload',
+        name: 'payload.json',
+        content_type: 'application/json',
+        digest: 'sha256:' + 'a'.repeat(64),
+        size_bytes: '12',
+        metadata_json: { schema_version: 'generated_payload_metadata.v1' },
+      },
+    });
   });
 });
 ```
@@ -304,6 +352,47 @@ export interface InternalArtifactObject {
   created_at: string;
   deleted_at?: string;
 }
+
+export interface RuntimeArtifactUploadProofMetadata {
+  schema_version: 'codex_runtime_job_artifact_upload.v2';
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  artifact_idempotency_key: string;
+  kind: string;
+  name: string;
+  content_type: string;
+  digest: string;
+  size_bytes: string;
+  metadata_json: Record<string, unknown>;
+}
+
+export const runtimeArtifactUploadProofPayload = (input: {
+  method: 'POST';
+  path: string;
+  worker_id: string;
+  runtime_job_id: string;
+  metadata: RuntimeArtifactUploadProofMetadata;
+}) => ({
+  schema_version: 'runtime_artifact_upload_proof.v1',
+  method: input.method,
+  path: input.path,
+  worker_id: input.worker_id,
+  runtime_job_id: input.runtime_job_id,
+  worker_session_token: input.metadata.worker_session_token,
+  nonce: input.metadata.nonce,
+  nonce_timestamp: input.metadata.nonce_timestamp,
+  upload: {
+    schema_version: input.metadata.schema_version,
+    artifact_idempotency_key: input.metadata.artifact_idempotency_key,
+    kind: input.metadata.kind,
+    name: input.metadata.name,
+    content_type: input.metadata.content_type,
+    digest: input.metadata.digest,
+    size_bytes: input.metadata.size_bytes,
+    metadata_json: input.metadata.metadata_json,
+  },
+});
 
 const segmentPattern = /^[a-z0-9_-]+$/;
 const kindSet = new Set<string>(internalArtifactKinds);
@@ -371,6 +460,33 @@ Add `export * from './internal-artifacts';` to `packages/domain/src/index.ts`.
 In `tests/domain/codex-runtime.test.ts`, add tests near existing terminal artifact validation:
 
 ```ts
+const generatedPayload = { schema_version: 'generated_payload.test.v1', value: 'ok' };
+const generatedPayloadDigest = codexCanonicalDigest(generatedPayload);
+const generatedPayloadArtifactByteDigest = 'sha256:' + '9'.repeat(64);
+
+it('accepts generated payload artifact refs with byte digest separate from payload digest', () => {
+  expect(() =>
+    validateCodexRuntimeJobTerminalResult({
+      task_kind: 'spec_draft',
+      prompt_version: 'prompt-v1',
+      output_schema_version: 'spec_draft.v1',
+      generated_payload: {
+        schema_version: 'generated_payload_ref.v1',
+        artifact: {
+          kind: 'generated_payload',
+          name: 'payload.json',
+          content_type: 'application/json',
+          digest: generatedPayloadArtifactByteDigest,
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+        },
+      },
+      generated_payload_digest: generatedPayloadDigest,
+      generation_artifacts: [],
+      public_summary: 'Generated payload stored as an internal artifact.',
+    }),
+  ).not.toThrow();
+});
+
 it('accepts canonical internal runtime artifact refs in terminal artifacts', () => {
   expect(() =>
     validateCodexRuntimeJobTerminalResult({
@@ -428,9 +544,19 @@ it('does not accept old runtime artifact refs in normal terminal validation', ()
 });
 ```
 
+Also update existing generated-payload artifact-ref tests in the same file:
+
+- change any successful `generated_payload_ref.v1` fixture that uses `artifact://codex-runtime-jobs/...` to the canonical `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/...` ref;
+- remove or replace the old "digest mismatch" rejection case that asserted `artifact.digest !== generated_payload_digest` must fail. After this wave, that mismatch is allowed because the former is a byte digest and the latter is a canonical payload digest;
+- keep negative coverage for malformed/non-SHA artifact digest, missing `internal_ref`, wrong kind, wrong content type, and old-prefix internal refs.
+
 - [ ] **Step 5: Update runtime artifact ref validation**
 
-In `packages/domain/src/codex-runtime.ts`, import `isInternalArtifactRefString`, and in `requireCodexRuntimeArtifact`, require `input.internal_ref` to pass `isInternalArtifactRefString(input.internal_ref)` when present. Add a separate exported helper for repository migration checks:
+In `packages/domain/src/codex-runtime.ts`, import `isInternalArtifactRefString`, and in `requireCodexRuntimeArtifact`, require `input.internal_ref` to pass `isInternalArtifactRefString(input.internal_ref)` when present.
+
+Update generated payload artifact-ref validation so `artifact.digest` is validated only as a SHA-256 byte digest and is not required to equal `generated_payload_digest`. The `generated_payload_digest` check happens later by loading stored bytes, parsing JSON, and calling `codexCanonicalDigest(parsed)`.
+
+Add a separate exported helper for repository migration checks:
 
 ```ts
 export const isLegacyCodexRuntimeJobArtifactRefString = (ref: string): boolean =>
@@ -746,14 +872,16 @@ Create `tests/db/local-internal-artifact-store.test.ts`:
 
 ```ts
 import { Buffer } from 'node:buffer';
-import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { codexCanonicalDigest } from '@forgeloop/domain';
 import { InMemoryDeliveryRepository, LocalInternalArtifactStore } from '../../packages/db/src/index';
 
 const roots: string[] = [];
+const rawSha256 = (bytes: Uint8Array): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+
 const makeRoot = async () => {
   const root = await mkdtemp(join(tmpdir(), 'forgeloop-internal-artifacts-'));
   roots.push(root);
@@ -769,7 +897,7 @@ describe('LocalInternalArtifactStore', () => {
     const repository = new InMemoryDeliveryRepository();
     const store = new LocalInternalArtifactStore({ root: await makeRoot(), repository, requestId: () => 'request-1' });
     const bytes = Buffer.from('{"ok":true}');
-    const digest = codexCanonicalDigest(JSON.parse(bytes.toString('utf8')));
+    const digest = rawSha256(bytes);
 
     const object = await store.putObject({
       artifact_id: 'artifact-1',
@@ -807,8 +935,41 @@ describe('LocalInternalArtifactStore', () => {
       bytes,
     });
     expect(replay.ref).toBe(object.ref);
+    expect(replay.request_digest).toBe(object.request_digest);
     const read = await store.getObject(object.ref);
     expect(Buffer.from(read.bytes)).toEqual(bytes);
+  });
+
+  it('rejects idempotency drift when canonical request fields change', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const store = new LocalInternalArtifactStore({ root: await makeRoot(), repository, requestId: () => 'request-1' });
+    const bytes = Buffer.from('same-bytes');
+    const digest = rawSha256(bytes);
+    const base = {
+      artifact_id: 'artifact-1',
+      kind: 'raw_metadata' as const,
+      owner_type: 'system' as const,
+      owner_id: 'system',
+      visibility: 'internal' as const,
+      content_type: 'text/plain',
+      declared_size_bytes: String(bytes.byteLength),
+      declared_artifact_digest: digest,
+      idempotency_key: 'idem-1',
+      metadata_json: { schema_version: 'test.v1' },
+      created_by_actor_type: 'system' as const,
+      created_by_actor_id: 'system',
+      now: '2026-05-30T00:00:00.000Z',
+      max_size_bytes: 1024,
+      bytes,
+    };
+
+    await store.putObject(base);
+    await expect(store.putObject({ ...base, content_type: 'application/octet-stream' })).rejects.toThrow(
+      'internal_artifact_idempotency_drift',
+    );
+    await expect(store.putObject({ ...base, metadata_json: { schema_version: 'test.v2' } })).rejects.toThrow(
+      'internal_artifact_idempotency_drift',
+    );
   });
 
   it('rejects digest mismatch and tombstones reads after delete', async () => {
@@ -887,6 +1048,8 @@ export interface InternalArtifactObjectRead {
 }
 ```
 
+The store input deliberately does not accept `request_digest`. The store owns request-digest construction because it builds the canonical ref and verifies the byte digest.
+
 - [ ] **Step 4: Implement local store**
 
 Create `packages/db/src/internal-artifacts/local-internal-artifact-store.ts`:
@@ -898,11 +1061,29 @@ Create `packages/db/src/internal-artifacts/local-internal-artifact-store.ts`:
 - create object path `{root}/objects/sha256/{first_two_hex}/{full_hex_digest}`;
 - use `rename`, but allow replay if the same content-addressed file already exists;
 - never follow symlinks; use `lstat` on path components and verify resolved paths stay under root;
-- create metadata with `repository.createOrReplayInternalArtifactObject`;
+- build canonical ref with `buildInternalArtifactRef`;
+- compute `request_digest` with `codexCanonicalDigest` over exactly:
+
+```ts
+{
+  schema_version: 'internal_artifact_request.v1',
+  artifact_id,
+  ref,
+  owner_type,
+  owner_id,
+  idempotency_key,
+  kind,
+  visibility,
+  content_type,
+  declared_size_bytes,
+  declared_artifact_digest,
+  metadata_json,
+}
+```
+
+- create metadata with `repository.createOrReplayInternalArtifactObject` including that `request_digest`;
 - implement `getObject`, `statObject`, and `deleteObject` by ref.
 - keep absolute filesystem paths private to the implementation; `getObject` returns bytes or a stream plus metadata, never an `absolute_path` field.
-
-The canonical ref must be built with `buildInternalArtifactRef`.
 
 - [ ] **Step 5: Export store**
 
@@ -1081,22 +1262,15 @@ git commit -m "feat: expose trusted internal artifact API"
 In `tests/api/codex-runtime-control-plane.test.ts`, replace the current JSON-only artifact upload expectation with an octet-stream upload:
 
 ```ts
-const payload = Buffer.from(JSON.stringify({ schema_version: 'test_payload.v1', value: 'ok' }));
+const generatedPayload = { schema_version: 'test_payload.v1', value: 'ok' };
+const payload = Buffer.from(JSON.stringify(generatedPayload));
 const digest = rawSha256(payload);
-const metadata = {
+const generatedPayloadDigest = codexCanonicalDigest(generatedPayload);
+const unsignedMetadata = {
   schema_version: 'codex_runtime_job_artifact_upload.v2',
   worker_session_token: clientSuppliedWorkerSessionToken,
   nonce: 'artifact-nonce-1',
   nonce_timestamp: later,
-  body_digest: codexCanonicalDigest({
-    artifact_idempotency_key: 'artifact-key-1',
-    kind: 'generated_payload',
-    name: 'payload.json',
-    content_type: 'application/json',
-    digest,
-    size_bytes: String(payload.byteLength),
-    metadata_json: { schema_version: 'generated_payload_metadata.v1' },
-  }),
   artifact_idempotency_key: 'artifact-key-1',
   kind: 'generated_payload',
   name: 'payload.json',
@@ -1105,9 +1279,21 @@ const metadata = {
   size_bytes: String(payload.byteLength),
   metadata_json: { schema_version: 'generated_payload_metadata.v1' },
 };
+const uploadPath = `/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`;
+const proofPayload = runtimeArtifactUploadProofPayload({
+  method: 'POST',
+  path: uploadPath,
+  worker_id: workerId,
+  runtime_job_id: runtimeJobId,
+  metadata: unsignedMetadata,
+});
+const metadata = {
+  ...unsignedMetadata,
+  body_digest: codexCanonicalDigest(proofPayload),
+};
 
 const upload = await request(app.getHttpServer())
-  .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`)
+  .post(uploadPath)
   .set('content-type', 'application/octet-stream')
   .set('x-forgeloop-runtime-artifact-metadata', Buffer.from(JSON.stringify(metadata)).toString('base64url'))
   .send(payload)
@@ -1116,6 +1302,8 @@ const upload = await request(app.getHttpServer())
 expect(upload.body.artifact.internal_ref).toMatch(
   /^artifact:\/\/internal\/codex_runtime_job_artifact\/codex_runtime_job\/runtime-job-1\//,
 );
+expect(upload.body.artifact.digest).toBe(digest);
+expect(upload.body.artifact.digest).not.toBe(generatedPayloadDigest);
 expect(JSON.stringify(upload.body)).not.toContain('storage_key');
 ```
 
@@ -1160,6 +1348,51 @@ export const createCodexRuntimeJobArtifactUploadMetadataSchema = workerSessionRe
 }).strict();
 ```
 
+Use the shared `runtimeArtifactUploadProofPayload` from `@forgeloop/domain` so the control-plane API and worker runtime do not duplicate proof semantics. Add it to `packages/domain/src/internal-artifacts.ts` in Task 1:
+
+```ts
+export const runtimeArtifactUploadProofPayload = (input: {
+  method: 'POST';
+  path: string;
+  worker_id: string;
+  runtime_job_id: string;
+  metadata: {
+    schema_version: 'codex_runtime_job_artifact_upload.v2';
+    worker_session_token: string;
+    nonce: string;
+    nonce_timestamp: string;
+    artifact_idempotency_key: string;
+    kind: string;
+    name: string;
+    content_type: string;
+    digest: string;
+    size_bytes: string;
+    metadata_json: Record<string, unknown>;
+  };
+}) => ({
+  schema_version: 'runtime_artifact_upload_proof.v1',
+  method: input.method,
+  path: input.path,
+  worker_id: input.worker_id,
+  runtime_job_id: input.runtime_job_id,
+  worker_session_token: input.metadata.worker_session_token,
+  nonce: input.metadata.nonce,
+  nonce_timestamp: input.metadata.nonce_timestamp,
+  upload: {
+    schema_version: input.metadata.schema_version,
+    artifact_idempotency_key: input.metadata.artifact_idempotency_key,
+    kind: input.metadata.kind,
+    name: input.metadata.name,
+    content_type: input.metadata.content_type,
+    digest: input.metadata.digest,
+    size_bytes: input.metadata.size_bytes,
+    metadata_json: input.metadata.metadata_json,
+  },
+});
+```
+
+This proof payload intentionally excludes raw bytes. Raw bytes are bound by `upload.digest` and verified by recomputing SHA-256 over the request body.
+
 - [ ] **Step 4: Update controller byte extraction**
 
 In `codex-runtime.controller.ts`, change `createRuntimeJobArtifact` to accept raw octet-stream metadata header and bytes:
@@ -1167,20 +1400,38 @@ In `codex-runtime.controller.ts`, change `createRuntimeJobArtifact` to accept ra
 ```ts
 @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/artifacts')
 createRuntimeJobArtifact(
-  @Param('workerId') workerId: string,
-  @Param('jobId') jobId: string,
-  @Req() request: { rawBody?: Buffer; headers: Record<string, string | string[] | undefined> },
-) {
-  const parsed = parseRuntimeArtifactUploadRequest(request);
-  return this.service.createRuntimeJobArtifact(workerId, jobId, parsed);
-}
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Req() request: { rawBody?: Buffer; headers: Record<string, string | string[] | undefined> },
+  ) {
+    const parsed = parseRuntimeArtifactUploadRequest(request, { workerId, jobId });
+    return this.service.createRuntimeJobArtifact(workerId, jobId, parsed);
+  }
 ```
 
 Implement `parseRuntimeArtifactUploadRequest` in the controller or DTO file. It must reject missing bytes and reject JSON-only metadata uploads.
 
+The parsed request must include the normalized route path used for proof verification:
+
+```ts
+{
+  proof_path: `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/artifacts`,
+  metadata,
+  bytes,
+}
+```
+
 - [ ] **Step 5: Update service store write**
 
-In `codex-runtime.service.ts`, inject `InternalArtifactsService` or `LocalInternalArtifactStore`. Replace old internal ref creation:
+In `codex-runtime.service.ts`, inject `InternalArtifactsService` or `LocalInternalArtifactStore`. Before writing bytes, validate worker proof exactly like other worker routes:
+
+- split `metadata` into `body_digest` and unsigned metadata;
+- compute `codexCanonicalDigest(runtimeArtifactUploadProofPayload({ method: 'POST', path: input.proof_path, worker_id: workerId, runtime_job_id: jobId, metadata: unsignedMetadata }))`;
+- require it to equal `metadata.body_digest`;
+- keep raw bytes out of `body_digest`;
+- verify raw bytes through `declared_artifact_digest`/store byte digest.
+
+Replace old internal ref creation:
 
 ```ts
 const artifactId = deterministicRuntimeArtifactId(jobId, input.artifact_idempotency_key);
@@ -1307,11 +1558,11 @@ export interface RuntimeJobArtifactUploadInput {
 }
 ```
 
-Make `jsonRuntimeJobArtifactUpload` encode bytes first:
+Make `jsonRuntimeJobArtifactUpload` encode bytes first and compute the artifact digest from those exact bytes:
 
 ```ts
 const bytes = Buffer.from(JSON.stringify(input.payload), 'utf8');
-const digest = codexCanonicalDigest(input.payload);
+const digest = rawSha256(bytes);
 return {
   artifact_idempotency_key: codexCanonicalDigest({ kind: input.kind, name: input.name, digest }),
   kind: input.kind,
@@ -1324,11 +1575,15 @@ return {
 };
 ```
 
+If a caller also needs `generated_payload_digest`, compute it separately with `codexCanonicalDigest(input.payload)` and put it in the terminal result, not in the runtime artifact upload `digest` field.
+
 - [ ] **Step 4: Update control-plane client**
 
 In `control-plane-client.ts`, special-case `uploadRuntimeJobArtifact`:
 
-- build worker metadata object with nonce, nonce timestamp, worker session token, and body digest;
+- build unsigned worker metadata with `schema_version`, nonce, nonce timestamp, worker session token, idempotency key, kind, name, content type, artifact byte digest, size, and metadata JSON;
+- compute the exact upload path `/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`;
+- set `body_digest` to `codexCanonicalDigest(runtimeArtifactUploadProofPayload({ method: 'POST', path, worker_id: workerId, runtime_job_id: runtimeJobId, metadata: unsignedMetadata }))`;
 - put metadata in `x-forgeloop-runtime-artifact-metadata` base64url JSON header;
 - send bytes as request body with `content-type: application/octet-stream`;
 - do not include JSON request body for artifact uploads.
@@ -1505,6 +1760,9 @@ git commit -m "feat: store pending workspace bundles internally"
 In `tests/api/codex-runtime-control-plane.test.ts` or `tests/api/automation-daemon.integration.test.ts`, create a generated payload artifact where:
 
 - stored bytes contain the generated payload JSON;
+- stored object/runtime artifact `digest` is the raw SHA-256 of those bytes;
+- terminal result `generated_payload_digest` is `codexCanonicalDigest(expectedGeneratedPayload)`;
+- `generated_payload_ref.v1.artifact.digest` equals the stored artifact byte digest, not `generated_payload_digest`;
 - `metadata_json` intentionally does not contain `generated_payload`;
 - terminal result uses `generated_payload_ref.v1`;
 - product-generation application succeeds.
@@ -1562,7 +1820,7 @@ In `ProductGenerationResultService.resolveGeneratedPayload`:
 - find runtime binding by `runtime_job_id` and `internal_ref`;
 - verify binding kind is `generated_payload`;
 - verify content type is `application/json`;
-- verify digest equals `generated_payload_digest`;
+- verify `generated_payload_ref.v1.artifact.digest` equals the runtime binding/store artifact byte digest;
 - load bytes from InternalArtifactStore by canonical ref;
 - parse JSON from bytes;
 - verify `codexCanonicalDigest(parsed) === generated_payload_digest`;
