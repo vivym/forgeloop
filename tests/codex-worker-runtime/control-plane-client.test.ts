@@ -279,6 +279,48 @@ describe('CodexRuntimeControlPlaneClient', () => {
     );
   });
 
+  it('sends encoded runtime artifact upload paths while signing the server proof path', async () => {
+    const artifactBytes = Buffer.from('artifact bytes', 'utf8');
+    const { fetchImpl, requests } = createFetchRecorder();
+    const client = new CodexRuntimeControlPlaneClient({
+      baseUrl: 'https://control.test',
+      fetchImpl,
+      nonceFactory: () => 'nonce-encoded-artifact',
+      now: () => '2026-05-23T01:02:03.000Z',
+    });
+
+    await client.uploadRuntimeJobArtifact('worker/1', 'runtime/job/1', {
+      workerSessionToken: 'session-1',
+      artifact_idempotency_key: 'artifact-encoded',
+      kind: 'startup_failure_evidence',
+      name: 'startup-failure.json',
+      content_type: 'application/json',
+      digest: 'sha256:' + 'e'.repeat(64),
+      size_bytes: artifactBytes.byteLength,
+      bytes: artifactBytes,
+    });
+
+    expect(requests).toHaveLength(1);
+    const request = requests[0]!;
+    expect([request.init.method, new URL(request.url).pathname]).toEqual([
+      'POST',
+      '/internal/codex-workers/worker%2F1/runtime-jobs/runtime%2Fjob%2F1/artifacts',
+    ]);
+    const metadata = parseRuntimeArtifactMetadata(request);
+    const { body_digest: bodyDigest, ...unsignedMetadata } = metadata;
+    expect(bodyDigest).toBe(
+      codexCanonicalDigest(
+        runtimeArtifactUploadProofPayload({
+          method: 'POST',
+          path: '/internal/codex-workers/worker/1/runtime-jobs/runtime/job/1/artifacts',
+          worker_id: 'worker/1',
+          runtime_job_id: 'runtime/job/1',
+          metadata: unsignedMetadata as Parameters<typeof runtimeArtifactUploadProofPayload>[0]['metadata'],
+        }),
+      ),
+    );
+  });
+
   it('binds worker GET proofs to the requested workload and control paths without a request body', async () => {
     const { fetchImpl, requests } = createFetchRecorder();
     const client = new CodexRuntimeControlPlaneClient({

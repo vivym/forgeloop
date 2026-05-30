@@ -252,8 +252,9 @@ export class CodexRuntimeControlPlaneClient {
   }
 
   async uploadRuntimeJobArtifact(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
-    const path = `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/artifacts`;
-    return this.#workerPostArtifact(path, workerId, jobId, input);
+    const requestPath = `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/artifacts`;
+    const proofPath = `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/artifacts`;
+    return this.#workerPostArtifact(requestPath, proofPath, workerId, jobId, input);
   }
 
   async getRuntimeJobControl(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
@@ -364,7 +365,13 @@ export class CodexRuntimeControlPlaneClient {
     return this.#postJson(path, this.#workerPayload(input));
   }
 
-  async #workerPostArtifact(path: string, workerId: string, jobId: string, input: WorkerRequestInput): Promise<any> {
+  async #workerPostArtifact(
+    requestPath: string,
+    proofPath: string,
+    workerId: string,
+    jobId: string,
+    input: WorkerRequestInput,
+  ): Promise<any> {
     const { bytes, ...metadataInput } = input;
     if (!(bytes instanceof Uint8Array)) {
       throw new Error('codex_control_plane_runtime_artifact_bytes_required');
@@ -375,14 +382,14 @@ export class CodexRuntimeControlPlaneClient {
       body_digest: codexCanonicalDigest(
         runtimeArtifactUploadProofPayload({
           method: 'POST',
-          path,
+          path: proofPath,
           worker_id: workerId,
           runtime_job_id: jobId,
           metadata,
         }),
       ),
     };
-    const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+    const response = await this.#fetch(`${this.#baseUrl}${requestPath}`, {
       method: 'POST',
       headers: {
         accept: 'application/json',
