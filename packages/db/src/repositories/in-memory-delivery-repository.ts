@@ -1974,6 +1974,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (record.job.accepted_session_epoch === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
+    this.assertCodexRuntimeJobArtifactEligibility(record, input);
     this.assertCodexWorkerNonceRecorded(
       input.worker_id,
       input.worker_session_token,
@@ -6096,22 +6097,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     );
     this.assertCodexRuntimeJobArtifactIntake(input);
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
-    const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
-    const preStartFailureEvidenceAllowed =
-      input.kind === 'startup_failure_evidence' &&
-      (record?.job.status === 'accepted' || record?.job.status === 'materializing') &&
-      leaseRecord?.lease.status === 'active';
-    if (
-      record === undefined ||
-      leaseRecord === undefined ||
-      record.job.worker_id !== input.worker_id ||
-      (record.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
-      record.job.expires_at <= input.now ||
-      (leaseRecord.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
-      leaseRecord.lease.expires_at <= input.now
-    ) {
+    if (record === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
+    this.assertCodexRuntimeJobArtifactEligibility(record, input);
     const expectedInternalRef =
       `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${input.artifact_id}`;
     if (input.internal_ref !== expectedInternalRef) {
@@ -6200,6 +6189,27 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
   }
 
+  private assertCodexRuntimeJobArtifactEligibility(
+    record: CodexRuntimeJobPrivateRecord,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): void {
+    const leaseRecord = this.codexLaunchLeases.get(record.job.launch_lease_id);
+    const preStartFailureEvidenceAllowed =
+      input.kind === 'startup_failure_evidence' &&
+      (record.job.status === 'accepted' || record.job.status === 'materializing') &&
+      leaseRecord?.lease.status === 'active';
+    if (
+      leaseRecord === undefined ||
+      record.job.worker_id !== input.worker_id ||
+      (record.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
+      record.job.expires_at <= input.now ||
+      (leaseRecord.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
+      leaseRecord.lease.expires_at <= input.now
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+  }
+
   private findCodexRuntimeJobArtifactReplay(
     input: PreflightCreateCodexRuntimeJobArtifactInput,
   ): CodexRuntimeJobArtifactPrivateRecord | undefined {
@@ -6235,7 +6245,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       artifact.internal_ref === input.internal_ref &&
       artifact.internal_artifact_object_id === input.internal_artifact_object_id &&
       artifact.size_bytes === input.size_bytes &&
-      artifact.request_digest === input.request_digest &&
       valuesEqual(artifact.metadata_json, input.metadata_json)
     );
   }
@@ -6253,7 +6262,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       artifact.digest === input.digest &&
       artifact.internal_ref === input.internal_ref &&
       artifact.size_bytes === input.size_bytes &&
-      artifact.request_digest === input.request_digest &&
       valuesEqual(artifact.metadata_json, input.metadata_json)
     );
   }

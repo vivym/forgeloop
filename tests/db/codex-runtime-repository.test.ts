@@ -2341,6 +2341,74 @@ describe('codex runtime repository behavior', () => {
       }),
     ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_worker_nonce_replay' });
 
+    const reservedAfterCancelArtifactId = '11111111-1111-4111-8111-777777777777';
+    const reservedAfterCancelObjectId = '33333333-3333-4333-8333-777777777777';
+    const reservedAfterCancelRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/${reservedAfterCancelArtifactId}`;
+    const reservedAfterCancelDigest = tokenHash('reserved-after-cancel-digest');
+    await repository.reserveCodexRuntimeJobArtifactUpload({
+      runtime_job_id: 'runtime-job-1',
+      worker_id: 'worker-1',
+      worker_session_token: 'session-token-1',
+      nonce: 'artifact-reserved-before-cancel',
+      nonce_timestamp: later,
+      artifact_id: reservedAfterCancelArtifactId,
+      artifact_idempotency_key: 'artifact-reserved-before-cancel',
+      kind: 'generated_payload',
+      name: 'generated-payload.json',
+      content_type: 'application/json',
+      digest: reservedAfterCancelDigest,
+      internal_ref: reservedAfterCancelRef,
+      size_bytes: 128,
+      metadata_json: {},
+      request_digest: tokenHash('artifact-reserved-before-cancel-request'),
+      now: later,
+    });
+    await terminalizeRuntimeJob(repository, 'runtime-job-1', 'runtime-launch-lease-1', {
+      nonce: 'terminal-before-artifact-bind',
+      idempotency_key: 'terminal-before-artifact-bind',
+      request_digest: tokenHash('terminal-before-artifact-bind-request'),
+    });
+    await repository.createOrReplayInternalArtifactObject({
+      id: reservedAfterCancelObjectId,
+      artifact_id: reservedAfterCancelArtifactId,
+      ref: reservedAfterCancelRef,
+      storage_key: `objects/${reservedAfterCancelDigest.slice('sha256:'.length)}`,
+      kind: 'codex_runtime_job_artifact',
+      content_type: 'application/json',
+      size_bytes: '128',
+      digest: reservedAfterCancelDigest,
+      visibility: 'internal',
+      owner_type: 'codex_runtime_job',
+      owner_id: 'runtime-job-1',
+      idempotency_key: 'artifact-reserved-before-cancel',
+      request_digest: tokenHash('artifact-reserved-before-cancel-request'),
+      metadata_json: {},
+      created_by_actor_type: 'codex_worker',
+      created_by_actor_id: 'worker-1',
+      created_at: later,
+    });
+    await expect(
+      repository.bindReservedCodexRuntimeJobArtifact({
+        runtime_job_id: 'runtime-job-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'artifact-reserved-before-cancel',
+        nonce_timestamp: later,
+        artifact_id: reservedAfterCancelArtifactId,
+        artifact_idempotency_key: 'artifact-reserved-before-cancel',
+        kind: 'generated_payload',
+        name: 'generated-payload.json',
+        content_type: 'application/json',
+        digest: reservedAfterCancelDigest,
+        internal_ref: reservedAfterCancelRef,
+        internal_artifact_object_id: reservedAfterCancelObjectId,
+        size_bytes: 128,
+        metadata_json: {},
+        request_digest: tokenHash('artifact-reserved-before-cancel-request'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
     await repository.createOrReplayInternalArtifactObject({
       id: '33333333-3333-4333-8333-555555555555',
       artifact_id: '11111111-1111-4111-8111-555555555555',

@@ -2737,6 +2737,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (bundle.job === undefined || bundle.job.accepted_session_epoch === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
+    this.assertCodexRuntimeJobArtifactEligibility(bundle, input);
     await this.assertCodexWorkerNonceRecorded(
       input.worker_id,
       input.worker_session_token,
@@ -6601,21 +6602,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
     this.assertCodexRuntimeJobArtifactIntake(input);
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
-    const preStartFailureEvidenceAllowed =
-      input.kind === 'startup_failure_evidence' &&
-      (bundle.job?.status === 'accepted' || bundle.job?.status === 'materializing') &&
-      bundle.lease?.status === 'active';
-    if (
-      bundle.job === undefined ||
-      bundle.lease === undefined ||
-      bundle.job.worker_id !== input.worker_id ||
-      (bundle.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
-      !timestampIsAfter(bundle.job.expires_at, input.now) ||
-      (bundle.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
-      !timestampIsAfter(bundle.lease.expires_at, input.now)
-    ) {
+    if (bundle.job === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
+    this.assertCodexRuntimeJobArtifactEligibility(bundle, input);
     const expectedInternalRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${input.artifact_id}`;
     if (input.internal_ref !== expectedInternalRef) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
@@ -6678,6 +6668,30 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .limit(1);
     if (existing !== undefined) {
       throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce was already used.');
+    }
+  }
+
+  private assertCodexRuntimeJobArtifactEligibility(
+    bundle: {
+      job?: CodexRuntimeJobDbRecord;
+      lease?: CodexLaunchLeaseDbRecord;
+    },
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): void {
+    const preStartFailureEvidenceAllowed =
+      input.kind === 'startup_failure_evidence' &&
+      (bundle.job?.status === 'accepted' || bundle.job?.status === 'materializing') &&
+      bundle.lease?.status === 'active';
+    if (
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.job.worker_id !== input.worker_id ||
+      (bundle.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
+      !timestampIsAfter(bundle.job.expires_at, input.now) ||
+      (bundle.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
+      !timestampIsAfter(bundle.lease.expires_at, input.now)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
   }
 
@@ -6766,7 +6780,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       artifact.internal_ref === input.internal_ref &&
       artifact.internal_artifact_object_id === input.internal_artifact_object_id &&
       artifact.size_bytes === input.size_bytes &&
-      artifact.request_digest === input.request_digest &&
       valuesEqual(artifact.metadata_json, input.metadata_json)
     );
   }
@@ -6784,7 +6797,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       artifact.digest === input.digest &&
       artifact.internal_ref === input.internal_ref &&
       artifact.size_bytes === input.size_bytes &&
-      artifact.request_digest === input.request_digest &&
       valuesEqual(artifact.metadata_json, input.metadata_json)
     );
   }

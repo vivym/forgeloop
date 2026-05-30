@@ -2476,6 +2476,26 @@ describe('codex runtime control-plane APIs', () => {
     expect(JSON.stringify(upload.body)).not.toContain('launch_token');
     expect(JSON.stringify(upload.body)).not.toContain(remoteLaunchToken);
 
+    const uploadReplay = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'artifact-nonce-1-replay',
+        artifact_idempotency_key: 'artifact-key-1',
+        kind: 'generated_payload',
+        name: 'payload.json',
+        content_type: 'application/json',
+        digest,
+        size_bytes: String(payload.byteLength),
+        metadata_json: { schema_version: 'generated_payload_metadata.v1' },
+      }),
+    });
+    expect(uploadReplay.status, JSON.stringify(uploadReplay.body)).toBe(201);
+    expect(uploadReplay.body.artifact).toEqual(upload.body.artifact);
+
     const nonceReplayPayload = Buffer.from('nonce replay payload\n');
     const nonceReplayDigest = rawSha256(nonceReplayPayload);
     const rejectedNonceReplay = await runtimeArtifactUpload({
