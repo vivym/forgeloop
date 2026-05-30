@@ -6196,8 +6196,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     const leaseRecord = this.codexLaunchLeases.get(record.job.launch_lease_id);
     const preStartFailureEvidenceAllowed =
       input.kind === 'startup_failure_evidence' &&
-      (record.job.status === 'accepted' || record.job.status === 'materializing') &&
-      leaseRecord?.lease.status === 'active';
+      ((leaseRecord?.lease.status === 'active' && (record.job.status === 'accepted' || record.job.status === 'materializing')) ||
+        (record.job.status === 'materializing' && leaseRecord?.lease.status === 'materialized'));
     if (
       leaseRecord === undefined ||
       record.job.worker_id !== input.worker_id ||

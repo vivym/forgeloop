@@ -2234,6 +2234,31 @@ describe('codex runtime repository behavior', () => {
     ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
   });
 
+  it('accepts startup failure evidence after materialization before runtime job start', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+
+    await expect(
+      createRuntimeJobArtifact(repository, 'runtime-job-1', {
+        kind: 'startup_failure_evidence',
+        name: 'startup-failure-evidence.json',
+        nonce: 'artifact-startup-failure-after-materialize',
+        artifact_idempotency_key: 'artifact-startup-failure-after-materialize',
+        request_digest: tokenHash('artifact-startup-failure-after-materialize-request'),
+        metadata_json: {
+          reason_code: 'codex_worker_startup_failed',
+          public_summary: 'Startup failed after materialization.',
+        },
+      }),
+    ).resolves.toMatchObject({
+      runtime_job_id: 'runtime-job-1',
+      kind: 'startup_failure_evidence',
+      name: 'startup-failure-evidence.json',
+    });
+  });
+
   it('rejects worker-invented, wrong-job, invalid-type, and oversized runtime job artifacts', async () => {
     const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
     await acceptRuntimeJob(repository);

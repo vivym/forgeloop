@@ -6680,8 +6680,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   ): void {
     const preStartFailureEvidenceAllowed =
       input.kind === 'startup_failure_evidence' &&
-      (bundle.job?.status === 'accepted' || bundle.job?.status === 'materializing') &&
-      bundle.lease?.status === 'active';
+      ((bundle.lease?.status === 'active' && (bundle.job?.status === 'accepted' || bundle.job?.status === 'materializing')) ||
+        (bundle.job?.status === 'materializing' && bundle.lease?.status === 'materialized'));
     if (
       bundle.job === undefined ||
       bundle.lease === undefined ||
