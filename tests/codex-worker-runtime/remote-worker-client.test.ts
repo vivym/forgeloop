@@ -1446,11 +1446,27 @@ describe('remote codex worker client', () => {
   });
 
   it.each([
-    ['structured app-server error', Object.assign(new Error('jsonrpc_error'), { code: 'codex_generation_turn_failed' }), 'codex_generation_turn_failed'],
-    ['usage-limited app-server turn', new Error('codex_generation_usage_limited'), 'codex_generation_usage_limited'],
-    ['public generation error message', new Error('codex_generation_raw_log_too_large'), 'codex_generation_raw_log_too_large'],
-  ])('preserves public generation failure codes from %s', async (_name, thrownError, expectedReasonCode) => {
+    [
+      'structured app-server error',
+      Object.assign(new Error('jsonrpc_error'), { code: 'codex_generation_turn_failed' }),
+      'codex_generation_turn_failed',
+      'app_server_turn_failed',
+    ],
+    [
+      'usage-limited app-server turn',
+      new Error('codex_generation_usage_limited'),
+      'codex_generation_usage_limited',
+      'app_server_usage_limit_exceeded',
+    ],
+    [
+      'public generation error message',
+      new Error('codex_generation_raw_log_too_large'),
+      'codex_generation_raw_log_too_large',
+      'app_server_raw_log_too_large',
+    ],
+  ])('preserves public generation failure codes from %s', async (_name, thrownError, expectedReasonCode, expectedFailureSubcode) => {
     const terminalized: Record<string, unknown>[] = [];
+    const uploadedArtifacts: Record<string, unknown>[] = [];
     let sealedEnvelope: SealedEnvelope | undefined;
     const boundaryWorkload = generationWorkload({
       task_kind: 'boundary_brainstorming_round',
@@ -1502,6 +1518,19 @@ describe('remote codex worker client', () => {
         fetchRuntimeJobWorkload: async () => ({ workload: boundaryWorkload, signed_context: generationSignedContext() }),
         materializeRuntimeJob: async () => materialization(),
         startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), input_json: boundaryWorkload, status: 'running' } }),
+        appendRuntimeJobEvent: async () => ({}),
+        uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          uploadedArtifacts.push(input);
+          return {
+            artifact: {
+              kind: input.kind,
+              name: input.name,
+              content_type: input.content_type,
+              digest: input.digest,
+              internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+            },
+          };
+        },
         terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
           terminalized.push(input);
           return {};
@@ -1545,7 +1574,21 @@ describe('remote codex worker client', () => {
       terminal_status: 'failed',
       reason_code: expectedReasonCode,
     });
+    expect(uploadedArtifacts.find((artifact) => artifact.kind === 'startup_failure_evidence')).toMatchObject({
+      metadata_json: {
+        reason_code: expectedReasonCode,
+        runtime_target_kind: 'generation',
+        app_server_started: true,
+        failure_stage: 'generation_runtime_turn',
+        failure_subcode: expectedFailureSubcode,
+        runtime_evidence_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        generation_output_schema_sent: false,
+        generation_context_operation: 'start',
+        public_summary: 'Remote Codex app-server startup or generation failed.',
+      },
+    });
     expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-secret');
+    expect(JSON.stringify(uploadedArtifacts)).not.toContain('launch-token-secret');
   });
 
   it.each([
@@ -2060,7 +2103,7 @@ describe('remote codex worker client', () => {
       launcher: {
         startFromMaterialization: vi.fn(async () => ({
           endpoint: 'docker-exec:' + digest('8'),
-          createTransport: () => appServerTransport(generatedSpec()),
+          createTransport: () => appServerTransport(generatedSpec({ content: 'x'.repeat(70_000) })),
           containerWorkspacePath: '/workspace' as const,
           publicEvidence: {
             runtime_profile_id: 'profile-1',
@@ -2235,7 +2278,7 @@ describe('remote codex worker client', () => {
       launcher: {
         startFromMaterialization: vi.fn(async () => ({
           endpoint: 'docker-exec:' + digest('8'),
-          createTransport: () => appServerTransport(generatedSpec()),
+          createTransport: () => appServerTransport(generatedSpec({ content: 'x'.repeat(70_000) })),
           containerWorkspacePath: '/workspace' as const,
           publicEvidence: {
             runtime_profile_id: 'profile-1',
@@ -2326,7 +2369,7 @@ describe('remote codex worker client', () => {
       launcher: {
         startFromMaterialization: vi.fn(async () => ({
           endpoint: 'docker-exec:' + digest('8'),
-          createTransport: () => appServerTransport(generatedSpec()),
+          createTransport: () => appServerTransport(generatedSpec({ content: 'x'.repeat(70_000) })),
           containerWorkspacePath: '/workspace' as const,
           publicEvidence: {
             runtime_profile_id: 'profile-1',
@@ -2742,5 +2785,115 @@ describe('remote codex worker client', () => {
     expect(uploadedArtifacts.map((entry) => entry.kind)).toContain('cleanup_failure_evidence');
     expect(operations.indexOf('artifact:cleanup_failure_evidence')).toBeLessThan(operations.indexOf('terminal:succeeded'));
     expect(JSON.stringify(uploadedArtifacts)).not.toContain('/tmp/private');
+  });
+
+  it('reports terminal-result failures after successful generation artifact upload without blaming artifact upload', async () => {
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const terminalized: Record<string, unknown>[] = [];
+    const uploadedArtifacts: Record<string, unknown>[] = [];
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-')),
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+        },
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+        fetchRuntimeJobWorkload: async () => (generationWorkloadResponse()),
+        materializeRuntimeJob: async () => materialization(),
+        startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
+        uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          uploadedArtifacts.push(input);
+          return {
+            artifact: {
+              kind: input.kind,
+              name: input.name,
+              content_type: input.content_type,
+              digest: input.digest,
+              internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+            },
+          };
+        },
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: {
+        startFromMaterialization: vi.fn(async () => ({
+          endpoint: 'docker-exec:' + digest('8'),
+          createTransport: () => appServerTransport(generatedSpec()),
+          containerWorkspacePath: '/workspace' as const,
+          publicEvidence: {
+            runtime_profile_id: 'profile-1',
+            runtime_profile_revision_id: 'profile-rev-1',
+            runtime_profile_digest: digest('7'),
+            runtime_target_kind: 'generation' as const,
+            source_access_mode: 'artifact_only' as const,
+            environment: 'test' as const,
+            launch_lease_id: 'lease-1',
+            worker_id: 'worker-1',
+            docker_image_digest: digest('4'),
+            container_id_digest: 'not-a-digest',
+            app_server_effective_config_digest: digest('6'),
+            docker_policy_self_check_digest: digest('a'),
+            app_server_attempted: true as const,
+            selected_execution_mode: 'app_server' as const,
+          },
+          close: async () => undefined,
+        })),
+      },
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-terminal-result-failure',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(uploadedArtifacts.map((artifact) => artifact.kind)).toEqual(
+      expect.arrayContaining(['generated_payload', 'generation_validation_report', 'startup_failure_evidence']),
+    );
+    expect(uploadedArtifacts.find((artifact) => artifact.kind === 'startup_failure_evidence')).toMatchObject({
+      metadata_json: {
+        reason_code: 'codex_runtime_job_unavailable',
+        runtime_target_kind: 'generation',
+        app_server_started: true,
+        failure_stage: 'generation_terminal_result',
+        failure_subcode: 'runtime_job_terminal_result_unavailable',
+        runtime_evidence_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      },
+    });
+    expect(terminalized).toHaveLength(1);
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'failed',
+      reason_code: 'codex_runtime_job_unavailable',
+    });
+    expect(JSON.stringify(terminalized[0])).not.toContain('x'.repeat(100));
+    expect(JSON.stringify(uploadedArtifacts)).not.toContain('launch-token-secret');
   });
 });

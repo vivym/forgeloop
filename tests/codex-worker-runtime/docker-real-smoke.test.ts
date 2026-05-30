@@ -26,6 +26,7 @@ import {
   CodexRuntimeControlPlaneClient,
   DockerizedCodexAppServerLauncher,
   createRemoteCodexWorkerClient,
+  sealCodexLaunchTokenEnvelope,
 } from '../../packages/codex-worker-runtime/src/index';
 import {
   codexCanonicalDigest,
@@ -37,7 +38,11 @@ import {
 } from '../../packages/domain/src/index';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src/index';
 import { createRemoteCodexGenerationRuntime } from '../../apps/automation-daemon/src/generation-runtime';
-import { loadCodexRuntimeDogfoodBootstrapConfig } from '../../scripts/codex-runtime-dogfood-bootstrap';
+import {
+  codexConfigTomlForTarget,
+  codexRuntimeDogfoodWorkerIdentityForTarget,
+  loadCodexRuntimeDogfoodBootstrapConfig,
+} from '../../scripts/codex-runtime-dogfood-bootstrap';
 
 const execFile = promisify(execFileCallback);
 const runDockerSmoke = process.env.FORGELOOP_RUN_REAL_DOCKER_SMOKE === '1';
@@ -112,7 +117,7 @@ const bootRemoteDogfoodControlPlane = async (): Promise<{
   ]);
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DELIVERY_REPOSITORY)
-    .useValue(new InMemoryDeliveryRepository())
+    .useValue(new InMemoryDeliveryRepository({ codexLaunchTokenEnvelopeSealer: { sealLaunchTokenEnvelope: sealCodexLaunchTokenEnvelope } }))
     .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
@@ -439,7 +444,7 @@ describe.skipIf(!runRemoteDogfoodSmoke)('same-host remote Codex generation dogfo
     const authRaw = await readProtectedCodexFile(hostAuthPath);
     const authJson = JSON.parse(authRaw) as Record<string, unknown>;
     const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-remote-codex-worker-'));
-    const workerIdentity = `remote-dogfood-worker-${randomUUID()}`;
+    const workerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget(`remote-dogfood-worker-${randomUUID()}`, 'generation');
     const workerBootstrapToken = `remote-dogfood-bootstrap-${randomUUID()}`;
     const projectId = 'remote-dogfood-project';
     const repoId = 'remote-dogfood-repo';
@@ -470,7 +475,7 @@ describe.skipIf(!runRemoteDogfoodSmoke)('same-host remote Codex generation dogfo
     const revision = buildRemoteDogfoodGenerationRevision({
       profileId,
       revisionId,
-      codexConfigToml,
+      codexConfigToml: codexConfigTomlForTarget(codexConfigToml, 'generation'),
       dockerImage: bootstrapConfig.dockerImage,
       dockerImageDigest: bootstrapConfig.dockerImageDigest,
       expectedEffectiveConfigDigest: bootstrapConfig.generationExpectedEffectiveConfigDigest,
@@ -580,6 +585,10 @@ describe.skipIf(!runRemoteDogfoodSmoke)('same-host remote Codex generation dogfo
         limit: 1,
       });
       expect(claimed?.id).toBe(actionRun.id);
+      if (claimed === undefined) {
+        throw new Error('remote_codex_dogfood_action_claim_missing');
+      }
+      expect(claimed?.attempt).toBeGreaterThan(actionRun.attempt);
       const controlPlaneClient = new CodexRuntimeControlPlaneClient({
         baseUrl,
         trustedActorSigner: ({ method, pathAndQuery, rawBody }) =>
@@ -636,6 +645,16 @@ describe.skipIf(!runRemoteDogfoodSmoke)('same-host remote Codex generation dogfo
         controlPollIntervalMs: 250,
       });
       await worker.runOnce();
+      const workerReadyStatus = await controlPlaneClient.getStatus({
+        projectId,
+        repoId,
+        targetKind: 'generation',
+        runtimeProfileId: profileId,
+        credentialBindingId,
+      });
+      expect(workerReadyStatus.worker_status).toBe('online');
+      expect(workerReadyStatus.blocker_codes ?? []).not.toContain('codex_worker_unavailable');
+      expect(workerIdentity).toMatch(/^codex-runtime-dogfood-worker-[a-f0-9]{12}-generation$/);
       let keepWorkerRunning = true;
       const workerPump = (async () => {
         while (keepWorkerRunning) {
@@ -654,6 +673,14 @@ describe.skipIf(!runRemoteDogfoodSmoke)('same-host remote Codex generation dogfo
       });
       let result: Awaited<ReturnType<typeof runtime.generateSpecDraft>>;
       try {
+        const runtimeJobId = `codex-generation-job-${codexCanonicalDigest({
+          actionRunId: claimed.id,
+          actionAttempt: claimed.attempt,
+          taskKind: 'spec_draft',
+          promptVersion: 'SPEC-draft.remote-dogfood.v1',
+          outputSchemaVersion: 'spec_draft.v1',
+          idempotencyKey: claimed.idempotency_key,
+        }).replace(/^sha256:/, '')}`;
         const generationPromise = runtime.generateSpecDraft({
           actionRunId: actionRun.id,
           projectId,
@@ -672,13 +699,13 @@ describe.skipIf(!runRemoteDogfoodSmoke)('same-host remote Codex generation dogfo
           policyDigests: { [repoId]: codexRuntimeNetworkPolicyDigest(bootstrapConfig.networkPolicy) },
           orchestration: {
             targetType: 'automation_action_run',
-            actionRunId: actionRun.id,
+            actionRunId: claimed.id,
             actionType: 'ensure_package_drafts',
-            actionAttempt: actionRun.attempt,
+            actionAttempt: claimed.attempt,
             claimToken: 'remote-dogfood-claim-token',
-            preconditionFingerprint: 'remote-dogfood-precondition',
+            preconditionFingerprint: claimed.precondition_fingerprint,
             automationScope: `repo:${projectId}:${repoId}`,
-            idempotencyKey: actionRun.idempotency_key,
+            idempotencyKey: claimed.idempotency_key,
           },
           signal: abortController.signal,
         });
@@ -688,7 +715,24 @@ describe.skipIf(!runRemoteDogfoodSmoke)('same-host remote Codex generation dogfo
             throw error;
           },
         );
-        result = await Promise.race([generationPromise, pumpFailure]);
+        try {
+          result = await Promise.race([generationPromise, pumpFailure]);
+        } catch (error) {
+          const job = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
+          const artifacts = await repository.listCodexRuntimeJobArtifacts({ runtime_job_id: runtimeJobId });
+          const failureEvidence = artifacts.find((artifact) => artifact.kind === 'startup_failure_evidence')?.metadata_json;
+          throw new Error(
+            `remote_codex_dogfood_generation_failed:${JSON.stringify({
+              terminal_status: job?.terminal_status,
+              terminal_reason_code: job?.terminal_reason_code,
+              failure_stage: failureEvidence?.failure_stage,
+              failure_subcode: failureEvidence?.failure_subcode,
+              app_server_started: failureEvidence?.app_server_started,
+              generation_output_schema_sent: failureEvidence?.generation_output_schema_sent,
+            })}`,
+            { cause: error },
+          );
+        }
       } finally {
         abortController.abort();
         keepWorkerRunning = false;

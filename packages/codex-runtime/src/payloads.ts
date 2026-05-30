@@ -424,16 +424,20 @@ export const boundaryRoundRuntimeResultSchema = z
         .strict(),
     ),
     summary_proposal: z
-      .object({
-        summary_markdown: nonBlank,
-        confirmed_scope: z.array(nonBlank),
-        confirmed_out_of_scope: z.array(nonBlank),
-        accepted_assumptions: z.array(nonBlank),
-        open_risks: z.array(nonBlank),
-        validation_expectations: z.array(nonBlank),
-      })
-      .strict()
-      .optional(),
+      .preprocess(
+        (value) => (value === null ? undefined : value),
+        z
+          .object({
+            summary_markdown: nonBlank,
+            confirmed_scope: z.array(nonBlank),
+            confirmed_out_of_scope: z.array(nonBlank),
+            accepted_assumptions: z.array(nonBlank),
+            open_risks: z.array(nonBlank),
+            validation_expectations: z.array(nonBlank),
+          })
+          .strict()
+          .optional(),
+      ),
     needs_leader_input: z.boolean(),
     public_summary: nonBlank,
     artifacts: z.array(artifactRefSchema.strict()),

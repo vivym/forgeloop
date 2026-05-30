@@ -13,7 +13,12 @@ import {
   requiredAutomationDogfoodSummaryMarkers,
 } from '../../scripts/automation-dogfood-summary';
 import { loadDogfoodGenerationRuntimeConfig, requestedGenerationMode } from '../../scripts/automation-dogfood';
-import { loadCodexRuntimeDogfoodBootstrapConfig, runCodexRuntimeDogfoodBootstrap } from '../../scripts/codex-runtime-dogfood-bootstrap';
+import {
+  codexRuntimeDogfoodWorkerIdentityForTarget,
+  loadCodexRuntimeDogfoodBootstrapConfig,
+  runCodexRuntimeDogfoodBootstrap,
+  renderCodexRuntimeDogfoodBootstrapCliFailure,
+} from '../../scripts/codex-runtime-dogfood-bootstrap';
 import {
   codexRemoteWorkerDogfoodCommand,
   loadCodexRemoteWorkerDogfoodConfig,
@@ -350,6 +355,14 @@ describe('automation dogfood script', () => {
           ]),
         }, '{"env":{"OPENAI_API_KEY":"sk-test"}}'),
       ).toThrow(/model_provider/);
+      expect(() =>
+        loadCodexRuntimeDogfoodBootstrapConfig({
+          ...bootstrapEnv(configPath),
+          FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON: JSON.stringify([
+            { protocol: 'https', host: 'api.openai.com', purpose: 'model_provider' },
+          ]),
+        }, '{"env":{"OPENAI_API_KEY":"sk-test"}}'),
+      ).toThrow(/invalid_rule/);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -395,10 +408,16 @@ describe('automation dogfood script', () => {
         .filter((request) => request.path === '/internal/codex-runtime/worker-bootstrap-tokens')
         .map((request) => request.body);
 
+      const generationWorkerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget('worker-1', 'generation');
+      const runExecutionWorkerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget('worker-1', 'run_execution');
       expect(summary).toMatchObject({
-        generation_worker_identity: 'worker-1-generation',
-        run_execution_worker_identity: 'worker-1-run-execution',
+        generation_worker_identity: generationWorkerIdentity,
+        run_execution_worker_identity: runExecutionWorkerIdentity,
       });
+      expect(bootstrapBodies.map((body) => body.id)).toEqual([
+        expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+        expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+      ]);
       expect(importBodies).toEqual([
         expect.objectContaining({
           target_kind: 'generation',
@@ -411,20 +430,239 @@ describe('automation dogfood script', () => {
       ]);
       expect(bootstrapBodies).toEqual([
         expect.objectContaining({
-          worker_identity: 'worker-1-generation',
+          worker_identity: generationWorkerIdentity,
           allowed_scopes_json: [{ project_id: 'project-1' }],
           allowed_capabilities_json: expect.objectContaining({ target_kinds: ['generation'] }),
         }),
         expect.objectContaining({
-          worker_identity: 'worker-1-run-execution',
+          worker_identity: runExecutionWorkerIdentity,
           allowed_scopes_json: [{ project_id: 'project-1', repo_id: 'repo-1' }],
           allowed_capabilities_json: expect.objectContaining({ target_kinds: ['run_execution'] }),
         }),
+      ]);
+      expect(bootstrapBodies[0]?.bootstrap_token_hash).not.toBe(bootstrapBodies[1]?.bootstrap_token_hash);
+      expect(new Set(bootstrapBodies.map((body) => `${String(body.bootstrap_token_hash)}:${String(body.bootstrap_token_version)}`)).size).toBe(
+        bootstrapBodies.length,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves centrally imported provider credentials while deriving target-specific Codex policy', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-bootstrap-provider-'));
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const providerToken = 'sk-channel-test-token';
+    try {
+      const configPath = join(tempRoot, 'config.toml');
+      writeFileSync(
+        configPath,
+        [
+          'model_provider = "x2r"',
+          'model = "gpt-5.5"',
+          'approval_policy = "on-request"',
+          'sandbox_mode = "workspace-write"',
+          'model_reasoning_effort = "xhigh"',
+          '',
+          '[model_providers.x2r]',
+          'name = "x2r"',
+          'base_url = "https://ai.x2r.store/v1"',
+          'wire_api = "responses"',
+          `experimental_bearer_token = "${providerToken}"`,
+          'requires_openai_auth = true',
+          '',
+        ].join('\n'),
+      );
+      chmodSync(configPath, 0o600);
+      const config = loadCodexRuntimeDogfoodBootstrapConfig(
+        {
+          ...bootstrapEnv(configPath),
+          FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON: JSON.stringify([
+            { id: 'x2r', protocol: 'https', host: 'ai.x2r.store', purpose: 'model_provider' },
+          ]),
+        },
+        '{"auth_mode":"chatgpt","OPENAI_API_KEY":null}',
+      );
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string | URL, init?: RequestInit) => {
+          const path = new URL(String(url)).pathname;
+          const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+          requests.push({ path, body });
+          if (path === '/internal/codex-runtime/import-local-codex') {
+            return new Response(
+              JSON.stringify({
+                profile_id: `profile-${body.target_kind}`,
+                profile_revision_id: `revision-${body.target_kind}`,
+                credential_binding_id: `binding-${body.target_kind}`,
+                codex_config_digest: digest(String(body.target_kind === 'generation' ? 'g' : 'r')),
+              }),
+              { status: 201 },
+            );
+          }
+          return new Response(JSON.stringify({ ok: true }), { status: 201 });
+        }),
+      );
+
+      const summary = await runCodexRuntimeDogfoodBootstrap(config);
+      const importBodies = requests
+        .filter((request) => request.path === '/internal/codex-runtime/import-local-codex')
+        .map((request) => request.body);
+      const generationConfig = String(importBodies.find((body) => body.target_kind === 'generation')?.codex_config_toml ?? '');
+      const runExecutionConfig = String(importBodies.find((body) => body.target_kind === 'run_execution')?.codex_config_toml ?? '');
+      const publicSummary = JSON.stringify(summary);
+
+      expect(generationConfig).toContain('model_provider = "x2r"');
+      expect(generationConfig).toContain('base_url = "https://ai.x2r.store/v1"');
+      expect(generationConfig).toContain(`experimental_bearer_token = "${providerToken}"`);
+      expect(generationConfig).toContain('requires_openai_auth = true');
+      expect(generationConfig).toContain('approval_policy = "never"');
+      expect(generationConfig).toContain('sandbox_mode = "read-only"');
+      expect(generationConfig).not.toContain('approval_policy = "on-request"');
+      expect(generationConfig).not.toContain('sandbox_mode = "workspace-write"');
+
+      expect(runExecutionConfig).toContain('model_provider = "x2r"');
+      expect(runExecutionConfig).toContain('base_url = "https://ai.x2r.store/v1"');
+      expect(runExecutionConfig).toContain(`experimental_bearer_token = "${providerToken}"`);
+      expect(runExecutionConfig).toContain('requires_openai_auth = true');
+      expect(runExecutionConfig).toContain('approval_policy = "never"');
+      expect(runExecutionConfig).toContain('sandbox_mode = "danger-full-access"');
+      expect(runExecutionConfig).not.toContain('approval_policy = "on-request"');
+      expect(runExecutionConfig).not.toContain('sandbox_mode = "workspace-write"');
+
+      expect(publicSummary).not.toContain(providerToken);
+      expect(publicSummary).not.toContain('experimental_bearer_token');
+      expect(publicSummary).not.toContain('config.toml');
+      expect(publicSummary).not.toContain('auth.json');
+      expect(config.networkPolicy.allowlist_rules).toEqual([
+        { id: 'x2r', protocol: 'https', host: 'ai.x2r.store', purpose: 'model_provider' },
       ]);
     } finally {
       vi.unstubAllGlobals();
       rmSync(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it('derives worker bootstrap token ids from the scoped trust root', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-bootstrap-scoped-token-'));
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+    try {
+      const configPath = join(tempRoot, 'config.toml');
+      writeFileSync(configPath, 'model = "gpt-5.5"\napproval_policy = "never"\nsandbox_mode = "danger-full-access"\n');
+      chmodSync(configPath, 0o600);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string | URL, init?: RequestInit) => {
+          const path = new URL(String(url)).pathname;
+          const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+          requests.push({ path, body });
+          if (path === '/internal/codex-runtime/import-local-codex') {
+            return new Response(
+              JSON.stringify({
+                profile_id: `${String(body.project_id)}-${String(body.target_kind)}-profile`,
+                profile_revision_id: `${String(body.project_id)}-${String(body.target_kind)}-revision`,
+                credential_binding_id: `${String(body.project_id)}-${String(body.target_kind)}-binding`,
+                codex_config_digest: digest(String(body.target_kind === 'generation' ? 'g' : 'r')),
+              }),
+              { status: 201 },
+            );
+          }
+          return new Response(JSON.stringify({ ok: true }), { status: 201 });
+        }),
+      );
+
+      await runCodexRuntimeDogfoodBootstrap(
+        loadCodexRuntimeDogfoodBootstrapConfig(bootstrapEnv(configPath), '{"env":{"OPENAI_API_KEY":"sk-test"}}'),
+      );
+      await runCodexRuntimeDogfoodBootstrap(
+        loadCodexRuntimeDogfoodBootstrapConfig(
+          {
+            ...bootstrapEnv(configPath),
+            FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: 'project-2',
+            FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: 'repo-2',
+          },
+          '{"env":{"OPENAI_API_KEY":"sk-test"}}',
+        ),
+      );
+
+      const bootstrapBodies = requests
+        .filter((request) => request.path === '/internal/codex-runtime/worker-bootstrap-tokens')
+        .map((request) => request.body);
+      const generationWorkerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget('worker-1', 'generation');
+      const runExecutionWorkerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget('worker-1', 'run_execution');
+      const generationIds = bootstrapBodies
+        .filter((body) => body.worker_identity === generationWorkerIdentity)
+        .map((body) => body.id);
+      const runExecutionIds = bootstrapBodies
+        .filter((body) => body.worker_identity === runExecutionWorkerIdentity)
+        .map((body) => body.id);
+
+      expect(generationIds).toHaveLength(2);
+      expect(runExecutionIds).toHaveLength(2);
+      expect(new Set(generationIds).size).toBe(2);
+      expect(new Set(runExecutionIds).size).toBe(2);
+      for (const id of [...generationIds, ...runExecutionIds]) {
+        expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      }
+      expect(new Set(bootstrapBodies.map((body) => `${String(body.bootstrap_token_hash)}:${String(body.bootstrap_token_version)}`)).size).toBe(
+        bootstrapBodies.length,
+      );
+      expect(generationWorkerIdentity).toMatch(/^codex-runtime-dogfood-worker-[a-f0-9]{12}-generation$/);
+      expect(runExecutionWorkerIdentity).toMatch(/^codex-runtime-dogfood-worker-[a-f0-9]{12}-run-execution$/);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects bootstrap allowlists that omit the configured model provider host', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-bootstrap-provider-allowlist-'));
+    try {
+      const configPath = join(tempRoot, 'config.toml');
+      writeFileSync(
+        configPath,
+        [
+          'model_provider = "x2r"',
+          'model = "gpt-5.5"',
+          '',
+          '[model_providers.x2r]',
+          'base_url = "https://ai.x2r.store/v1"',
+          'wire_api = "responses"',
+          'experimental_bearer_token = "sk-channel-test-token"',
+          'requires_openai_auth = true',
+          '',
+        ].join('\n'),
+      );
+      chmodSync(configPath, 0o600);
+
+      expect(() =>
+        loadCodexRuntimeDogfoodBootstrapConfig(
+          {
+            ...bootstrapEnv(configPath),
+            FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON: JSON.stringify([
+              { id: 'openai', protocol: 'https', host: 'api.openai.com', purpose: 'model_provider' },
+            ]),
+          },
+          '{"auth_mode":"chatgpt","OPENAI_API_KEY":null}',
+        ),
+      ).toThrow(/FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON_missing_model_provider_host/);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('renders bootstrap CLI failures without raw config, auth, token, or route markers', () => {
+    const message = renderCodexRuntimeDogfoodBootstrapCliFailure(
+      new Error('FORGELOOP_CODEX_AUTH_JSON_PATH_missing:/internal/codex-runtime/import-local-codex:sk-channel-test-token'),
+    );
+
+    expect(message).toBe('codex_runtime_bootstrap_failed');
+    expect(message).not.toContain('FORGELOOP_CODEX_AUTH_JSON_PATH');
+    expect(message).not.toContain('/internal/codex-runtime');
+    expect(message).not.toContain('sk-channel-test-token');
+    expect(message).not.toContain('config.toml');
+    expect(message).not.toContain('auth.json');
   });
 
   it('loads remote worker dogfood config and renders only public-safe startup evidence', () => {

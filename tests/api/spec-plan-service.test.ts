@@ -1227,6 +1227,60 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(replayed.runtime_job.id).toBe(actionResponse.runtime_job.id);
   });
 
+  it('applies runtime-backed Spec generation with QA evidence required by Execution Plan generation', async () => {
+    const { plan, item, boundary } = await seedApprovedBoundary(app);
+    await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const codexRuntimeService = app.get(CodexRuntimeService);
+
+    const actionResponse = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
+        .send({ actor_id: actorTech })
+        .expect(201)
+    ).body;
+    const terminalResult = generationTerminalResult('development_plan_item_spec_revision', generatedSpecRevision(item.id, boundary.revision_id));
+    const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, actionResponse.runtime_job, 'spec-qa-owner');
+
+    await codexRuntimeService.terminalizeRuntimeJob(
+      actionResponse.runtime_job.worker_id,
+      actionResponse.runtime_job.id,
+      withBodyDigest({
+        worker_session_token: sessionToken,
+        nonce: 'spec-qa-owner-terminal',
+        nonce_timestamp: terminalAt,
+        launch_lease_id: actionResponse.runtime_job.launch_lease_id,
+        terminal_status: 'succeeded',
+        reason_code: 'completed',
+        terminal_idempotency_key: 'spec-qa-owner-terminal',
+        terminal_result_json: terminalResult,
+      }),
+    );
+
+    const [spec] = await repository.listSpecs();
+    const [specRevision] = await repository.listSpecRevisions(spec.id);
+    expect(specRevision).toMatchObject({
+      qa_owner_actor_id: actorReviewer,
+      testability_note: expect.stringContaining(item.title),
+      acceptance_criteria: ['Draft Spec revision is created'],
+      test_strategy_summary: 'API writer tests',
+    });
+
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
+      .send({ actor_id: actorTech })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Runtime Spec approved with QA evidence.' })
+      .expect(201);
+    await request(server)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
+      .send({ actor_id: actorTech })
+      .expect(201);
+  });
+
   it('rejects Spec generation when the approved Boundary Summary belongs to an older item revision', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
@@ -1644,7 +1698,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
 
   it('creates retry runtime jobs from the new claim time instead of the first attempt start time', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
-    await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
+    const generationRuntime = await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
@@ -1665,7 +1719,19 @@ describe('SpecPlanService item-scoped delivery API', () => {
       finished_at: '2026-05-05T00:11:00.000Z',
     });
 
-    vi.stubEnv('FORGELOOP_AUTOMATION_TEST_NOW', '2026-05-05T00:11:30.000Z');
+    const retryNow = '2026-05-05T00:11:30.000Z';
+    vi.stubEnv('FORGELOOP_AUTOMATION_TEST_NOW', retryNow);
+    await repository.heartbeatCodexWorker({
+      worker_id: generationRuntime.workerId,
+      session_token: generationRuntime.sessionToken,
+      nonce: 'heartbeat-retry-runtime-job',
+      nonce_timestamp: retryNow,
+      status: 'online',
+      control_channel_status: 'connected',
+      active_lease_count: 0,
+      capabilities: ['generation'],
+      now: retryNow,
+    });
     const second = (
       await request(server)
         .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
@@ -2004,11 +2070,12 @@ async function terminalizeGenerationRuntimeJob(
 async function seedGenerationRuntimeForProject(app: INestApplication, projectId: string, repoId?: string) {
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const now = '2026-05-05T00:00:00.000Z';
-  const expiresAt = '2026-05-05T00:10:00.000Z';
+  const expiresAt = '2026-05-05T00:30:00.000Z';
   const networkPolicy = { mode: 'disabled' as const };
   const codexConfigToml = 'approval_policy = "never"\n';
   const scopeKey = repoId ?? 'project';
   const sessionScopeKey = repoId === undefined ? projectId : `${projectId}-${repoId}`;
+  const sessionToken = `session-${sessionScopeKey}`;
   const allowedScope = repoId === undefined ? { project_id: projectId } : { project_id: projectId, repo_id: repoId };
   const profileId = stableUuid({ kind: 'generation-profile', projectId, repoId: scopeKey });
   const profileRevisionId = stableUuid({ kind: 'generation-profile-revision', projectId, repoId: scopeKey });
@@ -2124,7 +2191,7 @@ async function seedGenerationRuntimeForProject(app: INestApplication, projectId:
     version: 'test-worker',
     bootstrap_token_hash: codexCredentialPayloadDigest(`bootstrap-${projectId}-${scopeKey}`),
     bootstrap_token_version: 1,
-    session_token: `session-${sessionScopeKey}`,
+    session_token: sessionToken,
     session_expires_at: expiresAt,
     status: 'online',
     control_channel_status: 'connected',
@@ -2144,7 +2211,7 @@ async function seedGenerationRuntimeForProject(app: INestApplication, projectId:
   });
   await repository.heartbeatCodexWorker({
     worker_id: workerId,
-    session_token: `session-${sessionScopeKey}`,
+    session_token: sessionToken,
     nonce: `heartbeat-${projectId}-${scopeKey}`,
     nonce_timestamp: now,
     status: 'online',
@@ -2156,7 +2223,7 @@ async function seedGenerationRuntimeForProject(app: INestApplication, projectId:
   vi.stubEnv('FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID', profileId);
   vi.stubEnv('FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID', credentialBindingId);
   vi.stubEnv('FORGELOOP_AUTOMATION_TEST_NOW', '2026-05-05T00:00:30.000Z');
-  return { profileId, profileRevisionId, credentialBindingId, credentialVersionId, workerId };
+  return { profileId, profileRevisionId, credentialBindingId, credentialVersionId, workerId, sessionToken };
 }
 
 function stableUuid(input: Record<string, unknown>): string {

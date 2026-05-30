@@ -10,6 +10,11 @@ import {
   type CodexAppServerTransport,
   type CodexEffectiveConfig,
 } from './app-server-protocol.js';
+import {
+  PublicCodexAppServerTurnError,
+  publicFailureSubcodeFromAppServerErrorShape,
+  publicFailureSubcodeForCodexErrorInfo,
+} from './app-server-error-categories.js';
 import type { CodexGenerationTaskKind } from './types.js';
 import type { CodexGenerationRuntimeSafety, GenerationLease } from './generation-safety.js';
 
@@ -17,6 +22,7 @@ export interface AppServerGenerateInput {
   taskKind: CodexGenerationTaskKind;
   prompt: string;
   outputSchemaVersion: string;
+  outputSchema?: Record<string, unknown>;
   contextDigest?: string;
   timeoutMs?: number;
   outputLimitBytes?: number;
@@ -40,6 +46,14 @@ type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[
 const defaultTimeoutMs = 300_000;
 const defaultOutputLimitBytes = 1_048_576;
 const defaultRawNotificationLimitBytes = 4_194_304;
+const defaultMaxTurnAttempts = 2;
+
+const retryableAppServerTurnFailureSubcodes = new Set([
+  'app_server_response_too_many_failed_attempts',
+  'app_server_response_stream_connection_failed',
+  'app_server_response_stream_disconnected',
+  'app_server_server_overloaded',
+]);
 
 const canonicalize = (value: unknown): CanonicalJsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
@@ -69,6 +83,21 @@ const assertPositiveInt = (name: string, value: number): void => {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`${name}_invalid`);
   }
+};
+
+const retryableAppServerTurnFailureSubcode = (error: unknown): string | undefined => {
+  const publicResultJson = isRecord(error) && isRecord(error.publicResultJson) ? error.publicResultJson : undefined;
+  const publicSubcode = publicResultJson?.failure_subcode;
+  if (typeof publicSubcode === 'string' && retryableAppServerTurnFailureSubcodes.has(publicSubcode)) {
+    return publicSubcode;
+  }
+  if (isRecord(error)) {
+    const rawSubcode = publicFailureSubcodeFromAppServerErrorShape(error);
+    if (rawSubcode !== undefined && retryableAppServerTurnFailureSubcodes.has(rawSubcode)) {
+      return rawSubcode;
+    }
+  }
+  return undefined;
 };
 
 const sandboxType = (config: CodexEffectiveConfig | undefined): string | undefined => {
@@ -204,12 +233,18 @@ const terminalStatus = (notification: unknown): string | undefined => {
   return stringField(turn, ['status']) ?? 'unknown';
 };
 
-const appServerTurnErrorCode = (notification: unknown): string | undefined => {
+const appServerTurnError = (notification: unknown): Error | undefined => {
   const body = notificationBody(notification);
   const error = isRecord(body.error) ? body.error : isRecord(body.turn) && isRecord(body.turn.error) ? body.turn.error : undefined;
   const codexErrorInfo = error === undefined ? undefined : stringField(error, ['codexErrorInfo', 'codex_error_info']);
   if (codexErrorInfo === 'usageLimitExceeded') {
-    return 'codex_generation_usage_limited';
+    return new Error('codex_generation_usage_limited');
+  }
+  const failureSubcode = publicFailureSubcodeForCodexErrorInfo(
+    error?.codexErrorInfo ?? error?.codex_error_info,
+  );
+  if (failureSubcode !== undefined) {
+    return new PublicCodexAppServerTurnError(failureSubcode);
   }
   return undefined;
 };
@@ -273,6 +308,7 @@ export class AppServerGenerationDriver {
       nonceFactory?: () => string;
       now?: () => string;
       limits?: AppServerGenerationLimits;
+      maxTurnAttempts?: number;
     },
   ) {}
 
@@ -290,15 +326,16 @@ export class AppServerGenerationDriver {
     const outputLimitBytes = input.outputLimitBytes ?? this.options.limits?.outputLimitBytes ?? defaultOutputLimitBytes;
     const rawNotificationLimitBytes =
       input.rawNotificationLimitBytes ?? this.options.limits?.rawNotificationLimitBytes ?? defaultRawNotificationLimitBytes;
+    const maxTurnAttempts = this.options.maxTurnAttempts ?? defaultMaxTurnAttempts;
     assertPositiveInt('codex_generation_timeout_ms', timeoutMs);
     assertPositiveInt('codex_generation_output_limit_bytes', outputLimitBytes);
     assertPositiveInt('codex_generation_raw_notification_limit_bytes', rawNotificationLimitBytes);
+    assertPositiveInt('codex_generation_max_turn_attempts', maxTurnAttempts);
 
     this.#generationActive = true;
     const now = this.options.now ?? (() => new Date().toISOString());
     const nonce = this.options.nonceFactory ?? (() => randomUUID());
     const deadline = Date.now() + timeoutMs;
-    this.#cleanupDone = false;
     this.#resetCancelState(input.signal);
 
     try {
@@ -310,80 +347,115 @@ export class AppServerGenerationDriver {
         throw new Error('codex_generation_safety_unavailable');
       }
 
-      await this.#withDeadline(this.options.transport.initialize?.() ?? Promise.resolve(), deadline);
-      const startTime = now();
-      const lease = await this.#withDeadline(
-        safety.createGenerationLease({
-          promptDigest: digest(input.prompt),
-          contextDigest: input.contextDigest ?? digest({}),
-          outputSchemaVersion: input.outputSchemaVersion,
-          sandboxPolicy: 'readOnly',
-          writableRoots: [],
-          timeoutMs,
-          outputLimitBytes,
-          rawNotificationLimitBytes,
-          now: startTime,
-          expiresAt: new Date(Date.parse(startTime) + timeoutMs).toISOString(),
-        }),
-        deadline,
-      );
-      this.#activeSession = { safety, lease };
-
-      await this.#consume(safety, lease, 'thread/start', input.prompt, nonce(), now(), deadline);
-      const threadResponse = await this.#withDeadline(
-        this.options.transport.request('thread/start', {
-          approvalPolicy: 'never',
-          sandbox: 'read-only',
-        }),
-        deadline,
-      );
-      assertSafeEffectiveConfig(effectiveConfigFromResponse(threadResponse), safety);
-
-      const threadId = extractThreadId(threadResponse);
-      if (threadId === undefined || threadId.length === 0) {
-        throw new Error('codex_app_server_unavailable');
+      for (let attempt = 1; attempt <= maxTurnAttempts; attempt += 1) {
+        this.#cleanupDone = false;
+        try {
+          return await this.#generateAttempt({
+            input,
+            safety,
+            timeoutMs,
+            outputLimitBytes,
+            rawNotificationLimitBytes,
+            deadline,
+            now,
+            nonce,
+          });
+        } catch (error) {
+          await this.#cleanupActiveSession(error instanceof Error ? error.message : 'codex_generation_failed', { interrupt: true });
+          const retryableSubcode = retryableAppServerTurnFailureSubcode(error);
+          if (retryableSubcode === undefined || attempt >= maxTurnAttempts || this.#cancelRequested) {
+            throw error;
+          }
+        }
       }
-      this.#activeSession.threadId = threadId;
-
-      await this.#consume(safety, lease, 'turn/start', input.prompt, nonce(), now(), deadline);
-      const turnResponse = await this.#withDeadline(
-        this.options.transport.request('turn/start', {
-          threadId,
-          input: textInput(input.prompt),
-          approvalPolicy: 'never',
-          sandboxPolicy: { type: 'readOnly', networkAccess: false },
-        }),
-        deadline,
-      );
-      const turnId = extractTurnId(turnResponse);
-      if (turnId !== undefined) {
-        this.#activeSession.turnId = turnId;
-      }
-      const turnEffectiveConfig = effectiveConfigFromResponse(turnResponse);
-      if (turnEffectiveConfig !== undefined) {
-        assertSafeEffectiveConfig(turnEffectiveConfig, safety);
-      }
-
-      const assistantText = await this.#withDeadline(
-        this.#collectAssistantText({
-          outputLimitBytes,
-          rawNotificationLimitBytes,
-        }),
-        deadline,
-      );
-      await this.#cleanupActiveSession('codex_generation_completed', { interrupt: false });
-      return {
-        assistantText,
-        extractedJson: extractSingleJsonObject(assistantText),
-        rawArtifactRefs: [],
-      };
+      throw new Error('codex_generation_turn_failed');
     } catch (error) {
-      await this.#cleanupActiveSession(error instanceof Error ? error.message : 'codex_generation_failed', { interrupt: true });
       throw error;
     } finally {
       this.#clearAbortListener();
       this.#generationActive = false;
     }
+  }
+
+  async #generateAttempt(input: {
+    input: AppServerGenerateInput;
+    safety: CodexGenerationRuntimeSafety;
+    timeoutMs: number;
+    outputLimitBytes: number;
+    rawNotificationLimitBytes: number;
+    deadline: number;
+    now: () => string;
+    nonce: () => string;
+  }): Promise<AppServerGenerateOutput> {
+    const { safety, deadline, now, nonce } = input;
+    await this.#withDeadline(this.options.transport.initialize?.() ?? Promise.resolve(), deadline);
+    const startTime = now();
+    const lease = await this.#withDeadline(
+      safety.createGenerationLease({
+        promptDigest: digest(input.input.prompt),
+        contextDigest: input.input.contextDigest ?? digest({}),
+        outputSchemaVersion: input.input.outputSchemaVersion,
+        sandboxPolicy: 'readOnly',
+        writableRoots: [],
+        timeoutMs: input.timeoutMs,
+        outputLimitBytes: input.outputLimitBytes,
+        rawNotificationLimitBytes: input.rawNotificationLimitBytes,
+        now: startTime,
+        expiresAt: new Date(Date.parse(startTime) + input.timeoutMs).toISOString(),
+      }),
+      deadline,
+    );
+    this.#activeSession = { safety, lease };
+
+    await this.#consume(safety, lease, 'thread/start', input.input.prompt, nonce(), now(), deadline);
+    const threadResponse = await this.#withDeadline(
+      this.options.transport.request('thread/start', {
+        approvalPolicy: 'never',
+        sandbox: 'read-only',
+      }),
+      deadline,
+    );
+    assertSafeEffectiveConfig(effectiveConfigFromResponse(threadResponse), safety);
+
+    const threadId = extractThreadId(threadResponse);
+    if (threadId === undefined || threadId.length === 0) {
+      throw new Error('codex_app_server_unavailable');
+    }
+    this.#activeSession.threadId = threadId;
+
+    await this.#consume(safety, lease, 'turn/start', input.input.prompt, nonce(), now(), deadline);
+    const turnResponse = await this.#withDeadline(
+      this.options.transport.request('turn/start', {
+        threadId,
+        input: textInput(input.input.prompt),
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'readOnly', networkAccess: false },
+        ...(input.input.outputSchema === undefined ? {} : { outputSchema: input.input.outputSchema }),
+      }),
+      deadline,
+    );
+    const turnId = extractTurnId(turnResponse);
+    if (turnId !== undefined) {
+      this.#activeSession.turnId = turnId;
+    }
+    const turnEffectiveConfig = effectiveConfigFromResponse(turnResponse);
+    if (turnEffectiveConfig !== undefined) {
+      assertSafeEffectiveConfig(turnEffectiveConfig, safety);
+    }
+
+    const assistantText = await this.#withDeadline(
+      this.#collectAssistantText({
+        outputLimitBytes: input.outputLimitBytes,
+        rawNotificationLimitBytes: input.rawNotificationLimitBytes,
+      }),
+      deadline,
+    );
+    await this.#cleanupActiveSession('codex_generation_completed', { interrupt: false });
+    return {
+      assistantText,
+      extractedJson: extractSingleJsonObject(assistantText),
+      rawArtifactRefs: [],
+    };
   }
 
   async #consume(
@@ -406,12 +478,15 @@ export class AppServerGenerationDriver {
 
     let text = '';
     let finalText: string | undefined;
+    let lastTurnError: Error | undefined;
     let rawNotificationBytes = 0;
     for await (const notification of notifications) {
       rawNotificationBytes += byteLength(JSON.stringify(notification) ?? 'undefined');
       if (rawNotificationBytes > limits.rawNotificationLimitBytes) {
         throw new Error('codex_generation_raw_log_too_large');
       }
+
+      lastTurnError = appServerTurnError(notification) ?? lastTurnError;
 
       const delta = assistantDelta(notification);
       if (delta !== undefined) {
@@ -432,11 +507,11 @@ export class AppServerGenerationDriver {
       const status = terminalStatus(notification);
       if (status !== undefined) {
         const output = finalText ?? text;
-        if (status === 'idle' && output.trim().length > 0) {
-          break;
-        }
         if (status !== 'completed') {
-          throw new Error(appServerTurnErrorCode(notification) ?? 'codex_generation_turn_failed');
+          if (status === 'idle' && output.trim().length > 0) {
+            continue;
+          }
+          throw lastTurnError ?? appServerTurnError(notification) ?? new Error('codex_generation_turn_failed');
         }
         break;
       }

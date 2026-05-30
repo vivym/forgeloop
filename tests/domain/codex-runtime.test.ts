@@ -439,6 +439,21 @@ describe('codex runtime domain contracts', () => {
 
     expect(validateCodexRuntimeJobTerminalResult(generationResult)).toEqual(generationResult);
 
+    const deterministicArtifactRefResult = {
+      ...generationResult,
+      generation_artifacts: [
+        {
+          kind: 'generated_payload',
+          name: 'generated payload',
+          content_type: 'application/json',
+          digest: digestA,
+          internal_ref:
+            'artifact://codex-runtime-jobs/dfb5b095-3534-4297-934a-b066af8441ec/artifacts/d8def3cb-2878-4349-be42-74c912d8ee78',
+        },
+      ],
+    };
+    expect(validateCodexRuntimeJobTerminalResult(deterministicArtifactRefResult)).toEqual(deterministicArtifactRefResult);
+
     expectDomainErrorCode(
       () =>
         validateCodexRuntimeJobTerminalResult({
@@ -507,6 +522,30 @@ describe('codex runtime domain contracts', () => {
     const result = generationTerminalResult(taskKind, payloadFactory());
 
     expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
+  });
+
+  it('allows generation artifact refs in structured terminal results without treating them as raw endpoints', () => {
+    const result = {
+      ...generationTerminalResult('boundary_brainstorming_round', boundaryRoundRuntimeResultPayload()),
+      generation_artifacts: [
+        {
+          kind: 'generated_payload',
+          name: 'generated-payload.json',
+          content_type: 'application/json',
+          digest: digestA,
+          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        },
+      ],
+    };
+
+    expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
+    expect(collectCodexRuntimeJobTerminalArtifactRefs(result)).toEqual([
+      {
+        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        digest: digestA,
+        content_type: 'application/json',
+      },
+    ]);
   });
 
   it('allows UUID product ids in structured terminal generation payloads', () => {
@@ -1837,12 +1876,67 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
-  it.each(['secret_key = "x"', 'auth_token = "x"'])('rejects secret-looking Codex config key %s', (codexConfigToml) => {
+  it('allows Codex provider bearer tokens as centrally stored runtime material', () => {
+    const codexConfigToml = [
+      'model_provider = "x2r"',
+      'model = "gpt-5.5"',
+      'approval_policy = "never"',
+      'sandbox_mode = "read-only"',
+      '[model_providers.x2r]',
+      'name = "x2r"',
+      'base_url = "https://api.openai.com/v1"',
+      'wire_api = "responses"',
+      'experimental_bearer_token = "sk-test"',
+      'requires_openai_auth = false',
+      '',
+    ].join('\n');
+
+    expect(validateCodexRuntimeProfileRevision(baseRevision({ codex_config_toml: codexConfigToml }), { strictRealDogfood: true })).toEqual(
+      expect.objectContaining({
+        codex_config_digest: codexCanonicalDigest(codexConfigToml),
+      }),
+    );
+  });
+
+  it('rejects strict real dogfood profiles when provider base_url is not covered by model-provider allowlist', () => {
+    const codexConfigToml = [
+      'model_provider = "x2r"',
+      'model = "gpt-5.5"',
+      'approval_policy = "never"',
+      'sandbox_mode = "read-only"',
+      '[model_providers.x2r]',
+      'base_url = "https://ai.x2r.store/v1"',
+      'wire_api = "responses"',
+      'experimental_bearer_token = "sk-test"',
+      '',
+    ].join('\n');
+
+    expectDomainErrorCode(
+      () => validateCodexRuntimeProfileRevision(baseRevision({ codex_config_toml: codexConfigToml }), { strictRealDogfood: true }),
+      'codex_worker_docker_policy_unavailable',
+    );
+  });
+
+  it.each([
+    'experimental_bearer_token = "sk-test" secret_key = "x"',
+    'requires_openai_auth = true auth_token = "x"',
+  ])('allows centrally stored secret-bearing Codex config material %s', (codexConfigToml) => {
+    expect(validateCodexRuntimeProfileRevision(baseRevision({ codex_config_toml: codexConfigToml }), { strictRealDogfood: true })).toEqual(
+      expect.objectContaining({
+        codex_config_digest: codexCanonicalDigest(codexConfigToml),
+      }),
+    );
+  });
+
+  it.each(['api_key = "${OPENAI_API_KEY}"', 'auth_token = "$ENV.AUTH_TOKEN"', 'secret = "env.SECRET"'])(
+    'rejects host environment interpolation in Codex config %s',
+    (codexConfigToml) => {
     expectDomainErrorCode(
       () => validateCodexRuntimeProfileRevision(baseRevision({ codex_config_toml: codexConfigToml }), { strictRealDogfood: true }),
       'codex_runtime_profile_invalid',
     );
-  });
+    },
+  );
 
   it('validates effective config assertions before prompt delivery', () => {
     const generationAssertions = baseRevision().effective_config_assertions;
@@ -2002,6 +2096,21 @@ describe('codex runtime domain contracts', () => {
         credential_binding_id: 'credential-binding-550e8400-e29b-41d4-a716-446655440000',
         credential_binding_version_id: 'credential-version-018f2f9e-2bb0-72bc-9233-7f4fdf2f0dd0',
         launch_lease_id: 'lease-550e8400-e29b-41d4-a716-446655440000',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateCodexDockerRuntimeEvidence({
+        ...validDockerRuntimeEvidence,
+        runtime_target_kind: 'generation',
+        worker_id: 'codex-runtime-dogfood-worker-eede4ae7916b-generation',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateCodexDockerRuntimeEvidence({
+        ...validDockerRuntimeEvidence,
+        worker_id: 'codex-runtime-dogfood-worker-eede4ae7916b-run-execution',
       }),
     ).not.toThrow();
 

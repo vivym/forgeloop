@@ -1,6 +1,10 @@
 import { AppServerGenerationDriver } from './app-server-generation-driver.js';
+import {
+  publicFailureSubcodeFromAppServerErrorShape,
+  publicTurnFailureFromSubcode,
+} from './app-server-error-categories.js';
 import { CodexAppServerEndpointTransport } from './app-server-endpoint-transport.js';
-import type { CodexAppServerTransport } from './app-server-protocol.js';
+import { isRecord, type CodexAppServerTransport } from './app-server-protocol.js';
 import {
   createFakeBoundaryRoundRuntimeResult,
   createFakeGeneratedExecutionPlanRevision,
@@ -117,7 +121,7 @@ const promptFor = (
   return [
     'You are a ForgeLoop product-generation worker running inside a read-only Codex app-server sandbox.',
     'Return exactly one JSON object that satisfies the requested output schema. Do not wrap the object in Markdown fences. Do not include prose before or after the JSON.',
-    'All strings must be public-safe product text. Do not include raw file system paths, runtime endpoints, container ids, config/auth material, secrets, logs, or prompt transcripts.',
+    'All strings must be public-safe product text. Do not include local file paths, runtime connection addresses, container identifiers, credential contents, private values, runtime traces, or prompt transcripts.',
     '',
     `Task kind: ${taskKind}`,
     `Output schema version: ${input.outputSchemaVersion}`,
@@ -129,6 +133,218 @@ const promptFor = (
     outputSchemaContract(taskKind, input.outputSchemaVersion, input.context),
   ].join('\n');
 };
+
+const stringSchema = (): Record<string, unknown> => ({ type: 'string' });
+
+const literalStringSchema = (value: string): Record<string, unknown> => ({ type: 'string', enum: [value] });
+
+const stringArraySchema = (): Record<string, unknown> => ({
+  type: 'array',
+  items: stringSchema(),
+});
+
+const nullableObjectSchema = (schema: Record<string, unknown>): Record<string, unknown> => ({
+  anyOf: [schema, { type: 'null' }],
+});
+
+const artifactRefJsonSchema = (): Record<string, unknown> => ({
+  type: 'object',
+  additionalProperties: false,
+  required: ['kind', 'name', 'content_type', 'storage_uri'],
+  properties: {
+    kind: stringSchema(),
+    name: stringSchema(),
+    content_type: stringSchema(),
+    storage_uri: stringSchema(),
+  },
+});
+
+const boundaryRoundOperation = (context: Record<string, unknown>): 'start' | 'continue' | 'revise_summary' => {
+  const operation = context.operation;
+  return operation === 'continue' || operation === 'revise_summary' ? operation : 'start';
+};
+
+const outputJsonSchemaFor = (
+  outputSchemaVersion: string,
+  context: Record<string, unknown>,
+): Record<string, unknown> | undefined => {
+  const baseObject = (required: string[], properties: Record<string, unknown>): Record<string, unknown> => ({
+    type: 'object',
+    additionalProperties: false,
+    required,
+    properties,
+  });
+  const generatedSpecRevisionProperties = {
+    schema_version: literalStringSchema('spec_revision.v1'),
+    development_plan_item_id: stringSchema(),
+    boundary_summary_revision_id: stringSchema(),
+    summary: stringSchema(),
+    content_markdown: stringSchema(),
+    problem_context: stringSchema(),
+    scope_in: stringArraySchema(),
+    scope_out: stringArraySchema(),
+    acceptance_criteria: stringArraySchema(),
+    test_strategy: stringArraySchema(),
+    risks: stringArraySchema(),
+    assumptions: stringArraySchema(),
+    unresolved_questions: stringArraySchema(),
+    public_summary: stringSchema(),
+  };
+  const generatedExecutionPlanProperties = {
+    schema_version: literalStringSchema('execution_plan_revision.v1'),
+    development_plan_item_id: stringSchema(),
+    based_on_spec_revision_id: stringSchema(),
+    summary: stringSchema(),
+    content_markdown: stringSchema(),
+    implementation_sequence: stringArraySchema(),
+    validation_strategy: stringArraySchema(),
+    allowed_paths: stringArraySchema(),
+    forbidden_paths: stringArraySchema(),
+    required_checks: {
+      type: 'array',
+      items: baseObject(['check_id', 'command', 'timeout_seconds', 'blocks_review'], {
+        check_id: stringSchema(),
+        command: stringSchema(),
+        timeout_seconds: { type: 'integer' },
+        blocks_review: { type: 'boolean' },
+      }),
+    },
+    rollback_notes: stringSchema(),
+    handoff_criteria: stringArraySchema(),
+    public_summary: stringSchema(),
+  };
+  switch (outputSchemaVersion) {
+    case 'boundary_round_result.v1':
+      {
+        const isStartRound = boundaryRoundOperation(context) === 'start';
+        const summaryProposalProperty = isStartRound
+          ? {}
+          : {
+              summary_proposal: nullableObjectSchema(
+                baseObject(
+                  [
+                    'summary_markdown',
+                    'confirmed_scope',
+                    'confirmed_out_of_scope',
+                    'accepted_assumptions',
+                    'open_risks',
+                    'validation_expectations',
+                  ],
+                  {
+                    summary_markdown: stringSchema(),
+                    confirmed_scope: stringArraySchema(),
+                    confirmed_out_of_scope: stringArraySchema(),
+                    accepted_assumptions: stringArraySchema(),
+                    open_risks: stringArraySchema(),
+                    validation_expectations: stringArraySchema(),
+                  },
+                ),
+              ),
+            };
+        return baseObject(
+          [
+            'schema_version',
+            'session_id',
+            'round_id',
+            'questions',
+            'proposed_decisions',
+            ...(isStartRound ? [] : ['summary_proposal']),
+            'needs_leader_input',
+            'public_summary',
+            'artifacts',
+          ],
+          {
+            schema_version: literalStringSchema('boundary_round_result.v1'),
+            session_id: stringSchema(),
+            round_id: stringSchema(),
+            questions: {
+              type: 'array',
+              items: baseObject(['text', 'required', 'rationale'], {
+                text: stringSchema(),
+                required: { type: 'boolean' },
+                rationale: stringSchema(),
+              }),
+            },
+            proposed_decisions: {
+              type: 'array',
+              items: baseObject(['text', 'rationale'], {
+                text: stringSchema(),
+                rationale: stringSchema(),
+              }),
+            },
+            ...summaryProposalProperty,
+            needs_leader_input: { type: 'boolean' },
+            public_summary: stringSchema(),
+            artifacts: { type: 'array', items: artifactRefJsonSchema() },
+          },
+        );
+      }
+    case 'spec_draft.v1':
+      return baseObject(
+        [
+          'schema_version',
+          'summary',
+          'content',
+          'background',
+          'goals',
+          'scope_in',
+          'scope_out',
+          'acceptance_criteria',
+          'risk_notes',
+          'test_strategy_summary',
+        ],
+        {
+          schema_version: literalStringSchema('spec_draft.v1'),
+          summary: stringSchema(),
+          content: stringSchema(),
+          background: stringSchema(),
+          goals: stringArraySchema(),
+          scope_in: stringArraySchema(),
+          scope_out: stringArraySchema(),
+          acceptance_criteria: stringArraySchema(),
+          risk_notes: stringArraySchema(),
+          test_strategy_summary: stringSchema(),
+        },
+      );
+    case 'plan_draft.v1':
+      return baseObject(
+        [
+          'schema_version',
+          'summary',
+          'content',
+          'implementation_summary',
+          'split_strategy',
+          'dependency_order',
+          'test_matrix',
+          'risk_mitigations',
+          'rollback_notes',
+        ],
+        {
+          schema_version: literalStringSchema('plan_draft.v1'),
+          summary: stringSchema(),
+          content: stringSchema(),
+          implementation_summary: stringSchema(),
+          split_strategy: stringSchema(),
+          dependency_order: stringArraySchema(),
+          test_matrix: stringArraySchema(),
+          risk_mitigations: stringArraySchema(),
+          rollback_notes: stringSchema(),
+        },
+      );
+    case 'spec_revision.v1':
+      return baseObject(Object.keys(generatedSpecRevisionProperties), generatedSpecRevisionProperties);
+    case 'execution_plan_revision.v1':
+      return baseObject(Object.keys(generatedExecutionPlanProperties), generatedExecutionPlanProperties);
+    default:
+      return undefined;
+  }
+};
+
+const shouldSendAppServerOutputSchema = (
+  taskKind: CodexGenerationTaskKind,
+  outputSchemaVersion: string,
+): boolean =>
+  !(taskKind === 'boundary_brainstorming_round' && outputSchemaVersion === 'boundary_round_result.v1');
 
 const nestedRecord = (value: unknown, key: string): Record<string, unknown> | undefined => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -188,10 +404,61 @@ const outputSchemaContract = (
   if (taskKind === 'boundary_brainstorming_round' || outputSchemaVersion === 'boundary_round_result.v1') {
     const sessionId = contextString(context, [['boundary_session', 'id'], ['session_id']], 'boundary-session-id');
     const roundId = contextString(context, [['boundary_round', 'id'], ['round_id']], 'boundary-round-id');
-    const operation = contextString(context, [['operation']], 'start');
-    const shouldProposeSummary = operation !== 'start';
-    const expected = shouldProposeSummary
-      ? {
+    const operation = boundaryRoundOperation(context);
+    if (operation === 'start') {
+      return [
+        'Return exactly the JSON object below. Use the concrete id values shown here. Never return placeholder text, Markdown, null optional fields, or extra keys.',
+        JSON.stringify(
+          {
+            schema_version: 'boundary_round_result.v1',
+            session_id: sessionId,
+            round_id: roundId,
+            questions: [
+              {
+                text: 'Should the strict dogfood execution stay limited to a docs-only report while preserving centralized Codex runtime distribution?',
+                required: true,
+                rationale: 'This answer is needed before approving the boundary.',
+              },
+            ],
+            proposed_decisions: [],
+            needs_leader_input: true,
+            public_summary: 'Boundary round generated a required Leader question.',
+            artifacts: [],
+          },
+          null,
+          2,
+        ),
+      ].join('\n');
+    }
+    return [
+      'Return exactly one boundary_round_result.v1 JSON object. Use the concrete session_id and round_id shown below. Never return placeholder text, Markdown, null optional fields, or extra keys.',
+      'Boundary Brainstorming is AI-led and may take many Leader-AI rounds. Ask another focused follow-up question when the boundary is still ambiguous. Only include "summary_proposal" when the boundary is ready for Leader approval.',
+      `Use "session_id": ${JSON.stringify(sessionId)}.`,
+      `Use "round_id": ${JSON.stringify(roundId)}.`,
+      'If more Leader input is needed, return this shape and replace only the product text:',
+      JSON.stringify(
+        {
+          schema_version: 'boundary_round_result.v1',
+          session_id: sessionId,
+          round_id: roundId,
+          questions: [
+            {
+              text: 'Which validation evidence should gate the execution boundary?',
+              required: true,
+              rationale: 'This answer is needed before approving the boundary.',
+            },
+          ],
+          proposed_decisions: [],
+          needs_leader_input: true,
+          public_summary: 'Boundary follow-up question generated.',
+          artifacts: [],
+        },
+        null,
+        2,
+      ),
+      'If the boundary is ready for Leader approval, return this shape and replace only the product text:',
+      JSON.stringify(
+        {
           schema_version: 'boundary_round_result.v1',
           session_id: sessionId,
           round_id: roundId,
@@ -214,26 +481,12 @@ const outputSchemaContract = (
           needs_leader_input: false,
           public_summary: 'Boundary Summary proposal generated for Leader approval.',
           artifacts: [],
-        }
-      : {
-          schema_version: 'boundary_round_result.v1',
-          session_id: sessionId,
-          round_id: roundId,
-          questions: [
-            {
-              text: 'Should the strict dogfood execution stay limited to a docs-only report while preserving centralized Codex runtime distribution?',
-              required: true,
-              rationale: 'This answer is needed before approving the boundary.',
-            },
-          ],
-          proposed_decisions: [],
-          needs_leader_input: true,
-          public_summary: 'Boundary round generated a required Leader question.',
-          artifacts: [],
-        };
-    return [
-      'Return exactly the JSON object below. Use the concrete id values shown here. Never return placeholder text, null optional objects, Markdown, or extra keys.',
-      JSON.stringify(expected, null, 2),
+        },
+        null,
+        2,
+      ),
+      'Do not include "summary_proposal" when asking follow-up questions. Do not include null fields.',
+      'Use public-safe product text only.',
     ].join('\n');
   }
   if (taskKind === 'development_plan_item_spec_revision' || outputSchemaVersion === 'spec_revision.v1') {
@@ -290,12 +543,12 @@ const outputSchemaContract = (
     const allowedPaths = contextStringArray(
       context,
       [['path_policy', 'allowed_paths'], ['execution_plan_path_policy', 'allowed_paths'], ['allowed_paths']],
-      ['**'],
+      ['docs/**'],
     );
     const forbiddenPaths = contextStringArray(
       context,
       [['path_policy', 'forbidden_paths'], ['execution_plan_path_policy', 'forbidden_paths'], ['forbidden_paths']],
-      [],
+      ['.git/**', 'node_modules/**'],
     );
     return [
       'Return exactly the JSON object below. Use the concrete id values shown here. Do not rewrite field values. Never return placeholder text, null arrays, Markdown fences, or extra keys.',
@@ -331,10 +584,10 @@ const outputSchemaContract = (
     return 'Return package_drafts.v1 with manifest, packages, dependencies, and optional structured_document fields only.';
   }
   if (taskKind === 'spec_draft' || outputSchemaVersion === 'spec_draft.v1') {
-    return 'Return spec_draft.v1 with summary, content, background, goals, scope_in, scope_out, acceptance_criteria, risk_notes, test_strategy_summary, and optional structured_document fields only.';
+    return 'Return spec_draft.v1 with summary, content, background, goals, scope_in, scope_out, acceptance_criteria, risk_notes, and test_strategy_summary fields only.';
   }
   if (taskKind === 'plan_draft' || outputSchemaVersion === 'plan_draft.v1') {
-    return 'Return plan_draft.v1 with summary, content, implementation_summary, split_strategy, dependency_order, test_matrix, risk_mitigations, rollback_notes, and optional structured_document fields only.';
+    return 'Return plan_draft.v1 with summary, content, implementation_summary, split_strategy, dependency_order, test_matrix, risk_mitigations, and rollback_notes fields only.';
   }
   return `Return exactly one JSON object for ${outputSchemaVersion}.`;
 };
@@ -406,12 +659,32 @@ const isJsonRpcErrorObject = (value: unknown): value is Record<string, unknown> 
   !Array.isArray(value) &&
   (typeof (value as Record<string, unknown>).code === 'number' || typeof (value as Record<string, unknown>).message === 'string');
 
+const publicResultJsonFromError = (error: Error): Record<string, unknown> | undefined => {
+  const candidate = (error as Error & { publicResultJson?: unknown }).publicResultJson;
+  return isRecord(candidate) ? candidate : undefined;
+};
+
 const toCodexGenerationError = (error: unknown): CodexGenerationError => {
   if (error instanceof CodexGenerationError) {
     return error;
   }
+  if (error instanceof Error) {
+    const publicResultJson = publicResultJsonFromError(error);
+    if (publicResultJson !== undefined) {
+    return new CodexGenerationError('codex_generation_turn_failed', {
+      retryable: true,
+      publicResultJson,
+    });
+    }
+  }
   if (isJsonRpcErrorObject(error)) {
-    return new CodexGenerationError('codex_generation_turn_failed', { retryable: true });
+    const failureSubcode = publicFailureSubcodeFromAppServerErrorShape(error);
+    return new CodexGenerationError('codex_generation_turn_failed', {
+      retryable: true,
+      ...(failureSubcode === undefined
+        ? {}
+        : { publicResultJson: publicTurnFailureFromSubcode(failureSubcode) }),
+    });
   }
   const code = error instanceof Error ? error.message : undefined;
   if (code !== undefined && appServerRetryableCodes.has(code as CodexGenerationErrorCode)) {
@@ -464,10 +737,14 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
         ...(config.rawNotificationLimitBytes === undefined ? {} : { rawNotificationLimitBytes: config.rawNotificationLimitBytes }),
         ...(config.transportFactory === undefined ? {} : { transportFactory: config.transportFactory }),
       });
+      const outputSchema = shouldSendAppServerOutputSchema(taskKind, input.outputSchemaVersion)
+        ? outputJsonSchemaFor(input.outputSchemaVersion, input.context)
+        : undefined;
       const output = await driver.generate({
         taskKind,
         prompt: promptFor(taskKind, input),
         outputSchemaVersion: input.outputSchemaVersion,
+        ...(outputSchema === undefined ? {} : { outputSchema }),
         contextDigest: input.actionRunId,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
         ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),

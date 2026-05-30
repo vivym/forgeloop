@@ -106,18 +106,57 @@ const parseCodexConfigToml = (env: EnvLike): string => {
   return configToml;
 };
 
-const withoutTopLevelTomlKey = (toml: string, key: string): string =>
-  toml
-    .split(/\r?\n/)
-    .filter((line) => !new RegExp(`^\\s*${key}\\s*=`).test(line))
-    .join('\n')
-    .replace(/\n*$/, '\n');
+export const codexConfigTomlForTarget = (toml: string, targetKind: 'generation' | 'run_execution'): string => {
+  const policyLines =
+    targetKind === 'generation'
+      ? ['approval_policy = "never"', 'sandbox_mode = "read-only"']
+      : ['approval_policy = "never"', 'sandbox_mode = "danger-full-access"'];
+  const lines = toml.replace(/\n*$/, '').split(/\r?\n/);
+  const firstTableIndex = lines.findIndex((line) => /^\s*\[/.test(line));
+  const rootEnd = firstTableIndex === -1 ? lines.length : firstTableIndex;
+  const rootLines = lines
+    .slice(0, rootEnd)
+    .filter((line) => !/^\s*(approval_policy|sandbox_mode)\s*=/.test(line))
+    .filter((line, index, array) => !(line.trim().length === 0 && index === array.length - 1));
+  const tableLines = lines.slice(rootEnd);
+  const nextLines = [...rootLines, ...policyLines, ...(tableLines.length === 0 ? [] : ['', ...tableLines])];
+  return `${nextLines.join('\n')}\n`;
+};
 
-const codexConfigTomlForTarget = (toml: string, targetKind: 'generation' | 'run_execution'): string => {
-  if (targetKind === 'run_execution') {
-    return toml;
-  }
-  return `${withoutTopLevelTomlKey(toml, 'sandbox_mode')}sandbox_mode = "read-only"\n`;
+export const codexRuntimeDogfoodWorkerIdentityForTarget = (
+  baseWorkerIdentity: string,
+  targetKind: 'generation' | 'run_execution',
+): string => {
+  const targetSuffix = targetKind === 'generation' ? 'generation' : 'run-execution';
+  const scopeDigest = createHash('sha256')
+    .update(codexCanonicalDigest({ worker_identity: baseWorkerIdentity, target_kind: targetKind }))
+    .digest('hex')
+    .slice(0, 12);
+  return `codex-runtime-dogfood-worker-${scopeDigest}-${targetSuffix}`;
+};
+
+export const codexRuntimeDogfoodBootstrapTokenForTarget = (
+  baseBootstrapToken: string,
+  input: {
+    workerIdentity: string;
+    allowedScope: { project_id: string; repo_id?: string };
+    allowedCapabilities: Record<string, unknown>;
+  },
+): string =>
+  `codex-runtime-dogfood-bootstrap:${createHash('sha256')
+    .update(
+      codexCanonicalDigest({
+        base_bootstrap_token_digest: codexCredentialPayloadDigest(baseBootstrapToken),
+        worker_identity: input.workerIdentity,
+        allowed_scope: input.allowedScope,
+        allowed_capabilities: input.allowedCapabilities,
+      }),
+    )
+    .digest('hex')}`;
+
+export const codexRuntimeDogfoodUuidFromSeed = (input: unknown): string => {
+  const hex = createHash('sha256').update(codexCanonicalDigest(input)).digest('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 };
 
 const parseAuthJson = (env: EnvLike, stdin?: string): unknown => {
@@ -139,11 +178,54 @@ const parseAllowlist = (env: EnvLike): CodexNetworkAllowlistRule[] => {
   if (!Array.isArray(parsed)) {
     throw new Error('FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON_must_be_array');
   }
-  const rules = parsed.map((entry) => entry as CodexNetworkAllowlistRule);
+  const rules = parsed.map((entry) => {
+    if (
+      typeof entry !== 'object' ||
+      entry === null ||
+      typeof (entry as { id?: unknown }).id !== 'string' ||
+      (entry as { id: string }).id.trim().length === 0 ||
+      !['https', 'http', 'tcp'].includes(String((entry as { protocol?: unknown }).protocol)) ||
+      typeof (entry as { host?: unknown }).host !== 'string' ||
+      (entry as { host: string }).host.trim().length === 0 ||
+      !['model_provider', 'package_registry', 'git_remote', 'other'].includes(String((entry as { purpose?: unknown }).purpose)) ||
+      ((entry as { port?: unknown }).port !== undefined &&
+        (!Number.isInteger((entry as { port: unknown }).port) ||
+          Number((entry as { port: unknown }).port) < 1 ||
+          Number((entry as { port: unknown }).port) > 65_535))
+    ) {
+      throw new Error('FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON_invalid_rule');
+    }
+    return entry as CodexNetworkAllowlistRule;
+  });
   if (!rules.some((rule) => rule.purpose === 'model_provider')) {
     throw new Error('FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON_requires_model_provider_rule');
   }
   return rules;
+};
+
+const providerBaseUrlHosts = (toml: string): string[] =>
+  [
+    ...toml.matchAll(/^\s*base_url\s*=\s*["']([^"']+)["']/gm),
+  ].flatMap((match) => {
+    try {
+      const host = new URL(match[1]!).hostname.toLowerCase();
+      return host.length === 0 ? [] : [host];
+    } catch {
+      return [];
+    }
+  });
+
+const assertAllowlistCoversConfiguredModelProviders = (
+  toml: string,
+  allowlistRules: readonly CodexNetworkAllowlistRule[],
+): void => {
+  const allowedHosts = new Set(
+    allowlistRules.filter((rule) => rule.purpose === 'model_provider').map((rule) => rule.host.toLowerCase()),
+  );
+  const missingHost = providerBaseUrlHosts(toml).find((host) => !allowedHosts.has(host));
+  if (missingHost !== undefined) {
+    throw new Error('FORGELOOP_CODEX_EGRESS_ALLOWLIST_JSON_missing_model_provider_host');
+  }
 };
 
 export const loadCodexRuntimeDogfoodBootstrapConfig = (
@@ -159,6 +241,8 @@ export const loadCodexRuntimeDogfoodBootstrapConfig = (
     throw new Error('FORGELOOP_CODEX_NETWORK_PROVIDER_must_be_docker_network_proxy');
   }
   const allowlistRules = parseAllowlist(env);
+  const codexConfigToml = parseCodexConfigToml(env);
+  assertAllowlistCoversConfiguredModelProviders(codexConfigToml, allowlistRules);
   const providerConfigWithoutDigest = {
     proxy_image: requiredEnv(env, 'FORGELOOP_CODEX_NETWORK_PROXY_IMAGE'),
     proxy_image_digest: requiredSha256Digest(env, 'FORGELOOP_CODEX_NETWORK_PROXY_IMAGE_DIGEST'),
@@ -177,7 +261,7 @@ export const loadCodexRuntimeDogfoodBootstrapConfig = (
     actorId: requiredEnv(env, 'FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID'),
     actorClass,
     daemonIdentity: requiredEnv(env, 'FORGELOOP_CODEX_RUNTIME_SETUP_DAEMON_IDENTITY'),
-    codexConfigToml: parseCodexConfigToml(env),
+    codexConfigToml,
     authJson: parseAuthJson(env, stdin),
     dockerImage: requiredEnv(env, 'FORGELOOP_CODEX_DOCKER_IMAGE'),
     dockerImageDigest: requiredSha256Digest(env, 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST'),
@@ -247,8 +331,48 @@ export const runCodexRuntimeDogfoodBootstrap = async (
     throw new Error('FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID_required_for_run_execution_worker');
   }
   const runExecutionAllowedScope = { project_id: config.allowedScope.project_id, repo_id: config.allowedScope.repo_id };
-  const generationWorkerIdentity = `${config.workerIdentity}-generation`;
-  const runExecutionWorkerIdentity = `${config.workerIdentity}-run-execution`;
+  const generationWorkerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget(config.workerIdentity, 'generation');
+  const runExecutionWorkerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget(config.workerIdentity, 'run_execution');
+  const generationAllowedCapabilities = {
+    target_kinds: ['generation'],
+    docker_image_digests: [config.dockerImageDigest],
+    network_policy_digests: [codexRuntimeNetworkPolicyDigest(config.networkPolicy)],
+    network_provider_config_digests: [config.networkPolicy.provider_config.provider_config_digest],
+  };
+  const runExecutionAllowedCapabilities = {
+    target_kinds: ['run_execution'],
+    docker_image_digests: [config.dockerImageDigest],
+    network_policy_digests: [codexRuntimeNetworkPolicyDigest(config.networkPolicy)],
+    network_provider_config_digests: [config.networkPolicy.provider_config.provider_config_digest],
+  };
+  const bootstrapTokenId = (
+    workerIdentity: string,
+    allowedScope: { project_id: string; repo_id?: string },
+    allowedCapabilities: typeof generationAllowedCapabilities,
+    bootstrapTokenHash: string,
+  ): string =>
+    codexRuntimeDogfoodUuidFromSeed({
+      kind: 'codex_runtime_dogfood_bootstrap_token',
+      worker_identity: workerIdentity,
+      allowed_scope: allowedScope,
+      allowed_capabilities: allowedCapabilities,
+      bootstrap_token_hash: bootstrapTokenHash,
+      bootstrap_token_version: config.workerBootstrapTokenVersion,
+    });
+  const generationBootstrapTokenHash = codexCredentialPayloadDigest(
+    codexRuntimeDogfoodBootstrapTokenForTarget(config.workerBootstrapToken, {
+      workerIdentity: generationWorkerIdentity,
+      allowedScope: generationAllowedScope,
+      allowedCapabilities: generationAllowedCapabilities,
+    }),
+  );
+  const runExecutionBootstrapTokenHash = codexCredentialPayloadDigest(
+    codexRuntimeDogfoodBootstrapTokenForTarget(config.workerBootstrapToken, {
+      workerIdentity: runExecutionWorkerIdentity,
+      allowedScope: runExecutionAllowedScope,
+      allowedCapabilities: runExecutionAllowedCapabilities,
+    }),
+  );
   const generationImport = (await signedSetupPost(config, '/internal/codex-runtime/import-local-codex', {
     profile_name: 'codex-runtime-generation-local-dogfood',
     target_kind: 'generation',
@@ -283,36 +407,36 @@ export const runCodexRuntimeDogfoodBootstrap = async (
     created_by: { actor_id: config.actorId },
   })) as Record<string, string>;
   await signedSetupPost(config, '/internal/codex-runtime/worker-bootstrap-tokens', {
-    id: `bootstrap-${createHash('sha256').update(generationWorkerIdentity).digest('hex').slice(0, 16)}`,
+    id: bootstrapTokenId(
+      generationWorkerIdentity,
+      generationAllowedScope,
+      generationAllowedCapabilities,
+      generationBootstrapTokenHash,
+    ),
     worker_identity: generationWorkerIdentity,
-    bootstrap_token_hash: codexCredentialPayloadDigest(config.workerBootstrapToken),
+    bootstrap_token_hash: generationBootstrapTokenHash,
     bootstrap_token_version: config.workerBootstrapTokenVersion,
     status: 'active',
     allowed_scopes_json: [generationAllowedScope],
-    allowed_capabilities_json: {
-      target_kinds: ['generation'],
-      docker_image_digests: [config.dockerImageDigest],
-      network_policy_digests: [codexRuntimeNetworkPolicyDigest(config.networkPolicy)],
-      network_provider_config_digests: [config.networkPolicy.provider_config.provider_config_digest],
-    },
+    allowed_capabilities_json: generationAllowedCapabilities,
     created_by_actor_id: config.actorId,
     created_at: createdAt,
     expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
     created_by: { actor_id: config.actorId },
   });
   await signedSetupPost(config, '/internal/codex-runtime/worker-bootstrap-tokens', {
-    id: `bootstrap-${createHash('sha256').update(runExecutionWorkerIdentity).digest('hex').slice(0, 16)}`,
+    id: bootstrapTokenId(
+      runExecutionWorkerIdentity,
+      runExecutionAllowedScope,
+      runExecutionAllowedCapabilities,
+      runExecutionBootstrapTokenHash,
+    ),
     worker_identity: runExecutionWorkerIdentity,
-    bootstrap_token_hash: codexCredentialPayloadDigest(config.workerBootstrapToken),
+    bootstrap_token_hash: runExecutionBootstrapTokenHash,
     bootstrap_token_version: config.workerBootstrapTokenVersion,
     status: 'active',
     allowed_scopes_json: [runExecutionAllowedScope],
-    allowed_capabilities_json: {
-      target_kinds: ['run_execution'],
-      docker_image_digests: [config.dockerImageDigest],
-      network_policy_digests: [codexRuntimeNetworkPolicyDigest(config.networkPolicy)],
-      network_provider_config_digests: [config.networkPolicy.provider_config.provider_config_digest],
-    },
+    allowed_capabilities_json: runExecutionAllowedCapabilities,
     created_by_actor_id: config.actorId,
     created_at: createdAt,
     expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -335,13 +459,15 @@ export const runCodexRuntimeDogfoodBootstrap = async (
   };
 };
 
+export const renderCodexRuntimeDogfoodBootstrapCliFailure = (_error: unknown): string => 'codex_runtime_bootstrap_failed';
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   runCodexRuntimeDogfoodBootstrap()
     .then((summary) => {
       console.log(JSON.stringify(summary, null, 2));
     })
     .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(renderCodexRuntimeDogfoodBootstrapCliFailure(error));
       process.exitCode = 1;
     });
 }

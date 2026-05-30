@@ -519,7 +519,7 @@ export const assertCodexRuntimeRecoveryReasonCode = (value: string): CodexRuntim
 type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[] | { [key: string]: CanonicalJsonValue };
 
 const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
-const secretConfigPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.|\b[A-Za-z0-9_.-]*(api[_-]?key|token|secret|auth)[A-Za-z0-9_.-]*\b)/i;
+const configInterpolationPattern = /(\$\{[^}]+\}|\$ENV\b|\benv\.)/i;
 const unsafeEvidenceKeyPattern = /(secret|token|api_key|auth|password|workspace_path|source_repo_path|app_server_endpoint|endpoint|container_id)$/i;
 const unsafeRuntimePublicKeyPattern =
   /(api[_-]?key|token|secret|auth(?:orization)?(?:_header)?|password|endpoint|socket(?:_path|_ref)?|container(?:_id|_name|_ref)?|workspace_path|source_repo_path)$/i;
@@ -922,6 +922,44 @@ const dockerRuntimeEvidencePublicIdKeys = new Set([
 const dockerRuntimeEvidencePublicIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const isDockerRuntimeEvidencePublicId = (key: string, value: string): boolean =>
   dockerRuntimeEvidencePublicIdKeys.has(key) && dockerRuntimeEvidencePublicIdPattern.test(value);
+const isDockerRuntimeEvidenceWorkerScopeDigestToken = (
+  value: string,
+  match: RegExpMatchArray,
+  runtimeTargetKind: unknown,
+): boolean => {
+  if (!/^[a-f0-9]{12}$/i.test(match[0])) {
+    return false;
+  }
+  const expectedSuffix =
+    runtimeTargetKind === 'generation' ? '-generation' : runtimeTargetKind === 'run_execution' ? '-run-execution' : undefined;
+  if (expectedSuffix === undefined) {
+    return false;
+  }
+  const start = match.index;
+  if (start === undefined || value[start - 1] !== '-') {
+    return false;
+  }
+  const end = start + match[0].length;
+  const prefix = value.slice(0, start - 1);
+  return value.slice(end) === expectedSuffix && /^[A-Za-z][A-Za-z0-9-]{0,95}$/.test(prefix);
+};
+const isDockerRuntimeEvidencePublicWorkerId = (value: string, runtimeTargetKind: unknown): boolean => {
+  if (!/^[A-Za-z][A-Za-z0-9-]{0,127}$/.test(value) || !value.includes('-')) {
+    return false;
+  }
+  if (
+    displayUnsafeEndpointTokenPattern.test(value) ||
+    publicUnsafeSecretTokenPattern.test(value) ||
+    isRawPathEndpointOrContainerId(value) ||
+    isCodexRuntimeEndpointOrContainerString(value) ||
+    isCodexRuntimeLocalPathString(value)
+  ) {
+    return false;
+  }
+  return [...value.matchAll(displayHexRuntimeIdTokenPattern)].every((match) =>
+    isDockerRuntimeEvidenceWorkerScopeDigestToken(value, match, runtimeTargetKind),
+  );
+};
 const codexRuntimePublicRoutePathTokenPattern =
   /(^|[\s([{"'=`])\/(?:api|v\d+(?:\.\d+)?|graphql|health|status|auth|oauth)(?:\/\S*)?/gi;
 const stripCodexRuntimePublicRoutePathTokens = (value: string): string =>
@@ -1102,6 +1140,29 @@ const assertStrictCodexRuntimeNetworkPolicy = (
     throw dockerPolicyUnavailable('Strict real dogfood egress allowlist profiles require a supported network provider.');
   }
   return policy;
+};
+
+const codexProviderBaseUrlHosts = (toml: string): string[] =>
+  [...toml.matchAll(/^\s*base_url\s*=\s*["']([^"']+)["']/gm)].flatMap((match) => {
+    try {
+      const host = new URL(match[1]!).hostname.toLowerCase();
+      return host.length === 0 ? [] : [host];
+    } catch {
+      return [];
+    }
+  });
+
+const assertCodexProviderHostsCoveredByAllowlist = (
+  toml: string,
+  networkPolicy: Extract<CodexRuntimeNetworkPolicy, { mode: 'egress_allowlist' }>,
+): void => {
+  const allowedHosts = new Set(
+    networkPolicy.allowlist_rules.filter((rule) => rule.purpose === 'model_provider').map((rule) => rule.host.toLowerCase()),
+  );
+  const missingHost = codexProviderBaseUrlHosts(toml).find((host) => !allowedHosts.has(host));
+  if (missingHost !== undefined) {
+    throw dockerPolicyUnavailable('Strict real dogfood provider base_url hosts must be covered by model_provider allowlist rules.');
+  }
 };
 
 function assertCodexRuntimeNetworkPolicy(policy: unknown): asserts policy is CodexRuntimeNetworkPolicy {
@@ -2172,8 +2233,8 @@ export const validateCodexRuntimeProfileRevision = (
     throw invalidProfile('Codex runtime profile digest does not match runtime-affecting profile data.');
   }
 
-  if (secretConfigPattern.test(validatedRevision.codex_config_toml)) {
-    throw invalidProfile('Codex config TOML must not contain secret-looking keys or environment interpolation channels.');
+  if (configInterpolationPattern.test(validatedRevision.codex_config_toml)) {
+    throw invalidProfile('Codex config TOML must not depend on environment interpolation channels.');
   }
 
   if (validatedRevision.app_server_required !== true || validatedRevision.allowed_driver_kind !== 'app_server') {
@@ -2232,6 +2293,7 @@ export const validateCodexRuntimeProfileRevision = (
     if (!hasModelProvider) {
       throw dockerPolicyUnavailable('Strict real dogfood egress allowlist profiles require a model_provider allowlist rule.');
     }
+    assertCodexProviderHostsCoveredByAllowlist(validatedRevision.codex_config_toml, networkPolicy);
   }
 
   const networkPolicy = normalizeCodexRuntimeNetworkPolicy(validatedRevision.network_policy);
@@ -2342,6 +2404,9 @@ export const validateCodexDockerRuntimeEvidence = (evidence: unknown): CodexDock
       });
     }
     if (isDockerRuntimeEvidencePublicId(key, value)) {
+      continue;
+    }
+    if (key === 'worker_id' && isDockerRuntimeEvidencePublicWorkerId(value, evidence.runtime_target_kind)) {
       continue;
     }
     if (

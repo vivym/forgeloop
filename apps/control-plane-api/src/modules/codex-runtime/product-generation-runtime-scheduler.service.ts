@@ -27,6 +27,8 @@ const optionalEnv = (key: string): string | undefined => {
   return value === undefined || value.length === 0 ? undefined : value;
 };
 
+const nowIso = (): string => process.env.FORGELOOP_AUTOMATION_TEST_NOW ?? new Date().toISOString();
+
 const stableUuid = (input: Record<string, unknown>): string => {
   const hex = codexCanonicalDigest(input).slice('sha256:'.length);
   const variant = ((Number.parseInt(hex[16] ?? '0', 16) & 0x3) | 0x8).toString(16);
@@ -119,7 +121,7 @@ export class ProductGenerationRuntimeSchedulerService {
     policy_digests?: Record<string, string> | undefined;
   }): Promise<ProductGenerationRuntimeScheduleResult> {
     const repository = input.repository ?? this.defaultRepository;
-    const now = this.runtime.now();
+    const now = nowIso();
     const repoIds = this.canonicalRepoIds(input.repo_ids);
     const actionRun = await repository.createOrReplayAutomationActionRun({
       ...input.action_run,

@@ -204,6 +204,81 @@ describe('codex runtime import APIs', () => {
     expect(publicJson).not.toContain('auth.json');
   });
 
+  it('imports local Codex provider bearer-token config without returning raw provider material', async () => {
+    const app = await bootApp();
+    vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    const providerToken = 'sk-channel-test-token';
+    const providerConfigToml = [
+      'model_provider = "x2r"',
+      'model = "gpt-5.5"',
+      'approval_policy = "never"',
+      'sandbox_mode = "read-only"',
+      '',
+      '[model_providers.x2r]',
+      'name = "x2r"',
+      'base_url = "https://ai.x2r.store/v1"',
+      'wire_api = "responses"',
+      `experimental_bearer_token = "${providerToken}"`,
+      'requires_openai_auth = true',
+      '',
+    ].join('\n');
+    const providerAllowlistRules = [{ id: 'x2r', protocol: 'https', host: 'ai.x2r.store', purpose: 'model_provider' }] as const;
+    const providerNetworkPolicy = {
+      ...networkPolicy,
+      allowlist_rules: providerAllowlistRules,
+      egress_allowlist_digest: codexCanonicalDigest(codexNetworkPolicyDigestInput('docker_network_proxy', providerAllowlistRules)),
+    };
+
+    const response = await signedSetupPost(
+      app,
+      '/internal/codex-runtime/import-local-codex',
+      importLocalCodexBody({
+        codex_config_toml: providerConfigToml,
+        network_policy: providerNetworkPolicy,
+      }),
+      'local-provider-import',
+    ).expect(201);
+
+    expect(response.body).toMatchObject({
+      codex_config_digest: codexCanonicalDigest(providerConfigToml),
+      credential_payload_digest: codexCredentialPayloadDigest(authJson),
+    });
+    const publicJson = JSON.stringify(response.body);
+    expect(publicJson).not.toContain(providerToken);
+    expect(publicJson).not.toContain('experimental_bearer_token');
+    expect(publicJson).not.toContain('ai.x2r.store');
+    expect(publicJson).not.toContain(providerConfigToml);
+    expect(publicJson).not.toContain('config.toml');
+    expect(publicJson).not.toContain('auth.json');
+  });
+
+  it('rejects local Codex imports when provider base_url is not covered by the model-provider allowlist', async () => {
+    const app = await bootApp();
+    vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
+    const providerConfigToml = [
+      'model_provider = "x2r"',
+      'model = "gpt-5.5"',
+      'approval_policy = "never"',
+      'sandbox_mode = "read-only"',
+      '',
+      '[model_providers.x2r]',
+      'base_url = "https://ai.x2r.store/v1"',
+      'wire_api = "responses"',
+      'experimental_bearer_token = "sk-channel-test-token"',
+      '',
+    ].join('\n');
+
+    await signedSetupPost(
+      app,
+      '/internal/codex-runtime/import-local-codex',
+      importLocalCodexBody({
+        codex_config_toml: providerConfigToml,
+        network_policy: networkPolicy,
+      }),
+      'local-provider-import-missing-allowlist',
+    ).expect(400);
+  });
+
   it('rejects path-like local Codex source labels before they can appear in public output', async () => {
     const app = await bootApp();
     vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');

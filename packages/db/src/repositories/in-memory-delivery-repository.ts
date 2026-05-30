@@ -1028,6 +1028,14 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         created_at: existing.created_at,
       };
     }
+    const existingByHashVersion = [...this.codexWorkerBootstrapTokens.values()].find(
+      (token) =>
+        token.token_hash === input.bootstrap_token_hash &&
+        token.bootstrap_token_version === input.bootstrap_token_version,
+    );
+    if (existingByHashVersion !== undefined) {
+      throw codexDenied('codex_worker_registration_denied', 'Worker bootstrap token already exists with different immutable fields.');
+    }
     const token: CodexWorkerBootstrapTokenRecord = {
       id: input.id,
       token_hash: input.bootstrap_token_hash,

@@ -4,11 +4,22 @@ import {
   CodexAppServerEndpointTransport,
   CodexGenerationError,
   createCodexGenerationRuntime,
+  validateBoundaryRoundRuntimeResult,
+  validateGeneratedExecutionPlanRevision,
   validateGeneratedPackageDraftSet,
+  validateGeneratedPlanDraft,
+  validateGeneratedSpecDraft,
+  validateGeneratedSpecRevision,
   type CodexGenerationResult,
   type CodexGenerationRuntime,
   type CodexGenerationRuntimeTaskInput,
+  type CodexGenerationTaskKind,
+  type BoundaryRoundRuntimeResultV1,
+  type GeneratedExecutionPlanRevisionV1,
   type GeneratedPackageDraftSetV1,
+  type GeneratedPlanDraftV1,
+  type GeneratedSpecDraftV1,
+  type GeneratedSpecRevisionV1,
 } from '@forgeloop/codex-runtime';
 import {
   codexCanonicalDigest,
@@ -21,9 +32,21 @@ import {
 
 import type { AutomationDaemonConfig } from './config.js';
 
-type GenerationTaskKind = 'package_drafts';
-type GenerationInput = Parameters<CodexGenerationRuntime['generatePackageDrafts']>[0];
-type GeneratedForTask<TTaskKind extends GenerationTaskKind> = GeneratedPackageDraftSetV1;
+type GenerationTaskKind = CodexGenerationTaskKind;
+type GenerationInput = CodexGenerationRuntimeTaskInput<Record<string, unknown>>;
+type GeneratedForTask<TTaskKind extends GenerationTaskKind> = TTaskKind extends 'spec_draft'
+  ? GeneratedSpecDraftV1
+  : TTaskKind extends 'plan_draft'
+    ? GeneratedPlanDraftV1
+    : TTaskKind extends 'package_drafts'
+      ? GeneratedPackageDraftSetV1
+      : TTaskKind extends 'boundary_brainstorming_round'
+        ? BoundaryRoundRuntimeResultV1
+        : TTaskKind extends 'development_plan_item_spec_revision'
+          ? GeneratedSpecRevisionV1
+          : TTaskKind extends 'development_plan_item_execution_plan_revision'
+            ? GeneratedExecutionPlanRevisionV1
+            : never;
 
 type RemoteRuntimeJobProjection = {
   id?: unknown;
@@ -178,23 +201,24 @@ export const createLeasedDockerCodexGenerationRuntime = (
   };
 
   return {
-    async generateSpecDraft() {
-      throw new Error('unsupported_generation_task');
-    },
-    async generatePlanDraft() {
-      throw new Error('unsupported_generation_task');
-    },
+    generateSpecDraft: (input) =>
+      generateWithLease('spec_draft', input, (runtime, taskInput) => runtime.generateSpecDraft(taskInput)),
+    generatePlanDraft: (input) =>
+      generateWithLease('plan_draft', input, (runtime, taskInput) => runtime.generatePlanDraft(taskInput)),
     generatePackageDrafts: (input) =>
       generateWithLease('package_drafts', input, (runtime, taskInput) => runtime.generatePackageDrafts(taskInput)),
-    async generateBoundaryBrainstormingRound() {
-      throw new Error('unsupported_generation_task');
-    },
-    async generateDevelopmentPlanItemSpecRevision() {
-      throw new Error('unsupported_generation_task');
-    },
-    async generateDevelopmentPlanItemExecutionPlanRevision() {
-      throw new Error('unsupported_generation_task');
-    },
+    generateBoundaryBrainstormingRound: (input) =>
+      generateWithLease('boundary_brainstorming_round', input, (runtime, taskInput) =>
+        runtime.generateBoundaryBrainstormingRound(taskInput),
+      ),
+    generateDevelopmentPlanItemSpecRevision: (input) =>
+      generateWithLease('development_plan_item_spec_revision', input, (runtime, taskInput) =>
+        runtime.generateDevelopmentPlanItemSpecRevision(taskInput),
+      ),
+    generateDevelopmentPlanItemExecutionPlanRevision: (input) =>
+      generateWithLease('development_plan_item_execution_plan_revision', input, (runtime, taskInput) =>
+        runtime.generateDevelopmentPlanItemExecutionPlanRevision(taskInput),
+      ),
   };
 };
 
@@ -256,6 +280,26 @@ const runtimeJobFromResponse = (response: unknown): RemoteRuntimeJobProjection =
   return response.runtime_job;
 };
 
+const validateGeneratedPayloadForTask = <TTaskKind extends GenerationTaskKind>(
+  taskKind: TTaskKind,
+  generatedPayload: unknown,
+): GeneratedForTask<TTaskKind> => {
+  switch (taskKind) {
+    case 'spec_draft':
+      return validateGeneratedSpecDraft(generatedPayload) as GeneratedForTask<TTaskKind>;
+    case 'plan_draft':
+      return validateGeneratedPlanDraft(generatedPayload) as GeneratedForTask<TTaskKind>;
+    case 'package_drafts':
+      return validateGeneratedPackageDraftSet(generatedPayload) as GeneratedForTask<TTaskKind>;
+    case 'boundary_brainstorming_round':
+      return validateBoundaryRoundRuntimeResult(generatedPayload) as GeneratedForTask<TTaskKind>;
+    case 'development_plan_item_spec_revision':
+      return validateGeneratedSpecRevision(generatedPayload) as GeneratedForTask<TTaskKind>;
+    case 'development_plan_item_execution_plan_revision':
+      return validateGeneratedExecutionPlanRevision(generatedPayload) as GeneratedForTask<TTaskKind>;
+  }
+};
+
 const isLostActionClaimRenewalError = (error: unknown): boolean => {
   if (error instanceof AutomationHttpError) {
     return (
@@ -311,7 +355,7 @@ const validateRemoteTerminalResult = <TTaskKind extends GenerationTaskKind>(
     throw new CodexGenerationError('generated_output_schema_invalid', { retryable: false });
   }
 
-  const generated = validateGeneratedPackageDraftSet(result.generated_payload);
+  const generated = validateGeneratedPayloadForTask(taskKind, result.generated_payload);
 
   return {
     taskKind,
@@ -641,22 +685,13 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
   };
 
   return {
-    async generateSpecDraft() {
-      throw new Error('unsupported_generation_task');
-    },
-    async generatePlanDraft() {
-      throw new Error('unsupported_generation_task');
-    },
+    generateSpecDraft: (input) => generateWithRemoteJob('spec_draft', input),
+    generatePlanDraft: (input) => generateWithRemoteJob('plan_draft', input),
     generatePackageDrafts: (input) => generateWithRemoteJob('package_drafts', input),
-    async generateBoundaryBrainstormingRound() {
-      throw new Error('unsupported_generation_task');
-    },
-    async generateDevelopmentPlanItemSpecRevision() {
-      throw new Error('unsupported_generation_task');
-    },
-    async generateDevelopmentPlanItemExecutionPlanRevision() {
-      throw new Error('unsupported_generation_task');
-    },
+    generateBoundaryBrainstormingRound: (input) => generateWithRemoteJob('boundary_brainstorming_round', input),
+    generateDevelopmentPlanItemSpecRevision: (input) => generateWithRemoteJob('development_plan_item_spec_revision', input),
+    generateDevelopmentPlanItemExecutionPlanRevision: (input) =>
+      generateWithRemoteJob('development_plan_item_execution_plan_revision', input),
   };
 };
 

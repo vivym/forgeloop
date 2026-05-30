@@ -72,6 +72,50 @@ describe('Boundary Brainstorming API', () => {
     });
   });
 
+  it('schedules Boundary generation when Codex worker heartbeat uses the runtime wall clock', async () => {
+    const codexWorkerNow = '2026-05-29T00:00:00.000Z';
+    vi.stubEnv('FORGELOOP_AUTOMATION_TEST_NOW', codexWorkerNow);
+    const { project, requirement } = await seedRequirement(app);
+    await seedBoundaryGenerationRuntimeForProject(app, project.id, { workerNow: codexWorkerNow });
+    const plan = await createDevelopmentPlan(app, {
+      project_id: project.id,
+      source_ref: { type: 'requirement', id: requirement.id },
+    });
+    const item = (
+      await request(app.getHttpServer())
+        .post(`/development-plans/${plan.id}/items`)
+        .send({
+          title: 'Schedule boundary with wall-clock worker',
+          summary: 'Ensure runtime scheduler uses Codex worker time for availability.',
+          responsible_role: 'tech_lead',
+          driver_actor_id: 'actor-tech',
+          reviewer_actor_id: 'actor-reviewer',
+          risk: 'medium',
+          dependency_hints: [],
+          affected_surfaces: ['codex-runtime'],
+          release_impact: 'release_scoped',
+        })
+        .expect(201)
+    ).body;
+
+    const session = (
+      await request(app.getHttpServer())
+        .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
+        .send({
+          actor_id: 'actor-leader',
+          leader_actor_id: 'actor-leader',
+        })
+        .expect(201)
+    ).body;
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const [round] = await repository.listBoundaryRounds(session.id);
+
+    expect(round).toMatchObject({
+      status: 'queued',
+      runtime_job_id: expect.any(String),
+    });
+  });
+
   it('rejects delegate self-escalation during boundary start', async () => {
     const first = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
@@ -1334,10 +1378,15 @@ async function terminalizeGenerationRuntimeJob(
   });
 }
 
-async function seedBoundaryGenerationRuntimeForProject(app: INestApplication, projectId: string) {
+async function seedBoundaryGenerationRuntimeForProject(
+  app: INestApplication,
+  projectId: string,
+  overrides: Partial<{ workerNow: string }> = {},
+) {
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const now = '2026-05-05T00:00:00.000Z';
-  const expiresAt = '2026-05-05T00:10:00.000Z';
+  const workerNow = overrides.workerNow ?? now;
+  const expiresAt = new Date(Date.parse(workerNow) + 10 * 60 * 1000).toISOString();
   const networkPolicy = { mode: 'disabled' as const };
   const profileId = stableUuid({ kind: 'boundary-generation-profile', projectId });
   const profileRevisionId = stableUuid({ kind: 'boundary-generation-profile-revision', projectId });
@@ -1469,23 +1518,23 @@ async function seedBoundaryGenerationRuntimeForProject(app: INestApplication, pr
     session_public_key_algorithm: 'x25519',
     session_public_key_material: 'base64-public-key-material',
     session_public_key_expires_at: expiresAt,
-    now,
+    now: workerNow,
   });
   await repository.heartbeatCodexWorker({
     worker_id: workerId,
     session_token: `boundary-session-${projectId}`,
     nonce: `boundary-heartbeat-${projectId}`,
-    nonce_timestamp: now,
+    nonce_timestamp: workerNow,
     status: 'online',
     control_channel_status: 'connected',
     active_lease_count: 0,
     capabilities: ['generation'],
-    now,
+    now: workerNow,
   });
 
   vi.stubEnv('FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID', profileId);
   vi.stubEnv('FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID', credentialBindingId);
-  vi.stubEnv('FORGELOOP_AUTOMATION_TEST_NOW', '2026-05-05T00:01:30.000Z');
+  vi.stubEnv('FORGELOOP_AUTOMATION_TEST_NOW', new Date(Date.parse(workerNow) + 90_000).toISOString());
 }
 
 function stableUuid(input: Record<string, unknown>): string {
