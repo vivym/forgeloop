@@ -1369,7 +1369,6 @@ export interface DeliveryRepository {
   getInternalArtifactObjectByRef(input: GetInternalArtifactObjectByRefInput): Promise<InternalArtifactObject | undefined>;
   getInternalArtifactObjectById(id: string): Promise<InternalArtifactObject | undefined>;
   tombstoneInternalArtifactObject(input: TombstoneInternalArtifactObjectInput): Promise<InternalArtifactObject>;
-  preflightCreateCodexRuntimeJobArtifact(input: PreflightCreateCodexRuntimeJobArtifactInput): Promise<void>;
   reserveCodexRuntimeJobArtifactUpload(input: ReserveCodexRuntimeJobArtifactUploadInput): Promise<void>;
   bindReservedCodexRuntimeJobArtifact(input: BindReservedCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
   createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;

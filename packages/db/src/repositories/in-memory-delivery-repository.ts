@@ -1967,11 +1967,21 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async bindReservedCodexRuntimeJobArtifact(input: BindReservedCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
-    this.assertCodexRuntimeJobArtifactObjectBinding(input);
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     if (record === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
+    if (record.job.accepted_session_epoch === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    this.assertCodexWorkerNonceRecorded(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.replay_protection,
+      record.job.accepted_session_epoch,
+    );
+    this.assertCodexRuntimeJobArtifactObjectBinding(input);
     const existing = this.findCodexRuntimeJobArtifactReplay(input);
     if (existing !== undefined) {
       if (this.codexRuntimeJobArtifactReplayMatches(existing, input)) {
@@ -1996,10 +2006,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     };
     this.codexRuntimeJobArtifacts.set(artifact.id, clone(artifact));
     return this.codexRuntimeJobArtifactPublic(artifact, record);
-  }
-
-  async preflightCreateCodexRuntimeJobArtifact(input: PreflightCreateCodexRuntimeJobArtifactInput): Promise<void> {
-    this.preflightCreateCodexRuntimeJobArtifactUnlocked(input);
   }
 
   async listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]> {
@@ -6151,6 +6157,38 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     );
     if (used) {
       throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce was already used.');
+    }
+  }
+
+  private assertCodexWorkerNonceRecorded(
+    workerId: string,
+    sessionToken: string,
+    nonce: string,
+    replayProtection: CodexWorkerReplayProtectionInput | undefined,
+    sessionEpoch: number,
+  ): void {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    const nonceHash = codexCredentialPayloadDigest(nonce);
+    const requestBindingDigest =
+      replayProtection === undefined
+        ? codexCanonicalDigest({ method: 'LEGACY', path: 'legacy-worker-session', body_digest: sessionTokenHash })
+        : codexCanonicalDigest(replayProtection);
+    const replayKeyHash = codexCanonicalDigest({
+      method: replayProtection?.method ?? 'LEGACY',
+      path: replayProtection?.path ?? 'legacy-worker-session',
+      body_digest: replayProtection?.body_digest ?? sessionTokenHash,
+      worker_id: workerId,
+      session_epoch: sessionEpoch,
+      nonce,
+    });
+    const record = this.codexWorkerSessionNonces.get(`${workerId}:${sessionEpoch}:${nonceHash}`);
+    if (
+      record === undefined ||
+      record.session_token_hash !== sessionTokenHash ||
+      record.request_binding_digest !== requestBindingDigest ||
+      record.replay_key_hash !== replayKeyHash
+    ) {
+      throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce reservation was not found.');
     }
   }
 

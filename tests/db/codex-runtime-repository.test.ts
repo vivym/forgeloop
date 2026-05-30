@@ -2301,6 +2301,47 @@ describe('codex runtime repository behavior', () => {
     ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
 
     await repository.createOrReplayInternalArtifactObject({
+      id: '33333333-3333-4333-8333-666666666666',
+      artifact_id: '11111111-1111-4111-8111-666666666666',
+      ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/11111111-1111-4111-8111-666666666666',
+      storage_key: `objects/${tokenHash('unreserved-digest').slice('sha256:'.length)}`,
+      kind: 'codex_runtime_job_artifact',
+      content_type: 'application/json',
+      size_bytes: '128',
+      digest: tokenHash('unreserved-digest'),
+      visibility: 'internal',
+      owner_type: 'codex_runtime_job',
+      owner_id: 'runtime-job-1',
+      idempotency_key: 'artifact-unreserved-object',
+      request_digest: tokenHash('artifact-unreserved-request'),
+      metadata_json: {},
+      created_by_actor_type: 'codex_worker',
+      created_by_actor_id: 'worker-1',
+      created_at: later,
+    });
+    await expect(
+      repository.bindReservedCodexRuntimeJobArtifact({
+        runtime_job_id: 'runtime-job-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'artifact-unreserved-nonce',
+        nonce_timestamp: later,
+        artifact_id: '11111111-1111-4111-8111-666666666666',
+        artifact_idempotency_key: 'artifact-unreserved-object',
+        kind: 'generated_payload',
+        name: 'generated-payload.json',
+        content_type: 'application/json',
+        digest: tokenHash('unreserved-digest'),
+        internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/11111111-1111-4111-8111-666666666666',
+        internal_artifact_object_id: '33333333-3333-4333-8333-666666666666',
+        size_bytes: 128,
+        metadata_json: {},
+        request_digest: tokenHash('artifact-unreserved-request'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_worker_nonce_replay' });
+
+    await repository.createOrReplayInternalArtifactObject({
       id: '33333333-3333-4333-8333-555555555555',
       artifact_id: '11111111-1111-4111-8111-555555555555',
       ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/11111111-1111-4111-8111-555555555555',
