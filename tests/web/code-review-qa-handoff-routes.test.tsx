@@ -16,6 +16,8 @@ describe('Code review and QA handoff route panels', () => {
     expect(await qaScreen.findByRole('heading', { name: 'QA' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeTruthy();
     expect(qaScreen.getByRole('heading', { name: 'QA queue' })).toBeTruthy();
+    expect(await qaScreen.findByText(qaHandoff.ref.title)).toBeTruthy();
+    expect(await qaScreen.findAllByRole('link', { name: /^Open execution handoff$/i })).toHaveLength(2);
   });
 
   it('renders code review and QA handoff controls from an execution detail', async () => {

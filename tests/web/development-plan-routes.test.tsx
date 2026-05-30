@@ -881,19 +881,21 @@ describe('Development Plan routes', () => {
     expect(document.body.textContent).toMatch(/Release gate waits for an owning Release link/i);
   });
 
-  it('routes Plan Item Review and QA gate cards to top-level queues', async () => {
+  it('routes Plan Item Review and QA gate cards to actionable handoff surfaces', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
 
     await user.click(await screen.findByRole('button', { name: /^open code review$/i }));
-    expect(await screen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="document-governance"]')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="execution-supervision"]')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /Code review handoff/i })).toBeTruthy();
 
     cleanup();
     const qaScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
     await user.click(await qaScreen.findByRole('button', { name: /^open qa handoff$/i }));
     expect(await qaScreen.findByRole('heading', { name: 'QA' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeTruthy();
+    expect(await qaScreen.findAllByRole('link', { name: /^Open execution handoff$/i })).toHaveLength(2);
   });
 
   it('keeps Development Plan loaded state compact while Plan Item pages expose exceptional state', async () => {

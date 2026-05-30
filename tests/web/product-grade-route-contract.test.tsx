@@ -259,7 +259,7 @@ describe('product-grade route contract', () => {
     expect(gateHrefs).toContain(`${itemBaseHref}/spec`);
     expect(gateHrefs).toContain(`${itemBaseHref}/implementation-plan`);
     expect(gateHrefs).toContain(`${itemBaseHref}/execution`);
-    expect(gateHrefs).toContain('/reviews');
+    expect(gateHrefs).toContain('/executions');
     expect(gateHrefs).toContain('/qa');
     expect(gateHrefs.join('\n')).not.toMatch(/brainstorming|execution-plan|\/items\/[^/]+\/review$|\/items\/[^/]+\/qa$/);
   });

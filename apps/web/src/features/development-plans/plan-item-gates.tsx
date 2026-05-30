@@ -181,10 +181,15 @@ export function planItemGateModels(item: DevelopmentPlanItemProjection): PlanIte
     gateConfig('spec', 'Spec', item.spec_status, href('/spec'), isApproved(item.boundary_status)),
     gateConfig('implementation-plan', 'Implementation Plan Doc', item.implementation_plan_status, href('/implementation-plan'), isApproved(item.spec_status) && hasRequiredSpecQaStrategy(item)),
     gateConfig('execution', 'Execution', item.execution_status, href('/execution'), isApproved(item.implementation_plan_status) && hasRunnableExecutionBoundary(item)),
-    gateConfig('code-review', 'Code Review', item.review_status, '/reviews', item.execution_status === 'completed' || isReviewOpen(item.review_status)),
+    gateConfig('code-review', 'Code Review', item.review_status, codeReviewHref(item), item.execution_status === 'completed' || isReviewOpen(item.review_status)),
     gateConfig('qa-handoff', 'QA handoff', item.qa_handoff_status, '/qa', item.review_status === 'approved' || isQaOpen(item.qa_handoff_status)),
     gateConfig('release', 'Release', undefined, releaseHref(item), (item.qa_handoff_status === 'accepted' || item.qa_handoff_status === 'approved') && hasLinkedRelease(item)),
   ];
+}
+
+function codeReviewHref(item: DevelopmentPlanItemProjection): string {
+  const executionId = item.code_review_handoffs?.[0]?.execution_id ?? item.executions?.[0]?.id;
+  return executionId === undefined ? '/executions' : `/executions/${encodeURIComponent(executionId)}`;
 }
 
 function PlanItemLifecycleActions({ item }: { item: DevelopmentPlanItemProjection }) {
