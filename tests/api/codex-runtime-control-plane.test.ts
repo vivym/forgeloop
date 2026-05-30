@@ -2518,6 +2518,62 @@ describe('codex runtime control-plane APIs', () => {
     });
     expect(correctedNonceReplay.status, JSON.stringify(correctedNonceReplay.body)).toBe(201);
 
+    const concurrentNoncePayloadA = Buffer.from('concurrent nonce replay payload a\n');
+    const concurrentNoncePayloadB = Buffer.from('concurrent nonce replay payload b\n');
+    const concurrentNonceDigestA = rawSha256(concurrentNoncePayloadA);
+    const concurrentNonceDigestB = rawSha256(concurrentNoncePayloadB);
+    const concurrentNonceUploads = [
+      {
+        key: 'artifact-concurrent-nonce-replay-a',
+        response: runtimeArtifactUpload({
+          app,
+          workerId,
+          runtimeJobId,
+          payload: concurrentNoncePayloadA,
+          metadata: runtimeArtifactUploadMetadata({
+            sessionToken: registration.session_token,
+            nonce: 'artifact-concurrent-nonce-replay',
+            artifact_idempotency_key: 'artifact-concurrent-nonce-replay-a',
+            kind: 'generated_payload',
+            name: 'concurrent-a.txt',
+            content_type: 'text/plain',
+            digest: concurrentNonceDigestA,
+            size_bytes: String(concurrentNoncePayloadA.byteLength),
+          }),
+        }),
+      },
+      {
+        key: 'artifact-concurrent-nonce-replay-b',
+        response: runtimeArtifactUpload({
+          app,
+          workerId,
+          runtimeJobId,
+          payload: concurrentNoncePayloadB,
+          metadata: runtimeArtifactUploadMetadata({
+            sessionToken: registration.session_token,
+            nonce: 'artifact-concurrent-nonce-replay',
+            artifact_idempotency_key: 'artifact-concurrent-nonce-replay-b',
+            kind: 'generated_payload',
+            name: 'concurrent-b.txt',
+            content_type: 'text/plain',
+            digest: concurrentNonceDigestB,
+            size_bytes: String(concurrentNoncePayloadB.byteLength),
+          }),
+        }),
+      },
+    ];
+    const concurrentNonceResults = await Promise.all(
+      concurrentNonceUploads.map(async (upload) => ({ key: upload.key, response: await upload.response })),
+    );
+    expect(concurrentNonceResults.map((result) => result.response.status).sort()).toEqual([201, 400]);
+    const rejectedConcurrentNonce = concurrentNonceResults.find((result) => result.response.status === 400);
+    expect(rejectedConcurrentNonce).toBeDefined();
+    await expect(
+      repository.getInternalArtifactObjectByRef({
+        ref: runtimeArtifactInternalRef(runtimeJobId, rejectedConcurrentNonce?.key ?? ''),
+      }),
+    ).resolves.toBeUndefined();
+
     await request(app.getHttpServer())
       .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`)
       .send(

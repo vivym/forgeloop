@@ -118,8 +118,10 @@ import type {
   CreatePendingWorkspaceBundleArtifactInput,
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeProfileWithRevisionInput,
+  BindReservedCodexRuntimeJobArtifactInput,
   CreateCodexRuntimeJobArtifactInput,
   PreflightCreateCodexRuntimeJobArtifactInput,
+  ReserveCodexRuntimeJobArtifactUploadInput,
   CreateCodexWorkerBootstrapTokenInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
@@ -1947,6 +1949,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    await this.reserveCodexRuntimeJobArtifactUpload(input);
+    return this.bindReservedCodexRuntimeJobArtifact(input);
+  }
+
+  async reserveCodexRuntimeJobArtifactUpload(input: ReserveCodexRuntimeJobArtifactUploadInput): Promise<void> {
     const session = this.preflightCreateCodexRuntimeJobArtifactUnlocked(input);
     this.recordCodexWorkerNonce(
       input.worker_id,
@@ -1957,6 +1964,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.replay_protection,
       session.session_epoch,
     );
+  }
+
+  async bindReservedCodexRuntimeJobArtifact(input: BindReservedCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
     this.assertCodexRuntimeJobArtifactObjectBinding(input);
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     if (record === undefined) {

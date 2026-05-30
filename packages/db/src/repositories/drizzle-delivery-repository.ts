@@ -185,6 +185,7 @@ import type {
   CodexLaunchTokenEnvelopeSealer,
   CodexRuntimeRecoveryResult,
   CodexWorkerReplayProtectionInput,
+  BindReservedCodexRuntimeJobArtifactInput,
   ConsumeCodexRuntimeSetupNonceInput,
   CreateInternalArtifactObjectInput,
   CreatePendingWorkspaceBundleArtifactInput,
@@ -192,6 +193,7 @@ import type {
   CreateCodexRuntimeJobArtifactInput,
   CreateCodexRuntimeProfileWithRevisionInput,
   PreflightCreateCodexRuntimeJobArtifactInput,
+  ReserveCodexRuntimeJobArtifactUploadInput,
   CreateCodexWorkerBootstrapTokenInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
@@ -1980,6 +1982,30 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
   }
 
+  async reserveCodexRuntimeJobArtifactUpload(input: ReserveCodexRuntimeJobArtifactUploadInput): Promise<void> {
+    return this.withAdvisoryLocks(
+      [
+        ...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id),
+        `codex-runtime-artifact:${input.runtime_job_id}:${input.artifact_id}`,
+        `codex-runtime-artifact-idempotency:${input.runtime_job_id}:${input.artifact_idempotency_key}`,
+      ],
+      async (repository) => {
+        await (repository as DrizzleDeliveryRepository).reserveCodexRuntimeJobArtifactUploadUnlocked(input);
+      },
+    );
+  }
+
+  async bindReservedCodexRuntimeJobArtifact(input: BindReservedCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    return this.withAdvisoryLocks(
+      [
+        ...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id),
+        `codex-runtime-artifact:${input.runtime_job_id}:${input.artifact_id}`,
+        `codex-runtime-artifact-idempotency:${input.runtime_job_id}:${input.artifact_idempotency_key}`,
+      ],
+      async (repository) => (repository as DrizzleDeliveryRepository).bindReservedCodexRuntimeJobArtifactUnlocked(input),
+    );
+  }
+
   async preflightCreateCodexRuntimeJobArtifact(input: PreflightCreateCodexRuntimeJobArtifactInput): Promise<void> {
     return this.withAdvisoryLocks(
       [
@@ -2700,6 +2726,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async createCodexRuntimeJobArtifactUnlocked(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    await this.reserveCodexRuntimeJobArtifactUploadUnlocked(input);
+    return this.bindReservedCodexRuntimeJobArtifactUnlocked(input);
+  }
+
+  private async reserveCodexRuntimeJobArtifactUploadUnlocked(input: ReserveCodexRuntimeJobArtifactUploadInput): Promise<void> {
     const session = await this.preflightCreateCodexRuntimeJobArtifactUnlocked(input);
     await this.recordCodexWorkerNonce(
       input.worker_id,
@@ -2710,6 +2741,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.replay_protection,
       session.session_epoch,
     );
+  }
+
+  private async bindReservedCodexRuntimeJobArtifactUnlocked(
+    input: BindReservedCodexRuntimeJobArtifactInput,
+  ): Promise<CodexRuntimeJobArtifact> {
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
     if (bundle.job === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');

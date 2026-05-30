@@ -1068,7 +1068,7 @@ export class CodexRuntimeService {
       artifact_id: artifactId,
     });
     const sizeBytes = Number(input.metadata.size_bytes);
-    await this.repository.preflightCreateCodexRuntimeJobArtifact({
+    const reservation = {
       runtime_job_id: jobId,
       worker_id: workerId,
       worker_session_token: input.metadata.worker_session_token,
@@ -1090,7 +1090,8 @@ export class CodexRuntimeService {
         bodyDigest,
       ),
       now,
-    });
+    };
+    await this.repository.reserveCodexRuntimeJobArtifactUpload(reservation);
     const stored = await this.internalArtifacts.putObject({
       artifact_id: artifactId,
       kind: 'codex_runtime_job_artifact',
@@ -1108,29 +1109,11 @@ export class CodexRuntimeService {
       max_size_bytes: codexRuntimeJobArtifactMaxSizeBytes,
       bytes: input.bytes,
     });
-    const artifact = await this.repository.createCodexRuntimeJobArtifact({
-      runtime_job_id: jobId,
-      worker_id: workerId,
-      worker_session_token: input.metadata.worker_session_token,
-      nonce: input.metadata.nonce,
-      nonce_timestamp: input.metadata.nonce_timestamp,
-      artifact_id: artifactId,
-      artifact_idempotency_key: input.metadata.artifact_idempotency_key,
-      kind: input.metadata.kind,
-      name: input.metadata.name,
-      content_type: input.metadata.content_type,
-      digest: input.metadata.digest,
+    const artifact = await this.repository.bindReservedCodexRuntimeJobArtifact({
+      ...reservation,
       internal_ref: stored.ref,
       internal_artifact_object_id: stored.id,
       size_bytes: Number(stored.size_bytes),
-      metadata_json: input.metadata.metadata_json,
-      request_digest: bodyDigest,
-      replay_protection: workerReplayProtection(
-        'POST',
-        input.proof_path,
-        bodyDigest,
-      ),
-      now,
     });
     return { artifact };
   }

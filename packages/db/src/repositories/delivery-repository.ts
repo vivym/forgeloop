@@ -501,6 +501,10 @@ export type PreflightCreateCodexRuntimeJobArtifactInput = Omit<
   'internal_artifact_object_id'
 >;
 
+export type ReserveCodexRuntimeJobArtifactUploadInput = PreflightCreateCodexRuntimeJobArtifactInput;
+
+export type BindReservedCodexRuntimeJobArtifactInput = CreateCodexRuntimeJobArtifactInput;
+
 export interface ListCodexRuntimeJobArtifactsInput {
   runtime_job_id: string;
 }
@@ -1366,6 +1370,8 @@ export interface DeliveryRepository {
   getInternalArtifactObjectById(id: string): Promise<InternalArtifactObject | undefined>;
   tombstoneInternalArtifactObject(input: TombstoneInternalArtifactObjectInput): Promise<InternalArtifactObject>;
   preflightCreateCodexRuntimeJobArtifact(input: PreflightCreateCodexRuntimeJobArtifactInput): Promise<void>;
+  reserveCodexRuntimeJobArtifactUpload(input: ReserveCodexRuntimeJobArtifactUploadInput): Promise<void>;
+  bindReservedCodexRuntimeJobArtifact(input: BindReservedCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
   createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
   listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]>;
   createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void>;
