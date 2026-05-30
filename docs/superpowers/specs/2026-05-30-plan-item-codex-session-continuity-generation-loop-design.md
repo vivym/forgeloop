@@ -34,6 +34,7 @@ This spec is authoritative for:
 - internal artifact store requirements for Codex session snapshots;
 - single-writer session leases;
 - session fork semantics;
+- Plan Item Workflow source-of-truth rules;
 - multi-wave implementation order.
 
 ## Problem
@@ -116,7 +117,9 @@ A `PlanItemWorkflow` is the product workflow instance for one Plan Item entering
 
 It belongs to exactly one Development Plan and exactly one Plan Item.
 
-Suggested shape:
+This is not an optional UI helper. It is the authoritative workflow contract and persisted DB/API object for Superpowers-backed Plan Item work.
+
+Contract shape:
 
 ```ts
 type PlanItemWorkflow = {
@@ -139,6 +142,10 @@ type PlanItemWorkflow = {
     | 'blocked'
     | 'archived';
   active_codex_session_id?: string;
+  active_boundary_summary_revision_id?: string;
+  active_spec_doc_revision_id?: string;
+  active_implementation_plan_doc_revision_id?: string;
+  execution_package_id?: string;
   created_by_actor_id: string;
   created_at: string;
   updated_at: string;
@@ -146,6 +153,17 @@ type PlanItemWorkflow = {
 ```
 
 The workflow is the product object. The Codex session is the runtime continuity object.
+
+Source-of-truth rules:
+
+- `PlanItemWorkflow.status` is the only source of truth for Superpowers workflow stage.
+- Existing `DevelopmentPlanItem` status fields may show projections for list views, but they must not own Superpowers transitions.
+- Existing `BrainstormingSession`, Spec Doc, Implementation Plan Doc, automation action run, runtime job, run session, and review packet records may reference a `PlanItemWorkflow`.
+- Those records must not own `active_codex_session_id`.
+- Only the Plan Item Workflow service may transition between Boundary, Spec Doc, Implementation Plan Doc, execution, code review, QA, and release-readiness stages.
+- Source documents, Requirement Documents, Bug Documents, Tech Debt Documents, and Initiative Documents may feed a Development Plan and Plan Item context package, but they cannot enqueue Spec Doc, Implementation Plan Doc, or execution directly.
+- API and UI routes that mutate Superpowers state must address the Plan Item Workflow or a child object under it.
+- Migrations must delete or replace any public route, DTO, or command that can start Superpowers generation outside the Plan Item Workflow path.
 
 ### Codex Session
 
@@ -168,12 +186,14 @@ type CodexSession = {
     | 'idle'
     | 'running'
     | 'blocked'
+    | 'recovering'
     | 'forked'
     | 'archived';
   latest_snapshot_id?: string;
   latest_snapshot_digest?: string;
   latest_turn_id?: string;
   latest_turn_digest?: string;
+  lease_epoch: number;
   runtime_profile_id: string;
   runtime_profile_revision_id: string;
   credential_binding_id: string;
@@ -192,7 +212,8 @@ Rules:
 - Codex creates `codex_thread_id`.
 - `codex_thread_id` is written only after Codex returns it.
 - Raw Codex thread ids are internal runtime metadata and should not be shown in normal product UI.
-- Product UI may show a short digest, creation time, last turn time, and status.
+- Product UI may show creation time, last continuation time, and product-safe continuity status.
+- Raw thread ids, snapshot refs, manifest metadata, and digests belong in trusted worker protocols and admin/operator diagnostics only.
 - One active Plan Item Workflow may have only one active CodexSession.
 - Forks create additional CodexSession records but do not replace the active session until a human explicitly chooses the fork.
 
@@ -221,6 +242,9 @@ type CodexSessionTurn = {
   input_digest: string;
   expected_previous_snapshot_digest?: string;
   output_snapshot_digest?: string;
+  codex_thread_id_digest?: string;
+  lease_id?: string;
+  lease_epoch?: number;
   automation_action_run_id?: string;
   runtime_job_id?: string;
   created_by_actor_id: string;
@@ -272,6 +296,8 @@ type ArtifactObject = {
   created_at: string;
 };
 ```
+
+This store is broader than existing generated-payload or runtime-job artifacts. Implementers may adapt the current `CodexRuntimeJobArtifact` upload path as a backend detail, but they must not create a second product-visible artifact model for session snapshots. `CodexSessionSnapshot.artifact_ref` must point to an internal ArtifactStore object with internal/private visibility, digest verification, and trusted worker access controls.
 
 ### v0 Backend
 
@@ -407,6 +433,25 @@ To resume:
 
 Config/auth are never sourced from the snapshot.
 
+### Worker `CODEX_HOME` Topology
+
+The current disposable `CODEX_HOME` topology is insufficient for snapshots if the live state only exists inside container tmpfs. The worker must use one of these explicit topologies:
+
+1. Preferred v0 topology: create a host-owned, snapshotable state directory under the task root, restore snapshot files there, bind-mount it as `/codex-home`, and bind-mount centralized config/auth from a separate read-only secret seed directory.
+2. Accepted fallback: keep container tmpfs for `/codex-home`, but perform a mandatory `docker cp` or container-side archive extraction from live `/codex-home` before stopping the container.
+
+In both topologies:
+
+- restore happens before app-server start;
+- config/auth are copied or mounted after restore and are never included in the next snapshot;
+- snapshot packaging happens before launcher `close()` and before task-root cleanup;
+- packaging rejects symlinks, hardlinks, device files, path escapes, absolute paths, and files outside the whitelist;
+- packaging produces relative manifest paths only;
+- live state extraction failure marks the session `blocked` and must not silently continue without a snapshot;
+- worker logs may include public-safe failure codes but must not print raw snapshot contents, token material, or raw Codex thread ids.
+
+The implementation plan must update the Docker command, app-server launcher, task filesystem lifecycle, and remote worker runbook together. A wave is not complete if snapshots only work in non-Docker unit tests.
+
 ## Single-Writer Session Lease
 
 Only one worker may run a CodexSession at a time.
@@ -423,7 +468,7 @@ Lease acquisition must be compare-and-set:
 claim session where
   status = idle
   latest_snapshot_digest = expected_previous_snapshot_digest
-  active_lease_id is null or expired
+  active_lease_id is null
 ```
 
 On success:
@@ -432,13 +477,31 @@ On success:
 status = running
 active_lease_id = lease-id
 locked_by_worker_id = worker-id
+lease_epoch = previous lease_epoch + 1
 lock_expires_at = now + ttl
 ```
+
+First-turn acquisition uses `expected_previous_snapshot_digest = null` and requires `latest_snapshot_digest is null`.
+
+Every session mutation after acquisition must carry lease fencing fields:
+
+```text
+codex_session_id
+active_lease_id
+locked_by_worker_id
+lease_epoch
+worker_session_digest
+```
+
+The control plane must reject mutation, snapshot upload finalization, terminalization, status transition, or first-thread-id binding unless the current session row still matches all lease fencing fields.
 
 On terminal success:
 
 ```text
 expected_previous_snapshot_digest must still match
+active_lease_id must still match
+locked_by_worker_id must still match
+lease_epoch must still match
 latest_snapshot_id = new_snapshot_id
 latest_snapshot_digest = new_snapshot_digest
 status = idle or next product status
@@ -450,6 +513,14 @@ On failure:
 - recoverable runtime failure moves session to `idle` or `blocked` depending on failure code;
 - missing snapshot, digest mismatch, unsafe snapshot, or resume failure moves session to `blocked`;
 - user-visible UI shows a public-safe blocker code and next action.
+
+Lease expiry is a recovery signal, not permission to run a second concurrent turn. When a lease expires:
+
+- no new worker may immediately start another turn against the same session;
+- the session moves to `recovering` or `blocked`;
+- operators or recovery automation must fence or cancel the old runtime job first;
+- terminalization from a non-current, expired, or fenced lease is recorded as `stale` and must not update `latest_snapshot_*`, product stage, or active thread binding;
+- TTL and renewal cadence must be shorter than runtime job timeout and documented in the runbook.
 
 ## Fork Semantics
 
@@ -507,10 +578,13 @@ Flow:
 7. Human reviews or requests changes on Spec Doc.
 8. Approved Spec Doc automatically enqueues Implementation Plan Doc generation in the same CodexSession.
 9. Human reviews or requests changes on Implementation Plan Doc.
-10. Approved Implementation Plan Doc marks execution ready.
-11. Execution runs in the same CodexSession when started.
+10. Approved Implementation Plan Doc unlocks execution-readiness evaluation.
+11. Execution Ready requires approved Spec Doc revision, approved Implementation Plan Doc revision, current Plan Item revision, required QA or test-strategy signoff for the Plan Item risk class, a validated runnable internal Execution Package boundary, and release or QA handoff links where applicable.
+12. Execution runs in the same CodexSession when started.
 
 Request changes are turns in the same session. They do not create a new session.
+
+Approved documents are necessary but not sufficient for execution. The gate must preserve PRD shift-left QA responsibilities and must not allow "approved plan" to bypass test strategy, runnable package validation, or handoff requirements.
 
 ## UI Requirements
 
@@ -542,10 +616,10 @@ Show a Context Preview before generation and execution:
 - approved Spec Doc revision;
 - approved Implementation Plan Doc revision;
 - repo/ref/worktree policy;
-- latest CodexSession snapshot digest;
+- product-safe continuity state such as "Codex context continuity verified", "last successful continuation", or "continuity stale/blocked";
 - stale blockers.
 
-Do not expose raw Codex session files.
+Do not expose raw Codex session files, snapshot digests, manifest metadata, snapshot refs, or raw thread ids in the normal Plan Item workspace. Technical leaders may open an explicitly technical diagnostics drawer if needed; admin/operator screens may show digests and refs for support.
 
 ### Recovery Actions
 
@@ -572,6 +646,16 @@ The app-server generation driver must support:
 - persisting only a digest or internal-only field to public-facing records;
 - producing enough metadata for snapshot validation.
 
+Thread binding is a trusted protocol contract:
+
+- first-turn terminalization must return `codex_thread_id`, `codex_thread_id_digest`, and Codex turn id through an internal-only worker/control-plane field or trusted session endpoint;
+- the control plane binds `CodexSession.codex_thread_id` only when it is currently null and all lease fencing fields match;
+- later-turn workloads include `existing_codex_thread_id` or an internal handle that resolves to it;
+- the driver must skip `thread/start` for later turns and use the verified app-server resume/turn method;
+- if restored state cannot resume the requested thread id, the session becomes `blocked`;
+- resume failure must never fall back to creating a replacement thread;
+- replacing a thread is allowed only through explicit abandon/new-session or fork action recorded on the Plan Item Workflow.
+
 ### Worker Filesystem
 
 The worker must change from purely disposable `CODEX_HOME` to restore-and-snapshot `CODEX_HOME`:
@@ -595,19 +679,30 @@ Accepted generation jobs for session turns must include:
 - `codex_session_id`;
 - `turn_id`;
 - `stage`;
+- `lease_id`;
+- `lease_epoch`;
+- `worker_session_digest`;
 - `expected_previous_snapshot_digest`;
 - latest snapshot ref when present;
+- `existing_codex_thread_id` or trusted internal thread handle when this is not the first turn;
 - runtime profile and credential binding ids;
 - owner workflow and Plan Item refs;
 - product precondition fingerprint.
 
 Terminalization must include:
 
+- lease fencing fields;
+- first-turn raw thread id through internal-only transport when binding is needed;
+- Codex thread id digest;
+- Codex turn id;
 - new snapshot ref;
 - new snapshot digest;
+- snapshot sequence;
 - output artifact refs;
 - public-safe evidence;
 - failure code when blocked.
+
+Existing runtime job artifact upload APIs may be reused behind the store implementation only if they satisfy the internal ArtifactStore visibility, digest, and access contract. They must not become a parallel public artifact path for Codex session snapshots.
 
 ## Security And Privacy
 
@@ -615,12 +710,14 @@ Hard requirements:
 
 - session snapshots are internal visibility only;
 - public APIs never return raw snapshot URIs unless the caller is a trusted worker or admin-only internal endpoint;
+- normal Plan Item product DTOs must not expose raw thread ids, snapshot refs, manifest metadata, or snapshot digests;
 - snapshot package and manifest must not contain credentials;
 - snapshot restore verifies digest before use;
 - snapshot upload computes digest after packaging;
-- session lock updates use CAS;
+- session lock updates use lease-fenced CAS;
 - unsafe snapshots fail closed;
-- public blocker reports contain only codes, digests, counts, and high-level status.
+- public-safe blocker reports contain only codes, counts, and high-level status;
+- digest-level troubleshooting data appears only in trusted worker payloads, technical diagnostics drawers, or admin/operator screens.
 
 The no-shared-filesystem rule still applies. Snapshot transfer must go through the control-plane ArtifactStore, not direct worker-to-worker filesystem sharing.
 
@@ -652,58 +749,69 @@ Goal: create `CodexSession`, `CodexSessionTurn`, `CodexSessionSnapshot`, and lea
 
 Deliverables:
 
+- authoritative `PlanItemWorkflow` contract schema, DB model, repository, and transition service;
 - contract schemas;
 - DB schema and repository APIs;
-- create session for Plan Item Workflow;
-- claim/release session lease;
+- create CodexSession only through Plan Item Workflow service;
+- ensure existing BrainstormingSession, Spec Doc, Implementation Plan Doc, automation action run, runtime job, and run session records reference workflow/session instead of owning workflow status;
+- claim/release session lease with lease epoch and worker session digest fencing;
 - CAS update of latest snapshot;
-- session blocked/retry/archive states;
+- session blocked/recovering/retry/archive states;
 - fork metadata model;
-- tests for single-writer behavior and stale snapshot rejection.
+- tests for single-writer behavior, first-turn null snapshot CAS, expired lease fencing, and stale snapshot rejection.
 
 Acceptance:
 
-- two workers cannot claim the same session concurrently;
+- two workers cannot claim or terminalize the same session concurrently;
+- expired leases cannot be overtaken until recovery fences or cancels the old runtime job;
 - stale terminal updates cannot overwrite newer snapshots;
+- no public route, DTO, or service can start Superpowers generation outside Plan Item Workflow;
 - fork creates a separate child session without mutating the parent.
 
-### Wave 3: Snapshot Packaging And Restore
+### Wave 3: App-Server Resume Protocol Support
 
-Goal: make worker runtime preserve Codex session continuity.
+Goal: stop starting a new Codex thread for every generation stage and define the trusted thread-binding protocol before snapshot restore depends on it.
+
+Deliverables:
+
+- verify the current Codex app-server resume method and payload;
+- driver input supports `existing_codex_thread_id` or trusted internal thread handle;
+- first turn captures Codex thread id, digest, and Codex turn id through internal-only terminalization;
+- first-turn thread binding uses lease-fenced CAS where `CodexSession.codex_thread_id` is null;
+- later turns skip `thread/start` and call the verified resume/turn method;
+- resume failure produces a blocked session without creating a replacement thread;
+- tests cover first-turn start/bind, later-turn resume, resume failure, and no fallback to replacement thread.
+
+Acceptance:
+
+- Brainstorming follow-up, Spec generation, and Implementation Plan Doc generation can run as turns in one live Codex thread within one worker lifecycle;
+- terminal evidence records one stable `codex_thread_id_digest`;
+- first-turn thread binding cannot be overwritten by stale terminalization;
+- app-server resume failure moves session to blocked and does not create a replacement thread automatically.
+
+### Wave 4: Snapshot Packaging And Restore
+
+Goal: make worker runtime preserve Codex session continuity across separate worker processes.
 
 Deliverables:
 
 - inspect Codex app-server session file layout;
 - whitelist required session files;
+- implement the worker `CODEX_HOME` topology change for Docker runtime;
 - package snapshot archive with manifest;
 - exclude config/auth/secrets/cache/tmp/socket files;
 - restore snapshot into fresh `CODEX_HOME`;
 - verify manifest and digest;
 - upload new snapshot after each turn;
-- public-safe blocked reasons for unsafe or missing snapshots.
+- public-safe blocked reasons for unsafe, missing, or unextractable live state.
 
 Acceptance:
 
-- same Codex thread can be resumed across separate worker runs;
+- same real Codex thread can be resumed across separate worker runs;
+- snapshot sequence increments monotonically;
 - config/auth are re-materialized from centralized records, not snapshot;
-- deleting or corrupting the snapshot blocks the session instead of silently starting a new one.
-
-### Wave 4: App-Server Resume Support
-
-Goal: stop starting a new Codex thread for every generation stage.
-
-Deliverables:
-
-- driver input supports `existing_codex_thread_id`;
-- first turn captures Codex thread id;
-- later turns resume the same thread id;
-- turn evidence links to CodexSessionTurn;
-- tests cover first-turn start, later-turn resume, and resume failure.
-
-Acceptance:
-
-- Brainstorming follow-up, Spec generation, and Implementation Plan Doc generation can run as turns in one Codex thread;
-- app-server resume failure moves session to blocked and does not create a replacement thread automatically.
+- deleting, corrupting, or making the snapshot unsafe blocks the session instead of silently starting a new one;
+- Docker integration proves the worker can extract and upload live `/codex-home` state before cleanup.
 
 ### Wave 5: Plan Item Workflow Product Loop
 
@@ -728,27 +836,53 @@ Acceptance:
 - Plan Item is the only entry point;
 - approved Boundary Summary auto-enqueues Spec generation;
 - approved Spec Doc auto-enqueues Implementation Plan Doc generation;
-- all actions reference the same active CodexSession unless an explicit fork is selected.
+- approved Implementation Plan Doc unlocks execution-readiness evaluation but does not bypass QA/test-strategy and Execution Package gates;
+- all actions reference the same active CodexSession unless an explicit fork is selected;
+- persisted evidence shows one stable `codex_thread_id_digest`, monotonic `CodexSessionSnapshot.sequence`, and each turn's `expected_previous_snapshot_digest` equals the previous successful output;
+- no stage creates a replacement Codex thread unless an explicit fork or abandon/new-session action is recorded.
 
-### Wave 6: Execution Continuity
+### Wave 6: Execution Handoff Continuity
 
-Goal: continue from approved Implementation Plan Doc into execution without losing the Codex session.
+Goal: prove the approved Implementation Plan Doc hands a runnable execution turn into the run-execution boundary without losing the Codex session.
 
 Deliverables:
 
-- execution turn uses active CodexSession;
-- run-execution worker can restore the latest session snapshot;
-- execution artifacts link to the same Plan Item Workflow;
-- continue-after-interruption uses the same session;
-- code review response and fix loops can continue the session.
+- execution-readiness evaluator;
+- required QA/test-strategy signoff model for Plan Item risk classes;
+- internal Execution Package boundary validation;
+- execution turn creation from approved Plan Item Workflow;
+- generation-to-execution handoff contract mapping runtime job, run session, workspace bundle, snapshot ref, lease fields, and Plan Item Workflow refs;
+- run-execution worker restores the latest session snapshot and resumes the same `codex_thread_id_digest`;
+- execution artifacts link to the same Plan Item Workflow.
 
 Acceptance:
 
+- execution cannot start until Spec Doc, Implementation Plan Doc, Plan Item revision, QA/test strategy, and Execution Package gates pass;
 - implementation work is not started in a fresh unrelated Codex session;
-- interruptions can resume from the latest snapshot;
-- fallback to a new session requires explicit human action.
+- the first execution turn records the same stable `codex_thread_id_digest` as generation turns;
+- handoff tests prove snapshot ref, lease fencing, run session, and execution artifacts stay under the same Plan Item Workflow.
 
-### Wave 7: Fork, Recovery, And Operations
+### Wave 7: Execution Continuation, Review Response, And Fix Loops
+
+Goal: support interruption, continuation, code review response, and fix loops without breaking session continuity.
+
+Deliverables:
+
+- continue-after-interruption action;
+- code review response turn action;
+- fix-loop continuation action;
+- stale terminalization handling for interrupted execution turns;
+- recovery tests for interrupted execution worker, missing snapshot, stale lease, and rejected resume;
+- product recovery UI for continue, fork, abandon/new-session, and archive choices.
+
+Acceptance:
+
+- interruptions can resume from the latest safe snapshot;
+- code review response and fix loops continue the same Codex session;
+- stale execution terminalization cannot overwrite a newer continuation;
+- fallback to a new session requires explicit human action and warning.
+
+### Wave 8: Fork, Recovery, And Operations
 
 Goal: make the system robust for real team usage.
 
@@ -774,10 +908,11 @@ Acceptance:
 Each implementation wave must include:
 
 - contract tests for new DTOs and enums;
-- repository tests for lease/CAS behavior;
+- repository tests for lease-fenced CAS behavior;
 - runtime unit tests for snapshot package/restore safety;
 - worker integration tests for upload/download;
 - API tests for Plan Item workflow actions;
+- fixture or dogfood evidence that the same real Codex thread digest is preserved whenever the wave claims continuity;
 - no-baggage scans for retired public names;
 - `pnpm test`;
 - `pnpm build`;
@@ -794,19 +929,20 @@ The program is complete when:
 - every Plan Item workflow has at most one active CodexSession unless explicitly forked;
 - Brainstorming, Spec Doc generation, Implementation Plan Doc generation, and execution can run as turns in the same Codex session;
 - Codex-created thread/session id is bound after the first turn and reused later;
+- acceptance evidence proves the same real `codex_thread_id_digest` across stages, not only the same ForgeLoop `CodexSession.id`;
 - session state survives worker cleanup through private snapshots;
 - workers restore session state only through ArtifactStore, not shared local filesystem;
 - snapshots exclude config/auth/secrets and fail closed on unsafe content;
-- one session can be claimed by only one worker at a time;
-- approved gates auto-enqueue the next generation turn without skipping human review;
+- one session can be claimed and terminalized by only one current lease at a time;
+- approved gates auto-enqueue the next generation turn without skipping human review, QA/test-strategy signoff, or Execution Package validation;
 - forks are explicit, auditable, and never auto-merged;
-- product UI makes session status, blocked reasons, and context preview understandable to Tech Leads;
+- product UI makes session status, blocked reasons, and context preview understandable to Tech Leads without exposing raw runtime metadata in normal workflows;
 - starting a replacement session is explicit and warns about lost context and extra quota.
 
 ## Open Questions For Implementation Planning
 
-- The exact Codex app-server method and payload for resuming an existing thread must be verified against the current bundled Codex version before Wave 4.
-- The exact Codex session file whitelist must be discovered empirically during Wave 3.
-- Snapshot archive format should be chosen during Wave 1 or Wave 3. `tar.zst` is preferred for production, but `tar.gz` may be acceptable if project dependencies make zstd awkward.
+- The exact Codex app-server method and payload for resuming an existing thread must be verified against the current bundled Codex version before Wave 3 is implemented.
+- The exact Codex session file whitelist must be discovered empirically during Wave 4.
+- Snapshot archive format should be chosen during Wave 1 or Wave 4. `tar.zst` is preferred for production, but `tar.gz` may be acceptable if project dependencies make zstd awkward.
 - Retention policy should default conservative: keep all snapshots for active sessions until a later operations wave defines pruning.
-- The first implementation may keep raw thread id in internal DB fields, but public DTOs must expose only digest-level metadata.
+- The first implementation may keep raw thread id in internal DB fields. Normal product DTOs must expose only product-safe continuity status. Digest-level metadata may appear only in trusted worker payloads, explicitly technical diagnostics DTOs, or admin/operator endpoints.
