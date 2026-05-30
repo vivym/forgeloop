@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,56 @@ import {
   codexRuntimeSuperpowersNoBaggageAllowlist,
   scanCodexRuntimeSuperpowersNoBaggage,
 } from '../../scripts/check-codex-runtime-superpowers-no-baggage';
+
+const repoRoot = new URL('../..', import.meta.url).pathname;
+const readRepoFile = (path: string): string => readFileSync(join(repoRoot, path), 'utf8');
+
+const runtimeNewWriteSourceFiles = [
+  'apps/control-plane-api/src/modules/codex-runtime/codex-runtime.dto.ts',
+  'apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts',
+  'apps/control-plane-api/src/modules/codex-runtime/product-generation-runtime-scheduler.service.ts',
+  'apps/automation-daemon/src/generation-runtime.ts',
+  'packages/codex-worker-runtime/src/remote-worker-client.ts',
+  'packages/codex-worker-runtime/src/runtime-job-artifacts.ts',
+  'packages/run-worker/src/run-worker.ts',
+];
+
+const productFacingArtifactExposureFiles = [
+  'apps/control-plane-api/src/modules/automation/automation.dto.ts',
+  'apps/control-plane-api/src/modules/brainstorming/brainstorming.controller.ts',
+  'apps/control-plane-api/src/modules/codex-runtime/codex-runtime.dto.ts',
+  'apps/control-plane-api/src/modules/development-plans/development-plans.controller.ts',
+  'apps/control-plane-api/src/modules/execution-packages/execution-packages.controller.ts',
+  'apps/control-plane-api/src/modules/executions/executions.controller.ts',
+  'apps/control-plane-api/src/modules/projects/projects.controller.ts',
+  'apps/control-plane-api/src/modules/query/product-lane-query-parser.ts',
+  'apps/control-plane-api/src/modules/query/public-run-session-projection.ts',
+  'apps/control-plane-api/src/modules/query/query.controller.ts',
+  'apps/control-plane-api/src/modules/query/query.service.ts',
+  'apps/control-plane-api/src/modules/release/release.controller.ts',
+  'apps/control-plane-api/src/modules/review-evidence/review-packets.controller.ts',
+  'apps/control-plane-api/src/modules/review-evidence/work-item-evidence.controller.ts',
+  'apps/control-plane-api/src/modules/run-control/execution-package-runs.controller.ts',
+  'apps/control-plane-api/src/modules/run-control/run-sessions.controller.ts',
+  'apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts',
+  'apps/control-plane-api/src/modules/work-items/work-items.controller.ts',
+  'packages/db/src/queries/delivery-runtime-readiness.ts',
+  'packages/db/src/queries/product-action-builders.ts',
+  'packages/db/src/queries/product-lane-filters.ts',
+  'packages/db/src/queries/product-lane-queries.ts',
+  'packages/db/src/queries/product-lane-types.ts',
+  'packages/db/src/queries/project-management-queries.ts',
+  'packages/db/src/queries/public-evidence-serialization.ts',
+  'packages/db/src/queries/release-cockpit-queries.ts',
+  'packages/db/src/queries/release-public-link-visibility.ts',
+  'packages/db/src/queries/release-test-acceptance-gate.ts',
+  ['packages', 'db', 'src', 'queries', 'replay-queries.ts'].join('/'),
+  'packages/db/src/queries/web-product-queries.ts',
+  'packages/db/src/queries/work-item-cockpit-queries.ts',
+  'packages/db/src/queries/work-item-delivery-readiness.ts',
+  'packages/db/src/queries/work-item-delivery-selection.ts',
+  'packages/db/src/queries/work-item-release-readiness.ts',
+];
 
 describe('Codex runtime Superpowers no-baggage gate', () => {
   it('requires every allowlist entry to carry owner and reason', () => {
@@ -125,10 +175,76 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
 
   it('keeps the current strict Codex runtime Superpowers lane free of unowned baggage matches', () => {
     const result = scanCodexRuntimeSuperpowersNoBaggage({
-      rootDir: new URL('../..', import.meta.url).pathname,
+      rootDir: repoRoot,
     });
 
     expect(result.violations).toEqual([]);
+  });
+
+  it('keeps new-write runtime artifact paths off legacy storage authorities', () => {
+    const forbiddenNewWritePatterns = [
+      {
+        name: 'legacy runtime artifact storage authority',
+        pattern: /artifact:\/\/codex-runtime-jobs\/[^"'`\s]+\/(?:artifacts|workspace-bundle)(?:\/|\b)/,
+      },
+      {
+        name: 'legacy pending bundle storage authority',
+        pattern: /artifact:codex-pending-bundles:/,
+      },
+      {
+        name: 'generated payload metadata as canonical source',
+        pattern: /metadata_json\.generated_payload/,
+      },
+      {
+        name: 'pending bundle replay from caller-supplied archive bytes',
+        pattern: /archive_bytes_base64:\s*input\.archive_bytes_base64/,
+      },
+    ];
+
+    const violations = runtimeNewWriteSourceFiles.flatMap((file) => {
+      const content = readRepoFile(file);
+      return forbiddenNewWritePatterns
+        .filter(({ pattern }) => pattern.test(content))
+        .map(({ name }) => `${file}: ${name}`);
+    });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('does not treat digest-bound runtime workload labels as byte storage authorities', () => {
+    const workloadLabelSource = readRepoFile('packages/run-worker/src/run-worker.ts');
+
+    expect(workloadLabelSource).toContain('artifact://codex-runtime-jobs/${runtimeJobId}/workload/package-prompt');
+    expect(workloadLabelSource).toContain('artifact://codex-runtime-jobs/${runtimeJobId}/workload/execution-context');
+    expect(workloadLabelSource).not.toMatch(
+      /artifact:\/\/codex-runtime-jobs\/[^"'`\s]+\/(?:artifacts|workspace-bundle)(?:\/|\b)/,
+    );
+  });
+
+  it('keeps product-facing DTO and query surfaces free of internal artifact storage details', () => {
+    const forbiddenProductExposurePatterns = [
+      {
+        name: 'storage_key',
+        pattern: /\bstorage_key\b/,
+      },
+      {
+        name: 'internal_artifact_objects.storageKey',
+        pattern: /\binternal_artifact_objects\.storageKey\b/,
+      },
+      {
+        name: 'direct internal artifact download URL',
+        pattern: /\/internal\/artifacts\/[^"'`\s]+\/download|downloadInternalArtifact/,
+      },
+    ];
+
+    const violations = productFacingArtifactExposureFiles.flatMap((file) => {
+      const content = readRepoFile(file);
+      return forbiddenProductExposurePatterns
+        .filter(({ pattern }) => pattern.test(content))
+        .map(({ name }) => `${file}: ${name}`);
+    });
+
+    expect(violations).toEqual([]);
   });
 
   it('scans product reports by default and applies allowlist entries to specific occurrences', () => {

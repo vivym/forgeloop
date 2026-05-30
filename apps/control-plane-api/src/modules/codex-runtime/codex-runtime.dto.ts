@@ -327,7 +327,6 @@ const pendingWorkspaceBundleSchema = z.object({
   internal_artifact_object_id: z.string().min(1).optional(),
   archive_digest: sha256DigestSchema,
   manifest_digest: sha256DigestSchema,
-  archive_bytes_base64: z.string().min(1).optional(),
   run_worker_lease_id: z.string().min(1),
   size_bytes: z.number().int().positive(),
   workspace_acquisition_digest: sha256DigestSchema,

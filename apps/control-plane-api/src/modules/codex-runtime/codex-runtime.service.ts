@@ -99,7 +99,6 @@ const pendingWorkspaceBundleReplayInput = (
     ...(input.internal_artifact_object_id === undefined ? {} : { internal_artifact_object_id: input.internal_artifact_object_id }),
     archive_digest: input.archive_digest,
     manifest_digest: input.manifest_digest,
-    ...(input.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: input.archive_bytes_base64 }),
     run_worker_lease_id: input.run_worker_lease_id,
     size_bytes: input.size_bytes,
     workspace_acquisition_digest: input.workspace_acquisition_digest,
