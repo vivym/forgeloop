@@ -490,7 +490,6 @@ export const collectWorkspaceBundleChangedFiles = (input: {
 };
 
 export const createWorkspaceBundlePatchArtifact = (input: {
-  runtimeJobId: string;
   patch: string;
   changedFiles: readonly string[];
   allowedPaths: readonly string[];
@@ -498,8 +497,8 @@ export const createWorkspaceBundlePatchArtifact = (input: {
 }): {
   content_type: 'text/x-diff';
   digest: string;
-  internal_ref: string;
   size_bytes: number;
+  bytes: Uint8Array;
   changed_files: string[];
 } => {
   const changedFiles = collectWorkspaceBundleChangedFiles(input);
@@ -508,8 +507,8 @@ export const createWorkspaceBundlePatchArtifact = (input: {
   return {
     content_type: 'text/x-diff',
     digest,
-    internal_ref: `artifact://codex-runtime-jobs/${input.runtimeJobId}/artifacts/${digest.slice('sha256:'.length)}`,
     size_bytes: patchBytes.byteLength,
+    bytes: patchBytes,
     changed_files: changedFiles,
   };
 };

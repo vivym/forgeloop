@@ -768,7 +768,6 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
             forbiddenPaths: workspace.manifest.forbidden_paths,
           })
         : createWorkspaceBundlePatchArtifact({
-            runtimeJobId: job.id,
             patch: draft.patch,
             changedFiles: draft.changed_files,
             allowedPaths: workspace.manifest.allowed_paths,
@@ -786,7 +785,6 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         throw new Error('codex_control_plane_method_missing:uploadRuntimeJobArtifact');
       }
       const localPatch = createWorkspaceBundlePatchArtifact({
-        runtimeJobId: job.id,
         patch: draft.patch,
         changedFiles: draft.changed_files,
         allowedPaths: workspace.manifest.allowed_paths,
@@ -803,6 +801,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         content_type: localPatch.content_type,
         digest: localPatch.digest,
         size_bytes: localPatch.size_bytes,
+        bytes: localPatch.bytes,
         metadata_json: {
           changed_files: localPatch.changed_files,
         },

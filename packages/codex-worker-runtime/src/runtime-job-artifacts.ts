@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 
 import {
   codexCanonicalDigest,
@@ -9,6 +10,8 @@ import {
 } from '@forgeloop/domain';
 import type { CodexGenerationResult } from '@forgeloop/codex-runtime';
 
+const sha256 = (bytes: Uint8Array | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+
 export interface RuntimeJobArtifactUploadInput {
   artifact_idempotency_key: string;
   kind: string;
@@ -16,6 +19,7 @@ export interface RuntimeJobArtifactUploadInput {
   content_type: string;
   digest: string;
   size_bytes: number;
+  bytes: Uint8Array;
   metadata_json?: Record<string, unknown>;
 }
 
@@ -26,17 +30,23 @@ export const jsonRuntimeJobArtifactUpload = (input: {
   metadata?: Record<string, unknown>;
 }): RuntimeJobArtifactUploadInput => {
   const encoded = JSON.stringify(input.payload);
+  if (encoded === undefined) {
+    throw new Error('codex_runtime_job_artifact_payload_unserializable');
+  }
+  const bytes = Buffer.from(encoded, 'utf8');
+  const generatedPayloadDigest = codexCanonicalDigest(input.payload);
   return {
     artifact_idempotency_key: codexCanonicalDigest({
       kind: input.kind,
       name: input.name,
-      digest: codexCanonicalDigest(input.payload),
+      digest: generatedPayloadDigest,
     }),
     kind: input.kind,
     name: input.name,
     content_type: 'application/json',
-    digest: codexCanonicalDigest(input.payload),
-    size_bytes: Buffer.byteLength(encoded, 'utf8'),
+    digest: sha256(bytes),
+    size_bytes: bytes.byteLength,
+    bytes,
     ...(input.metadata === undefined ? {} : { metadata_json: input.metadata }),
   };
 };
