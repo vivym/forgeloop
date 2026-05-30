@@ -270,7 +270,7 @@ function assertPublicSafeId(value: string, label: string): void {
     !publicIdPattern.test(value) ||
     value.includes('..') ||
     /\bsk-[A-Za-z0-9_.-]+\b/.test(value) ||
-    /(?:api[_-]?key|token|secret|auth(?:orization)?|password|credential|experimental_bearer_token|auth_json|auth\.json|config\.toml|raw_config|raw_auth)/i.test(value)
+    /(?:api[_-]?key|token|secret|authorization|password|credential|experimental_bearer_token|auth_json|auth\.json|config\.toml|raw_config|raw_auth)/i.test(value)
   ) {
     throw new Error(`codex_runtime_superpowers_dogfood_report_unsafe:${label}`);
   }

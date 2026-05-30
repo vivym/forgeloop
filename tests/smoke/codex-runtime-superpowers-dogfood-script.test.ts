@@ -1366,12 +1366,26 @@ describe('Codex runtime Superpowers dogfood script', () => {
   });
 
   it.each([
+    ['product_api_reason', { product_api_reason: 'codex_runtime_superpowers_action_status_auth_missing' }],
+    ['product_api_reason', { product_api_reason: 'auth_failed' }],
+    ['runtime_job_reason_code', { runtime_job_reason_code: 'app_server_unauthorized' }],
+    ['runtime_job_failure_stage', { runtime_job_failure_stage: 'auth_challenge' }],
+    ['runtime_job_failure_stage', { runtime_job_failure_stage: 'auth_failed' }],
+  ] as const)('renders public auth blocker identifier field %s', (_label, overrides) => {
+    const markdown = renderCodexRuntimeSuperpowersDogfoodBlockerReport({
+      status: 'BLOCKED',
+      blocker_code: 'codex_runtime_superpowers_runtime_job_failed',
+      ...overrides,
+    });
+
+    expect(markdown).toContain(Object.values(overrides)[0]);
+  });
+
+  it.each([
     ['product_api_reason', { product_api_reason: 'experimental_bearer_token' }],
     ['product_api_reason', { product_api_reason: 'api_key_missing' }],
-    ['product_api_reason', { product_api_reason: 'auth_failed' }],
     ['runtime_job_failure_subcode', { runtime_job_failure_subcode: 'sk-channel-test-token' }],
     ['runtime_job_reason_code', { runtime_job_reason_code: 'auth_json' }],
-    ['runtime_job_failure_stage', { runtime_job_failure_stage: 'auth_failed' }],
     ['runtime_job_runtime_target_kind', { runtime_job_runtime_target_kind: 'experimental_bearer_token' }],
     ['runtime_job_failure_public_summary', { runtime_job_failure_public_summary: 'Failed with config.toml auth secret.' }],
     ['missing_env', { missing_env: ['FORGELOOP_CODEX_AUTH_JSON_PATH'] }],
