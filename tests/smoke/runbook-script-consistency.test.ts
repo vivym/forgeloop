@@ -68,4 +68,12 @@ describe('runbook script consistency gate', () => {
     expect(runbook).toContain('Optional setup inputs:');
     expect(runbook).toContain('FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID');
   });
+
+  it('documents the isolated worktree inputs required by the Superpowers dogfood command', () => {
+    const runbook = readFileSync(new URL('docs/runbooks/codex-remote-worker-runtime.md', rootUrl), 'utf8');
+
+    expect(runbook).toContain('FORGELOOP_CODEX_DOGFOOD_ISOLATED_WORKTREE=1');
+    expect(runbook).toContain('FORGELOOP_CODEX_DOGFOOD_REPO_BASE_BRANCH=main');
+    expect(runbook).toContain('FORGELOOP_CODEX_DOGFOOD_REPO_PATH=');
+  });
 });

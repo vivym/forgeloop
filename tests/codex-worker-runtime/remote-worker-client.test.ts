@@ -789,6 +789,7 @@ describe('remote codex worker client', () => {
       reason_code: 'codex_runtime_job_succeeded',
       terminal_result_json: {
         task_kind: 'run_execution',
+        output_schema_version: 'codex_run_execution_result.v1',
         execution_package_id: 'execution-package-1',
         execution_package_version: 7,
         run_session_id: 'run-session-1',
@@ -803,6 +804,11 @@ describe('remote codex worker client', () => {
           ),
           internal_ref: 'artifact://codex-runtime-jobs/runtime-job-run-1/artifacts/run_execution_patch',
         },
+        runtime_evidence: expect.objectContaining({
+          app_server_attempted: true,
+          selected_execution_mode: 'app_server',
+          runtime_target_kind: 'run_execution',
+        }),
       },
     });
     expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-run-secret');

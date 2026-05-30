@@ -25,6 +25,7 @@ import {
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexGenerationRuntimeJobResult,
+  type CodexRunExecutionRuntimeJobResult,
   DomainError,
   type CodexLaunchLease,
   type CodexLaunchTarget,
@@ -265,12 +266,13 @@ type PublicRuntimeJob = Pick<
   | 'terminal_at'
   | 'terminal_status'
   | 'terminal_reason_code'
-  | 'terminal_result_json'
 > & {
   input: {
     input_digest: string;
     schema_version?: unknown;
+    output_schema_version?: unknown;
   };
+  terminal_result_json?: CodexGenerationRuntimeJobResult | CodexRunExecutionRuntimeJobResult;
   workspace_acquisition?: {
     workspace_acquisition_digest: string;
     schema_version?: unknown;
@@ -290,7 +292,17 @@ const workerReplayProtection = (method: 'GET' | 'POST', path: string, bodyDigest
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
+const publicRuntimeJobTerminalResult = (
+  result: CodexRuntimeJob['terminal_result_json'],
+): PublicRuntimeJob['terminal_result_json'] | undefined => {
+  if (result === undefined) {
+    return undefined;
+  }
+  return validateCodexRuntimeJobTerminalResult(result);
+};
+
 const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
+  const terminalResult = publicRuntimeJobTerminalResult(job.terminal_result_json);
   return {
     id: job.id,
     target_type: job.target_type,
@@ -315,10 +327,11 @@ const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
     ...(job.terminal_at === undefined ? {} : { terminal_at: job.terminal_at }),
     ...(job.terminal_status === undefined ? {} : { terminal_status: job.terminal_status }),
     ...(job.terminal_reason_code === undefined ? {} : { terminal_reason_code: job.terminal_reason_code }),
-    ...(job.terminal_result_json === undefined ? {} : { terminal_result_json: job.terminal_result_json }),
+    ...(terminalResult === undefined ? {} : { terminal_result_json: terminalResult }),
     input: {
       input_digest: job.input_digest,
       ...(job.input_json.schema_version === undefined ? {} : { schema_version: job.input_json.schema_version }),
+      ...(job.input_json.output_schema_version === undefined ? {} : { output_schema_version: job.input_json.output_schema_version }),
     },
     ...(job.workspace_acquisition_digest === undefined
       ? {}
