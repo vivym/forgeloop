@@ -11,4 +11,5 @@ export * from './completion.js';
 export * from './identity.js';
 export * from './release-gates.js';
 export * from './codex-runtime.js';
+export * from './internal-artifacts.js';
 export * from './work-item-delivery-readiness.js';

@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 
 import { artifactRefSchema } from '@forgeloop/contracts';
 
+import { isInternalArtifactRefString, parseInternalArtifactRef } from './internal-artifacts.js';
 import { DomainError, type IsoDateTime, type RunDriverKind } from './types.js';
 
 export type CodexRuntimeEnvironment = 'local_dogfood' | 'test';
@@ -756,6 +757,9 @@ const isCodexRuntimeArtifactRefString = (value: string): boolean => {
   );
 };
 
+export const isLegacyCodexRuntimeJobArtifactRefString = (ref: string): boolean =>
+  /^artifact:\/\/codex-runtime-jobs\/[a-z0-9_-]+\/artifacts\/[a-z0-9_-]+$/.test(ref);
+
 const isCodexRuntimeForgeloopRefString = (value: string): boolean => {
   const prefix = 'forgeloop://';
   if (!value.startsWith(prefix)) {
@@ -772,6 +776,7 @@ const isCodexRuntimeIsoDateTimeString = (value: string): boolean =>
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value);
 
 const isCodexRuntimeProductSafeString = (value: string): boolean =>
+  isInternalArtifactRefString(value) ||
   isCodexRuntimeArtifactRefString(value) ||
   isCodexRuntimeForgeloopRefString(value) ||
   isCodexRuntimeMimeTypeString(value) ||
@@ -1366,7 +1371,7 @@ const assertCodexRuntimePublicSafeRecord = (
   value: unknown,
   label: string,
   path: readonly string[],
-  options: { allowRunExecutionChangedFiles?: boolean } = {},
+  options: { allowRunExecutionChangedFiles?: boolean; rejectLegacyCodexRuntimeJobArtifactRefs?: boolean } = {},
 ): void => {
   if (
     value === null ||
@@ -1378,6 +1383,15 @@ const assertCodexRuntimePublicSafeRecord = (
   ) {
     if (typeof value === 'number' && !Number.isFinite(value)) {
       throw unsafeCodexRuntimePublicValue(`Codex runtime ${label} must be JSON-compatible.`, { field: path.join('.') });
+    }
+    if (
+      typeof value === 'string' &&
+      options.rejectLegacyCodexRuntimeJobArtifactRefs === true &&
+      value.startsWith('artifact://codex-runtime-jobs/')
+    ) {
+      throw unsafeCodexRuntimePublicValue('Codex runtime terminal result cannot include legacy runtime artifact refs.', {
+        field: path.join('.'),
+      });
     }
     if (
       typeof value === 'string' &&
@@ -1626,6 +1640,22 @@ const codexRunExecutionRuntimeJobResultKeys = new Set([
   'public_summary',
 ]);
 
+const requireCodexRuntimeInternalRef = (input: Record<string, unknown>, field: string, label: string): string => {
+  const internalRef = requireCodexRuntimeResultString(input, field);
+  try {
+    const parsed = parseInternalArtifactRef(internalRef);
+    if (parsed.kind === 'codex_runtime_job_artifact' && parsed.owner_type === 'codex_runtime_job') {
+      return internalRef;
+    }
+  } catch {
+    // Report all terminal internal ref failures with the runtime evidence safety code.
+  }
+  if (!isInternalArtifactRefString(internalRef)) {
+    throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${label} is invalid.`);
+  }
+  throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${label} must reference a runtime job artifact.`);
+};
+
 const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<string, unknown> => {
   if (!isPlainObject(input)) {
     throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} must contain artifact objects.`);
@@ -1641,7 +1671,7 @@ const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<stri
     if (input.digest === undefined) {
       throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} internal_ref requires digest.`);
     }
-    requireCodexRuntimeResultString(input, 'internal_ref');
+    requireCodexRuntimeInternalRef(input, 'internal_ref', `${field} internal_ref`);
   }
   return input;
 };
@@ -1885,7 +1915,6 @@ const isGeneratedPayloadArtifactRefPayload = (payload: Record<string, unknown>):
 
 const requireGeneratedPayloadArtifactRefPayload = (
   payload: Record<string, unknown>,
-  expectedGeneratedPayloadDigest: string,
 ): void => {
   assertCodexRuntimeResultKeys(payload, new Set(['schema_version', 'artifact']), 'generated_payload ref');
   const artifact = requireCodexRuntimeResultRecord(payload, 'artifact');
@@ -1893,7 +1922,6 @@ const requireGeneratedPayloadArtifactRefPayload = (
   if (
     artifact.kind !== 'generated_payload' ||
     artifact.content_type !== 'application/json' ||
-    artifact.digest !== expectedGeneratedPayloadDigest ||
     typeof artifact.internal_ref !== 'string'
   ) {
     throw unsafeCodexRuntimePublicValue('Codex generation terminal result generated_payload artifact ref is invalid.');
@@ -1912,7 +1940,7 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   const generatedPayload = requireCodexRuntimeResultRecord(input, 'generated_payload');
   const generatedPayloadDigest = requireCodexRuntimeResultDigest(input, 'generated_payload_digest');
   if (isGeneratedPayloadArtifactRefPayload(generatedPayload)) {
-    requireGeneratedPayloadArtifactRefPayload(generatedPayload, generatedPayloadDigest);
+    requireGeneratedPayloadArtifactRefPayload(generatedPayload);
   } else {
     if (generatedPayloadDigest !== codexCanonicalDigest(generatedPayload)) {
       throw unsafeCodexRuntimePublicValue('Codex generation terminal result generated_payload_digest does not match generated_payload.');
@@ -1961,7 +1989,7 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
       throw unsafeCodexRuntimePublicValue('Codex run-execution patch_artifact content_type is invalid.');
     }
     requireCodexRuntimeResultDigest(patchArtifact, 'digest');
-    requireCodexRuntimeResultString(patchArtifact, 'internal_ref');
+    requireCodexRuntimeInternalRef(patchArtifact, 'internal_ref', 'patch_artifact internal_ref');
   }
   requireCodexRuntimeResultArray(normalizedInput, 'check_results').forEach((entry) => {
     if (!isPlainObject(entry)) {
@@ -1980,7 +2008,7 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
       if (entry.output_digest === undefined) {
         throw unsafeCodexRuntimePublicValue('Codex run-execution check result output_internal_ref requires output_digest.');
       }
-      requireCodexRuntimeResultString(entry, 'output_internal_ref');
+      requireCodexRuntimeInternalRef(entry, 'output_internal_ref', 'check_results output_internal_ref');
     }
   });
   requireCodexRuntimeResultArray(normalizedInput, 'execution_artifacts').forEach((artifact) =>
@@ -2122,6 +2150,7 @@ export const validateCodexRuntimeJobTerminalResult = (
       : Object.fromEntries(Object.entries(resultRecord).filter(([key]) => !omittedPublicSafeKeys.has(key)));
   assertCodexRuntimePublicSafeRecord(publicSafeInput, 'terminal result', [], {
     allowRunExecutionChangedFiles: resultRecord.task_kind === 'run_execution',
+    rejectLegacyCodexRuntimeJobArtifactRefs: true,
   });
   return result;
 };
