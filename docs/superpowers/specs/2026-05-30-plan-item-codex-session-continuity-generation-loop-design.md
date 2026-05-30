@@ -290,12 +290,14 @@ type ArtifactObject = {
   content_type: string;
   size_bytes: number;
   digest: string;
-  visibility: 'internal' | 'private' | 'public';
+  visibility: 'internal' | 'private';
   owner_type: string;
   owner_id: string;
   created_at: string;
 };
 ```
+
+Wave 1's dedicated Internal Artifact Store spec is authoritative for canonical ref shape, upload transport, idempotency, local filesystem layout, and runtime-job/workspace-bundle migration. This umbrella intentionally defers to that spec for detailed store mechanics.
 
 This store is broader than existing generated-payload or runtime-job artifacts. Implementers may adapt the current `CodexRuntimeJobArtifact` upload path as a backend detail, but they must not create a second product-visible artifact model for session snapshots. `CodexSessionSnapshot.artifact_ref` must point to an internal ArtifactStore object with internal/private visibility, digest verification, and trusted worker access controls.
 
@@ -309,12 +311,12 @@ FORGELOOP_ARTIFACT_STORE_ROOT=/var/lib/forgeloop/artifacts
 
 The interface must not expose local absolute paths to product DTOs. Returned refs use `artifact://` URIs.
 
-Example keys:
+Canonical refs are defined by the Wave 1 Internal Artifact Store spec. Examples:
 
 ```text
-artifact://codex-sessions/{codex_session_id}/snapshots/{snapshot_id}.tar.zst
-artifact://codex-runtime-jobs/{runtime_job_id}/artifacts/{artifact_id}
-artifact://workspace-bundles/{bundle_id}.tar.zst
+artifact://internal/codex_session_snapshot/codex_session/{codex_session_id}/{snapshot_id}
+artifact://internal/codex_runtime_job_artifact/codex_runtime_job/{runtime_job_id}/{artifact_id}
+artifact://internal/workspace_bundle/run_session/{run_session_id}/{bundle_id}
 ```
 
 Future backends may include S3, R2, GCS, or MinIO without changing product models.
