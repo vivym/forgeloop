@@ -16,6 +16,7 @@ import {
   type Organization,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
+  type InternalArtifactObject,
   type RunSession,
 } from '../../packages/domain/src/index';
 import {
@@ -656,7 +657,9 @@ const runtimeJobArtifactInput = (
   input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   seed: Awaited<ReturnType<typeof seedRuntime>>,
   artifactId: string,
-) => ({
+) => {
+  const digest = tokenHash(`artifact-digest-${input.runtime_job_id}`);
+  return {
   runtime_job_id: input.runtime_job_id,
   worker_id: seed.workerId,
   worker_session_token: seed.sessionToken,
@@ -667,12 +670,36 @@ const runtimeJobArtifactInput = (
   kind: 'generated_payload',
   name: 'generated-payload.json',
   content_type: 'application/json',
-  digest: tokenHash(`artifact-digest-${input.runtime_job_id}`),
-  internal_ref: `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${artifactId}`,
+  digest,
+  internal_ref: `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${artifactId}`,
+  internal_artifact_object_id: randomUUID(),
   size_bytes: 128,
   metadata_json: {},
   request_digest: tokenHash(`artifact-request-${input.runtime_job_id}`),
   now: later,
+  };
+};
+
+const internalArtifactObjectForRuntimeArtifact = (
+  input: ReturnType<typeof runtimeJobArtifactInput>,
+): InternalArtifactObject => ({
+  id: input.internal_artifact_object_id,
+  artifact_id: input.artifact_id,
+  ref: input.internal_ref,
+  storage_key: `objects/${input.digest.slice('sha256:'.length)}`,
+  kind: 'codex_runtime_job_artifact',
+  content_type: input.content_type,
+  size_bytes: String(input.size_bytes),
+  digest: input.digest,
+  visibility: 'internal',
+  owner_type: 'codex_runtime_job',
+  owner_id: input.runtime_job_id,
+  idempotency_key: input.artifact_idempotency_key,
+  request_digest: input.request_digest,
+  metadata_json: input.metadata_json,
+  created_by_actor_type: 'codex_worker',
+  created_by_actor_id: input.worker_id,
+  created_at: input.now,
 });
 
 const installLaunchLeaseUpdateDelay = async (client: ReturnType<typeof createDbClient>, leaseId: string) => {
@@ -1056,6 +1083,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
 
         const artifactId = randomUUID();
         const artifactInput = runtimeJobArtifactInput(input, seed, artifactId);
+        await repository.createOrReplayInternalArtifactObject(internalArtifactObjectForRuntimeArtifact(artifactInput));
         const artifact = await repository.createCodexRuntimeJobArtifact(artifactInput);
 
         await expect(
@@ -1077,7 +1105,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
             nonce: `artifact-same-digest-different-key-${conflictingArtifactId}`,
             artifact_id: conflictingArtifactId,
             artifact_idempotency_key: `artifact-conflict-${input.runtime_job_id}`,
-            internal_ref: `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${conflictingArtifactId}`,
+            internal_ref: `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${conflictingArtifactId}`,
             request_digest: tokenHash(`artifact-same-digest-conflict-request-${input.runtime_job_id}`),
           }),
         ).rejects.toMatchObject({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });

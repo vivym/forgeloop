@@ -9,6 +9,7 @@ import { registerInternalArtifactUploadMiddleware } from './modules/internal-art
 const bootstrap = async (): Promise<void> => {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bodyParser: false, rawBody: true });
   registerInternalArtifactUploadMiddleware(app.getHttpAdapter().getInstance());
+  app.useBodyParser('raw', { type: 'application/octet-stream', limit: '10mb' });
   app.useBodyParser('json');
   app.useBodyParser('urlencoded', { extended: true });
   app.enableCors({

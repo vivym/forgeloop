@@ -30,6 +30,43 @@ const actorReviewer = 'actor-reviewer';
 type RuntimeJobRef = Pick<CodexRuntimeJob, 'id' | 'worker_id' | 'launch_lease_id' | 'project_id' | 'repo_id'>;
 const now = '2026-05-23T00:00:00.000Z';
 
+const createRuntimeArtifactObject = async (
+  repository: DeliveryRepository,
+  input: {
+    id: string;
+    artifact_id: string;
+    ref: string;
+    digest: string;
+    content_type: string;
+    size_bytes: number;
+    runtime_job_id: string;
+    idempotency_key: string;
+    request_digest: string;
+    metadata_json: Record<string, unknown>;
+    worker_id: string;
+    created_at: string;
+  },
+) =>
+  repository.createOrReplayInternalArtifactObject({
+    id: input.id,
+    artifact_id: input.artifact_id,
+    ref: input.ref,
+    storage_key: `objects/${input.digest.slice('sha256:'.length)}`,
+    kind: 'codex_runtime_job_artifact',
+    content_type: input.content_type,
+    size_bytes: String(input.size_bytes),
+    digest: input.digest,
+    visibility: 'internal',
+    owner_type: 'codex_runtime_job',
+    owner_id: input.runtime_job_id,
+    idempotency_key: input.idempotency_key,
+    request_digest: input.request_digest,
+    metadata_json: input.metadata_json,
+    created_by_actor_type: 'codex_worker',
+    created_by_actor_id: input.worker_id,
+    created_at: input.created_at,
+  });
+
 describe('SpecPlanService item-scoped delivery API', () => {
   let app: INestApplication;
 
@@ -1011,7 +1048,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const generated = generatedSpecRevision(item.id, boundary.revision_id);
     const generatedPayloadDigest = codexCanonicalDigest(generated);
     const artifactId = 'generated-payload-ref';
-    const internalRef = `artifact://codex-runtime-jobs/${runtimeJob.id}/artifacts/${artifactId}`;
+    const internalRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${runtimeJob.id}/${artifactId}`;
+    const internalArtifactObjectId = stableUuid({ test: 'unsupported-payload-ref', runtime_job_id: runtimeJob.id });
     const artifact = {
       kind: 'generated_payload',
       name: 'generated-spec.json',
@@ -1019,6 +1057,20 @@ describe('SpecPlanService item-scoped delivery API', () => {
       digest: generatedPayloadDigest,
       internal_ref: internalRef,
     };
+    await createRuntimeArtifactObject(repository, {
+      id: internalArtifactObjectId,
+      artifact_id: artifactId,
+      ref: internalRef,
+      digest: generatedPayloadDigest,
+      content_type: 'application/json',
+      size_bytes: 70_000,
+      runtime_job_id: runtimeJob.id,
+      idempotency_key: artifactId,
+      request_digest: digest('unsupported-payload-ref-artifact'),
+      metadata_json: {},
+      worker_id: runtimeJob.worker_id,
+      created_at: terminalAt,
+    });
     await repository.createCodexRuntimeJobArtifact({
       runtime_job_id: runtimeJob.id,
       worker_id: runtimeJob.worker_id,
@@ -1028,6 +1080,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       artifact_id: artifactId,
       artifact_idempotency_key: artifactId,
       ...artifact,
+      internal_artifact_object_id: internalArtifactObjectId,
       size_bytes: 70_000,
       metadata_json: {},
       request_digest: digest('unsupported-payload-ref-artifact'),
@@ -1100,7 +1153,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const generated = generatedSpecRevision(item.id, boundary.revision_id);
     const generatedPayloadDigest = codexCanonicalDigest(generated);
     const artifactId = 'generated-payload-ref-success';
-    const internalRef = `artifact://codex-runtime-jobs/${runtimeJob.id}/artifacts/${artifactId}`;
+    const internalRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${runtimeJob.id}/${artifactId}`;
+    const internalArtifactObjectId = stableUuid({ test: 'payload-ref-success', runtime_job_id: runtimeJob.id });
     const artifact = {
       kind: 'generated_payload',
       name: 'generated-spec.json',
@@ -1108,6 +1162,20 @@ describe('SpecPlanService item-scoped delivery API', () => {
       digest: generatedPayloadDigest,
       internal_ref: internalRef,
     };
+    await createRuntimeArtifactObject(repository, {
+      id: internalArtifactObjectId,
+      artifact_id: artifactId,
+      ref: internalRef,
+      digest: generatedPayloadDigest,
+      content_type: 'application/json',
+      size_bytes: 70_000,
+      runtime_job_id: runtimeJob.id,
+      idempotency_key: artifactId,
+      request_digest: digest('payload-ref-success-artifact'),
+      metadata_json: { generated_payload: generated },
+      worker_id: runtimeJob.worker_id,
+      created_at: terminalAt,
+    });
     await repository.createCodexRuntimeJobArtifact({
       runtime_job_id: runtimeJob.id,
       worker_id: runtimeJob.worker_id,
@@ -1117,6 +1185,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       artifact_id: artifactId,
       artifact_idempotency_key: artifactId,
       ...artifact,
+      internal_artifact_object_id: internalArtifactObjectId,
       size_bytes: 70_000,
       metadata_json: { generated_payload: generated },
       request_digest: digest('payload-ref-success-artifact'),

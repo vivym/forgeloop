@@ -12,11 +12,14 @@ import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
   codexRuntimeJobInputDigest,
+  codexRuntimeJobArtifactMaxSizeBytes,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
   codexWorkspaceAcquisitionDigest,
+  buildInternalArtifactRef,
   collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
+  runtimeArtifactUploadProofPayload,
   validateCodexLaunchTargetKind,
   validateCodexDockerRuntimeEvidence,
   validateCodexRuntimeJobTerminalResult,
@@ -38,10 +41,10 @@ import {
   type CodexRuntimeTargetKind,
   type CodexPublicBlockerCode,
 } from '@forgeloop/domain';
-import type { CodexLaunchFenceSnapshot, DeliveryRepository } from '@forgeloop/db';
+import { LocalInternalArtifactStore, type CodexLaunchFenceSnapshot, type DeliveryRepository } from '@forgeloop/db';
 
 import { ProductGenerationResultService } from '../automation/product-generation-result.service';
-import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
+import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../core/control-plane-tokens';
 import type {
   CodexRuntimeStatusQuery,
   AcceptCodexRuntimeJobDto,
@@ -489,11 +492,20 @@ const publicCredentialVersion = (version: CodexCredentialBindingVersion): CodexC
 
 @Injectable()
 export class CodexRuntimeService {
+  private readonly internalArtifacts: LocalInternalArtifactStore;
+
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
+    @Inject(INTERNAL_ARTIFACT_STORE_ROOT) internalArtifactStoreRoot: string,
     @Inject(ProductGenerationResultService)
     private readonly productGenerationResults: ProductGenerationResultService,
-  ) {}
+  ) {
+    this.internalArtifacts = new LocalInternalArtifactStore({
+      root: internalArtifactStoreRoot,
+      repository,
+      requestId: 'codex-runtime-service',
+    });
+  }
 
   async createProfile(input: CreateCodexRuntimeProfileDto) {
     const revision = validateCodexRuntimeProfileRevision(input.revision as unknown as CodexRuntimeProfileRevision, {
@@ -1033,30 +1045,90 @@ export class CodexRuntimeService {
   }
 
   async createRuntimeJobArtifact(workerId: string, jobId: string, input: CreateCodexRuntimeJobArtifactDto) {
-    assertWorkerBodyDigest(input);
+    const { body_digest: bodyDigest, ...unsignedMetadata } = input.metadata;
+    const expectedBodyDigest = codexCanonicalDigest(
+      runtimeArtifactUploadProofPayload({
+        method: 'POST',
+        path: input.proof_path,
+        worker_id: workerId,
+        runtime_job_id: jobId,
+        metadata: unsignedMetadata,
+      }),
+    );
+    if (bodyDigest !== expectedBodyDigest) {
+      throw new BadRequestException('Codex worker request body digest was rejected');
+    }
     const now = nowIso();
-    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
-    const artifactId = deterministicRuntimeArtifactId(jobId, input.artifact_idempotency_key);
+    assertFreshWorkerNonceTimestamp(input.metadata.nonce_timestamp, now);
+    const artifactId = deterministicRuntimeArtifactId(jobId, input.metadata.artifact_idempotency_key);
+    const expectedInternalRef = buildInternalArtifactRef({
+      kind: 'codex_runtime_job_artifact',
+      owner_type: 'codex_runtime_job',
+      owner_id: jobId,
+      artifact_id: artifactId,
+    });
+    const sizeBytes = Number(input.metadata.size_bytes);
+    await this.repository.preflightCreateCodexRuntimeJobArtifact({
+      runtime_job_id: jobId,
+      worker_id: workerId,
+      worker_session_token: input.metadata.worker_session_token,
+      nonce: input.metadata.nonce,
+      nonce_timestamp: input.metadata.nonce_timestamp,
+      artifact_id: artifactId,
+      artifact_idempotency_key: input.metadata.artifact_idempotency_key,
+      kind: input.metadata.kind,
+      name: input.metadata.name,
+      content_type: input.metadata.content_type,
+      digest: input.metadata.digest,
+      internal_ref: expectedInternalRef,
+      size_bytes: Number.isSafeInteger(sizeBytes) ? sizeBytes : -1,
+      metadata_json: input.metadata.metadata_json,
+      request_digest: bodyDigest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        input.proof_path,
+        bodyDigest,
+      ),
+      now,
+    });
+    const stored = await this.internalArtifacts.putObject({
+      artifact_id: artifactId,
+      kind: 'codex_runtime_job_artifact',
+      owner_type: 'codex_runtime_job',
+      owner_id: jobId,
+      visibility: 'internal',
+      content_type: input.metadata.content_type,
+      declared_size_bytes: input.metadata.size_bytes,
+      declared_artifact_digest: input.metadata.digest,
+      idempotency_key: input.metadata.artifact_idempotency_key,
+      metadata_json: input.metadata.metadata_json,
+      created_by_actor_type: 'codex_worker',
+      created_by_actor_id: workerId,
+      now,
+      max_size_bytes: codexRuntimeJobArtifactMaxSizeBytes,
+      bytes: input.bytes,
+    });
     const artifact = await this.repository.createCodexRuntimeJobArtifact({
       runtime_job_id: jobId,
       worker_id: workerId,
-      worker_session_token: input.worker_session_token,
-      nonce: input.nonce,
-      nonce_timestamp: input.nonce_timestamp,
+      worker_session_token: input.metadata.worker_session_token,
+      nonce: input.metadata.nonce,
+      nonce_timestamp: input.metadata.nonce_timestamp,
       artifact_id: artifactId,
-      artifact_idempotency_key: input.artifact_idempotency_key,
-      kind: input.kind,
-      name: input.name,
-      content_type: input.content_type,
-      digest: input.digest,
-      internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/${artifactId}`,
-      size_bytes: input.size_bytes,
-      metadata_json: input.metadata_json ?? {},
-      request_digest: input.body_digest,
+      artifact_idempotency_key: input.metadata.artifact_idempotency_key,
+      kind: input.metadata.kind,
+      name: input.metadata.name,
+      content_type: input.metadata.content_type,
+      digest: input.metadata.digest,
+      internal_ref: stored.ref,
+      internal_artifact_object_id: stored.id,
+      size_bytes: Number(stored.size_bytes),
+      metadata_json: input.metadata.metadata_json,
+      request_digest: bodyDigest,
       replay_protection: workerReplayProtection(
         'POST',
-        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/artifacts`,
-        input.body_digest,
+        input.proof_path,
+        bodyDigest,
       ),
       now,
     });

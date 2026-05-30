@@ -119,6 +119,7 @@ import type {
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeProfileWithRevisionInput,
   CreateCodexRuntimeJobArtifactInput,
+  PreflightCreateCodexRuntimeJobArtifactInput,
   CreateCodexWorkerBootstrapTokenInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
@@ -1946,16 +1947,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
-    const session = this.assertCodexRuntimeJobWorkerSession(
-      input.runtime_job_id,
-      input.worker_id,
-      input.worker_session_token,
-      input.now,
-      'codex_runtime_job_unavailable',
-      {
-        requireConnected: false,
-      },
-    );
+    const session = this.preflightCreateCodexRuntimeJobArtifactUnlocked(input);
     this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1965,28 +1957,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.replay_protection,
       session.session_epoch,
     );
-    this.assertCodexRuntimeJobArtifactIntake(input);
+    this.assertCodexRuntimeJobArtifactObjectBinding(input);
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
-    const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
-    const preStartFailureEvidenceAllowed =
-      input.kind === 'startup_failure_evidence' &&
-      (record?.job.status === 'accepted' || record?.job.status === 'materializing') &&
-      leaseRecord?.lease.status === 'active';
-    if (
-      record === undefined ||
-      leaseRecord === undefined ||
-      record.job.worker_id !== input.worker_id ||
-      (record.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
-      record.job.expires_at <= input.now ||
-      (leaseRecord.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
-      leaseRecord.lease.expires_at <= input.now
-    ) {
+    if (record === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
-    }
-    const expectedInternalRef =
-      `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${input.artifact_id}`;
-    if (input.internal_ref !== expectedInternalRef) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
     }
     const existing = this.findCodexRuntimeJobArtifactReplay(input);
     if (existing !== undefined) {
@@ -2004,9 +1978,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       content_type: input.content_type,
       digest: input.digest,
       internal_ref: input.internal_ref,
-      ...(input.internal_artifact_object_id === undefined
-        ? {}
-        : { internal_artifact_object_id: input.internal_artifact_object_id }),
+      internal_artifact_object_id: input.internal_artifact_object_id,
       size_bytes: input.size_bytes,
       metadata_json: clone(input.metadata_json),
       request_digest: input.request_digest,
@@ -2014,6 +1986,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     };
     this.codexRuntimeJobArtifacts.set(artifact.id, clone(artifact));
     return this.codexRuntimeJobArtifactPublic(artifact, record);
+  }
+
+  async preflightCreateCodexRuntimeJobArtifact(input: PreflightCreateCodexRuntimeJobArtifactInput): Promise<void> {
+    this.preflightCreateCodexRuntimeJobArtifactUnlocked(input);
   }
 
   async listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]> {
@@ -6071,7 +6047,104 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     };
   }
 
-  private assertCodexRuntimeJobArtifactIntake(input: CreateCodexRuntimeJobArtifactInput): void {
+  private assertCodexRuntimeJobArtifactObjectBinding(input: CreateCodexRuntimeJobArtifactInput): void {
+    const object = this.internalArtifactObjects.get(input.internal_artifact_object_id);
+    if (
+      object === undefined ||
+      object.deleted_at !== undefined ||
+      object.ref !== input.internal_ref ||
+      object.owner_type !== 'codex_runtime_job' ||
+      object.owner_id !== input.runtime_job_id ||
+      object.kind !== 'codex_runtime_job_artifact' ||
+      object.artifact_id !== input.artifact_id ||
+      object.digest !== input.digest ||
+      object.content_type !== input.content_type ||
+      object.size_bytes !== String(input.size_bytes)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact object binding was denied.');
+    }
+  }
+
+  private preflightCreateCodexRuntimeJobArtifactUnlocked(
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): CodexWorkerSessionProof {
+    const session = this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      input.now,
+      'codex_runtime_job_unavailable',
+      {
+        requireConnected: false,
+      },
+    );
+    this.assertCodexRuntimeJobArtifactIntake(input);
+    const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
+    const preStartFailureEvidenceAllowed =
+      input.kind === 'startup_failure_evidence' &&
+      (record?.job.status === 'accepted' || record?.job.status === 'materializing') &&
+      leaseRecord?.lease.status === 'active';
+    if (
+      record === undefined ||
+      leaseRecord === undefined ||
+      record.job.worker_id !== input.worker_id ||
+      (record.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
+      record.job.expires_at <= input.now ||
+      (leaseRecord.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
+      leaseRecord.lease.expires_at <= input.now
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    const expectedInternalRef =
+      `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${input.artifact_id}`;
+    if (input.internal_ref !== expectedInternalRef) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
+    }
+    this.assertCodexWorkerNonceAvailable(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const existing = this.findCodexRuntimeJobArtifactReplay(input);
+    if (existing !== undefined && !this.codexRuntimeJobArtifactPreflightReplayMatches(existing, input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    return session;
+  }
+
+  private assertCodexWorkerNonceAvailable(
+    workerId: string,
+    sessionToken: string,
+    nonce: string,
+    replayProtection?: CodexWorkerReplayProtectionInput,
+    sessionEpochOverride?: number,
+  ): void {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    const nonceHash = codexCredentialPayloadDigest(nonce);
+    const sessionEpoch = sessionEpochOverride ?? this.codexWorkerRegistrations.get(workerId)?.session_epoch ?? 1;
+    const replayKeyHash = codexCanonicalDigest({
+      method: replayProtection?.method ?? 'LEGACY',
+      path: replayProtection?.path ?? 'legacy-worker-session',
+      body_digest: replayProtection?.body_digest ?? sessionTokenHash,
+      worker_id: workerId,
+      session_epoch: sessionEpoch,
+      nonce,
+    });
+    const used = valuesFor(this.codexWorkerSessionNonces).some(
+      (record) =>
+        (record.worker_id === workerId && record.session_token_hash === sessionTokenHash && record.nonce_hash === nonceHash) ||
+        (record.worker_id === workerId && record.session_epoch === sessionEpoch && record.nonce_hash === nonceHash) ||
+        record.replay_key_hash === replayKeyHash,
+    );
+    if (used) {
+      throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce was already used.');
+    }
+  }
+
+  private assertCodexRuntimeJobArtifactIntake(input: PreflightCreateCodexRuntimeJobArtifactInput): void {
     try {
       validateCodexRuntimeJobArtifactIntake(input);
     } catch {
@@ -6080,7 +6153,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   private findCodexRuntimeJobArtifactReplay(
-    input: CreateCodexRuntimeJobArtifactInput,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
   ): CodexRuntimeJobArtifactPrivateRecord | undefined {
     const candidates = valuesFor(this.codexRuntimeJobArtifacts).filter(
       (artifact) =>
@@ -6113,6 +6186,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       artifact.digest === input.digest &&
       artifact.internal_ref === input.internal_ref &&
       artifact.internal_artifact_object_id === input.internal_artifact_object_id &&
+      artifact.size_bytes === input.size_bytes &&
+      artifact.request_digest === input.request_digest &&
+      valuesEqual(artifact.metadata_json, input.metadata_json)
+    );
+  }
+
+  private codexRuntimeJobArtifactPreflightReplayMatches(
+    artifact: CodexRuntimeJobArtifactPrivateRecord,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): boolean {
+    return (
+      artifact.runtime_job_id === input.runtime_job_id &&
+      artifact.artifact_idempotency_key === input.artifact_idempotency_key &&
+      artifact.kind === input.kind &&
+      artifact.name === input.name &&
+      artifact.content_type === input.content_type &&
+      artifact.digest === input.digest &&
+      artifact.internal_ref === input.internal_ref &&
       artifact.size_bytes === input.size_bytes &&
       artifact.request_digest === input.request_digest &&
       valuesEqual(artifact.metadata_json, input.metadata_json)

@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 
 import type { INestApplication } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +14,7 @@ import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/ru
 import { signAutomationRequest } from '../../packages/automation/src/index';
 import { InMemoryDeliveryRepository, type CodexLaunchTokenEnvelopeSealer, type DeliveryRepository } from '../../packages/db/src/index';
 import {
+  buildInternalArtifactRef,
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
   codexLaunchTokenEnvelopeDigest,
@@ -19,6 +22,7 @@ import {
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
   codexWorkspaceAcquisitionDigest,
+  runtimeArtifactUploadProofPayload,
   type ExecutionPackage,
   type CodexRuntimeProfileRevision,
   type RunSession,
@@ -55,6 +59,24 @@ const credentialVersionId = 'credential-binding-version-1';
 const apps: INestApplication[] = [];
 
 const sha = (seed: string): string => `sha256:${seed.padEnd(64, seed).slice(0, 64)}`;
+const rawSha256 = (bytes: Uint8Array): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+const deterministicRuntimeArtifactId = (jobId: string, artifactIdempotencyKey: string): string => {
+  const hex = codexCanonicalDigest({ runtime_job_id: jobId, artifact_idempotency_key: artifactIdempotencyKey }).slice(
+    'sha256:'.length,
+  );
+  const bytes = Buffer.from(hex.slice(0, 32), 'hex');
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const uuidHex = bytes.toString('hex');
+  return `${uuidHex.slice(0, 8)}-${uuidHex.slice(8, 12)}-${uuidHex.slice(12, 16)}-${uuidHex.slice(16, 20)}-${uuidHex.slice(20, 32)}`;
+};
+const runtimeArtifactInternalRef = (jobId: string, artifactIdempotencyKey: string): string =>
+  buildInternalArtifactRef({
+    kind: 'codex_runtime_job_artifact',
+    owner_type: 'codex_runtime_job',
+    owner_id: jobId,
+    artifact_id: deterministicRuntimeArtifactId(jobId, artifactIdempotencyKey),
+  });
 
 const codexConfigToml = 'approval_policy = "never"\n';
 const providerConfig = {
@@ -583,6 +605,56 @@ const runtimeWorkerQuery = (sessionToken: string, nonce: string, query: Record<s
     ...query,
   });
 
+const runtimeArtifactUploadMetadata = (input: {
+  sessionToken: string;
+  nonce: string;
+  artifact_idempotency_key: string;
+  kind: string;
+  name: string;
+  content_type: string;
+  digest: string;
+  size_bytes: string;
+  metadata_json?: Record<string, unknown>;
+}) => ({
+  schema_version: 'codex_runtime_job_artifact_upload.v2' as const,
+  worker_session_token: input.sessionToken,
+  nonce: input.nonce,
+  nonce_timestamp: later,
+  artifact_idempotency_key: input.artifact_idempotency_key,
+  kind: input.kind,
+  name: input.name,
+  content_type: input.content_type,
+  digest: input.digest,
+  size_bytes: input.size_bytes,
+  metadata_json: input.metadata_json ?? {},
+});
+
+const runtimeArtifactUpload = (input: {
+  app: INestApplication;
+  workerId: string;
+  runtimeJobId: string;
+  metadata: ReturnType<typeof runtimeArtifactUploadMetadata>;
+  payload: Buffer;
+}) => {
+  const uploadPath = `/internal/codex-workers/${input.workerId}/runtime-jobs/${input.runtimeJobId}/artifacts`;
+  const proofPayload = runtimeArtifactUploadProofPayload({
+    method: 'POST',
+    path: uploadPath,
+    worker_id: input.workerId,
+    runtime_job_id: input.runtimeJobId,
+    metadata: input.metadata,
+  });
+  const metadata = {
+    ...input.metadata,
+    body_digest: codexCanonicalDigest(proofPayload),
+  };
+  return request(input.app.getHttpServer())
+    .post(uploadPath)
+    .set('content-type', 'application/octet-stream')
+    .set('x-forgeloop-runtime-artifact-metadata', Buffer.from(JSON.stringify(metadata)).toString('base64url'))
+    .send(input.payload);
+};
+
 const binaryParser = (response: NodeJS.ReadableStream, callback: (error: Error | null, body?: Buffer) => void) => {
   const chunks: Buffer[] = [];
   response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
@@ -634,7 +706,8 @@ const bootApp = async (
     builder.overrideProvider(ProductGenerationResultService).useValue(overrides.productGenerationResultService);
   }
   const moduleRef = await builder.compile();
-  const app = moduleRef.createNestApplication({ rawBody: true });
+  const app = moduleRef.createNestApplication<NestExpressApplication>({ rawBody: true });
+  app.useBodyParser('raw', { type: 'application/octet-stream', limit: '10mb' });
   app.useLogger(false);
   await app.init();
   apps.push(app);
@@ -646,7 +719,8 @@ const bootAppWithDefaultRepository = async (): Promise<{ app: INestApplication; 
     .overrideProvider(DELIVERY_RUN_WORKER)
     .useValue({ kick: () => undefined, drainOnce: async () => undefined })
     .compile();
-  const app = moduleRef.createNestApplication({ rawBody: true });
+  const app = moduleRef.createNestApplication<NestExpressApplication>({ rawBody: true });
+  app.useBodyParser('raw', { type: 'application/octet-stream', limit: '10mb' });
   app.useLogger(false);
   await app.init();
   apps.push(app);
@@ -1499,7 +1573,7 @@ describe('codex runtime control-plane APIs', () => {
     const workspaceBundle = {
       schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: 'workspace-bundle-selected-runtime-job',
-      archive_ref: 'artifact:codex-pending-bundles:workspace-bundle-selected-runtime-job',
+      archive_ref: `artifact://internal/workspace_bundle/run_session/${runtimeJobRunSession.id}/workspace-bundle-selected-runtime-job`,
       archive_digest: workspaceBundleArchiveDigest(workspaceBundleBytes),
       manifest_digest: sha('d'),
       size_bytes: workspaceBundleBytes.byteLength,
@@ -1616,7 +1690,7 @@ describe('codex runtime control-plane APIs', () => {
     const workspaceAcquisition = {
       schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: 'workspace-bundle-api-1',
-      archive_ref: 'artifact:codex-pending-bundles:workspace-bundle-api-1',
+      archive_ref: `artifact://internal/workspace_bundle/run_session/${runSession.id}/workspace-bundle-api-1`,
       archive_digest: archiveDigest,
       manifest_digest: manifestDigest,
       size_bytes: archiveBytes.byteLength,
@@ -2110,7 +2184,7 @@ describe('codex runtime control-plane APIs', () => {
     });
   });
 
-  it('drives remote runtime jobs through sealed-envelope worker APIs without exposing launch tokens', async () => {
+  it('drives remote runtime jobs through sealed-envelope worker APIs and uploads artifacts without exposing launch tokens', async () => {
     const capturedLaunchTokens = new Map<string, string>();
     const { app, repository } = await bootApp(
       new InMemoryDeliveryRepository({ codexLaunchTokenEnvelopeSealer: capturingSealer(capturedLaunchTokens) }),
@@ -2269,34 +2343,37 @@ describe('codex runtime control-plane APIs', () => {
     const remoteLaunchToken = capturedLaunchTokens.get(runtimeJobId);
     expect(remoteLaunchToken).toEqual(expect.stringMatching(/^codex-runtime-launch:/));
 
-    await request(app.getHttpServer())
-      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`)
-      .send(
-        runtimeWorkerBody(registration.session_token, 'runtime-job-startup-failure-artifact', {
-          artifact_idempotency_key: 'runtime-job-startup-failure-artifact-1',
-          kind: 'startup_failure_evidence',
-          name: 'startup-failure-evidence.json',
-          content_type: 'application/json',
-          digest: sha('a'),
-          size_bytes: 12,
-          metadata_json: {
-            reason_code: 'codex_workspace_bundle_invalid',
-            failure_subcode: 'job_temp_root_already_exists',
-            public_summary: 'Remote Codex workspace bundle validation failed.',
-          },
-        }),
-      )
-      .expect(201)
-      .expect(({ body }) => {
-        expect(body.artifact).toMatchObject({
-          runtime_job_id: runtimeJobId,
-          kind: 'startup_failure_evidence',
-          metadata_json: {
-            reason_code: 'codex_workspace_bundle_invalid',
-            failure_subcode: 'job_temp_root_already_exists',
-          },
-        });
-      });
+    const startupFailurePayload = Buffer.from('startup-fail');
+    const startupFailureUpload = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload: startupFailurePayload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'runtime-job-startup-failure-artifact',
+        artifact_idempotency_key: 'runtime-job-startup-failure-artifact-1',
+        kind: 'startup_failure_evidence',
+        name: 'startup-failure-evidence.json',
+        content_type: 'application/json',
+        digest: rawSha256(startupFailurePayload),
+        size_bytes: String(startupFailurePayload.byteLength),
+        metadata_json: {
+          reason_code: 'codex_workspace_bundle_invalid',
+          failure_subcode: 'job_temp_root_already_exists',
+          public_summary: 'Remote Codex workspace bundle validation failed.',
+        },
+      }),
+    });
+    expect(startupFailureUpload.status, JSON.stringify(startupFailureUpload.body)).toBe(201);
+    expect(startupFailureUpload.body.artifact).toMatchObject({
+      runtime_job_id: runtimeJobId,
+      kind: 'startup_failure_evidence',
+      metadata_json: {
+        reason_code: 'codex_workspace_bundle_invalid',
+        failure_subcode: 'job_temp_root_already_exists',
+      },
+    });
 
     vi.stubEnv('FORGELOOP_UNSAFE_DB_CODEX_CREDENTIAL_STORE', '1');
     await request(app.getHttpServer())
@@ -2359,36 +2436,188 @@ describe('codex runtime control-plane APIs', () => {
       )
       .expect(201);
 
+    const generatedPayload = { schema_version: 'test_payload.v1', value: 'ok' };
+    const payload = Buffer.from(`${JSON.stringify(generatedPayload)}\n`);
+    const digest = rawSha256(payload);
+    const generatedPayloadDigest = codexCanonicalDigest(generatedPayload);
+    const upload = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'artifact-nonce-1',
+        artifact_idempotency_key: 'artifact-key-1',
+        kind: 'generated_payload',
+        name: 'payload.json',
+        content_type: 'application/json',
+        digest,
+        size_bytes: String(payload.byteLength),
+        metadata_json: { schema_version: 'generated_payload_metadata.v1' },
+      }),
+    }).expect(201);
+
+    expect(upload.body.artifact).toMatchObject({
+      runtime_job_id: runtimeJobId,
+      project_id: projectId,
+      repo_id: repoId,
+      target_kind: 'generation',
+      content_type: 'application/json',
+      digest,
+      size_bytes: payload.byteLength,
+    });
+    expect(upload.body.artifact.internal_ref).toMatch(
+      /^artifact:\/\/internal\/codex_runtime_job_artifact\/codex_runtime_job\/runtime-job-1\//,
+    );
+    expect(upload.body.artifact.digest).toBe(digest);
+    expect(upload.body.artifact.digest).not.toBe(generatedPayloadDigest);
+    expect(JSON.stringify(upload.body)).not.toContain('storage_key');
+    expect(JSON.stringify(upload.body)).not.toContain('launch_token');
+    expect(JSON.stringify(upload.body)).not.toContain(remoteLaunchToken);
+
+    const nonceReplayPayload = Buffer.from('nonce replay payload\n');
+    const nonceReplayDigest = rawSha256(nonceReplayPayload);
+    const rejectedNonceReplay = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload: nonceReplayPayload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'artifact-nonce-1',
+        artifact_idempotency_key: 'artifact-retry-key-nonce-replay',
+        kind: 'generated_payload',
+        name: 'nonce-replay.txt',
+        content_type: 'text/plain',
+        digest: nonceReplayDigest,
+        size_bytes: String(nonceReplayPayload.byteLength),
+      }),
+    });
+    expect(rejectedNonceReplay.status).toBe(400);
+    await expect(
+      repository.getInternalArtifactObjectByRef({
+        ref: runtimeArtifactInternalRef(runtimeJobId, 'artifact-retry-key-nonce-replay'),
+      }),
+    ).resolves.toBeUndefined();
+    const correctedNonceReplay = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload: nonceReplayPayload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'artifact-retry-nonce-replay-corrected',
+        artifact_idempotency_key: 'artifact-retry-key-nonce-replay',
+        kind: 'generated_payload',
+        name: 'nonce-replay.txt',
+        content_type: 'text/plain',
+        digest: nonceReplayDigest,
+        size_bytes: String(nonceReplayPayload.byteLength),
+      }),
+    });
+    expect(correctedNonceReplay.status, JSON.stringify(correctedNonceReplay.body)).toBe(201);
+
     await request(app.getHttpServer())
       .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`)
       .send(
-        runtimeWorkerBody(registration.session_token, 'runtime-job-artifact', {
-          artifact_idempotency_key: 'runtime-job-artifact-1',
+        runtimeWorkerBody(registration.session_token, 'metadata-only', {
+          artifact_idempotency_key: 'metadata-only',
           kind: 'generated_payload',
-          name: 'generated-payload.json',
+          name: 'payload.json',
           content_type: 'application/json',
-          digest: sha('f'),
-          size_bytes: 12,
-          metadata_json: {},
+          digest,
+          size_bytes: String(payload.byteLength),
+          metadata_json: { generated_payload: { unsafe: 'legacy canonical path' } },
         }),
       )
-      .expect(201)
-      .expect(({ body }) => {
-        expect(body.artifact).toMatchObject({
-          runtime_job_id: runtimeJobId,
-          project_id: projectId,
-          repo_id: repoId,
-          target_kind: 'generation',
-          content_type: 'application/json',
-          digest: sha('f'),
-          size_bytes: 12,
-        });
-        expect(body.artifact.internal_ref).toMatch(
-          new RegExp(`^artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/[0-9a-f-]{36}$`),
-        );
-        expect(JSON.stringify(body)).not.toContain('launch_token');
-        expect(JSON.stringify(body)).not.toContain(remoteLaunchToken);
-      });
+      .expect(400);
+
+    const retryPayload = Buffer.from('retry payload\n');
+    const retryDigest = rawSha256(retryPayload);
+    const rejectedContentType = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload: retryPayload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'artifact-retry-invalid-content-type',
+        artifact_idempotency_key: 'artifact-retry-key-1',
+        kind: 'generated_payload',
+        name: 'payload.txt',
+        content_type: 'application/x-secret-dump',
+        digest: retryDigest,
+        size_bytes: String(retryPayload.byteLength),
+      }),
+    });
+    expect(rejectedContentType.status).toBe(400);
+    await expect(
+      repository.getInternalArtifactObjectByRef({
+        ref: runtimeArtifactInternalRef(runtimeJobId, 'artifact-retry-key-1'),
+      }),
+    ).resolves.toBeUndefined();
+    const correctedContentType = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload: retryPayload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'artifact-retry-valid-content-type',
+        artifact_idempotency_key: 'artifact-retry-key-1',
+        kind: 'generated_payload',
+        name: 'payload.txt',
+        content_type: 'text/plain',
+        digest: retryDigest,
+        size_bytes: String(retryPayload.byteLength),
+      }),
+    });
+    expect(correctedContentType.status, JSON.stringify(correctedContentType.body)).toBe(201);
+
+    const unsafeMetadataPayload = Buffer.from('unsafe metadata retry payload\n');
+    const unsafeMetadataDigest = rawSha256(unsafeMetadataPayload);
+    const rejectedUnsafeMetadata = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload: unsafeMetadataPayload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'artifact-retry-unsafe-metadata',
+        artifact_idempotency_key: 'artifact-retry-key-2',
+        kind: 'generated_payload',
+        name: 'unsafe-metadata.txt',
+        content_type: 'text/plain',
+        digest: unsafeMetadataDigest,
+        size_bytes: String(unsafeMetadataPayload.byteLength),
+        metadata_json: { workspace_path: '/tmp/private/codex-home' },
+      }),
+    });
+    expect(rejectedUnsafeMetadata.status).toBe(400);
+    await expect(
+      repository.getInternalArtifactObjectByRef({
+        ref: runtimeArtifactInternalRef(runtimeJobId, 'artifact-retry-key-2'),
+      }),
+    ).resolves.toBeUndefined();
+    const correctedMetadata = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload: unsafeMetadataPayload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'artifact-retry-safe-metadata',
+        artifact_idempotency_key: 'artifact-retry-key-2',
+        kind: 'generated_payload',
+        name: 'unsafe-metadata.txt',
+        content_type: 'text/plain',
+        digest: unsafeMetadataDigest,
+        size_bytes: String(unsafeMetadataPayload.byteLength),
+        metadata_json: { note: 'safe retry metadata' },
+      }),
+    });
+    expect(correctedMetadata.status, JSON.stringify(correctedMetadata.body)).toBe(201);
 
     await request(app.getHttpServer())
       .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/terminal`)
@@ -2533,24 +2762,29 @@ describe('codex runtime control-plane APIs', () => {
       .expect(201);
 
     const generatedPayload = generatedSpecRevisionPayload();
-    const generatedPayloadDigest = codexCanonicalDigest(generatedPayload);
-    const artifact = await request(app.getHttpServer())
-      .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/artifacts`)
-      .send(
-        runtimeWorkerBody(registration.session_token, 'runtime-job-projection-generation-artifact', {
-          artifact_idempotency_key: 'runtime-job-projection-generation-artifact-1',
-          kind: 'generated_payload',
-          name: 'generated-payload.json',
-          content_type: 'application/json',
-          digest: generatedPayloadDigest,
-          size_bytes: 12,
-          metadata_json: {
-            output_schema_version: 'spec_revision.v1',
-            generated_payload: { schema_version: 'spec_revision.v1' },
-          },
-        }),
-      )
-      .expect(201);
+    const artifactPayload = Buffer.from(`${JSON.stringify(generatedPayload)}\n`);
+    const generatedPayloadDigest = rawSha256(artifactPayload);
+    const terminalGeneratedPayloadDigest = codexCanonicalDigest(generatedPayload);
+    const artifact = await runtimeArtifactUpload({
+      app,
+      workerId,
+      runtimeJobId,
+      payload: artifactPayload,
+      metadata: runtimeArtifactUploadMetadata({
+        sessionToken: registration.session_token,
+        nonce: 'runtime-job-projection-generation-artifact',
+        artifact_idempotency_key: 'runtime-job-projection-generation-artifact-1',
+        kind: 'generated_payload',
+        name: 'generated-payload.json',
+        content_type: 'application/json',
+        digest: generatedPayloadDigest,
+        size_bytes: String(artifactPayload.byteLength),
+        metadata_json: {
+          output_schema_version: 'spec_revision.v1',
+          generated_payload: { schema_version: 'spec_revision.v1' },
+        },
+      }),
+    }).expect(201);
 
     await request(app.getHttpServer())
       .post(`/internal/codex-workers/${workerId}/runtime-jobs/${runtimeJobId}/terminal`)
@@ -2565,7 +2799,7 @@ describe('codex runtime control-plane APIs', () => {
             prompt_version: 'prompt-v1',
             output_schema_version: 'spec_revision.v1',
             generated_payload: generatedPayload,
-            generated_payload_digest: generatedPayloadDigest,
+            generated_payload_digest: terminalGeneratedPayloadDigest,
             generation_artifacts: [
               {
                 kind: 'generated_payload',
@@ -2594,7 +2828,7 @@ describe('codex runtime control-plane APIs', () => {
           terminal_result_json: {
             task_kind: 'development_plan_item_spec_revision',
             generated_payload: generatedPayload,
-            generated_payload_digest: generatedPayloadDigest,
+            generated_payload_digest: terminalGeneratedPayloadDigest,
             public_summary: 'Generated a Spec revision.',
             output_schema_version: 'spec_revision.v1',
             runtime_evidence: {
@@ -2663,7 +2897,7 @@ describe('codex runtime control-plane APIs', () => {
     const workspaceAcquisition = {
       schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: 'workspace-bundle-run-projection',
-      archive_ref: 'artifact:codex-pending-bundles:workspace-bundle-run-projection',
+      archive_ref: `artifact://internal/workspace_bundle/run_session/${runSession.id}/workspace-bundle-run-projection`,
       archive_digest: workspaceBundleArchiveDigest(archiveBytes),
       manifest_digest: codexCanonicalDigest('run-projection-manifest'),
       size_bytes: archiveBytes.byteLength,
@@ -2983,7 +3217,7 @@ describe('codex runtime control-plane APIs', () => {
     const workspaceAcquisition = {
       schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: 'workspace-bundle-worker-poll-1',
-      archive_ref: 'artifact:codex-pending-bundles:workspace-bundle-worker-poll-1',
+      archive_ref: `artifact://internal/workspace_bundle/run_session/${runSession.id}/workspace-bundle-worker-poll-1`,
       archive_digest: archiveDigest,
       manifest_digest: manifestDigest,
       size_bytes: archiveBytes.byteLength,

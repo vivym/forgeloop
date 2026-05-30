@@ -15,6 +15,7 @@ import {
   type CodexDockerNetworkProxyConfig,
   type CodexLaunchLease,
   type CodexLaunchTokenEnvelope,
+  type InternalArtifactObject,
   type ExecutionPackage,
   type CodexLaunchLeaseWithToken,
   type CodexLaunchTarget,
@@ -761,29 +762,51 @@ const createRuntimeJobArtifact = (
   repository: DeliveryRepository,
   runtimeJobId = 'runtime-job-1',
   patch: Partial<Parameters<DeliveryRepository['createCodexRuntimeJobArtifact']>[0]> = {},
-) =>
-  repository.createCodexRuntimeJobArtifact({
+) => {
+  const artifactId = `11111111-1111-4111-8111-${runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'}`;
+  const objectId = `33333333-3333-4333-8333-${runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'}`;
+  const internalRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${runtimeJobId}/${artifactId}`;
+  const base = {
     runtime_job_id: runtimeJobId,
     worker_id: 'worker-1',
     worker_session_token: 'session-token-1',
     nonce: `artifact-nonce-${runtimeJobId}`,
     nonce_timestamp: later,
-    artifact_id: `11111111-1111-4111-8111-${runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'}`,
+    artifact_id: artifactId,
     artifact_idempotency_key: `artifact-${runtimeJobId}`,
     kind: 'generated_payload',
     name: 'generated-payload.json',
     content_type: 'application/json',
     digest: tokenHash(`artifact-digest-${runtimeJobId}`),
-    internal_ref: `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${runtimeJobId}/11111111-1111-4111-8111-${
-      runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'
-    }`,
-    internal_artifact_object_id: `33333333-3333-4333-8333-${runtimeJobId === 'runtime-job-1' ? '111111111111' : '222222222222'}`,
+    internal_ref: internalRef,
+    internal_artifact_object_id: objectId,
     size_bytes: 128,
     metadata_json: {},
     request_digest: tokenHash(`artifact-request-${runtimeJobId}`),
     now: later,
     ...patch,
-  });
+  };
+  const object: InternalArtifactObject = {
+    id: base.internal_artifact_object_id,
+    artifact_id: base.artifact_id,
+    ref: base.internal_ref,
+    storage_key: `objects/${base.digest.slice('sha256:'.length)}`,
+    kind: 'codex_runtime_job_artifact',
+    content_type: base.content_type,
+    size_bytes: String(base.size_bytes),
+    digest: base.digest,
+    visibility: 'internal',
+    owner_type: 'codex_runtime_job',
+    owner_id: base.runtime_job_id,
+    idempotency_key: base.artifact_idempotency_key,
+    request_digest: base.request_digest,
+    metadata_json: base.metadata_json,
+    created_by_actor_type: 'codex_worker',
+    created_by_actor_id: base.worker_id,
+    created_at: base.now,
+  };
+  return repository.createOrReplayInternalArtifactObject(object).then(() => repository.createCodexRuntimeJobArtifact(base));
+};
 
 const runtimeLaunchLeases = (repository: DeliveryRepository): Map<string, { lease: CodexLaunchLease }> =>
   (repository as unknown as { codexLaunchLeases: Map<string, { lease: CodexLaunchLease }> }).codexLaunchLeases;
@@ -2244,6 +2267,77 @@ describe('codex runtime repository behavior', () => {
         metadata_json: { workspace_path: '/tmp/private/codex-home' },
         nonce: 'artifact-unsafe-metadata',
         request_digest: tokenHash('artifact-unsafe-metadata-request'),
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+  });
+
+  it('requires new runtime job artifacts to bind to matching internal artifact objects', async () => {
+    const { repository, launchToken } = await createRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository);
+    await claimRuntimeJobEnvelope(repository);
+    await materializeRuntimeJob(repository, launchToken);
+    await startRuntimeJob(repository);
+
+    await expect(
+      repository.createCodexRuntimeJobArtifact({
+        runtime_job_id: 'runtime-job-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'artifact-missing-object',
+        nonce_timestamp: later,
+        artifact_id: '11111111-1111-4111-8111-444444444444',
+        artifact_idempotency_key: 'artifact-missing-object',
+        kind: 'generated_payload',
+        name: 'generated-payload.json',
+        content_type: 'application/json',
+        digest: tokenHash('artifact-missing-object-digest'),
+        internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/11111111-1111-4111-8111-444444444444',
+        internal_artifact_object_id: '33333333-3333-4333-8333-444444444444',
+        size_bytes: 128,
+        metadata_json: {},
+        request_digest: tokenHash('artifact-missing-object-request'),
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
+
+    await repository.createOrReplayInternalArtifactObject({
+      id: '33333333-3333-4333-8333-555555555555',
+      artifact_id: '11111111-1111-4111-8111-555555555555',
+      ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/11111111-1111-4111-8111-555555555555',
+      storage_key: `objects/${tokenHash('wrong-digest').slice('sha256:'.length)}`,
+      kind: 'codex_runtime_job_artifact',
+      content_type: 'application/json',
+      size_bytes: '128',
+      digest: tokenHash('wrong-digest'),
+      visibility: 'internal',
+      owner_type: 'codex_runtime_job',
+      owner_id: 'runtime-job-1',
+      idempotency_key: 'artifact-mismatched-object',
+      request_digest: tokenHash('artifact-mismatched-object-request'),
+      metadata_json: {},
+      created_by_actor_type: 'codex_worker',
+      created_by_actor_id: 'worker-1',
+      created_at: later,
+    });
+    await expect(
+      repository.createCodexRuntimeJobArtifact({
+        runtime_job_id: 'runtime-job-1',
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'artifact-mismatched-object',
+        nonce_timestamp: later,
+        artifact_id: '11111111-1111-4111-8111-555555555555',
+        artifact_idempotency_key: 'artifact-mismatched-object',
+        kind: 'generated_payload',
+        name: 'generated-payload.json',
+        content_type: 'application/json',
+        digest: tokenHash('expected-digest'),
+        internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/11111111-1111-4111-8111-555555555555',
+        internal_artifact_object_id: '33333333-3333-4333-8333-555555555555',
+        size_bytes: 128,
+        metadata_json: {},
+        request_digest: tokenHash('artifact-mismatched-object-request'),
+        now: later,
       }),
     ).rejects.toMatchObject<Partial<DomainError>>({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });
   });

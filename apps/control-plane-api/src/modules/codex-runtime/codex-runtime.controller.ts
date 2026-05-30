@@ -1,7 +1,8 @@
 import { Buffer } from 'node:buffer';
 
-import { BadRequestException, Body, Controller, Get, Inject, Param, Post, Query, Res, StreamableFile, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, Param, Post, Query, Req, Res, StreamableFile, UseGuards } from '@nestjs/common';
 import { codexCanonicalDigest, codexCredentialPayloadDigest } from '@forgeloop/domain';
+import { z } from 'zod';
 
 import { TrustedAutomationActorGuard } from '../automation/trusted-automation-actor.guard';
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
@@ -14,7 +15,7 @@ import {
   codexRuntimeWorkerQuerySchema,
   createCodexCredentialSchema,
   createCodexLaunchLeaseSchema,
-  createCodexRuntimeJobArtifactSchema,
+  createCodexRuntimeJobArtifactUploadMetadataSchema,
   createCodexRuntimeJobSchema,
   createCodexRuntimeProfileSchema,
   createCodexWorkerBootstrapTokenSchema,
@@ -76,6 +77,61 @@ const assertWorkerBodyDigest = (input: { body_digest: string }): void => {
   if (input.body_digest !== expected) {
     throw new BadRequestException('Codex worker request body digest was rejected');
   }
+};
+
+type RuntimeArtifactUploadRequest = {
+  rawBody?: Buffer;
+  body?: unknown;
+  headers: Record<string, string | string[] | undefined>;
+};
+
+const runtimeArtifactMetadataHeaderName = 'x-forgeloop-runtime-artifact-metadata';
+
+const singleHeaderValue = (headers: RuntimeArtifactUploadRequest['headers'], name: string): string | undefined => {
+  const values = Object.entries(headers)
+    .filter(([headerName, value]) => headerName.toLowerCase() === name && value !== undefined)
+    .flatMap(([, value]) => (Array.isArray(value) ? value : [value]));
+  if (values.length > 1) {
+    throw new BadRequestException('Codex runtime job artifact upload metadata was rejected');
+  }
+  return values[0]?.trim();
+};
+
+export const parseRuntimeArtifactUploadRequest = (
+  request: RuntimeArtifactUploadRequest,
+  params: { workerId: string; jobId: string },
+): CreateCodexRuntimeJobArtifactDto => {
+  const contentType = singleHeaderValue(request.headers, 'content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  const bytes = request.rawBody ?? (Buffer.isBuffer(request.body) ? request.body : undefined);
+  if (contentType !== 'application/octet-stream' || bytes === undefined || bytes.byteLength === 0) {
+    throw new BadRequestException('Codex runtime job artifact upload requires application/octet-stream bytes');
+  }
+
+  const encodedMetadata = singleHeaderValue(request.headers, runtimeArtifactMetadataHeaderName);
+  if (encodedMetadata === undefined || encodedMetadata.length === 0) {
+    throw new BadRequestException('Codex runtime job artifact upload metadata is required');
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(encodedMetadata, 'base64url').toString('utf8'));
+  } catch {
+    throw new BadRequestException('Codex runtime job artifact upload metadata must be base64url JSON');
+  }
+
+  const parsed = createCodexRuntimeJobArtifactUploadMetadataSchema
+    .extend({ body_digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) })
+    .strict()
+    .safeParse(decoded);
+  if (!parsed.success) {
+    throw new BadRequestException('Codex runtime job artifact upload metadata was rejected');
+  }
+
+  return {
+    proof_path: `/internal/codex-workers/${params.workerId}/runtime-jobs/${params.jobId}/artifacts`,
+    metadata: parsed.data,
+    bytes,
+  };
 };
 
 @Controller()
@@ -268,9 +324,10 @@ export class CodexRuntimeController {
   createRuntimeJobArtifact(
     @Param('workerId') workerId: string,
     @Param('jobId') jobId: string,
-    @Body(new ZodValidationPipe(createCodexRuntimeJobArtifactSchema)) body: CreateCodexRuntimeJobArtifactDto,
+    @Req() request: RuntimeArtifactUploadRequest,
   ) {
-    return this.service.createRuntimeJobArtifact(workerId, jobId, body);
+    const parsed = parseRuntimeArtifactUploadRequest(request, { workerId, jobId });
+    return this.service.createRuntimeJobArtifact(workerId, jobId, parsed);
   }
 
   @Get('/internal/codex-workers/:workerId/runtime-jobs/:jobId/workspace-bundle/:bundleId')

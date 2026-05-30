@@ -191,6 +191,7 @@ import type {
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeJobArtifactInput,
   CreateCodexRuntimeProfileWithRevisionInput,
+  PreflightCreateCodexRuntimeJobArtifactInput,
   CreateCodexWorkerBootstrapTokenInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
@@ -1979,6 +1980,19 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
   }
 
+  async preflightCreateCodexRuntimeJobArtifact(input: PreflightCreateCodexRuntimeJobArtifactInput): Promise<void> {
+    return this.withAdvisoryLocks(
+      [
+        ...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id),
+        `codex-runtime-artifact:${input.runtime_job_id}:${input.artifact_id}`,
+        `codex-runtime-artifact-idempotency:${input.runtime_job_id}:${input.artifact_idempotency_key}`,
+      ],
+      async (repository) => {
+        await (repository as DrizzleDeliveryRepository).preflightCreateCodexRuntimeJobArtifactUnlocked(input);
+      },
+    );
+  }
+
   async listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]> {
     const [jobRow] = await this.db
       .select()
@@ -2686,16 +2700,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async createCodexRuntimeJobArtifactUnlocked(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
-    const session = await this.assertCodexRuntimeJobWorkerSession(
-      input.runtime_job_id,
-      input.worker_id,
-      input.worker_session_token,
-      'codex_runtime_job_unavailable',
-      input.now,
-      {
-        requireConnected: false,
-      },
-    );
+    const session = await this.preflightCreateCodexRuntimeJobArtifactUnlocked(input);
     await this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -2705,27 +2710,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.replay_protection,
       session.session_epoch,
     );
-    this.assertCodexRuntimeJobArtifactIntake(input);
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
-    const preStartFailureEvidenceAllowed =
-      input.kind === 'startup_failure_evidence' &&
-      (bundle.job?.status === 'accepted' || bundle.job?.status === 'materializing') &&
-      bundle.lease?.status === 'active';
-    if (
-      bundle.job === undefined ||
-      bundle.lease === undefined ||
-      bundle.job.worker_id !== input.worker_id ||
-      (bundle.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
-      bundle.job.expires_at <= input.now ||
-      (bundle.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
-      bundle.lease.expires_at <= input.now
-    ) {
+    if (bundle.job === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
-    const expectedInternalRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${input.artifact_id}`;
-    if (input.internal_ref !== expectedInternalRef) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
-    }
+    await this.assertCodexRuntimeJobArtifactObjectBinding(input);
     const existing = await this.findCodexRuntimeJobArtifactReplay(input);
     if (existing !== undefined) {
       if (this.codexRuntimeJobArtifactReplayMatches(existing, input)) {
@@ -2744,7 +2733,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         contentType: input.content_type,
         digest: input.digest,
         internalRef: input.internal_ref,
-        internalArtifactObjectId: input.internal_artifact_object_id ?? null,
+        internalArtifactObjectId: input.internal_artifact_object_id,
         sizeBytes: input.size_bytes,
         metadataJson: input.metadata_json,
         requestDigest: input.request_digest,
@@ -6542,7 +6531,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     });
   }
 
-  private assertCodexRuntimeJobArtifactIntake(input: CreateCodexRuntimeJobArtifactInput): void {
+  private assertCodexRuntimeJobArtifactIntake(input: PreflightCreateCodexRuntimeJobArtifactInput): void {
     try {
       validateCodexRuntimeJobArtifactIntake(input);
     } catch {
@@ -6550,8 +6539,120 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
   }
 
+  private async assertCodexRuntimeJobArtifactObjectBinding(input: CreateCodexRuntimeJobArtifactInput): Promise<void> {
+    const object = await this.getInternalArtifactObjectById(input.internal_artifact_object_id);
+    if (
+      object === undefined ||
+      object.ref !== input.internal_ref ||
+      object.owner_type !== 'codex_runtime_job' ||
+      object.owner_id !== input.runtime_job_id ||
+      object.kind !== 'codex_runtime_job_artifact' ||
+      object.artifact_id !== input.artifact_id ||
+      object.digest !== input.digest ||
+      object.content_type !== input.content_type ||
+      object.size_bytes !== String(input.size_bytes)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact object binding was denied.');
+    }
+  }
+
+  private async preflightCreateCodexRuntimeJobArtifactUnlocked(
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): Promise<CodexWorkerSessionProof> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+      {
+        requireConnected: false,
+      },
+    );
+    this.assertCodexRuntimeJobArtifactIntake(input);
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    const preStartFailureEvidenceAllowed =
+      input.kind === 'startup_failure_evidence' &&
+      (bundle.job?.status === 'accepted' || bundle.job?.status === 'materializing') &&
+      bundle.lease?.status === 'active';
+    if (
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.job.worker_id !== input.worker_id ||
+      (bundle.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
+      !timestampIsAfter(bundle.job.expires_at, input.now) ||
+      (bundle.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
+      !timestampIsAfter(bundle.lease.expires_at, input.now)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    const expectedInternalRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${input.artifact_id}`;
+    if (input.internal_ref !== expectedInternalRef) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
+    }
+    await this.assertCodexWorkerNonceAvailable(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const existing = await this.findCodexRuntimeJobArtifactReplay(input);
+    if (existing !== undefined && !this.codexRuntimeJobArtifactPreflightReplayMatches(existing, input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    return session;
+  }
+
+  private async assertCodexWorkerNonceAvailable(
+    workerId: string,
+    sessionToken: string,
+    nonce: string,
+    replayProtection?: CodexWorkerReplayProtectionInput,
+    sessionEpochOverride?: number,
+  ): Promise<void> {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    const nonceHash = codexCredentialPayloadDigest(nonce);
+    const [worker] = await this.db
+      .select({ sessionEpoch: codex_worker_registrations.sessionEpoch })
+      .from(codex_worker_registrations)
+      .where(eq(codex_worker_registrations.id, workerId))
+      .limit(1);
+    const sessionEpoch = sessionEpochOverride ?? worker?.sessionEpoch ?? 1;
+    const replayKeyHash = codexCanonicalDigest({
+      method: replayProtection?.method ?? 'LEGACY',
+      path: replayProtection?.path ?? 'legacy-worker-session',
+      body_digest: replayProtection?.body_digest ?? sessionTokenHash,
+      worker_id: workerId,
+      session_epoch: sessionEpoch,
+      nonce,
+    });
+    const [existing] = await this.db
+      .select({ id: codex_worker_session_nonces.id })
+      .from(codex_worker_session_nonces)
+      .where(
+        or(
+          and(
+            eq(codex_worker_session_nonces.workerId, workerId),
+            eq(codex_worker_session_nonces.sessionTokenHash, sessionTokenHash),
+            eq(codex_worker_session_nonces.nonceHash, nonceHash),
+          ),
+          and(
+            eq(codex_worker_session_nonces.workerId, workerId),
+            eq(codex_worker_session_nonces.sessionEpoch, sessionEpoch),
+            eq(codex_worker_session_nonces.nonceHash, nonceHash),
+          ),
+          eq(codex_worker_session_nonces.replayKeyHash, replayKeyHash),
+        ),
+      )
+      .limit(1);
+    if (existing !== undefined) {
+      throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce was already used.');
+    }
+  }
+
   private async findCodexRuntimeJobArtifactReplay(
-    input: CreateCodexRuntimeJobArtifactInput,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
   ): Promise<CodexRuntimeJobArtifactDbRecord | undefined> {
     const rows = await this.db
       .select()
@@ -6594,6 +6695,24 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       artifact.digest === input.digest &&
       artifact.internal_ref === input.internal_ref &&
       artifact.internal_artifact_object_id === input.internal_artifact_object_id &&
+      artifact.size_bytes === input.size_bytes &&
+      artifact.request_digest === input.request_digest &&
+      valuesEqual(artifact.metadata_json, input.metadata_json)
+    );
+  }
+
+  private codexRuntimeJobArtifactPreflightReplayMatches(
+    artifact: CodexRuntimeJobArtifactDbRecord,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): boolean {
+    return (
+      artifact.runtime_job_id === input.runtime_job_id &&
+      artifact.artifact_idempotency_key === input.artifact_idempotency_key &&
+      artifact.kind === input.kind &&
+      artifact.name === input.name &&
+      artifact.content_type === input.content_type &&
+      artifact.digest === input.digest &&
+      artifact.internal_ref === input.internal_ref &&
       artifact.size_bytes === input.size_bytes &&
       artifact.request_digest === input.request_digest &&
       valuesEqual(artifact.metadata_json, input.metadata_json)
