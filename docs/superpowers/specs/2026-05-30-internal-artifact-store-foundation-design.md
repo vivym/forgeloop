@@ -98,7 +98,7 @@ The store is generic at the storage layer, not at the product layer. Consumers m
 
 ### Internal Artifact Object
 
-Suggested contract shape:
+Mandatory contract shape:
 
 ```ts
 type InternalArtifactVisibility = 'internal' | 'private';
@@ -124,11 +124,12 @@ type InternalArtifactOwnerType =
 
 type InternalArtifactObject = {
   id: string;
+  artifact_id: string;
   ref: string;
   storage_key: string;
   kind: InternalArtifactKind;
   content_type: string;
-  size_bytes: number;
+  size_bytes: string;
   digest: string;
   visibility: InternalArtifactVisibility;
   owner_type: InternalArtifactOwnerType;
@@ -146,7 +147,10 @@ type InternalArtifactObject = {
 Rules:
 
 - `ref` is the only durable external identifier and must start with `artifact://`.
+- `id` is the DB row id and must be a UUID.
+- `artifact_id` is the text segment used in the canonical ref.
 - `storage_key` is internal server-side metadata and must never be returned in normal product DTOs.
+- `size_bytes` is serialized as a decimal string in contracts and DTOs, and stored as a 64-bit integer in DB.
 - `digest` must be a `sha256:` digest computed over stored bytes.
 - `visibility = internal` means trusted runtime/control-plane only.
 - `visibility = private` means server-side domain code may reference the object, but public DTOs still receive only product-safe derived refs when a consumer explicitly provides them.
@@ -154,13 +158,38 @@ Rules:
 - `request_digest` is computed from the canonical request payload: schema version, artifact id, canonical ref, owner type, owner id, idempotency key, kind, visibility, content type, declared size, declared artifact byte digest, and canonical metadata JSON.
 - `deleted_at` is a tombstone. The local file may be removed later by retention, but refs must not be silently reused.
 
+DB constraints:
+
+- table name: `internal_artifact_objects`;
+- `id` is UUID primary key;
+- `artifact_id`, `ref`, `storage_key`, `kind`, `content_type`, `digest`, `visibility`, `owner_type`, `owner_id`, `idempotency_key`, `request_digest`, `metadata_json`, `created_by_actor_type`, `created_by_actor_id`, and `created_at` are required;
+- `size_bytes` must use a 64-bit integer type because future snapshots and workspace bundles may exceed 2 GB;
+- `deleted_at` is nullable;
+- `created_by_actor_id` is not nullable and is intentionally not a cross-table FK because actors can be users, workers, or system identities;
+- unique index on `ref`;
+- unique index on `(owner_type, owner_id, idempotency_key)`;
+- unique index on `(owner_type, owner_id, kind, artifact_id)`;
+- index on `(owner_type, owner_id, kind, created_at)`;
+- index on `storage_key`;
+- index on `(digest, content_type)`;
+- `storage_key` is not unique because multiple owners/refs may point at the same content-addressed bytes;
+- tombstoned refs remain unique and cannot be reused.
+
 Idempotency rules:
 
-- `id` is the artifact id used in the canonical ref.
+- `artifact_id` is the artifact id used in the canonical ref.
 - A replay with the same `(owner_type, owner_id, idempotency_key)` succeeds only when `request_digest`, digest, size, content type, visibility, metadata, and ref match the existing row.
 - A replay with the same idempotency key but different bytes, metadata, visibility, or ref is rejected as `internal_artifact_idempotency_drift`.
-- A second write with the same canonical ref and different idempotency key is rejected unless it is an exact replay of the same object metadata and digest.
+- A second write with the same canonical ref and a different idempotency key is always rejected as `internal_artifact_ref_conflict`.
 - Tombstoned refs cannot be reused.
+
+Artifact id rules:
+
+- Runtime job artifacts use `deterministicRuntimeArtifactId(runtime_job_id, artifact_idempotency_key)`, matching the current deterministic id contract.
+- Workspace bundles use the existing `bundle_id`.
+- Future Codex session snapshots use the future `snapshot_id`; Wave 1 only reserves the namespace.
+- Admin/operator direct writes use a server-generated UUID string as `artifact_id`; clients may not choose arbitrary ids.
+- The control plane derives the canonical ref after authorization; workers submit idempotency inputs and bytes, not refs.
 
 ### Ref Format
 
@@ -194,7 +223,7 @@ v0 stores bytes under:
 FORGELOOP_ARTIFACT_STORE_ROOT=/var/lib/forgeloop/artifacts
 ```
 
-Suggested path layout:
+Required path layout:
 
 ```text
 {root}/objects/sha256/{first_two_hex}/{full_hex_digest}
@@ -216,7 +245,7 @@ Backend rules:
 
 ## Store Interface
 
-The application should expose a typed internal service, not raw filesystem helpers.
+The application must expose a typed internal service, not raw filesystem helpers.
 
 ```ts
 interface InternalArtifactStore {
@@ -252,9 +281,9 @@ The store must not expose helper methods that accept an arbitrary local path to 
 
 ## Relation To Existing Runtime Job Artifacts
 
-`CodexRuntimeJobArtifact` remains the runtime-job usage record, but it should stop being the storage authority.
+`CodexRuntimeJobArtifact` remains the runtime-job usage record, but it must stop being the storage authority.
 
-Wave 1 implementation should change runtime-job artifact intake to:
+Wave 1 implementation must change runtime-job artifact intake to:
 
 1. validate worker session, runtime job ownership, job status, nonce, content type, size, digest, artifact id, and idempotency key;
 2. write bytes through `InternalArtifactStore.putObject`;
@@ -267,7 +296,8 @@ Important constraints:
 
 - `CodexRuntimeJobArtifact` may keep `runtime_job_id`, `artifact_idempotency_key`, `kind`, `name`, and terminal artifact validation.
 - Detailed runtime artifact kinds such as `generated_payload`, `generation_validation_report`, `startup_failure_evidence`, `cleanup_failure_evidence`, `run_execution_patch`, and `workspace_bundle` remain in `codex_runtime_job_artifacts.kind`.
-- The backing `InternalArtifactObject.kind` for those rows is `codex_runtime_job_artifact`, except workspace bundles whose backing kind is `workspace_bundle`.
+- The backing `InternalArtifactObject.kind` for runtime artifact rows is `codex_runtime_job_artifact`, except workspace bundles whose backing kind is `workspace_bundle`.
+- Detailed runtime artifact kind remains on the `codex_runtime_job_artifacts.kind` binding row. For example, generated payload resolution checks binding-row kind `generated_payload` plus backing object kind `codex_runtime_job_artifact`.
 - It must not own local storage paths.
 - It must not be reused for Codex session snapshots, because snapshots are owned by `codex_session_id`, not `runtime_job_id`.
 - New runtime job artifact refs are deterministic:
@@ -295,31 +325,188 @@ Wave 1 includes pending workspace bundle storage for new writes.
 Current pending bundle records store `archive_bytes_base64` and a pending artifact ref in `codex_pending_workspace_bundles`. After Wave 1:
 
 - new pending bundle creation writes the archive bytes into `InternalArtifactStore` as `kind = workspace_bundle`;
-- `codex_pending_workspace_bundles` stores the canonical internal ref, digest, manifest digest, size, and acquisition metadata;
+- `codex_pending_workspace_bundles.archive_bytes_base64` becomes nullable and legacy-only;
+- `codex_pending_workspace_bundles.pending_artifact_ref` stores the canonical internal ref;
+- `codex_pending_workspace_bundles` stores `internal_artifact_object_id` or `internal_artifact_ref`, digest, manifest digest, size, and acquisition metadata;
+- `workspace_acquisition_json.archive_ref` must equal the canonical `artifact://internal/workspace_bundle/run_session/{run_session_id}/{bundle_id}` ref for new rows;
 - runtime-job bundle binding creates or replays the `codex_runtime_job_artifacts` usage row pointing at the same `InternalArtifactObject`;
 - runtime-job workspace download reads bytes through the internal store by canonical ref;
 - old pending bundle rows that still have DB-stored bytes remain readable only through a migration path, and no new rows may store archive bytes as the canonical source.
 
+Pending bundle replay and drift rules:
+
+- replay is keyed by existing `bundle_id`;
+- replay succeeds only when archive digest, manifest digest, size, workspace acquisition digest, run session id, execution package id, run-worker lease id, and canonical pending artifact ref match;
+- replay with different archive bytes, manifest, acquisition JSON, lease, or canonical ref is rejected as `workspace_bundle_idempotency_drift`;
+- runtime-job binding must lock the pending row and create a `codex_runtime_job_artifacts` usage row that points at the same internal artifact object;
+- binding replay succeeds only when the existing usage row references the same runtime job, bundle id, digest, manifest digest, and internal artifact ref.
+
+Legacy pending-bundle migration contract:
+
+- the DB-byte read path is read-only and exists only for rows created before Wave 1 lands;
+- access is trusted-worker/control-plane only and requires the same runtime job, run session, run-worker lease, and digest checks as the InternalArtifactStore read path;
+- reads must recompute archive digest and manifest digest before returning bytes;
+- the migration path must not expose bytes, refs, or local/storage details through browser/product APIs;
+- no new `archive_bytes_base64` value may be written as the canonical source after Wave 1;
+- old rows must be backfilled to InternalArtifactStore or tombstoned before Wave 4 snapshot packaging starts;
+- the runbook must document the removal gate so the migration path cannot become permanent baggage.
+
 ## Trusted Worker APIs
 
-Wave 1 should add internal endpoints for trusted workers and control-plane clients.
+Wave 1 must add exact internal artifact endpoints and update the existing runtime-job wrapper route.
 
-Suggested endpoints:
+Store endpoints:
 
 ```text
-POST /internal/artifacts
+POST /internal/artifacts:upload
 GET /internal/artifacts?ref_base64url={base64url(canonical_ref)}
 HEAD /internal/artifacts?ref_base64url={base64url(canonical_ref)}
 DELETE /internal/artifacts
 ```
 
-Runtime-job-specific upload endpoints may remain as domain wrappers, but they should call the internal store rather than write directly to runtime artifact tables.
+Runtime-job-specific upload endpoints may remain as domain wrappers, but they must call the internal store rather than write directly to runtime artifact tables.
+
+Store upload DTO:
+
+```ts
+type UploadInternalArtifactMetadata = {
+  schema_version: 'internal_artifact_upload.v1';
+  owner_type: InternalArtifactOwnerType;
+  owner_id: string;
+  kind: InternalArtifactKind;
+  visibility: InternalArtifactVisibility;
+  content_type: string;
+  declared_size_bytes: string;
+  declared_artifact_digest: string;
+  idempotency_key: string;
+  metadata_json: Record<string, unknown>;
+};
+```
+
+Store upload transport:
+
+- `multipart/form-data` with parts `metadata` and `file`; or
+- `application/octet-stream` body with metadata in headers prefixed `x-forgeloop-artifact-*`.
+
+Store upload response:
+
+```ts
+type UploadInternalArtifactResponse = {
+  artifact: {
+    id: string;
+    ref: string;
+    kind: InternalArtifactKind;
+    content_type: string;
+    digest: string;
+    size_bytes: string;
+    visibility: InternalArtifactVisibility;
+    owner_type: InternalArtifactOwnerType;
+    owner_id: string;
+    created_at: string;
+  };
+};
+```
+
+Store stat/download/delete contracts:
+
+```ts
+type InternalArtifactRefRequest = {
+  schema_version: 'internal_artifact_ref_request.v1';
+  ref_base64url: string;
+  requester_type: 'codex_worker' | 'system' | 'admin';
+  requester_id: string;
+  nonce?: string;
+  nonce_timestamp?: string;
+  body_digest?: string;
+};
+
+type InternalArtifactStatResponse = {
+  artifact: {
+    id: string;
+    ref: string;
+    kind: InternalArtifactKind;
+    content_type: string;
+    digest: string;
+    size_bytes: string;
+    visibility: InternalArtifactVisibility;
+    owner_type: InternalArtifactOwnerType;
+    owner_id: string;
+    created_at: string;
+    deleted_at?: string;
+  };
+};
+
+type DeleteInternalArtifactResponse = {
+  artifact: InternalArtifactStatResponse['artifact'];
+  deleted: true;
+};
+```
+
+`InternalArtifactStatResponse` is the trusted server/client abstraction produced by decoding `HEAD` response headers or repository metadata. It is not a `HEAD` JSON response body.
+
+For `HEAD` and `GET`, the wire request carrier is:
+
+- `ref_base64url` in the query string;
+- authenticated requester identity from the worker/admin auth context;
+- optional replay fields in headers: `x-forgeloop-artifact-requester-type`, `x-forgeloop-artifact-requester-id`, `x-forgeloop-artifact-nonce`, `x-forgeloop-artifact-nonce-timestamp`, and `x-forgeloop-artifact-body-digest`;
+- no JSON body.
+
+For `DELETE`, the wire request carrier is a JSON `InternalArtifactRefRequest` body. The same authenticated worker/admin context is still required, and body fields must match that auth context.
+
+`HEAD /internal/artifacts` returns no body and must include:
+
+```text
+x-forgeloop-artifact-ref: {canonical_ref}
+x-forgeloop-artifact-kind: {kind}
+x-forgeloop-artifact-digest: sha256:...
+x-forgeloop-artifact-size-bytes: {decimal string}
+content-type: {content_type}
+content-length: {size bytes when available}
+```
+
+`GET /internal/artifacts` returns the stored bytes and the same digest, size, ref, and kind headers. `DELETE /internal/artifacts` tombstones the object metadata and returns `DeleteInternalArtifactResponse`.
+
+Stat, download, and delete responses must not include `storage_key`, local paths, bucket paths, filesystem errors, or backend-specific locations.
+
+Runtime-job wrapper upload DTO:
+
+```ts
+type CreateCodexRuntimeJobArtifactUpload = {
+  schema_version: 'codex_runtime_job_artifact_upload.v2';
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  body_digest: string;
+  artifact_idempotency_key: string;
+  kind: string;
+  name: string;
+  content_type: string;
+  digest: string;
+  size_bytes: string;
+  metadata_json: Record<string, unknown>;
+};
+```
+
+The existing route stays the domain wrapper:
+
+```text
+POST /internal/codex-workers/:workerId/runtime-jobs/:jobId/artifacts
+```
+
+Its request must become multipart or octet-stream and include the bytes for every new artifact write. The current metadata-only JSON DTO must be rejected for new writes. This applies to:
+
+- `generated_payload`;
+- `generation_validation_report`;
+- `startup_failure_evidence`;
+- `cleanup_failure_evidence`;
+- `run_execution_patch`;
+- any future runtime-job artifact kind.
 
 Transport rules:
 
 - refs containing `/` are never carried as path params;
 - `ref_base64url` is transport encoding only and must decode to the canonical ref string before validation;
-- DELETE carries the canonical ref through JSON body or `ref_base64url`, then validates the decoded ref;
+- DELETE carries `ref_base64url` only inside the JSON `InternalArtifactRefRequest` body, then validates the decoded ref and requires requester fields to match the authenticated context;
 - POST uploads bytes with `multipart/form-data` for large objects or `application/octet-stream` raw body with metadata headers;
 - JSON/base64 upload is allowed only for small JSON runtime artifacts under the existing inline artifact limit, and the decoded bytes are still stored as bytes;
 - metadata-only uploads are rejected for new writes;
@@ -329,6 +516,25 @@ Transport rules:
 - worker replay protection signs the HTTP upload request digest, which includes method, path, ref transport encoding or upload metadata, declared artifact digest, declared size, idempotency key, nonce, and timestamp;
 - the HTTP upload request digest is distinct from the stored artifact byte digest;
 - response projection returns kind, name, content type, digest, size, and canonical `internal_ref`, but not `storage_key` or local paths.
+
+Runtime consumers that must migrate in Wave 1:
+
+- `CodexRuntimeService.createRuntimeJobArtifact` must compute canonical `artifact://internal/...` refs and store bytes through InternalArtifactStore.
+- `createCodexRuntimeJobArtifactSchema` and worker client `uploadRuntimeJobArtifact` must carry bytes for all new writes.
+- `jsonRuntimeJobArtifactUpload` must provide JSON bytes, not only metadata.
+- run-execution patch upload must send patch bytes to the control plane; the local patch helper must stop emitting old-prefix refs as canonical output.
+- automation-daemon generation result handling must stop checking only the `artifact://codex-runtime-jobs/{runtimeJobId}/artifacts/` prefix and must use the internal runtime artifact binding validator.
+- domain runtime public-safety validation must accept canonical internal refs only through an internal-runtime protocol validator, not by widening public `ArtifactRef` or `PublicArtifactRef`.
+- run-worker terminal projection must preserve internal refs only in trusted runtime results and avoid exposing them to normal product DTOs.
+- old-prefix acceptance is allowed only in the migration adapter for records created before Wave 1; in-flight old runtime jobs may terminalize through the adapter, but no post-Wave-1 upload may persist an old-prefix ref.
+
+Generated payload resolution:
+
+- `generated_payload_ref.v1` must resolve by loading bytes from the bound `InternalArtifactObject`;
+- resolution verifies runtime-job binding kind `generated_payload`, backing object kind `codex_runtime_job_artifact`, content type `application/json`, digest, and canonical internal ref;
+- JSON is parsed from stored bytes and its canonical digest must equal `generated_payload_digest`;
+- `metadata_json.generated_payload` is no longer canonical and must not be required for applying generated payloads;
+- metadata may keep summary/index fields only.
 
 Access rules:
 
@@ -371,7 +577,7 @@ Public-safe callers receive codes and high-level summaries only. Server logs may
 
 ## Implementation Boundaries
 
-Wave 1 should touch:
+Wave 1 must touch:
 
 - contracts/domain types for internal artifact refs and metadata;
 - DB schema/repository for `internal_artifact_objects`;
@@ -382,7 +588,7 @@ Wave 1 should touch:
 - internal runtime artifact ref validator for terminal/internal protocols;
 - tests for store safety and runtime-job compatibility.
 
-Wave 1 should not touch:
+Wave 1 must not touch:
 
 - CodexSession or CodexSessionSnapshot tables;
 - worker `CODEX_HOME` layout;
@@ -404,7 +610,12 @@ Required tests:
 - runtime-job artifact intake writes through InternalArtifactStore and preserves current worker/job authorization checks;
 - runtime-job terminal validation accepts canonical `artifact://internal/...` refs only for artifacts bound to the same runtime job;
 - old `artifact://codex-runtime-jobs/...` rows remain terminal-valid through migration adapter but cannot be newly written;
+- new terminal results using `artifact://internal/...` refs are accepted end-to-end by worker, control plane, automation-daemon, generated-payload application, and run-execution result handling;
+- post-Wave-1 attempts to upload or persist old-prefix runtime artifact refs are rejected;
 - pending workspace bundle creation stores bytes in InternalArtifactStore, and runtime-job workspace download reads through the store;
+- pending workspace bundle replay detects acquisition or archive drift;
+- legacy pending bundle DB-byte rows remain trusted-worker/control-plane-only, verify digest on read, and have tests proving they are not exposed through product DTOs or normal user APIs;
+- generated payload refs load JSON from InternalArtifactStore bytes, not from `metadata_json.generated_payload`;
 - public product DTO tests prove internal refs and storage keys are not exposed;
 - Attachment API tests or contract tests prove session/internal artifacts are not product Attachments;
 - existing runtime terminalization tests still resolve generated payload artifacts.
@@ -426,12 +637,15 @@ Wave 1 is complete when:
 - no persisted internal object exposes local absolute paths through product DTOs;
 - trusted workers can upload, stat, download, and delete internal objects by ref with authorization;
 - `CodexRuntimeJobArtifact` no longer acts as an independent storage authority;
+- every runtime artifact upload path carries bytes and rejects metadata-only new writes;
+- generated payload resolution reads byte-backed artifacts from InternalArtifactStore;
 - new pending workspace bundle rows no longer store archive bytes as the canonical source;
 - product Attachments are not used for internal runtime/session artifacts;
 - tests cover path traversal, digest mismatch, visibility fences, idempotency drift, and runtime-job artifact compatibility.
 
-## Open Questions For Implementation Planning
+## Implementation Planning Decisions And Questions
 
 - Wave 1 will not backfill old `artifact://codex-runtime-jobs/...` rows. It provides a temporary read-only migration adapter for metadata lookup and terminal validation of existing rows only. The canonical write path is not open: new writes must emit `artifact://internal/...`. The adapter must have an explicit removal gate before Wave 4 snapshot packaging begins.
+- Wave 1 will not immediately backfill old pending workspace bundle DB-byte rows. It provides a trusted-worker/control-plane-only read migration path with digest verification for existing rows only. Those rows must be backfilled to InternalArtifactStore or tombstoned before Wave 4 snapshot packaging begins.
 - Whether content-addressed object bytes should be garbage-collected in Wave 1 or only tombstoned until the operations wave. The safer default is tombstone-only.
 - Whether the first backend stores JSON metadata sidecars on disk in addition to DB metadata. The DB row is authoritative either way.

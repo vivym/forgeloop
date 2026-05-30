@@ -272,12 +272,12 @@ interface ArtifactStore {
 }
 ```
 
-Suggested metadata:
+Non-authoritative high-level metadata, with exact DTO/storage contracts owned by the Wave 1 Internal Artifact Store spec:
 
 ```ts
 type ArtifactObject = {
   id: string;
-  storage_uri: string;
+  ref: string;
   kind:
     | 'codex_session_snapshot'
     | 'codex_runtime_job_artifact'
@@ -288,7 +288,7 @@ type ArtifactObject = {
     | 'logs'
     | 'raw_metadata';
   content_type: string;
-  size_bytes: number;
+  size_bytes: string;
   digest: string;
   visibility: 'internal' | 'private';
   owner_type: string;
@@ -354,7 +354,7 @@ type CodexSessionSnapshot = {
   sequence: number;
   artifact_ref: ArtifactObjectRef;
   digest: string;
-  size_bytes: number;
+  size_bytes: string;
   manifest_digest: string;
   codex_version?: string;
   runtime_profile_revision_id: string;
@@ -377,7 +377,7 @@ Every snapshot archive includes a manifest:
     {
       "path": "sessions/2026/05/30/rollout-....jsonl",
       "digest": "sha256:...",
-      "size_bytes": 123456
+      "size_bytes": "123456"
     }
   ],
   "excluded_patterns": [
