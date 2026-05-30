@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import appRouteConfig from '../../apps/web/src/app/routes';
@@ -11,7 +14,15 @@ import {
 } from '../../apps/web/src/features/product-surfaces/route-contract';
 import { productNavigationGroups } from '../../apps/web/src/shared/navigation/product-navigation';
 import { productWorkspacePreviewScenario } from './fixtures/product-data';
+import { planItemGateModels } from '../../apps/web/src/features/development-plans/plan-item-gates';
+import { itemHref } from '../../apps/web/src/features/development-plans/development-plan-table';
 import { duplicateProductRoutePaths, flattenProductRouteConfig } from './helpers/product-route-config';
+
+const repoRoot = process.cwd();
+
+function readRepoFile(path: string) {
+  return readFileSync(join(repoRoot, path), 'utf8');
+}
 
 const expectedProductRoutes = [
   '/',
@@ -37,13 +48,11 @@ const expectedProductRoutes = [
   '/development-plans/new',
   '/development-plans/:id',
   '/development-plans/:id/items/:itemId',
-  '/development-plans/:id/items/:itemId/brainstorming',
   '/development-plans/:id/items/:itemId/spec',
-  '/development-plans/:id/items/:itemId/execution-plan',
+  '/development-plans/:id/items/:itemId/implementation-plan',
   '/development-plans/:id/items/:itemId/execution',
-  '/development-plans/:id/items/:itemId/review',
-  '/development-plans/:id/items/:itemId/qa',
-  '/specs-plans',
+  '/reviews',
+  '/qa',
   '/executions',
   '/executions/:id',
   '/board',
@@ -57,7 +66,7 @@ const expectedProductRoutes = [
   '/reports/observation',
 ];
 
-const expectedRetiredSmokeRoutes = [
+const legacyRoutePaths = [
   '/dashboard',
   '/work-items',
   '/work-items/:id',
@@ -65,8 +74,6 @@ const expectedRetiredSmokeRoutes = [
   '/packages/:id',
   '/runs',
   '/runs/:id',
-  '/reviews',
-  '/reviews/:id',
   '/plans',
   '/plans/:id',
   '/specs',
@@ -108,13 +115,11 @@ const expectedConcreteScreenshotRoutes = [
   '/development-plans/new',
   '/development-plans/dp-product-workspace-core-surface-redesign',
   '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility',
-  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-typed-source-boundary/brainstorming',
   '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/spec',
-  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/execution-plan',
+  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/implementation-plan',
   '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-product-workspace-preview-state/execution',
-  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/review',
-  '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-qa-shift-left-strategy/qa',
-  '/specs-plans',
+  '/reviews',
+  '/qa',
   '/executions',
   '/executions/exec-product-workspace-preview-active',
   '/board',
@@ -169,11 +174,11 @@ describe('product-grade route contract', () => {
     const commandPaths = productCommandItems.map((item) => item.path);
     expect(commandPaths).toEqual(expectedProductRoutes);
 
-    for (const route of retiredProductRoutes) {
-      expect(commandPaths).not.toContain(route.path);
+    expect(retiredProductRoutes).toEqual([]);
+    for (const routePath of legacyRoutePaths) {
+      expect(commandPaths).not.toContain(routePath);
     }
     expect(commandPaths).not.toContain('/dev-tools');
-    expect(retiredProductRoutes.map((route) => route.path)).toEqual(expectedRetiredSmokeRoutes);
   });
 
   it('requires screenshot fixtures for every route family', () => {
@@ -188,8 +193,8 @@ describe('product-grade route contract', () => {
     const retiredHeadings = [
       'Build AI-native project management API clients',
       'Web product UI architecture foundation plan',
-      'Specs & Execution Plans',
-      'Specs and Execution Plans',
+      'Specs & Implementation Plan Docs',
+      'Specs and Implementation Plan Docs',
     ];
 
     for (const route of requiredScreenshotRoutes) {
@@ -202,25 +207,21 @@ describe('product-grade route contract', () => {
   it('uses the approved primary navigation labels', () => {
     const labels = productNavigationGroups({ devToolsEnabled: false }).flatMap((group) => group.items.map((item) => item.label));
     expect(labels).toContain('Document Reviews');
-    expect(labels).not.toContain('Specs & Execution Plans');
-    expect(labels).not.toContain('Specs and Execution Plans');
+    expect(labels).not.toContain('Specs & Implementation Plan Docs');
+    expect(labels).not.toContain('Specs and Implementation Plan Docs');
   });
 
   it('does not register retired product routes as active route config entries', () => {
     const activeRoutePaths = flattenProductRouteConfig(appRouteConfig);
-    expect(activeRoutePaths).not.toContain('dashboard');
-    expect(activeRoutePaths).not.toContain('tasks');
-    expect(activeRoutePaths).not.toContain('work-items');
-    expect(activeRoutePaths).not.toContain('packages');
-    expect(activeRoutePaths).not.toContain('runs');
-    expect(activeRoutePaths).not.toContain('reviews');
-    expect(activeRoutePaths).not.toContain('plans');
-    expect(activeRoutePaths).not.toContain('specs');
+    for (const routePath of legacyRoutePaths) {
+      expect(activeRoutePaths).not.toContain(routePath.replace(/^\//, ''));
+    }
+    expect(activeRoutePaths.join('\n')).not.toMatch(/specs-plans|brainstorming|execution-plan|\/items\/[^/]+\/review$|\/items\/[^/]+\/qa$/);
   });
 
-  it('classifies retired query product modes as dev-only or rejected', () => {
-    expect(retiredProductRoutes.map((route) => route.path)).toEqual(expectedRetiredSmokeRoutes);
-    expect(retiredProductQueryStates).toContain('/reports?report=replay');
+  it('keeps legacy query product modes out of the product route contract', () => {
+    expect(retiredProductRoutes).toEqual([]);
+    expect(retiredProductQueryStates).toEqual([]);
   });
 
   it('classifies every registered public router path', () => {
@@ -229,6 +230,37 @@ describe('product-grade route contract', () => {
 
     expect(registeredPaths.filter((path) => !classified.has(path))).toEqual([]);
     expect(duplicateProductRoutePaths(registeredPaths)).toEqual([]);
-    expect(registeredPaths.join('\n')).not.toMatch(/(^|\/)(dashboard|tasks|work-items|packages|runs|reviews|plans|specs)(\/|$)/);
+    expect(registeredPaths.join('\n')).not.toMatch(/(^|\/)(dashboard|tasks|work-items|packages|runs|plans|specs)(\/|$)/);
+  });
+
+  it('keeps active product link builders on canonical document-native routes', () => {
+    const activeLinkSources = [
+      'apps/web/src/features/reviews/reviews-route.tsx',
+      'apps/web/src/features/reviews/document-review-queue.tsx',
+      'apps/web/src/features/reviews/review-queue-view-model.ts',
+      'apps/web/src/features/development-plans/development-plan-view-model.ts',
+      'apps/web/src/features/my-work/my-work-view-model.ts',
+      'apps/web/src/features/cockpit/cockpit-view-model.ts',
+      'apps/web/src/features/board/board-route.tsx',
+    ].map(readRepoFile).join('\n');
+
+    expect(activeLinkSources).toContain('/reviews');
+    expect(activeLinkSources).toContain('implementation-plan');
+    expect(activeLinkSources).not.toMatch(/\/specs-plans|\/execution-plan|\/items\/[^`'"]+\/review\b|\/items\/[^`'"]+\/qa\b/);
+  });
+
+  it('keeps Plan Item gate model links on registered public routes', () => {
+    const [item] = productWorkspacePreviewScenario.developmentPlanItems;
+    expect(item).toBeDefined();
+
+    const gateHrefs = planItemGateModels(item).map((gate) => gate.href);
+    const itemBaseHref = itemHref(item);
+
+    expect(gateHrefs).toContain(`${itemBaseHref}/spec`);
+    expect(gateHrefs).toContain(`${itemBaseHref}/implementation-plan`);
+    expect(gateHrefs).toContain(`${itemBaseHref}/execution`);
+    expect(gateHrefs).toContain('/executions');
+    expect(gateHrefs).toContain('/qa');
+    expect(gateHrefs.join('\n')).not.toMatch(/brainstorming|execution-plan|\/items\/[^/]+\/review$|\/items\/[^/]+\/qa$/);
   });
 });

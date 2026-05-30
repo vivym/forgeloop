@@ -455,8 +455,8 @@ export class BrainstormingService {
           input.generated.session_id === session.id &&
           input.generated.round_id === round.id &&
           session.current_round_id === round.id &&
-          String(precondition.source_object_revision_id) === workItem.updated_at &&
-          JSON.stringify(precondition.source_object_ref) === JSON.stringify(item.source_ref) &&
+          String(precondition.source_revision_id) === workItem.updated_at &&
+          JSON.stringify(precondition.source_ref) === JSON.stringify(item.source_ref) &&
           String(precondition.development_plan_id) === plan.id &&
           String(precondition.development_plan_revision_id) === plan.revision_id &&
           String(precondition.development_plan_item_id) === item.id &&
@@ -1093,8 +1093,8 @@ export class BrainstormingService {
     now: string;
   }): CreateOrReplayAutomationActionRunInput {
     const preconditionFingerprintJson = {
-      source_object_ref: input.item.source_ref,
-      source_object_revision_id: input.workItem.updated_at,
+      source_ref: input.item.source_ref,
+      source_revision_id: input.workItem.updated_at,
       development_plan_id: input.plan.id,
       development_plan_revision_id: input.plan.revision_id,
       development_plan_item_id: input.item.id,
@@ -1169,7 +1169,7 @@ export class BrainstormingService {
         title: this.runtimeSafeText(input.item.title),
         summary: this.runtimeSafeText(input.item.summary),
       },
-      source_object: {
+      planning_input: {
         ref: input.item.source_ref,
         revision_id: input.workItem.updated_at,
         title: this.runtimeSafeText(input.workItem.title),
@@ -1544,7 +1544,7 @@ export class BrainstormingService {
         title: item.title,
         boundary_status: item.boundary_status,
         spec_status: item.spec_status,
-        execution_plan_status: item.execution_plan_status,
+        implementation_plan_status: item.implementation_plan_status,
         execution_status: item.execution_status,
       })),
       change_reason: input.changeReason,

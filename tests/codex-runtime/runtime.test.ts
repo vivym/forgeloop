@@ -558,7 +558,7 @@ describe('createCodexGenerationRuntime', () => {
     expect(() => validateGeneratedSpecRevision(extractSingleJsonObject(contractJson))).not.toThrow();
   });
 
-  it('uses approved Spec revision id from the signed context in Execution Plan contracts', async () => {
+  it('uses approved Spec revision id from the signed context in Implementation Plan Doc contracts', async () => {
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const runtime = createCodexGenerationRuntime({
       mode: 'app_server',
@@ -580,6 +580,8 @@ describe('createCodexGenerationRuntime', () => {
             type: 'assistant_message_delta',
             delta: JSON.stringify({
               ...JSON.parse(validExecutionPlanRevisionJson),
+              summary: 'Generated Implementation Plan Doc revision',
+              public_summary: 'Generated an Implementation Plan Doc revision.',
             }),
           };
           yield { type: 'turn_completed', status: 'completed' };

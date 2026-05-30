@@ -14,11 +14,8 @@ import BugsRoute from '../../apps/web/src/app/routes/bugs';
 import NewBugRoute from '../../apps/web/src/app/routes/bugs/new';
 import DevelopmentPlanDetailRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId';
 import DevelopmentPlanItemDetailRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId';
-import DevelopmentPlanItemBrainstormingRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/brainstorming';
 import DevelopmentPlanItemExecutionRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/execution';
-import DevelopmentPlanItemExecutionPlanRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/execution-plan';
-import DevelopmentPlanItemQaRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/qa';
-import DevelopmentPlanItemReviewRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/review';
+import DevelopmentPlanItemImplementationPlanRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/implementation-plan';
 import DevelopmentPlanItemSpecRoute from '../../apps/web/src/app/routes/development-plans/$developmentPlanId/items/$itemId/spec';
 import DevelopmentPlansRoute from '../../apps/web/src/app/routes/development-plans';
 import NewDevelopmentPlanRoute from '../../apps/web/src/app/routes/development-plans/new';
@@ -42,7 +39,8 @@ import RequirementEvidenceRoute from '../../apps/web/src/app/routes/requirements
 import RequirementDetailRoute from '../../apps/web/src/app/routes/requirements/$requirementId';
 import RequirementsRoute from '../../apps/web/src/app/routes/requirements';
 import NewRequirementRoute from '../../apps/web/src/app/routes/requirements/new';
-import SpecsPlansRoute from '../../apps/web/src/app/routes/specs-plans';
+import ReviewsRoute from '../../apps/web/src/app/routes/reviews';
+import QaRoute from '../../apps/web/src/app/routes/qa';
 import TechDebtDetailRoute from '../../apps/web/src/app/routes/tech-debt/$techDebtId';
 import TechDebtEvidenceRoute from '../../apps/web/src/app/routes/tech-debt/$techDebtId/evidence';
 import TechDebtRoute from '../../apps/web/src/app/routes/tech-debt';
@@ -90,13 +88,11 @@ const productRoutes: RouteObject[] = [
       { path: 'development-plans/new', Component: NewDevelopmentPlanRoute },
       { path: 'development-plans/:developmentPlanId', Component: DevelopmentPlanDetailRoute },
       { path: 'development-plans/:developmentPlanId/items/:itemId', Component: DevelopmentPlanItemDetailRoute },
-      { path: 'development-plans/:developmentPlanId/items/:itemId/brainstorming', Component: DevelopmentPlanItemBrainstormingRoute },
       { path: 'development-plans/:developmentPlanId/items/:itemId/spec', Component: DevelopmentPlanItemSpecRoute },
-      { path: 'development-plans/:developmentPlanId/items/:itemId/execution-plan', Component: DevelopmentPlanItemExecutionPlanRoute },
+      { path: 'development-plans/:developmentPlanId/items/:itemId/implementation-plan', Component: DevelopmentPlanItemImplementationPlanRoute },
       { path: 'development-plans/:developmentPlanId/items/:itemId/execution', Component: DevelopmentPlanItemExecutionRoute },
-      { path: 'development-plans/:developmentPlanId/items/:itemId/review', Component: DevelopmentPlanItemReviewRoute },
-      { path: 'development-plans/:developmentPlanId/items/:itemId/qa', Component: DevelopmentPlanItemQaRoute },
-      { path: 'specs-plans', Component: SpecsPlansRoute },
+      { path: 'reviews', Component: ReviewsRoute },
+      { path: 'qa', Component: QaRoute },
       { path: 'bugs', Component: BugsRoute },
       { path: 'bugs/new', Component: NewBugRoute },
       { path: 'bugs/:bugId', Component: BugDetailRoute },

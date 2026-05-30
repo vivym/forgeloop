@@ -118,7 +118,7 @@ describe('EvidenceAttachments', () => {
     expect(document.body.innerHTML).not.toContain('/api/attachments/att-other/render/render-token');
   });
 
-  it('renders source evidence readiness states without promoting raw artifact links', async () => {
+  it('renders document evidence readiness states without promoting raw artifact links', async () => {
     const screen = await renderRoute(`/requirements/${requirementListItem.id}/evidence`, {
       apiOverrides: {
         [`GET /query/requirements/${requirementListItem.id}`]: {

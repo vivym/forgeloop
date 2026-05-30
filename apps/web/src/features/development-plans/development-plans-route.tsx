@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 
 import { createForgeloopCommandApi } from '../../shared/api/commands';
 import { useBugsQuery, useDevelopmentPlansQuery, useInitiativesQuery, useRequirementsQuery, useTechDebtQuery } from '../../shared/api/hooks';
-import type { SourceObjectRef } from '../../shared/api/types';
+import type { PlanningInputRef } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { useProjectContext } from '../../shared/context/project-context';
 import { CompactMetadata, DevelopmentPlanWorkspace, PlanAuthoringLayout, PreviewPane, ProductPage, Section } from '../../shared/layout';
@@ -24,7 +24,7 @@ type DevelopmentPlanListRow = {
     reviewer_actor_id?: string;
     boundary_status?: string;
     spec_status?: string;
-    execution_plan_status?: string;
+    implementation_plan_status?: string;
     execution_status?: string;
     review_status?: string;
     qa_handoff_status?: string;
@@ -50,7 +50,7 @@ type DevelopmentPlanListRow = {
 };
 
 type DevelopmentPlanFilterState = {
-  sourceType: string;
+  planningInputType: string;
   role: string;
   driver: string;
   reviewer: string;
@@ -60,21 +60,21 @@ type DevelopmentPlanFilterState = {
   status: string;
 };
 
-type SourceObjectType = SourceObjectRef['type'];
+type PlanningInputType = PlanningInputRef['type'];
 
-type SourceObjectListItem = {
+type PlanningInputListItem = {
   id?: string | undefined;
   ref?: { type?: string | undefined; id?: string | undefined; title?: string | undefined } | undefined;
   title?: string | undefined;
 };
 
-type SourceObjectOption = {
+type PlanningInputOption = {
   label: string;
   value: string;
 };
 
 const defaultFilters: DevelopmentPlanFilterState = {
-  sourceType: 'all',
+  planningInputType: 'all',
   role: 'all',
   driver: 'all',
   reviewer: 'all',
@@ -84,8 +84,8 @@ const defaultFilters: DevelopmentPlanFilterState = {
   status: 'all',
 };
 
-const sourceTypeOptions = [
-  { label: 'All source types', value: 'all' },
+const planningInputTypeOptions = [
+  { label: 'All planning input types', value: 'all' },
   { label: 'Requirements', value: 'requirement' },
   { label: 'Initiatives', value: 'initiative' },
   { label: 'Bugs', value: 'bug' },
@@ -106,7 +106,7 @@ const gateOptions = [
   { label: 'All gates', value: 'all' },
   { label: 'Boundary', value: 'boundary' },
   { label: 'Spec', value: 'spec' },
-  { label: 'Execution Plan', value: 'execution_plan' },
+  { label: 'Implementation Plan Doc', value: 'implementation_plan' },
   { label: 'Execution', value: 'execution' },
   { label: 'Review', value: 'review' },
   { label: 'QA', value: 'qa' },
@@ -137,7 +137,7 @@ const statusOptions = [
   { label: 'Complete', value: 'complete' },
 ];
 
-const sourceAuthoringOptions = sourceTypeOptions.filter((option) => option.value !== 'all');
+const documentAuthoringOptions = planningInputTypeOptions.filter((option) => option.value !== 'all');
 
 export function DevelopmentPlansRoute() {
   const { projectId } = useProjectContext();
@@ -189,13 +189,13 @@ export function DevelopmentPlanNewRoute() {
   const bugQuery = useBugsQuery({ project_id: projectId, limit: 100 });
   const techDebtQuery = useTechDebtQuery({ project_id: projectId, limit: 100 });
   const [title, setTitle] = useState('');
-  const [sourceType, setSourceType] = useState<SourceObjectType>('requirement');
-  const [sourceId, setSourceId] = useState('');
+  const [planningInputType, setPlanningInputType] = useState<PlanningInputType>('requirement');
+  const [planningInputId, setPlanningInputId] = useState('');
   const [manualGuidance, setManualGuidance] = useState('');
   const [aiGuidance, setAiGuidance] = useState('Draft a table-first Development Plan with linked typed refs, Plan Items, boundary risks, and release impact.');
   const [actionState, setActionState] = useState<{ status: 'idle' | 'running' | 'success' | 'error'; message?: string; planId?: string }>({ status: 'idle' });
 
-  const sourceQueries = useMemo(
+  const planningInputQueries = useMemo(
     () => ({
       bug: bugQuery,
       initiative: initiativeQuery,
@@ -204,35 +204,35 @@ export function DevelopmentPlanNewRoute() {
     }),
     [bugQuery, initiativeQuery, requirementQuery, techDebtQuery],
   );
-  const sourceObjectOptionsByType = useMemo<Record<SourceObjectType, SourceObjectOption[]>>(
+  const planningInputOptionsByType = useMemo<Record<PlanningInputType, PlanningInputOption[]>>(
     () => ({
-      bug: sourceOptionsFromItems(bugQuery.data?.items, 'bug'),
-      initiative: sourceOptionsFromItems(initiativeQuery.data?.items, 'initiative'),
-      requirement: sourceOptionsFromItems(requirementQuery.data?.items, 'requirement'),
-      tech_debt: sourceOptionsFromItems(techDebtQuery.data?.items, 'tech_debt'),
+      bug: planningOptionsFromItems(bugQuery.data?.items, 'bug'),
+      initiative: planningOptionsFromItems(initiativeQuery.data?.items, 'initiative'),
+      requirement: planningOptionsFromItems(requirementQuery.data?.items, 'requirement'),
+      tech_debt: planningOptionsFromItems(techDebtQuery.data?.items, 'tech_debt'),
     }),
     [bugQuery.data?.items, initiativeQuery.data?.items, requirementQuery.data?.items, techDebtQuery.data?.items],
   );
-  const currentSourceObjectOptions = sourceObjectOptions(sourceType, sourceObjectOptionsByType);
-  const visibleSourceObjectOptions = currentSourceObjectOptions.length > 0
-    ? currentSourceObjectOptions
-    : [{ label: `${formatValue(sourceType)} typed refs unavailable`, value: '' }];
-  const selectedSourceQuery = sourceQueries[sourceType];
-  const selectedSourceOption = currentSourceObjectOptions.find((option) => option.value === sourceId);
+  const currentPlanningInputOptions = planningInputOptions(planningInputType, planningInputOptionsByType);
+  const visiblePlanningInputOptions = currentPlanningInputOptions.length > 0
+    ? currentPlanningInputOptions
+    : [{ label: `${formatValue(planningInputType)} typed refs unavailable`, value: '' }];
+  const selectedPlanningInputQuery = planningInputQueries[planningInputType];
+  const selectedPlanningInputOption = currentPlanningInputOptions.find((option) => option.value === planningInputId);
   const validation = validateAuthoring({
-    sourceId,
-    sourceObjectCount: currentSourceObjectOptions.length,
-    sourceObjectsError: selectedSourceQuery.isError,
-    sourceObjectsLoading: selectedSourceQuery.isLoading,
+    planningInputId,
+    planningInputCount: currentPlanningInputOptions.length,
+    planningInputsError: selectedPlanningInputQuery.isError,
+    planningInputsLoading: selectedPlanningInputQuery.isLoading,
     title,
   });
-  const sourceRef = sourceRefFor(sourceType, sourceId, selectedSourceOption?.label);
+  const planningInputRef = planningInputRefFor(planningInputType, planningInputId, selectedPlanningInputOption?.label);
 
   useEffect(() => {
-    if (!currentSourceObjectOptions.some((option) => option.value === sourceId)) {
-      setSourceId(currentSourceObjectOptions[0]?.value ?? '');
+    if (!currentPlanningInputOptions.some((option) => option.value === planningInputId)) {
+      setPlanningInputId(currentPlanningInputOptions[0]?.value ?? '');
     }
-  }, [currentSourceObjectOptions, sourceId]);
+  }, [currentPlanningInputOptions, planningInputId]);
 
   const createPlan = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -247,8 +247,8 @@ export function DevelopmentPlanNewRoute() {
         actor_id: actorId,
         ...(manualGuidance.trim().length > 0 ? { guidance: manualGuidance.trim() } : {}),
         project_id: projectId,
-        source_ref: sourceRef,
-        title: title.trim() || `${sourceRef.title ?? sourceRef.id} Development Plan`,
+        source_ref: planningInputRef,
+        title: title.trim() || `${planningInputRef.title ?? planningInputRef.id} Development Plan`,
       });
       setActionState({
         status: 'success',
@@ -272,13 +272,13 @@ export function DevelopmentPlanNewRoute() {
       const generated = await createForgeloopCommandApi().generateDevelopmentPlanDraft({
         actor_id: actorId,
         project_id: projectId,
-        source_ref: sourceRef,
+        source_ref: planningInputRef,
         ...(guidance.length > 0 ? { guidance } : {}),
       });
       const planId = typeof generated.id === 'string' ? generated.id : undefined;
       setActionState({
         status: 'success',
-        message: 'Development Plan draft generated with source context. Review Plan Items before boundary approval.',
+        message: 'Development Plan draft generated with planning input context. Review Plan Items before boundary approval.',
         ...(planId === undefined ? {} : { planId }),
       });
     } catch {
@@ -290,7 +290,7 @@ export function DevelopmentPlanNewRoute() {
     <ProductPage family="plan-authoring" ariaLabel="New Development Plan">
       <h1 className="mb-3 text-xl font-semibold text-text-primary">New Development Plan</h1>
       <PlanAuthoringLayout
-        sourceContext={
+        planningInputContext={
           <div className="grid gap-4">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Link className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:bg-surface-muted" to="/development-plans">Back to Development Plans</Link>
@@ -298,7 +298,7 @@ export function DevelopmentPlanNewRoute() {
             <form className="grid gap-4" onSubmit={(event) => void createPlan(event)}>
               <Section
                 description="Manual creation records typed refs and starts an empty Plan Item table for boundary approval."
-                title="Manual source context"
+                title="Manual planning input context"
                 variant="panel"
               >
                 <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_minmax(10rem,0.8fr)]">
@@ -307,29 +307,29 @@ export function DevelopmentPlanNewRoute() {
                     <input className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm font-normal text-text-primary" value={title} onChange={(event) => setTitle(event.target.value)} />
                   </label>
                   <label className="grid gap-1 text-sm font-semibold text-text-primary">
-                    Source type
-                    <Select aria-label="Source type" options={sourceAuthoringOptions} value={sourceType} onChange={(event) => {
-                      const nextSourceType = event.target.value;
-                      if (isSourceObjectType(nextSourceType)) {
-                        const nextSourceOptions = sourceObjectOptions(nextSourceType, sourceObjectOptionsByType);
-                        setSourceType(nextSourceType);
-                        setSourceId(nextSourceOptions[0]?.value ?? '');
+                    Planning input type
+                    <Select aria-label="Planning input type" options={documentAuthoringOptions} value={planningInputType} onChange={(event) => {
+                      const nextPlanningInputType = event.target.value;
+                      if (isPlanningInputType(nextPlanningInputType)) {
+                        const nextPlanningInputOptions = planningInputOptions(nextPlanningInputType, planningInputOptionsByType);
+                        setPlanningInputType(nextPlanningInputType);
+                        setPlanningInputId(nextPlanningInputOptions[0]?.value ?? '');
                       }
                     }} />
                   </label>
                   <label className="grid gap-1 text-sm font-semibold text-text-primary">
-                    Source object
-                    <Select aria-label="Source object" disabled={currentSourceObjectOptions.length === 0 || selectedSourceQuery.isLoading || selectedSourceQuery.isError} options={visibleSourceObjectOptions} value={sourceId} onChange={(event) => setSourceId(event.target.value)} />
+                    Planning input
+                    <Select aria-label="Planning input" disabled={currentPlanningInputOptions.length === 0 || selectedPlanningInputQuery.isLoading || selectedPlanningInputQuery.isError} options={visiblePlanningInputOptions} value={planningInputId} onChange={(event) => setPlanningInputId(event.target.value)} />
                   </label>
                 </div>
-                {selectedSourceQuery.isLoading ? <InlineNotice title={`Loading ${formatValue(sourceType)} typed refs.`} tone="info" /> : null}
-                {selectedSourceQuery.isError ? <InlineNotice title={`${formatValue(sourceType)} typed refs could not be loaded.`} tone="danger" /> : null}
-                {!selectedSourceQuery.isLoading && !selectedSourceQuery.isError && currentSourceObjectOptions.length === 0 ? (
-                  <InlineNotice title={`No ${formatValue(sourceType)} typed refs are available for this project.`} tone="warning" />
+                {selectedPlanningInputQuery.isLoading ? <InlineNotice title={`Loading ${formatValue(planningInputType)} typed refs.`} tone="info" /> : null}
+                {selectedPlanningInputQuery.isError ? <InlineNotice title={`${formatValue(planningInputType)} typed refs could not be loaded.`} tone="danger" /> : null}
+                {!selectedPlanningInputQuery.isLoading && !selectedPlanningInputQuery.isError && currentPlanningInputOptions.length === 0 ? (
+                  <InlineNotice title={`No ${formatValue(planningInputType)} typed refs are available for this project.`} tone="warning" />
                 ) : null}
                 <label className="mt-3 grid gap-1 text-sm font-semibold text-text-primary">
-                  Manual source guidance
-                  <Textarea aria-label="Manual source guidance" placeholder="Capture constraints, acceptance criteria, dependencies, or known risks for Plan Item authoring." value={manualGuidance} onChange={(event) => setManualGuidance(event.target.value)} />
+                  Manual planning guidance
+                  <Textarea aria-label="Manual planning guidance" placeholder="Capture constraints, acceptance criteria, dependencies, or known risks for Plan Item authoring." value={manualGuidance} onChange={(event) => setManualGuidance(event.target.value)} />
                 </label>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Button disabled={validation.hasBlockingIssue} loading={actionState.status === 'running'} type="submit" variant="primary">
@@ -341,7 +341,7 @@ export function DevelopmentPlanNewRoute() {
           </div>
         }
         aiAssist={
-          <Section description="AI assistance proposes Plan Items from typed refs. It does not create Spec or Execution Plan documents." title="AI-assisted plan generation" variant="panel">
+          <Section description="AI assistance proposes Plan Items from typed refs. It does not create Spec or Implementation Plan Doc documents." title="AI-assisted plan generation" variant="panel">
             <label className="grid gap-1 text-sm font-semibold text-text-primary">
               AI generation guidance
               <Textarea aria-label="AI generation guidance" value={aiGuidance} onChange={(event) => setAiGuidance(event.target.value)} />
@@ -359,7 +359,7 @@ export function DevelopmentPlanNewRoute() {
               {validation.messages.map((message) => (
                 <li key={message}>{message}</li>
               ))}
-              <li>Downstream Spec and Execution Plan documents are generated only from Plan Items after boundary approval.</li>
+              <li>Downstream Spec and Implementation Plan Doc documents are generated only from Plan Items after boundary approval.</li>
               <li>Typed refs create or generate Development Plans only; downstream artifacts wait for approved Plan Items.</li>
             </ul>
             {actionState.status !== 'idle' ? (
@@ -489,7 +489,7 @@ function DevelopmentPlanFilters({
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary lg:flex-nowrap">
-      <FilterSelect label="Source type" options={sourceTypeOptions} value={filters.sourceType} onChange={(value) => updateFilter('sourceType', value)} />
+      <FilterSelect label="Planning input type" options={planningInputTypeOptions} value={filters.planningInputType} onChange={(value) => updateFilter('planningInputType', value)} />
       <FilterSelect label="Role" options={roleOptions} value={filters.role} onChange={(value) => updateFilter('role', value)} />
       <FilterSelect label="Driver" options={optionsFromValues(rows.flatMap((row) => row.driver_actor_ids ?? [row.driver_actor_id]).filter(nonEmpty), 'All drivers')} value={filters.driver} onChange={(value) => updateFilter('driver', value)} />
       <FilterSelect label="Reviewer" options={optionsFromValues(rows.flatMap((row) => row.reviewer_actor_ids ?? [row.reviewer_actor_id]).filter(nonEmpty), 'All reviewers')} value={filters.reviewer} onChange={(value) => updateFilter('reviewer', value)} />
@@ -513,7 +513,7 @@ function FilterSelect({ label, onChange, options, value }: { label: string; onCh
 function DevelopmentPlanEmptyState() {
   return (
     <EmptyState
-      description="Select source context, then create a table of Plan Items for boundary approval before downstream artifact generation."
+      description="Select planning input context, then create a table of Plan Items for boundary approval before downstream artifact generation."
       title="No active Development Plans yet."
     />
   );
@@ -535,7 +535,7 @@ const columns: DataTableColumn<DevelopmentPlanListRow>[] = [
     cell: (row) => (
       <div className="grid gap-1">
         {row.source_refs?.length ? row.source_refs.map((ref) => (
-          <Link className="font-medium text-primary hover:underline" key={`${ref.type}-${ref.id}`} to={sourceHref(ref)}>
+          <Link className="font-medium text-primary hover:underline" key={`${ref.type}-${ref.id}`} to={documentHref(ref)}>
             {ref.title ?? `${formatValue(ref.type)} ${ref.id}`}
           </Link>
         )) : <span className="text-text-muted">Not linked</span>}
@@ -553,7 +553,7 @@ const columns: DataTableColumn<DevelopmentPlanListRow>[] = [
 
 function rowMatchesFilters(row: DevelopmentPlanListRow, filters: DevelopmentPlanFilterState): boolean {
   return (
-    (filters.sourceType === 'all' || (row.source_refs?.some((ref) => ref.type === filters.sourceType) ?? false)) &&
+    (filters.planningInputType === 'all' || (row.source_refs?.some((ref) => ref.type === filters.planningInputType) ?? false)) &&
     matchesProjectionFilter(row.responsible_roles, row.responsible_role, filters.role) &&
     matchesProjectionFilter(row.driver_actor_ids, row.driver_actor_id, filters.driver) &&
     matchesProjectionFilter(row.reviewer_actor_ids, row.reviewer_actor_id, filters.reviewer) &&
@@ -564,48 +564,48 @@ function rowMatchesFilters(row: DevelopmentPlanListRow, filters: DevelopmentPlan
   );
 }
 
-function validateAuthoring(input: { sourceId: string; sourceObjectCount: number; sourceObjectsError: boolean; sourceObjectsLoading: boolean; title: string }) {
+function validateAuthoring(input: { planningInputId: string; planningInputCount: number; planningInputsError: boolean; planningInputsLoading: boolean; title: string }) {
   const messages = [
-    input.title.trim().length > 0 ? 'Title is ready.' : 'Title can be added now or inferred from source context.',
-    sourceObjectSelectionMessage(input),
-    'Plan Items remain the boundary for Spec, Execution Plan, execution, review, QA, and release readiness.',
+    input.title.trim().length > 0 ? 'Title is ready.' : 'Title can be added now or inferred from planning input context.',
+    planningInputSelectionMessage(input),
+    'Plan Items remain the boundary for Spec, Implementation Plan Doc, execution, review, QA, and release readiness.',
   ];
 
   return {
-    hasBlockingIssue: input.sourceObjectsLoading || input.sourceObjectsError || input.sourceObjectCount === 0 || input.sourceId.trim().length === 0,
+    hasBlockingIssue: input.planningInputsLoading || input.planningInputsError || input.planningInputCount === 0 || input.planningInputId.trim().length === 0,
     messages,
   };
 }
 
-function sourceObjectSelectionMessage(input: { sourceId: string; sourceObjectCount: number; sourceObjectsError: boolean; sourceObjectsLoading: boolean }) {
-  if (input.sourceObjectsLoading) return 'Typed refs are loading from live project data.';
-  if (input.sourceObjectsError) return 'Typed ref list failed to load.';
-  if (input.sourceObjectCount === 0) return 'Create a typed ref before authoring a Development Plan.';
-  return input.sourceId.trim().length > 0 ? 'Source object is selected.' : 'Source object selection is required.';
+function planningInputSelectionMessage(input: { planningInputId: string; planningInputCount: number; planningInputsError: boolean; planningInputsLoading: boolean }) {
+  if (input.planningInputsLoading) return 'Typed refs are loading from live project data.';
+  if (input.planningInputsError) return 'Typed ref list failed to load.';
+  if (input.planningInputCount === 0) return 'Create a typed ref before authoring a Development Plan.';
+  return input.planningInputId.trim().length > 0 ? 'Planning input is selected.' : 'Planning input selection is required.';
 }
 
-function sourceObjectOptions(sourceType: SourceObjectType, optionsByType: Record<SourceObjectType, SourceObjectOption[]>) {
-  return optionsByType[sourceType] ?? [];
+function planningInputOptions(planningInputType: PlanningInputType, optionsByType: Record<PlanningInputType, PlanningInputOption[]>) {
+  return optionsByType[planningInputType] ?? [];
 }
 
-function sourceOptionsFromItems(items: readonly SourceObjectListItem[] | undefined, sourceType: SourceObjectType): SourceObjectOption[] {
+function planningOptionsFromItems(items: readonly PlanningInputListItem[] | undefined, planningInputType: PlanningInputType): PlanningInputOption[] {
   return (items ?? []).flatMap((item) => {
     const id = item.ref?.id ?? item.id;
     if (id === undefined || id.trim().length === 0) return [];
-    return [{ label: item.title ?? item.ref?.title ?? `${formatValue(sourceType)} ${id}`, value: id }];
+    return [{ label: item.title ?? item.ref?.title ?? `${formatValue(planningInputType)} ${id}`, value: id }];
   });
 }
 
-function sourceRefFor(sourceType: SourceObjectType, sourceId: string, sourceTitle: string | undefined): SourceObjectRef {
-  const id = sourceId.trim();
-  return { type: sourceType, id, title: sourceTitle ?? `${formatValue(sourceType)} ${id}` } as SourceObjectRef;
+function planningInputRefFor(planningInputType: PlanningInputType, planningInputId: string, planningInputTitle: string | undefined): PlanningInputRef {
+  const id = planningInputId.trim();
+  return { type: planningInputType, id, title: planningInputTitle ?? `${formatValue(planningInputType)} ${id}` } as PlanningInputRef;
 }
 
-function isSourceObjectType(value: string): value is SourceObjectType {
+function isPlanningInputType(value: string): value is PlanningInputType {
   return value === 'requirement' || value === 'initiative' || value === 'bug' || value === 'tech_debt';
 }
 
-function sourceHref(ref: { type: string; id: string }) {
+function documentHref(ref: { type: string; id: string }) {
   switch (ref.type) {
     case 'requirement':
       return `/requirements/${encodeURIComponent(ref.id)}`;

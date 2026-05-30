@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
-import { useSpecExecutionPlanQueueQuery } from '../../shared/api/hooks';
+import { useDocumentReviewQueueQuery } from '../../shared/api/hooks';
 import { useProjectContext } from '../../shared/context/project-context';
 import { CompactMetadata, DocumentGovernanceLayout, InlineActions, PreviewPane, ProductPage, Section } from '../../shared/layout';
 import { Badge, DataTable, EmptyState, InlineNotice, StatusPill, type DataTableColumn } from '../../shared/ui';
 import { SurfaceStateIndicator, type SurfaceState } from '../project-management/surface-state';
 import {
-  specPlanQueueGroups,
-  specPlanQueueViewModel,
-  type SpecPlanQueueGroup,
-  type SpecPlanQueueItem,
-  type SpecPlanQueueRow,
-} from './spec-plan-view-model';
+  documentReviewQueueGroups,
+  documentReviewQueueViewModel,
+  type DocumentReviewQueueGroup,
+  type DocumentReviewQueueItem,
+  type DocumentReviewQueueRow,
+} from './review-queue-view-model';
 
 const selectedSegmentClass =
   'inline-flex min-h-9 items-center justify-center rounded-md border border-primary bg-primary px-3 text-sm font-semibold text-white transition-colors duration-base ease-standard';
@@ -20,30 +20,30 @@ const unselectedSegmentClass =
   'inline-flex min-h-9 items-center justify-center rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-primary transition-colors duration-base ease-standard hover:border-border-strong hover:bg-surface-muted';
 const secondaryLinkClass = 'text-sm font-semibold text-primary hover:underline';
 
-export function SpecExecutionPlanQueue() {
+export function DocumentReviewQueue({ basePath = '/reviews' }: { basePath?: string }) {
   const { projectId } = useProjectContext();
   const [searchParams] = useSearchParams();
-  const activeTab = searchParams.get('tab') === 'plans' ? 'plans' : 'specs';
+  const activeTab = searchParams.get('tab') === 'implementation-plans' ? 'implementation-plans' : 'specs';
   const focusedDevelopmentPlanId = searchParams.get('development_plan_id');
   const focusedDevelopmentPlanItemId = searchParams.get('development_plan_item_id');
-  const query = useSpecExecutionPlanQueueQuery({ project_id: projectId, limit: 100 });
+  const query = useDocumentReviewQueueQuery({ project_id: projectId, limit: 100 });
   const queueProjection = useMemo(
     () => ({
-      items: (query.data?.items ?? []) as unknown as SpecPlanQueueItem[],
+      items: (query.data?.items ?? []) as unknown as DocumentReviewQueueItem[],
       degraded_sources: Array.isArray(query.data?.degraded_sources) ? (query.data.degraded_sources as string[]) : [],
     }),
     [query.data?.degraded_sources, query.data?.items],
   );
-  const baseViewModel = useMemo(() => specPlanQueueViewModel(queueProjection), [queueProjection]);
+  const baseViewModel = useMemo(() => documentReviewQueueViewModel(queueProjection), [queueProjection]);
   const rows = useMemo(
     () => baseViewModel.rows
-      .filter((row) => (activeTab === 'specs' ? row.artifactType === 'spec' : row.artifactType === 'execution_plan'))
+      .filter((row) => (activeTab === 'specs' ? row.artifactType === 'spec' : row.artifactType === 'implementation_plan_doc'))
       .filter((row) => isFocusedQueueRow(row, focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)),
     [activeTab, baseViewModel.rows, focusedDevelopmentPlanId, focusedDevelopmentPlanItemId],
   );
-  const groups = useMemo(() => specPlanQueueGroups(rows), [rows]);
+  const groups = useMemo(() => documentReviewQueueGroups(rows), [rows]);
   const viewModel = useMemo(
-    () => specPlanQueueViewModel({ items: rows.map(rowToQueueItem), degraded_sources: queueProjection.degraded_sources }),
+    () => documentReviewQueueViewModel({ items: rows.map(rowToQueueItem), degraded_sources: queueProjection.degraded_sources }),
     [queueProjection.degraded_sources, rows],
   );
   const [focusedRowKey, setFocusedRowKey] = useState<string | undefined>(undefined);
@@ -66,11 +66,11 @@ export function SpecExecutionPlanQueue() {
 
   const toolbar = (
         <InlineActions aria-label="Document review tabs" role="tablist">
-          <Link aria-selected={activeTab === 'specs'} className={activeTab === 'specs' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref('specs', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
+          <Link aria-selected={activeTab === 'specs'} className={activeTab === 'specs' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref(basePath, 'specs', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
             Specs
           </Link>
-          <Link aria-selected={activeTab === 'plans'} className={activeTab === 'plans' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref('plans', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
-            Execution Plans
+          <Link aria-selected={activeTab === 'implementation-plans'} className={activeTab === 'implementation-plans' ? selectedSegmentClass : unselectedSegmentClass} role="tab" to={tabHref(basePath, 'implementation-plans', focusedDevelopmentPlanId, focusedDevelopmentPlanItemId)}>
+            Implementation Plan Docs
           </Link>
         </InlineActions>
   );
@@ -102,7 +102,7 @@ export function SpecExecutionPlanQueue() {
             <div className="grid min-w-0 gap-4">
               <SurfaceStateIndicator label="Document Reviews Queue" state={queueSurfaceState(query.isLoading, query.isError, rows, queueProjection.degraded_sources)} />
               {query.isError ? null : groups.map((group) => (
-                <SpecPlanGroup
+                <DocumentReviewGroup
                   focusedRowKey={focusedRow?.id}
                   group={group}
                   isLoading={query.isLoading}
@@ -111,7 +111,7 @@ export function SpecExecutionPlanQueue() {
                 />
               ))}
               {rows.length === 0 && query.isLoading !== true ? (
-                <EmptyState description="No Spec or Execution Plan rows currently need governance action." title="No governance rows." />
+                <EmptyState description="No Spec or Implementation Plan Doc rows currently need governance action." title="No governance rows." />
               ) : null}
             </div>
           }
@@ -121,7 +121,7 @@ export function SpecExecutionPlanQueue() {
   );
 }
 
-function DocumentReviewGroups({ groups }: { groups: SpecPlanQueueGroup[] }) {
+function DocumentReviewGroups({ groups }: { groups: DocumentReviewQueueGroup[] }) {
   return (
     <div className="flex flex-wrap gap-2" aria-label="Document review groups">
       {groups.map((group) => (
@@ -133,23 +133,23 @@ function DocumentReviewGroups({ groups }: { groups: SpecPlanQueueGroup[] }) {
   );
 }
 
-function SpecPlanGroup({
+function DocumentReviewGroup({
   focusedRowKey,
   group,
   isLoading,
   onFocusRow,
 }: {
   focusedRowKey: string | undefined;
-  group: SpecPlanQueueGroup;
+  group: DocumentReviewQueueGroup;
   isLoading: boolean;
-  onFocusRow: (row: SpecPlanQueueRow) => void;
+  onFocusRow: (row: DocumentReviewQueueRow) => void;
 }) {
   return (
     <Section aria-label={group.label} description={`${group.rows.length} row${group.rows.length === 1 ? '' : 's'}.`} title={group.label} variant="panel">
       {isLoading ? <InlineNotice title={`Loading ${group.label.toLowerCase()} rows.`} tone="info" /> : null}
       <DataTable
         ariaLabel={group.label}
-        columns={specPlanColumns}
+        columns={documentReviewColumns}
         density="compact"
         emptyMessage={`No ${group.label.toLowerCase()} rows.`}
         getRowKey={(item) => item.id}
@@ -162,12 +162,12 @@ function SpecPlanGroup({
   );
 }
 
-const specPlanColumns: DataTableColumn<SpecPlanQueueRow>[] = [
+const documentReviewColumns: DataTableColumn<DocumentReviewQueueRow>[] = [
   {
     key: 'document',
     header: 'Document',
     cell: (row) => (
-      <div className="flex min-h-6 min-w-[14rem] max-w-[24rem] items-center gap-3" data-desktop-row-height="44-56" data-spec-plan-queue-row="">
+      <div className="flex min-h-6 min-w-[14rem] max-w-[24rem] items-center gap-3" data-desktop-row-height="44-56" data-document-review-queue-row="">
         <span className="truncate font-semibold text-text-primary">{row.title}</span>
         <Link className={secondaryLinkClass} onClick={(event) => event.stopPropagation()} to={row.href}>
           Open plan item
@@ -176,7 +176,7 @@ const specPlanColumns: DataTableColumn<SpecPlanQueueRow>[] = [
     ),
   },
   { key: 'artifact', header: 'Artifact', cell: (row) => <Badge tone="info">{row.artifactLabel}</Badge> },
-  { key: 'source', header: 'Source object', cell: (row) => row.sourceObject },
+  { key: 'source', header: 'Planning input', cell: (row) => row.sourceInput },
   { key: 'planItem', header: 'Development Plan Item', cell: (row) => row.developmentPlanItem },
   { key: 'gate', header: 'Gate status', cell: (row) => <StatusPill tone={statusTone(row)}>{row.gateStatus}</StatusPill> },
   { key: 'reviewer', header: 'Reviewer', cell: (row) => row.reviewer },
@@ -185,7 +185,7 @@ const specPlanColumns: DataTableColumn<SpecPlanQueueRow>[] = [
   { key: 'action', header: 'Next action', cell: (row) => row.nextAction },
 ];
 
-function DocumentReviewInspector({ row }: { row: SpecPlanQueueRow | undefined }) {
+function DocumentReviewInspector({ row }: { row: DocumentReviewQueueRow | undefined }) {
   if (row === undefined) {
     return (
       <PreviewPane aria-label="Selected governance row" meta="No row selected" title="Selected governance row">
@@ -214,7 +214,7 @@ function DocumentReviewInspector({ row }: { row: SpecPlanQueueRow | undefined })
             { label: 'Reviewer', value: row.reviewer },
             { label: 'Development Plan Item', value: row.developmentPlanItem },
             { label: 'Command', value: row.command },
-            { label: 'Source object', value: row.sourceObject },
+            { label: 'Planning input', value: row.sourceInput },
             { label: 'Plan item', value: row.developmentPlanItem },
             { label: 'Age', value: row.age },
             { label: 'Risk', value: row.risk },
@@ -225,20 +225,20 @@ function DocumentReviewInspector({ row }: { row: SpecPlanQueueRow | undefined })
   );
 }
 
-function tabHref(tab: 'specs' | 'plans', developmentPlanId: string | null, developmentPlanItemId: string | null): string {
+function tabHref(basePath: string, tab: 'specs' | 'implementation-plans', developmentPlanId: string | null, developmentPlanItemId: string | null): string {
   const params = new URLSearchParams({ tab });
   if (developmentPlanId !== null) params.set('development_plan_id', developmentPlanId);
   if (developmentPlanItemId !== null) params.set('development_plan_item_id', developmentPlanItemId);
-  return `/specs-plans?${params.toString()}`;
+  return `${basePath}?${params.toString()}`;
 }
 
-function isFocusedQueueRow(row: SpecPlanQueueRow, developmentPlanId: string | null, developmentPlanItemId: string | null): boolean {
+function isFocusedQueueRow(row: DocumentReviewQueueRow, developmentPlanId: string | null, developmentPlanItemId: string | null): boolean {
   if (developmentPlanId !== null && row.developmentPlanId !== developmentPlanId) return false;
   if (developmentPlanItemId !== null && row.developmentPlanItemId !== developmentPlanItemId) return false;
   return true;
 }
 
-function rowToQueueItem(row: SpecPlanQueueRow): SpecPlanQueueItem {
+function rowToQueueItem(row: DocumentReviewQueueRow): DocumentReviewQueueItem {
   return {
     id: row.id,
     artifact_type: row.artifactType,
@@ -254,7 +254,7 @@ function rowToQueueItem(row: SpecPlanQueueRow): SpecPlanQueueItem {
     next_action: row.nextAction,
     command: row.command,
     href: row.href,
-    source_ref: { title: row.sourceObject },
+    source_ref: { title: row.sourceInput },
     development_plan_item_ref: {
       ...(row.developmentPlanItemId === undefined ? {} : { id: row.developmentPlanItemId }),
       ...(row.developmentPlanId === undefined ? {} : { development_plan_id: row.developmentPlanId }),
@@ -272,7 +272,7 @@ function queueFocusDescription(developmentPlanId: string | null, developmentPlan
   return 'Showing all governance rows.';
 }
 
-function queueSurfaceState(isLoading: boolean, isError: boolean, rows: SpecPlanQueueRow[], degradedSources: string[]): SurfaceState | undefined {
+function queueSurfaceState(isLoading: boolean, isError: boolean, rows: DocumentReviewQueueRow[], degradedSources: string[]): SurfaceState | undefined {
   if (isLoading) return 'loading';
   if (isError) return 'error';
   if (rows.length === 0) return 'empty';
@@ -285,7 +285,7 @@ function queueSurfaceState(isLoading: boolean, isError: boolean, rows: SpecPlanQ
   return 'approved';
 }
 
-function statusTone(row: SpecPlanQueueRow): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
+function statusTone(row: DocumentReviewQueueRow): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
   const text = `${row.status} ${row.gateStatus}`.toLowerCase();
   if (row.blocked || text.includes('blocked') || text.includes('failed') || text.includes('rejected')) return 'danger';
   if (row.stale || text.includes('stale') || text.includes('changes requested')) return 'warning';

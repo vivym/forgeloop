@@ -17,7 +17,7 @@ export type QaHandoffProjection = {
   development_plan_item_id?: string;
   development_plan_item_ref?: ProductRef & { development_plan_id?: string };
   approved_spec_revision_ref?: ProductRef & { spec_id?: string };
-  approved_execution_plan_revision_ref?: ProductRef & { execution_plan_id?: string };
+  approved_implementation_plan_revision_ref?: ProductRef & { implementation_plan_id?: string };
   status?: string;
   acceptance_criteria?: string[];
   test_strategy?: string;
@@ -32,7 +32,7 @@ type ExecutionSummary = {
   source_ref?: ProductRef;
   development_plan_item_id?: string;
   development_plan_item_ref?: ProductRef & { development_plan_id?: string };
-  execution_plan_revision_ref?: ProductRef & { execution_plan_id?: string };
+  implementation_plan_revision_ref?: ProductRef & { implementation_plan_id?: string };
   evidence_refs?: ProductRef[];
 };
 
@@ -118,10 +118,10 @@ export function QaHandoffPanel({
           />
         ) : null}
         <dl className="grid gap-3 text-sm">
-          <Definition label="Source object" value={handoff?.source_ref?.title ?? execution.source_ref?.title ?? 'Not linked'} />
+          <Definition label="Planning input" value={handoff?.source_ref?.title ?? execution.source_ref?.title ?? 'Not linked'} />
           <Definition label="Development Plan Item" value={handoff?.development_plan_item_ref?.title ?? execution.development_plan_item_ref?.title ?? ((handoff?.development_plan_item_id ?? execution.development_plan_item_id) === undefined ? 'Not linked' : 'Linked Plan Item')} />
           <Definition label="Approved Spec" value={handoff?.approved_spec_revision_ref?.title ?? 'Not linked'} />
-          <Definition label="Approved Execution Plan" value={handoff?.approved_execution_plan_revision_ref?.title ?? execution.execution_plan_revision_ref?.title ?? 'Not linked'} />
+          <Definition label="Approved Implementation Plan Doc" value={handoff?.approved_implementation_plan_revision_ref?.title ?? execution.implementation_plan_revision_ref?.title ?? 'Not linked'} />
           <Definition label="Acceptance criteria" value={criteria.join(', ')} />
           <Definition label="Test strategy" value={testStrategy} />
           <Definition label="Verification evidence" value={evidenceRefs.map(evidenceLabel).join(', ')} />

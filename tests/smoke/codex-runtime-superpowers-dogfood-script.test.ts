@@ -45,7 +45,7 @@ const strictDogfoodEnv = (overrides?: Record<string, string | undefined>): Recor
   FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
   FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-setup',
   FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
-  FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'requirement-1',
+  FORGELOOP_CODEX_DOGFOOD_PLANNING_INPUT_ID: 'requirement-1',
   FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
   FORGELOOP_CODEX_DOGFOOD_REPO_PATH: isolatedWorktreePath,
   FORGELOOP_CODEX_DOGFOOD_REPO_BASE_BRANCH: 'main',
@@ -104,7 +104,7 @@ const specEvidence = {
 };
 
 const executionPlanEvidence = {
-  execution_plan_revision_id: 'execution-plan-revision-1',
+  implementation_plan_revision_id: 'execution-plan-revision-1',
   output_schema_versions: ['execution_plan_revision.v1'],
   app_server_evidence_digests: [digest('plan-app-server-a')],
   runtime_job_digests: [digest('plan-a')],
@@ -200,7 +200,7 @@ const safeReport = () => ({
   boundary_brainstorming_session_id: 'boundary-session-1',
   boundary_summary_revision_id: 'boundary-summary-revision-1',
   spec_revision_id: 'spec-revision-1',
-  execution_plan_revision_id: 'execution-plan-revision-1',
+  implementation_plan_revision_id: 'execution-plan-revision-1',
   execution_id: 'execution-1',
   runtime_profile_revision_digests: [digest('a')],
   credential_binding_version_digests: [digest('b')],
@@ -247,8 +247,8 @@ const completeDogfoodClientWithPhaseEvidence = (overrides?: {
   })),
   smokeGenerationWorker: vi.fn(async () => undefined),
   startNoSharedFilesystemRunWorker: vi.fn(async () => undefined),
-  seedSourceAndDevelopmentPlanItem: vi.fn(async () => ({
-    source_object_id: 'requirement-1',
+  seedPlanningInputAndDevelopmentPlanItem: vi.fn(async () => ({
+    planning_input_id: 'requirement-1',
     development_plan_id: 'development-plan-1',
     development_plan_item_id: 'item-1',
   })),
@@ -272,7 +272,7 @@ const completeDogfoodClientWithPhaseEvidence = (overrides?: {
     ...specEvidence,
     ...overrides?.spec,
   })),
-  generateAndApproveExecutionPlan: vi.fn(async () => ({
+  generateAndApproveImplementationPlanDoc: vi.fn(async () => ({
     ...executionPlanEvidence,
     ...overrides?.executionPlan,
   })),
@@ -302,8 +302,8 @@ const boundaryHttpClientConfig = (
   runExecutionRuntimeProfileId: 'profile-run',
   runExecutionCredentialBindingId: 'binding-run',
   projectId: 'project-1',
-  sourceObjectType: 'requirement',
-  sourceObjectId: 'requirement-1',
+  planningInputType: 'requirement',
+  planningInputId: 'requirement-1',
   leaderActorId: 'actor-leader',
   reviewerActorId: 'actor-reviewer',
   repoId: 'repo-1',
@@ -421,9 +421,9 @@ describe('Codex runtime Superpowers dogfood script', () => {
       startNoSharedFilesystemRunWorker: vi.fn(async () => {
         calls.push('startNoSharedFilesystemRunWorker');
       }),
-      seedSourceAndDevelopmentPlanItem: vi.fn(async () => {
-        calls.push('seedSourceAndDevelopmentPlanItem');
-        return { source_object_id: 'requirement-1', development_plan_id: 'development-plan-1', development_plan_item_id: 'item-1' };
+      seedPlanningInputAndDevelopmentPlanItem: vi.fn(async () => {
+        calls.push('seedPlanningInputAndDevelopmentPlanItem');
+        return { planning_input_id: 'requirement-1', development_plan_id: 'development-plan-1', development_plan_item_id: 'item-1' };
       }),
       completeBoundaryBrainstorming: vi.fn(async (mode: 'initial' | 'rebase') => {
         calls.push(`completeBoundaryBrainstorming:${mode}`);
@@ -456,8 +456,8 @@ describe('Codex runtime Superpowers dogfood script', () => {
         calls.push('generateAndApproveSpec');
         return specEvidence;
       }),
-      generateAndApproveExecutionPlan: vi.fn(async () => {
-        calls.push('generateAndApproveExecutionPlan');
+      generateAndApproveImplementationPlanDoc: vi.fn(async () => {
+        calls.push('generateAndApproveImplementationPlanDoc');
         return executionPlanEvidence;
       }),
       startExecution: vi.fn(async () => {
@@ -474,7 +474,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
 
     expect(calls).toEqual([
       'dogfoodWorktreeBase',
-      'seedSourceAndDevelopmentPlanItem',
+      'seedPlanningInputAndDevelopmentPlanItem',
       'importCodexRuntime',
       'smokeGenerationWorker',
       'startNoSharedFilesystemRunWorker',
@@ -483,7 +483,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       'assertStaleBoundaryBlocksSpecGeneration',
       'completeBoundaryBrainstorming:rebase',
       'generateAndApproveSpec',
-      'generateAndApproveExecutionPlan',
+      'generateAndApproveImplementationPlanDoc',
       'startExecution',
       'writeReport',
     ]);
@@ -493,7 +493,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       boundary_brainstorming_session_id: 'boundary-session-rebased',
       boundary_summary_revision_id: 'boundary-summary-revision-rebased',
       spec_revision_id: 'spec-revision-1',
-      execution_plan_revision_id: 'execution-plan-revision-1',
+      implementation_plan_revision_id: 'execution-plan-revision-1',
       execution_id: 'execution-1',
       no_shared_filesystem_worker: true,
       stale_boundary_negative_check: {
@@ -767,8 +767,8 @@ describe('Codex runtime Superpowers dogfood script', () => {
       })),
       smokeGenerationWorker: vi.fn(async () => undefined),
       startNoSharedFilesystemRunWorker: vi.fn(async () => undefined),
-      seedSourceAndDevelopmentPlanItem: vi.fn(async () => ({
-        source_object_id: 'requirement-1',
+      seedPlanningInputAndDevelopmentPlanItem: vi.fn(async () => ({
+        planning_input_id: 'requirement-1',
         development_plan_id: 'development-plan-1',
         development_plan_item_id: 'item-1',
       })),
@@ -794,8 +794,8 @@ describe('Codex runtime Superpowers dogfood script', () => {
         app_server_evidence_digests: [],
         cleanup_status: 'completed' as const,
       })),
-      generateAndApproveExecutionPlan: vi.fn(async () => ({
-        execution_plan_revision_id: 'execution-plan-revision-1',
+      generateAndApproveImplementationPlanDoc: vi.fn(async () => ({
+        implementation_plan_revision_id: 'execution-plan-revision-1',
         output_schema_versions: ['execution_plan_revision.v1'],
         runtime_job_digests: [],
         app_server_evidence_digests: [],
@@ -1240,7 +1240,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     });
   });
 
-  it('auto-seeds the product source before runtime bootstrap in strict dogfood mode', async () => {
+  it('auto-seeds the product planning input before runtime bootstrap in strict dogfood mode', async () => {
     const requests: Array<{ method: string; path: string; body?: unknown }> = [];
     const bootstrapPatches: Array<Record<string, string | undefined> | undefined> = [];
     const dogfoodEnv: Record<string, string | undefined> = {};
@@ -1260,7 +1260,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       if (method === 'POST' && path === '/projects/project-created/repos') {
         return jsonResponse({ id: 'project-repo-1' });
       }
-      if (method === 'POST' && path === '/source-objects/requirement') {
+      if (method === 'POST' && path === '/requirements') {
         return jsonResponse({ id: 'work-item-created' });
       }
       if (method === 'POST' && path === '/development-plans') {
@@ -1274,7 +1274,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     const client = createCodexRuntimeSuperpowersDogfoodHttpClient(
       boundaryHttpClientConfig({
         projectId: 'project-placeholder',
-        sourceObjectId: 'source-placeholder',
+        planningInputId: 'source-placeholder',
         skipBootstrap: false,
         autoSeedProductSource: true,
       }),
@@ -1298,8 +1298,8 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await expect(client.seedSourceAndDevelopmentPlanItem()).resolves.toEqual({
-      source_object_id: 'work-item-created',
+    await expect(client.seedPlanningInputAndDevelopmentPlanItem()).resolves.toEqual({
+      planning_input_id: 'work-item-created',
       development_plan_id: 'development-plan-1',
       development_plan_item_id: 'item-1',
     });
@@ -1308,7 +1308,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
       'POST /projects',
       'POST /projects/project-created/repos',
-      'POST /source-objects/requirement',
+      'POST /requirements',
       'POST /development-plans',
       'POST /development-plans/development-plan-1/items',
     ]);
@@ -1317,7 +1317,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: 'project-created',
       FORGELOOP_CODEX_DOGFOOD_REPO_ID: 'repo-1',
       FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: 'repo-1',
-      FORGELOOP_CODEX_DOGFOOD_SOURCE_OBJECT_ID: 'work-item-created',
+      FORGELOOP_CODEX_DOGFOOD_PLANNING_INPUT_ID: 'work-item-created',
     });
     expect(bootstrapPatches).toHaveLength(1);
     expect(dogfoodEnv).toMatchObject({
@@ -1334,7 +1334,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       jsonResponse(
         {
           code: 'path_policy_docs_allowlist_required',
-          message: 'Docs-only dogfood execution requires docs/** in the approved Execution Plan allowed_paths.',
+          message: 'Docs-only dogfood execution requires docs/** in the approved Implementation Plan Doc allowed_paths.',
           error: 'Bad Request',
           statusCode: 400,
         },
@@ -1346,7 +1346,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     );
 
-    await expect(client.seedSourceAndDevelopmentPlanItem()).rejects.toMatchObject({
+    await expect(client.seedPlanningInputAndDevelopmentPlanItem()).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_product_api_unavailable',
       report: {
         product_api_status: 400,
@@ -1548,7 +1548,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await client.completeBoundaryBrainstorming('initial');
 
     const workerIndex = events.indexOf('worker:generation');
@@ -1638,7 +1638,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       if (method === 'POST' && path === '/projects/project-1/repos') {
         return jsonResponse({ id: 'project-repo-1' });
       }
-      if (method === 'POST' && path === '/source-objects/requirement') {
+      if (method === 'POST' && path === '/requirements') {
         return jsonResponse({ id: 'requirement-1' });
       }
       if (method === 'POST' && path === '/development-plans') {
@@ -1709,7 +1709,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     const initialBoundary = await client.completeBoundaryBrainstorming('initial');
     expect(initialBoundary).toMatchObject({
       mode: 'initial',
@@ -1823,7 +1823,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       ],
     });
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_boundary_unexpected_state',
     });
@@ -1841,7 +1841,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       ],
     });
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     const rebasedBoundary = await client.completeBoundaryBrainstorming('rebase');
 
     expect(rebasedBoundary).toMatchObject({
@@ -1885,7 +1885,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       ],
     });
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     const rebasedBoundary = await client.completeBoundaryBrainstorming('rebase');
 
     expect(rebasedBoundary).toMatchObject({
@@ -1931,7 +1931,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
         initialSessionId: `boundary-session-${status}`,
       });
 
-      await client.seedSourceAndDevelopmentPlanItem();
+      await client.seedPlanningInputAndDevelopmentPlanItem();
       await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
         blockerCode: 'codex_runtime_superpowers_boundary_unexpected_state',
       });
@@ -1964,7 +1964,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     });
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_boundary_max_turns_exceeded',
     });
@@ -1985,7 +1985,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     });
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.completeBoundaryBrainstorming('rebase')).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_boundary_loop_exhausted',
     });
@@ -2068,7 +2068,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await client.completeBoundaryBrainstorming('initial');
 
     expect(workerCalls).toEqual(['generation', 'generation']);
@@ -2154,7 +2154,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_runtime_job_failed',
       report: {
@@ -2213,7 +2213,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.completeBoundaryBrainstorming('initial')).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_remote_worker_invocation_timed_out',
     });
@@ -2247,14 +2247,14 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.generateAndApproveSpec()).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_dogfood_spec_runtime_job_missing',
     });
     expect(workerCalls).toEqual([]);
   });
 
-  it('requires scheduled Execution Plan generation runtime job metadata before invoking the worker', async () => {
+  it('requires scheduled Implementation Plan Doc generation runtime job metadata before invoking the worker', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const parsedUrl = new URL(String(url));
       const path = parsedUrl.pathname;
@@ -2282,8 +2282,8 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
-    await expect(client.generateAndApproveExecutionPlan()).rejects.toMatchObject({
+    await client.seedPlanningInputAndDevelopmentPlanItem();
+    await expect(client.generateAndApproveImplementationPlanDoc()).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_dogfood_execution_plan_runtime_job_missing',
     });
     expect(workerCalls).toEqual([]);
@@ -2354,7 +2354,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       runRemoteWorkerOnce: async () => undefined,
     });
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
 
     await expect(client.generateAndApproveSpec()).resolves.toMatchObject({
       spec_revision_id: 'spec-revision-1',
@@ -2365,7 +2365,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     });
   });
 
-  it('returns Execution Plan runtime job schema, app-server evidence, and runtime job digest from runtime projection', async () => {
+  it('returns Implementation Plan Doc runtime job schema, app-server evidence, and runtime job digest from runtime projection', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const parsedUrl = new URL(String(url));
       const path = parsedUrl.pathname;
@@ -2381,7 +2381,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
         return jsonResponse({ action_run: { id: 'action-run-plan' }, runtime_job: { id: 'runtime-job-plan' } });
       }
       if (method === 'GET' && path === '/query/development-plans/development-plan-1/items/item-1') {
-        return jsonResponse({ execution_plans: [{ current_revision_id: 'execution-plan-revision-1' }] });
+        return jsonResponse({ implementation_plan_docs: [{ current_revision_id: 'execution-plan-revision-1' }] });
       }
       if (method === 'GET' && path === '/internal/codex-runtime/runtime-jobs/runtime-job-plan') {
         return jsonResponse({
@@ -2430,10 +2430,10 @@ describe('Codex runtime Superpowers dogfood script', () => {
       runRemoteWorkerOnce: async () => undefined,
     });
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
 
-    await expect(client.generateAndApproveExecutionPlan()).resolves.toMatchObject({
-      execution_plan_revision_id: 'execution-plan-revision-1',
+    await expect(client.generateAndApproveImplementationPlanDoc()).resolves.toMatchObject({
+      implementation_plan_revision_id: 'execution-plan-revision-1',
       output_schema_versions: ['execution_plan_revision.v1'],
       app_server_evidence_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
       runtime_job_digests: [expect.stringMatching(/^sha256:[a-f0-9]{64}$/)],
@@ -2503,7 +2503,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       runRemoteWorkerOnce: async () => undefined,
     });
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     const result = await client.generateAndApproveSpec();
 
     expect(result).toMatchObject({
@@ -2587,7 +2587,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       runRemoteWorkerOnce: async () => undefined,
     });
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.generateAndApproveSpec()).rejects.toThrow(
       /codex_runtime_superpowers_dogfood_report_unsafe:cleanup_failure_public_summary/,
     );
@@ -2636,7 +2636,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.generateAndApproveSpec()).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_runtime_job_failed',
       report: {
@@ -2693,7 +2693,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.generateAndApproveSpec()).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_product_generation_action_failed',
       report: {
@@ -2787,7 +2787,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.startExecution()).resolves.toMatchObject({
       execution_id: 'execution-1',
       workspace_bundle_digest: digest('w'),
@@ -2845,7 +2845,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.startExecution()).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_execution_runtime_evidence_missing',
     });
@@ -2915,7 +2915,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       },
     );
 
-    await client.seedSourceAndDevelopmentPlanItem();
+    await client.seedPlanningInputAndDevelopmentPlanItem();
     await expect(client.startExecution()).rejects.toMatchObject({
       blockerCode: 'codex_runtime_superpowers_run_execution_failed',
       report: {

@@ -334,7 +334,7 @@ export function useProductActionCommandMutation(input: { projectId: string; acti
   });
 }
 
-export function useSpecExecutionPlanQueueQuery(query: Pick<ListProductQuery, 'project_id' | 'cursor' | 'limit'>) {
+export function useDocumentReviewQueueQuery(query: Pick<ListProductQuery, 'project_id' | 'cursor' | 'limit'>) {
   const normalizedQuery = {
     project_id: query.project_id,
     ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
@@ -342,8 +342,8 @@ export function useSpecExecutionPlanQueueQuery(query: Pick<ListProductQuery, 'pr
   };
 
   return useQuery({
-    queryKey: queryKeys.specExecutionPlanQueue(normalizedQuery),
-    queryFn: () => createQueryApi().listSpecExecutionPlanQueue(normalizedQuery),
+    queryKey: queryKeys.documentReviewQueue(normalizedQuery),
+    queryFn: () => createQueryApi().listDocumentReviewQueue(normalizedQuery),
   });
 }
 
@@ -665,12 +665,12 @@ export function useGenerateItemSpecDraftMutation(input: { developmentPlanId: str
   });
 }
 
-export function useGenerateItemExecutionPlanDraftMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
+export function useGenerateItemImplementationPlanDraftMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: () =>
-      createCommandApi().generateItemExecutionPlanDraft(
+      createCommandApi().generateItemImplementationPlanDraft(
         requiredId(input.developmentPlanId, 'developmentPlanId'),
         requiredId(input.itemId, 'itemId'),
       ),
@@ -738,21 +738,21 @@ export function useCompareItemSpecRevisionsQuery(
   });
 }
 
-export function useSubmitItemExecutionPlanForApprovalMutation(input: { developmentPlanId: string; itemId: string }) {
+export function useSubmitItemImplementationPlanForApprovalMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (body: SubmitForApprovalBody) =>
-      createCommandApi().submitItemExecutionPlanForApproval(input.developmentPlanId, input.itemId, body),
+      createCommandApi().submitItemImplementationPlanForApproval(input.developmentPlanId, input.itemId, body),
     onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useApproveItemExecutionPlanMutation(input: { developmentPlanId: string; itemId: string }) {
+export function useApproveItemImplementationPlanMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approveItemExecutionPlan(input.developmentPlanId, input.itemId, body),
+    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approveItemImplementationPlan(input.developmentPlanId, input.itemId, body),
     onSuccess: () =>
       Promise.all([
         invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
@@ -761,43 +761,43 @@ export function useApproveItemExecutionPlanMutation(input: { developmentPlanId: 
   });
 }
 
-export function useRequestItemExecutionPlanChangesMutation(input: { developmentPlanId: string; itemId: string }) {
+export function useRequestItemImplementationPlanChangesMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (body: RequestArtifactChangesBody) =>
-      createCommandApi().requestItemExecutionPlanChanges(input.developmentPlanId, input.itemId, body),
+      createCommandApi().requestItemImplementationPlanChanges(input.developmentPlanId, input.itemId, body),
     onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useRejectItemExecutionPlanMutation(input: { developmentPlanId: string; itemId: string }) {
+export function useRejectItemImplementationPlanMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (body: RequestArtifactChangesBody) =>
-      createCommandApi().rejectItemExecutionPlan(input.developmentPlanId, input.itemId, body),
+      createCommandApi().rejectItemImplementationPlan(input.developmentPlanId, input.itemId, body),
     onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useRegenerateItemExecutionPlanDraftMutation(input: { developmentPlanId: string; itemId: string }) {
+export function useRegenerateItemImplementationPlanDraftMutation(input: { developmentPlanId: string; itemId: string }) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (body: RegenerateArtifactDraftBody) =>
-      createCommandApi().regenerateItemExecutionPlanDraft(input.developmentPlanId, input.itemId, body),
+      createCommandApi().regenerateItemImplementationPlanDraft(input.developmentPlanId, input.itemId, body),
     onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
-export function useCompareItemExecutionPlanRevisionsQuery(
+export function useCompareItemImplementationPlanRevisionsQuery(
   input: { developmentPlanId: string | undefined; itemId: string | undefined; query: RevisionCompareQuery | undefined },
 ) {
   return useQuery({
-    queryKey: ['item-execution-plan-revision-compare', input.developmentPlanId, input.itemId, input.query],
+    queryKey: ['item-implementation-plan-revision-compare', input.developmentPlanId, input.itemId, input.query],
     queryFn: () =>
-      createCommandApi().compareItemExecutionPlanRevisions(
+      createCommandApi().compareItemImplementationPlanRevisions(
         requiredId(input.developmentPlanId, 'developmentPlanId'),
         requiredId(input.itemId, 'itemId'),
         requiredValue(input.query, 'query'),
@@ -907,9 +907,9 @@ function invalidateObjectQuery(queryClient: QueryClient, objectType: ProductObje
       return queryClient.invalidateQueries({ queryKey: queryKeys.spec(objectId) });
     case 'spec_revision':
       return queryClient.invalidateQueries({ queryKey: queryKeys.specRevision(objectId) });
-    case 'execution_plan':
+    case 'implementation_plan_doc':
       return queryClient.invalidateQueries({ queryKey: queryKeys.plan(objectId) });
-    case 'execution_plan_revision':
+    case 'implementation_plan_revision':
       return queryClient.invalidateQueries({ queryKey: queryKeys.planRevision(objectId) });
     case 'execution':
       return queryClient.invalidateQueries({ queryKey: queryKeys.execution(objectId) });
@@ -939,8 +939,8 @@ function invalidateItemScopedArtifactResources(
     queryClient.invalidateQueries({ queryKey: ['development-plan-item', developmentPlanId, itemId] }),
     queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId) }),
     queryClient.invalidateQueries({ queryKey: ['item-spec-revision-compare', developmentPlanId, itemId] }),
-    queryClient.invalidateQueries({ queryKey: ['item-execution-plan-revision-compare', developmentPlanId, itemId] }),
-    queryClient.invalidateQueries({ queryKey: ['spec-execution-plan-queue'] }),
+    queryClient.invalidateQueries({ queryKey: ['item-implementation-plan-revision-compare', developmentPlanId, itemId] }),
+    queryClient.invalidateQueries({ queryKey: ['document-review-queue'] }),
   ]);
 }
 

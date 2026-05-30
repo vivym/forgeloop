@@ -2,7 +2,7 @@ import type {
   ContextManifest as ContractContextManifest,
   DevelopmentPlan as ContractDevelopmentPlan,
   DevelopmentPlanItem as ContractDevelopmentPlanItem,
-  SourceObjectRef,
+  PlanningInputRef,
 } from '@forgeloop/contracts';
 import type { IsoDateTime, Spec, SpecRevision } from './types.js';
 
@@ -14,7 +14,7 @@ export interface ContextManifest extends ContractContextManifest {
 }
 
 export interface DevelopmentPlanItem extends ContractDevelopmentPlanItem {
-  source_ref: SourceObjectRef;
+  source_ref: PlanningInputRef;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -34,7 +34,7 @@ export interface DevelopmentPlanRevisionItemRef {
   title: string;
   boundary_status: DevelopmentPlanItem['boundary_status'];
   spec_status: DevelopmentPlanItem['spec_status'];
-  execution_plan_status: DevelopmentPlanItem['execution_plan_status'];
+  implementation_plan_status: DevelopmentPlanItem['implementation_plan_status'];
   execution_status: DevelopmentPlanItem['execution_status'];
 }
 
@@ -44,7 +44,7 @@ export interface DevelopmentPlanRevision {
   revision_number: number;
   title: string;
   status: DevelopmentPlan['status'];
-  source_refs: SourceObjectRef[];
+  source_refs: PlanningInputRef[];
   item_refs: DevelopmentPlanRevisionItemRef[];
   generation_state?: DevelopmentPlanGenerationState;
   change_reason: string;
@@ -55,7 +55,7 @@ export interface DevelopmentPlanRevision {
 export interface DevelopmentPlanSourceLink {
   id: string;
   development_plan_id: string;
-  source_ref: SourceObjectRef;
+  source_ref: PlanningInputRef;
   link_type: 'primary' | 'related';
   rationale?: string;
   created_by_actor_id?: string;

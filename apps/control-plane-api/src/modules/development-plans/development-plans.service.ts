@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { SourceObjectRef } from '@forgeloop/contracts';
+import type { PlanningInputRef } from '@forgeloop/contracts';
 import type { DeliveryRepository } from '@forgeloop/db';
 import {
   DomainError,
@@ -16,11 +16,11 @@ import { AuditWriterService } from '../audit/audit-writer.service';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 
-type SourceObjectType = SourceObjectRef['type'];
+type PlanningInputType = PlanningInputRef['type'];
 
 type CreateDevelopmentPlanInput = {
   project_id: string;
-  source_ref: SourceObjectRef;
+  source_ref: PlanningInputRef;
   title: string;
   actor_id?: string | undefined;
   guidance?: string | undefined;
@@ -46,7 +46,7 @@ type UpdateDevelopmentPlanItemInput = {
 
 type GenerateDraftInput = {
   project_id: string;
-  source_ref: SourceObjectRef;
+  source_ref: PlanningInputRef;
   actor_id?: string | undefined;
   guidance?: string | undefined;
 };
@@ -57,15 +57,15 @@ type RegenerateDraftInput = {
   preserve_prior_decisions: boolean;
 };
 
-type LinkSourceObjectInput = {
-  source_type: SourceObjectType;
+type LinkPlanningInputInput = {
+  source_type: PlanningInputType;
   source_id: string;
   development_plan_id: string;
   actor_id?: string | undefined;
   rationale?: string | undefined;
 };
 
-const allowedSourceObjectTypes = new Set<SourceObjectType>(['initiative', 'requirement', 'bug', 'tech_debt']);
+const allowedPlanningInputTypes = new Set<PlanningInputType>(['initiative', 'requirement', 'bug', 'tech_debt']);
 
 @Injectable()
 export class DevelopmentPlansService {
@@ -90,9 +90,9 @@ export class DevelopmentPlansService {
     };
 
     return this.withDevelopmentPlanMutation(plan.id, async (repository) => {
-      await this.requireSourceObject(input.project_id, input.source_ref, repository);
+      await this.requirePlanningInput(input.project_id, input.source_ref, repository);
       await repository.saveDevelopmentPlan(plan);
-      await this.saveSourceLink(plan.id, input.source_ref, 'primary', input.actor_id, input.guidance, repository);
+      await this.savePlanningInputLink(plan.id, input.source_ref, 'primary', input.actor_id, input.guidance, repository);
       await this.saveDevelopmentPlanRevision(
         plan,
         {
@@ -113,8 +113,8 @@ export class DevelopmentPlansService {
   async createDevelopmentPlanItem(developmentPlanId: string, input: CreateDevelopmentPlanItemInput): Promise<DevelopmentPlanItem> {
     return this.withDevelopmentPlanMutation(developmentPlanId, async (repository) => {
       const plan = await this.requireDevelopmentPlan(developmentPlanId, repository);
-      const sourceRef = this.primarySourceRef(plan);
-      const item = this.buildDevelopmentPlanItem(plan.id, sourceRef, input);
+      const planningInputRef = this.primaryPlanningInputRef(plan);
+      const item = this.buildDevelopmentPlanItem(plan.id, planningInputRef, input);
       await repository.saveDevelopmentPlanItem(item);
       await this.saveItemRevision(item, 'manual_item_created', input.driver_actor_id, repository);
       const updatedPlan: DevelopmentPlan = {
@@ -186,7 +186,7 @@ export class DevelopmentPlansService {
     return this.withDevelopmentPlanMutation(plan.id, async (repository) => {
       const contextManifest = await this.buildContextManifest(
         {
-          sourceRef: input.source_ref,
+          planningInputRef: input.source_ref,
           projectId: input.project_id,
           developmentPlanId: plan.id,
           developmentPlanRevisionId: plan.revision_id,
@@ -197,7 +197,7 @@ export class DevelopmentPlansService {
 
       await repository.saveContextManifest(contextManifest);
       await repository.saveDevelopmentPlan(plan);
-      await this.saveSourceLink(plan.id, input.source_ref, 'primary', input.actor_id, undefined, repository);
+      await this.savePlanningInputLink(plan.id, input.source_ref, 'primary', input.actor_id, undefined, repository);
 
       for (const itemInput of this.generatedItemInputs(input.guidance)) {
         const item = this.buildDevelopmentPlanItem(plan.id, input.source_ref, {
@@ -243,10 +243,10 @@ export class DevelopmentPlansService {
         throw new ConflictException('Approved Development Plans cannot be regenerated');
       }
       const revisionId = this.runtime.id('development-plan-revision');
-      const sourceRef = this.primarySourceRef(plan);
+      const planningInputRef = this.primaryPlanningInputRef(plan);
       const contextManifest = await this.buildContextManifest(
         {
-          sourceRef,
+          planningInputRef,
           projectId: plan.project_id,
           developmentPlanId: plan.id,
           developmentPlanRevisionId: revisionId,
@@ -256,7 +256,7 @@ export class DevelopmentPlansService {
       );
       await repository.saveContextManifest(contextManifest);
 
-      const regeneratedItem = this.buildDevelopmentPlanItem(plan.id, sourceRef, {
+      const regeneratedItem = this.buildDevelopmentPlanItem(plan.id, planningInputRef, {
         title: 'QA handoff planning',
         summary: `Regenerated from feedback: ${input.feedback}`,
         responsible_role: 'qa',
@@ -314,25 +314,25 @@ export class DevelopmentPlansService {
     });
   }
 
-  async linkSourceObjectToDevelopmentPlan(input: LinkSourceObjectInput): Promise<DevelopmentPlanSourceLink> {
-    const sourceRef: SourceObjectRef = { type: input.source_type, id: input.source_id };
+  async linkPlanningInputToDevelopmentPlan(input: LinkPlanningInputInput): Promise<DevelopmentPlanSourceLink> {
+    const planningInputRef: PlanningInputRef = { type: input.source_type, id: input.source_id };
 
     return this.withDevelopmentPlanMutation(input.development_plan_id, async (repository) => {
       const plan = await this.requireDevelopmentPlan(input.development_plan_id, repository);
-      await this.requireSourceObject(plan.project_id, sourceRef, repository);
-      const existing = (await repository.listDevelopmentPlanSourceLinksForSource(sourceRef)).find(
+      await this.requirePlanningInput(plan.project_id, planningInputRef, repository);
+      const existing = (await repository.listDevelopmentPlanSourceLinksForSource(planningInputRef)).find(
         (link) => link.development_plan_id === plan.id,
       );
       if (existing !== undefined) {
         return existing;
       }
 
-      const link = await this.saveSourceLink(plan.id, sourceRef, 'related', input.actor_id, input.rationale, repository);
-      const sourceRefs = this.hasSourceRef(plan, sourceRef) ? plan.source_refs : [...plan.source_refs, sourceRef];
+      const link = await this.savePlanningInputLink(plan.id, planningInputRef, 'related', input.actor_id, input.rationale, repository);
+      const planningInputRefs = this.hasPlanningInputRef(plan, planningInputRef) ? plan.source_refs : [...plan.source_refs, planningInputRef];
       const updatedPlan: DevelopmentPlan = {
         ...plan,
         revision_id: this.runtime.id('development-plan-revision'),
-        source_refs: sourceRefs,
+        source_refs: planningInputRefs,
         updated_at: this.runtime.now(),
       };
       await repository.saveDevelopmentPlan(updatedPlan);
@@ -345,7 +345,7 @@ export class DevelopmentPlansService {
         repository,
       );
       await this.appendPlanEvent(plan.id, 'development_plan_source_linked', input.actor_id, {
-        source_ref: sourceRef,
+        source_ref: planningInputRef,
         rationale: input.rationale,
       }, repository);
       return link;
@@ -375,30 +375,30 @@ export class DevelopmentPlansService {
     return item;
   }
 
-  private async requireSourceObject(
+  private async requirePlanningInput(
     projectId: string,
-    sourceRef: SourceObjectRef,
+    planningInputRef: PlanningInputRef,
     repository: DeliveryRepository = this.repository,
   ): Promise<WorkItem> {
-    if (!allowedSourceObjectTypes.has(sourceRef.type)) {
-      throw new DomainError('INVALID_TRANSITION', `Unsupported source object type ${sourceRef.type}`);
+    if (!allowedPlanningInputTypes.has(planningInputRef.type)) {
+      throw new DomainError('INVALID_TRANSITION', `Unsupported planning input type ${planningInputRef.type}`);
     }
-    const sourceObject = await repository.getWorkItem(sourceRef.id);
-    if (sourceObject === undefined) {
-      throw new NotFoundException(`${sourceRef.type} ${sourceRef.id} not found`);
+    const planningInput = await repository.getWorkItem(planningInputRef.id);
+    if (planningInput === undefined) {
+      throw new NotFoundException(`${planningInputRef.type} ${planningInputRef.id} not found`);
     }
-    if (sourceObject.kind !== sourceRef.type) {
-      throw new BadRequestException(`Source object ${sourceRef.id} is a ${sourceObject.kind}, not a ${sourceRef.type}`);
+    if (planningInput.kind !== planningInputRef.type) {
+      throw new BadRequestException(`Planning input ${planningInputRef.id} is a ${planningInput.kind}, not a ${planningInputRef.type}`);
     }
-    if (sourceObject.project_id !== projectId) {
-      throw new BadRequestException('Source object must belong to the Development Plan project');
+    if (planningInput.project_id !== projectId) {
+      throw new BadRequestException('Planning input must belong to the Development Plan project');
     }
-    return sourceObject;
+    return planningInput;
   }
 
   private buildDevelopmentPlanItem(
     developmentPlanId: string,
-    sourceRef: SourceObjectRef,
+    planningInputRef: PlanningInputRef,
     input: CreateDevelopmentPlanItemInput,
   ): DevelopmentPlanItem {
     const at = this.runtime.now();
@@ -406,7 +406,7 @@ export class DevelopmentPlansService {
       id: this.runtime.id('development-plan-item'),
       development_plan_id: developmentPlanId,
       revision_id: this.runtime.id('development-plan-item-revision'),
-      source_ref: sourceRef,
+      source_ref: planningInputRef,
       title: input.title,
       summary: input.summary,
       responsible_role: input.responsible_role,
@@ -418,7 +418,7 @@ export class DevelopmentPlansService {
       affected_surfaces: input.affected_surfaces,
       boundary_status: 'not_started',
       spec_status: 'missing',
-      execution_plan_status: 'missing',
+      implementation_plan_status: 'missing',
       execution_status: 'not_started',
       review_status: 'missing',
       qa_handoff_status: 'missing',
@@ -476,7 +476,7 @@ export class DevelopmentPlansService {
         title: item.title,
         boundary_status: item.boundary_status,
         spec_status: item.spec_status,
-        execution_plan_status: item.execution_plan_status,
+        implementation_plan_status: item.implementation_plan_status,
         execution_status: item.execution_status,
       })),
       ...(input.generationState === undefined ? {} : { generation_state: input.generationState }),
@@ -488,9 +488,9 @@ export class DevelopmentPlansService {
     return revision;
   }
 
-  private async saveSourceLink(
+  private async savePlanningInputLink(
     developmentPlanId: string,
-    sourceRef: SourceObjectRef,
+    planningInputRef: PlanningInputRef,
     linkType: DevelopmentPlanSourceLink['link_type'],
     actorId?: string,
     rationale?: string,
@@ -499,7 +499,7 @@ export class DevelopmentPlansService {
     const link: DevelopmentPlanSourceLink = {
       id: this.runtime.id('development-plan-source-link'),
       development_plan_id: developmentPlanId,
-      source_ref: sourceRef,
+      source_ref: planningInputRef,
       link_type: linkType,
       ...(rationale === undefined ? {} : { rationale }),
       ...(actorId === undefined ? {} : { created_by_actor_id: actorId }),
@@ -511,7 +511,7 @@ export class DevelopmentPlansService {
 
   private async buildContextManifest(
     input: {
-      sourceRef: SourceObjectRef;
+      planningInputRef: PlanningInputRef;
       projectId: string;
       developmentPlanId: string;
       developmentPlanRevisionId: string;
@@ -519,13 +519,13 @@ export class DevelopmentPlansService {
     },
     repository: DeliveryRepository = this.repository,
   ): Promise<ContextManifest> {
-    const sourceObject = await this.requireSourceObject(input.projectId, input.sourceRef, repository);
+    const planningInput = await this.requirePlanningInput(input.projectId, input.planningInputRef, repository);
     const projectRepos = await repository.listProjectRepos(input.projectId);
     const relatedSources = (await repository.listWorkItems(input.projectId))
-      .filter((candidate) => candidate.id !== sourceObject.id && (candidate.kind === 'requirement' || candidate.kind === 'bug'))
+      .filter((candidate) => candidate.id !== planningInput.id && (candidate.kind === 'requirement' || candidate.kind === 'bug'))
       .slice(0, 5)
       .map((candidate) => ({
-        type: 'historical_related_source_object',
+        type: 'historical_related_planning_input',
         ref: `${candidate.kind}:${candidate.id}`,
         digest: candidate.updated_at,
       }));
@@ -534,11 +534,11 @@ export class DevelopmentPlansService {
     return {
       id,
       revision_id: this.runtime.id('context-manifest-revision'),
-      source_ref: { ...input.sourceRef, revision_id: sourceObject.updated_at },
+      source_ref: { ...input.planningInputRef, revision_id: planningInput.updated_at },
       development_plan_id: input.developmentPlanId,
       development_plan_revision_id: input.developmentPlanRevisionId,
       sources: [
-        { type: 'source_object_revision', ref: `${sourceObject.kind}:${sourceObject.id}`, digest: sourceObject.updated_at },
+        { type: 'planning_input_revision', ref: `${planningInput.kind}:${planningInput.id}`, digest: planningInput.updated_at },
         { type: 'prd_product_doc', ref: 'docs/PRD_v1.md' },
         { type: 'contract_doc', ref: 'packages/contracts/src/ai-project-management.ts' },
         ...projectRepos.map((repo) => ({ type: 'repository_path', ref: repo.local_path, digest: repo.base_commit_sha })),
@@ -594,16 +594,16 @@ export class DevelopmentPlansService {
     };
   }
 
-  private primarySourceRef(plan: DevelopmentPlan): SourceObjectRef {
-    const sourceRef = plan.source_refs[0];
-    if (sourceRef === undefined) {
-      throw new ConflictException(`Development Plan ${plan.id} has no source object`);
+  private primaryPlanningInputRef(plan: DevelopmentPlan): PlanningInputRef {
+    const planningInputRef = plan.source_refs[0];
+    if (planningInputRef === undefined) {
+      throw new ConflictException(`Development Plan ${plan.id} has no planning input`);
     }
-    return sourceRef;
+    return planningInputRef;
   }
 
-  private hasSourceRef(plan: DevelopmentPlan, sourceRef: SourceObjectRef): boolean {
-    return plan.source_refs.some((candidate) => candidate.type === sourceRef.type && candidate.id === sourceRef.id);
+  private hasPlanningInputRef(plan: DevelopmentPlan, planningInputRef: PlanningInputRef): boolean {
+    return plan.source_refs.some((candidate) => candidate.type === planningInputRef.type && candidate.id === planningInputRef.id);
   }
 
   private withDevelopmentPlanMutation<T>(

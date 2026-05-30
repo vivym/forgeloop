@@ -472,7 +472,7 @@ const outputSchemaContract = (
           summary_proposal: {
             summary_markdown:
               'Validate the Superpowers product loop through centralized Codex runtime distribution, using Dockerized app-server workers and no host-local worker configuration.',
-            confirmed_scope: ['Boundary Brainstorming, Spec revision, Execution Plan revision, and Execution are in scope'],
+            confirmed_scope: ['Boundary Brainstorming, Spec revision, Implementation Plan Doc revision, and Execution are in scope'],
             confirmed_out_of_scope: ['Direct CLI fallback and host-local worker Codex configuration are out of scope'],
             accepted_assumptions: ['The approved Development Plan Item revision remains current'],
             open_risks: ['Generated product text must remain public-safe'],
@@ -557,8 +557,8 @@ const outputSchemaContract = (
           schema_version: 'execution_plan_revision.v1',
           development_plan_item_id: developmentPlanItemId,
           based_on_spec_revision_id: approvedSpecRevisionId,
-          summary: 'Execution Plan for the approved Spec revision.',
-          content_markdown: '## Execution Plan\n\nImplement the approved Spec with focused verification.',
+          summary: 'Implementation Plan Doc for the approved Spec revision.',
+          content_markdown: '## Implementation Plan Doc\n\nImplement the approved Spec with focused verification.',
           implementation_sequence: ['Update the scoped runtime code path', 'Run focused verification'],
           validation_strategy: ['Run targeted tests and strict dogfood'],
           allowed_paths: allowedPaths,
@@ -573,7 +573,7 @@ const outputSchemaContract = (
           ],
           rollback_notes: 'Revert the scoped changes if validation fails.',
           handoff_criteria: ['All required checks pass'],
-          public_summary: 'Execution Plan revision generated for reviewer signoff.',
+          public_summary: 'Implementation Plan Doc revision generated for reviewer signoff.',
         },
         null,
         2,

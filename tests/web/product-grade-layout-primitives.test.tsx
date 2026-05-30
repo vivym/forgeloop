@@ -51,7 +51,7 @@ describe('product-grade layout primitives', () => {
     );
 
     expect(document.querySelector('[data-product-shell="cockpit-command-center"] [data-cockpit-attention-queue]')?.textContent).toBe('Command center slots');
-    expect(document.querySelector('[data-product-shell="requirement-workspace"] [data-typed-source-table]')?.textContent).toBe('Requirement slots');
+    expect(document.querySelector('[data-product-shell="requirement-workspace"] [data-typed-document-table]')?.textContent).toBe('Requirement slots');
     expect(document.querySelector('[data-product-shell="development-plan-workspace"] [data-development-plan-table]')?.textContent).toBe('Development plan slots');
     expect(document.querySelector('[data-product-shell="plan-item-gate-workspace"] [data-plan-item-workspace]')?.textContent).toBe('Gate slots');
     expect(screen.queryByRole('heading')).toBeNull();
@@ -134,10 +134,10 @@ describe('product-grade layout primitives', () => {
 
     rerender(<RequirementWorkspace table={<div>Requirement rows</div>} />);
 
-    expect(document.querySelector('[data-typed-source-layout]')?.className).not.toContain('lg:grid-cols');
+    expect(document.querySelector('[data-typed-document-layout]')?.className).not.toContain('lg:grid-cols');
 
     rerender(<RequirementWorkspace inspector={<div>Inspector</div>} table={<div>Requirement rows</div>} />);
-    expect(document.querySelector('[data-typed-source-layout]')?.className).toContain('lg:grid-cols-[minmax(28rem,1fr)_20rem]');
+    expect(document.querySelector('[data-typed-document-layout]')?.className).toContain('lg:grid-cols-[minmax(28rem,1fr)_20rem]');
 
     rerender(<DevelopmentPlanWorkspace table={<div>Plan rows</div>} />);
     expect(document.querySelector('[data-development-plan-layout]')?.className).not.toContain('grid-cols');
@@ -160,9 +160,9 @@ describe('product-grade layout primitives', () => {
     expect(document.querySelector('[data-cockpit-rail]')).toBeNull();
 
     rerender(<RequirementWorkspace inspector={[]} table={<div>Requirement rows</div>} toolbar={[]} />);
-    expect(document.querySelector('[data-typed-source-layout]')?.className).not.toContain('lg:grid-cols');
-    expect(document.querySelector('[data-typed-source-toolbar]')).toBeNull();
-    expect(document.querySelector('[data-typed-source-inspector]')).toBeNull();
+    expect(document.querySelector('[data-typed-document-layout]')?.className).not.toContain('lg:grid-cols');
+    expect(document.querySelector('[data-typed-document-toolbar]')).toBeNull();
+    expect(document.querySelector('[data-typed-document-inspector]')).toBeNull();
 
     rerender(<DevelopmentPlanWorkspace inspector={[]} table={<div>Plan rows</div>} toolbar={[]} />);
     expect(document.querySelector('[data-development-plan-layout]')?.className).not.toContain('lg:grid-cols');
@@ -217,34 +217,34 @@ describe('product-grade layout primitives', () => {
     expect(screen.queryByTestId('next-action')).toBeNull();
   });
 
-  it('falls back to source context when PlanAuthoringLayout preview primary is omitted', () => {
+  it('falls back to planning input context when PlanAuthoringLayout preview primary is omitted', () => {
     render(
       <PlanAuthoringLayout
         aiAssist={<section>AI assist</section>}
         primarySurface="preview"
-        sourceContext={<section>Source context</section>}
+        planningInputContext={<section>Planning input context</section>}
       />,
     );
 
     const primaryWorkSurfaces = document.querySelectorAll('[data-primary-work-surface]');
     expect(primaryWorkSurfaces).toHaveLength(1);
-    expect(primaryWorkSurfaces[0]?.textContent).toBe('Source context');
-    expect(primaryWorkSurfaces[0]?.hasAttribute('data-source-context-picker')).toBe(true);
+    expect(primaryWorkSurfaces[0]?.textContent).toBe('Planning input context');
+    expect(primaryWorkSurfaces[0]?.hasAttribute('data-planning-input-picker')).toBe(true);
   });
 
-  it('falls back to source context when PlanAuthoringLayout preview primary is null', () => {
+  it('falls back to planning input context when PlanAuthoringLayout preview primary is null', () => {
     render(
       <PlanAuthoringLayout
         preview={null}
         primarySurface="preview"
-        sourceContext={<section>Source context</section>}
+        planningInputContext={<section>Planning input context</section>}
       />,
     );
 
     const primaryWorkSurfaces = document.querySelectorAll('[data-primary-work-surface]');
     expect(primaryWorkSurfaces).toHaveLength(1);
-    expect(primaryWorkSurfaces[0]?.textContent).toBe('Source context');
-    expect(primaryWorkSurfaces[0]?.hasAttribute('data-source-context-picker')).toBe(true);
+    expect(primaryWorkSurfaces[0]?.textContent).toBe('Planning input context');
+    expect(primaryWorkSurfaces[0]?.hasAttribute('data-planning-input-picker')).toBe(true);
   });
 
   it('falls back to lanes when ExecutionSupervisionLayout evidence primary is omitted', () => {
@@ -307,7 +307,7 @@ describe('product-grade layout primitives', () => {
     render(
       <DocumentWorkspaceLayout
         attachments={[]}
-        document={<section>Source document</section>}
+        document={<section>Planning input</section>}
         properties={<section>Properties</section>}
       />,
     );

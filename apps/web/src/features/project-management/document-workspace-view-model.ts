@@ -11,7 +11,7 @@ interface DownstreamGateSummary {
   blocker_count: number;
 }
 
-interface TypedSourceProjection {
+interface TypedDocumentProjection {
   affected_modules?: readonly string[] | undefined;
   bug_refs?: readonly SourceRef[] | undefined;
   business_outcome?: string | undefined;
@@ -43,7 +43,7 @@ interface TypedSourceProjection {
   validation_strategy?: string | undefined;
 }
 
-export type TypedSourceWorkspaceColumnField =
+export type TypedDocumentWorkspaceColumnField =
   | 'affectedModules'
   | 'businessOutcome'
   | 'childBugs'
@@ -60,13 +60,13 @@ export type TypedSourceWorkspaceColumnField =
   | 'severity'
   | 'validationStrategy';
 
-export interface TypedSourceWorkspaceColumn {
-  field: TypedSourceWorkspaceColumnField;
+export interface TypedDocumentWorkspaceColumn {
+  field: TypedDocumentWorkspaceColumnField;
   header: string;
   key: string;
 }
 
-export interface TypedSourceWorkspaceDefinition {
+export interface TypedDocumentWorkspaceDefinition {
   createLabel: string;
   degradedSummary: string;
   detailNoun: string;
@@ -74,10 +74,10 @@ export interface TypedSourceWorkspaceDefinition {
   emptyTitle: string;
   inspectorLabel: string;
   tableAriaLabel: string;
-  typeSpecificColumns: TypedSourceWorkspaceColumn[];
+  typeSpecificColumns: TypedDocumentWorkspaceColumn[];
 }
 
-export interface TypedSourceWorkspaceRow {
+export interface TypedDocumentWorkspaceRow {
   id: string;
   title: string;
   href: string;
@@ -114,12 +114,12 @@ export interface TypedSourceWorkspaceRow {
   validationStrategy?: string | undefined;
 }
 
-type TypedSourceAdapter = {
-  definition: TypedSourceWorkspaceDefinition;
-  row: (source: TypedSourceProjection, href: string) => TypedSourceWorkspaceRow;
+type TypedDocumentAdapter = {
+  definition: TypedDocumentWorkspaceDefinition;
+  row: (source: TypedDocumentProjection, href: string) => TypedDocumentWorkspaceRow;
 };
 
-export const requirementWorkspaceViewModel: TypedSourceAdapter = createTypedSourceAdapter({
+export const requirementWorkspaceViewModel: TypedDocumentAdapter = createTypedDocumentAdapter({
   createLabel: 'Create Requirement',
   degradedSummary: 'Requirement data is incomplete.',
   detailNoun: 'Requirement',
@@ -130,7 +130,7 @@ export const requirementWorkspaceViewModel: TypedSourceAdapter = createTypedSour
   typeSpecificColumns: [],
 });
 
-export const initiativeWorkspaceViewModel: TypedSourceAdapter = createTypedSourceAdapter({
+export const initiativeWorkspaceViewModel: TypedDocumentAdapter = createTypedDocumentAdapter({
   createLabel: 'Create Initiative',
   degradedSummary: 'Initiative data is incomplete.',
   detailNoun: 'Initiative',
@@ -148,7 +148,7 @@ export const initiativeWorkspaceViewModel: TypedSourceAdapter = createTypedSourc
   ],
 });
 
-export const bugWorkspaceViewModel: TypedSourceAdapter = createTypedSourceAdapter({
+export const bugWorkspaceViewModel: TypedDocumentAdapter = createTypedDocumentAdapter({
   createLabel: 'Create Bug',
   degradedSummary: 'Bug data is incomplete.',
   detailNoun: 'Bug',
@@ -165,7 +165,7 @@ export const bugWorkspaceViewModel: TypedSourceAdapter = createTypedSourceAdapte
   ],
 });
 
-export const techDebtWorkspaceViewModel: TypedSourceAdapter = createTypedSourceAdapter({
+export const techDebtWorkspaceViewModel: TypedDocumentAdapter = createTypedDocumentAdapter({
   createLabel: 'Create Tech Debt',
   degradedSummary: 'Tech Debt data is incomplete.',
   detailNoun: 'Tech Debt',
@@ -181,18 +181,18 @@ export const techDebtWorkspaceViewModel: TypedSourceAdapter = createTypedSourceA
   ],
 });
 
-function createTypedSourceAdapter(definition: TypedSourceWorkspaceDefinition): TypedSourceAdapter {
+function createTypedDocumentAdapter(definition: TypedDocumentWorkspaceDefinition): TypedDocumentAdapter {
   return {
     definition,
-    row: (source, href) => typedSourceWorkspaceRow(source, href, definition),
+    row: (source, href) => typedDocumentWorkspaceRow(source, href, definition),
   };
 }
 
-function typedSourceWorkspaceRow(
-  source: TypedSourceProjection,
+function typedDocumentWorkspaceRow(
+  source: TypedDocumentProjection,
   href: string,
-  definition: TypedSourceWorkspaceDefinition,
-): TypedSourceWorkspaceRow {
+  definition: TypedDocumentWorkspaceDefinition,
+): TypedDocumentWorkspaceRow {
   const title = source.title ?? source.ref?.title ?? source.id;
   const developmentPlanCoverage = source.planning_coverage === undefined
     ? 'Unavailable'
@@ -258,7 +258,7 @@ function formatDownstreamGateSummary(summary: DownstreamGateSummary | undefined)
   return `${activeGateCount} gates / ${blockerText}`;
 }
 
-function typeSpecificRowFields(source: TypedSourceProjection): Partial<TypedSourceWorkspaceRow> {
+function typeSpecificRowFields(source: TypedDocumentProjection): Partial<TypedDocumentWorkspaceRow> {
   const planningSummary = source.planning_coverage === undefined
     ? 'Unavailable'
     : `${source.planning_coverage.development_plan_count} linked / ${source.planning_coverage.plan_item_count} governed`;
@@ -282,7 +282,7 @@ function typeSpecificRowFields(source: TypedSourceProjection): Partial<TypedSour
   };
 }
 
-function relatedObjectCount(source: TypedSourceProjection): string {
+function relatedObjectCount(source: TypedDocumentProjection): string {
   const relationshipRefs = source.relationship_refs ?? [];
   const planRefs = source.linked_development_plans ?? [];
   const itemRefs = source.linked_plan_items ?? [];

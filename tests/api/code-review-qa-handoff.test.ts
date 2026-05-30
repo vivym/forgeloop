@@ -76,7 +76,7 @@ describe('Code review and QA handoff API', () => {
       source_ref: expect.objectContaining({ type: 'requirement' }),
       development_plan_item_id: item.id,
       approved_spec_revision_ref: expect.objectContaining({ id: specRevision.id }),
-      approved_execution_plan_revision_ref: expect.objectContaining({ id: executionPlanRevision.id }),
+      approved_implementation_plan_revision_ref: expect.objectContaining({ id: executionPlanRevision.id }),
       changed_surfaces: ['apps/web/src/features/development-plans'],
       release_impact: item.release_impact,
     });

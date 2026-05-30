@@ -954,7 +954,7 @@ describe('product generation automation action schemas', () => {
   it.each([
     'run_boundary_brainstorming_round',
     'generate_development_plan_item_spec_revision',
-    'generate_development_plan_item_execution_plan_revision',
+    'generate_development_plan_item_implementation_plan_revision',
   ])('rejects %s without precondition_fingerprint_json', (actionType) => {
     const body = productGenerationActionBody(actionType);
     delete (body.action_input_json as Record<string, unknown>).precondition_fingerprint_json;
@@ -983,8 +983,8 @@ describe('product generation automation action schemas', () => {
     expect(createAutomationActionRunSchema.safeParse(body).success).toBe(false);
   });
 
-  it('rejects Execution Plan generation without an approved Spec revision', () => {
-    const body = productGenerationActionBody('generate_development_plan_item_execution_plan_revision');
+  it('rejects Implementation Plan Doc generation without an approved Spec revision', () => {
+    const body = productGenerationActionBody('generate_development_plan_item_implementation_plan_revision');
     delete (body.action_input_json as Record<string, unknown>).approved_spec_revision_id;
 
     expect(createAutomationActionRunSchema.safeParse(body).success).toBe(false);
@@ -1562,8 +1562,8 @@ async function latestBoundarySummaryRevision(repository: DeliveryRepository, ses
 
 function productGenerationActionBody(actionType: string, overrides: Record<string, unknown> = {}) {
   const basePrecondition = {
-    source_object_ref: { type: 'requirement', id: 'requirement-1' },
-    source_object_revision_id: 'source-revision-1',
+    source_ref: { type: 'requirement', id: 'requirement-1' },
+    source_revision_id: 'source-revision-1',
     development_plan_id: 'plan-1',
     development_plan_revision_id: 'plan-revision-1',
     development_plan_item_id: 'item-1',

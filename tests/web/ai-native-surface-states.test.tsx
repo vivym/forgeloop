@@ -24,7 +24,7 @@ describe('AI-native surface states', () => {
     ['/my-work', 'My Work'],
     ['/board', 'Board'],
     ['/reports', 'Reports'],
-    ['/specs-plans', 'Document Reviews Queue'],
+    ['/reviews', 'Document Reviews Queue'],
     ['/executions', 'Executions Queue'],
     [`/executions/${execution.id}`, 'Execution Detail'],
   ] as const)('renders loading, empty, error, stale, blocked, approved, running, and resumable states for %s', async (route) => {
@@ -70,19 +70,19 @@ describe('AI-native surface states', () => {
 });
 
 function overridesFor(route: string, state: SurfaceState): ProductApiResponseMap {
-  if (route === `/requirements/${requirementListItem.id}`) return sourceObjectOverrides(state);
+  if (route === `/requirements/${requirementListItem.id}`) return documentWorkspaceOverrides(state);
   if (route === '/cockpit') return dashboardOverrides(state);
   if (route === '/my-work') return myWorkOverrides(state);
   if (route === '/board') return boardOverrides(state);
   if (route === `/development-plans/${developmentPlan.id}`) return developmentPlanOverrides(state);
   if (route === `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`) return developmentPlanItemOverrides(state);
-  if (route === '/specs-plans') return specExecutionPlanQueueOverrides(state);
+  if (route === '/reviews') return documentReviewQueueOverrides(state);
   if (route === '/executions') return executionsOverrides(state);
   if (route === `/executions/${execution.id}`) return executionDetailOverrides(state);
   return reportOverrides(state);
 }
 
-function sourceObjectOverrides(state: SurfaceState): ProductApiResponseMap {
+function documentWorkspaceOverrides(state: SurfaceState): ProductApiResponseMap {
   const key = `GET /query/requirements/${requirementListItem.id}`;
   if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
   if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
@@ -218,14 +218,14 @@ function developmentPlanItemOverrides(state: SurfaceState): ProductApiResponseMa
   };
 }
 
-function specExecutionPlanQueueOverrides(state: SurfaceState): ProductApiResponseMap {
-  const key = `GET /query/specs-execution-plans?project_id=${projectId}&limit=100`;
+function documentReviewQueueOverrides(state: SurfaceState): ProductApiResponseMap {
+  const key = `GET /query/reviews?project_id=${projectId}&limit=100`;
   if (state === 'loading') return { [key]: () => new Promise(() => undefined) };
   if (state === 'error') return { [key]: () => new Response(JSON.stringify({ message: 'failed' }), { status: 500 }) };
   if (state === 'empty') return { [key]: { items: [], degraded_sources: [] } };
   return {
     [key]: {
-      degraded_sources: state === 'stale' ? ['stale_specs_execution_plans_projection'] : [],
+      degraded_sources: state === 'stale' ? ['stale_document_reviews_projection'] : [],
       items: [
         {
           id: 'spec-queue-state',

@@ -214,7 +214,7 @@ describe('ForgeMarkdownEditor attachments', () => {
     expect(onChange).toHaveBeenCalledWith(expect.stringContaining('![Plan Item dropped flow](attachment://att-drop-flow "Plan Item dropped flow")'));
   });
 
-  it('keeps source-object edits recoverable after failed upload and failed save', async () => {
+  it('keeps document-workspace edits recoverable after failed upload and failed save', async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockRejectedValueOnce(new Error('save failed')).mockResolvedValueOnce(undefined);
     const onUploadAttachment = vi
@@ -227,7 +227,7 @@ describe('ForgeMarkdownEditor attachments', () => {
           owner_object_id: 'req-plan-item-governance',
           filename: 'recovered.png',
           content_type: 'image/png',
-          alt_text: 'Recovered source object image',
+          alt_text: 'Recovered planning input image',
         }),
       );
 
@@ -259,7 +259,7 @@ describe('ForgeMarkdownEditor attachments', () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
   });
 
-  it('keeps Spec and Execution Plan image refs stable across failed upload and recovery', async () => {
+  it('keeps Spec and Implementation Plan Doc image refs stable across failed upload and recovery', async () => {
     const onChange = vi.fn();
     const onUploadAttachment = vi
       .fn()
@@ -307,23 +307,23 @@ describe('ForgeMarkdownEditor attachments', () => {
     const onUploadAttachment = vi
       .fn()
       .mockResolvedValueOnce(
-        publicAttachmentFixture({
-          id: 'att-execution-plan-drop',
-          owner_object_type: 'execution_plan_revision',
-          owner_object_id: 'planrev-requirements-database-view-v1',
+          publicAttachmentFixture({
+            id: 'att-implementation-plan-doc-drop',
+            owner_object_type: 'implementation_plan_revision',
+            owner_object_id: 'planrev-requirements-database-view-v1',
           filename: 'drop.png',
           content_type: 'image/png',
-          alt_text: 'Execution Plan dropped image',
+          alt_text: 'Implementation Plan Doc dropped image',
         }),
       )
       .mockResolvedValueOnce(
-        publicAttachmentFixture({
-          id: 'att-execution-plan-picker',
-          owner_object_type: 'execution_plan_revision',
-          owner_object_id: 'planrev-requirements-database-view-v1',
+          publicAttachmentFixture({
+            id: 'att-implementation-plan-doc-picker',
+            owner_object_type: 'implementation_plan_revision',
+            owner_object_id: 'planrev-requirements-database-view-v1',
           filename: 'picker.png',
           content_type: 'image/png',
-          alt_text: 'Execution Plan picker image',
+          alt_text: 'Implementation Plan Doc picker image',
         }),
       );
 
@@ -332,14 +332,14 @@ describe('ForgeMarkdownEditor attachments', () => {
         allowedBlocks={['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code']}
         mode="edit"
         objectRef={{
-          type: 'execution_plan_revision',
+          type: 'implementation_plan_revision',
           id: 'planrev-requirements-database-view-v1',
-          execution_plan_id: 'plan-requirements-database-view',
+          implementation_plan_id: 'plan-requirements-database-view',
         }}
         onChange={onChange}
         onUploadAttachment={onUploadAttachment}
         validationPolicy={{ validation_version: '2026-05-23' }}
-        value="## Execution Plan"
+        value="## Implementation Plan Doc"
         attachments={[]}
       />,
     );
@@ -349,8 +349,8 @@ describe('ForgeMarkdownEditor attachments', () => {
     await uploadFile(screen.getByLabelText(/image file/i), new File(['image'], 'picker.png', { type: 'image/png' }));
 
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledTimes(2));
-    expect(onChange).toHaveBeenCalledWith(expect.stringContaining('attachment://att-execution-plan-drop'));
-    expect(onChange).toHaveBeenCalledWith(expect.stringContaining('attachment://att-execution-plan-picker'));
+    expect(onChange).toHaveBeenCalledWith(expect.stringContaining('attachment://att-implementation-plan-doc-drop'));
+    expect(onChange).toHaveBeenCalledWith(expect.stringContaining('attachment://att-implementation-plan-doc-picker'));
   });
 
   it('keeps item-scoped document edits recoverable after failed draft save', async () => {
@@ -399,7 +399,7 @@ describe('ForgeMarkdownEditor attachments', () => {
     expect(onChange).toHaveBeenCalledWith(expect.stringContaining('[ci.log](attachment://att-log)'));
   });
 
-  it('does not expose image insertion on pre-created source object authoring routes', async () => {
+  it('does not expose image insertion on pre-created planning input authoring routes', async () => {
     const rendered = await renderRoute('/requirements/new');
 
     expect(await rendered.findByRole('heading', { name: 'New Requirement' })).toBeTruthy();

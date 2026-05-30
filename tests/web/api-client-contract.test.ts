@@ -18,10 +18,10 @@ describe('AI-native web API client contract', () => {
     for (const method of [
       'generateDevelopmentPlanDraft',
       'regenerateDevelopmentPlanDraft',
-      'linkSourceObjectToDevelopmentPlan',
+      'linkPlanningInputToDevelopmentPlan',
       'generateItemSpecDraft',
       'regenerateItemSpecDraft',
-      'generateItemExecutionPlanDraft',
+      'generateItemImplementationPlanDraft',
       'startItemExecution',
       'markExecutionReadyForCodeReview',
       'acceptQaHandoff',
@@ -33,7 +33,7 @@ describe('AI-native web API client contract', () => {
       'getDashboard',
       'listDevelopmentPlans',
       'getDevelopmentPlanItem',
-      'listSpecExecutionPlanQueue',
+      'listDocumentReviewQueue',
       'listExecutions',
       'listCodeReviewHandoffs',
       'listQaHandoffs',
@@ -86,7 +86,7 @@ describe('AI-native web API client contract', () => {
     expect(roleLensActorFilter('developer', undefined)).toEqual({});
   });
 
-  it('preserves actor filters in typed source and Development Plan query keys and URLs', async () => {
+  it('preserves actor filters in typed document and Development Plan query keys and URLs', async () => {
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ items: [], degraded_sources: [] }), {
         status: 200,

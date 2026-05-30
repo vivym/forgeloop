@@ -743,8 +743,8 @@ const claimActionRun = async (repository: DeliveryRepository, suffix = '1', lock
 const claimProductSpecActionRun = async (repository: DeliveryRepository, suffix = 'product-spec') => {
   const actionId = `action-run-${suffix}`;
   const precondition = {
-    source_object_ref: { type: 'requirement', id: 'requirement-runtime' },
-    source_object_revision_id: 'requirement-runtime-revision',
+    source_ref: { type: 'requirement', id: 'requirement-runtime' },
+    source_revision_id: 'requirement-runtime-revision',
     development_plan_id: 'development-plan-runtime',
     development_plan_revision_id: 'development-plan-runtime-revision',
     development_plan_item_id: 'item-runtime',

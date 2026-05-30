@@ -73,8 +73,8 @@ const attachmentOwnerTypes = new Set<AttachmentUploadMetadata['object_type']>([
   'spec_revision',
   'development_plan',
   'development_plan_item',
-  'execution_plan',
-  'execution_plan_revision',
+  'implementation_plan_doc',
+  'implementation_plan_revision',
   'execution',
   'bug',
   'release',
@@ -89,8 +89,8 @@ const attachmentRefObjectTypes = new Set<ObjectRef['type']>([
   'spec_revision',
   'development_plan',
   'development_plan_item',
-  'execution_plan',
-  'execution_plan_revision',
+  'implementation_plan_doc',
+  'implementation_plan_revision',
   'execution',
   'release',
 ]);
@@ -409,13 +409,13 @@ export class AttachmentsService {
       }
       return;
     }
-    if (objectType === 'execution_plan') {
+    if (objectType === 'implementation_plan_doc') {
       if ((await this.repository.getExecutionPlan(objectId)) === undefined) {
         throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
       }
       return;
     }
-    if (objectType === 'execution_plan_revision') {
+    if (objectType === 'implementation_plan_revision') {
       if ((await this.repository.getExecutionPlanRevision(objectId)) === undefined) {
         throw new NotFoundException(`Object ${objectType}/${objectId} not found`);
       }

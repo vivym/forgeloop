@@ -38,7 +38,7 @@ export type DevelopmentPlanItemProjection = {
   affected_surfaces?: string[];
   boundary_status?: string;
   spec_status?: string;
-  execution_plan_status?: string;
+  implementation_plan_status?: string;
   execution_status?: string;
   review_status?: string;
   qa_handoff_status?: string;
@@ -54,7 +54,7 @@ export type DevelopmentPlanItemProjection = {
     phase?: string;
     activity_state?: string;
     gate_state?: string;
-    execution_plan_revision_id?: string;
+    implementation_plan_revision_id?: string;
   };
   release_context?: {
     release_refs?: Array<{ type?: string; id: string; title?: string; href?: string }>;
@@ -62,15 +62,15 @@ export type DevelopmentPlanItemProjection = {
     evidence_refs?: Array<{ type?: string; id: string; title?: string; evidence_type?: string; release_id?: string; status?: string; summary?: string }>;
     qa_test_evidence_required?: boolean;
   };
-  execution_plans?: Array<{ id: string; title?: string; current_revision_id?: string; approved_revision_id?: string }>;
+  implementation_plan_docs?: Array<{ id: string; title?: string; current_revision_id?: string; approved_revision_id?: string }>;
   executions?: Array<{
     id: string;
     title?: string;
     status?: string;
     worker_state?: string;
     development_plan_item_ref?: ProductObjectRef & { development_plan_id?: string };
-    execution_plan_revision_id?: string;
-    execution_plan_revision_ref?: ProductObjectRef & { execution_plan_id?: string };
+    implementation_plan_revision_id?: string;
+    implementation_plan_revision_ref?: ProductObjectRef & { implementation_plan_id?: string };
     evidence_refs?: ProductObjectRef[];
     test_evidence_refs?: ProductObjectRef[];
   }>;
@@ -78,7 +78,7 @@ export type DevelopmentPlanItemProjection = {
     id: string;
     title?: string;
     execution_id?: string;
-    execution_plan_revision_id?: string;
+    implementation_plan_revision_id?: string;
     reviewer_actor_id?: string;
     status?: string;
     summary?: string;
@@ -97,7 +97,7 @@ export type DevelopmentPlanItemProjection = {
     development_plan_item_id?: string;
     development_plan_item_ref?: ProductObjectRef & { development_plan_id?: string };
     approved_spec_revision_ref?: ProductObjectRef & { spec_id?: string };
-    approved_execution_plan_revision_ref?: ProductObjectRef & { execution_plan_id?: string };
+    approved_implementation_plan_revision_ref?: ProductObjectRef & { implementation_plan_id?: string };
     status?: string;
     acceptance_criteria?: string[];
     test_strategy?: string;
@@ -112,7 +112,7 @@ export type DevelopmentPlanItemProjection = {
 export type PlanItemGateModel = {
   enabled: boolean;
   href: string;
-  id: 'boundary' | 'spec' | 'execution-plan' | 'execution' | 'code-review' | 'qa-handoff' | 'release';
+  id: 'boundary' | 'spec' | 'implementation-plan' | 'execution' | 'code-review' | 'qa-handoff' | 'release';
   label: string;
   reason: string;
   reasonId: string;
@@ -177,14 +177,19 @@ export function PlanItemGateSummary({ item }: { item: DevelopmentPlanItemProject
 export function planItemGateModels(item: DevelopmentPlanItemProjection): PlanItemGateModel[] {
   const href = (suffix: string) => `${itemHref(item)}${suffix}`;
   return [
-    gateConfig('boundary', 'Boundary', item.boundary_status, href('/brainstorming'), true),
+    gateConfig('boundary', 'Boundary', item.boundary_status, itemHref(item), true),
     gateConfig('spec', 'Spec', item.spec_status, href('/spec'), isApproved(item.boundary_status)),
-    gateConfig('execution-plan', 'Execution Plan', item.execution_plan_status, href('/execution-plan'), isApproved(item.spec_status) && hasRequiredSpecQaStrategy(item)),
-    gateConfig('execution', 'Execution', item.execution_status, href('/execution'), isApproved(item.execution_plan_status) && hasRunnableExecutionBoundary(item)),
-    gateConfig('code-review', 'Code Review', item.review_status, href('/review'), item.execution_status === 'completed' || isReviewOpen(item.review_status)),
-    gateConfig('qa-handoff', 'QA handoff', item.qa_handoff_status, href('/qa'), item.review_status === 'approved' || isQaOpen(item.qa_handoff_status)),
+    gateConfig('implementation-plan', 'Implementation Plan Doc', item.implementation_plan_status, href('/implementation-plan'), isApproved(item.spec_status) && hasRequiredSpecQaStrategy(item)),
+    gateConfig('execution', 'Execution', item.execution_status, href('/execution'), isApproved(item.implementation_plan_status) && hasRunnableExecutionBoundary(item)),
+    gateConfig('code-review', 'Code Review', item.review_status, codeReviewHref(item), item.execution_status === 'completed' || isReviewOpen(item.review_status)),
+    gateConfig('qa-handoff', 'QA handoff', item.qa_handoff_status, '/qa', item.review_status === 'approved' || isQaOpen(item.qa_handoff_status)),
     gateConfig('release', 'Release', undefined, releaseHref(item), (item.qa_handoff_status === 'accepted' || item.qa_handoff_status === 'approved') && hasLinkedRelease(item)),
   ];
+}
+
+function codeReviewHref(item: DevelopmentPlanItemProjection): string {
+  const executionId = item.code_review_handoffs?.[0]?.execution_id ?? item.executions?.[0]?.id;
+  return executionId === undefined ? '/executions' : `/executions/${encodeURIComponent(executionId)}`;
 }
 
 function PlanItemLifecycleActions({ item }: { item: DevelopmentPlanItemProjection }) {
@@ -201,7 +206,7 @@ function PlanItemLifecycleActions({ item }: { item: DevelopmentPlanItemProjectio
   const verificationEvidenceRefs = verificationEvidenceFor(execution);
   const hasExecutionEvidence = verificationEvidenceRefs.length > 0;
   const specComparePair = revisionComparePair(item.specs?.[0]);
-  const executionPlanComparePair = revisionComparePair(item.execution_plans?.[0]);
+  const implementationPlanComparePair = revisionComparePair(item.implementation_plan_docs?.[0]);
   const codeReviewApprovedOrException = item.review_status === 'approved' || codeReview?.status === 'approved' || codeReview?.audited_exception !== undefined;
 
   const state = {
@@ -210,12 +215,12 @@ function PlanItemLifecycleActions({ item }: { item: DevelopmentPlanItemProjectio
     reviewSpec: developmentPlanId !== undefined && isInReview(item.spec_status),
     regenerateSpec: developmentPlanId !== undefined && isRegeneratable(item.spec_status),
     compareSpec: developmentPlanId !== undefined && specComparePair !== undefined,
-    generateExecutionPlan: developmentPlanId !== undefined && isApproved(item.spec_status) && hasRequiredSpecQaStrategy(item) && isNotStarted(item.execution_plan_status),
-    submitExecutionPlan: developmentPlanId !== undefined && isSubmittable(item.execution_plan_status),
-    reviewExecutionPlan: developmentPlanId !== undefined && isInReview(item.execution_plan_status),
-    regenerateExecutionPlan: developmentPlanId !== undefined && isRegeneratable(item.execution_plan_status),
-    compareExecutionPlan: developmentPlanId !== undefined && executionPlanComparePair !== undefined,
-    startExecution: developmentPlanId !== undefined && isApproved(item.execution_plan_status) && hasRunnableExecutionBoundary(item) && isNotStarted(item.execution_status),
+    generateImplementationPlan: developmentPlanId !== undefined && isApproved(item.spec_status) && hasRequiredSpecQaStrategy(item) && isNotStarted(item.implementation_plan_status),
+    submitImplementationPlan: developmentPlanId !== undefined && isSubmittable(item.implementation_plan_status),
+    reviewImplementationPlan: developmentPlanId !== undefined && isInReview(item.implementation_plan_status),
+    regenerateImplementationPlan: developmentPlanId !== undefined && isRegeneratable(item.implementation_plan_status),
+    compareImplementationPlan: developmentPlanId !== undefined && implementationPlanComparePair !== undefined,
+    startExecution: developmentPlanId !== undefined && isApproved(item.implementation_plan_status) && hasRunnableExecutionBoundary(item) && isNotStarted(item.execution_status),
     interruptExecution: execution !== undefined && canInterruptExecution(execution),
     continueExecution: execution !== undefined && canContinueExecution(execution),
     readyForCodeReview: execution !== undefined && item.execution_status === 'completed' && hasExecutionEvidence && !isReviewOpen(item.review_status),
@@ -291,46 +296,46 @@ function PlanItemLifecycleActions({ item }: { item: DevelopmentPlanItemProjectio
             Compare Spec revisions
           </LifecycleButton>
         </ActionGroup>
-        <ActionGroup title="Execution Plan">
+        <ActionGroup title="Implementation Plan Doc">
           <LifecycleButton
-            describedBy="generate-execution-plan-reason"
-            disabled={disabled || !state.generateExecutionPlan}
+            describedBy="generate-implementation-plan-reason"
+            disabled={disabled || !state.generateImplementationPlan}
             icon={<FileCheck2 />}
-            loading={runningAction === 'Generate Execution Plan'}
-            onClick={() => void run('Generate Execution Plan', () => commandApi.generateItemExecutionPlanDraft(developmentPlanId!, item.id, { actor_id: actorId }))}
+            loading={runningAction === 'Generate Implementation Plan Doc'}
+            onClick={() => void run('Generate Implementation Plan Doc', () => commandApi.generateItemImplementationPlanDraft(developmentPlanId!, item.id, { actor_id: actorId }))}
           >
-            Generate Execution Plan
+            Generate Implementation Plan Doc
           </LifecycleButton>
-          <p className="sr-only" id="generate-execution-plan-reason">{executionPlanGenerationReason(item)}</p>
-          <LifecycleButton disabled={disabled || !state.submitExecutionPlan} icon={<Send />} loading={runningAction === 'Submit Execution Plan'} onClick={() => void run('Submit Execution Plan', () => commandApi.submitItemExecutionPlanForApproval(developmentPlanId!, item.id, { actor_id: actorId }))}>
-            Submit Execution Plan for review
+          <p className="sr-only" id="generate-implementation-plan-reason">{implementationPlanGenerationReason(item)}</p>
+          <LifecycleButton disabled={disabled || !state.submitImplementationPlan} icon={<Send />} loading={runningAction === 'Submit Implementation Plan Doc'} onClick={() => void run('Submit Implementation Plan Doc', () => commandApi.submitItemImplementationPlanForApproval(developmentPlanId!, item.id, { actor_id: actorId }))}>
+            Submit Implementation Plan Doc for review
           </LifecycleButton>
-          <LifecycleButton disabled={disabled || !state.reviewExecutionPlan} icon={<CheckCircle2 />} loading={runningAction === 'Approve Execution Plan'} onClick={() => void run('Approve Execution Plan', () => commandApi.approveItemExecutionPlan(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Approved from Development Plan Item gate.' }))}>
-            Approve Execution Plan
+          <LifecycleButton disabled={disabled || !state.reviewImplementationPlan} icon={<CheckCircle2 />} loading={runningAction === 'Approve Implementation Plan Doc'} onClick={() => void run('Approve Implementation Plan Doc', () => commandApi.approveItemImplementationPlan(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Approved from Development Plan Item gate.' }))}>
+            Approve Implementation Plan Doc
           </LifecycleButton>
-          <LifecycleButton disabled={disabled || !state.reviewExecutionPlan} icon={<RotateCw />} loading={runningAction === 'Request Execution Plan Changes'} onClick={() => void run('Request Execution Plan Changes', () => commandApi.requestItemExecutionPlanChanges(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Changes requested from Development Plan Item gate.' }))}>
-            Request Execution Plan changes
+          <LifecycleButton disabled={disabled || !state.reviewImplementationPlan} icon={<RotateCw />} loading={runningAction === 'Request Implementation Plan Doc Changes'} onClick={() => void run('Request Implementation Plan Doc Changes', () => commandApi.requestItemImplementationPlanChanges(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Changes requested from Development Plan Item gate.' }))}>
+            Request Implementation Plan Doc changes
           </LifecycleButton>
-          <LifecycleButton disabled={disabled || !state.reviewExecutionPlan} icon={<XCircle />} loading={runningAction === 'Reject Execution Plan'} onClick={() => void run('Reject Execution Plan', () => commandApi.rejectItemExecutionPlan(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Rejected from Development Plan Item gate.' }))}>
-            Reject Execution Plan
+          <LifecycleButton disabled={disabled || !state.reviewImplementationPlan} icon={<XCircle />} loading={runningAction === 'Reject Implementation Plan Doc'} onClick={() => void run('Reject Implementation Plan Doc', () => commandApi.rejectItemImplementationPlan(developmentPlanId!, item.id, { actor_id: actorId, rationale: 'Rejected from Development Plan Item gate.' }))}>
+            Reject Implementation Plan Doc
           </LifecycleButton>
-          <LifecycleButton disabled={disabled || !state.regenerateExecutionPlan} icon={<RefreshCcw />} loading={runningAction === 'Regenerate Execution Plan'} onClick={() => void run('Regenerate Execution Plan', () => commandApi.regenerateItemExecutionPlanDraft(developmentPlanId!, item.id, { actor_id: actorId, feedback: 'Regenerate while preserving approved Spec decisions.', preserve_prior_decisions: true }))}>
-            Regenerate Execution Plan
+          <LifecycleButton disabled={disabled || !state.regenerateImplementationPlan} icon={<RefreshCcw />} loading={runningAction === 'Regenerate Implementation Plan Doc'} onClick={() => void run('Regenerate Implementation Plan Doc', () => commandApi.regenerateItemImplementationPlanDraft(developmentPlanId!, item.id, { actor_id: actorId, feedback: 'Regenerate while preserving approved Spec decisions.', preserve_prior_decisions: true }))}>
+            Regenerate Implementation Plan Doc
           </LifecycleButton>
           <LifecycleButton
-            disabled={disabled || !state.compareExecutionPlan}
+            disabled={disabled || !state.compareImplementationPlan}
             icon={<GitCompare />}
-            loading={runningAction === 'Compare Execution Plan Revisions'}
+            loading={runningAction === 'Compare Implementation Plan Doc Revisions'}
             onClick={() =>
-              executionPlanComparePair === undefined
+              implementationPlanComparePair === undefined
                 ? undefined
-                : void run('Compare Execution Plan Revisions', () =>
-                    commandApi.compareItemExecutionPlanRevisions(developmentPlanId!, item.id, executionPlanComparePair),
+                : void run('Compare Implementation Plan Doc Revisions', () =>
+                    commandApi.compareItemImplementationPlanRevisions(developmentPlanId!, item.id, implementationPlanComparePair),
                   )
             }
             variant="secondary"
           >
-            Compare Execution Plan revisions
+            Compare Implementation Plan Doc revisions
           </LifecycleButton>
         </ActionGroup>
         <ActionGroup title="Execution and review">
@@ -465,7 +470,7 @@ export function ItemStructuredFields({ item }: { item: DevelopmentPlanItemProjec
           ['Responsible role', formatValue(item.responsible_role)],
           ['Driver', item.driver_actor_id ?? 'Unassigned'],
           ['Risk', formatValue(item.risk)],
-          ['Source object', item.source_ref?.title ?? item.source_ref?.id ?? 'Not linked'],
+          ['Planning input', item.source_ref?.title ?? item.source_ref?.id ?? 'Not linked'],
           ['Next action', item.next_action ?? 'Review gate state'],
           ['Development Plan', item.development_plan_ref?.title ?? item.object_ref?.development_plan_id ?? item.development_plan_id ?? 'Not linked'],
         ].map(([label, value]) => (
@@ -599,28 +604,28 @@ function requiresSpecQaStrategy(item: DevelopmentPlanItemProjection): boolean {
 
 function hasRunnableExecutionBoundary(item: DevelopmentPlanItemProjection): boolean {
   const boundary = item.runtime_boundary;
-  const approvedRevisionId = item.execution_plans?.[0]?.approved_revision_id ?? item.execution_plans?.[0]?.current_revision_id;
+  const approvedRevisionId = item.implementation_plan_docs?.[0]?.approved_revision_id ?? item.implementation_plan_docs?.[0]?.current_revision_id;
   return (
     boundary !== undefined &&
     boundary.type === 'execution_package' &&
-    boundary.execution_plan_revision_id === approvedRevisionId &&
+    boundary.implementation_plan_revision_id === approvedRevisionId &&
     boundary.phase === 'ready' &&
     boundary.activity_state === 'idle' &&
     boundary.gate_state === 'not_submitted'
   );
 }
 
-function executionPlanGenerationReason(item: DevelopmentPlanItemProjection): string {
-  if (!isApproved(item.spec_status)) return 'Execution Plan generation waits for an approved Spec.';
-  if (!requiresSpecQaStrategy(item)) return 'Execution Plan generation is eligible. QA/test strategy is optional for low-risk, single-surface Plan Items.';
-  if (!hasSpecQaStrategy(item)) return 'Execution Plan generation requires QA/Test Owner participation, a testability note, acceptance criteria, and a test strategy summary for higher-risk, release-impacting, or cross-surface Plan Items.';
-  return 'Execution Plan generation is eligible from the approved Spec.';
+function implementationPlanGenerationReason(item: DevelopmentPlanItemProjection): string {
+  if (!isApproved(item.spec_status)) return 'Implementation Plan Doc generation waits for an approved Spec.';
+  if (!requiresSpecQaStrategy(item)) return 'Implementation Plan Doc generation is eligible. QA/test strategy is optional for low-risk, single-surface Plan Items.';
+  if (!hasSpecQaStrategy(item)) return 'Implementation Plan Doc generation requires QA/Test Owner participation, a testability note, acceptance criteria, and a test strategy summary for higher-risk, release-impacting, or cross-surface Plan Items.';
+  return 'Implementation Plan Doc generation is eligible from the approved Spec.';
 }
 
 function executionStartReason(item: DevelopmentPlanItemProjection): string {
-  if (!isApproved(item.execution_plan_status)) return 'Execution start waits for an approved Execution Plan.';
+  if (!isApproved(item.implementation_plan_status)) return 'Execution start waits for an approved Implementation Plan Doc.';
   if (!hasRunnableExecutionBoundary(item)) return 'Execution start requires a runnable internal execution boundary before Codex can run.';
-  return 'Execution can start from the approved Execution Plan and runnable execution boundary.';
+  return 'Execution can start from the approved Implementation Plan Doc and runnable execution boundary.';
 }
 
 function hasText(value: string | undefined): boolean {
@@ -650,7 +655,7 @@ function invalidateItem(queryClient: ReturnType<typeof useQueryClient>, developm
     queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlan(developmentPlanId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItem(developmentPlanId, itemId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.developmentPlanItemRevisions(developmentPlanId, itemId) }),
-    queryClient.invalidateQueries({ queryKey: ['spec-execution-plan-queue'] }),
+    queryClient.invalidateQueries({ queryKey: ['document-review-queue'] }),
     queryClient.invalidateQueries({ queryKey: ['executions'] }),
     queryClient.invalidateQueries({ queryKey: ['code-review-handoffs'] }),
     queryClient.invalidateQueries({ queryKey: ['qa-handoffs'] }),

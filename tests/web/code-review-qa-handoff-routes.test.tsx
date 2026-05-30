@@ -3,24 +3,21 @@
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { codeReviewHandoff, developmentPlan, developmentPlanItem, execution, projectId, qaHandoff } from './fixtures/product-data';
+import { codeReviewHandoff, developmentPlanItem, execution, projectId, qaHandoff } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
 describe('Code review and QA handoff route panels', () => {
-  it('renders Plan Item code review route as a code-review workspace', async () => {
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/dpi-cockpit-command-center/review`);
+  it('renders top-level review and QA routes as valid workspaces', async () => {
+    const reviewsScreen = await renderRoute('/reviews');
+    expect(await reviewsScreen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
+    expect(document.querySelector('[data-page-family="document-governance"]')).toBeTruthy();
 
-    expect(await screen.findByRole('heading', { name: /Cockpit/i, level: 1 })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="code-review"]')).toBeTruthy();
-    expect(document.querySelector('[data-code-review-workspace][data-primary-work-surface]')).toBeTruthy();
-  });
-
-  it('renders Plan Item QA route as a qa-handoff workspace', async () => {
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/dpi-requirements-database-view/qa`);
-
-    expect(await screen.findByRole('heading', { name: /Requirements/i, level: 1 })).toBeTruthy();
+    const qaScreen = await renderRoute('/qa');
+    expect(await qaScreen.findByRole('heading', { name: 'QA' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeTruthy();
-    expect(document.querySelector('[data-qa-handoff-workspace][data-primary-work-surface]')).toBeTruthy();
+    expect(qaScreen.getByRole('heading', { name: 'QA queue' })).toBeTruthy();
+    expect(await qaScreen.findByText(qaHandoff.ref.title)).toBeTruthy();
+    expect(await qaScreen.findAllByRole('link', { name: /^Open execution handoff$/i })).toHaveLength(2);
   });
 
   it('renders code review and QA handoff controls from an execution detail', async () => {

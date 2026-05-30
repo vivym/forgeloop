@@ -52,7 +52,7 @@ describe('product workspace shell boundaries', () => {
     const shellSource = readRepoFile(shellFile);
 
     expect(shellSource).toContain('export interface CockpitCommandCenterProps');
-    expect(shellSource).toContain('export interface TypedSourceWorkspaceProps');
+    expect(shellSource).toContain('export interface TypedDocumentWorkspaceProps');
     expect(shellSource).toContain('export interface DevelopmentPlanWorkspaceProps');
     expect(shellSource).toContain('export interface PlanItemGateWorkspaceProps');
     expect(shellSource).toContain('attentionQueue: ReactNode');
@@ -107,12 +107,9 @@ describe('product workspace shell boundaries', () => {
     ['/development-plans', 'development-plan-workspace'],
     [`/development-plans/${developmentPlan.id}`, 'development-plan-workspace'],
     [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}`, 'plan-item-gate-workspace'],
-    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/brainstorming`, 'plan-item-gate-workspace'],
     [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/spec`, 'plan-item-gate-workspace'],
-    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/execution-plan`, 'plan-item-gate-workspace'],
+    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/implementation-plan`, 'plan-item-gate-workspace'],
     [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/execution`, 'plan-item-gate-workspace'],
-    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/review`, 'plan-item-gate-workspace'],
-    [`/development-plans/${developmentPlan.id}/items/${developmentPlan.items[0].id}/qa`, 'plan-item-gate-workspace'],
   ] as const)('renders %s inside the typed product shell %s', async (route, shellMarker) => {
     await renderRoute(route);
 

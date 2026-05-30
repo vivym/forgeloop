@@ -49,11 +49,11 @@ describe('responsive layout contract', () => {
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
-  it('renders source object workspace without old responsive class tokens', async () => {
+  it('renders planning input workspace without old responsive class tokens', async () => {
     const screen = await renderRoute(`/requirements/${requirementListItem.id}`);
 
     expect(await screen.findByRole('heading', { name: 'Requirement' })).toBeTruthy();
-    expect(document.querySelector('[data-page-family="source-document"]')).toBeTruthy();
+    expect(document.querySelector('[data-page-family="document-workspace"]')).toBeTruthy();
     expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeTruthy();
     expect(screen.getAllByRole('main').length).toBeGreaterThan(0);
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
@@ -108,7 +108,7 @@ describe('responsive layout contract', () => {
 
     expect(await tabletScreen.findByRole('columnheader', { name: 'Current gate' })).toBeTruthy();
     expect(tabletScreen.getByRole('columnheader', { name: 'Gate progress' })).toBeTruthy();
-    expect(tabletScreen.queryByRole('columnheader', { name: 'Execution Plan' })).toBeNull();
+    expect(tabletScreen.queryByRole('columnheader', { name: 'Implementation Plan Doc' })).toBeNull();
   });
 });
 

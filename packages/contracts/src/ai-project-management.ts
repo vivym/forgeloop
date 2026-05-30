@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { productObjectRefSchema, runtimeEvidenceObjectRefSchema, sourceObjectRefSchema } from './product-object-ref.js';
+import { productObjectRefSchema, runtimeEvidenceObjectRefSchema, planningInputRefSchema } from './product-object-ref.js';
 
 const nonEmpty = z.string().trim().min(1);
 const isoDateTimeSchema = z.string().datetime();
@@ -45,7 +45,7 @@ export const contextManifestSchema = z
   .object({
     id: nonEmpty,
     revision_id: nonEmpty,
-    source_ref: sourceObjectRefSchema,
+    source_ref: planningInputRefSchema,
     development_plan_id: nonEmpty.optional(),
     development_plan_revision_id: nonEmpty.optional(),
     development_plan_item_id: nonEmpty.optional(),
@@ -81,7 +81,7 @@ export const developmentPlanItemSchema = z
     affected_surfaces: z.array(nonEmpty).default([]),
     boundary_status: developmentPlanItemBoundaryStatusSchema,
     spec_status: artifactReviewStatusSchema,
-    execution_plan_status: artifactReviewStatusSchema,
+    implementation_plan_status: artifactReviewStatusSchema,
     execution_status: executionStatusSchema,
     review_status: artifactReviewStatusSchema,
     qa_handoff_status: artifactReviewStatusSchema,
@@ -98,7 +98,7 @@ export const developmentPlanSchema = z
     revision_id: nonEmpty,
     title: nonEmpty,
     status: developmentPlanStatusSchema,
-    source_refs: z.array(sourceObjectRefSchema).default([]),
+    source_refs: z.array(planningInputRefSchema).default([]),
     items: z.array(developmentPlanItemSchema).default([]),
     created_at: isoDateTimeSchema.optional(),
     updated_at: isoDateTimeSchema,
@@ -206,7 +206,7 @@ export const brainstormingSessionSchema = z
   .object({
     id: nonEmpty,
     revision_id: nonEmpty,
-    source_ref: sourceObjectRefSchema,
+    source_ref: planningInputRefSchema,
     development_plan_id: nonEmpty,
     ...boundaryBrainstormingSessionProcessShape,
     development_plan_item_id: nonEmpty,
@@ -291,7 +291,7 @@ export const boundarySummarySchema = z
     development_plan_id: nonEmpty,
     development_plan_item_id: nonEmpty,
     development_plan_item_revision_id: nonEmpty,
-    source_ref: sourceObjectRefSchema,
+    source_ref: planningInputRefSchema,
     summary: nonEmpty,
     approved_by_actor_id: nonEmpty.optional(),
     approved_at: isoDateTimeSchema.optional(),
@@ -387,7 +387,7 @@ export const executionSchema = z
         title: nonEmpty.optional(),
       })
       .strict(),
-    execution_plan_revision_id: nonEmpty,
+    implementation_plan_revision_id: nonEmpty,
     ref: z.object({ type: z.literal('execution'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
     development_plan_item_ref: z
       .object({
@@ -398,18 +398,18 @@ export const executionSchema = z
         title: nonEmpty.optional(),
       })
       .strict(),
-    execution_plan_revision_ref: z
+    implementation_plan_revision_ref: z
       .object({
-        type: z.literal('execution_plan_revision'),
+        type: z.literal('implementation_plan_revision'),
         id: nonEmpty,
-        execution_plan_id: nonEmpty,
+        implementation_plan_id: nonEmpty,
         title: nonEmpty.optional(),
       })
       .strict(),
     status: executionStatusSchema,
     worker_state: nonEmpty.optional(),
     current_step: nonEmpty.optional(),
-    source_ref: sourceObjectRefSchema.optional(),
+    source_ref: planningInputRefSchema.optional(),
     stale: z.boolean().optional(),
     blocked: z.boolean().optional(),
     last_event_at: isoDateTimeSchema.optional(),
@@ -460,7 +460,7 @@ export const codeReviewHandoffSchema = z
     ref: z.object({ type: z.literal('code_review_handoff'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
     execution_id: nonEmpty,
     development_plan_item_id: nonEmpty,
-    execution_plan_revision_id: nonEmpty,
+    implementation_plan_revision_id: nonEmpty,
     reviewer_actor_id: nonEmpty,
     status: codeReviewHandoffStatusSchema,
     summary: nonEmpty,
@@ -485,7 +485,7 @@ export const qaHandoffSchema = z
     ref: z.object({ type: z.literal('qa_handoff'), id: nonEmpty, title: nonEmpty.optional() }).strict(),
     code_review_handoff_id: nonEmpty,
     execution_id: nonEmpty,
-    source_ref: sourceObjectRefSchema,
+    source_ref: planningInputRefSchema,
     development_plan_item_id: nonEmpty,
     development_plan_item_ref: z
       .object({
@@ -497,11 +497,11 @@ export const qaHandoffSchema = z
       })
       .strict(),
     approved_spec_revision_ref: z.object({ type: z.literal('spec_revision'), id: nonEmpty, spec_id: nonEmpty, title: nonEmpty.optional() }).strict(),
-    approved_execution_plan_revision_ref: z
+    approved_implementation_plan_revision_ref: z
       .object({
-        type: z.literal('execution_plan_revision'),
+        type: z.literal('implementation_plan_revision'),
         id: nonEmpty,
-        execution_plan_id: nonEmpty,
+        implementation_plan_id: nonEmpty,
         title: nonEmpty.optional(),
       })
       .strict(),

@@ -23,7 +23,7 @@ const reportIds = [
   'development-plan-throughput',
   'brainstorming-bottlenecks',
   'spec-review-aging',
-  'execution-plan-review-aging',
+  'implementation-plan-doc-review-aging',
   'execution-continuation',
   'execution-outcomes',
   'code-review',
@@ -45,7 +45,7 @@ describe('project management query API', () => {
     await app.close();
   });
 
-  it('lists My Work using source objects and Development Plan Items, not generic Tasks', async () => {
+  it('lists My Work using planning inputs and Development Plan Items, not generic Tasks', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
 
     const response = await request(app.getHttpServer())
@@ -78,7 +78,7 @@ describe('project management query API', () => {
         }),
         expect.objectContaining({
           object_ref: expect.objectContaining({
-            type: 'execution_plan',
+            type: 'implementation_plan_doc',
           }),
           href: `/development-plans/${item.development_plan_id}/items/${item.id}`,
         }),
@@ -89,7 +89,7 @@ describe('project management query API', () => {
     expect(JSON.stringify(response.body)).not.toContain('owner_actor_id');
   });
 
-  it('projects source object details through relationships, not legacy Task or direct Plan refs', async () => {
+  it('projects planning input details through relationships, not legacy Task or direct Plan refs', async () => {
     const { developmentPlan, item, workItem } = await seedApprovedExecutionPlan(app);
 
     const response = await request(app.getHttpServer()).get(`/query/requirements/${workItem.id}`).expect(200);
@@ -103,7 +103,7 @@ describe('project management query API', () => {
     expect(response.body.relationship_refs).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: 'spec' }),
-        expect.objectContaining({ type: 'execution_plan' }),
+        expect.objectContaining({ type: 'implementation_plan_doc' }),
       ]),
     );
     expect(response.body).not.toHaveProperty('task_refs');
@@ -112,7 +112,7 @@ describe('project management query API', () => {
     expect(JSON.stringify(response.body)).not.toContain('"type":"work_item"');
   });
 
-  it('renders optional typed source detail fields with product fallbacks', async () => {
+  it('renders optional typed document detail fields with product fallbacks', async () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const requirement: WorkItem = {
       id: 'req-optional-out-of-scope',
@@ -179,7 +179,7 @@ describe('project management query API', () => {
     await seedTypedRequirementProjection(repository);
     const server = app.getHttpServer();
 
-    const listResponse = await request(server).get('/query/requirements').query({ project_id: 'project-typed-source' }).expect(200);
+    const listResponse = await request(server).get('/query/requirements').query({ project_id: 'project-typed-document' }).expect(200);
     expect(listResponse.body.items).toEqual([
       expect.objectContaining({
         id: 'req-checkout-risk',
@@ -191,7 +191,7 @@ describe('project management query API', () => {
         driver_actor_id: 'actor-product',
         planning_coverage: { development_plan_count: 1, plan_item_count: 3, uncovered: false },
         downstream_gate_summary: {
-          current_gate_counts: { boundary: 1, spec: 1, execution_plan: 1, execution: 0, code_review: 0, qa: 0, release: 0 },
+          current_gate_counts: { boundary: 1, spec: 1, implementation_plan_doc: 1, execution: 0, code_review: 0, qa: 0, release: 0 },
           blocker_count: 1,
         },
         last_meaningful_update_at: '2026-05-27T08:45:00.000Z',
@@ -217,7 +217,12 @@ describe('project management query API', () => {
       linked_plan_items: expect.arrayContaining([
         expect.objectContaining({ type: 'development_plan_item', id: 'dpi-boundary', development_plan_id: 'dp-core', title: 'Confirm checkout boundary' }),
         expect.objectContaining({ type: 'development_plan_item', id: 'dpi-spec', development_plan_id: 'dp-core', title: 'Review Spec test strategy' }),
-        expect.objectContaining({ type: 'development_plan_item', id: 'dpi-plan', development_plan_id: 'dp-core', title: 'Approve checkout execution plan' }),
+        expect.objectContaining({
+          type: 'development_plan_item',
+          id: 'dpi-plan',
+          development_plan_id: 'dp-core',
+          title: 'Approve checkout implementation plan doc',
+        }),
       ]),
       evidence_refs: [{ type: 'attachment', id: 'att-1', title: 'Research screenshot' }],
       attachment_refs: [
@@ -236,13 +241,13 @@ describe('project management query API', () => {
       release_refs: [{ type: 'release', id: 'rel-preview', title: 'Preview release' }],
     });
     expect(JSON.stringify(detailResponse.body)).not.toContain('storage_uri');
-    expect(JSON.stringify(detailResponse.body.attachment_refs)).not.toMatch(/\"type\":\"spec\"|\"type\":\"execution_plan\"|\"type\":\"execution\"/);
-    expect(JSON.stringify({ list: listResponse.body, detail: detailResponse.body })).not.toMatch(/unavailable|source object|owner_actor_id/);
+    expect(JSON.stringify(detailResponse.body.attachment_refs)).not.toMatch(/\"type\":\"spec\"|\"type\":\"implementation_plan_doc\"|\"type\":\"execution\"/);
+    expect(JSON.stringify({ list: listResponse.body, detail: detailResponse.body })).not.toMatch(/unavailable|planning input|owner_actor_id/);
 
     await repository.saveReleaseEvidence({
       id: 'evidence-scope-only',
-      org_id: 'org-typed-source',
-      project_id: 'project-typed-source',
+      org_id: 'org-typed-document',
+      project_id: 'project-typed-document',
       release_id: 'rel-preview',
       title: 'Scope-only Plan Item evidence',
       evidence_type: 'observation_note',
@@ -278,12 +283,12 @@ describe('project management query API', () => {
     );
   });
 
-  it('applies typed source list filters instead of silently ignoring them', async () => {
+  it('applies typed document list filters instead of silently ignoring them', async () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await seedTypedRequirementProjection(repository);
     await repository.saveWorkItem({
       id: 'req-low-risk-followup',
-      project_id: 'project-typed-source',
+      project_id: 'project-typed-document',
       kind: 'requirement',
       title: 'Low risk follow-up',
       narrative_markdown: 'Low risk follow-up narrative.',
@@ -311,68 +316,68 @@ describe('project management query API', () => {
 
     const byDriver = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', driver_actor_id: 'actor-product' })
+      .query({ project_id: 'project-typed-document', driver_actor_id: 'actor-product' })
       .expect(200);
     expect(byDriver.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
 
     const byRisk = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', risk: 'low' })
+      .query({ project_id: 'project-typed-document', risk: 'low' })
       .expect(200);
     expect(byRisk.body.items.map((item: { id: string }) => item.id)).toEqual(['req-low-risk-followup']);
 
     const byStatus = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', status: 'triage' })
+      .query({ project_id: 'project-typed-document', status: 'triage' })
       .expect(200);
     expect(byStatus.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
   });
 
-  it('applies downstream role filters to typed source lists instead of silently dropping them', async () => {
+  it('applies downstream role filters to typed document lists instead of silently dropping them', async () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await seedTypedRequirementProjection(repository);
     const server = app.getHttpServer();
 
     const byReviewer = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', reviewer_actor_id: 'actor-tech' })
+      .query({ project_id: 'project-typed-document', reviewer_actor_id: 'actor-tech' })
       .expect(200);
     expect(byReviewer.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
 
     const byMissingReviewer = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', reviewer_actor_id: 'actor-other' })
+      .query({ project_id: 'project-typed-document', reviewer_actor_id: 'actor-other' })
       .expect(200);
     expect(byMissingReviewer.body.items).toEqual([]);
 
     const byDeveloper = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', execution_owner_actor_id: executionActorDeveloper })
+      .query({ project_id: 'project-typed-document', execution_owner_actor_id: executionActorDeveloper })
       .expect(200);
     expect(byDeveloper.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
 
     const byProductDriverAsDeveloper = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', execution_owner_actor_id: 'actor-product' })
+      .query({ project_id: 'project-typed-document', execution_owner_actor_id: 'actor-product' })
       .expect(200);
     expect(byProductDriverAsDeveloper.body.items).toEqual([]);
 
     const byQa = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', qa_owner_actor_id: executionActorQa })
+      .query({ project_id: 'project-typed-document', qa_owner_actor_id: executionActorQa })
       .expect(200);
     expect(byQa.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
 
     const byRelease = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', release_owner_actor_id: 'actor-release' })
+      .query({ project_id: 'project-typed-document', release_owner_actor_id: 'actor-release' })
       .expect(200);
     expect(byRelease.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
 
     await repository.saveRelease({
       id: 'rel-package-only',
-      org_id: 'org-typed-source',
-      project_id: 'project-typed-source',
+      org_id: 'org-typed-document',
+      project_id: 'project-typed-document',
       title: 'Package-only release',
       phase: 'planning',
       activity_state: 'idle',
@@ -389,7 +394,7 @@ describe('project management query API', () => {
 
     const byPackageOnlyRelease = await request(server)
       .get('/query/requirements')
-      .query({ project_id: 'project-typed-source', release_owner_actor_id: 'actor-package-release' })
+      .query({ project_id: 'project-typed-document', release_owner_actor_id: 'actor-package-release' })
       .expect(200);
     expect(byPackageOnlyRelease.body.items.map((item: { id: string }) => item.id)).toEqual(['req-checkout-risk']);
 
@@ -399,7 +404,7 @@ describe('project management query API', () => {
     );
   });
 
-  it('strictly projects all product workspace preview typed source detail routes', async () => {
+  it('strictly projects all product workspace preview typed document detail routes', async () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await seedProductWorkspacePreviewRepository(repository);
     const server = app.getHttpServer();
@@ -417,7 +422,7 @@ describe('project management query API', () => {
     expect(() => bugDetailSchema.parse(bug.body)).not.toThrow();
 
     expect(JSON.stringify({ requirement: requirement.body, initiative: initiative.body, techDebt: techDebt.body, bug: bug.body })).not.toMatch(
-      /storage_uri|\"type\":\"spec\"|\"type\":\"execution_plan\"/,
+      /storage_uri|\"type\":\"spec\"|\"type\":\"implementation_plan_doc\"/,
     );
   });
 
@@ -605,11 +610,11 @@ describe('project management query API', () => {
           approved_revision_id: specRevision.id,
           qa_owner_actor_id: expect.any(String),
           testability_note: expect.any(String),
-          acceptance_criteria: expect.arrayContaining(['Execution starts only from an approved item Execution Plan.']),
+          acceptance_criteria: expect.arrayContaining(['Execution starts only from an approved item Implementation Plan Doc.']),
           test_strategy_summary: expect.any(String),
         }),
       ]),
-      execution_plans: expect.arrayContaining([
+      implementation_plan_docs: expect.arrayContaining([
         expect.objectContaining({
           current_revision_id: executionPlanRevision.id,
           approved_revision_id: executionPlanRevision.id,
@@ -636,7 +641,7 @@ describe('project management query API', () => {
         phase: 'queued',
         activity_state: 'idle',
         gate_state: 'not_submitted',
-        execution_plan_revision_id: executionPlanRevision.id,
+        implementation_plan_revision_id: executionPlanRevision.id,
       },
       release_context: {
         release_refs: [
@@ -672,12 +677,12 @@ describe('project management query API', () => {
       },
     });
 
-    const specsAndExecutionPlans = await request(server).get('/query/specs-execution-plans').query(query).expect(200);
+    const specsAndExecutionPlans = await request(server).get('/query/reviews').query(query).expect(200);
     expect(specsAndExecutionPlans.body.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ artifact_type: 'spec', development_plan_item_ref: expect.objectContaining({ id: item.id }) }),
         expect.objectContaining({
-          artifact_type: 'execution_plan',
+          artifact_type: 'implementation_plan_doc',
           development_plan_item_ref: expect.objectContaining({ id: item.id }),
         }),
       ]),
@@ -689,7 +694,7 @@ describe('project management query API', () => {
         expect.objectContaining({
           object_ref: expect.objectContaining({ type: 'execution', id: execution.id }),
           development_plan_item_ref: expect.objectContaining({ id: item.id }),
-          execution_plan_revision_ref: expect.objectContaining({ id: execution.execution_plan_revision_id }),
+          implementation_plan_revision_ref: expect.objectContaining({ id: execution.implementation_plan_revision_id }),
           last_event_at: expect.any(String),
           actions: expect.arrayContaining([expect.objectContaining({ id: 'inspect' })]),
         }),
@@ -916,7 +921,7 @@ async function seedExecutionReviewAndQa(app: INestApplication) {
 async function seedTypedRequirementProjection(repository: DeliveryRepository) {
   const requirement: WorkItem = {
     id: 'req-checkout-risk',
-    project_id: 'project-typed-source',
+    project_id: 'project-typed-document',
     kind: 'requirement',
     title: 'Checkout risk controls',
     narrative_markdown: 'Checkout risk controls narrative.',
@@ -969,7 +974,7 @@ async function seedTypedRequirementProjection(repository: DeliveryRepository) {
       affected_surfaces: ['checkout'],
       boundary_status: 'not_started',
       spec_status: 'missing',
-      execution_plan_status: 'missing',
+      implementation_plan_status: 'missing',
       execution_status: 'not_started',
       review_status: 'missing',
       qa_handoff_status: 'missing',
@@ -993,7 +998,7 @@ async function seedTypedRequirementProjection(repository: DeliveryRepository) {
       affected_surfaces: ['checkout'],
       boundary_status: 'approved',
       spec_status: 'blocked',
-      execution_plan_status: 'missing',
+      implementation_plan_status: 'missing',
       execution_status: 'not_started',
       review_status: 'missing',
       qa_handoff_status: 'missing',
@@ -1007,8 +1012,8 @@ async function seedTypedRequirementProjection(repository: DeliveryRepository) {
       revision_id: 'dpi-plan-rev-1',
       development_plan_id: developmentPlan.id,
       source_ref: sourceRef,
-      title: 'Approve checkout execution plan',
-      summary: 'Approve checkout execution plan.',
+      title: 'Approve checkout implementation plan doc',
+      summary: 'Approve checkout implementation plan doc.',
       responsible_role: 'tech_lead',
       driver_actor_id: 'actor-product',
       reviewer_actor_id: 'actor-tech',
@@ -1017,19 +1022,19 @@ async function seedTypedRequirementProjection(repository: DeliveryRepository) {
       affected_surfaces: ['checkout'],
       boundary_status: 'approved',
       spec_status: 'approved',
-      execution_plan_status: 'in_review',
+      implementation_plan_status: 'in_review',
       execution_status: 'not_started',
       review_status: 'missing',
       qa_handoff_status: 'missing',
       release_impact: 'release_scoped',
-      next_action: 'Approve checkout execution plan',
+      next_action: 'Approve checkout implementation plan doc',
       created_at: '2026-05-27T08:20:00.000Z',
       updated_at: '2026-05-27T08:20:00.000Z',
     },
   ];
   const release: Release = {
     id: 'rel-preview',
-    org_id: 'org-typed-source',
+    org_id: 'org-typed-document',
     project_id: requirement.project_id,
     title: 'Preview release',
     phase: 'planning',
@@ -1062,7 +1067,7 @@ async function seedTypedRequirementProjection(repository: DeliveryRepository) {
   };
   const evidence: ReleaseEvidence = {
     id: 'evidence-1',
-    org_id: 'org-typed-source',
+    org_id: 'org-typed-document',
     project_id: requirement.project_id,
     release_id: release.id,
     title: 'Research screenshot',
@@ -1090,19 +1095,19 @@ async function seedTypedRequirementProjection(repository: DeliveryRepository) {
   await repository.saveExecution({
     id: 'execution-dpi-plan',
     development_plan_item_id: 'dpi-plan',
-    execution_plan_revision_id: 'execution-plan-revision-dpi-plan',
+    implementation_plan_revision_id: 'implementation-plan-revision-dpi-plan',
     ref: { type: 'execution', id: 'execution-dpi-plan', title: 'Execute checkout plan' },
     development_plan_item_ref: {
       type: 'development_plan_item',
       id: 'dpi-plan',
       development_plan_id: developmentPlan.id,
       revision_id: 'dpi-plan-rev-1',
-      title: 'Approve checkout execution plan',
+      title: 'Approve checkout implementation plan doc',
     },
-    execution_plan_revision_ref: {
-      type: 'execution_plan_revision',
-      id: 'execution-plan-revision-dpi-plan',
-      execution_plan_id: 'execution-plan-dpi-plan',
+    implementation_plan_revision_ref: {
+      type: 'implementation_plan_revision',
+      id: 'implementation-plan-revision-dpi-plan',
+      implementation_plan_id: 'implementation-plan-dpi-plan',
       title: 'Execute checkout plan',
     },
     source_ref: sourceRef,
@@ -1125,7 +1130,7 @@ async function seedTypedRequirementProjection(repository: DeliveryRepository) {
     id: 'review-dpi-plan',
     execution_id: 'execution-dpi-plan',
     development_plan_item_id: 'dpi-plan',
-    execution_plan_revision_id: 'execution-plan-revision-dpi-plan',
+    implementation_plan_revision_id: 'implementation-plan-revision-dpi-plan',
     ref: { type: 'code_review_handoff', id: 'review-dpi-plan', title: 'Review checkout implementation' },
     reviewer_actor_id: 'actor-tech',
     status: 'in_review',
@@ -1147,13 +1152,13 @@ async function seedTypedRequirementProjection(repository: DeliveryRepository) {
       id: 'dpi-plan',
       development_plan_id: developmentPlan.id,
       revision_id: 'dpi-plan-rev-1',
-      title: 'Approve checkout execution plan',
+      title: 'Approve checkout implementation plan doc',
     },
     approved_spec_revision_ref: { type: 'spec_revision', id: 'spec-revision-dpi-plan', spec_id: 'spec-dpi-plan' },
-    approved_execution_plan_revision_ref: {
-      type: 'execution_plan_revision',
-      id: 'execution-plan-revision-dpi-plan',
-      execution_plan_id: 'execution-plan-dpi-plan',
+    approved_implementation_plan_revision_ref: {
+      type: 'implementation_plan_revision',
+      id: 'implementation-plan-revision-dpi-plan',
+      implementation_plan_id: 'implementation-plan-dpi-plan',
     },
     acceptance_criteria: ['Checkout plan passes QA.'],
     test_strategy: 'Run checkout regression tests.',
@@ -1179,12 +1184,12 @@ function executionPackageForTypedProjection(
     execution_id: 'execution-dpi-plan',
     spec_id: 'spec-dpi-plan',
     spec_revision_id: 'spec-revision-dpi-plan',
-    execution_plan_id: 'execution-plan-dpi-plan',
-    execution_plan_revision_id: 'execution-plan-revision-dpi-plan',
+    execution_plan_id: 'implementation-plan-dpi-plan',
+    execution_plan_revision_id: 'implementation-plan-revision-dpi-plan',
     plan_id: 'plan-dpi-plan',
     plan_revision_id: 'plan-revision-dpi-plan',
     project_id: requirement.project_id,
-    repo_id: 'repo-typed-source',
+    repo_id: 'repo-typed-document',
     objective: 'Execute checkout plan',
     owner_actor_id: executionActorDeveloper,
     reviewer_actor_id: executionActorReviewer,

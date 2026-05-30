@@ -154,7 +154,7 @@ function ReleaseReadinessWorkspace({
                 `${disabledReason === undefined ? 'Launch release is available' : `Launch disabled: ${disabledReason}`}. ${rollbackText}.`,
                 `${viewModel.primaryActorOrRole} owns approval review, launch decision, rollback readiness, and evidence relevance.`,
                 `Readiness ${readiness.ready ? 'ready' : 'blocked'} for ${readiness.scope_refs.length} scope object(s)`,
-                `${release.scope_summary ?? 'Release scope unavailable.'} Readiness by Spec, Execution Plan, execution, code review, QA, release blockers, evidence, rollback plan, observation.`,
+                `${release.scope_summary ?? 'Release scope unavailable.'} Readiness by Spec, Implementation Plan Doc, execution, code review, QA, release blockers, evidence, rollback plan, observation.`,
               ]}
             />
             <Section title={release.title}>

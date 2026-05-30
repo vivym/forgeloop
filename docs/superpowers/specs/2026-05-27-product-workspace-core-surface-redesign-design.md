@@ -4,9 +4,11 @@
 
 User-approved design draft.
 
-This spec defines the next ForgeLoop Web redesign pass after `2026-05-26-product-architecture-visual-rebuild-design.md` was implemented and still failed manual product-quality review. The previous pass moved the product in the right direction, but the current UI still looks like a generic project-management demo rather than a mature AI-native delivery workspace.
+Superseded naming note: `docs/superpowers/specs/2026-05-29-document-native-product-model-redesign-design.md` is authoritative for document-native artifact naming, parent-child route hierarchy, and source document to Plan Item gate eligibility. Product-facing plan-document copy, routes, fixtures, route-contract tests, screenshots, and navigation from this spec must use `Implementation Plan Doc` and `/development-plans/:developmentPlanId/items/:planItemId/implementation-plan`.
 
-The project is not launched. Correct product architecture, information architecture, and frontend architecture take priority over compatibility. Implementation must remove the remaining generic page-template behavior, generic source-object language, and low-signal status panels where they conflict with this spec. Do not preserve historical UI structure merely because it already exists.
+This spec defines the next ForgeLoop Web redesign pass after `2026-05-26-product-architecture-visual-rebuild-design.md` was implemented and still failed manual product-quality review. The previous pass moved the product in the right direction, but the current UI still looks like a generic project-management preview rather than a mature AI-native delivery workspace.
+
+The project is not launched. Correct product architecture, information architecture, and frontend architecture take priority over compatibility. Implementation must remove the remaining generic page-template behavior, generic source-document language, and low-signal status panels where they conflict with this spec. Do not preserve historical UI structure merely because it already exists.
 
 This spec supersedes the four-core-surface layout direction from:
 
@@ -14,26 +16,26 @@ This spec supersedes the four-core-surface layout direction from:
 - `docs/superpowers/specs/2026-05-25-product-grade-visual-system-closure-design.md`;
 - `docs/superpowers/specs/2026-05-26-product-architecture-visual-rebuild-design.md`.
 
-It does not supersede the PRD, typed source-object model, Development Plan / Plan Item product flow, Superpowers-style brainstorming gate, Spec and Execution Plan approval gates, Codex execution supervision, review, QA, release, or future evolution-loop goals.
+It does not supersede the PRD, typed source-document model, Development Plan / Plan Item product flow, Superpowers-style brainstorming gate, Spec and Implementation Plan Doc approval gates, Codex execution supervision, review, QA, release, or future evolution-loop goals.
 
 ## Context
 
 Manual review of the current preview at `/cockpit`, `/requirements`, `/development-plans`, and `/development-plans/:developmentPlanId/items/:itemId` shows that ForgeLoop now has the right route families and data model direction, but the product surface still has these blockers:
 
 - **Cockpit is not a command center.** It renders attention queues, reports, metrics, and gate snippets as similar bordered blocks. It does not tell a manager, tech lead, developer, or QA which decision needs attention first.
-- **Requirements still look generic.** The page is labeled `Requirements`, but the reusable `ObjectList` renders "source object database", "Create source object", "Plan source object", "Requirement summary unavailable", and `Responsibility: actor-owner`. This undercuts the typed Requirement model and the product role expectation that Product primarily edits Requirements while all roles can read them.
+- **Requirements still look generic.** The page is labeled `Requirements`, but the reusable `ObjectList` renders "source document database", "Create source document", "Plan source document", "Requirement summary unavailable", and `Responsibility: actor-owner`. This undercuts the typed Requirement model and the product role expectation that Product primarily edits Requirements while all roles can read them.
 - **Development Plans are table-shaped but not yet a planning workspace.** The page has filters and a table, but it does not yet present plan coverage, row health, linked Requirements/Bugs/Tech Debt/Initiatives, AI-assisted generation state, and selected Plan Item details with the density and polish of mature planning tools.
 - **Plan Item detail has the right lifecycle but the wrong workspace shape.** It vertically stacks route chrome, state banners, metadata, gate progress, gate cards, actions, revision history, and evidence. It must instead behave like a governed Plan Item workspace where one current gate dominates the center, adjacent gates stay visible but compact, and evidence/activity/decision context lives in a side rail.
 - **Shared layout primitives are still acting as visual decisions.** `ProductPage`, `SurfaceStateIndicator`, `Section`, `CockpitLayout`, `DatabaseViewLayout`, `PlanningTableLayout`, and `GateFlowLayout` encourage each page family to look alike. Shared primitives must provide structure and accessibility, not impose identical first-viewport composition.
 - **Low-value state is overemphasized.** Large approved/blocked banners and repeated explanatory text consume more visual attention than the actual work queue, requirement narrative, planning table, or current gate.
-- **The seeded demo is too thin.** Many surfaces show one row and "unavailable" copy. A premium workflow product must preview realistic density: multiple Requirements, at least one Bug, one Tech Debt item, multiple Development Plans, multiple Plan Items in different gate states, active execution, review requested changes, QA pending, and release readiness blockers.
+- **The seeded preview is too thin.** Many surfaces show one row and "unavailable" copy. A premium workflow product must preview realistic density: multiple Requirements, at least one Bug, one Tech Debt item, multiple Development Plans, multiple Plan Items in different gate states, active execution, review requested changes, QA pending, and release readiness blockers.
 
 ForgeLoop's target product is not a Jira clone, a Notion clone, or a Linear clone. It must borrow mature layout discipline from those products:
 
 - Linear-style calm navigation, dense queues, small status marks, and strong current action hierarchy.
-- Notion-style document plus properties for typed source objects and Spec / Execution Plan authoring.
+- Notion-style document plus properties for typed source documents and Spec / Implementation Plan Doc authoring.
 - GitHub Projects / Jira Product Discovery style planning tables with inspectors, coverage, filters, and linked delivery state.
-- AI-native workflow controls that are native to ForgeLoop: context collection, brainstorming questions, boundary approval, Spec generation, Execution Plan generation, Codex execution, interrupt/continue, review, QA, and release readiness.
+- AI-native workflow controls that are native to ForgeLoop: context collection, brainstorming questions, boundary approval, Spec generation, Implementation Plan Doc generation, Codex execution, interrupt/continue, review, QA, and release readiness.
 
 ## Goals
 
@@ -44,9 +46,9 @@ ForgeLoop's target product is not a Jira clone, a Notion clone, or a Linear clon
   - Plan Item Detail and its gate routes.
 - Replace the remaining generic page-template feel with page-family-specific layouts.
 - Keep Requirements typed and role-aware: Product edits narrative and acceptance; tech lead, developer, QA, release, and manager read and act through their relevant signals.
-- Remove generic list behavior from all typed source-object route families: Requirements, Initiatives, Bugs, and Tech Debt.
+- Remove generic list behavior from all typed source-document route families: Requirements, Initiatives, Bugs, and Tech Debt.
 - Make Development Plan the central planning workspace between typed source refs and Plan Items.
-- Make Plan Item the governed delivery workspace for Brainstorming, Spec, Execution Plan, Execution, Code Review, and QA.
+- Make Plan Item the governed delivery workspace for Brainstorming, Spec, Implementation Plan Doc, Execution, Code Review, and QA.
 - Make all first viewports prioritize real work: decisions, blockers, current gate, plan coverage, typed refs, and next actions.
 - Keep UI calm, dense, and clean: small status marks, compact rows, restrained color, crisp borders, no decorative hero treatment, no card sprawl, no card-in-card layouts.
 - Establish a frontend architecture that prevents future pages from slipping back into one generic `WorkspacePage` or generic `ObjectList` shape.
@@ -60,12 +62,12 @@ ForgeLoop's target product is not a Jira clone, a Notion clone, or a Linear clon
 - No generic custom-field builder.
 - No top-level generic Work Items page.
 - No top-level Tasks route.
-- No structured executable task extraction from Execution Plan documents.
+- No structured executable task extraction from Implementation Plan Docs.
 - No direct Requirement/Bug/Tech Debt/Initiative to Spec generation.
-- No direct typed source-object to Execution Plan generation.
-- No direct execution from Development Plan content, incomplete brainstorming, draft Spec, or draft Execution Plan.
+- No direct typed source-document to Implementation Plan Doc generation.
+- No direct execution from Development Plan content, incomplete brainstorming, draft Spec, or draft Implementation Plan Doc.
 - No raw Execution Package, Run Session, Review Packet, trace, replay, or runtime object browser in primary navigation.
-- No public generic Work Item Owner or generic source-object owner language.
+- No public old work-item ownership label or generic source-document ownership language.
 - No compatibility shell, old/new switch, legacy route family, or fallback generic page renderer.
 - No decorative marketing hero layout, oversized KPI cards, gradient blobs, emoji icons, one-note palette, or ornamental visuals.
 
@@ -73,7 +75,7 @@ ForgeLoop's target product is not a Jira clone, a Notion clone, or a Linear clon
 
 ### Typed Objects, Not Generic Work Items
 
-The PRD uses Work Item as an abstraction, but the product UI must expose typed source objects:
+The PRD uses Work Item as an abstraction, but the product UI must expose typed source documents:
 
 - Initiative;
 - Requirement;
@@ -84,9 +86,9 @@ Each type has distinct information gravity and role focus. Requirements are not 
 
 Forbidden public labels in this redesign:
 
-- `source object` when the route already knows the typed object;
-- `Work Item Owner`;
-- generic `owner` for typed source objects or Plan Items;
+- `source document` when the route already knows the typed object;
+- the old work-item ownership label;
+- generic `owner` for typed source documents or Plan Items;
 - `Task` as a first-class object in this slice;
 - `Package`, `Run`, `Review Packet`, or `Trace` as primary navigation labels.
 
@@ -104,21 +106,21 @@ Allowed responsibility language:
 
 ### Development Plan Is The Planning Bridge
 
-No typed source object can skip directly to Spec, Execution Plan, or execution. The product flow remains:
+No typed source document can skip directly to Spec, Implementation Plan Doc, or execution. The product flow remains:
 
-`Typed Source Object -> Development Plan -> Plan Item -> Brainstorming -> Spec -> Execution Plan -> Codex Execution -> Code Review -> QA -> Release`
+`Typed Source Document -> Development Plan -> Plan Item -> Brainstorming -> Spec -> Implementation Plan Doc -> Codex Execution -> Code Review -> QA -> Release`
 
 Development Plan must look like a normal development planning table that can be manually authored or AI-assisted. AI generation is an action on the planning workspace, not the whole product metaphor.
 
-The Development Plan UI may show a typed source ref group as `Linked Requirements/Bugs/Tech Debt/Initiatives` or `Typed refs`. It must not show public labels such as `linked source objects` or `source object context` when the row already has typed refs.
+The Development Plan UI may show a typed source ref group as `Linked Requirements/Bugs/Tech Debt/Initiatives` or `Typed refs`. It must not show public labels such as `linked source documents` or `source document context` when the row already has typed refs.
 
 ### Plan Item Is The Governed Delivery Workspace
 
 Plan Item is the smallest product unit that can move through:
 
-`Boundary brainstorming -> Spec review -> Execution Plan review -> Execution supervision -> Code review -> QA handoff -> Release readiness`
+`Boundary brainstorming -> Spec review -> Implementation Plan Doc review -> Execution supervision -> Code review -> QA handoff -> Release readiness`
 
-Plan Item is not an executable task list. Execution Plan documents continue to carry detailed executable steps until a future spec introduces structured task extraction.
+Plan Item is not an executable task list. Implementation Plan Docs continue to carry detailed executable steps until a future spec introduces structured task extraction.
 
 ### Product Entry And Runtime Authority
 
@@ -126,14 +128,14 @@ This redesign changes the product entry point and visual hierarchy. It does not 
 
 Authority rules:
 
-- Product/gate authority is carried by typed source refs, Development Plan, Plan Item, approved Boundary Summary, approved Spec revision, and approved Execution Plan revision.
-- The Web product label `Execution Plan` is the product-facing name for the PRD Implementation Plan artifact in this slice.
+- Product/gate authority is carried by typed source refs, Development Plan, Plan Item, approved Boundary Summary, approved Spec revision, and approved Implementation Plan Doc revision.
+- The Web product label `Implementation Plan Doc` is the product-facing name for the PRD Implementation Plan artifact in this slice.
 - Runtime enqueue must create or link an internal Execution Package before a Codex worker run starts.
 - Every runtime Execution Package created from a Plan Item must carry source refs, `development_plan_id`, `development_plan_item_id`, `spec_revision_id`, `execution_plan_revision_id`, policy/check requirements, changed-file evidence, test evidence, review linkage, QA linkage, and release linkage where available.
 - A Plan Item may supervise one or more internal Execution Packages when implementation must split across repos, surfaces, contracts, release units, or verification boundaries.
 - Execution Package, Run Session, Review Packet, trace, and replay objects remain authoritative internal execution/evidence objects, but they must not become primary navigation or raw object-browser surfaces.
 - Developer-facing execution evidence from those runtime objects must remain visible from Plan Item execution, Executions, My Work, Release, and Reports.
-- Execution is disabled unless the Plan Item resolves to an approved Spec revision, an approved Execution Plan revision, and a runnable internal Execution Package boundary.
+- Execution is disabled unless the Plan Item resolves to an approved Spec revision, an approved Implementation Plan Doc revision, and a runnable internal Execution Package boundary.
 - Starting execution from a Plan Item must first validate or materialize the internal Execution Package boundary. The action is not eligible when the UI only has an approved document but no runnable package boundary with source refs, policy checks, verification expectations, and ownership links.
 
 ### Quality Shift-Left
@@ -141,8 +143,8 @@ Authority rules:
 The PRD requires QA and test strategy to enter during Spec review, not after implementation. This redesign must make that gate visible:
 
 - Spec routes must show QA/Test Owner participation state for medium, high, critical, release-impacting, or cross-surface Plan Items.
-- Spec review must include acceptance criteria, test strategy summary, risk scenarios, and validation expectations before Execution Plan generation is enabled.
-- Execution Plan generation is disabled when a required QA/Test Owner review, testability note, acceptance criteria, or test strategy summary is missing.
+- Spec review must include acceptance criteria, test strategy summary, risk scenarios, and validation expectations before Implementation Plan Doc generation is enabled.
+- Implementation Plan Doc generation is disabled when a required QA/Test Owner review, testability note, acceptance criteria, or test strategy summary is missing.
 - QA surfaces remain post-execution decision surfaces, but they must reference the test strategy accepted during Spec review instead of introducing it for the first time.
 
 ### Page Families Must Be Structurally Distinct
@@ -214,8 +216,8 @@ Cockpit must show:
 
 - top 3-7 attention items with typed refs and clear next action;
 - active/resumable Codex executions;
-- Spec and Execution Plan review aging;
-- Plan Items blocked by missing boundary, missing Spec approval, missing Execution Plan approval, requested code-review changes, or QA blockers;
+- Spec and Implementation Plan Doc review aging;
+- Plan Items blocked by missing boundary, missing Spec approval, missing Implementation Plan Doc approval, requested code-review changes, or QA blockers;
 - release readiness blockers;
 - stale/degraded data warnings only when real and compact;
 - links to My Work, Development Plan, Plan Item, Execution, Review, QA, or Release as appropriate.
@@ -228,7 +230,7 @@ Examples:
 
 - Continue execution;
 - Review Spec;
-- Review Execution Plan;
+- Review Implementation Plan Doc;
 - Resolve code-review changes;
 - Create QA handoff;
 - Inspect release blocker.
@@ -292,7 +294,7 @@ Requirement inspector must show:
 
 #### Required Data Contract
 
-The current typed source object schemas are too thin for product-grade workspaces. Implementation must extend the public query projection and contract schemas instead of filling the UI with inferred or unavailable text.
+The current typed source document schemas are too thin for product-grade workspaces. Implementation must extend the public query projection and contract schemas instead of filling the UI with inferred or unavailable text.
 
 All typed source workspace list projections must expose:
 
@@ -360,9 +362,9 @@ Strict API parsing must continue to protect the UI contract. The redesign must u
 
 #### Remove From Current Implementation
 
-- `Requirements source object database`;
-- `Create source object`;
-- `Plan source object`;
+- `Requirements source document database`;
+- `Create source document`;
+- `Plan source document`;
 - `Requirement summary unavailable` as the default seeded impression;
 - generic `Responsibility: actor-owner`;
 - a bottom planning state section that repeats the selected row instead of adding value.
@@ -427,7 +429,7 @@ Inspector must show:
 - current gate and blocker;
 - next action;
 - linked typed source context;
-- Spec / Execution Plan / execution / review / QA links;
+- Spec / Implementation Plan Doc / execution / review / QA links;
 - evidence summary;
 - compact action buttons.
 
@@ -441,8 +443,8 @@ Inspector must show:
 - open Plan Item;
 - start/continue brainstorming where allowed;
 - generate Spec only after approved boundary;
-- generate Execution Plan only after approved Spec;
-- start execution only after approved Execution Plan, required QA/test-strategy gates, and a runnable internal Execution Package boundary.
+- generate Implementation Plan Doc only after approved Spec;
+- start execution only after approved Implementation Plan Doc, required QA/test-strategy gates, and a runnable internal Execution Package boundary.
 
 #### Remove From Current Implementation
 
@@ -465,7 +467,7 @@ It is primarily for tech lead, developer, reviewer, QA, and release-facing workf
 All Plan Item routes share a gate workspace shell:
 
 - top compact identity row: Plan Item title, source refs, current gate, risk, driver, responsible role, reviewer, release impact;
-- left or upper compact gate rail: Boundary, Spec, Execution Plan, Execution, Code Review, QA, Release;
+- left or upper compact gate rail: Boundary, Spec, Implementation Plan Doc, Execution, Code Review, QA, Release;
 - center main workspace: current gate content only;
 - right rail: evidence, decisions, activity, context manifest, linked artifacts;
 - bottom or collapsed section: revision history and secondary evidence.
@@ -488,7 +490,7 @@ Spec:
 - QA/Test Owner participation, testability notes, acceptance criteria, risk scenarios, and test strategy summary where required by risk/release impact;
 - generate/submit/approve/request changes actions separated by gate eligibility.
 
-Execution Plan:
+Implementation Plan Doc:
 
 - same document review workspace pattern as Spec;
 - clear distinction from Development Plan;
@@ -532,9 +534,9 @@ Release:
 - generate Spec;
 - submit Spec for review;
 - approve/request changes/reject Spec;
-- generate Execution Plan;
-- submit Execution Plan for review;
-- approve/request changes/reject Execution Plan;
+- generate Implementation Plan Doc;
+- submit Implementation Plan Doc for review;
+- approve/request changes/reject Implementation Plan Doc;
 - start/interrupt/continue execution;
 - mark ready for code review;
 - approve/request changes in code review;
@@ -544,7 +546,7 @@ Release:
 
 Actions must be eligible only when upstream gates are satisfied. Disabled actions must explain the missing gate in one compact line.
 
-For execution actions, `upstream gates` means approved boundary, approved Spec revision, approved Execution Plan revision, required QA/test-strategy participation for the Plan Item risk class, and a validated runnable internal Execution Package boundary. The UI must not allow a direct execution start from Development Plan content, draft Spec, draft Execution Plan, or an approved document that has no runnable package boundary.
+For execution actions, `upstream gates` means approved boundary, approved Spec revision, approved Implementation Plan Doc revision, required QA/test-strategy participation for the Plan Item risk class, and a validated runnable internal Execution Package boundary. The UI must not allow a direct execution start from Development Plan content, draft Spec, draft Implementation Plan Doc, or an approved document that has no runnable package boundary.
 
 #### Remove From Current Implementation
 
@@ -580,9 +582,9 @@ Mechanical guardrails:
 - Page-specific shells must expose stable DOM markers such as `data-product-shell="cockpit-command-center"`, `data-product-shell="requirement-workspace"`, `data-product-shell="initiative-workspace"`, `data-product-shell="bug-workspace"`, `data-product-shell="tech-debt-workspace"`, `data-product-shell="development-plan-workspace"`, and `data-product-shell="plan-item-gate-workspace"` so route-contract tests can verify the intended shell.
 - If a shared layout primitive is used by more than one page family, it must not own headings, explanatory copy, dominant state blocks, toolbar layout, or primary column composition.
 
-### Split Typed Source Object UI
+### Split Typed Source Document UI
 
-`ObjectList` currently makes Requirements, Bugs, Tech Debt, and Initiatives look too similar. This redesign must remove generic source-object UI for all typed source-object route families, not only Requirements.
+`ObjectList` currently makes Requirements, Bugs, Tech Debt, and Initiatives look too similar. This redesign must remove generic source-document UI for all typed source-document route families, not only Requirements.
 
 Implementation must:
 
@@ -596,9 +598,9 @@ Minimum typed adapters:
 - `BugDatabase` / `BugWorkspace`;
 - `TechDebtDatabase` / `TechDebtWorkspace`.
 
-The implementation must not leave any typed source-object route with generic `source object` text, generic owner language, generic create/plan action labels, or generic unavailable summaries as the dominant seeded impression.
+The implementation must not leave any typed source-document route with generic `source document` text, generic owner language, generic create/plan action labels, or generic unavailable summaries as the dominant seeded impression.
 
-Typed source-object route families include index, new, detail, and evidence routes for:
+Typed source-document route families include index, new, detail, and evidence routes for:
 
 - `/requirements`, `/requirements/new`, `/requirements/:id`, `/requirements/:id/evidence`;
 - `/initiatives`, `/initiatives/new`, `/initiatives/:id`, `/initiatives/:id/evidence`;
@@ -631,7 +633,7 @@ Forbidden shared abstractions:
 
 - generic page template that decides first viewport for product pages;
 - generic state banner automatically rendered for normal approved/current states;
-- generic source-object queue copy;
+- generic source-document queue copy;
 - generic lifecycle action inventory that ignores gate context.
 
 ### Data And View Models
@@ -684,7 +686,7 @@ URL state:
 Query mapping:
 
 - `product` maps to `driver_actor_id` for Requirements, Initiatives, Bugs, Tech Debt, and Development Plans when a concrete actor is selected;
-- `tech-lead` maps to the existing `spec-approver` product lane where possible and to reviewer/approver filters on Spec and Execution Plan queues where those fields exist; it must not silently filter typed source object routes unless a concrete reviewer/approver field is present;
+- `tech-lead` maps to the existing `spec-approver` product lane where possible and to reviewer/approver filters on Spec and Implementation Plan Doc queues where those fields exist; it must not silently filter typed source document routes unless a concrete reviewer/approver field is present;
 - `developer` maps to `execution_owner_actor_id` for execution-oriented queues and Plan Item views;
 - `reviewer` maps to `reviewer_actor_id`;
 - `qa` maps to `qa_owner_actor_id`;
@@ -745,8 +747,8 @@ The future implementation plan must be split into these phases:
 
 1. **Preview Data And Route Stability**
    - fix product-review preview startup instability if still present;
-   - expand demo seed;
-   - expand typed source object query contracts/projections for planning coverage, downstream gate summary, type-specific narrative summaries, evidence, releases, and next action;
+   - expand preview seed;
+   - expand typed source document query contracts/projections for planning coverage, downstream gate summary, type-specific narrative summaries, evidence, releases, and next action;
    - extend role-lens query contracts where page-local filters need actor-specific fields;
    - keep `requiredScreenshotRoutes` equal to `canonicalProductRoutes`, including typed source index/new/detail/evidence routes and all Plan Item gate routes.
 2. **Layout Foundations**
@@ -757,8 +759,8 @@ The future implementation plan must be split into these phases:
 3. **Cockpit Command Center**
    - rebuild cockpit view model and route layout;
    - add attention queue, flow strip, and risk rail.
-4. **Typed Source Object Workspaces**
-   - replace generic source-object list copy and structure across Requirements, Initiatives, Bugs, and Tech Debt;
+4. **Typed Source Document Workspaces**
+   - replace generic source-document list copy and structure across Requirements, Initiatives, Bugs, and Tech Debt;
    - build Requirement database, inspector, detail workspace, and planning actions;
    - add typed adapters for Initiative, Bug, and Tech Debt index/new/detail/evidence routes;
    - remove `ObjectList` as a product-facing generic renderer or reduce it to a neutral table engine with no copy, actions, or empty-state ownership.
@@ -770,11 +772,11 @@ The future implementation plan must be split into these phases:
    - move evidence/activity/revisions into right rail or lower secondary area;
    - make actions contextual and gate-aware;
    - surface QA/Test Owner participation and accepted test strategy in Spec review for required risk classes;
-   - keep execution disabled until approved Spec, approved Execution Plan, required QA/test-strategy gates, and runnable internal Execution Package boundary exist;
+   - keep execution disabled until approved Spec, approved Implementation Plan Doc, required QA/test-strategy gates, and runnable internal Execution Package boundary exist;
    - include release readiness as the post-QA gate/context when a Plan Item has release impact.
 7. **Verification**
    - update route-contract tests;
-   - add no-generic-copy guards for all typed source object routes, Development Plan routes, and Plan Item gate routes;
+   - add no-generic-copy guards for all typed source document routes, Development Plan routes, and Plan Item gate routes;
    - add import-boundary guards for direct `ProductPage` / normal-state `SurfaceStateIndicator` usage on core routes;
    - run screenshot review across required viewports;
    - run `pnpm test`, `pnpm build`, `git diff --check`, and blocker review.
@@ -782,17 +784,17 @@ The future implementation plan must be split into these phases:
 ## Acceptance Criteria
 
 - `/cockpit` first viewport shows a role-aware attention queue, delivery flow, and risk/readiness rail; it does not show generic report rows as dominant content.
-- `/requirements`, `/requirements/new`, `/requirements/:id`, and `/requirements/:id/evidence` use Requirement-specific language, fields, and actions; they do not contain `source object database`, `Create source object`, `Plan source object`, generic owner language, or dominant unavailable summaries.
+- `/requirements`, `/requirements/new`, `/requirements/:id`, and `/requirements/:id/evidence` use Requirement-specific language, fields, and actions; they do not contain `source document database`, `Create source document`, `Plan source document`, generic owner language, or dominant unavailable summaries.
 - `/requirements/:id` behaves as a document plus properties workspace with MDXEditor-backed narrative editing and visible Development Plan coverage.
-- `/initiatives`, `/bugs`, and `/tech-debt` index/new/detail/evidence routes use their typed language, fields, and actions; they do not contain generic `source object` copy, generic create/plan labels, generic owner language, or dominant unavailable summaries.
+- `/initiatives`, `/bugs`, and `/tech-debt` index/new/detail/evidence routes use their typed language, fields, and actions; they do not contain generic `source document` copy, generic create/plan labels, generic owner language, or dominant unavailable summaries.
 - `/development-plans` shows a dense planning index with summary, filters, and plan rows that remain readable at 1280px width.
 - `/development-plans/:id` shows a table-first Plan Item workspace with selected-item inspector and AI/manual planning actions.
 - `/development-plans/:id/items/:itemId` overview shows one current gate as primary, compact gate rail/progress through Release readiness, and evidence/activity context; it does not render every gate body fully in first viewport.
-- Spec and Execution Plan routes preserve MDXEditor document editing, attachment support, review state, and gate-aware actions.
-- Spec review exposes QA/Test Owner participation and test strategy status where required by risk/release impact; Execution Plan generation remains disabled until required QA/test-strategy gates are satisfied.
-- Actions for Spec generation, Execution Plan generation, and execution are disabled until their required upstream gates are satisfied, including a runnable internal Execution Package boundary before execution start.
+- Spec and Implementation Plan Doc routes preserve MDXEditor document editing, attachment support, review state, and gate-aware actions.
+- Spec review exposes QA/Test Owner participation and test strategy status where required by risk/release impact; Implementation Plan Doc generation remains disabled until required QA/test-strategy gates are satisfied.
+- Actions for Spec generation, Implementation Plan Doc generation, and execution are disabled until their required upstream gates are satisfied, including a runnable internal Execution Package boundary before execution start.
 - Release readiness remains visible after QA acceptance for release-impacting Plan Items, with links to Release surfaces and readiness blockers where available.
-- Public UI copy does not reintroduce generic Work Item Owner or generic source-object owner semantics.
+- Public UI copy does not reintroduce the old work-item ownership label or generic source-document ownership semantics.
 - Route-contract verification keeps `requiredScreenshotRoutes` aligned with `canonicalProductRoutes`, including typed source routes and all Plan Item gate subroutes.
 - Core routes expose page-specific shell DOM markers and pass import-boundary checks that prevent direct generic page-template composition from returning as the primary layout.
 - Seeded product-review preview shows realistic density and does not rely on empty/unavailable placeholders for the main impression.
@@ -813,4 +815,4 @@ Requirement detail must use a permanent right property rail on desktop widths. T
 
 ### Plan Item Gate Actions
 
-Plan Item gate actions live in the right decision rail on overview and gate hub routes. Document-heavy routes such as Spec and Execution Plan also get a sticky compact document toolbar for save/submit/review actions. Do not add a global sticky bottom command bar in this slice unless mobile verification proves the right rail/drawer cannot support the workflow.
+Plan Item gate actions live in the right decision rail on overview and gate hub routes. Document-heavy routes such as Spec and Implementation Plan Doc also get a sticky compact document toolbar for save/submit/review actions. Do not add a global sticky bottom command bar in this slice unless mobile verification proves the right rail/drawer cannot support the workflow.

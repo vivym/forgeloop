@@ -47,11 +47,10 @@ describe('AI-native My Work, Board, and Reports', () => {
     expect(document.body.textContent).not.toMatch(/\bTasks\b|Work Item Owner|owner_actor_id|coming soon|placeholder/i);
   });
 
-  it('renders retired Dashboard as a product-safe state', async () => {
-    const screen = await renderRoute('/dashboard');
-    expect(await screen.findByRole('heading', { name: /not found|retired|not available/i })).toBeTruthy();
-    expect(document.body.textContent).toMatch(/not found|retired|not available/i);
-    expect(document.body.textContent).not.toMatch(/Flow health|Blocked work|Trend reports|Risk concentration/i);
+  it('renders unknown product routes as a product-safe state', async () => {
+    const screen = await renderRoute('/unknown-product-route');
+    expect(await screen.findByRole('heading', { name: /not found|not available/i })).toBeTruthy();
+    expect(document.body.textContent).toMatch(/not found|not available/i);
   });
 
   it('renders Board as a Development Plan Item gate flow', async () => {
@@ -63,7 +62,7 @@ describe('AI-native My Work, Board, and Reports', () => {
       'Planning',
       'Boundary',
       'Spec',
-      'Execution Plan',
+      'Implementation Plan Doc',
       'Running',
       'Review',
       'QA',
@@ -71,7 +70,7 @@ describe('AI-native My Work, Board, and Reports', () => {
     ]) {
       expect(screen.getByRole('region', { name: `${label} cards` })).toBeTruthy();
     }
-    expect(await screen.findByText(/Requirement/i)).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Planning cards' }).textContent).toMatch(/Requirement/i);
     expect((await screen.findAllByText(/Development Plan Item/i)).length).toBeGreaterThan(0);
     const boardContent = document.querySelector('#main-content')?.textContent ?? '';
     expect(boardContent).not.toMatch(/Intake \/ Development Plan needed|\bReady\b|\bActive\b|\bValidation\b|\bDone\b/);
@@ -111,7 +110,7 @@ describe('AI-native My Work, Board, and Reports', () => {
         'Development Plan throughput',
         'Brainstorming bottlenecks',
         'Spec review aging',
-        'Execution Plan review aging',
+        'Implementation Plan Doc review aging',
         'Execution outcomes',
         'Execution continuation',
         'Code review turnaround',

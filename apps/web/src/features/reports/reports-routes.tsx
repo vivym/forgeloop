@@ -73,7 +73,7 @@ const metricSections = [
   {
     title: 'Development Plan throughput',
     owner: 'Product',
-    summary: 'Measures how source objects move into Development Plans and plan rows.',
+    summary: 'Measures how requirements, initiatives, bugs, and tech debt move into Development Plans and Plan Items.',
   },
   {
     title: 'Brainstorming bottlenecks',
@@ -86,9 +86,9 @@ const metricSections = [
     summary: 'Highlights item-scoped Specs waiting for review or regeneration.',
   },
   {
-    title: 'Execution Plan review aging',
+    title: 'Implementation Plan Doc review aging',
     owner: 'Tech Lead',
-    summary: 'Tracks Execution Plan document review health before Codex execution.',
+    summary: 'Tracks Implementation Plan Doc document review health before Codex execution.',
   },
   {
     title: 'Execution outcomes',
@@ -118,7 +118,7 @@ const metricSections = [
   {
     title: 'Quality and bug escape',
     owner: 'QA',
-    summary: 'Connects escaped bugs and QA blockers back to source objects and plan rows.',
+    summary: 'Connects escaped bugs and QA blockers back to typed planning inputs and Plan Items.',
   },
 ] as const;
 

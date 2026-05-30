@@ -46,14 +46,11 @@ describe('React Router product shell', () => {
     }
   });
 
-  it('renders /dashboard as a retired safe state without old dashboard UI', async () => {
-    const screen = await renderRoute('/dashboard');
+  it('renders unknown product routes as a safe not-found state', async () => {
+    const screen = await renderRoute('/unknown-product-route');
 
-    expect(await screen.findByRole('heading', { name: /not found|retired|not available/i })).toBeTruthy();
-    expect(document.body.textContent).toMatch(/not found|retired|not available/i);
-    for (const oldDashboardText of ['Flow health', 'Blocked work', 'Risk concentration', 'Trend reports']) {
-      expect(document.body.textContent).not.toContain(oldDashboardText);
-    }
+    expect(await screen.findByRole('heading', { name: /not found|not available/i })).toBeTruthy();
+    expect(document.body.textContent).toMatch(/not found|not available/i);
   });
 
   it('opens command search suggestions without retired routes', async () => {
@@ -152,7 +149,7 @@ describe('React Router product shell', () => {
   });
 
   it('marks Document Reviews active for the governance queue route', async () => {
-    const screen = await renderRoute('/specs-plans');
+    const screen = await renderRoute('/reviews');
 
     expect(screen.getByRole('link', { name: 'Document Reviews' }).getAttribute('aria-current')).toBe('page');
   });
@@ -212,7 +209,7 @@ describe('React Router product shell', () => {
     const layoutRoute = routeConfigModule.default.find((route) => route.file === './routes/_layout.tsx');
     const serialized = JSON.stringify(layoutRoute);
 
-    for (const forbidden of ['lanes', 'pipeline', 'work-items', 'tasks', 'packages', 'runs', 'reviews']) {
+    for (const forbidden of ['lanes', 'pipeline', 'work-items', 'tasks', 'packages', 'runs', 'specs-plans']) {
       expect(serialized).not.toContain(`"path":"${forbidden}`);
       expect(serialized).not.toContain(`/routes/${forbidden}`);
     }

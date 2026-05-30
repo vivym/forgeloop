@@ -2,13 +2,11 @@ import { Body, Controller, Get, Inject, Param, Patch, Post, Query } from '@nestj
 import { markdownDocumentSchema, type MarkdownDocument } from '@forgeloop/contracts';
 
 import {
-  createSourceObjectSchema,
+  createTypedDocumentSchema,
   createWorkItemSchema,
-  sourceObjectTypeSchema,
   updateWorkItemSchema,
-  type CreateSourceObjectDto,
+  type CreateTypedDocumentDto,
   type CreateWorkItemDto,
-  type SourceObjectTypeDto,
   type UpdateWorkItemDto,
 } from '../delivery/dto';
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
@@ -33,12 +31,24 @@ export class WorkItemsController {
     return this.workItemService.createWorkItem(body);
   }
 
-  @Post('source-objects/:sourceType')
-  createSourceObject(
-    @Param('sourceType', new ZodValidationPipe(sourceObjectTypeSchema)) sourceType: SourceObjectTypeDto,
-    @Body(new ZodValidationPipe(createSourceObjectSchema)) body: CreateSourceObjectDto,
-  ) {
-    return this.workItemService.createWorkItem({ ...body, kind: sourceType });
+  @Post('requirements')
+  createRequirement(@Body(new ZodValidationPipe(createTypedDocumentSchema)) body: CreateTypedDocumentDto) {
+    return this.workItemService.createWorkItem({ ...body, kind: 'requirement' });
+  }
+
+  @Post('initiatives')
+  createInitiative(@Body(new ZodValidationPipe(createTypedDocumentSchema)) body: CreateTypedDocumentDto) {
+    return this.workItemService.createWorkItem({ ...body, kind: 'initiative' });
+  }
+
+  @Post('tech-debt')
+  createTechDebt(@Body(new ZodValidationPipe(createTypedDocumentSchema)) body: CreateTypedDocumentDto) {
+    return this.workItemService.createWorkItem({ ...body, kind: 'tech_debt' });
+  }
+
+  @Post('bugs')
+  createBug(@Body(new ZodValidationPipe(createTypedDocumentSchema)) body: CreateTypedDocumentDto) {
+    return this.workItemService.createWorkItem({ ...body, kind: 'bug' });
   }
 
   @Get('work-items')

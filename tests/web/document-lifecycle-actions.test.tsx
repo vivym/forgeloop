@@ -8,9 +8,9 @@ import type { ReactNode } from 'react';
 
 import {
   isStrictlyApproved,
-  SpecPlanLifecycleActions,
-} from '../../apps/web/src/features/spec-plan/spec-plan-lifecycle-actions';
-import type { SpecPlan } from '../../apps/web/src/shared/api/types';
+  DocumentLifecycleActions,
+} from '../../apps/web/src/features/development-plans/document-lifecycle-actions';
+import type { ReviewableDocumentArtifact } from '../../apps/web/src/shared/api/types';
 import { installProductApiMock } from './fixtures/product-api-mock';
 import { legacyRenderedClassTokens } from './helpers/no-legacy-class-scan';
 import {
@@ -25,7 +25,7 @@ import {
 } from './fixtures/product-data';
 import { renderRoute } from './router-test-utils';
 
-const inReviewSpec: SpecPlan = {
+const inReviewSpec: ReviewableDocumentArtifact = {
   id: 'spec-1',
   work_item_id: 'work-item-1',
   entity_type: 'spec',
@@ -36,13 +36,13 @@ const inReviewSpec: SpecPlan = {
   current_revision_id: 'spec-rev-1',
 };
 
-const draftSpec: SpecPlan = {
+const draftSpec: ReviewableDocumentArtifact = {
   ...inReviewSpec,
   status: 'draft',
   gate_state: 'not_submitted',
 };
 
-const draftPlan: SpecPlan = {
+const draftPlan: ReviewableDocumentArtifact = {
   id: 'plan-1',
   work_item_id: 'work-item-1',
   entity_type: 'plan',
@@ -53,7 +53,7 @@ const draftPlan: SpecPlan = {
   current_revision_id: 'plan-rev-1',
 };
 
-const approvedPlan: SpecPlan = {
+const approvedPlan: ReviewableDocumentArtifact = {
   ...draftPlan,
   status: 'approved',
   gate_state: 'approved',
@@ -72,7 +72,7 @@ const renderLifecycle = (ui: ReactNode) => {
   return { ...rendered, queryClient };
 };
 
-describe('SpecPlanLifecycleActions', () => {
+describe('DocumentLifecycleActions', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
@@ -90,7 +90,7 @@ describe('SpecPlanLifecycleActions', () => {
     });
 
     renderLifecycle(
-      <SpecPlanLifecycleActions actorId="actor-owner" artifact={draftSpec} kind="spec" {...lifecycleContext} />,
+      <DocumentLifecycleActions actorId="actor-owner" artifact={draftSpec} kind="spec" {...lifecycleContext} />,
     );
 
     await user.click(screen.getByRole('button', { name: 'Submit Spec for approval' }));
@@ -106,7 +106,7 @@ describe('SpecPlanLifecycleActions', () => {
     );
   });
 
-  it('approves an in-review Plan with optional rationale', async () => {
+  it('approves an in-review Implementation Plan Doc with optional rationale', async () => {
     const user = userEvent.setup();
     const inReviewPlan = {
       ...draftPlan,
@@ -114,19 +114,19 @@ describe('SpecPlanLifecycleActions', () => {
       gate_state: 'awaiting_approval',
     };
     const fetchMock = installProductApiMock({
-      'POST /development-plans/development-plan-1/items/development-plan-item-1/execution-plan/approve': approvedPlan,
+      'POST /development-plans/development-plan-1/items/development-plan-item-1/implementation-plan/approve': approvedPlan,
     });
 
     renderLifecycle(
-      <SpecPlanLifecycleActions actorId="actor-reviewer" artifact={inReviewPlan} kind="plan" {...lifecycleContext} />,
+      <DocumentLifecycleActions actorId="actor-reviewer" artifact={inReviewPlan} kind="implementation-plan" {...lifecycleContext} />,
     );
 
-    await user.type(screen.getByLabelText('Plan approval rationale'), 'Plan is executable.');
-    await user.click(screen.getByRole('button', { name: 'Approve Plan' }));
+    await user.type(screen.getByLabelText('Implementation Plan Doc approval rationale'), 'Plan is executable.');
+    await user.click(screen.getByRole('button', { name: 'Approve Implementation Plan Doc' }));
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        'http://localhost:3000/development-plans/development-plan-1/items/development-plan-item-1/execution-plan/approve',
+        'http://localhost:3000/development-plans/development-plan-1/items/development-plan-item-1/implementation-plan/approve',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ actor_id: 'actor-reviewer', rationale: 'Plan is executable.' }),
@@ -147,7 +147,7 @@ describe('SpecPlanLifecycleActions', () => {
     });
 
     renderLifecycle(
-      <SpecPlanLifecycleActions actorId="actor-reviewer" artifact={inReviewSpec} kind="spec" {...lifecycleContext} />,
+      <DocumentLifecycleActions actorId="actor-reviewer" artifact={inReviewSpec} kind="spec" {...lifecycleContext} />,
     );
 
     expect((screen.getByRole('button', { name: 'Request Spec changes' }) as HTMLButtonElement).disabled).toBe(true);
@@ -170,25 +170,25 @@ describe('SpecPlanLifecycleActions', () => {
   it('shows blocked reasons when artifacts cannot enter lifecycle actions', () => {
     renderLifecycle(
       <div>
-        <SpecPlanLifecycleActions
+        <DocumentLifecycleActions
           actorId="actor-owner"
           artifact={{ ...draftSpec, current_revision_id: undefined }}
           developmentPlanId={lifecycleContext.developmentPlanId}
           itemId={lifecycleContext.itemId}
           kind="spec"
         />
-        <SpecPlanLifecycleActions
+        <DocumentLifecycleActions
           actorId="actor-owner"
           artifact={{ ...draftPlan, current_revision_id: undefined }}
           developmentPlanId={lifecycleContext.developmentPlanId}
           itemId={lifecycleContext.itemId}
-          kind="plan"
+          kind="implementation-plan"
         />
       </div>,
     );
 
     expect(screen.getByText('Create a current Spec revision before submitting for approval.')).toBeTruthy();
-    expect(screen.getByText('Plan approval is available after a current Plan revision exists.')).toBeTruthy();
+    expect(screen.getByText('Implementation Plan Doc approval is available after a current Implementation Plan Doc revision exists.')).toBeTruthy();
     expect(legacyRenderedClassTokens(document.body)).toEqual([]);
   });
 
@@ -196,7 +196,7 @@ describe('SpecPlanLifecycleActions', () => {
     const user = userEvent.setup();
     const fetchMock = installProductApiMock();
 
-    renderLifecycle(<SpecPlanLifecycleActions actorId="actor-owner" artifact={draftSpec} kind="spec" />);
+    renderLifecycle(<DocumentLifecycleActions actorId="actor-owner" artifact={draftSpec} kind="spec" />);
 
     expect(screen.getByText('Spec lifecycle actions require Development Plan Item context.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Submit Spec for approval' })).toBeNull();
@@ -286,13 +286,13 @@ describe('Document Reviews route queue', () => {
           type: 'development_plan_item',
           id: 'development-plan-item-approved',
           development_plan_id: developmentPlan.id,
-          title: 'Ready execution plan item',
+          title: 'Ready Implementation Plan Doc item',
         },
         reviewer_actor_id: 'actor-reviewer',
         age_label: '10m',
         risk: 'low',
-        next_action: 'Generate Execution Plan.',
-        command: 'Generate Execution Plan',
+        next_action: 'Generate Implementation Plan Doc.',
+        command: 'Generate Implementation Plan Doc',
       },
       {
         id: 'spec-stale',
@@ -317,8 +317,8 @@ describe('Document Reviews route queue', () => {
       },
       {
         id: executionPlan.id,
-        artifact_type: 'execution_plan',
-        title: 'Execution Plan needs review',
+        artifact_type: 'implementation_plan_doc',
+        title: 'Implementation Plan Doc needs review',
         status: 'in_review',
         gate_state: 'awaiting_review',
         source_ref: developmentPlan.source_refs[0],
@@ -331,18 +331,18 @@ describe('Document Reviews route queue', () => {
         reviewer_actor_id: 'actor-reviewer',
         age_label: '45m',
         risk: developmentPlanItem.risk,
-        next_action: 'Review Execution Plan before execution.',
-        command: 'Approve Execution Plan',
+        next_action: 'Review Implementation Plan Doc before execution.',
+        command: 'Approve Implementation Plan Doc',
         href: `/plans/${executionPlan.id}`,
       },
     ];
     const apiOverrides = {
-      [`GET /query/specs-execution-plans?project_id=${projectId}&limit=100`]: {
+      [`GET /query/reviews?project_id=${projectId}&limit=100`]: {
         items: governanceRows,
         degraded_sources: [],
       },
     };
-    const routeScreen = await renderRoute('/specs-plans', { apiOverrides });
+    const routeScreen = await renderRoute('/reviews', { apiOverrides });
 
     expect(await routeScreen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
     for (const label of ['Needs generation', 'Needs review', 'Changes requested', 'Approved / ready', 'Stale / blocked']) {
@@ -354,13 +354,13 @@ describe('Document Reviews route queue', () => {
     expect((await routeScreen.findAllByRole('link', { name: /open plan item/i })).map((link) => link.getAttribute('href'))).toContain(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
     );
-    const plansTab = routeScreen.getByRole('tab', { name: 'Execution Plans' });
-    expect(plansTab.getAttribute('href')).toBe('/specs-plans?tab=plans');
+    const plansTab = routeScreen.getByRole('tab', { name: 'Implementation Plan Docs' });
+    expect(plansTab.getAttribute('href')).toBe('/reviews?tab=implementation-plans');
     cleanup();
-    const plansScreen = await renderRoute('/specs-plans?tab=plans', { apiOverrides });
-    expect((await plansScreen.findAllByText(/Execution Plan needs review/i)).length).toBeGreaterThan(0);
+    const plansScreen = await renderRoute('/reviews?tab=implementation-plans', { apiOverrides });
+    expect((await plansScreen.findAllByText(/Implementation Plan Doc needs review/i)).length).toBeGreaterThan(0);
     expect((await plansScreen.findAllByRole('link', { name: /open plan item/i })).map((link) => link.getAttribute('href'))).toContain(
-      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution-plan`,
+      `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
     );
     expect(document.body.textContent).not.toMatch(/\/plans\/|\/specs\/|\/tasks\//);
   });
@@ -381,6 +381,6 @@ describe('Document Reviews route queue', () => {
   ])('does not expose legacy or direct artifact route %s', async (route) => {
     const routeScreen = await renderRoute(route);
     expect(await routeScreen.findByRole('heading', { name: /not found/i })).toBeTruthy();
-    expect(document.body.textContent).not.toMatch(/generate spec|generate execution plan|start execution/i);
+    expect(document.body.textContent).not.toMatch(/generate spec|generate implementation plan doc|start execution/i);
   });
 });

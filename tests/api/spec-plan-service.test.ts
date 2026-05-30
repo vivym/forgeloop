@@ -77,12 +77,12 @@ describe('SpecPlanService item-scoped delivery API', () => {
     await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ spec_status: 'draft' });
   });
 
-  it('rejects Execution Plan generation until Spec is approved', async () => {
+  it('rejects Implementation Plan Doc generation until Spec is approved', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/generate-draft`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400);
   });
@@ -106,7 +106,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .send({ actor_id: actorReviewer, rationale: 'Spec approved with source driver QA fallback.' })
       .expect(201);
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/generate-draft`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(201);
   });
@@ -155,7 +155,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       });
   });
 
-  it('rejects Execution Plan generation when required QA and test strategy evidence is missing from approved Spec', async () => {
+  it('rejects Implementation Plan Doc generation when required QA and test strategy evidence is missing from approved Spec', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -178,12 +178,12 @@ describe('SpecPlanService item-scoped delivery API', () => {
     });
 
     const response = await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/generate-draft`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400);
 
     expect(response.body.message).toContain('qa_test_owner_missing');
-    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ execution_plan_status: 'missing' });
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'missing' });
   });
 
   it('requires QA and test strategy evidence for release-blocking Plan Items even when risk and surface count are low', async () => {
@@ -214,7 +214,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     });
 
     const response = await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/generate-draft`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400);
 
@@ -401,7 +401,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ]);
   });
 
-  it('supports generate after approved Spec, submit, reject, regenerate, and compare for Execution Plan reviews', async () => {
+  it('supports generate after approved Spec, submit, reject, regenerate, and compare for Implementation Plan Doc reviews', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -416,37 +416,39 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
       .expect(201);
 
-    const firstExecutionPlanRevision = await generateItemExecutionPlanDraft(app, plan.id, item.id);
+    const firstExecutionPlanRevision = await generateItemImplementationPlanDraft(app, plan.id, item.id);
     expect(firstExecutionPlanRevision).toMatchObject({
+      implementation_plan_id: expect.any(String),
       development_plan_item_id: item.id,
       based_on_spec_revision_id: specRevision.id,
       author_actor_id: actorTech,
     });
-    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ execution_plan_status: 'draft' });
+    expect(firstExecutionPlanRevision).not.toHaveProperty('execution_plan_id');
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'draft' });
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/submit-for-approval`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/submit-for-approval`)
       .send({ actor_id: actorTech })
       .expect(201);
-    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ execution_plan_status: 'in_review' });
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'in_review' });
 
     const rejected = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/reject`)
+        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/reject`)
         .send({ actor_id: actorReviewer, rationale: 'Plan does not include QA handoff validation.' })
         .expect(201)
     ).body;
     expect(rejected.status).toBe('changes_requested');
-    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ execution_plan_status: 'changes_requested' });
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'changes_requested' });
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/submit-for-approval`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/submit-for-approval`)
       .send({ actor_id: actorTech })
       .expect(400);
 
     const secondExecutionPlanRevision = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/regenerate-draft`)
+        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/regenerate-draft`)
         .send({
           actor_id: actorTech,
           feedback: 'Add QA handoff validation and visual checks.',
@@ -455,10 +457,12 @@ describe('SpecPlanService item-scoped delivery API', () => {
         .expect(201)
     ).body;
     expect(secondExecutionPlanRevision.revision_number).toBe(firstExecutionPlanRevision.revision_number + 1);
+    expect(secondExecutionPlanRevision).toMatchObject({ implementation_plan_id: firstExecutionPlanRevision.implementation_plan_id });
+    expect(secondExecutionPlanRevision).not.toHaveProperty('execution_plan_id');
 
     const executionPlanDiff = (
       await request(server)
-        .get(`/development-plans/${plan.id}/items/${item.id}/execution-plan/revisions/compare`)
+        .get(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/revisions/compare`)
         .query({
           base_revision_id: firstExecutionPlanRevision.id,
           compare_revision_id: secondExecutionPlanRevision.id,
@@ -470,7 +474,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       compare_revision_id: secondExecutionPlanRevision.id,
       changed_fields: expect.arrayContaining(['content', 'revision_number']),
     });
-    await expect(repository.listDecisionsForObject('execution_plan', rejected.id)).resolves.toEqual(
+    await expect(repository.listDecisionsForObject('implementation_plan_doc', rejected.id)).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           actor_id: actorReviewer,
@@ -481,7 +485,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     );
   });
 
-  it('creates a runnable internal execution boundary when approving an item Execution Plan', async () => {
+  it('creates a runnable internal execution boundary when approving an item Implementation Plan Doc', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -496,7 +500,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
       .expect(201);
 
-    const executionPlanRevision = await generateItemExecutionPlanDraft(app, plan.id, item.id);
+    const executionPlanRevision = await generateItemImplementationPlanDraft(app, plan.id, item.id);
     const requiredChecks = [
       {
         check_id: 'unit',
@@ -554,12 +558,12 @@ describe('SpecPlanService item-scoped delivery API', () => {
     await repository.saveExecutionPackage(draftPackage);
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/submit-for-approval`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/submit-for-approval`)
       .send({ actor_id: actorTech })
       .expect(201);
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Execution Plan approved.' })
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/approve`)
+      .send({ actor_id: actorReviewer, rationale: 'Implementation Plan Doc approved.' })
       .expect(201);
 
     await expect(repository.listExecutionPackagesForWorkItem(item.source_ref.id)).resolves.toEqual(
@@ -583,7 +587,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(runtimeBoundary).not.toHaveProperty('execution_id');
   });
 
-  it('saves item-scoped Execution Plan Markdown drafts as new current revisions', async () => {
+  it('saves item-scoped Implementation Plan Doc Markdown drafts as new current revisions', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -597,17 +601,17 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
       .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
       .expect(201);
-    const firstExecutionPlanRevision = await generateItemExecutionPlanDraft(app, plan.id, item.id);
+    const firstExecutionPlanRevision = await generateItemImplementationPlanDraft(app, plan.id, item.id);
 
     const savedRevision = (
       await request(server)
-        .patch(`/development-plans/${plan.id}/items/${item.id}/execution-plan/draft`)
+        .patch(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/draft`)
         .send({
-          markdown: '# Saved Execution Plan draft\n\nPersisted through the item-scoped draft endpoint.',
+          markdown: '# Saved Implementation Plan Doc draft\n\nPersisted through the item-scoped draft endpoint.',
           object_ref: {
-            type: 'execution_plan_revision',
+            type: 'implementation_plan_revision',
             id: firstExecutionPlanRevision.id,
-            execution_plan_id: firstExecutionPlanRevision.execution_plan_id,
+            implementation_plan_id: firstExecutionPlanRevision.implementation_plan_id,
           },
           allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
           attachment_refs: [],
@@ -617,28 +621,29 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ).body;
 
     expect(savedRevision).toMatchObject({
-      execution_plan_id: firstExecutionPlanRevision.execution_plan_id,
+      implementation_plan_id: firstExecutionPlanRevision.implementation_plan_id,
       revision_number: firstExecutionPlanRevision.revision_number + 1,
-      content: '# Saved Execution Plan draft\n\nPersisted through the item-scoped draft endpoint.',
+      content: '# Saved Implementation Plan Doc draft\n\nPersisted through the item-scoped draft endpoint.',
       attachment_refs: [],
     });
+    expect(savedRevision).not.toHaveProperty('execution_plan_id');
     expect(savedRevision).not.toHaveProperty('structured_document');
-    await expect(repository.getExecutionPlan(firstExecutionPlanRevision.execution_plan_id)).resolves.toMatchObject({
+    await expect(repository.getExecutionPlan(firstExecutionPlanRevision.implementation_plan_id)).resolves.toMatchObject({
       current_revision_id: savedRevision.id,
     });
-    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ execution_plan_status: 'draft' });
-    await expect(repository.listObjectEvents(savedRevision.id, 'execution_plan_revision')).resolves.toEqual(
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'draft' });
+    await expect(repository.listObjectEvents(savedRevision.id, 'implementation_plan_revision')).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           actor_id: actorTech,
-          event_type: 'execution_plan_draft_saved',
+          event_type: 'implementation_plan_draft_saved',
           metadata: expect.objectContaining({ previous_revision_id: firstExecutionPlanRevision.id }),
         }),
       ]),
     );
   });
 
-  it('preserves non-inline item-scoped Execution Plan attachments across Markdown draft saves', async () => {
+  it('preserves non-inline item-scoped Implementation Plan Doc attachments across Markdown draft saves', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -652,25 +657,25 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
       .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
       .expect(201);
-    const firstExecutionPlanRevision = await generateItemExecutionPlanDraft(app, plan.id, item.id);
+    const firstExecutionPlanRevision = await generateItemImplementationPlanDraft(app, plan.id, item.id);
     const attachment = await seedRevisionAttachment(repository, {
       id: 'att-execution-plan-non-inline',
       objectRef: {
-        type: 'execution_plan_revision',
+        type: 'implementation_plan_revision',
         id: firstExecutionPlanRevision.id,
-        execution_plan_id: firstExecutionPlanRevision.execution_plan_id,
+        implementation_plan_id: firstExecutionPlanRevision.implementation_plan_id,
       },
     });
 
     const savedRevision = (
       await request(server)
-        .patch(`/development-plans/${plan.id}/items/${item.id}/execution-plan/draft`)
+        .patch(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/draft`)
         .send({
-          markdown: '# Saved Execution Plan draft\n\nText-only edit should keep the attached checklist available.',
+          markdown: '# Saved Implementation Plan Doc draft\n\nText-only edit should keep the attached checklist available.',
           object_ref: {
-            type: 'execution_plan_revision',
+            type: 'implementation_plan_revision',
             id: firstExecutionPlanRevision.id,
-            execution_plan_id: firstExecutionPlanRevision.execution_plan_id,
+            implementation_plan_id: firstExecutionPlanRevision.implementation_plan_id,
           },
           allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
           attachment_refs: [attachment],
@@ -680,7 +685,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ).body;
 
     expect(savedRevision.attachment_refs).toEqual([expect.objectContaining({ id: attachment.id })]);
-    await expect(repository.listAttachmentsForObject('execution_plan_revision', savedRevision.id)).resolves.toEqual([
+    await expect(repository.listAttachmentsForObject('implementation_plan_revision', savedRevision.id)).resolves.toEqual([
       expect.objectContaining({ id: attachment.id }),
     ]);
   });
@@ -1271,7 +1276,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .send({ actor_id: actorReviewer, rationale: 'Runtime Spec approved with QA evidence.' })
       .expect(201);
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan-revisions/generate`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
       .send({ actor_id: actorTech })
       .expect(201);
   });
@@ -1377,7 +1382,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ).resolves.toMatchObject({ applied: true, revision: { id: first.applied ? first.revision.id : undefined } });
   });
 
-  it('schedules runtime-backed Execution Plan generation and writes structured draft fields from the approved Spec', async () => {
+  it('schedules runtime-backed Implementation Plan Doc generation and writes structured draft fields from the approved Spec', async () => {
     const { plan, item, boundary } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
@@ -1396,13 +1401,13 @@ describe('SpecPlanService item-scoped delivery API', () => {
 
     const actionResponse = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan-revisions/generate`)
+        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
 
     expect(actionResponse.action_run).toMatchObject({
-      action_type: 'generate_development_plan_item_execution_plan_revision',
+      action_type: 'generate_development_plan_item_implementation_plan_revision',
       target_object_id: item.id,
       action_input_json: expect.objectContaining({
         approved_boundary_summary_revision_id: boundary.revision_id,
@@ -1471,7 +1476,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(executionPlanRevision).toMatchObject({
       development_plan_item_id: item.id,
       based_on_spec_revision_id: specRevision.id,
-      summary: 'Generated Execution Plan revision',
+      summary: 'Generated Implementation Plan Doc revision',
       content: 'Implement the approved Spec in focused slices.',
       author_actor_id: actorTech,
       structured_document: expect.objectContaining({
@@ -1484,10 +1489,10 @@ describe('SpecPlanService item-scoped delivery API', () => {
         handoff_criteria: ['Targeted tests pass'],
       }),
     });
-    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ execution_plan_status: 'draft' });
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'draft' });
     const replayed = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan-revisions/generate`)
+        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
@@ -1495,7 +1500,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(replayed.runtime_job.id).toBe(actionResponse.runtime_job.id);
   });
 
-  it('does not create an Execution Plan revision when the approved Spec precondition is stale', async () => {
+  it('does not create an Implementation Plan Doc revision when the approved Spec precondition is stale', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
@@ -1514,7 +1519,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ).body;
     const actionResponse = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan-revisions/generate`)
+        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
@@ -1539,7 +1544,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     await expect(repository.listExecutionPlansForDevelopmentPlanItem(item.id)).resolves.toEqual([]);
   });
 
-  it('rejects runtime-backed Execution Plan generation when the item drifts after Spec approval', async () => {
+  it('rejects runtime-backed Implementation Plan Doc generation when the item drifts after Spec approval', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
@@ -1560,7 +1565,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     });
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan-revisions/generate`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
       .send({ actor_id: actorTech })
       .expect(400)
       .expect(({ body }) => {
@@ -1568,7 +1573,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       });
   });
 
-  it('replays an already-applied Execution Plan writer result before checking now-stale item preconditions', async () => {
+  it('replays an already-applied Implementation Plan Doc writer result before checking now-stale item preconditions', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
@@ -1585,14 +1590,14 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .expect(201);
     const actionResponse = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan-revisions/generate`)
+        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
     const actionRun = (await repository.getAutomationActionRun(actionResponse.action_run.id))!;
     const generated = generatedExecutionPlanRevision(item.id, specRevision.id);
 
-    const first = await specPlanService.writeGeneratedItemExecutionPlanRevision({
+    const first = await specPlanService.writeGeneratedItemImplementationPlanRevision({
       actionRun,
       runtime_job_id: actionResponse.runtime_job.id,
       generated,
@@ -1600,7 +1605,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(first).toMatchObject({ applied: true });
 
     await expect(
-      specPlanService.writeGeneratedItemExecutionPlanRevision({
+      specPlanService.writeGeneratedItemImplementationPlanRevision({
         actionRun,
         runtime_job_id: actionResponse.runtime_job.id,
         generated,
@@ -1608,7 +1613,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ).resolves.toMatchObject({ applied: true, revision: { id: first.applied ? first.revision.id : undefined } });
   });
 
-  it('rejects legacy Execution Plan draft generation when the approved Spec no longer matches the approved Boundary Summary revision', async () => {
+  it('rejects legacy Implementation Plan Doc draft generation when the approved Spec no longer matches the approved Boundary Summary revision', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -1630,7 +1635,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     });
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan/generate-draft`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400)
       .expect(({ body }) => {
@@ -1660,7 +1665,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(second.runtime_job.input_digest).toBe(first.runtime_job.input_digest);
   });
 
-  it('replays runtime-backed Execution Plan generation scheduling for duplicate POSTs', async () => {
+  it('replays runtime-backed Implementation Plan Doc generation scheduling for duplicate POSTs', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
@@ -1676,12 +1681,12 @@ describe('SpecPlanService item-scoped delivery API', () => {
 
     const first = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan-revisions/generate`)
+        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
     const secondResponse = await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/execution-plan-revisions/generate`)
+      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
       .send({ actor_id: actorTech });
     expect(secondResponse.status, JSON.stringify(secondResponse.body)).toBe(201);
     const second = secondResponse.body;
@@ -1752,7 +1757,7 @@ async function seedRevisionAttachment(
     id: string;
     objectRef:
       | { type: 'spec_revision'; id: string; spec_id: string }
-      | { type: 'execution_plan_revision'; id: string; execution_plan_id: string };
+      | { type: 'implementation_plan_revision'; id: string; implementation_plan_id: string };
   },
 ): Promise<AttachmentRef> {
   const attachment: Attachment = {
@@ -1787,10 +1792,10 @@ async function generateItemSpecDraft(app: INestApplication, developmentPlanId: s
   ).body;
 }
 
-async function generateItemExecutionPlanDraft(app: INestApplication, developmentPlanId: string, itemId: string) {
+async function generateItemImplementationPlanDraft(app: INestApplication, developmentPlanId: string, itemId: string) {
   return (
     await request(app.getHttpServer())
-      .post(`/development-plans/${developmentPlanId}/items/${itemId}/execution-plan/generate-draft`)
+      .post(`/development-plans/${developmentPlanId}/items/${itemId}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(201)
   ).body;
@@ -1849,7 +1854,7 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
   await request(server)
     .post(`/boundary-brainstorming-sessions/${session.id}/decisions`)
     .send({
-      text: 'Keep implementation scoped to item-level spec and execution plan gates.',
+      text: 'Keep implementation scoped to item-level Spec and Implementation Plan Doc gates.',
       rationale: 'The Development Plan Item is the product boundary.',
       actor_id: actorTech,
     })
@@ -1922,7 +1927,7 @@ async function seedDevelopmentPlanItem(app: INestApplication, itemOverrides: Ite
       .send({
         project_id: project.id,
         source_ref: { type: 'requirement', id: workItem.id },
-        title: 'Spec and execution plan gate development plan',
+        title: 'Spec and Implementation Plan Doc gate development plan',
         actor_id: actorProduct,
       })
       .expect(201)
@@ -1931,7 +1936,7 @@ async function seedDevelopmentPlanItem(app: INestApplication, itemOverrides: Ite
     await request(server)
       .post(`/development-plans/${plan.id}/items`)
       .send({
-        title: 'Gate specs and execution plans by item',
+        title: 'Gate Specs and Implementation Plan Docs by item',
         summary: 'Generate and review artifacts only from approved Development Plan Item boundaries.',
         responsible_role: 'tech_lead',
         driver_actor_id: actorTech,
@@ -2258,16 +2263,16 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
         project_id: project.id,
         kind: 'requirement',
         title: 'Extract SpecPlanService',
-        goal: 'Move spec and execution plan commands to the item boundary.',
-        success_criteria: ['Spec and execution plan routes are item-scoped.'],
+        goal: 'Move Spec and Implementation Plan Doc commands to the item boundary.',
+        success_criteria: ['Spec and Implementation Plan Doc routes are item-scoped.'],
         priority: 'P0',
         risk: 'medium',
         driver_actor_id: actorProduct,
         intake_context: {
           type: 'requirement',
-          stakeholder_problem: 'Direct source-object spec and plan routing bypasses item boundaries.',
+          stakeholder_problem: 'Direct document-workspace spec and plan routing bypasses item boundaries.',
           desired_outcome: 'Artifacts are generated from approved Development Plan Items.',
-          acceptance_criteria: ['Spec and execution plan commands require item gates.'],
+          acceptance_criteria: ['Spec and Implementation Plan Doc commands require item gates.'],
           in_scope: ['SpecPlanService API tests'],
         },
       })
@@ -2279,8 +2284,8 @@ const createProjectRepoWorkItem = async (app: INestApplication) => {
 
 function boundarySummaryProposal() {
   return {
-    summary_markdown: '# Boundary Summary\n\nGenerate Spec and Execution Plan revisions from the approved item boundary.',
-    confirmed_scope: ['Item-scoped Spec and Execution Plan APIs'],
+    summary_markdown: '# Boundary Summary\n\nGenerate Spec and Implementation Plan Doc revisions from the approved item boundary.',
+    confirmed_scope: ['Item-scoped Spec and Implementation Plan Doc APIs'],
     confirmed_out_of_scope: ['Direct Work Item creation compatibility'],
     accepted_assumptions: ['Mock draft generation is sufficient for service tests'],
     open_risks: ['Reviewers need structured revision comparison'],
@@ -2312,7 +2317,7 @@ function generatedExecutionPlanRevision(itemId: string, specRevisionId: string) 
     schema_version: 'execution_plan_revision.v1',
     development_plan_item_id: itemId,
     based_on_spec_revision_id: specRevisionId,
-    summary: 'Generated Execution Plan revision',
+    summary: 'Generated Implementation Plan Doc revision',
     content_markdown: 'Implement the approved Spec in focused slices.',
     implementation_sequence: ['Add schemas', 'Wire worker dispatch'],
     validation_strategy: ['Run targeted runtime tests'],
@@ -2328,7 +2333,7 @@ function generatedExecutionPlanRevision(itemId: string, specRevisionId: string) 
     ],
     rollback_notes: 'Revert generated runtime changes.',
     handoff_criteria: ['Targeted tests pass'],
-    public_summary: 'Generated an Execution Plan revision.',
+    public_summary: 'Generated an Implementation Plan Doc revision.',
   };
 }
 

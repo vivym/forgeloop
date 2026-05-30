@@ -25,7 +25,7 @@ export type DevelopmentPlanItemRow = {
   reviewer_actor_id?: string;
   boundary_status?: string;
   spec_status?: string;
-  execution_plan_status?: string;
+  implementation_plan_status?: string;
   execution_status?: string;
   review_status?: string;
   qa_handoff_status?: string;

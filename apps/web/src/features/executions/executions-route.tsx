@@ -57,7 +57,7 @@ export function ExecutionsRoute() {
       ? 'Execution supervision unavailable'
       : focusedRow === undefined
         ? 'No execution supervision rows'
-        : `Worker state ${focusedRow.workerState}; approved Execution Plan ${focusedRow.approvedExecutionPlanRevision}`;
+        : `Worker state ${focusedRow.workerState}; approved Implementation Plan Doc ${focusedRow.approvedImplementationPlanRevision}`;
 
   return (
     <ProductPage family="execution-supervision" ariaLabel="Executions">
@@ -65,7 +65,7 @@ export function ExecutionsRoute() {
       <div className="sr-only">
         <span>{pageState}</span>
         <span>{executionRisk(rows, query.isError)}</span>
-        <span>{focusedRow === undefined ? 'Allowed action: wait for an approved Execution Plan to start' : `Allowed action: ${focusedRow.allowedAction.label}`}</span>
+        <span>{focusedRow === undefined ? 'Allowed action: wait for an approved Implementation Plan Doc to start' : `Allowed action: ${focusedRow.allowedAction.label}`}</span>
         <span>{focusedRow === undefined ? 'Execution owner supervises Development Plan Item delivery.' : `Development Plan Item: ${focusedRow.developmentPlanItem}`}</span>
       </div>
       <ExecutionSupervisionLayout
@@ -103,7 +103,7 @@ function ExecutionLanes({
   const grouped = groupRows(rows);
 
   if (rows.length === 0) {
-    return <EmptyState description="Approved Execution Plans will appear here when execution starts." title="No executions yet." />;
+    return <EmptyState description="Approved Implementation Plan Docs will appear here when execution starts." title="No executions yet." />;
   }
 
   return (
@@ -138,7 +138,7 @@ function ExecutionEvidence({ row }: { row: ExecutionSupervisionRow | undefined }
         <p className="m-0 text-sm text-text-secondary">No execution evidence is selected.</p>
       ) : (
         <dl className="grid gap-2 text-sm">
-          <Definition label="Approved Execution Plan" value={row.approvedExecutionPlanRevision} />
+          <Definition label="Approved Implementation Plan Doc" value={row.approvedImplementationPlanRevision} />
           <Definition label="Development Plan Item" value={row.developmentPlanItem} />
           <Definition label="Current step" value={row.currentStep} />
           <Definition label="PR, diff, and test evidence" value={row.evidenceSummary} />
@@ -166,10 +166,10 @@ function ExecutionRow({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h3 className="m-0 min-w-0 text-sm font-semibold text-text-primary">{row.title}</h3>
             <StatusPill tone={row.statusTone}>{row.workerState}</StatusPill>
-            <Badge tone="info">Approved Execution Plan</Badge>
+            <Badge tone="info">Approved Implementation Plan Doc</Badge>
           </div>
           <dl className="grid gap-2 text-sm md:grid-cols-2 xl:grid-cols-3">
-            <Definition label="Execution Plan revision" value={row.approvedExecutionPlanRevision} />
+            <Definition label="Implementation Plan Doc revision" value={row.approvedImplementationPlanRevision} />
             <Definition label="Development Plan Item" value={row.developmentPlanItem} />
             <Definition label="Worker state" value={row.workerState} />
             <Definition label="Current step" value={row.currentStep} />

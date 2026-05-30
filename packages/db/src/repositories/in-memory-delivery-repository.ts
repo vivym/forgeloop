@@ -3504,7 +3504,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     const updatedExecutionIds: string[] = [];
     const executions = valuesFor(this.executions).sort(byCreatedAtThenId);
     for (const execution of executions) {
-      const executionPlanRevision = this.executionPlanRevisions.get(execution.execution_plan_revision_id);
+      const executionPlanRevision = this.executionPlanRevisions.get(execution.implementation_plan_revision_id);
       if (executionPlanRevision === undefined) {
         throw new Error(`execution_approved_spec_linkage_backfill_failed: execution_plan_revision_missing:${execution.id}`);
       }

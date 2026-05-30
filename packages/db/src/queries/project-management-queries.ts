@@ -14,11 +14,11 @@ import type {
   RequirementListItem,
   TechDebtDetail,
   TechDebtListItem,
-  TypedSourceAttachmentRef,
-  TypedSourceEvidenceRef,
-  TypedSourceRelationshipRef,
+  TypedDocumentAttachmentRef,
+  TypedDocumentEvidenceRef,
+  TypedDocumentRelationshipRef,
 } from '@forgeloop/contracts';
-import { productObjectRefSchema, releaseReadinessDetailSchema, typedSourceRelationshipRefSchema } from '@forgeloop/contracts';
+import { productObjectRefSchema, releaseReadinessDetailSchema, typedDocumentRelationshipRefSchema } from '@forgeloop/contracts';
 import type {
   CodeReviewHandoff,
   DevelopmentPlan,
@@ -85,7 +85,7 @@ type DashboardCommandAction = {
     | 'release_blocker'
     | 'code_review_changes'
     | 'qa_blocker'
-    | 'missing_execution_plan_approval'
+    | 'missing_implementation_plan_doc_approval'
     | 'missing_spec_approval'
     | 'resumable_execution'
     | 'stale_context';
@@ -93,7 +93,7 @@ type DashboardCommandAction = {
   next_action: string;
   runtime?: { execution_id: string; resumable: boolean; state: string };
   severity: 'critical' | 'high' | 'medium' | 'low';
-  stage_id: 'boundary' | 'spec' | 'execution_plan' | 'execution' | 'code_review' | 'qa' | 'release';
+  stage_id: 'boundary' | 'spec' | 'implementation_plan_doc' | 'execution' | 'code_review' | 'qa' | 'release';
   typed_ref: ReturnType<typeof developmentPlanItemRef>;
 };
 type DashboardRuntimeSignal = {
@@ -103,7 +103,7 @@ type DashboardRuntimeSignal = {
   resumable: boolean;
   state: string;
 };
-type TypedSourceProjectionContext = {
+type TypedDocumentProjectionContext = {
   plans: DevelopmentPlan[];
   planItems: DevelopmentPlanItemWithPlan[];
   executionPackages: ExecutionPackage[];
@@ -114,7 +114,7 @@ type TypedSourceProjectionContext = {
   attachments: Attachment[];
   releaseEvidence: ReleaseEvidence[];
 };
-type TypedSourceProjection = {
+type TypedDocumentProjection = {
   planning_coverage: {
     development_plan_count: number;
     plan_item_count: number;
@@ -124,7 +124,7 @@ type TypedSourceProjection = {
     current_gate_counts: {
       boundary: number;
       spec: number;
-      execution_plan: number;
+      implementation_plan_doc: number;
       execution: number;
       code_review: number;
       qa: number;
@@ -132,11 +132,11 @@ type TypedSourceProjection = {
     };
     blocker_count: number;
   };
-  linked_development_plans: Extract<TypedSourceRelationshipRef, { type: 'development_plan' }>[];
-  linked_plan_items: Extract<TypedSourceRelationshipRef, { type: 'development_plan_item' }>[];
-  evidence_refs: TypedSourceEvidenceRef[];
-  attachment_refs: TypedSourceAttachmentRef[];
-  release_refs: Extract<TypedSourceRelationshipRef, { type: 'release' }>[];
+  linked_development_plans: Extract<TypedDocumentRelationshipRef, { type: 'development_plan' }>[];
+  linked_plan_items: Extract<TypedDocumentRelationshipRef, { type: 'development_plan_item' }>[];
+  evidence_refs: TypedDocumentEvidenceRef[];
+  attachment_refs: TypedDocumentAttachmentRef[];
+  release_refs: Extract<TypedDocumentRelationshipRef, { type: 'release' }>[];
   audit: {
     created_at: string;
     updated_at: string;
@@ -235,9 +235,9 @@ export async function listMyWorkQueue(
 export async function listRequirements(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: RequirementListItem[] }> {
   const [workItems, context] = await Promise.all([
     typedWorkItemsForQuery(repository, query, 'requirement'),
-    typedSourceProjectionContext(repository, query.project_id),
+    typedDocumentProjectionContext(repository, query.project_id),
   ]);
-  return { items: workItems.map((workItem) => workItemToRequirementListItem(workItem, typedSourceProjection(workItem, context))) };
+  return { items: workItems.map((workItem) => workItemToRequirementListItem(workItem, typedDocumentProjection(workItem, context))) };
 }
 
 export async function getRequirementDetail(repository: DeliveryRepository, requirementId: string): Promise<RequirementDetail | undefined> {
@@ -245,16 +245,16 @@ export async function getRequirementDetail(repository: DeliveryRepository, requi
   if (workItem === undefined) {
     return undefined;
   }
-  const context = await typedSourceProjectionContext(repository, workItem.project_id);
-  return workItemToRequirementDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
+  const context = await typedDocumentProjectionContext(repository, workItem.project_id);
+  return workItemToRequirementDetail(workItem, typedDocumentProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listInitiatives(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: InitiativeListItem[] }> {
   const [workItems, context] = await Promise.all([
     typedWorkItemsForQuery(repository, query, 'initiative'),
-    typedSourceProjectionContext(repository, query.project_id),
+    typedDocumentProjectionContext(repository, query.project_id),
   ]);
-  return { items: workItems.map((workItem) => workItemToInitiativeListItem(workItem, typedSourceProjection(workItem, context))) };
+  return { items: workItems.map((workItem) => workItemToInitiativeListItem(workItem, typedDocumentProjection(workItem, context))) };
 }
 
 export async function getInitiativeDetail(repository: DeliveryRepository, initiativeId: string): Promise<InitiativeDetail | undefined> {
@@ -262,16 +262,16 @@ export async function getInitiativeDetail(repository: DeliveryRepository, initia
   if (workItem === undefined) {
     return undefined;
   }
-  const context = await typedSourceProjectionContext(repository, workItem.project_id);
-  return workItemToInitiativeDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
+  const context = await typedDocumentProjectionContext(repository, workItem.project_id);
+  return workItemToInitiativeDetail(workItem, typedDocumentProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listTechDebt(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: TechDebtListItem[] }> {
   const [workItems, context] = await Promise.all([
     typedWorkItemsForQuery(repository, query, 'tech_debt'),
-    typedSourceProjectionContext(repository, query.project_id),
+    typedDocumentProjectionContext(repository, query.project_id),
   ]);
-  return { items: workItems.map((workItem) => workItemToTechDebtListItem(workItem, typedSourceProjection(workItem, context))) };
+  return { items: workItems.map((workItem) => workItemToTechDebtListItem(workItem, typedDocumentProjection(workItem, context))) };
 }
 
 export async function getTechDebtDetail(repository: DeliveryRepository, techDebtId: string): Promise<TechDebtDetail | undefined> {
@@ -279,16 +279,16 @@ export async function getTechDebtDetail(repository: DeliveryRepository, techDebt
   if (workItem === undefined) {
     return undefined;
   }
-  const context = await typedSourceProjectionContext(repository, workItem.project_id);
-  return workItemToTechDebtDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
+  const context = await typedDocumentProjectionContext(repository, workItem.project_id);
+  return workItemToTechDebtDetail(workItem, typedDocumentProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function listBugs(repository: DeliveryRepository, query: ProductListQuery): Promise<{ items: BugListItem[] }> {
   const [workItems, context] = await Promise.all([
     typedWorkItemsForQuery(repository, query, 'bug'),
-    typedSourceProjectionContext(repository, query.project_id),
+    typedDocumentProjectionContext(repository, query.project_id),
   ]);
-  return { items: workItems.map((workItem) => workItemToBugListItem(workItem, typedSourceProjection(workItem, context))) };
+  return { items: workItems.map((workItem) => workItemToBugListItem(workItem, typedDocumentProjection(workItem, context))) };
 }
 
 export async function getBugDetail(repository: DeliveryRepository, bugId: string): Promise<BugDetail | undefined> {
@@ -296,8 +296,8 @@ export async function getBugDetail(repository: DeliveryRepository, bugId: string
   if (workItem === undefined) {
     return undefined;
   }
-  const context = await typedSourceProjectionContext(repository, workItem.project_id);
-  return workItemToBugDetail(workItem, typedSourceProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
+  const context = await typedDocumentProjectionContext(repository, workItem.project_id);
+  return workItemToBugDetail(workItem, typedDocumentProjection(workItem, context), await sourceRelationshipRefs(repository, workItem));
 }
 
 export async function getReleaseReadinessDetail(
@@ -350,7 +350,7 @@ export async function getDashboard(
     project_id: query.project_id,
     sections: [
       dashboardSection('flow-health', 'Flow Health', developmentPlanItems.length, [
-        { label: 'Source objects', value: workItems.length },
+        { label: 'Typed documents', value: workItems.length },
         { label: 'Development Plan Items', value: developmentPlanItems.length },
         { label: 'Executions', value: executions.length },
       ]),
@@ -362,8 +362,8 @@ export async function getDashboard(
       dashboardSection('aging', 'Aging', agingScore(developmentPlanItems), [
         { label: 'Specs waiting review', value: developmentPlanItems.filter(({ item }) => item.spec_status === 'in_review').length },
         {
-          label: 'Execution plans waiting review',
-          value: developmentPlanItems.filter(({ item }) => item.execution_plan_status === 'in_review').length,
+          label: 'Implementation Plan Docs waiting review',
+          value: developmentPlanItems.filter(({ item }) => item.implementation_plan_status === 'in_review').length,
         },
       ]),
       dashboardSection('role-load', 'Role Load', developmentPlanItems.length, roleLoadMetrics(developmentPlanItems)),
@@ -390,7 +390,7 @@ export async function listDevelopmentPlanProjections(
 ): Promise<Record<string, unknown>> {
   const [plans, roleContext] = await Promise.all([
     repository.listDevelopmentPlans(query.project_id),
-    typedSourceProjectionContext(repository, query.project_id),
+    typedDocumentProjectionContext(repository, query.project_id),
   ]);
   const visiblePlans = plans.filter((plan) => developmentPlanMatchesQuery(plan, query, roleContext));
   const rows = await Promise.all(
@@ -508,7 +508,7 @@ export async function getDevelopmentPlanItemProjection(
     affected_surfaces: item.affected_surfaces,
     boundary_status: item.boundary_status,
     spec_status: item.spec_status,
-    execution_plan_status: item.execution_plan_status,
+    implementation_plan_status: item.implementation_plan_status,
     execution_status: item.execution_status,
     review_status: item.review_status,
     qa_handoff_status: item.qa_handoff_status,
@@ -517,7 +517,7 @@ export async function getDevelopmentPlanItemProjection(
     revisions: itemRevisions,
     boundary_summary_revisions: boundaryRevisionCandidates,
     specs: await Promise.all(specs.filter((spec) => spec.development_plan_item_id === item.id).map((spec) => specQueueRow(repository, plan, item, spec))),
-    execution_plans: await Promise.all(executionPlans.map((executionPlan) => executionPlanQueueRow(repository, plan, item, executionPlan))),
+    implementation_plan_docs: await Promise.all(executionPlans.map((executionPlan) => executionPlanQueueRow(repository, plan, item, executionPlan))),
     executions: await Promise.all(
       executions
         .filter(({ execution }) => execution.development_plan_item_id === item.id)
@@ -785,22 +785,22 @@ function dashboardCommandActions({
         stage_id: 'spec',
       }),
     );
-  const missingExecutionPlanApprovals = developmentPlanItems
+  const missingImplementationPlanDocApprovals = developmentPlanItems
     .filter(({ item }) =>
-      item.execution_plan_status === 'blocked' ||
-      item.execution_plan_status === 'changes_requested' ||
-      item.execution_plan_status === 'in_review',
+      item.implementation_plan_status === 'blocked' ||
+      item.implementation_plan_status === 'changes_requested' ||
+      item.implementation_plan_status === 'in_review',
     )
     .map(({ item, plan }) =>
       dashboardDevelopmentPlanItemAction({
-        id: `execution-plan:${item.id}`,
+        id: `implementation-plan-doc:${item.id}`,
         item,
-        kind: 'missing_execution_plan_approval',
+        kind: 'missing_implementation_plan_doc_approval',
         label: item.title,
         next_action: item.next_action,
         plan,
-        severity: item.execution_plan_status === 'in_review' ? 'medium' : 'high',
-        stage_id: 'execution_plan',
+        severity: item.implementation_plan_status === 'in_review' ? 'medium' : 'high',
+        stage_id: 'implementation_plan_doc',
       }),
     );
   const resumableExecutions = executions
@@ -825,7 +825,7 @@ function dashboardCommandActions({
     ...reviewChanges,
     ...qaBlockers,
     ...missingSpecApprovals,
-    ...missingExecutionPlanApprovals,
+      ...missingImplementationPlanDocApprovals,
     ...resumableExecutions,
   ]).slice(0, 7);
 }
@@ -925,9 +925,9 @@ function developmentPlanItemRef(item: DevelopmentPlanItem) {
 
 function executionPlanRevisionRef(executionPlan: ExecutionPlanDocument, revision?: ExecutionPlanRevision) {
   return {
-    type: 'execution_plan_revision' as const,
+    type: 'implementation_plan_revision' as const,
     id: revision?.id ?? executionPlan.approved_revision_id ?? executionPlan.current_revision_id ?? executionPlan.id,
-    execution_plan_id: executionPlan.id,
+    implementation_plan_id: executionPlan.id,
     title: revision?.summary,
   };
 }
@@ -946,11 +946,11 @@ function developmentPlanItemQueueRow(plan: DevelopmentPlan, item: DevelopmentPla
     status: item.next_action,
     boundary_status: item.boundary_status,
     spec_status: item.spec_status,
-    execution_plan_status: item.execution_plan_status,
+    implementation_plan_status: item.implementation_plan_status,
     execution_status: item.execution_status,
     review_status: item.review_status,
     qa_handoff_status: item.qa_handoff_status,
-    stale: item.spec_status === 'stale' || item.execution_plan_status === 'stale' || item.boundary_status === 'stale',
+    stale: item.spec_status === 'stale' || item.implementation_plan_status === 'stale' || item.boundary_status === 'stale',
     blocked: isDevelopmentPlanItemBlocked(item),
     next_action: item.next_action,
     href: `/development-plans/${plan.id}/items/${item.id}`,
@@ -982,7 +982,7 @@ async function specQueueRow(repository: DeliveryRepository, plan: DevelopmentPla
     risk_scenarios: revision?.risk_scenarios,
     stale: item.spec_status === 'stale',
     blocked: item.spec_status === 'blocked',
-    next_action: item.spec_status === 'approved' ? 'generate_execution_plan' : 'review_spec',
+    next_action: item.spec_status === 'approved' ? 'generate_implementation_plan_doc' : 'review_spec',
     href: `/development-plans/${plan.id}/items/${item.id}`,
     updated_at: spec.updated_at,
   };
@@ -1000,8 +1000,8 @@ async function executionPlanQueueRow(
       : await repository.getExecutionPlanRevision(executionPlan.approved_revision_id);
   return {
     id: executionPlan.id,
-    object_ref: { type: 'execution_plan' as const, id: executionPlan.id, title: revision?.summary ?? `${item.title} Execution Plan` },
-    artifact_type: 'execution_plan',
+    object_ref: { type: 'implementation_plan_doc' as const, id: executionPlan.id, title: revision?.summary ?? `${item.title} Implementation Plan Doc` },
+    artifact_type: 'implementation_plan_doc',
     source_ref: item.source_ref,
     development_plan_item_ref: developmentPlanItemRef(item),
     reviewer_actor_id: executionPlan.approved_by_actor_id ?? item.reviewer_actor_id,
@@ -1011,9 +1011,9 @@ async function executionPlanQueueRow(
     current_revision_id: executionPlan.current_revision_id,
     approved_revision_id: executionPlan.approved_revision_id,
     approved_revision_ref: revision === undefined ? undefined : executionPlanRevisionRef(executionPlan, revision),
-    stale: item.execution_plan_status === 'stale',
-    blocked: item.execution_plan_status === 'blocked',
-    next_action: executionPlan.status === 'approved' ? 'start_execution' : 'review_execution_plan',
+    stale: item.implementation_plan_status === 'stale',
+    blocked: item.implementation_plan_status === 'blocked',
+    next_action: executionPlan.status === 'approved' ? 'start_execution' : 'review_implementation_plan_doc',
     href: `/development-plans/${plan.id}/items/${item.id}`,
     updated_at: executionPlan.updated_at,
   };
@@ -1067,7 +1067,8 @@ async function executionQueueRow(
     object_ref: execution.ref,
     source_ref: item.source_ref,
     development_plan_item_ref: developmentPlanItemRef(item),
-    execution_plan_revision_ref: execution.execution_plan_revision_ref,
+    implementation_plan_revision_id: execution.implementation_plan_revision_id,
+    implementation_plan_revision_ref: execution.implementation_plan_revision_ref,
     status: execution.status,
     worker_state: execution.worker_state ?? execution.status,
     current_step: execution.current_step ?? executionCurrentStep(execution),
@@ -1174,7 +1175,7 @@ function qaHandoffQueueRow(plan: DevelopmentPlan, item: DevelopmentPlanItem, han
     source_ref: handoff.source_ref,
     development_plan_item_ref: developmentPlanItemRef(item),
     approved_spec_revision_ref: handoff.approved_spec_revision_ref,
-    approved_execution_plan_revision_ref: handoff.approved_execution_plan_revision_ref,
+    approved_implementation_plan_revision_ref: handoff.approved_implementation_plan_revision_ref,
     acceptance_criteria: handoff.acceptance_criteria,
     test_strategy: handoff.test_strategy,
     verification_evidence_refs: handoff.verification_evidence_refs,
@@ -1249,7 +1250,7 @@ function planItemRuntimeBoundary(
     phase: selected.phase,
     activity_state: selected.activity_state,
     gate_state: selected.gate_state,
-    execution_plan_revision_id: selected.execution_plan_revision_id,
+    implementation_plan_revision_id: selected.execution_plan_revision_id,
   };
 }
 
@@ -1303,7 +1304,7 @@ function releaseEvidenceLinksPlanItem(evidence: ReleaseEvidence, item: Developme
 
 function planItemReleaseEvidenceRef(evidence: ReleaseEvidence): Record<string, unknown> {
   return {
-    ...typedSourceEvidenceRef(evidence),
+    ...typedDocumentEvidenceRef(evidence),
     evidence_type: evidence.evidence_type,
     status: evidence.status,
     summary: evidence.summary,
@@ -1365,12 +1366,12 @@ function executionPlanToMyWorkQueueItem(
   item: DevelopmentPlanItem,
 ): MyWorkQueueItem {
   return {
-    id: `execution_plan:${executionPlan.id}`,
-    object_ref: { type: 'execution_plan', id: executionPlan.id, title: `${item.title} Execution Plan` },
-    title: `${item.title} Execution Plan`,
-    attention_reason: `execution_plan_${executionPlan.status}`,
+    id: `implementation_plan_doc:${executionPlan.id}`,
+    object_ref: { type: 'implementation_plan_doc', id: executionPlan.id, title: `${item.title} Implementation Plan Doc` },
+    title: `${item.title} Implementation Plan Doc`,
+    attention_reason: `implementation_plan_doc_${executionPlan.status}`,
     actor_id: executionPlan.approved_by_actor_id ?? item.reviewer_actor_id,
-    expected_action: executionPlan.status === 'approved' ? 'Start execution' : 'Review Execution Plan',
+    expected_action: executionPlan.status === 'approved' ? 'Start execution' : 'Review Implementation Plan Doc',
     href: `/development-plans/${plan.id}/items/${item.id}`,
   };
 }
@@ -1405,7 +1406,7 @@ function developmentPlanItemToBoardCard(plan: DevelopmentPlan, item: Development
     object_ref: developmentPlanItemRef(item),
     title: item.title,
     column_id: item.next_action,
-    status: `${item.boundary_status}/${item.spec_status}/${item.execution_plan_status}/${item.execution_status}`,
+    status: `${item.boundary_status}/${item.spec_status}/${item.implementation_plan_status}/${item.execution_status}`,
     risk: item.risk,
     driver_actor_id: item.driver_actor_id,
     blocked: isDevelopmentPlanItemBlocked(item),
@@ -1460,8 +1461,8 @@ function isDevelopmentPlanItemBlocked(item: DevelopmentPlanItem): boolean {
     item.boundary_status === 'changes_requested' ||
     item.spec_status === 'blocked' ||
     item.spec_status === 'changes_requested' ||
-    item.execution_plan_status === 'blocked' ||
-    item.execution_plan_status === 'changes_requested' ||
+    item.implementation_plan_status === 'blocked' ||
+    item.implementation_plan_status === 'changes_requested' ||
     item.execution_status === 'failed' ||
     item.execution_status === 'interrupted' ||
     item.review_status === 'blocked' ||
@@ -1474,7 +1475,7 @@ function isDevelopmentPlanItemBlocked(item: DevelopmentPlanItem): boolean {
 function currentDevelopmentPlanItemGate(item: DevelopmentPlanItem): string {
   if (item.boundary_status !== 'approved') return 'boundary';
   if (item.spec_status !== 'approved') return 'spec';
-  if (item.execution_plan_status !== 'approved') return 'execution_plan';
+  if (item.implementation_plan_status !== 'approved') return 'implementation_plan_doc';
   if (item.execution_status !== 'completed') return 'execution';
   if (item.review_status !== 'approved') return 'review';
   if (item.qa_handoff_status !== 'approved') return 'qa';
@@ -1512,7 +1513,7 @@ function roleLoadMetrics(items: DevelopmentPlanItemWithPlan[]): Array<{ label: s
 }
 
 function agingScore(items: DevelopmentPlanItemWithPlan[]): number {
-  return items.filter(({ item }) => item.spec_status === 'in_review' || item.execution_plan_status === 'in_review').length;
+  return items.filter(({ item }) => item.spec_status === 'in_review' || item.implementation_plan_status === 'in_review').length;
 }
 
 function ageSeconds(createdAt: string, updatedAt: string): number {
@@ -1529,7 +1530,7 @@ function reportLinks(): Array<{ id: string; href: string }> {
     'development-plan-throughput',
     'brainstorming-bottlenecks',
     'spec-review-aging',
-    'execution-plan-review-aging',
+    'implementation-plan-doc-review-aging',
     'execution-continuation',
     'execution-outcomes',
     'code-review',
@@ -1557,7 +1558,7 @@ function reportGroupsFor(
         group(
           'approved_items',
           context.developmentPlanItems
-            .filter(({ item }) => item.execution_plan_status === 'approved')
+            .filter(({ item }) => item.implementation_plan_status === 'approved')
             .map(developmentPlanItemReportRef),
         ),
       ];
@@ -1591,18 +1592,18 @@ function reportGroupsFor(
             .map(developmentPlanItemReportRef),
         ),
       ];
-    case 'execution-plan-review-aging':
+    case 'implementation-plan-doc-review-aging':
       return [
         group(
           'in_review',
           context.developmentPlanItems
-            .filter(({ item }) => item.execution_plan_status === 'in_review')
+            .filter(({ item }) => item.implementation_plan_status === 'in_review')
             .map(developmentPlanItemReportRef),
         ),
         group(
           'changes_requested',
           context.developmentPlanItems
-            .filter(({ item }) => item.execution_plan_status === 'changes_requested')
+            .filter(({ item }) => item.implementation_plan_status === 'changes_requested')
             .map(developmentPlanItemReportRef),
         ),
       ];
@@ -1710,7 +1711,7 @@ async function typedWorkItems(repository: DeliveryRepository, projectId: string,
 async function typedWorkItemsForQuery(repository: DeliveryRepository, query: ProductListQuery, kind: WorkItemObjectType): Promise<TypedWorkItem[]> {
   const [workItems, context] = await Promise.all([
     typedWorkItems(repository, query.project_id, kind),
-    typedSourceProjectionContext(repository, query.project_id),
+    typedDocumentProjectionContext(repository, query.project_id),
   ]);
   return workItems.filter((workItem) => typedWorkItemMatchesQuery(workItem, query, context));
 }
@@ -1724,13 +1725,13 @@ async function typedWorkItemById(
   return workItem?.kind === kind ? (workItem as TypedWorkItem) : undefined;
 }
 
-async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: TypedWorkItem): Promise<TypedSourceRelationshipRef[]> {
+async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: TypedWorkItem): Promise<TypedDocumentRelationshipRef[]> {
   const sourceRef = sourceRefFor(workItem);
   const sourceLinks = await repository.listDevelopmentPlanSourceLinksForSource(sourceRef);
-  const refs: TypedSourceRelationshipRef[] = [];
+  const refs: TypedDocumentRelationshipRef[] = [];
   const seen = new Set<string>();
 
-  const push = (ref: TypedSourceRelationshipRef) => {
+  const push = (ref: TypedDocumentRelationshipRef) => {
     const key = JSON.stringify(ref);
     if (!seen.has(key)) {
       seen.add(key);
@@ -1755,7 +1756,7 @@ async function sourceRelationshipRefs(repository: DeliveryRepository, workItem: 
   return refs;
 }
 
-async function typedSourceProjectionContext(repository: DeliveryRepository, projectId: string): Promise<TypedSourceProjectionContext> {
+async function typedDocumentProjectionContext(repository: DeliveryRepository, projectId: string): Promise<TypedDocumentProjectionContext> {
   const [plans, planItems, executionPackages, executions, codeReviewHandoffs, qaHandoffs, releases, workItems] = await Promise.all([
     repository.listDevelopmentPlans(projectId),
     listDevelopmentPlanItemsForProject(repository, projectId),
@@ -1786,7 +1787,7 @@ async function typedSourceProjectionContext(repository: DeliveryRepository, proj
   };
 }
 
-function typedSourceProjection(workItem: TypedWorkItem, context: TypedSourceProjectionContext): TypedSourceProjection {
+function typedDocumentProjection(workItem: TypedWorkItem, context: TypedDocumentProjectionContext): TypedDocumentProjection {
   const sourceRef = sourceRefFor(workItem);
   const linkedDevelopmentPlans = context.plans.filter((plan) => plan.source_refs.some((ref) => sourceRefsMatch(ref, sourceRef)));
   const linkedDevelopmentPlanIds = new Set(linkedDevelopmentPlans.map((plan) => plan.id));
@@ -1812,7 +1813,7 @@ function typedSourceProjection(workItem: TypedWorkItem, context: TypedSourceProj
     downstream_gate_summary: downstreamGateSummary(linkedPlanItems.map(({ item }) => item)),
     linked_development_plans: linkedDevelopmentPlans.map(developmentPlanRef),
     linked_plan_items: linkedPlanItems.map(({ item }) => developmentPlanItemRef(item)),
-    evidence_refs: evidenceRefs.map(typedSourceEvidenceRef),
+    evidence_refs: evidenceRefs.map(typedDocumentEvidenceRef),
     attachment_refs: attachmentRefs.map(attachmentPublicRef),
     release_refs: releaseRefs.map((release) => ({ type: 'release' as const, id: release.id, title: release.title })),
     audit: {
@@ -1828,7 +1829,7 @@ function typedSourceProjection(workItem: TypedWorkItem, context: TypedSourceProj
 function typedWorkItemMatchesQuery(
   workItem: TypedWorkItem,
   query: ProductListQuery,
-  context: TypedSourceProjectionContext,
+  context: TypedDocumentProjectionContext,
 ): boolean {
   if (query.status !== undefined && workItem.phase !== query.status) {
     return false;
@@ -1857,7 +1858,7 @@ function typedWorkItemMatchesQuery(
 function developmentPlanMatchesQuery(
   plan: DevelopmentPlan,
   query: ProductListQuery,
-  context: TypedSourceProjectionContext,
+  context: TypedDocumentProjectionContext,
 ): boolean {
   if (query.status !== undefined && plan.status !== query.status) {
     return false;
@@ -1877,14 +1878,14 @@ function developmentPlanMatchesQuery(
   }
   if (
     query.stale !== undefined &&
-    planItems.some(({ item }) => item.spec_status === 'stale' || item.execution_plan_status === 'stale' || item.boundary_status === 'stale') !== query.stale
+    planItems.some(({ item }) => item.spec_status === 'stale' || item.implementation_plan_status === 'stale' || item.boundary_status === 'stale') !== query.stale
   ) {
     return false;
   }
   return planRoleFilterState(plan, context).matches(query);
 }
 
-function sourceRoleFilterState(workItem: TypedWorkItem, context: TypedSourceProjectionContext) {
+function sourceRoleFilterState(workItem: TypedWorkItem, context: TypedDocumentProjectionContext) {
   const sourceRef = sourceRefFor(workItem);
   const linkedDevelopmentPlanIds = new Set(
     context.plans.filter((plan) => plan.source_refs.some((ref) => sourceRefsMatch(ref, sourceRef))).map((plan) => plan.id),
@@ -1938,7 +1939,7 @@ function sourceRoleFilterState(workItem: TypedWorkItem, context: TypedSourceProj
   });
 }
 
-function planRoleFilterState(plan: DevelopmentPlan, context: TypedSourceProjectionContext) {
+function planRoleFilterState(plan: DevelopmentPlan, context: TypedDocumentProjectionContext) {
   const planItems = context.planItems.filter(({ plan: candidatePlan }) => candidatePlan.id === plan.id);
   const planItemIds = new Set(planItems.map(({ item }) => item.id));
   const planPackageIds = new Set(
@@ -2033,11 +2034,11 @@ function sourceRefsMatch(left: { type: string; id: string }, right: { type: stri
   return left.type === right.type && left.id === right.id;
 }
 
-function downstreamGateSummary(items: DevelopmentPlanItem[]): TypedSourceProjection['downstream_gate_summary'] {
+function downstreamGateSummary(items: DevelopmentPlanItem[]): TypedDocumentProjection['downstream_gate_summary'] {
   const current_gate_counts = {
     boundary: 0,
     spec: 0,
-    execution_plan: 0,
+    implementation_plan_doc: 0,
     execution: 0,
     code_review: 0,
     qa: 0,
@@ -2052,10 +2053,10 @@ function downstreamGateSummary(items: DevelopmentPlanItem[]): TypedSourceProject
   };
 }
 
-function downstreamGateFor(item: DevelopmentPlanItem): keyof TypedSourceProjection['downstream_gate_summary']['current_gate_counts'] {
+function downstreamGateFor(item: DevelopmentPlanItem): keyof TypedDocumentProjection['downstream_gate_summary']['current_gate_counts'] {
   if (item.boundary_status !== 'approved') return 'boundary';
   if (item.spec_status !== 'approved') return 'spec';
-  if (item.execution_plan_status !== 'approved') return 'execution_plan';
+  if (item.implementation_plan_status !== 'approved') return 'implementation_plan_doc';
   if (item.execution_status !== 'completed') return 'execution';
   if (item.review_status !== 'approved') return 'code_review';
   if (item.qa_handoff_status !== 'approved') return 'qa';
@@ -2068,10 +2069,10 @@ function nextSourceAction(items: DevelopmentPlanItem[], workItem: WorkItem): str
     (item: DevelopmentPlanItem) => item.review_status === 'changes_requested' || item.review_status === 'blocked',
     (item: DevelopmentPlanItem) => item.qa_handoff_status === 'blocked' || item.qa_handoff_status === 'changes_requested',
     (item: DevelopmentPlanItem) => item.spec_status === 'blocked' || item.spec_status === 'changes_requested',
-    (item: DevelopmentPlanItem) => item.execution_plan_status === 'blocked' || item.execution_plan_status === 'changes_requested',
+    (item: DevelopmentPlanItem) => item.implementation_plan_status === 'blocked' || item.implementation_plan_status === 'changes_requested',
     (item: DevelopmentPlanItem) => item.boundary_status === 'changes_requested',
     (item: DevelopmentPlanItem) => item.spec_status !== 'approved',
-    (item: DevelopmentPlanItem) => item.execution_plan_status !== 'approved',
+    (item: DevelopmentPlanItem) => item.implementation_plan_status !== 'approved',
     (item: DevelopmentPlanItem) => item.execution_status !== 'completed',
   ];
   for (const matcher of priority) {
@@ -2080,10 +2081,10 @@ function nextSourceAction(items: DevelopmentPlanItem[], workItem: WorkItem): str
       return item.next_action;
     }
   }
-  return items[0]?.next_action ?? `Create Development Plan for ${typedSourceLabel(workItem.kind)}`;
+  return items[0]?.next_action ?? `Create Development Plan for ${typedDocumentLabel(workItem.kind)}`;
 }
 
-function typedSourceLabel(kind: WorkItem['kind']): string {
+function typedDocumentLabel(kind: WorkItem['kind']): string {
   if (kind === 'tech_debt') return 'Tech Debt';
   return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
 }
@@ -2136,7 +2137,7 @@ function evidenceLinksSource(
   items: DevelopmentPlanItemWithPlan[],
 ): boolean {
   const scopeRef = evidenceScopeRef(evidence);
-  if (scopeRef !== undefined && typedSourceRefMatches(scopeRef, sourceRef, items)) {
+  if (scopeRef !== undefined && typedDocumentRefMatches(scopeRef, sourceRef, items)) {
     return true;
   }
   if (evidence.object_ref !== undefined) {
@@ -2152,7 +2153,7 @@ function evidenceScopeRef(evidence: ReleaseEvidence): ObjectRef | undefined {
   return isRecord(evidence.extra) ? productSafeObjectRef(evidence.extra.scope_ref) : undefined;
 }
 
-function typedSourceRefMatches(ref: ObjectRef, sourceRef: WorkItemPublicRef, items: DevelopmentPlanItemWithPlan[]): boolean {
+function typedDocumentRefMatches(ref: ObjectRef, sourceRef: WorkItemPublicRef, items: DevelopmentPlanItemWithPlan[]): boolean {
   return (
     sourceRefsMatch(ref, sourceRef) ||
     items.some(({ item }) => ref.type === 'development_plan_item' && ref.id === item.id)
@@ -2177,7 +2178,7 @@ function evidenceAttachmentId(evidence: ReleaseEvidence): string | undefined {
   return observationLinks(evidence).find((link) => link.object_type === 'attachment')?.object_id;
 }
 
-function typedSourceEvidenceRef(evidence: ReleaseEvidence): TypedSourceEvidenceRef {
+function typedDocumentEvidenceRef(evidence: ReleaseEvidence): TypedDocumentEvidenceRef {
   const attachmentId = evidenceAttachmentId(evidence);
   if (attachmentId !== undefined) {
     return { type: 'attachment', id: attachmentId, title: evidence.title ?? evidence.summary };
@@ -2196,12 +2197,12 @@ function uniqueById<T extends { id: string }>(rows: T[]): T[] {
   });
 }
 
-function attachmentPublicRef(attachment: Attachment): TypedSourceAttachmentRef {
+function attachmentPublicRef(attachment: Attachment): TypedDocumentAttachmentRef {
   return {
     id: attachment.id,
     owner_object_type: attachment.owner_object_type,
     owner_object_id: attachment.owner_object_id,
-    linked_object_refs: attachment.linked_object_refs.filter(isTypedSourceRelationshipRef),
+    linked_object_refs: attachment.linked_object_refs.filter(isTypedDocumentRelationshipRef),
     filename: attachment.filename,
     content_type: attachment.content_type,
     size_bytes: attachment.size_bytes,
@@ -2217,8 +2218,8 @@ function attachmentPublicRef(attachment: Attachment): TypedSourceAttachmentRef {
   };
 }
 
-function isTypedSourceRelationshipRef(ref: ObjectRef): ref is TypedSourceRelationshipRef {
-  return typedSourceRelationshipRefSchema.safeParse(ref).success;
+function isTypedDocumentRelationshipRef(ref: ObjectRef): ref is TypedDocumentRelationshipRef {
+  return typedDocumentRelationshipRefSchema.safeParse(ref).success;
 }
 
 function workItemRef(workItem: WorkItem): WorkItemPublicRef {
@@ -2257,7 +2258,7 @@ function releaseToMyWorkQueueItem(release: Release): MyWorkQueueItem {
   };
 }
 
-function baseWorkItemListItem(workItem: WorkItem, projection: TypedSourceProjection) {
+function baseWorkItemListItem(workItem: WorkItem, projection: TypedDocumentProjection) {
   return {
     id: workItem.id,
     ref: workItemRef(workItem),
@@ -2275,7 +2276,7 @@ function baseWorkItemListItem(workItem: WorkItem, projection: TypedSourceProject
   };
 }
 
-function baseWorkItemDetail(workItem: TypedWorkItem, projection: TypedSourceProjection) {
+function baseWorkItemDetail(workItem: TypedWorkItem, projection: TypedDocumentProjection) {
   return {
     ...baseWorkItemListItem(workItem, projection),
     narrative_markdown: workItem.narrative_markdown,
@@ -2287,14 +2288,14 @@ function baseWorkItemDetail(workItem: TypedWorkItem, projection: TypedSourceProj
   };
 }
 
-function workItemToRequirementListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): RequirementListItem {
+function workItemToRequirementListItem(workItem: TypedWorkItem, projection: TypedDocumentProjection): RequirementListItem {
   return { ...baseWorkItemListItem(workItem, projection), ref: { type: 'requirement', id: workItem.id, title: workItem.title } };
 }
 
 function workItemToRequirementDetail(
   workItem: TypedWorkItem,
-  projection: TypedSourceProjection,
-  relationshipRefs: TypedSourceRelationshipRef[],
+  projection: TypedDocumentProjection,
+  relationshipRefs: TypedDocumentRelationshipRef[],
 ): RequirementDetail {
   const context = workItem.intake_context.type === 'requirement' ? workItem.intake_context : undefined;
   return {
@@ -2311,7 +2312,7 @@ function workItemToRequirementDetail(
   };
 }
 
-function workItemToInitiativeListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): InitiativeListItem {
+function workItemToInitiativeListItem(workItem: TypedWorkItem, projection: TypedDocumentProjection): InitiativeListItem {
   const context = workItem.intake_context.type === 'initiative' ? workItem.intake_context : undefined;
   return {
     ...baseWorkItemListItem(workItem, projection),
@@ -2322,8 +2323,8 @@ function workItemToInitiativeListItem(workItem: TypedWorkItem, projection: Typed
 
 function workItemToInitiativeDetail(
   workItem: TypedWorkItem,
-  projection: TypedSourceProjection,
-  relationshipRefs: TypedSourceRelationshipRef[],
+  projection: TypedDocumentProjection,
+  relationshipRefs: TypedDocumentRelationshipRef[],
 ): InitiativeDetail {
   const context = workItem.intake_context.type === 'initiative' ? workItem.intake_context : undefined;
   return {
@@ -2337,7 +2338,7 @@ function workItemToInitiativeDetail(
   };
 }
 
-function workItemToTechDebtListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): TechDebtListItem {
+function workItemToTechDebtListItem(workItem: TypedWorkItem, projection: TypedDocumentProjection): TechDebtListItem {
   const context = workItem.intake_context.type === 'tech_debt' ? workItem.intake_context : undefined;
   return {
     ...baseWorkItemListItem(workItem, projection),
@@ -2349,8 +2350,8 @@ function workItemToTechDebtListItem(workItem: TypedWorkItem, projection: TypedSo
 
 function workItemToTechDebtDetail(
   workItem: TypedWorkItem,
-  projection: TypedSourceProjection,
-  relationshipRefs: TypedSourceRelationshipRef[],
+  projection: TypedDocumentProjection,
+  relationshipRefs: TypedDocumentRelationshipRef[],
 ): TechDebtDetail {
   const context = workItem.intake_context.type === 'tech_debt' ? workItem.intake_context : undefined;
   return {
@@ -2364,7 +2365,7 @@ function workItemToTechDebtDetail(
   };
 }
 
-function workItemToBugListItem(workItem: TypedWorkItem, projection: TypedSourceProjection): BugListItem {
+function workItemToBugListItem(workItem: TypedWorkItem, projection: TypedDocumentProjection): BugListItem {
   const context = workItem.intake_context.type === 'bug' ? workItem.intake_context : undefined;
   return {
     ...baseWorkItemListItem(workItem, projection),
@@ -2374,7 +2375,7 @@ function workItemToBugListItem(workItem: TypedWorkItem, projection: TypedSourceP
   };
 }
 
-function workItemToBugDetail(workItem: TypedWorkItem, projection: TypedSourceProjection, relationshipRefs: TypedSourceRelationshipRef[]): BugDetail {
+function workItemToBugDetail(workItem: TypedWorkItem, projection: TypedDocumentProjection, relationshipRefs: TypedDocumentRelationshipRef[]): BugDetail {
   const context = workItem.intake_context.type === 'bug' ? workItem.intake_context : undefined;
   return {
     ...baseWorkItemDetail(workItem, projection),
@@ -2399,7 +2400,7 @@ function optionalContextSummary(valueToCheck: string | undefined, fallback: stri
   return valueToCheck !== undefined && valueToCheck.trim().length > 0 ? valueToCheck : fallback;
 }
 
-function releaseCoverageText(projection: TypedSourceProjection): string {
+function releaseCoverageText(projection: TypedDocumentProjection): string {
   if (projection.release_refs.length === 0) {
     return 'No release coverage yet.';
   }
@@ -2690,14 +2691,6 @@ function productSafeObjectRef(valueToCheck: unknown): ObjectRef | undefined {
   }
 
   switch (valueToCheck.type) {
-    case 'plan':
-      return { type: 'execution_plan', id: valueToCheck.id };
-    case 'plan_revision': {
-      const executionPlanId = stringValue(valueToCheck, 'execution_plan_id') ?? stringValue(valueToCheck, 'plan_id');
-      return executionPlanId === undefined
-        ? undefined
-        : { type: 'execution_plan_revision', id: valueToCheck.id, execution_plan_id: executionPlanId };
-    }
     case 'execution_package':
     case 'run_session':
       return { type: 'execution', id: stringValue(valueToCheck, 'execution_id') ?? valueToCheck.id };

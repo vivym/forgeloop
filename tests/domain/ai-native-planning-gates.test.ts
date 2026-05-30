@@ -38,10 +38,10 @@ const specRevision = (overrides: Partial<SpecRevision> = {}): SpecRevision => ({
   summary: 'Approved spec',
   content: 'Approved spec body',
   background: 'Background',
-  goals: ['Generate an execution plan'],
-  scope_in: ['Execution planning'],
+  goals: ['Generate an Implementation Plan Doc'],
+  scope_in: ['Implementation Plan Doc generation'],
   scope_out: [],
-  acceptance_criteria: ['Execution Plan is generated only from loaded approved SpecRevision'],
+  acceptance_criteria: ['Implementation Plan Doc is generated only from loaded approved SpecRevision'],
   risk_notes: [],
   test_strategy_summary: 'Domain gates',
   qa_owner_actor_id: 'actor-qa',
@@ -57,7 +57,7 @@ const releaseScopedItem = (overrides: Partial<DevelopmentPlanItem> = {}): Develo
   development_plan_id: 'development-plan-1',
   source_ref: { type: 'requirement', id: 'requirement-1' },
   title: 'Release-scoped item',
-  summary: 'Requires QA participation before execution planning.',
+  summary: 'Requires QA participation before Implementation Plan Doc generation.',
   responsible_role: 'developer',
   driver_actor_id: 'actor-dev',
   reviewer_actor_id: 'actor-reviewer',
@@ -66,7 +66,7 @@ const releaseScopedItem = (overrides: Partial<DevelopmentPlanItem> = {}): Develo
   affected_surfaces: ['apps/web', 'apps/control-plane-api'],
   boundary_status: 'approved',
   spec_status: 'approved',
-  execution_plan_status: 'approved',
+  implementation_plan_status: 'approved',
   execution_status: 'not_started',
   review_status: 'not_started',
   qa_handoff_status: 'not_started',
@@ -96,7 +96,7 @@ const executionPlanRevision = (overrides: Partial<ExecutionPlanRevision> = {}): 
   development_plan_item_id: 'development-plan-item-1',
   based_on_spec_revision_id: 'spec-revision-1',
   revision_number: 1,
-  summary: 'Approved execution plan',
+  summary: 'Approved Implementation Plan Doc',
   content: 'Execution plan body',
   created_at: at,
   ...overrides,
@@ -115,7 +115,7 @@ const approvedPlanItem = (overrides: Partial<DevelopmentPlanItem> = {}): Develop
   affected_surfaces: [],
   boundary_status: 'approved',
   spec_status: 'missing',
-  execution_plan_status: 'missing',
+  implementation_plan_status: 'missing',
   execution_status: 'not_started',
   review_status: 'missing',
   qa_handoff_status: 'missing',
@@ -161,7 +161,7 @@ const runnableExecutionPackage = (overrides: Partial<ExecutionPackage> = {}): Ex
 });
 
 describe('AI-native planning gate helpers', () => {
-  it('requires the approved SpecRevision to be loaded before Execution Plan generation', () => {
+  it('requires the approved SpecRevision to be loaded before Implementation Plan Doc generation', () => {
     expect(canGenerateExecutionPlanFromApprovedSpec({ spec: approvedSpec() })).toEqual({
       ok: false,
       reason: 'approved_spec_revision_not_loaded',
@@ -174,7 +174,7 @@ describe('AI-native planning gate helpers', () => {
     ).toEqual({ ok: true });
   });
 
-  it('requires QA/Test Owner participation and test strategy fields for release-scoped Execution Plan generation', () => {
+  it('requires QA/Test Owner participation and test strategy fields for release-scoped Implementation Plan Doc generation', () => {
     expect(
       canGenerateExecutionPlanFromApprovedSpec({
         item: releaseScopedItem(),
@@ -261,7 +261,7 @@ describe('AI-native planning gate helpers', () => {
   it('requires the approved ExecutionPlanRevision to be loaded before execution starts', () => {
     expect(canStartExecutionFromApprovedExecutionPlan({ executionPlan: approvedExecutionPlan() })).toEqual({
       ok: false,
-      reason: 'approved_execution_plan_revision_not_loaded',
+      reason: 'approved_implementation_plan_revision_not_loaded',
     });
     expect(
       canStartExecutionFromApprovedExecutionPlan({
@@ -343,7 +343,7 @@ describe('AI-native planning gate helpers', () => {
       }),
     ).toEqual({
       ok: false,
-      reason: 'approved_execution_plan_revision_missing',
+      reason: 'approved_implementation_plan_revision_missing',
     });
   });
 
@@ -358,7 +358,7 @@ describe('AI-native planning gate helpers', () => {
       }),
     ).toEqual({
       ok: false,
-      reason: 'execution_plan_revision_not_approved_revision',
+      reason: 'implementation_plan_revision_not_approved_revision',
     });
   });
 

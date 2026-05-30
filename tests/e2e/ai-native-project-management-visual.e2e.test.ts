@@ -74,13 +74,11 @@ describe('AI-native project management visual QA', () => {
           '/development-plans/new',
           '/development-plans/dp-product-workspace-core-surface-redesign',
           '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility',
-          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-typed-source-boundary/brainstorming',
           '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/spec',
-          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/execution-plan',
+          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-requirements-database-view/implementation-plan',
           '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-product-workspace-preview-state/execution',
-          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-plan-item-gate-eligibility/review',
-          '/development-plans/dp-product-workspace-core-surface-redesign/items/dpi-qa-shift-left-strategy/qa',
-          '/specs-plans',
+          '/reviews',
+          '/qa',
           '/executions',
           '/executions/exec-product-workspace-preview-active',
           '/board',
@@ -188,15 +186,7 @@ describe('AI-native project management visual QA', () => {
 
         const developmentPlanId = (await generatedPlan).id;
         const itemId = await fixture.firstPlanItemId(developmentPlanId);
-        await page.goto(`${baseUrl}/development-plans/${developmentPlanId}/items/${itemId}/brainstorming`);
-        await page.getByRole('button', { name: /start boundary brainstorming/i }).click();
-        await page.getByRole('textbox', { name: /answer boundary question/i }).fill('Keep the change scoped to apps/web and route tests.');
-        await page.getByRole('textbox', { name: /decision rationale/i }).fill('The approved boundary is limited to Web IA and route tests.');
-        await page.getByRole('button', { name: /answer boundary questions/i }).click();
-        await page.getByRole('button', { name: /record boundary decision/i }).click();
-        await page.getByRole('button', { name: /approve boundary/i }).click();
-        await expectPage(page.getByText(/boundary approved/i)).toBeVisible();
-
+        await fixture.approvePlanItemBoundary(developmentPlanId, itemId);
         await page.goto(`${baseUrl}/development-plans/${developmentPlanId}/items/${itemId}`);
         await page.getByRole('button', { name: /^generate spec$/i }).click();
         await expectPage(page.getByText(/generate spec command completed/i)).toBeVisible();
@@ -204,12 +194,12 @@ describe('AI-native project management visual QA', () => {
         await expectPage(page.getByText(/submit spec command completed/i)).toBeVisible();
         await page.getByRole('button', { name: /^approve spec$/i }).click();
         await expectPage(page.getByText(/approve spec command completed/i)).toBeVisible();
-        await page.getByRole('button', { name: /^generate execution plan$/i }).click();
-        await expectPage(page.getByText(/generate execution plan command completed/i)).toBeVisible();
-        await page.getByRole('button', { name: /submit execution plan for review/i }).click();
-        await expectPage(page.getByText(/submit execution plan command completed/i)).toBeVisible();
-        await page.getByRole('button', { name: /^approve execution plan$/i }).click();
-        await expectPage(page.getByText(/approve execution plan command completed/i)).toBeVisible();
+        await page.getByRole('button', { name: /^generate implementation plan doc$/i }).click();
+        await expectPage(page.getByText(/generate implementation plan doc command completed/i)).toBeVisible();
+        await page.getByRole('button', { name: /submit implementation plan doc for review/i }).click();
+        await expectPage(page.getByText(/submit implementation plan doc command completed/i)).toBeVisible();
+        await page.getByRole('button', { name: /^approve implementation plan doc$/i }).click();
+        await expectPage(page.getByText(/approve implementation plan doc command completed/i)).toBeVisible();
         const startExecutionResponse = page.waitForResponse(
           (response) => response.request().method() === 'POST' && /\/execution\/start$/.test(new URL(response.url()).pathname) && response.status() === 201,
         );
@@ -263,7 +253,7 @@ async function assertNoRenderedBaggage(page: Page, path: string) {
 
   if (path === '/development-plans/new') {
     expect(bodyText, `${path} must render a real authoring workspace`).toContain('AI generation guidance');
-    expect(bodyText, `${path} must avoid old source picker placeholder`).not.toContain('Pick a source object first');
+    expect(bodyText, `${path} must avoid old source picker placeholder`).not.toContain('Pick a typed document first');
     expect(bodyText, `${path} must preserve item-scoped downstream generation`).toContain('generated only from Plan Items after boundary approval');
   }
 

@@ -1817,21 +1817,21 @@ const requireGeneratedSpecRevisionPayload = (input: Record<string, unknown>): vo
 
 const requireGeneratedExecutionPlanRequiredCheck = (input: unknown): void => {
   if (!isPlainObject(input)) {
-    throw unsafeCodexRuntimePublicValue('Codex Execution Plan required_checks must contain objects.');
+    throw unsafeCodexRuntimePublicValue('Codex Implementation Plan Doc required_checks must contain objects.');
   }
   assertCodexRuntimeResultKeys(input, generatedExecutionPlanRequiredCheckKeys, 'required_checks');
   requireCodexRuntimeResultString(input, 'check_id');
   requireCodexRuntimeResultString(input, 'command');
   if (typeof input.timeout_seconds !== 'number' || !Number.isInteger(input.timeout_seconds) || input.timeout_seconds <= 0) {
-    throw unsafeCodexRuntimePublicValue('Codex Execution Plan required_checks timeout_seconds must be a positive integer.');
+    throw unsafeCodexRuntimePublicValue('Codex Implementation Plan Doc required_checks timeout_seconds must be a positive integer.');
   }
   requireCodexRuntimeResultBoolean(input, 'blocks_review');
 };
 
 const requireGeneratedExecutionPlanRevisionPayload = (input: Record<string, unknown>): void => {
-  assertCodexRuntimeResultKeys(input, generatedExecutionPlanRevisionKeys, 'Execution Plan revision generated_payload');
+  assertCodexRuntimeResultKeys(input, generatedExecutionPlanRevisionKeys, 'Implementation Plan Doc revision generated_payload');
   if (input.schema_version !== 'execution_plan_revision.v1') {
-    throw unsafeCodexRuntimePublicValue('Codex Execution Plan revision generated_payload schema_version is invalid.');
+    throw unsafeCodexRuntimePublicValue('Codex Implementation Plan Doc revision generated_payload schema_version is invalid.');
   }
   requireCodexRuntimeResultString(input, 'development_plan_item_id');
   requireCodexRuntimeResultString(input, 'based_on_spec_revision_id');
@@ -1841,12 +1841,12 @@ const requireGeneratedExecutionPlanRevisionPayload = (input: Record<string, unkn
   requireCodexRuntimeResultStringArray(input, 'validation_strategy');
   requireCodexRuntimeResultStringArray(input, 'allowed_paths').forEach((path) => {
     if (!isSafeCodexRuntimeRepoRelativePath(path)) {
-      throw unsafeCodexRuntimePublicValue('Codex Execution Plan allowed_paths must be safe repository-relative paths.');
+      throw unsafeCodexRuntimePublicValue('Codex Implementation Plan Doc allowed_paths must be safe repository-relative paths.');
     }
   });
   requireCodexRuntimeResultStringArray(input, 'forbidden_paths').forEach((path) => {
     if (!isSafeCodexRuntimeRepoRelativePath(path)) {
-      throw unsafeCodexRuntimePublicValue('Codex Execution Plan forbidden_paths must be safe repository-relative paths.');
+      throw unsafeCodexRuntimePublicValue('Codex Implementation Plan Doc forbidden_paths must be safe repository-relative paths.');
     }
   });
   const checkIds = requireCodexRuntimeResultArray(input, 'required_checks').map((entry) => {
@@ -1854,7 +1854,7 @@ const requireGeneratedExecutionPlanRevisionPayload = (input: Record<string, unkn
     return (entry as Record<string, unknown>).check_id as string;
   });
   if (new Set(checkIds).size !== checkIds.length) {
-    throw unsafeCodexRuntimePublicValue('Codex Execution Plan required_checks check_id values must be unique.');
+    throw unsafeCodexRuntimePublicValue('Codex Implementation Plan Doc required_checks check_id values must be unique.');
   }
   requireCodexRuntimeResultString(input, 'rollback_notes');
   requireCodexRuntimeResultStringArray(input, 'handoff_criteria');

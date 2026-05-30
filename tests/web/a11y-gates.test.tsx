@@ -26,7 +26,7 @@ describe('web accessibility gates', () => {
     },
   );
 
-  it.each(['/my-work', '/cockpit', '/dashboard', '/specs-plans', '/executions', '/reports'])(
+  it.each(['/my-work', '/cockpit', '/reviews', '/executions', '/reports'])(
     'has no automated axe violations on %s',
     async (route) => {
       await renderRoute(route);

@@ -230,7 +230,7 @@ describe('My Work route', () => {
     );
   });
 
-  it('keeps Specs, Execution Plans, and executions on canonical product routes', async () => {
+  it('keeps Specs, Implementation Plan Docs, and executions on canonical product routes', async () => {
     const screen = await renderRoute('/my-work', {
       apiOverrides: {
         [`GET /query/my-work?project_id=${projectId}&actor_id=${actorId}`]: {
@@ -245,12 +245,12 @@ describe('My Work route', () => {
               href: '/runtime/spec-browser',
             },
             {
-              id: 'tech-lead:execution-plan',
-              object_ref: { type: 'execution_plan', id: executionPlan.id },
-              title: 'Execution Plan approval',
+              id: 'tech-lead:implementation-plan-doc',
+              object_ref: { type: 'implementation_plan_doc', id: executionPlan.id },
+              title: 'Implementation Plan Doc approval',
               attention_reason: 'tech_lead_attention',
-              expected_action: 'Review Execution Plan',
-              href: '/runtime/execution-plan-browser',
+              expected_action: 'Review Implementation Plan Doc',
+              href: '/runtime/implementation-plan-doc-browser',
             },
             {
               id: 'developer:execution',
@@ -265,8 +265,8 @@ describe('My Work route', () => {
       },
     });
 
-    expect((await screen.findAllByRole('link', { name: /^Open Spec$/i }))[0]?.getAttribute('href')).toBe('/specs-plans');
-    expect(screen.getByRole('link', { name: /^Open Execution Plan$/i }).getAttribute('href')).toBe('/specs-plans');
+    expect((await screen.findAllByRole('link', { name: /^Open Spec$/i }))[0]?.getAttribute('href')).toBe('/reviews?tab=specs');
+    expect(screen.getByRole('link', { name: /^Open Implementation Plan Doc$/i }).getAttribute('href')).toBe('/reviews?tab=implementation-plans');
     expect(screen.getByRole('link', { name: /^Open Execution$/i }).getAttribute('href')).toBe(`/board?execution_id=${execution.id}`);
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href')).join(' ')).not.toMatch(/\/runtime|browser/i);
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Raw Replay Browser/i);

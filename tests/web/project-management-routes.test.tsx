@@ -42,7 +42,7 @@ const removedRoutes = [
   `/initiatives/${initiativeListItem.id}/plan`,
   '/packages',
   '/runs',
-  '/reviews',
+  '/specs-plans',
 ];
 
 const legacyOwnerPattern = new RegExp(`${['Work', 'Item', 'Owner'].join(' ')}|${['owner', 'actor', 'id'].join('_')}`);
@@ -62,7 +62,7 @@ const renderedProductRoutes = [
   `/requirements/${requirementListItem.id}`,
   `/development-plans/${developmentPlan.id}`,
   `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
-  '/specs-plans',
+  '/reviews',
   '/executions',
   '/reports',
 ] as const;
@@ -120,41 +120,41 @@ describe('project management route IA', () => {
   it.each(removedRoutes)('does not resolve removed product route %s', async (route) => {
     const screen = await renderRoute(route);
     expect(screen.getByRole('heading', { name: /not found|404/i })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /generate spec|generate execution plan|start execution/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /generate spec|generate implementation plan doc|start execution/i })).toBeNull();
     expect(document.body.textContent).not.toMatch(/Execution Package Browser|Run Session Browser|Review Packet Browser|Raw Replay Browser/i);
     cleanup();
   });
 
   it('renders Document Reviews as a governance queue instead of direct document browsers', async () => {
-    const screen = await renderRoute('/specs-plans');
+    const screen = await renderRoute('/reviews');
     expect(await screen.findByRole('heading', { name: 'Document Reviews' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="document-governance"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-document-queue][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('tab', { name: 'Specs' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Execution Plans' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Implementation Plan Docs' })).toBeTruthy();
     expect((await screen.findAllByRole('link', { name: /open plan item/i }))[0]?.getAttribute('href')).toMatch(/^\/development-plans\//);
     expect(screen.getByRole('region', { name: /selected governance row/i })).toBeTruthy();
-    expect(document.querySelector('[data-spec-plan-queue-row][data-desktop-row-height="44-56"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-document-review-queue-row][data-desktop-row-height="44-56"]')).toBeInstanceOf(HTMLElement);
     expect(document.body.textContent).not.toMatch(/\/specs\/|\/plans\/|\/tasks\//);
   });
 
   it('renders focused Document Reviews context from Development Plan Item links', async () => {
-    const screen = await renderRoute(`/specs-plans?development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`);
+    const screen = await renderRoute(`/reviews?development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`);
 
     expect(await screen.findByText(/Focused governance queue/i)).toBeTruthy();
     expect(await screen.findByText(new RegExp(`Development Plan Item ${developmentPlanItem.id}`, 'i'))).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Execution Plans' }).getAttribute('href')).toBe(
-      `/specs-plans?tab=plans&development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`,
+    expect(screen.getByRole('tab', { name: 'Implementation Plan Docs' }).getAttribute('href')).toBe(
+      `/reviews?tab=implementation-plans&development_plan_id=${developmentPlan.id}&development_plan_item_id=${developmentPlanItem.id}`,
     );
   });
 
-  it('renders source object workspace with role lens and item-scoped downstream actions', async () => {
+  it('renders planning input workspace with role lens and item-scoped downstream actions', async () => {
     const screen = await renderRoute(`/requirements/${requirementListItem.id}`);
 
     expect(await screen.findByRole('heading', { name: /^Requirement$/ })).toBeTruthy();
     expect(await screen.findByText(/Product workspace clarity must be visible before teams can trust gate actions/i)).toBeTruthy();
     expect(document.querySelector('[data-product-shell="requirement-workspace"]')).toBeInstanceOf(HTMLElement);
-    expect(document.querySelector('[data-page-family="source-document"]')).toBeInstanceOf(HTMLElement);
+    expect(document.querySelector('[data-page-family="document-workspace"]')).toBeInstanceOf(HTMLElement);
     expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
     expect(screen.getByRole('region', { name: /requirement narrative document/i })).toBeTruthy();
     expect(screen.getByRole('region', { name: /requirement properties/i }).querySelector('[data-compact-metadata]')).toBeInstanceOf(HTMLElement);
@@ -167,7 +167,7 @@ describe('project management route IA', () => {
     expect(screen.getByRole('button', { name: /link existing development plan/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /add row to existing development plan/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /generate spec/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /generate execution plan/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /generate implementation plan doc/i })).toBeNull();
     expect(screen.getByRole('link', { name: /open development plan item/i }).getAttribute('href')).toBe(
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
     );
@@ -185,10 +185,10 @@ describe('project management route IA', () => {
     expect(screen.queryByTestId('surface-state-running')).toBeNull();
     expect(document.querySelector('[data-document-surface]')?.textContent).not.toMatch(/Evidence attachments|Planning links/i);
     expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
-    expect(document.body.textContent).not.toMatch(/source object/i);
+    expect(document.body.textContent).not.toMatch(/planning input/i);
   });
 
-  it('uploads source narrative images through stable source-object attachment refs', async () => {
+  it('uploads source narrative images through stable document-workspace attachment refs', async () => {
     let capturedMetadata: unknown;
     let capturedActorHeader: string | null = null;
     const screen = await renderRoute(`/requirements/${requirementListItem.id}`, {
@@ -224,7 +224,7 @@ describe('project management route IA', () => {
     });
   });
 
-  it('renders source object evidence routes as product-grade evidence workspaces', async () => {
+  it('renders planning input evidence routes as product-grade evidence workspaces', async () => {
     for (const [route, heading, expectedEvidence] of [
       [`/requirements/${requirementListItem.id}/evidence`, 'Requirement Evidence', /Plan Item generation flow/i],
       [`/initiatives/${initiativeListItem.id}/evidence`, 'Initiative Evidence', /Product workspace redesign evidence/i],
@@ -235,19 +235,19 @@ describe('project management route IA', () => {
 
       expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy();
       expect((await screen.findAllByText(expectedEvidence)).length).toBeGreaterThan(0);
-      expect(document.querySelector('[data-page-family="source-evidence"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-page-family="document-evidence"]')).toBeInstanceOf(HTMLElement);
       expect(document.querySelector('[data-evidence-summary][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(screen.getByRole('region', { name: /evidence readiness summary/i })).toBeTruthy();
       expect(screen.getAllByText(/relevant evidence/i).length).toBeGreaterThan(0);
       expect(screen.queryByTestId('surface-state-approved')).toBeNull();
       expect(screen.getByRole('link', { name: new RegExp(`open ${heading.replace(' Evidence', '')}`, 'i') }).getAttribute('href')).toBe(route.replace('/evidence', ''));
       expect(document.querySelector('[data-evidence-summary]')?.textContent).not.toMatch(/Raw artifact links|Evidence attachments/i);
-      expect(document.body.textContent).not.toMatch(/Scaffold|Generate Spec|Generate Execution Plan|Work Item Owner|owner_actor_id|\/tasks/);
+      expect(document.body.textContent).not.toMatch(/Scaffold|Generate Spec|Generate Implementation Plan Doc|Work Item Owner|owner_actor_id|\/tasks/);
       cleanup();
     }
   });
 
-  it('renders typed list and detail source object surfaces', async () => {
+  it('renders typed list and detail planning input surfaces', async () => {
     for (const [route, heading, expectedText] of [
       ['/requirements', 'Requirements', new RegExp(requirementListItem.title, 'i')],
       [`/requirements/${requirementListItem.id}`, 'Requirement', /Product workspace clarity must be visible/i],
@@ -266,7 +266,7 @@ describe('project management route IA', () => {
     }
   });
 
-  it('renders typed source lists as dense planning queues without generic source-object copy', async () => {
+  it('renders typed document lists as dense planning queues without generic document-workspace copy', async () => {
     for (const [route, heading, objectType, driverLabel, itemTitle, createHref, shellMarker, typeColumns] of [
       ['/requirements', 'Requirements', 'Requirement', 'Requirement Driver', new RegExp(requirementListItem.title, 'i'), '/requirements/new', 'requirement-workspace', []],
       [
@@ -304,16 +304,16 @@ describe('project management route IA', () => {
 
       expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy();
       expect(document.querySelector(`[data-product-shell="${shellMarker}"]`)).toBeInstanceOf(HTMLElement);
-      expect(document.querySelector('[data-page-family="source-database"]')).toBeInstanceOf(HTMLElement);
-      expect(document.querySelector('[data-typed-source-toolbar]')).toBeInstanceOf(HTMLElement);
-      expect(document.querySelector('[data-typed-source-table] [data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-page-family="document-database"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-typed-document-toolbar]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-typed-document-table] [data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect((await screen.findAllByText(itemTitle)).length).toBeGreaterThan(0);
       expect(document.querySelector('[data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(document.body.textContent).toMatch(new RegExp(driverLabel, 'i'));
       expect(document.body.textContent).toMatch(/risk|blocker/i);
       expect(document.body.textContent).toMatch(/Development Plan coverage|Plan Item coverage|Downstream gates|Last meaningful update|Next action/i);
-      expect(document.body.textContent).not.toMatch(/source object/i);
-      expect(document.body.textContent).not.toMatch(/open source object to inspect planning state/i);
+      expect(document.body.textContent).not.toMatch(/planning input/i);
+      expect(document.body.textContent).not.toMatch(/open planning input to inspect planning state/i);
       expect(document.body.textContent).not.toMatch(/responsibility|assigned/i);
       expect(screen.queryByTestId('surface-state-blocked')).toBeNull();
       expect(screen.queryByTestId('surface-state-approved')).toBeNull();
@@ -322,8 +322,8 @@ describe('project management route IA', () => {
       expect(screen.getByRole('button', { name: /view: dense/i })).toBeTruthy();
       expect(screen.getByRole('link', { name: new RegExp(`Create ${objectType}`, 'i') }).getAttribute('href')).toBe(createHref);
       expect(screen.getByRole('link', { name: /Create Development Plan/i }).getAttribute('href')).toBe('/development-plans/new');
-      expect(screen.queryByRole('link', { name: /create source object/i })).toBeNull();
-      expect(screen.queryByRole('link', { name: /plan source object/i })).toBeNull();
+      expect(screen.queryByRole('link', { name: /create planning input/i })).toBeNull();
+      expect(screen.queryByRole('link', { name: /plan planning input/i })).toBeNull();
       expect(screen.getByRole('table', { name: new RegExp(`${heading} workspace`, 'i') })).toBeTruthy();
       for (const column of ['Title', 'Status', 'Priority', 'Risk', driverLabel, 'Development Plan coverage', 'Plan Item coverage', 'Downstream gates', 'Last meaningful update', 'Next action', ...typeColumns]) {
         expect(screen.getByRole('columnheader', { name: column })).toBeTruthy();
@@ -331,7 +331,7 @@ describe('project management route IA', () => {
       expect(screen.getAllByRole('link', { name: new RegExp(`open ${objectType}`, 'i') })[0]).toBeTruthy();
       expect(document.body.textContent).not.toMatch(legacyOwnerPattern);
       expect(document.body.textContent).not.toContain('Development Plan missing');
-      expect(document.body.textContent).not.toContain('Create Development Plan from source object');
+      expect(document.body.textContent).not.toContain('Create Development Plan from planning input');
       cleanup();
     }
   });
@@ -386,7 +386,7 @@ describe('project management route IA', () => {
     expect(screen.queryByText('Urgent filtered requirement')).toBeNull();
   });
 
-  it('keeps source object preview tied to the selected row and resets after filtering', async () => {
+  it('keeps planning input preview tied to the selected row and resets after filtering', async () => {
     const retryRequirement = {
       ...requirementListItem,
       id: 'req-visual-review-followup',
@@ -448,7 +448,7 @@ describe('project management route IA', () => {
 
     expect(await screen.findByRole('heading', { name: 'No requirements match the current filters.' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'No requirements match the current filters.' }).closest('td')).toBeNull();
-    expect(document.querySelector('p [data-typed-source-empty-state]')).toBeNull();
+    expect(document.querySelector('p [data-typed-document-empty-state]')).toBeNull();
   });
 
   it('renders typed create forms without Task creation', async () => {
@@ -464,7 +464,7 @@ describe('project management route IA', () => {
       }
       expect(screen.queryByRole('textbox', { name: /narrative markdown/i })).toBeNull();
       expect(screen.getByRole('region', { name: /narrative document/i })).toBeTruthy();
-      expect(document.querySelector('[data-page-family="source-document"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-page-family="document-workspace"]')).toBeInstanceOf(HTMLElement);
       expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(screen.getByRole('textbox', { name: /markdown editor/i })).toBeTruthy();
       expect(screen.queryByRole('button', { name: /insert image/i })).toBeNull();
@@ -524,7 +524,7 @@ describe('project management route IA', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const screen = await renderRoute('/requirements/new', {
       apiOverrides: {
-        'POST /work-items': { id: 'req-created', driver_actor_id: actorId },
+        'POST /requirements': { id: 'req-created', driver_actor_id: actorId },
         'PATCH /requirements/req-created/narrative': { id: 'req-created' },
       },
     });
@@ -533,7 +533,7 @@ describe('project management route IA', () => {
       target: { value: 'Product teams need governed Plan Item generation.' },
     });
     fireEvent.change(screen.getByLabelText(/desired outcome/i), {
-      target: { value: 'Spec and Execution Plan generation stay item-scoped.' },
+      target: { value: 'Spec and Implementation Plan Doc generation stay item-scoped.' },
     });
     fireEvent.change(screen.getByLabelText(/acceptance criteria/i), {
       target: { value: 'Plan Item generation flow is visible before document generation.' },
