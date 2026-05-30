@@ -2608,11 +2608,13 @@ describe('remote codex worker client', () => {
         },
       },
     });
-    expect(uploadedArtifacts.find((artifact) => artifact.kind === 'generated_payload')).toMatchObject({
+    const generatedPayloadArtifact = uploadedArtifacts.find((artifact) => artifact.kind === 'generated_payload');
+    expect(generatedPayloadArtifact).toMatchObject({
       metadata_json: {
-        generated_payload: expect.objectContaining({ content: 'x'.repeat(70_000) }),
+        generated_payload_digest: codexCanonicalDigest(generatedSpec({ content: 'x'.repeat(70_000) })),
       },
     });
+    expect(JSON.stringify(generatedPayloadArtifact?.metadata_json)).not.toContain('generated_payload":{"content"');
     expect(JSON.stringify(terminalized[0]?.terminal_result_json)).not.toContain('x'.repeat(100));
   });
 

@@ -193,7 +193,7 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
       },
       {
         name: 'generated payload metadata as canonical source',
-        pattern: /metadata_json\.generated_payload/,
+        pattern: /metadata_json\.generated_payload|\bgenerated_payload:\s*result\.generated\b/,
       },
       {
         name: 'pending bundle replay from caller-supplied archive bytes',

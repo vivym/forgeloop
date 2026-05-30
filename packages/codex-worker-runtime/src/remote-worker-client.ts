@@ -1020,7 +1020,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         metadata: {
           task_kind: result.taskKind,
           output_schema_version: result.outputSchemaVersion,
-          generated_payload: result.generated,
+          generated_payload_digest: codexCanonicalDigest(result.generated),
         },
       }),
       jsonRuntimeJobArtifactUpload({

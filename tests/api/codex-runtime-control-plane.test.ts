@@ -2966,7 +2966,7 @@ describe('codex runtime control-plane APIs', () => {
         size_bytes: String(artifactPayload.byteLength),
         metadata_json: {
           output_schema_version: 'spec_revision.v1',
-          generated_payload: { schema_version: 'spec_revision.v1' },
+          generated_payload_digest: terminalGeneratedPayloadDigest,
         },
       }),
     }).expect(201);
@@ -3022,15 +3022,16 @@ describe('codex runtime control-plane APIs', () => {
             },
           },
         });
-        expect(body.artifacts).toContainEqual(
-          expect.objectContaining({
-            kind: 'generated_payload',
-            metadata_json: expect.objectContaining({
-              output_schema_version: 'spec_revision.v1',
-              generated_payload: expect.objectContaining({ schema_version: 'spec_revision.v1' }),
-            }),
-          }),
+        const generatedPayloadArtifact = body.artifacts.find(
+          (artifact: { kind?: string }) => artifact.kind === 'generated_payload',
         );
+        expect(generatedPayloadArtifact).toMatchObject({
+          metadata_json: expect.objectContaining({
+            output_schema_version: 'spec_revision.v1',
+            generated_payload_digest: terminalGeneratedPayloadDigest,
+          }),
+        });
+        expect(generatedPayloadArtifact.metadata_json).not.toHaveProperty('generated_payload');
         expectRuntimeJobProjectionRedacted(body.runtime_job);
         expect(JSON.stringify(body)).not.toContain('launch_token');
         expect(JSON.stringify(body)).not.toContain('docker-exec:');
