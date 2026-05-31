@@ -115,6 +115,43 @@ const executionPlanRevisionInput: ExecutionPlanRevision = {
   created_at: now,
 };
 
+const boundarySummaryRevisionInput: BoundarySummaryRevision = {
+  id: 'boundary-summary-revision-1',
+  boundary_summary_id: 'boundary-summary-1',
+  development_plan_item_id: 'item-1',
+  workflow_id: 'workflow-1',
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'turn-1',
+  revision_number: 1,
+  status: 'approved',
+  summary: 'Approved boundary.',
+  decisions: [],
+  unresolved_questions: [],
+  created_by_actor_id: 'actor-tech',
+  created_at: now,
+};
+
+const specRevisionInput = {
+  id: 'spec-revision-1',
+  spec_id: 'spec-1',
+  work_item_id: 'work-item-1',
+  development_plan_item_id: 'item-1',
+  workflow_id: 'workflow-1',
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'turn-1',
+  revision_number: 1,
+  summary: 'Approved spec.',
+  content: 'Spec content.',
+  background: 'Background.',
+  goals: ['Goal.'],
+  scope_in: ['In scope.'],
+  scope_out: ['Out of scope.'],
+  acceptance_criteria: ['Accepted.'],
+  risk_notes: [],
+  test_strategy_summary: 'Run focused tests.',
+  created_at: now,
+} as const;
+
 const internalArtifactObjectInput: InternalArtifactObject = {
   id: 'internal-artifact-1',
   artifact_id: 'artifact-1',
@@ -137,16 +174,85 @@ const internalArtifactObjectInput: InternalArtifactObject = {
 
 const seedWorkflowActiveApprovalFields = async (
   repository: InMemoryDeliveryRepository,
-  overrides: Partial<PlanItemWorkflow> = {},
 ) => {
-  const workflow = await repository.getPlanItemWorkflow('workflow-1');
-  if (workflow === undefined) throw new Error('Expected seeded workflow');
-  (repository as unknown as { planItemWorkflows: Map<string, PlanItemWorkflow> }).planItemWorkflows.set('workflow-1', {
-    ...workflow,
-    active_boundary_summary_revision_id: 'boundary-summary-revision-1',
-    active_spec_doc_revision_id: 'spec-revision-1',
-    active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1',
-    ...overrides,
+  await repository.saveBoundarySummaryRevision(boundarySummaryRevisionInput);
+  await repository.saveSpecRevision(specRevisionInput);
+  await repository.saveExecutionPlanRevision(executionPlanRevisionInput);
+  await repository.saveWorkflowManualDecision(manualDecisionInput);
+  await repository.applyPlanItemWorkflowTransition({
+    transition: {
+      ...transitionInput,
+      id: 'transition-seed-start-brainstorming',
+      from_status: 'not_started',
+      to_status: 'brainstorming',
+      evidence_object_type: 'manual_decision',
+      evidence_object_id: 'decision-1',
+      codex_session_turn_id: undefined,
+    },
+  });
+  await repository.applyPlanItemWorkflowTransition({
+    transition: {
+      ...transitionInput,
+      id: 'transition-seed-boundary-review',
+      from_status: 'brainstorming',
+      to_status: 'boundary_review',
+      evidence_object_type: 'boundary_summary_revision',
+      evidence_object_id: 'boundary-summary-revision-1',
+      codex_session_turn_id: undefined,
+    },
+    projection_patch: {
+      active_boundary_summary_revision_id: 'boundary-summary-revision-1',
+    },
+  });
+  await repository.applyPlanItemWorkflowTransition({
+    transition: {
+      ...transitionInput,
+      id: 'transition-seed-spec-queued',
+      from_status: 'boundary_review',
+      to_status: 'spec_generation_queued',
+      evidence_object_type: 'boundary_summary_revision',
+      evidence_object_id: 'boundary-summary-revision-1',
+      codex_session_turn_id: undefined,
+    },
+  });
+  await repository.applyPlanItemWorkflowTransition({
+    transition: {
+      ...transitionInput,
+      id: 'transition-seed-spec-review',
+      from_status: 'spec_generation_queued',
+      to_status: 'spec_review',
+      evidence_object_type: 'spec_revision',
+      evidence_object_id: 'spec-revision-1',
+      codex_session_turn_id: undefined,
+    },
+    projection_patch: {
+      active_spec_doc_revision_id: 'spec-revision-1',
+    },
+  });
+  await repository.applyPlanItemWorkflowTransition({
+    transition: {
+      ...transitionInput,
+      id: 'transition-seed-plan-queued',
+      from_status: 'spec_review',
+      to_status: 'implementation_plan_generation_queued',
+      evidence_object_type: 'spec_revision',
+      evidence_object_id: 'spec-revision-1',
+      codex_session_turn_id: undefined,
+    },
+  });
+  await repository.applyPlanItemWorkflowTransition({
+    transition: {
+      ...transitionInput,
+      id: 'transition-seed-plan-review',
+      from_status: 'implementation_plan_generation_queued',
+      to_status: 'implementation_plan_review',
+      evidence_object_type: 'implementation_plan_revision',
+      evidence_object_id: 'implementation-plan-revision-1',
+      codex_session_turn_id: undefined,
+    },
+    projection_patch: {
+      active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1',
+    },
   });
 };
 
@@ -285,6 +391,33 @@ const terminalizeTurnWithSnapshot = async (
     now: terminalizeNow,
   });
 };
+
+const applyWorkflowProjectionTransition = async (
+  repository: InMemoryDeliveryRepository,
+  input: {
+    transition_id: string;
+    from_status: PlanItemWorkflow['status'];
+    to_status: PlanItemWorkflow['status'];
+    evidence_object_type: typeof transitionInput.evidence_object_type;
+    evidence_object_id: string;
+    projection_patch?: Parameters<InMemoryDeliveryRepository['applyPlanItemWorkflowTransition']>[0]['projection_patch'];
+    supporting_evidence?: Parameters<InMemoryDeliveryRepository['applyPlanItemWorkflowTransition']>[0]['transition']['supporting_evidence'];
+    actor_id?: string;
+  },
+) =>
+  repository.applyPlanItemWorkflowTransition({
+    transition: {
+      ...transitionInput,
+      id: input.transition_id,
+      from_status: input.from_status,
+      to_status: input.to_status,
+      actor_id: input.actor_id ?? 'actor-tech',
+      evidence_object_type: input.evidence_object_type,
+      evidence_object_id: input.evidence_object_id,
+      ...(input.supporting_evidence === undefined ? {} : { supporting_evidence: input.supporting_evidence }),
+    },
+    projection_patch: input.projection_patch,
+  });
 
 describe('Plan Item Workflow repository', () => {
   it('creates workflow with initial active Codex Session', async () => {
@@ -513,6 +646,66 @@ describe('Plan Item Workflow repository', () => {
       'workflow_invalid_transition',
     );
     await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflow);
+  });
+
+  it('applies a workflow transition and service-owned projection patch atomically', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
+    await repository.saveBoundarySummaryRevision(boundarySummaryRevisionInput);
+
+    await applyWorkflowProjectionTransition(repository, {
+      transition_id: 'transition-start',
+      from_status: 'not_started',
+      to_status: 'brainstorming',
+      evidence_object_type: 'manual_decision',
+      evidence_object_id: 'decision-1',
+    });
+
+    await applyWorkflowProjectionTransition(repository, {
+      transition_id: 'transition-boundary',
+      from_status: 'brainstorming',
+      to_status: 'boundary_review',
+      evidence_object_type: 'boundary_summary_revision',
+      evidence_object_id: 'boundary-summary-revision-1',
+      projection_patch: { active_boundary_summary_revision_id: 'boundary-summary-revision-1' },
+    });
+
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
+      status: 'boundary_review',
+      active_boundary_summary_revision_id: 'boundary-summary-revision-1',
+      updated_at: now,
+    });
+    expect((await repository.getPlanItemWorkflow('workflow-1'))?.previous_status).toBeUndefined();
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(2);
+  });
+
+  it('rejects duplicate atomic workflow transition ids without updating workflow projections', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
+    await repository.appendPlanItemWorkflowTransition(transitionInput);
+    await repository.saveBoundarySummaryRevision(boundarySummaryRevisionInput);
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+
+    await expectDomainErrorCode(
+      () =>
+        applyWorkflowProjectionTransition(repository, {
+          transition_id: 'transition-1',
+          from_status: 'brainstorming',
+          to_status: 'boundary_review',
+          evidence_object_type: 'boundary_summary_revision',
+          evidence_object_id: 'boundary-summary-revision-1',
+          projection_patch: { active_boundary_summary_revision_id: 'boundary-summary-revision-1' },
+        }),
+      'workflow_invalid_transition',
+    );
+
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflow);
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([transitionInput]);
   });
 
   it('rejects saving a missing Codex Session', async () => {
@@ -2754,6 +2947,181 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
   });
 
+  it('rejects document gate evidence without matching workflow session provenance', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.saveBoundarySummaryRevision({
+      ...boundarySummaryRevisionInput,
+      id: 'boundary-missing-session',
+      boundary_summary_id: 'boundary-summary-missing-session',
+      codex_session_id: undefined,
+    });
+    await repository.saveBoundarySummaryRevision({
+      ...boundarySummaryRevisionInput,
+      id: 'boundary-foreign-session',
+      boundary_summary_id: 'boundary-summary-foreign-session',
+      codex_session_id: 'session-foreign',
+    });
+    await repository.saveSpecRevision({
+      ...specRevisionInput,
+      id: 'spec-missing-session',
+      codex_session_id: undefined,
+    });
+    await repository.saveSpecRevision({
+      ...specRevisionInput,
+      id: 'spec-foreign-session',
+      codex_session_id: 'session-foreign',
+    });
+    await repository.saveExecutionPlanRevision({
+      ...executionPlanRevisionInput,
+      id: 'implementation-plan-missing-session',
+      execution_plan_id: 'implementation-plan-missing-session',
+      codex_session_id: undefined,
+    });
+    await repository.saveExecutionPlanRevision({
+      ...executionPlanRevisionInput,
+      id: 'implementation-plan-foreign-session',
+      execution_plan_id: 'implementation-plan-foreign-session',
+      codex_session_id: 'session-foreign',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-boundary-missing-session',
+          from_status: 'brainstorming',
+          to_status: 'boundary_review',
+          evidence_object_type: 'boundary_summary_revision',
+          evidence_object_id: 'boundary-missing-session',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-boundary-foreign-session',
+          from_status: 'brainstorming',
+          to_status: 'boundary_review',
+          evidence_object_type: 'boundary_summary_revision',
+          evidence_object_id: 'boundary-foreign-session',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-spec-missing-session',
+          from_status: 'spec_generation_queued',
+          to_status: 'spec_review',
+          evidence_object_type: 'spec_revision',
+          evidence_object_id: 'spec-missing-session',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-spec-foreign-session',
+          from_status: 'spec_generation_queued',
+          to_status: 'spec_review',
+          evidence_object_type: 'spec_revision',
+          evidence_object_id: 'spec-foreign-session',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-plan-missing-session',
+          from_status: 'implementation_plan_generation_queued',
+          to_status: 'implementation_plan_review',
+          evidence_object_type: 'implementation_plan_revision',
+          evidence_object_id: 'implementation-plan-missing-session',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-plan-foreign-session',
+          from_status: 'implementation_plan_generation_queued',
+          to_status: 'implementation_plan_review',
+          evidence_object_type: 'implementation_plan_revision',
+          evidence_object_id: 'implementation-plan-foreign-session',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
+  it('rejects document gate evidence without matching development plan item provenance', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.saveBoundarySummaryRevision({
+      ...boundarySummaryRevisionInput,
+      id: 'boundary-foreign-item',
+      boundary_summary_id: 'boundary-summary-foreign-item',
+      development_plan_item_id: 'item-foreign',
+    });
+    await repository.saveSpecRevision({
+      ...specRevisionInput,
+      id: 'spec-foreign-item',
+      development_plan_item_id: 'item-foreign',
+    });
+    await repository.saveExecutionPlanRevision({
+      ...executionPlanRevisionInput,
+      id: 'implementation-plan-foreign-item',
+      execution_plan_id: 'implementation-plan-foreign-item',
+      development_plan_item_id: 'item-foreign',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-boundary-foreign-item',
+          from_status: 'brainstorming',
+          to_status: 'boundary_review',
+          evidence_object_type: 'boundary_summary_revision',
+          evidence_object_id: 'boundary-foreign-item',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-spec-foreign-item',
+          from_status: 'spec_generation_queued',
+          to_status: 'spec_review',
+          evidence_object_type: 'spec_revision',
+          evidence_object_id: 'spec-foreign-item',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-plan-foreign-item',
+          from_status: 'implementation_plan_generation_queued',
+          to_status: 'implementation_plan_review',
+          evidence_object_type: 'implementation_plan_revision',
+          evidence_object_id: 'implementation-plan-foreign-item',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
   it('rejects execution readiness transitions with missing or foreign readiness evidence', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession({
@@ -2816,7 +3184,7 @@ describe('Plan Item Workflow repository', () => {
 
     await repository.appendPlanItemWorkflowTransition(readinessTransition);
 
-    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([readinessTransition]);
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toContainEqual(readinessTransition);
   });
 
   it('rejects execution readiness transitions when readiness is not ready or lacks implementation plan support', async () => {
@@ -2876,7 +3244,9 @@ describe('Plan Item Workflow repository', () => {
         }),
       'workflow_invalid_transition',
     );
-    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+    const transitions = await repository.listPlanItemWorkflowTransitions('workflow-1');
+    expect(transitions).not.toContainEqual(readinessTransition);
+    expect(transitions).toHaveLength(6);
   });
 
   it('accepts execution readiness transitions with ready revision-matched readiness and implementation plan support', async () => {
@@ -2907,7 +3277,7 @@ describe('Plan Item Workflow repository', () => {
 
     await repository.appendPlanItemWorkflowTransition(readinessTransition);
 
-    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([readinessTransition]);
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toContainEqual(readinessTransition);
   });
 
   it('rejects workflow transitions with unresolved repository or internal artifact evidence', async () => {

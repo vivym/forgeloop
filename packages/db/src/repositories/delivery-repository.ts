@@ -350,6 +350,16 @@ export interface WorkflowRepositoryEvidenceInput {
   development_plan_item_id: string;
 }
 
+export interface ApplyPlanItemWorkflowTransitionInput {
+  transition: PlanItemWorkflowTransition;
+  projection_patch?: {
+    active_boundary_summary_revision_id?: string;
+    active_spec_doc_revision_id?: string;
+    active_implementation_plan_doc_revision_id?: string;
+    execution_package_id?: string;
+  };
+}
+
 export interface CreateCodexSessionForkInput {
   id: string;
   workflow_id: string;
@@ -1435,6 +1445,7 @@ export interface DeliveryRepository {
   getActivePlanItemWorkflowByItem(itemId: string): Promise<PlanItemWorkflow | undefined>;
   savePlanItemWorkflow(workflow: PlanItemWorkflow): Promise<void>;
   appendPlanItemWorkflowTransition(transition: PlanItemWorkflowTransition): Promise<void>;
+  applyPlanItemWorkflowTransition(input: ApplyPlanItemWorkflowTransitionInput): Promise<PlanItemWorkflow>;
   listPlanItemWorkflowTransitions(workflowId: string): Promise<PlanItemWorkflowTransition[]>;
   saveWorkflowManualDecision(decision: WorkflowManualDecision): Promise<void>;
   getWorkflowManualDecision(id: string): Promise<WorkflowManualDecision | undefined>;

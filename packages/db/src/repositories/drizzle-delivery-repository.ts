@@ -270,6 +270,7 @@ import type {
   BoundaryDecisionRecord,
   BoundaryQuestionRecord,
   ClaimCodexSessionLeaseInput,
+  ApplyPlanItemWorkflowTransitionInput,
   CreateCodexSessionForkInput,
   CreatePlanItemWorkflowWithInitialSessionInput,
   RenewCodexSessionLeaseInput,
@@ -919,6 +920,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async appendPlanItemWorkflowTransition(_transition: PlanItemWorkflowTransition): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async applyPlanItemWorkflowTransition(_input: ApplyPlanItemWorkflowTransitionInput): Promise<PlanItemWorkflow> {
     return this.workflowRepositoryNotImplemented();
   }
 
