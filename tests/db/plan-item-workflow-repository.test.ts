@@ -1,17 +1,42 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   DomainError,
   type BoundarySummaryRevision,
   type DevelopmentPlan,
+  type DevelopmentPlanItem,
   type ExecutionPlanRevision,
   type InternalArtifactObject,
   type PlanItemWorkflow,
   type PlanItemWorkflowTransition,
 } from '@forgeloop/domain';
 
-import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
+import {
+  createDbClient,
+  DrizzleDeliveryRepository,
+  InMemoryDeliveryRepository,
+  type DeliveryRepository,
+  assertResettableDatabaseUrl,
+  resetForgeloopDatabase,
+} from '../../packages/db/src/index';
 
 const now = '2026-05-31T00:00:00.000Z';
+function isResettableDatabaseUrl(databaseUrl: string): boolean {
+  try {
+    assertResettableDatabaseUrl(databaseUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const drizzleDatabaseUrl = process.env.FORGELOOP_TEST_DATABASE_URL ?? process.env.FORGELOOP_DATABASE_URL;
+const drizzleTest =
+  drizzleDatabaseUrl !== undefined && isResettableDatabaseUrl(drizzleDatabaseUrl) ? it : it.skip;
+const activePools: Array<{ end: () => Promise<void> }> = [];
+
+afterEach(async () => {
+  await Promise.all(activePools.splice(0).map((pool) => pool.end()));
+});
 
 const expectDomainErrorCode = async (action: () => Promise<unknown>, code: string) => {
   try {
@@ -22,6 +47,18 @@ const expectDomainErrorCode = async (action: () => Promise<unknown>, code: strin
     expect(error).toBeInstanceOf(DomainError);
     expect((error as DomainError).code).toBe(code as DomainError['code']);
   }
+};
+
+const createDrizzleWorkflowRepository = async () => {
+  if (drizzleDatabaseUrl === undefined) {
+    throw new Error('Expected FORGELOOP_TEST_DATABASE_URL or FORGELOOP_DATABASE_URL');
+  }
+  await resetForgeloopDatabase(drizzleDatabaseUrl);
+  const { db, pool } = createDbClient({ connectionString: drizzleDatabaseUrl });
+  activePools.push(pool);
+  const repository = new DrizzleDeliveryRepository(db);
+  await seedDrizzleWorkflowParents(repository);
+  return repository;
 };
 
 const baseWorkflowInput = {
@@ -171,6 +208,178 @@ const internalArtifactObjectInput: InternalArtifactObject = {
   created_by_actor_type: 'system',
   created_by_actor_id: 'actor-tech',
   created_at: now,
+};
+
+const uuidFixture = {
+  orgId: '10000000-0000-4000-8000-000000000001',
+  actorTechId: '10000000-0000-4000-8000-000000000002',
+  actorProductId: '10000000-0000-4000-8000-000000000003',
+  projectId: '10000000-0000-4000-8000-000000000004',
+  developmentPlanId: '10000000-0000-4000-8000-000000000005',
+  developmentPlanRevisionId: '10000000-0000-4000-8000-000000000006',
+  developmentPlanItemId: '10000000-0000-4000-8000-000000000007',
+  workflowId: '10000000-0000-4000-8000-000000000008',
+  sessionId: '10000000-0000-4000-8000-000000000009',
+  credentialBindingId: '10000000-0000-4000-8000-000000000010',
+  credentialBindingVersionId: '10000000-0000-4000-8000-000000000011',
+  runtimeProfileId: '10000000-0000-4000-8000-000000000012',
+  runtimeProfileRevisionId: '10000000-0000-4000-8000-000000000013',
+  turnId: '10000000-0000-4000-8000-000000000014',
+  leaseId: '10000000-0000-4000-8000-000000000015',
+  snapshotId: '10000000-0000-4000-8000-000000000016',
+  decisionId: '10000000-0000-4000-8000-000000000017',
+  transitionId: '10000000-0000-4000-8000-000000000018',
+  forkSessionId: '10000000-0000-4000-8000-000000000019',
+  forkDecisionId: '10000000-0000-4000-8000-000000000020',
+  forkTransitionId: '10000000-0000-4000-8000-000000000021',
+  staleAttemptId: '10000000-0000-4000-8000-000000000022',
+  readinessId: '10000000-0000-4000-8000-000000000023',
+  boundarySummaryId: '10000000-0000-4000-8000-000000000024',
+  boundarySummaryRevisionId: '10000000-0000-4000-8000-000000000025',
+  specId: '10000000-0000-4000-8000-000000000026',
+  specRevisionId: '10000000-0000-4000-8000-000000000027',
+  executionPlanId: '10000000-0000-4000-8000-000000000028',
+  executionPlanRevisionId: '10000000-0000-4000-8000-000000000029',
+} as const;
+
+const drizzleWorkflowInput = {
+  id: uuidFixture.workflowId,
+  codex_session_id: uuidFixture.sessionId,
+  development_plan_id: uuidFixture.developmentPlanId,
+  development_plan_item_id: uuidFixture.developmentPlanItemId,
+  runtime_profile_id: uuidFixture.runtimeProfileId,
+  runtime_profile_revision_id: uuidFixture.runtimeProfileRevisionId,
+  credential_binding_id: uuidFixture.credentialBindingId,
+  credential_binding_version_id: uuidFixture.credentialBindingVersionId,
+  actor_id: uuidFixture.actorTechId,
+  now,
+};
+
+const drizzleTurnInput = {
+  id: uuidFixture.turnId,
+  codex_session_id: uuidFixture.sessionId,
+  workflow_id: uuidFixture.workflowId,
+  intent: 'continue_execution',
+  status: 'running',
+  input_digest: 'sha256:drizzle-turn-input',
+  expected_previous_snapshot_digest: undefined,
+  created_by_actor_id: uuidFixture.actorTechId,
+  created_at: now,
+  updated_at: now,
+} as const;
+
+const drizzleLeaseInput = {
+  session_id: uuidFixture.sessionId,
+  workflow_id: uuidFixture.workflowId,
+  lease_id: uuidFixture.leaseId,
+  lease_token_hash: 'sha256:drizzle-lease-token',
+  worker_id: 'worker-drizzle',
+  worker_session_digest: 'sha256:worker-session-drizzle',
+  expected_previous_snapshot_digest: undefined,
+  now,
+  expires_at: '2026-05-31T00:05:00.000Z',
+};
+
+const drizzleSnapshotInput = {
+  id: uuidFixture.snapshotId,
+  codex_session_id: uuidFixture.sessionId,
+  sequence: 1,
+  artifact_ref: `artifact://internal/codex_session_snapshot/codex_session/${uuidFixture.sessionId}/${uuidFixture.snapshotId}`,
+  digest: 'sha256:drizzle-snapshot-1',
+  size_bytes: '123',
+  manifest_digest: 'sha256:drizzle-manifest-1',
+  runtime_profile_revision_id: uuidFixture.runtimeProfileRevisionId,
+  created_from_turn_id: uuidFixture.turnId,
+  created_by_actor_id: uuidFixture.actorTechId,
+  created_at: '2026-05-31T00:02:00.000Z',
+} as const;
+
+const seedDrizzleWorkflowParents = async (repository: DeliveryRepository) => {
+  await repository.saveOrganization({
+    id: uuidFixture.orgId,
+    name: 'Forgeloop Test Org',
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.saveActor({
+    id: uuidFixture.actorTechId,
+    org_id: uuidFixture.orgId,
+    display_name: 'Tech Actor',
+    actor_type: 'human',
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.saveActor({
+    id: uuidFixture.actorProductId,
+    org_id: uuidFixture.orgId,
+    display_name: 'Product Actor',
+    actor_type: 'human',
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.saveProject({
+    id: uuidFixture.projectId,
+    name: 'Forgeloop',
+    repo_ids: ['repo-drizzle'],
+    owner_actor_id: uuidFixture.actorTechId,
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.saveProjectRepo({
+    id: 'repo-drizzle',
+    repo_id: 'repo-drizzle',
+    project_id: uuidFixture.projectId,
+    name: 'owner/repo',
+    status: 'active',
+    local_path: '/tmp/repo',
+    default_branch: 'main',
+    remote_url: 'https://github.com/owner/repo.git',
+    base_commit_sha: 'a'.repeat(40),
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.saveDevelopmentPlan({
+    id: uuidFixture.developmentPlanId,
+    project_id: uuidFixture.projectId,
+    revision_id: uuidFixture.developmentPlanRevisionId,
+    title: 'Drizzle plan',
+    status: 'active',
+    source_refs: [{ type: 'requirement', id: 'requirement-drizzle' }],
+    items: [],
+    created_at: now,
+    updated_at: now,
+  });
+  await repository.saveDevelopmentPlanItem({
+    id: uuidFixture.developmentPlanItemId,
+    development_plan_id: uuidFixture.developmentPlanId,
+    revision_id: uuidFixture.developmentPlanRevisionId,
+    source_ref: { type: 'requirement', id: 'requirement-drizzle' },
+    title: 'Drizzle workflow item',
+    summary: 'Exercise Drizzle workflow persistence.',
+    driver_actor_id: uuidFixture.actorTechId,
+    responsible_role: 'developer',
+    reviewer_actor_id: uuidFixture.actorProductId,
+    leader_actor_id: uuidFixture.actorProductId,
+    leader_delegate_actor_ids: [],
+    risk: 'medium',
+    dependency_hints: [],
+    affected_surfaces: ['packages/db'],
+    boundary_status: 'not_started',
+    spec_status: 'missing',
+    implementation_plan_status: 'missing',
+    execution_status: 'not_started',
+    review_status: 'missing',
+    qa_handoff_status: 'missing',
+    release_impact: 'none',
+    next_action: 'Start workflow.',
+    created_at: now,
+    updated_at: now,
+  } satisfies DevelopmentPlanItem);
+};
+
+const seedDrizzleWorkflow = async (repository: DeliveryRepository) => {
+  await repository.createPlanItemWorkflowWithInitialSession(drizzleWorkflowInput);
+  await repository.createCodexSessionTurn(drizzleTurnInput);
 };
 
 const seedWorkflowActiveApprovalFields = async (
@@ -4450,5 +4659,254 @@ describe('Plan Item Workflow repository', () => {
         development_plan_item_id: 'item-1',
       }),
     ).resolves.toEqual({ repository_id: 'repo-1', resolved_ref: 'https://github.com/owner/repo/pull/123' });
+  });
+});
+
+describe('Plan Item Workflow Drizzle repository critical paths', () => {
+  drizzleTest('serializes lease renewal on the Codex session object lock', async () => {
+    if (drizzleDatabaseUrl === undefined) {
+      throw new Error('Expected FORGELOOP_TEST_DATABASE_URL or FORGELOOP_DATABASE_URL');
+    }
+    const repository = await createDrizzleWorkflowRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(drizzleWorkflowInput);
+    await repository.claimCodexSessionLease({
+      ...drizzleLeaseInput,
+      expires_at: '2026-05-31T00:05:00.000Z',
+    });
+    const lockClient = createDbClient({ connectionString: drizzleDatabaseUrl });
+    activePools.push(lockClient.pool);
+    const connection = await lockClient.pool.connect();
+    try {
+      await connection.query('begin');
+      await connection.query('select pg_advisory_xact_lock(hashtext($1::text))', [`codex-session:${uuidFixture.sessionId}`]);
+      let renewed = false;
+      const renewPromise = repository
+        .renewCodexSessionLease({
+          session_id: uuidFixture.sessionId,
+          lease_id: uuidFixture.leaseId,
+          lease_token_hash: 'sha256:drizzle-lease-token',
+          worker_id: 'worker-drizzle',
+          worker_session_digest: 'sha256:worker-session-drizzle',
+          lease_epoch: 1,
+          now: '2026-05-31T00:01:00.000Z',
+          expires_at: '2026-05-31T00:06:00.000Z',
+        })
+        .then((lease) => {
+          renewed = true;
+          return lease;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      expect(renewed).toBe(false);
+      await connection.query('commit');
+      await expect(renewPromise).resolves.toMatchObject({
+        id: uuidFixture.leaseId,
+        status: 'active',
+        heartbeat_at: '2026-05-31T00:01:00.000Z',
+      });
+    } finally {
+      await connection.query('rollback').catch(() => undefined);
+      connection.release();
+    }
+  });
+
+  drizzleTest('persists workflow/session transitions and enforces lease fencing', async () => {
+    const repository = await createDrizzleWorkflowRepository();
+
+    const created = await repository.createPlanItemWorkflowWithInitialSession(drizzleWorkflowInput);
+
+    expect(created.workflow).toMatchObject({
+      id: uuidFixture.workflowId,
+      status: 'not_started',
+      active_codex_session_id: uuidFixture.sessionId,
+    });
+    expect(created.session).toMatchObject({
+      id: uuidFixture.sessionId,
+      status: 'idle',
+      role: 'active',
+      owner_id: uuidFixture.workflowId,
+      lease_epoch: 0,
+    });
+    await expect(repository.getActivePlanItemWorkflowByItem(uuidFixture.developmentPlanItemId)).resolves.toMatchObject({
+      id: uuidFixture.workflowId,
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.savePlanItemWorkflow({
+          ...created.workflow,
+          status: 'brainstorming',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+
+    await repository.saveWorkflowManualDecision({
+      id: uuidFixture.decisionId,
+      workflow_id: uuidFixture.workflowId,
+      codex_session_id: uuidFixture.sessionId,
+      kind: 'start_brainstorming',
+      reason: 'Start.',
+      created_by_actor_id: uuidFixture.actorTechId,
+      created_at: now,
+    });
+    const transitioned = await repository.applyPlanItemWorkflowTransition({
+      transition: {
+        id: uuidFixture.transitionId,
+        workflow_id: uuidFixture.workflowId,
+        from_status: 'not_started',
+        to_status: 'brainstorming',
+        actor_id: uuidFixture.actorTechId,
+        reason: 'Start brainstorming.',
+        evidence_object_type: 'manual_decision',
+        evidence_object_id: uuidFixture.decisionId,
+        codex_session_id: uuidFixture.sessionId,
+        created_at: '2026-05-31T00:01:00.000Z',
+      },
+    });
+    expect(transitioned).toMatchObject({
+      id: uuidFixture.workflowId,
+      status: 'brainstorming',
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+    await expect(repository.listPlanItemWorkflowTransitions(uuidFixture.workflowId)).resolves.toHaveLength(1);
+
+    await repository.createCodexSessionTurn(drizzleTurnInput);
+    const claimed = await repository.claimCodexSessionLease(drizzleLeaseInput);
+    expect(claimed.lease).toMatchObject({ status: 'active', lease_epoch: 1 });
+    await expectDomainErrorCode(
+      () =>
+        repository.claimCodexSessionLease({
+          ...drizzleLeaseInput,
+          lease_id: '10000000-0000-4000-8000-000000000030',
+          lease_token_hash: 'sha256:drizzle-other-lease-token',
+          worker_id: 'worker-drizzle-other',
+          worker_session_digest: 'sha256:worker-session-drizzle-other',
+        }),
+      'codex_session_lease_conflict',
+    );
+
+    const terminalized = await repository.terminalizeCodexSessionTurn({
+      session_id: uuidFixture.sessionId,
+      turn_id: uuidFixture.turnId,
+      lease_id: uuidFixture.leaseId,
+      lease_token_hash: 'sha256:drizzle-lease-token',
+      lease_epoch: 1,
+      worker_id: 'worker-drizzle',
+      worker_session_digest: 'sha256:worker-session-drizzle',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      output_snapshot: drizzleSnapshotInput,
+      codex_thread_id: 'thread-drizzle',
+      codex_thread_id_digest: 'sha256:thread-drizzle',
+      now: '2026-05-31T00:02:00.000Z',
+    });
+    expect(terminalized.session).toMatchObject({
+      status: 'idle',
+      latest_snapshot_id: uuidFixture.snapshotId,
+      latest_snapshot_digest: 'sha256:drizzle-snapshot-1',
+      codex_thread_id_digest: 'sha256:thread-drizzle',
+    });
+    expect(terminalized.session).not.toHaveProperty('active_lease_id');
+    await expect(repository.getCodexSessionSnapshot(uuidFixture.snapshotId)).resolves.toMatchObject({
+      id: uuidFixture.snapshotId,
+      sequence: 1,
+      created_from_turn_id: uuidFixture.turnId,
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: uuidFixture.sessionId,
+          turn_id: uuidFixture.turnId,
+          lease_id: uuidFixture.leaseId,
+          lease_token_hash: 'sha256:drizzle-lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-drizzle',
+          worker_session_digest: 'sha256:worker-session-drizzle',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: undefined,
+          now: '2026-05-31T00:03:00.000Z',
+        }),
+      'codex_session_stale_terminalization',
+    );
+    await repository.saveStaleCodexSessionTerminalizationAttempt({
+      id: uuidFixture.staleAttemptId,
+      codex_session_id: uuidFixture.sessionId,
+      codex_session_turn_id: uuidFixture.turnId,
+      lease_id: uuidFixture.leaseId,
+      lease_epoch: 1,
+      worker_id: 'worker-drizzle',
+      worker_session_digest: 'sha256:worker-session-drizzle',
+      attempted_output_snapshot_digest: 'sha256:ignored',
+      failure_code: 'codex_session_stale_terminalization',
+      created_at: '2026-05-31T00:03:00.000Z',
+    });
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts(uuidFixture.sessionId)).resolves.toHaveLength(1);
+  });
+
+  drizzleTest('persists explicit fork selection with manual decision and transition ledger', async () => {
+    const repository = await createDrizzleWorkflowRepository();
+    await seedDrizzleWorkflow(repository);
+
+    const claimed = await repository.claimCodexSessionLease(drizzleLeaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: uuidFixture.sessionId,
+      turn_id: uuidFixture.turnId,
+      lease_id: claimed.lease.id,
+      lease_token_hash: claimed.lease.lease_token_hash,
+      lease_epoch: claimed.lease.lease_epoch,
+      worker_id: 'worker-drizzle',
+      worker_session_digest: 'sha256:worker-session-drizzle',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      output_snapshot: drizzleSnapshotInput,
+      now: '2026-05-31T00:02:00.000Z',
+    });
+
+    const fork = await repository.createCodexSessionFork({
+      id: uuidFixture.forkSessionId,
+      workflow_id: uuidFixture.workflowId,
+      parent_session_id: uuidFixture.sessionId,
+      forked_from_turn_id: uuidFixture.turnId,
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: uuidFixture.actorTechId,
+      now: '2026-05-31T00:03:00.000Z',
+    });
+    expect(fork).toMatchObject({
+      id: uuidFixture.forkSessionId,
+      role: 'candidate_fork',
+      latest_snapshot_id: uuidFixture.snapshotId,
+      latest_snapshot_digest: 'sha256:drizzle-snapshot-1',
+    });
+    await expectDomainErrorCode(
+      () =>
+        repository.claimCodexSessionLease({
+          ...drizzleLeaseInput,
+          session_id: uuidFixture.forkSessionId,
+          lease_id: '10000000-0000-4000-8000-000000000031',
+        }),
+      'codex_session_lease_conflict',
+    );
+
+    const selected = await repository.selectActiveCodexSessionFork({
+      workflow_id: uuidFixture.workflowId,
+      selected_codex_session_id: uuidFixture.forkSessionId,
+      manual_decision_id: uuidFixture.forkDecisionId,
+      transition_id: uuidFixture.forkTransitionId,
+      actor_id: uuidFixture.actorTechId,
+      reason: 'Use the alternate path.',
+      now: '2026-05-31T00:04:00.000Z',
+    });
+    expect(selected.workflow).toMatchObject({
+      id: uuidFixture.workflowId,
+      active_codex_session_id: uuidFixture.forkSessionId,
+    });
+    expect(selected.selectedSession).toMatchObject({ id: uuidFixture.forkSessionId, role: 'active' });
+    await expect(repository.getCodexSession(uuidFixture.sessionId)).resolves.toMatchObject({ role: 'inactive_fork' });
+    await expect(repository.getWorkflowManualDecision(uuidFixture.forkDecisionId)).resolves.toMatchObject({
+      kind: 'fork_select',
+      selected_codex_session_id: uuidFixture.forkSessionId,
+    });
+    await expect(repository.listPlanItemWorkflowTransitions(uuidFixture.workflowId)).resolves.toHaveLength(1);
   });
 });
