@@ -919,10 +919,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.workflowRepositoryNotImplemented();
   }
 
-  async appendPlanItemWorkflowTransition(_transition: PlanItemWorkflowTransition): Promise<void> {
-    return this.workflowRepositoryNotImplemented();
-  }
-
   async applyPlanItemWorkflowTransition(_input: ApplyPlanItemWorkflowTransitionInput): Promise<PlanItemWorkflow> {
     return this.workflowRepositoryNotImplemented();
   }

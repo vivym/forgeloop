@@ -3032,7 +3032,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.planItemWorkflows.set(workflow.id, clone(workflow));
   }
 
-  async appendPlanItemWorkflowTransition(transition: PlanItemWorkflowTransition): Promise<void> {
+  private appendPlanItemWorkflowTransition(transition: PlanItemWorkflowTransition): void {
     this.assertCanAppendPlanItemWorkflowTransition(transition);
     this.planItemWorkflowTransitions.set(transition.id, clone(transition));
   }
@@ -3452,6 +3452,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.workflowManualDecisions.has(decision.id)) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Workflow manual decision ${decision.id} already exists`);
     }
+    if (!workflowManualDecisionSchema.safeParse(decision).success) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Workflow manual decision ${decision.id} payload is invalid`,
+      );
+    }
     this.assertWorkflowCodexSessionProvenance(
       decision.workflow_id,
       decision.codex_session_id,
@@ -3750,11 +3756,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     const existingForSequence = valuesFor(this.codexSessionSnapshots).find(
       (candidate) => candidate.codex_session_id === snapshot.codex_session_id && candidate.sequence === snapshot.sequence,
     );
+    const maxExistingSequence = valuesFor(this.codexSessionSnapshots)
+      .filter((candidate) => candidate.codex_session_id === snapshot.codex_session_id)
+      .reduce((maxSequence, candidate) => Math.max(maxSequence, candidate.sequence), 0);
     const existingForArtifact = valuesFor(this.codexSessionSnapshots).find(
       (candidate) => candidate.artifact_ref === snapshot.artifact_ref,
     );
     if (this.codexSessionSnapshots.has(snapshot.id) || existingForSequence !== undefined || existingForArtifact !== undefined) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} is not unique`);
+    }
+    if (snapshot.sequence <= maxExistingSequence) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session snapshot ${snapshot.id} sequence is stale`,
+      );
     }
     this.codexSessionSnapshots.set(snapshot.id, clone(snapshot));
   }

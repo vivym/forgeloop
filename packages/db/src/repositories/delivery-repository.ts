@@ -1444,7 +1444,6 @@ export interface DeliveryRepository {
   getPlanItemWorkflow(id: string): Promise<PlanItemWorkflow | undefined>;
   getActivePlanItemWorkflowByItem(itemId: string): Promise<PlanItemWorkflow | undefined>;
   savePlanItemWorkflow(workflow: PlanItemWorkflow): Promise<void>;
-  appendPlanItemWorkflowTransition(transition: PlanItemWorkflowTransition): Promise<void>;
   applyPlanItemWorkflowTransition(input: ApplyPlanItemWorkflowTransitionInput): Promise<PlanItemWorkflow>;
   listPlanItemWorkflowTransitions(workflowId: string): Promise<PlanItemWorkflowTransition[]>;
   saveWorkflowManualDecision(decision: WorkflowManualDecision): Promise<void>;

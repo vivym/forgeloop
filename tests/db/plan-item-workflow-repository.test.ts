@@ -6,6 +6,7 @@ import {
   type ExecutionPlanRevision,
   type InternalArtifactObject,
   type PlanItemWorkflow,
+  type PlanItemWorkflowTransition,
 } from '@forgeloop/domain';
 
 import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
@@ -417,6 +418,13 @@ const applyWorkflowProjectionTransition = async (
     },
     projection_patch: input.projection_patch,
   });
+
+const applyWorkflowTransition = async (
+  repository: InMemoryDeliveryRepository,
+  transition: PlanItemWorkflowTransition,
+) => {
+  await repository.applyPlanItemWorkflowTransition({ transition });
+};
 
 describe('Plan Item Workflow repository', () => {
   it('creates workflow with initial active Codex Session', async () => {
@@ -843,7 +851,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-readiness-without-active-plan-patch',
           from_status: 'implementation_plan_review',
@@ -869,7 +877,7 @@ describe('Plan Item Workflow repository', () => {
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
     await repository.saveWorkflowManualDecision(manualDecisionInput);
-    await repository.appendPlanItemWorkflowTransition(transitionInput);
+    await applyWorkflowTransition(repository, transitionInput);
     await repository.saveBoundarySummaryRevision(boundarySummaryRevisionInput);
     const workflow = await repository.getPlanItemWorkflow('workflow-1');
     if (workflow === undefined) throw new Error('Expected seeded workflow');
@@ -2303,6 +2311,42 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
   });
 
+  it('rejects snapshots whose sequence is not greater than the current session maximum', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionSnapshot({
+      ...snapshotInput,
+      id: 'snapshot-2',
+      sequence: 2,
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
+      digest: 'sha256:snapshot-2',
+      manifest_digest: 'sha256:manifest-2',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionSnapshot({
+          ...snapshotInput,
+          id: 'snapshot-1',
+          sequence: 1,
+          artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1',
+          digest: 'sha256:snapshot-1',
+          manifest_digest: 'sha256:manifest-1',
+        }),
+      'workflow_invalid_transition',
+    );
+
+    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toMatchObject({
+      sequence: 2,
+      digest: 'sha256:snapshot-2',
+    });
+    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    const session = await repository.getCodexSession('session-1');
+    expect(session?.latest_snapshot_id).toBeUndefined();
+    expect(session?.latest_snapshot_digest).toBeUndefined();
+  });
+
   it('rejects terminalizing an older non-latest running turn without moving the session backward', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -2879,7 +2923,7 @@ describe('Plan Item Workflow repository', () => {
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
     await repository.saveWorkflowManualDecision(manualDecisionInput);
-    await repository.appendPlanItemWorkflowTransition(transitionInput);
+    await applyWorkflowTransition(repository, transitionInput);
     await repository.createCodexSessionFork({
       id: 'session-fork',
       workflow_id: 'workflow-1',
@@ -2916,7 +2960,7 @@ describe('Plan Item Workflow repository', () => {
     await repository.createCodexSessionTurn(turnInput);
     await repository.saveWorkflowManualDecision(manualDecisionInput);
 
-    await repository.appendPlanItemWorkflowTransition(transitionInput);
+    await applyWorkflowTransition(repository, transitionInput);
 
     await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([transitionInput]);
   });
@@ -2934,7 +2978,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-missing-workflow',
           workflow_id: 'workflow-missing',
@@ -2943,7 +2987,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-missing-session',
           codex_session_id: 'session-missing',
@@ -2952,7 +2996,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-foreign-session',
           codex_session_id: 'session-other',
@@ -2983,7 +3027,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-missing-turn',
           codex_session_turn_id: 'turn-missing',
@@ -2992,7 +3036,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-foreign-turn',
           codex_session_turn_id: 'turn-other',
@@ -3009,7 +3053,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           evidence_object_type: 'codex_session_turn',
           evidence_object_id: 'turn-1',
@@ -3025,7 +3069,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-wrong-evidence-type',
           from_status: 'implementation_plan_review',
@@ -3046,7 +3090,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           actor_id: '',
         }),
@@ -3054,7 +3098,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           supporting_evidence: [{ object_type: 'codex_session_turn', object_id: 'turn-1' }],
         }),
@@ -3093,7 +3137,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-missing-decision',
           evidence_object_id: 'decision-missing',
@@ -3102,7 +3146,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-foreign-workflow-decision',
           evidence_object_id: 'decision-foreign-workflow',
@@ -3111,7 +3155,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-foreign-workflow-session-decision',
           evidence_object_id: 'decision-foreign-workflow-session',
@@ -3120,7 +3164,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-wrong-actor-decision',
           evidence_object_id: 'decision-wrong-actor',
@@ -3171,7 +3215,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-boundary-missing-session',
           from_status: 'brainstorming',
@@ -3183,7 +3227,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-boundary-foreign-session',
           from_status: 'brainstorming',
@@ -3195,7 +3239,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-spec-missing-session',
           from_status: 'spec_generation_queued',
@@ -3207,7 +3251,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-spec-foreign-session',
           from_status: 'spec_generation_queued',
@@ -3219,7 +3263,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-plan-missing-session',
           from_status: 'implementation_plan_generation_queued',
@@ -3231,7 +3275,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-plan-foreign-session',
           from_status: 'implementation_plan_generation_queued',
@@ -3268,7 +3312,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-boundary-foreign-item',
           from_status: 'brainstorming',
@@ -3280,7 +3324,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-spec-foreign-item',
           from_status: 'spec_generation_queued',
@@ -3292,7 +3336,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-plan-foreign-item',
           from_status: 'implementation_plan_generation_queued',
@@ -3348,7 +3392,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...readinessTransition,
           id: 'transition-missing-readiness',
           evidence_object_id: 'readiness-missing',
@@ -3357,7 +3401,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...readinessTransition,
           id: 'transition-foreign-readiness',
           evidence_object_id: 'readiness-foreign',
@@ -3408,12 +3452,12 @@ describe('Plan Item Workflow repository', () => {
     } as const;
 
     await expectDomainErrorCode(
-      () => repository.appendPlanItemWorkflowTransition(readinessTransition),
+      () => applyWorkflowTransition(repository, readinessTransition),
       'workflow_invalid_transition',
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...readinessTransition,
           id: 'transition-readiness-missing-plan-support',
           evidence_object_id: 'readiness-missing-plan-support',
@@ -3422,7 +3466,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...readinessTransition,
           id: 'transition-readiness-missing-transition-support',
           evidence_object_id: 'readiness-1',
@@ -3475,7 +3519,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-unresolved-commit',
           from_status: 'execution_running',
@@ -3488,7 +3532,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-unresolved-pr',
           from_status: 'code_review',
@@ -3501,7 +3545,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-unresolved-internal-artifact-support',
           supporting_evidence: [{ object_type: 'internal_artifact', object_id: 'internal-artifact-missing' }],
@@ -3525,7 +3569,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-foreign-pr',
           from_status: 'code_review',
@@ -3538,7 +3582,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expectDomainErrorCode(
       () =>
-        repository.appendPlanItemWorkflowTransition({
+        applyWorkflowTransition(repository, {
           ...transitionInput,
           id: 'transition-foreign-internal-artifact-support',
           supporting_evidence: [{ object_type: 'internal_artifact', object_id: 'internal-artifact-foreign' }],
@@ -3592,6 +3636,22 @@ describe('Plan Item Workflow repository', () => {
         }),
       'workflow_invalid_transition',
     );
+  });
+
+  it('rejects manual decisions that fail full contract validation before saving them', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveWorkflowManualDecision({
+          ...manualDecisionInput,
+          id: 'decision-invalid-kind',
+          kind: 'not_a_decision',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getWorkflowManualDecision('decision-invalid-kind')).resolves.toBeUndefined();
   });
 
   it('rejects manual decisions with missing or foreign selected fork provenance', async () => {
