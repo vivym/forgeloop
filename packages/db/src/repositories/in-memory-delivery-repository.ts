@@ -577,6 +577,17 @@ interface InMemoryDeliveryRepositoryOptions {
 const codexDenied = (code: DomainErrorType['code'], message: string, details?: Record<string, unknown>): DomainErrorType =>
   new DomainError(code, message, details);
 
+const codexSessionSnapshotDurableIdentityMatches = (
+  existing: CodexSessionSnapshot,
+  candidate: CodexSessionSnapshot,
+): boolean =>
+  existing.codex_session_id === candidate.codex_session_id &&
+  existing.digest === candidate.digest &&
+  existing.artifact_ref === candidate.artifact_ref &&
+  existing.manifest_digest === candidate.manifest_digest &&
+  existing.sequence === candidate.sequence &&
+  existing.created_from_turn_id === candidate.created_from_turn_id;
+
 const capabilityList = (capabilities: Record<string, unknown>, key: string): readonly string[] => {
   const value = capabilities[key];
   return Array.isArray(value) && value.every((entry): entry is string => typeof entry === 'string') ? value : [];
@@ -3201,13 +3212,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot does not belong to session ${session.id}`);
     }
+    const existingOutputSnapshot =
+      input.output_snapshot === undefined ? undefined : this.codexSessionSnapshots.get(input.output_snapshot.id);
+    if (input.output_snapshot !== undefined && existingOutputSnapshot !== undefined) {
+      if (!codexSessionSnapshotDurableIdentityMatches(existingOutputSnapshot, input.output_snapshot)) {
+        throw new DomainError(
+          'codex_session_snapshot_stale',
+          `codex_session_snapshot_stale: Output snapshot ${input.output_snapshot.id} durable identity is stale`,
+        );
+      }
+    }
+    const outputSnapshot = existingOutputSnapshot ?? input.output_snapshot;
     const releasedLease: CodexSessionLease = { ...clone(lease), status: 'released', released_at: input.now, updated_at: input.now };
     const updatedTurn: CodexSessionTurn = {
       ...clone(turn),
       status: input.status,
-      ...(input.output_snapshot === undefined
+      ...(outputSnapshot === undefined
         ? {}
-        : { output_snapshot_id: input.output_snapshot.id, output_snapshot_digest: input.output_snapshot.digest }),
+        : { output_snapshot_id: outputSnapshot.id, output_snapshot_digest: outputSnapshot.digest }),
       ...(input.output_object_type === undefined ? {} : { output_object_type: input.output_object_type }),
       ...(input.output_object_id === undefined ? {} : { output_object_id: input.output_object_id }),
       ...(input.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: input.codex_thread_id_digest }),
@@ -3224,9 +3246,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       status: input.status === 'succeeded' ? 'idle' : 'blocked',
       latest_turn_id: updatedTurn.id,
       latest_turn_digest: updatedTurn.output_snapshot_digest ?? updatedTurn.input_digest,
-      ...(input.output_snapshot === undefined
+      ...(outputSnapshot === undefined
         ? {}
-        : { latest_snapshot_id: input.output_snapshot.id, latest_snapshot_digest: input.output_snapshot.digest }),
+        : { latest_snapshot_id: outputSnapshot.id, latest_snapshot_digest: outputSnapshot.digest }),
       ...(input.codex_thread_id === undefined ? {} : { codex_thread_id: input.codex_thread_id }),
       ...(input.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: input.codex_thread_id_digest }),
       updated_at: input.now,
