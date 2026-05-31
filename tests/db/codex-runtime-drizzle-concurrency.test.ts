@@ -702,6 +702,43 @@ const internalArtifactObjectForRuntimeArtifact = (
   created_at: input.now,
 });
 
+const internalArtifactObjectForPendingWorkspaceBundle = (input: {
+  id: string;
+  bundle_id: string;
+  pending_artifact_ref: string;
+  archive_digest: string;
+  manifest_digest: string;
+  run_worker_lease_id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  size_bytes: number;
+  request_digest: string;
+  created_at: string;
+  created_by_actor_id: string;
+}): InternalArtifactObject => ({
+  id: input.id,
+  artifact_id: input.bundle_id,
+  ref: input.pending_artifact_ref,
+  storage_key: `objects/${input.archive_digest.slice('sha256:'.length)}`,
+  kind: 'workspace_bundle',
+  content_type: 'application/vnd.forgeloop.workspace-bundle',
+  size_bytes: String(input.size_bytes),
+  digest: input.archive_digest,
+  visibility: 'internal',
+  owner_type: 'run_session',
+  owner_id: input.run_session_id,
+  idempotency_key: `pending-workspace-bundle:${input.bundle_id}`,
+  request_digest: input.request_digest,
+  metadata_json: {
+    manifest_digest: input.manifest_digest,
+    execution_package_id: input.execution_package_id,
+    run_worker_lease_id: input.run_worker_lease_id,
+  },
+  created_by_actor_type: 'codex_worker',
+  created_by_actor_id: input.created_by_actor_id,
+  created_at: input.created_at,
+});
+
 const installLaunchLeaseUpdateDelay = async (client: ReturnType<typeof createDbClient>, leaseId: string) => {
   await client.db.execute(sql.raw(`
     create or replace function codex_test_delay_launch_lease_update()
@@ -815,10 +852,11 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         await installPendingWorkspaceBundleInsertDelay(firstClient, bundleId);
 
         const archiveBytes = Buffer.from('pending workspace bundle race\n');
+        const archiveRef = `artifact://internal/workspace_bundle/run_session/${run.id}/${bundleId}`;
         const workspaceAcquisitionJson = {
           schema_version: 'workspace_bundle_acquisition.v1',
           bundle_id: bundleId,
-          archive_ref: `artifact:codex-pending-bundles:${bundleId}`,
+          archive_ref: archiveRef,
           archive_digest: bytesDigest(archiveBytes),
           manifest_digest: tokenHash('pending-bundle-race-manifest'),
           size_bytes: archiveBytes.byteLength,
@@ -828,12 +866,12 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           id: randomUUID(),
           bundle_id: bundleId,
           pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+          internal_artifact_object_id: randomUUID(),
           archive_digest: workspaceAcquisitionJson.archive_digest,
           manifest_digest: workspaceAcquisitionJson.manifest_digest,
           run_worker_lease_id: runWorkerLease.id,
           run_session_id: run.id,
           execution_package_id: run.execution_package_id,
-          archive_bytes_base64: archiveBytes.toString('base64'),
           size_bytes: archiveBytes.byteLength,
           workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
           workspace_acquisition_json: workspaceAcquisitionJson,
@@ -841,6 +879,22 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           request_digest: tokenHash('pending-bundle-race-request'),
           created_at: now,
         };
+        await firstRepository.createOrReplayInternalArtifactObject(
+          internalArtifactObjectForPendingWorkspaceBundle({
+            id: input.internal_artifact_object_id,
+            bundle_id: input.bundle_id,
+            pending_artifact_ref: input.pending_artifact_ref,
+            archive_digest: input.archive_digest,
+            manifest_digest: input.manifest_digest,
+            run_worker_lease_id: input.run_worker_lease_id,
+            run_session_id: input.run_session_id,
+            execution_package_id: input.execution_package_id,
+            size_bytes: input.size_bytes,
+            request_digest: tokenHash('pending-bundle-race-object-request'),
+            created_at: input.created_at,
+            created_by_actor_id: runWorkerLease.worker_id,
+          }),
+        );
 
         await expect(
           Promise.all([
