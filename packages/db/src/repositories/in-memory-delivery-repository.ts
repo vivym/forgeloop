@@ -3052,7 +3052,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       );
     }
     this.assertPlanItemWorkflowProjectionPatchAllowed(input);
-    this.assertCanAppendPlanItemWorkflowTransition(input.transition);
+    this.assertCanAppendPlanItemWorkflowTransition(input.transition, input.projection_patch);
 
     const updatedWorkflow: PlanItemWorkflow = {
       ...clone(workflow),
@@ -3070,7 +3070,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return clone(updatedWorkflow);
   }
 
-  private assertCanAppendPlanItemWorkflowTransition(transition: PlanItemWorkflowTransition): void {
+  private assertCanAppendPlanItemWorkflowTransition(
+    transition: PlanItemWorkflowTransition,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): void {
     if (this.planItemWorkflowTransitions.has(transition.id)) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} already exists`);
     }
@@ -3093,7 +3096,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `Transition ${transition.id}`,
       );
     }
-    this.assertPlanItemWorkflowTransitionEvidence(transition);
+    this.assertPlanItemWorkflowTransitionEvidence(transition, projectionPatch);
   }
 
   private nextWorkflowPreviousStatus(
@@ -3117,16 +3120,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     const transition = input.transition;
     const invalid =
       (patch.active_boundary_summary_revision_id !== undefined &&
-        (transition.evidence_object_type !== 'boundary_summary_revision' ||
+        (transition.from_status !== 'boundary_review' ||
+          transition.to_status !== 'spec_generation_queued' ||
+          transition.evidence_object_type !== 'boundary_summary_revision' ||
           transition.evidence_object_id !== patch.active_boundary_summary_revision_id)) ||
       (patch.active_spec_doc_revision_id !== undefined &&
-        (transition.evidence_object_type !== 'spec_revision' ||
+        (transition.from_status !== 'spec_review' ||
+          transition.to_status !== 'implementation_plan_generation_queued' ||
+          transition.evidence_object_type !== 'spec_revision' ||
           transition.evidence_object_id !== patch.active_spec_doc_revision_id)) ||
       (patch.active_implementation_plan_doc_revision_id !== undefined &&
-        (transition.evidence_object_type !== 'implementation_plan_revision' ||
-          transition.evidence_object_id !== patch.active_implementation_plan_doc_revision_id)) ||
+        !this.isExecutionReadinessImplementationPlanProjectionPatchAllowed(
+          transition,
+          patch.active_implementation_plan_doc_revision_id,
+        )) ||
       (patch.execution_package_id !== undefined &&
-        (transition.evidence_object_type !== 'execution_package' ||
+        (transition.from_status !== 'execution_ready' ||
+          transition.to_status !== 'execution_running' ||
+          transition.evidence_object_type !== 'execution_package' ||
           transition.evidence_object_id !== patch.execution_package_id));
     if (invalid) {
       throw new DomainError(
@@ -3136,7 +3147,35 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
   }
 
-  private assertPlanItemWorkflowTransitionEvidence(transition: PlanItemWorkflowTransition): void {
+  private isExecutionReadinessImplementationPlanProjectionPatchAllowed(
+    transition: PlanItemWorkflowTransition,
+    activeImplementationPlanRevisionId: string,
+  ): boolean {
+    if (
+      transition.from_status !== 'implementation_plan_review' ||
+      transition.to_status !== 'execution_ready' ||
+      transition.evidence_object_type !== 'execution_readiness_record'
+    ) {
+      return false;
+    }
+    const record = this.executionReadinessRecords.get(transition.evidence_object_id);
+    return (
+      record?.approved_implementation_plan_revision_id === activeImplementationPlanRevisionId &&
+      record.supporting_evidence.some(
+        (evidence) =>
+          evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId,
+      ) &&
+      transition.supporting_evidence?.some(
+        (evidence) =>
+          evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId,
+      ) === true
+    );
+  }
+
+  private assertPlanItemWorkflowTransitionEvidence(
+    transition: PlanItemWorkflowTransition,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): void {
     const workflow = this.planItemWorkflows.get(transition.workflow_id);
     let primaryManualDecisionKind;
     if (transition.evidence_object_type === 'manual_decision') {
@@ -3150,18 +3189,22 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       ...(workflow?.previous_status === undefined ? {} : { previous_status: workflow.previous_status }),
       ...(primaryManualDecisionKind === undefined ? {} : { manual_decision_kind: primaryManualDecisionKind }),
     });
-    this.assertPlanItemWorkflowTransitionPrimaryEvidence(transition);
+    this.assertPlanItemWorkflowTransitionPrimaryEvidence(transition, projectionPatch);
     for (const evidence of transition.supporting_evidence ?? []) {
       this.assertPlanItemWorkflowTransitionEvidenceObject(transition, evidence.object_type, evidence.object_id);
     }
   }
 
-  private assertPlanItemWorkflowTransitionPrimaryEvidence(transition: PlanItemWorkflowTransition): void {
+  private assertPlanItemWorkflowTransitionPrimaryEvidence(
+    transition: PlanItemWorkflowTransition,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): void {
     this.assertPlanItemWorkflowTransitionEvidenceObject(
       transition,
       transition.evidence_object_type,
       transition.evidence_object_id,
       true,
+      projectionPatch,
     );
   }
 
@@ -3170,6 +3213,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     evidenceObjectType: PlanItemWorkflowTransition['evidence_object_type'],
     evidenceObjectId: string,
     isPrimaryEvidence = false,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
   ): void {
     if (!workflowTransitionEvidenceObjectTypeSchema.safeParse(evidenceObjectType).success) {
       throw new DomainError(
@@ -3203,7 +3247,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
 
     if (evidenceObjectType === 'execution_readiness_record') {
-      this.assertPlanItemWorkflowExecutionReadinessEvidence(transition, evidenceObjectId, isPrimaryEvidence);
+      this.assertPlanItemWorkflowExecutionReadinessEvidence(transition, evidenceObjectId, isPrimaryEvidence, projectionPatch);
       return;
     }
 
@@ -3275,10 +3319,16 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     transition: PlanItemWorkflowTransition,
     evidenceObjectId: string,
     isPrimaryEvidence: boolean,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
   ): void {
     const workflow = this.planItemWorkflows.get(transition.workflow_id);
     const record = this.executionReadinessRecords.get(evidenceObjectId);
-    const activeImplementationPlanRevisionId = workflow?.active_implementation_plan_doc_revision_id;
+    const transitionPatchPlanRevisionId =
+      transition.to_status === 'execution_ready' && isPrimaryEvidence
+        ? projectionPatch?.active_implementation_plan_doc_revision_id
+        : undefined;
+    const activeImplementationPlanRevisionId =
+      workflow?.active_implementation_plan_doc_revision_id ?? transitionPatchPlanRevisionId;
     const hasReadinessPlanSupport =
       activeImplementationPlanRevisionId !== undefined &&
       record?.supporting_evidence.some(

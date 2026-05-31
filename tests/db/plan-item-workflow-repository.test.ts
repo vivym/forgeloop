@@ -200,9 +200,6 @@ const seedWorkflowActiveApprovalFields = async (
       evidence_object_id: 'boundary-summary-revision-1',
       codex_session_turn_id: undefined,
     },
-    projection_patch: {
-      active_boundary_summary_revision_id: 'boundary-summary-revision-1',
-    },
   });
   await repository.applyPlanItemWorkflowTransition({
     transition: {
@@ -213,6 +210,9 @@ const seedWorkflowActiveApprovalFields = async (
       evidence_object_type: 'boundary_summary_revision',
       evidence_object_id: 'boundary-summary-revision-1',
       codex_session_turn_id: undefined,
+    },
+    projection_patch: {
+      active_boundary_summary_revision_id: 'boundary-summary-revision-1',
     },
   });
   await repository.applyPlanItemWorkflowTransition({
@@ -225,9 +225,6 @@ const seedWorkflowActiveApprovalFields = async (
       evidence_object_id: 'spec-revision-1',
       codex_session_turn_id: undefined,
     },
-    projection_patch: {
-      active_spec_doc_revision_id: 'spec-revision-1',
-    },
   });
   await repository.applyPlanItemWorkflowTransition({
     transition: {
@@ -239,6 +236,9 @@ const seedWorkflowActiveApprovalFields = async (
       evidence_object_id: 'spec-revision-1',
       codex_session_turn_id: undefined,
     },
+    projection_patch: {
+      active_spec_doc_revision_id: 'spec-revision-1',
+    },
   });
   await repository.applyPlanItemWorkflowTransition({
     transition: {
@@ -249,9 +249,6 @@ const seedWorkflowActiveApprovalFields = async (
       evidence_object_type: 'implementation_plan_revision',
       evidence_object_id: 'implementation-plan-revision-1',
       codex_session_turn_id: undefined,
-    },
-    projection_patch: {
-      active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1',
     },
   });
 };
@@ -403,6 +400,7 @@ const applyWorkflowProjectionTransition = async (
     projection_patch?: Parameters<InMemoryDeliveryRepository['applyPlanItemWorkflowTransition']>[0]['projection_patch'];
     supporting_evidence?: Parameters<InMemoryDeliveryRepository['applyPlanItemWorkflowTransition']>[0]['transition']['supporting_evidence'];
     actor_id?: string;
+    codex_session_turn_id?: string;
   },
 ) =>
   repository.applyPlanItemWorkflowTransition({
@@ -414,6 +412,7 @@ const applyWorkflowProjectionTransition = async (
       actor_id: input.actor_id ?? 'actor-tech',
       evidence_object_type: input.evidence_object_type,
       evidence_object_id: input.evidence_object_id,
+      codex_session_turn_id: input.codex_session_turn_id,
       ...(input.supporting_evidence === undefined ? {} : { supporting_evidence: input.supporting_evidence }),
     },
     projection_patch: input.projection_patch,
@@ -648,7 +647,7 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflow);
   });
 
-  it('applies a workflow transition and service-owned projection patch atomically', async () => {
+  it('applies a workflow approval transition and service-owned projection patch atomically', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
@@ -669,16 +668,200 @@ describe('Plan Item Workflow repository', () => {
       to_status: 'boundary_review',
       evidence_object_type: 'boundary_summary_revision',
       evidence_object_id: 'boundary-summary-revision-1',
+    });
+
+    const submittedWorkflow = await repository.getPlanItemWorkflow('workflow-1');
+    expect(submittedWorkflow).toMatchObject({
+      status: 'boundary_review',
+      updated_at: now,
+    });
+    expect(submittedWorkflow?.active_boundary_summary_revision_id).toBeUndefined();
+
+    await applyWorkflowProjectionTransition(repository, {
+      transition_id: 'transition-boundary-approval',
+      from_status: 'boundary_review',
+      to_status: 'spec_generation_queued',
+      evidence_object_type: 'boundary_summary_revision',
+      evidence_object_id: 'boundary-summary-revision-1',
       projection_patch: { active_boundary_summary_revision_id: 'boundary-summary-revision-1' },
     });
 
     await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
-      status: 'boundary_review',
+      status: 'spec_generation_queued',
       active_boundary_summary_revision_id: 'boundary-summary-revision-1',
       updated_at: now,
     });
     expect((await repository.getPlanItemWorkflow('workflow-1'))?.previous_status).toBeUndefined();
-    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(2);
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(3);
+  });
+
+  it('rejects submission transitions that try to set active document projection patches', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
+    await repository.saveBoundarySummaryRevision(boundarySummaryRevisionInput);
+    await repository.saveSpecRevision(specRevisionInput);
+    await repository.saveExecutionPlanRevision(executionPlanRevisionInput);
+
+    await applyWorkflowProjectionTransition(repository, {
+      transition_id: 'transition-start',
+      from_status: 'not_started',
+      to_status: 'brainstorming',
+      evidence_object_type: 'manual_decision',
+      evidence_object_id: 'decision-1',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        applyWorkflowProjectionTransition(repository, {
+          transition_id: 'transition-boundary-submission-patch',
+          from_status: 'brainstorming',
+          to_status: 'boundary_review',
+          evidence_object_type: 'boundary_summary_revision',
+          evidence_object_id: 'boundary-summary-revision-1',
+          projection_patch: { active_boundary_summary_revision_id: 'boundary-summary-revision-1' },
+        }),
+      'workflow_invalid_transition',
+    );
+    const rejectedBoundaryPatchWorkflow = await repository.getPlanItemWorkflow('workflow-1');
+    expect(rejectedBoundaryPatchWorkflow).toMatchObject({
+      status: 'brainstorming',
+    });
+    expect(rejectedBoundaryPatchWorkflow?.active_boundary_summary_revision_id).toBeUndefined();
+
+    await applyWorkflowProjectionTransition(repository, {
+      transition_id: 'transition-boundary-submission',
+      from_status: 'brainstorming',
+      to_status: 'boundary_review',
+      evidence_object_type: 'boundary_summary_revision',
+      evidence_object_id: 'boundary-summary-revision-1',
+    });
+    await applyWorkflowProjectionTransition(repository, {
+      transition_id: 'transition-boundary-approval',
+      from_status: 'boundary_review',
+      to_status: 'spec_generation_queued',
+      evidence_object_type: 'boundary_summary_revision',
+      evidence_object_id: 'boundary-summary-revision-1',
+      projection_patch: { active_boundary_summary_revision_id: 'boundary-summary-revision-1' },
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        applyWorkflowProjectionTransition(repository, {
+          transition_id: 'transition-spec-submission-patch',
+          from_status: 'spec_generation_queued',
+          to_status: 'spec_review',
+          evidence_object_type: 'spec_revision',
+          evidence_object_id: 'spec-revision-1',
+          projection_patch: { active_spec_doc_revision_id: 'spec-revision-1' },
+        }),
+      'workflow_invalid_transition',
+    );
+    const rejectedSpecPatchWorkflow = await repository.getPlanItemWorkflow('workflow-1');
+    expect(rejectedSpecPatchWorkflow).toMatchObject({
+      status: 'spec_generation_queued',
+    });
+    expect(rejectedSpecPatchWorkflow?.active_spec_doc_revision_id).toBeUndefined();
+
+    await applyWorkflowProjectionTransition(repository, {
+      transition_id: 'transition-spec-submission',
+      from_status: 'spec_generation_queued',
+      to_status: 'spec_review',
+      evidence_object_type: 'spec_revision',
+      evidence_object_id: 'spec-revision-1',
+    });
+    await applyWorkflowProjectionTransition(repository, {
+      transition_id: 'transition-spec-approval',
+      from_status: 'spec_review',
+      to_status: 'implementation_plan_generation_queued',
+      evidence_object_type: 'spec_revision',
+      evidence_object_id: 'spec-revision-1',
+      projection_patch: { active_spec_doc_revision_id: 'spec-revision-1' },
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        applyWorkflowProjectionTransition(repository, {
+          transition_id: 'transition-plan-submission-patch',
+          from_status: 'implementation_plan_generation_queued',
+          to_status: 'implementation_plan_review',
+          evidence_object_type: 'implementation_plan_revision',
+          evidence_object_id: 'implementation-plan-revision-1',
+          projection_patch: { active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1' },
+        }),
+      'workflow_invalid_transition',
+    );
+    const rejectedPlanPatchWorkflow = await repository.getPlanItemWorkflow('workflow-1');
+    expect(rejectedPlanPatchWorkflow).toMatchObject({
+      status: 'implementation_plan_generation_queued',
+    });
+    expect(rejectedPlanPatchWorkflow?.active_implementation_plan_doc_revision_id).toBeUndefined();
+  });
+
+  it('applies execution readiness transition and active implementation plan projection atomically', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      actor_id: 'actor-product',
+    });
+    await seedWorkflowActiveApprovalFields(repository);
+    await repository.saveExecutionReadinessRecord({
+      ...readinessRecordInput,
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+    });
+
+    await applyWorkflowProjectionTransition(repository, {
+      transition_id: 'transition-readiness-with-active-plan',
+      from_status: 'implementation_plan_review',
+      to_status: 'execution_ready',
+      actor_id: 'actor-product',
+      evidence_object_type: 'execution_readiness_record',
+      evidence_object_id: 'readiness-1',
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+      projection_patch: { active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1' },
+    });
+
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
+      status: 'execution_ready',
+      active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1',
+      updated_at: now,
+    });
+  });
+
+  it('rejects direct execution readiness transitions without the active implementation plan projection patch', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      actor_id: 'actor-product',
+    });
+    await seedWorkflowActiveApprovalFields(repository);
+    await repository.saveExecutionReadinessRecord({
+      ...readinessRecordInput,
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-readiness-without-active-plan-patch',
+          from_status: 'implementation_plan_review',
+          to_status: 'execution_ready',
+          actor_id: 'actor-product',
+          reason: 'Mark ready.',
+          evidence_object_type: 'execution_readiness_record',
+          evidence_object_id: 'readiness-1',
+          supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+          codex_session_turn_id: undefined,
+        }),
+      'workflow_invalid_transition',
+    );
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    expect(workflow).toMatchObject({
+      status: 'implementation_plan_review',
+    });
+    expect(workflow?.active_implementation_plan_doc_revision_id).toBeUndefined();
   });
 
   it('rejects duplicate atomic workflow transition ids without updating workflow projections', async () => {
@@ -695,8 +878,8 @@ describe('Plan Item Workflow repository', () => {
       () =>
         applyWorkflowProjectionTransition(repository, {
           transition_id: 'transition-1',
-          from_status: 'brainstorming',
-          to_status: 'boundary_review',
+          from_status: 'boundary_review',
+          to_status: 'spec_generation_queued',
           evidence_object_type: 'boundary_summary_revision',
           evidence_object_id: 'boundary-summary-revision-1',
           projection_patch: { active_boundary_summary_revision_id: 'boundary-summary-revision-1' },
@@ -3182,7 +3365,10 @@ describe('Plan Item Workflow repository', () => {
       'workflow_invalid_transition',
     );
 
-    await repository.appendPlanItemWorkflowTransition(readinessTransition);
+    await repository.applyPlanItemWorkflowTransition({
+      transition: readinessTransition,
+      projection_patch: { active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1' },
+    });
 
     await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toContainEqual(readinessTransition);
   });
@@ -3275,7 +3461,10 @@ describe('Plan Item Workflow repository', () => {
       codex_session_turn_id: undefined,
     } as const;
 
-    await repository.appendPlanItemWorkflowTransition(readinessTransition);
+    await repository.applyPlanItemWorkflowTransition({
+      transition: readinessTransition,
+      projection_patch: { active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1' },
+    });
 
     await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toContainEqual(readinessTransition);
   });
