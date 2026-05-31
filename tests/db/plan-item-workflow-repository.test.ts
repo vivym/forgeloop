@@ -112,6 +112,79 @@ describe('Plan Item Workflow repository', () => {
     ).rejects.toThrow(DomainError);
   });
 
+  it('rejects creating an initial session with an existing archived workflow id', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected seeded Codex session');
+    await repository.savePlanItemWorkflow({
+      ...workflow,
+      status: 'archived',
+      active_codex_session_id: undefined,
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+    await repository.saveCodexSession({
+      ...session,
+      status: 'archived',
+      active_lease_id: undefined,
+      archived_at: '2026-05-31T00:01:00.000Z',
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createPlanItemWorkflowWithInitialSession({
+          ...baseWorkflowInput,
+          codex_session_id: 'session-2',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
+      development_plan_item_id: 'item-1',
+      status: 'archived',
+    });
+    await expect(repository.getCodexSession('session-2')).resolves.toBeUndefined();
+  });
+
+  it('rejects creating an initial session with an existing archived Codex session id', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected seeded Codex session');
+    await repository.savePlanItemWorkflow({
+      ...workflow,
+      status: 'archived',
+      active_codex_session_id: undefined,
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+    await repository.saveCodexSession({
+      ...session,
+      status: 'archived',
+      active_lease_id: undefined,
+      archived_at: '2026-05-31T00:01:00.000Z',
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createPlanItemWorkflowWithInitialSession({
+          ...baseWorkflowInput,
+          id: 'workflow-2',
+          development_plan_item_id: 'item-2',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-2')).resolves.toBeUndefined();
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      owner_id: 'workflow-1',
+      status: 'archived',
+    });
+  });
+
   it('claims only the workflow active session and rejects a second active lease', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -541,6 +614,302 @@ describe('Plan Item Workflow repository', () => {
     });
     expect(terminalized.session).not.toHaveProperty('active_lease_id');
     await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toMatchObject({ digest: 'sha256:snapshot-1' });
+  });
+
+  it('rejects terminalization with only a Codex thread id before mutation', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: undefined,
+          output_snapshot: { ...snapshotInput },
+          codex_thread_id: 'thread-1',
+          now: '2026-05-31T00:02:00.000Z',
+        }),
+      'codex_session_stale_terminalization',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: claimed.lease.id,
+    });
+    const session = await repository.getCodexSession('session-1');
+    expect(session?.codex_thread_id).toBeUndefined();
+    expect(session?.codex_thread_id_digest).toBeUndefined();
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+  });
+
+  it('rejects terminalization with only a Codex thread digest before mutation', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: undefined,
+          output_snapshot: { ...snapshotInput },
+          codex_thread_id_digest: 'sha256:thread-1',
+          now: '2026-05-31T00:02:00.000Z',
+        }),
+      'codex_session_stale_terminalization',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: claimed.lease.id,
+    });
+    const session = await repository.getCodexSession('session-1');
+    expect(session?.codex_thread_id).toBeUndefined();
+    expect(session?.codex_thread_id_digest).toBeUndefined();
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+  });
+
+  it('allows first terminalization to bind a Codex thread id and digest', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+
+    const terminalized = await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      lease_id: claimed.lease.id,
+      lease_token_hash: 'sha256:lease-token',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+      now: '2026-05-31T00:02:00.000Z',
+    });
+
+    expect(terminalized.session).toMatchObject({
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+    });
+    expect(terminalized.turn).toMatchObject({ codex_thread_id_digest: 'sha256:thread-1' });
+  });
+
+  it('rejects later terminalization with a different Codex thread binding before mutation', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      lease_id: claimed.lease.id,
+      lease_token_hash: 'sha256:lease-token',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+      now: '2026-05-31T00:02:00.000Z',
+    });
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-2',
+      input_digest: 'sha256:turn-2',
+      created_at: '2026-05-31T00:03:00.000Z',
+      updated_at: '2026-05-31T00:03:00.000Z',
+    });
+    const secondClaim = await repository.claimCodexSessionLease({
+      ...leaseInput,
+      lease_id: 'lease-2',
+      lease_token_hash: 'sha256:lease-token-2',
+      expected_previous_snapshot_digest: undefined,
+      now: '2026-05-31T00:04:00.000Z',
+      expires_at: '2026-05-31T00:09:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-2',
+          lease_id: secondClaim.lease.id,
+          lease_token_hash: 'sha256:lease-token-2',
+          lease_epoch: 2,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: undefined,
+          output_snapshot: {
+            ...snapshotInput,
+            id: 'snapshot-2',
+            sequence: 2,
+            artifact_ref: 'artifact://snapshot-2',
+            digest: 'sha256:snapshot-2',
+            manifest_digest: 'sha256:manifest-2',
+            created_from_turn_id: 'turn-2',
+          },
+          codex_thread_id: 'thread-2',
+          codex_thread_id_digest: 'sha256:thread-2',
+          now: '2026-05-31T00:05:00.000Z',
+        }),
+      'codex_session_stale_terminalization',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: 'lease-2',
+      lease_epoch: 2,
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+    });
+    await expect(repository.getCodexSessionTurn('turn-2')).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
+    await expect(repository.renewCodexSessionLease({
+      session_id: 'session-1',
+      lease_id: 'lease-2',
+      lease_token_hash: 'sha256:lease-token-2',
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      lease_epoch: 2,
+      now: '2026-05-31T00:05:30.000Z',
+      expires_at: '2026-05-31T00:10:00.000Z',
+    })).resolves.toMatchObject({ id: 'lease-2', status: 'active' });
+  });
+
+  it('preserves an existing Codex thread binding when later terminalization omits both fields', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      lease_id: claimed.lease.id,
+      lease_token_hash: 'sha256:lease-token',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+      now: '2026-05-31T00:02:00.000Z',
+    });
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-2',
+      input_digest: 'sha256:turn-2',
+      created_at: '2026-05-31T00:03:00.000Z',
+      updated_at: '2026-05-31T00:03:00.000Z',
+    });
+    const secondClaim = await repository.claimCodexSessionLease({
+      ...leaseInput,
+      lease_id: 'lease-2',
+      lease_token_hash: 'sha256:lease-token-2',
+      expected_previous_snapshot_digest: undefined,
+      now: '2026-05-31T00:04:00.000Z',
+      expires_at: '2026-05-31T00:09:00.000Z',
+    });
+
+    const terminalized = await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-2',
+      lease_id: secondClaim.lease.id,
+      lease_token_hash: 'sha256:lease-token-2',
+      lease_epoch: 2,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      now: '2026-05-31T00:05:00.000Z',
+    });
+
+    expect(terminalized.session).toMatchObject({
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+    });
+  });
+
+  it('allows later terminalization with the same Codex thread id and digest', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      lease_id: claimed.lease.id,
+      lease_token_hash: 'sha256:lease-token',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+      now: '2026-05-31T00:02:00.000Z',
+    });
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-2',
+      input_digest: 'sha256:turn-2',
+      created_at: '2026-05-31T00:03:00.000Z',
+      updated_at: '2026-05-31T00:03:00.000Z',
+    });
+    const secondClaim = await repository.claimCodexSessionLease({
+      ...leaseInput,
+      lease_id: 'lease-2',
+      lease_token_hash: 'sha256:lease-token-2',
+      expected_previous_snapshot_digest: undefined,
+      now: '2026-05-31T00:04:00.000Z',
+      expires_at: '2026-05-31T00:09:00.000Z',
+    });
+
+    const terminalized = await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-2',
+      lease_id: secondClaim.lease.id,
+      lease_token_hash: 'sha256:lease-token-2',
+      lease_epoch: 2,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+      now: '2026-05-31T00:05:00.000Z',
+    });
+
+    expect(terminalized.session).toMatchObject({
+      status: 'idle',
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+    });
+    expect(terminalized.turn).toMatchObject({ codex_thread_id_digest: 'sha256:thread-1' });
   });
 
   it('rejects terminalization when a reused output snapshot id has drifted durable identity', async () => {

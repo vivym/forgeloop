@@ -2921,6 +2921,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   async createPlanItemWorkflowWithInitialSession(
     input: CreatePlanItemWorkflowWithInitialSessionInput,
   ): Promise<{ workflow: PlanItemWorkflow; session: CodexSession }> {
+    if (this.planItemWorkflows.has(input.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Workflow ${input.id} already exists`);
+    }
+    if (this.codexSessions.has(input.codex_session_id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${input.codex_session_id} already exists`);
+    }
     if (this.getActivePlanItemWorkflowByItemSync(input.development_plan_item_id) !== undefined) {
       throw new DomainError(
         'workflow_active_session_conflict',
@@ -3279,6 +3285,35 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         throw new DomainError(
           'codex_session_snapshot_stale',
           `codex_session_snapshot_stale: Output snapshot ${input.output_snapshot.id} durable identity is stale`,
+        );
+      }
+    }
+    const hasThreadIdInput = input.codex_thread_id !== undefined;
+    const hasThreadDigestInput = input.codex_thread_id_digest !== undefined;
+    if (hasThreadIdInput !== hasThreadDigestInput) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Codex session ${input.session_id} thread binding is incomplete`,
+      );
+    }
+    if (hasThreadIdInput && hasThreadDigestInput) {
+      const hasSessionThreadId = session.codex_thread_id !== undefined;
+      const hasSessionThreadDigest = session.codex_thread_id_digest !== undefined;
+      if (hasSessionThreadId !== hasSessionThreadDigest) {
+        throw new DomainError(
+          'codex_session_stale_terminalization',
+          `codex_session_stale_terminalization: Codex session ${input.session_id} has a partial thread binding`,
+        );
+      }
+      if (
+        hasSessionThreadId &&
+        hasSessionThreadDigest &&
+        (session.codex_thread_id !== input.codex_thread_id ||
+          session.codex_thread_id_digest !== input.codex_thread_id_digest)
+      ) {
+        throw new DomainError(
+          'codex_session_stale_terminalization',
+          `codex_session_stale_terminalization: Codex session ${input.session_id} thread binding is stale`,
         );
       }
     }
