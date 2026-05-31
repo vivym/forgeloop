@@ -19,6 +19,11 @@ import type {
   CodexLaunchTokenEnvelope,
   CodexLaunchLease,
   CodexLaunchMaterialization,
+  CodexSession,
+  CodexSessionLease,
+  CodexSessionSnapshot,
+  CodexSessionStaleTerminalizationAttempt,
+  CodexSessionTurn,
   CodexRuntimeJob,
   CodexRuntimeJobArtifact,
   CodexRuntimeProfile,
@@ -46,11 +51,14 @@ import type {
   ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
+  ExecutionReadinessRecord,
   ManualPathHold,
   ObjectEvent,
   Organization,
   Plan,
   PlanRevision,
+  PlanItemWorkflow,
+  PlanItemWorkflowTransition,
   Project,
   ProjectRepo,
   Release,
@@ -70,6 +78,7 @@ import type {
   StructuredRevisionDiff,
   Task,
   WorkItem,
+  WorkflowManualDecision,
   ResolvedCodexCredential,
 } from '@forgeloop/domain';
 import type { ObjectRef } from '@forgeloop/contracts';
@@ -260,6 +269,13 @@ import type {
   BoundaryAnswerRecord,
   BoundaryDecisionRecord,
   BoundaryQuestionRecord,
+  ClaimCodexSessionLeaseInput,
+  CreateCodexSessionForkInput,
+  CreatePlanItemWorkflowWithInitialSessionInput,
+  RenewCodexSessionLeaseInput,
+  SelectActiveCodexSessionForkInput,
+  TerminalizeCodexSessionTurnInput,
+  WorkflowRepositoryEvidenceInput,
   BoundaryRoundRecord,
 } from './delivery-repository';
 import {
@@ -874,6 +890,123 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async withObjectLock<T>(key: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
     return this.withAdvisoryLocks([key], write);
+  }
+
+
+  private workflowRepositoryNotImplemented(): never {
+    throw new Error('not implemented: Drizzle workflow session repository persistence is Task 2C');
+  }
+
+  async createPlanItemWorkflowWithInitialSession(
+    _input: CreatePlanItemWorkflowWithInitialSessionInput,
+  ): Promise<{ workflow: PlanItemWorkflow; session: CodexSession }> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async getPlanItemWorkflow(_id: string): Promise<PlanItemWorkflow | undefined> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async getActivePlanItemWorkflowByItem(_itemId: string): Promise<PlanItemWorkflow | undefined> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async savePlanItemWorkflow(_workflow: PlanItemWorkflow): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async appendPlanItemWorkflowTransition(_transition: PlanItemWorkflowTransition): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async listPlanItemWorkflowTransitions(_workflowId: string): Promise<PlanItemWorkflowTransition[]> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async saveWorkflowManualDecision(_decision: WorkflowManualDecision): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async getWorkflowManualDecision(_id: string): Promise<WorkflowManualDecision | undefined> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async saveExecutionReadinessRecord(_record: ExecutionReadinessRecord): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async getExecutionReadinessRecord(_id: string): Promise<ExecutionReadinessRecord | undefined> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async getBoundarySummaryRevisionById(_revisionId: string): Promise<BoundarySummaryRevision | undefined> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async resolveWorkflowRepositoryEvidence(
+    _input: WorkflowRepositoryEvidenceInput,
+  ): Promise<{ repository_id: string; resolved_ref: string } | undefined> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async getCodexSession(_id: string): Promise<CodexSession | undefined> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async saveCodexSession(_session: CodexSession): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async createCodexSessionTurn(_turn: CodexSessionTurn): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async getCodexSessionTurn(_id: string): Promise<CodexSessionTurn | undefined> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async saveCodexSessionTurn(_turn: CodexSessionTurn): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async createCodexSessionSnapshot(_snapshot: CodexSessionSnapshot): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async getCodexSessionSnapshot(_id: string): Promise<CodexSessionSnapshot | undefined> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async saveStaleCodexSessionTerminalizationAttempt(_attempt: CodexSessionStaleTerminalizationAttempt): Promise<void> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async listStaleCodexSessionTerminalizationAttempts(_sessionId: string): Promise<CodexSessionStaleTerminalizationAttempt[]> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async claimCodexSessionLease(_input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async renewCodexSessionLease(_input: RenewCodexSessionLeaseInput): Promise<CodexSessionLease> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async terminalizeCodexSessionTurn(
+    _input: TerminalizeCodexSessionTurnInput,
+  ): Promise<{ session: CodexSession; turn: CodexSessionTurn }> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async createCodexSessionFork(_input: CreateCodexSessionForkInput): Promise<CodexSession> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async selectActiveCodexSessionFork(
+    _input: SelectActiveCodexSessionForkInput,
+  ): Promise<{ workflow: PlanItemWorkflow; selectedSession: CodexSession }> {
+    return this.workflowRepositoryNotImplemented();
   }
 
   async createCodexRuntimeProfileWithRevision(
@@ -4906,7 +5039,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private boundarySummaryRevisionDbRecord(revision: BoundarySummaryRevision): Record<string, unknown> {
-    const record = { ...(revision as Record<string, unknown>) };
+    const record = { ...(revision as unknown as Record<string, unknown>) };
     const decisionSnapshot = this.normalizedBoundaryDecisionSnapshot(record.decision_snapshot);
     record.status ??= this.boundarySummaryRevisionStatus(revision);
     record.confirmed_scope ??= [];
@@ -4929,7 +5062,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private boundarySummaryRevisionBackfillComparisonRecord(revision: BoundarySummaryRevision): Record<string, unknown> {
-    const record = { ...(revision as Record<string, unknown>) };
+    const record = { ...(revision as unknown as Record<string, unknown>) };
     if (record.session_id !== undefined && record.brainstorming_session_id === undefined) {
       record.brainstorming_session_id = record.session_id;
     }
@@ -4944,7 +5077,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   private async hydrateBoundarySummaryRevisionForSave(
     revision: BoundarySummaryRevision,
   ): Promise<BoundarySummaryRevision> {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     const revisionSessionId = this.boundarySummaryRevisionSessionId(revision);
     const needsSummary = revisionSessionId === undefined || typeof record.development_plan_id !== 'string';
     const summary = needsSummary ? await this.getBoundarySummary(revision.boundary_summary_id) : undefined;
@@ -4959,7 +5092,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private boundarySummaryRevisionSessionId(revision: BoundarySummaryRevision): string | undefined {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     return typeof record.session_id === 'string'
       ? record.session_id
       : typeof record.brainstorming_session_id === 'string'
@@ -4979,7 +5112,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     session: BrainstormingSession | undefined,
     summary: BoundarySummary | undefined,
   ): Promise<BoundarySummaryRevision> {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     const sessionId = this.boundarySummaryRevisionSessionId(revision) ?? session?.id;
     const sessionRevisionId =
       typeof record.session_revision_id === 'string'
@@ -5074,7 +5207,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private boundarySummaryRevisionHasApprovedEvidence(revision: BoundarySummaryRevision): boolean {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     return (
       typeof record.session_id === 'string' &&
       typeof record.session_revision_id === 'string' &&
