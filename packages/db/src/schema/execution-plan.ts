@@ -4,6 +4,7 @@ import type { ExecutionPlanDocument, ExecutionPlanRevision } from '@forgeloop/do
 import { timestampColumn } from './_shared';
 import { actors } from './actor';
 import { development_plan_items } from './development-plan';
+import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
 import { spec_revisions } from './spec';
 
 export const execution_plans = pgTable('execution_plans', {
@@ -11,6 +12,7 @@ export const execution_plans = pgTable('execution_plans', {
   developmentPlanItemId: uuid('development_plan_item_id')
     .notNull()
     .references(() => development_plan_items.id),
+  workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
   status: text('status').$type<ExecutionPlanDocument['status']>().notNull(),
   currentRevisionId: uuid('current_revision_id'),
   approvedRevisionId: uuid('approved_revision_id'),
@@ -30,6 +32,9 @@ export const execution_plan_revisions = pgTable(
     developmentPlanItemId: uuid('development_plan_item_id')
       .notNull()
       .references(() => development_plan_items.id),
+    workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+    codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
+    codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
     basedOnSpecRevisionId: uuid('based_on_spec_revision_id')
       .notNull()
       .references(() => spec_revisions.id),

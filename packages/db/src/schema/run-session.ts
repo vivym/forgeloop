@@ -4,12 +4,16 @@ import type { RunSession } from '@forgeloop/domain';
 
 import { runSessionStatus, timestampColumn } from './_shared';
 import { actors } from './actor';
+import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
 
 export const run_sessions = pgTable(
   'run_sessions',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     executionPackageId: uuid('execution_package_id').notNull(),
+    workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+    codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
+    codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
     requestedByActorId: uuid('requested_by_actor_id')
       .notNull()
       .references(() => actors.id),

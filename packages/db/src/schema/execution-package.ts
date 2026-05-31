@@ -10,6 +10,7 @@ import {
 } from './_shared';
 import { actors } from './actor';
 import { executions } from './execution-supervision';
+import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
 
 export type RequiredTestGateSpec = Record<string, unknown>;
 
@@ -18,6 +19,9 @@ export const execution_packages = pgTable('execution_packages', {
   taskId: uuid('task_id'),
   workItemId: uuid('work_item_id').notNull(),
   developmentPlanItemId: uuid('development_plan_item_id'),
+  workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+  codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
+  codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
   executionId: uuid('execution_id').references(() => executions.id),
   specId: uuid('spec_id').notNull(),
   specRevisionId: uuid('spec_revision_id').notNull(),

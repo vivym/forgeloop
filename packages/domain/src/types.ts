@@ -88,6 +88,12 @@ export class DomainError extends Error {
 export type IsoDateTime = string;
 export type RequiredTestGateSpec = Record<string, unknown>;
 
+export interface WorkflowPersistenceRefs {
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
+}
+
 export interface Project {
   id: string;
   org_id?: string;
@@ -176,6 +182,7 @@ export interface SpecPlanBase {
   id: string;
   work_item_id: string;
   development_plan_item_id?: string;
+  workflow_id?: string;
   boundary_summary_id?: string;
   context_manifest_id?: string;
   entity_type: SpecPlanEntityType;
@@ -206,6 +213,9 @@ export interface SpecRevision {
   spec_id: string;
   work_item_id: string;
   development_plan_item_id?: string;
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
   boundary_summary_id?: string;
   context_manifest_id?: string;
   revision_number: number;
@@ -295,6 +305,9 @@ export interface ExecutionPackage {
   task_id?: string;
   work_item_id: string;
   development_plan_item_id?: string;
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
   execution_id?: string;
   spec_id: string;
   spec_revision_id: string;
@@ -433,6 +446,9 @@ export interface RunRuntimeMetadata {
 export interface RunSession {
   id: string;
   execution_package_id: string;
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
   requested_by_actor_id: string;
   status: RunSessionStatus;
   executor_type?: ExecutorType;
@@ -510,6 +526,9 @@ export interface ReviewPacket {
   id: string;
   run_session_id: string;
   execution_package_id: string;
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
   reviewer_actor_id: string;
   spec_revision_id: string;
   plan_revision_id: string;

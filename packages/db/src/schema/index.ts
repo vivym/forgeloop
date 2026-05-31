@@ -9,6 +9,7 @@ export * from './spec';
 export * from './plan';
 export * from './context-manifest';
 export * from './development-plan';
+export * from './plan-item-workflow';
 export * from './brainstorming';
 export * from './execution-plan';
 export * from './execution-supervision';

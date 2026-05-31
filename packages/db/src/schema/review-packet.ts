@@ -4,6 +4,7 @@ import type { ReviewPacket } from '@forgeloop/domain';
 
 import { reviewPacketDecision, reviewPacketStatus, timestampColumn } from './_shared';
 import { actors } from './actor';
+import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
 
 export const review_packets = pgTable(
   'review_packets',
@@ -11,6 +12,9 @@ export const review_packets = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     runSessionId: uuid('run_session_id').notNull(),
     executionPackageId: uuid('execution_package_id').notNull(),
+    workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+    codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
+    codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
     reviewerActorId: uuid('reviewer_actor_id')
       .notNull()
       .references(() => actors.id),

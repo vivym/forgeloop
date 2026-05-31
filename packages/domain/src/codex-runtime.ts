@@ -4,7 +4,7 @@ import { isIP } from 'node:net';
 import { artifactRefSchema } from '@forgeloop/contracts';
 
 import { isInternalArtifactRefString, parseInternalArtifactRef } from './internal-artifacts.js';
-import { DomainError, type IsoDateTime, type RunDriverKind } from './types.js';
+import { DomainError, type IsoDateTime, type RunDriverKind, type WorkflowPersistenceRefs } from './types.js';
 
 export type CodexRuntimeEnvironment = 'local_dogfood' | 'test';
 export type CodexRuntimeTargetKind = 'generation' | 'run_execution';
@@ -230,7 +230,7 @@ export interface CodexLaunchLeaseWithToken extends CodexLaunchLease {
 export type CodexRuntimeJobStatus = 'queued' | 'accepted' | 'materializing' | 'running' | 'terminal';
 export type CodexRuntimeJobTerminalStatus = 'succeeded' | 'failed' | 'cancelled' | 'expired';
 
-export interface CodexRuntimeJob {
+export interface CodexRuntimeJob extends WorkflowPersistenceRefs {
   id: string;
   job_request_id: string;
   target_type: CodexLaunchTarget['target_type'];
