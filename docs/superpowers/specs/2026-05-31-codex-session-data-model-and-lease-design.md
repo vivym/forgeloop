@@ -150,6 +150,7 @@ type WorkflowTransitionEvidenceObjectType =
   | 'execution_package'
   | 'run_session'
   | 'review_packet'
+  | 'internal_artifact'
   | 'commit'
   | 'pull_request'
   | 'manual_decision';
@@ -368,6 +369,7 @@ Rules:
 
 ```ts
 type WorkflowManualDecisionKind =
+  | 'start_brainstorming'
   | 'change_request'
   | 'block'
   | 'recover'
@@ -396,6 +398,7 @@ Rules:
 - The selected session must belong to the same workflow, must have `role = 'candidate_fork'` or `role = 'inactive_fork'`, and must have `status != 'archived'`.
 - Change-request decisions may reference the rejected revision as `related_object_type` and `related_object_id`.
 - `manual_decision` transitions validate the persisted `WorkflowManualDecision` record for ownership, actor, and decision kind.
+- `override` is reserved for explicit human override paths such as code-review or QA gate progression when no stronger typed evidence is available. It must not be used for starting brainstorming, requesting document changes, blocking, recovering, archiving, or fork selection.
 
 ### CodexSessionLease
 
@@ -432,6 +435,8 @@ Rules:
 - At most one active lease may exist per `codex_session_id`.
 - Lease tokens are stored hashed.
 - Session mutation requires current lease id, token, epoch, worker id, and worker session digest.
+- Lease claim is allowed only for the workflow's selected active session: `CodexSession.role = 'active'` and `PlanItemWorkflow.active_codex_session_id = codex_session_id`.
+- `candidate_fork` and `inactive_fork` sessions cannot be claimed or run in Wave 2.
 - Expiry alone is not permission to accept stale writes.
 - A stale worker may finish locally, but its terminalization cannot update the current session.
 - Recovery may create a new lease only after the old runtime job is fenced, cancelled, or declared unrecoverable by the workflow service or operator recovery command.
@@ -464,24 +469,24 @@ The workflow service must encode an explicit transition table. The first impleme
 
 | From | To | Evidence |
 | --- | --- | --- |
-| `not_started` | `brainstorming` | `manual_decision` and active `CodexSession` |
+| `not_started` | `brainstorming` | `manual_decision` with `kind = 'start_brainstorming'` and active `CodexSession` |
 | `brainstorming` | `boundary_review` | `boundary_summary_revision` |
-| `boundary_review` | `brainstorming` | `manual_decision` with change request reason |
+| `boundary_review` | `brainstorming` | `manual_decision` with `kind = 'change_request'` |
 | `boundary_review` | `spec_generation_queued` | approved `boundary_summary_revision` |
 | `spec_generation_queued` | `spec_review` | `spec_revision` |
-| `spec_review` | `spec_generation_queued` | `manual_decision` with change request reason |
+| `spec_review` | `spec_generation_queued` | `manual_decision` with `kind = 'change_request'` |
 | `spec_review` | `implementation_plan_generation_queued` | approved `spec_revision` |
 | `implementation_plan_generation_queued` | `implementation_plan_review` | `implementation_plan_revision` |
-| `implementation_plan_review` | `implementation_plan_generation_queued` | `manual_decision` with change request reason |
+| `implementation_plan_review` | `implementation_plan_generation_queued` | `manual_decision` with `kind = 'change_request'` |
 | `implementation_plan_review` | `execution_ready` | `execution_readiness_record` with approved `implementation_plan_revision` as supporting evidence |
 | `execution_ready` | `execution_running` | `execution_package` |
 | `execution_running` | `code_review` | `run_session` or `commit` |
-| `code_review` | `qa` | `review_packet`, `pull_request`, or `manual_decision` |
-| `qa` | `release_ready` | `manual_decision` or future QA evidence |
-| any non-terminal | `blocked` | `manual_decision` with blocker reason |
-| `blocked` | previous safe state | `manual_decision` with recovery reason |
+| `code_review` | `qa` | `review_packet`, `pull_request`, or `manual_decision` with `kind = 'override'` |
+| `qa` | `release_ready` | `manual_decision` with `kind = 'override'` or future QA evidence |
+| any non-terminal | `blocked` | `manual_decision` with `kind = 'block'` |
+| `blocked` | previous safe state | `manual_decision` with `kind = 'recover'` |
 | same current status | same current status | `manual_decision` with `kind = 'fork_select'` for active Codex Session replacement only |
-| any non-terminal | `archived` | `manual_decision` |
+| any non-terminal | `archived` | `manual_decision` with `kind = 'archive'` |
 
 Additional rules:
 
@@ -730,6 +735,8 @@ To claim a session, the repository must perform an atomic CAS operation equivale
 
 ```text
 where codex_sessions.id = session_id
+  and codex_sessions.role = 'active'
+  and plan_item_workflows.active_codex_session_id = session_id
   and status in ('starting', 'idle', 'recovering')
   and active_lease_id is null
   and latest_snapshot_digest is not distinct from expected_previous_snapshot_digest
@@ -823,7 +830,7 @@ Rules:
 - child starts with `role = 'candidate_fork'` unless the actor explicitly selects it in the same transaction;
 - parent latest snapshot and state remain unchanged;
 - choosing a child as active writes a `PlanItemWorkflowTransition` with `manual_decision` evidence;
-- selecting a child requires `status != 'archived'`, sets the previous active session role to `inactive_fork`, sets the child role to `active`, and updates `PlanItemWorkflow.active_codex_session_id` in one transaction;
+- selecting a child requires `status != 'archived'`, requires both the previous active session and selected child session to be lease-free and not `running`, sets the previous active session role to `inactive_fork`, sets the child role to `active`, and updates `PlanItemWorkflow.active_codex_session_id` in one transaction;
 - fork creation plus immediate selection writes one `fork_select` transition in that same transaction;
 - inactive forks can be archived but not auto-merged.
 
@@ -899,6 +906,8 @@ Repository tests:
 - one active session per workflow;
 - workflow creation also creates an initial active Codex Session;
 - one active lease per Codex Session;
+- candidate and inactive forks cannot be claimed;
+- lease claim rejects a session that is not `PlanItemWorkflow.active_codex_session_id`;
 - claim CAS fails on mismatched expected snapshot digest;
 - first-turn claim accepts null expected snapshot only when latest snapshot is null;
 - renew fails after expiry or token mismatch;
@@ -906,6 +915,7 @@ Repository tests:
 - stale terminalization cannot overwrite current snapshot;
 - fork creation does not mutate parent.
 - archived fork selection rejects.
+- fork selection rejects while the previous active session or selected child session has an active lease or `status = 'running'`.
 
 API tests:
 
