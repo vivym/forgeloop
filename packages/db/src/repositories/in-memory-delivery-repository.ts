@@ -3070,7 +3070,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session turn ${turn.id} already exists`);
     }
     const session = this.codexSessions.get(turn.codex_session_id);
-    if (session === undefined || session.owner_type !== 'plan_item_workflow' || session.owner_id !== turn.workflow_id) {
+    const workflow = session === undefined ? undefined : this.planItemWorkflows.get(session.owner_id);
+    const cannotCreateTurn =
+      session === undefined ||
+      workflow === undefined ||
+      session.owner_type !== 'plan_item_workflow' ||
+      session.owner_id !== turn.workflow_id ||
+      workflow.id !== turn.workflow_id ||
+      workflow.active_codex_session_id !== session.id ||
+      session.role !== 'active' ||
+      !claimableCodexSessionStatuses.has(session.status);
+    if (cannotCreateTurn) {
       throw new DomainError(
         'workflow_active_session_missing',
         `workflow_active_session_missing: Codex session ${turn.codex_session_id} is not active for workflow ${turn.workflow_id}`,
