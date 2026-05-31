@@ -74,6 +74,33 @@ const baseWorkflowInput = {
   now,
 };
 
+const baseDevelopmentPlanItem: DevelopmentPlanItem = {
+  id: 'item-1',
+  development_plan_id: 'plan-1',
+  revision_id: 'item-revision-1',
+  source_ref: { type: 'requirement', id: 'requirement-1' },
+  title: 'Workflow item',
+  summary: 'Exercise workflow persistence.',
+  driver_actor_id: 'actor-product',
+  responsible_role: 'developer',
+  reviewer_actor_id: 'actor-tech',
+  leader_actor_id: 'actor-tech',
+  leader_delegate_actor_ids: [],
+  risk: 'medium',
+  dependency_hints: [],
+  affected_surfaces: ['packages/db'],
+  boundary_status: 'not_started',
+  spec_status: 'missing',
+  implementation_plan_status: 'missing',
+  execution_status: 'not_started',
+  review_status: 'missing',
+  qa_handoff_status: 'missing',
+  release_impact: 'none',
+  next_action: 'Start workflow.',
+  created_at: now,
+  updated_at: now,
+};
+
 const turnInput = {
   id: 'turn-1',
   codex_session_id: 'session-1',
@@ -707,6 +734,22 @@ describe('Plan Item Workflow repository', () => {
       owner_id: 'workflow-1',
       status: 'idle',
     });
+  });
+
+  it('rejects creating a workflow when persisted Plan Item belongs to another Development Plan', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.saveDevelopmentPlanItem(baseDevelopmentPlanItem);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createPlanItemWorkflowWithInitialSession({
+          ...baseWorkflowInput,
+          development_plan_id: 'plan-other',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexSession('session-1')).resolves.toBeUndefined();
   });
 
   it('rejects saving a missing Plan Item Workflow', async () => {
@@ -4842,6 +4885,21 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       created_at: '2026-05-31T00:03:00.000Z',
     });
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(uuidFixture.sessionId)).resolves.toHaveLength(1);
+  });
+
+  drizzleTest('rejects persisted Plan Item Workflow plan/item mismatch', async () => {
+    const repository = await createDrizzleWorkflowRepository();
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createPlanItemWorkflowWithInitialSession({
+          ...drizzleWorkflowInput,
+          development_plan_id: '20000000-0000-4000-8000-000000000005',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow(uuidFixture.workflowId)).resolves.toBeUndefined();
+    await expect(repository.getCodexSession(uuidFixture.sessionId)).resolves.toBeUndefined();
   });
 
   drizzleTest('persists explicit fork selection with manual decision and transition ledger', async () => {

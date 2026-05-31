@@ -53,11 +53,12 @@ export class PlanItemWorkflowService {
     return this.repository.withObjectLock(`development-plan:${developmentPlanId}`, async (lockedRepository) =>
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const now = this.now();
-        await this.assertActorCanStartWorkflow(repository, itemId, dto.actor_id);
+        const item = await this.requirePlanItemBelongsToPlan(repository, developmentPlanId, itemId);
+        this.assertActorCanStartWorkflowItem(item, dto.actor_id);
         const created = await repository.createPlanItemWorkflowWithInitialSession({
           id: randomUUID(),
           codex_session_id: randomUUID(),
-          development_plan_id: developmentPlanId,
+          development_plan_id: item.development_plan_id,
           development_plan_item_id: itemId,
           runtime_profile_id: dto.runtime_profile_id,
           runtime_profile_revision_id: dto.runtime_profile_revision_id,
@@ -701,13 +702,23 @@ export class PlanItemWorkflowService {
     return session;
   }
 
-  private async assertActorCanStartWorkflow(repository: DeliveryRepository, itemId: string, actorId: string) {
+  private async requirePlanItemBelongsToPlan(repository: DeliveryRepository, developmentPlanId: string, itemId: string) {
     const item = await repository.getDevelopmentPlanItem(itemId);
+    if (item === undefined || item.development_plan_id !== developmentPlanId) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `Plan Item ${itemId} does not belong to Development Plan ${developmentPlanId}`,
+      );
+    }
+    return item;
+  }
+
+  private assertActorCanStartWorkflowItem(item: DevelopmentPlanItem, actorId: string) {
     const actorContext: Parameters<typeof assertWorkflowActorAuthorized>[2] = {
       actor_id: actorId,
+      development_plan_item: this.workflowActorPlanItem(item),
     };
-    if (item !== undefined) actorContext.development_plan_item = this.workflowActorPlanItem(item);
-    assertWorkflowActorAuthorized({ development_plan_item_id: itemId }, 'start_brainstorming', actorContext);
+    assertWorkflowActorAuthorized({ development_plan_item_id: item.id }, 'start_brainstorming', actorContext);
   }
 
   private async assertActorCanMutateWorkflow(

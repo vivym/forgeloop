@@ -90,6 +90,30 @@ describe('Plan Item Workflow API', () => {
     await expect(repository.getActivePlanItemWorkflowByItem(item.id)).resolves.toBeUndefined();
   });
 
+  it('rejects workflow start when route plan does not own the item', async () => {
+    const first = await seedDevelopmentPlanItem(app, { idPrefix: '66666666' });
+    const second = await seedDevelopmentPlanItem(app, { idPrefix: '77777777' });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+
+    await request(app.getHttpServer())
+      .post(`/development-plans/${second.plan.id}/items/${first.item.id}/workflow/start-brainstorming`)
+      .send({
+        actor_id: first.ids.actorTech,
+        runtime_profile_id: first.ids.runtimeProfile,
+        runtime_profile_revision_id: first.ids.runtimeProfileRevision,
+        credential_binding_id: first.ids.credentialBinding,
+        credential_binding_version_id: first.ids.credentialBindingVersion,
+        reason: 'Start workflow with a mismatched route plan.',
+      })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_invalid_transition');
+      });
+
+    await expect(repository.getActivePlanItemWorkflowByItem(first.item.id)).resolves.toBeUndefined();
+    await expect(repository.getActivePlanItemWorkflowByItem(second.item.id)).resolves.toBeUndefined();
+  });
+
   it('rejects wrong evidence type for boundary submission', async () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
     const workflow = await startWorkflow(app, plan.id, item.id);

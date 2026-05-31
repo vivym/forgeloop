@@ -1018,6 +1018,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         `workflow_active_session_conflict: Plan item ${input.development_plan_item_id} already has an active workflow`,
       );
     }
+    const item = await this.getDevelopmentPlanItem(input.development_plan_item_id);
+    if (item !== undefined && item.development_plan_id !== input.development_plan_id) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan item ${input.development_plan_item_id} does not belong to development plan ${input.development_plan_id}`,
+      );
+    }
 
     const workflow: PlanItemWorkflow = {
       id: input.id,
