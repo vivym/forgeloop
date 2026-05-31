@@ -2983,6 +2983,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async savePlanItemWorkflow(workflow: PlanItemWorkflow): Promise<void> {
+    const existingWorkflow = this.planItemWorkflows.get(workflow.id);
+    if (existingWorkflow === undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow ${workflow.id} does not exist`,
+      );
+    }
+    if (
+      existingWorkflow.development_plan_id !== workflow.development_plan_id ||
+      existingWorkflow.development_plan_item_id !== workflow.development_plan_item_id ||
+      existingWorkflow.created_by_actor_id !== workflow.created_by_actor_id ||
+      existingWorkflow.created_at !== workflow.created_at
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow ${workflow.id} identity fields cannot change`,
+      );
+    }
     this.assertCanSavePlanItemWorkflow(workflow);
     this.planItemWorkflows.set(workflow.id, clone(workflow));
   }
@@ -3074,6 +3092,28 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveCodexSession(session: CodexSession): Promise<void> {
+    const existingSession = this.codexSessions.get(session.id);
+    if (existingSession === undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session ${session.id} does not exist`,
+      );
+    }
+    if (
+      existingSession.owner_type !== session.owner_type ||
+      existingSession.owner_id !== session.owner_id ||
+      existingSession.runtime_profile_id !== session.runtime_profile_id ||
+      existingSession.runtime_profile_revision_id !== session.runtime_profile_revision_id ||
+      existingSession.credential_binding_id !== session.credential_binding_id ||
+      existingSession.credential_binding_version_id !== session.credential_binding_version_id ||
+      existingSession.created_by_actor_id !== session.created_by_actor_id ||
+      existingSession.created_at !== session.created_at
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session ${session.id} identity fields cannot change`,
+      );
+    }
     this.assertCanSaveCodexSession(session);
     this.codexSessions.set(session.id, clone(session));
   }
@@ -3427,7 +3467,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         forkTurn.output_snapshot_digest === undefined ||
         forkTurnOutputSnapshot === undefined ||
         forkTurnOutputSnapshot.codex_session_id !== parent.id ||
-        forkTurnOutputSnapshot.digest !== forkTurn.output_snapshot_digest)
+        forkTurnOutputSnapshot.digest !== forkTurn.output_snapshot_digest ||
+        forkTurnOutputSnapshot.created_from_turn_id !== forkTurn.id)
     ) {
       throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);
     }

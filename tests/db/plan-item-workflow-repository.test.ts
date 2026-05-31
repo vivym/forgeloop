@@ -185,6 +185,203 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('rejects saving a missing Plan Item Workflow', async () => {
+    const repository = new InMemoryDeliveryRepository();
+
+    await expectDomainErrorCode(
+      () =>
+        repository.savePlanItemWorkflow({
+          id: 'workflow-missing',
+          development_plan_id: 'plan-1',
+          development_plan_item_id: 'item-1',
+          status: 'not_started',
+          active_codex_session_id: 'session-1',
+          created_by_actor_id: 'actor-tech',
+          created_at: now,
+          updated_at: now,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-missing')).resolves.toBeUndefined();
+  });
+
+  it('rejects saving a Plan Item Workflow with changed immutable identity fields', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.savePlanItemWorkflow({
+          ...workflow,
+          development_plan_id: 'plan-drifted',
+          development_plan_item_id: 'item-drifted',
+          created_by_actor_id: 'actor-drifted',
+          created_at: '2026-05-30T00:00:00.000Z',
+          status: 'in_progress',
+          active_codex_session_id: undefined,
+          active_boundary_summary_revision_id: 'boundary-summary-revision-1',
+          active_spec_doc_revision_id: 'spec-doc-revision-1',
+          active_implementation_plan_doc_revision_id: 'implementation-plan-doc-revision-1',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
+      development_plan_id: 'plan-1',
+      development_plan_item_id: 'item-1',
+      created_by_actor_id: 'actor-tech',
+      created_at: now,
+      status: 'not_started',
+      active_codex_session_id: 'session-1',
+    });
+  });
+
+  it('allows saving a Plan Item Workflow with mutable projection and status fields changed', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+
+    await repository.savePlanItemWorkflow({
+      ...workflow,
+      status: 'in_progress',
+      active_codex_session_id: undefined,
+      active_boundary_summary_revision_id: 'boundary-summary-revision-1',
+      active_spec_doc_revision_id: 'spec-doc-revision-1',
+      active_implementation_plan_doc_revision_id: 'implementation-plan-doc-revision-1',
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
+      development_plan_id: 'plan-1',
+      development_plan_item_id: 'item-1',
+      created_by_actor_id: 'actor-tech',
+      status: 'in_progress',
+      active_codex_session_id: undefined,
+      active_boundary_summary_revision_id: 'boundary-summary-revision-1',
+      active_spec_doc_revision_id: 'spec-doc-revision-1',
+      active_implementation_plan_doc_revision_id: 'implementation-plan-doc-revision-1',
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+  });
+
+  it('rejects saving a missing Codex Session', async () => {
+    const repository = new InMemoryDeliveryRepository();
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSession({
+          id: 'session-missing',
+          owner_type: 'plan_item_workflow',
+          owner_id: 'workflow-1',
+          status: 'idle',
+          role: 'active',
+          runtime_profile_id: 'profile-1',
+          runtime_profile_revision_id: 'profile-revision-1',
+          credential_binding_id: 'credential-1',
+          credential_binding_version_id: 'credential-version-1',
+          lease_epoch: 0,
+          created_by_actor_id: 'actor-tech',
+          created_at: now,
+          updated_at: now,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getCodexSession('session-missing')).resolves.toBeUndefined();
+  });
+
+  it('rejects saving a Codex Session with changed immutable ownership fields', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected seeded Codex session');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSession({
+          ...session,
+          owner_id: 'workflow-drifted',
+          runtime_profile_id: 'profile-drifted',
+          runtime_profile_revision_id: 'profile-revision-drifted',
+          credential_binding_id: 'credential-drifted',
+          credential_binding_version_id: 'credential-version-drifted',
+          created_by_actor_id: 'actor-drifted',
+          created_at: '2026-05-30T00:00:00.000Z',
+          status: 'running',
+          role: 'inactive_fork',
+          active_lease_id: 'lease-1',
+          latest_snapshot_id: 'snapshot-1',
+          latest_snapshot_digest: 'sha256:snapshot-1',
+          latest_turn_id: 'turn-1',
+          latest_turn_digest: 'sha256:turn-1',
+          codex_thread_id: 'thread-1',
+          codex_thread_id_digest: 'sha256:thread-1',
+          lease_epoch: 1,
+          archived_at: '2026-05-31T00:01:00.000Z',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      owner_id: 'workflow-1',
+      runtime_profile_id: 'profile-1',
+      runtime_profile_revision_id: 'profile-revision-1',
+      credential_binding_id: 'credential-1',
+      credential_binding_version_id: 'credential-version-1',
+      created_by_actor_id: 'actor-tech',
+      created_at: now,
+      status: 'idle',
+      role: 'active',
+      lease_epoch: 0,
+    });
+  });
+
+  it('allows saving a Codex Session with mutable lease, latest, thread, role, and status fields changed', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected seeded Codex session');
+
+    await repository.saveCodexSession({
+      ...session,
+      status: 'archived',
+      role: 'inactive_fork',
+      active_lease_id: 'lease-1',
+      latest_snapshot_id: 'snapshot-1',
+      latest_snapshot_digest: 'sha256:snapshot-1',
+      latest_turn_id: 'turn-1',
+      latest_turn_digest: 'sha256:turn-1',
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+      lease_epoch: 1,
+      archived_at: '2026-05-31T00:01:00.000Z',
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      owner_id: 'workflow-1',
+      runtime_profile_id: 'profile-1',
+      runtime_profile_revision_id: 'profile-revision-1',
+      credential_binding_id: 'credential-1',
+      credential_binding_version_id: 'credential-version-1',
+      created_by_actor_id: 'actor-tech',
+      status: 'archived',
+      role: 'inactive_fork',
+      active_lease_id: 'lease-1',
+      latest_snapshot_id: 'snapshot-1',
+      latest_snapshot_digest: 'sha256:snapshot-1',
+      latest_turn_id: 'turn-1',
+      latest_turn_digest: 'sha256:turn-1',
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+      lease_epoch: 1,
+      archived_at: '2026-05-31T00:01:00.000Z',
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+  });
+
   it('claims only the workflow active session and rejects a second active lease', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -360,23 +557,12 @@ describe('Plan Item Workflow repository', () => {
     await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
   });
 
-  it('rejects lease claim when owner workflow is missing', async () => {
+  it('rejects lease claim when owner workflow no longer points at the session', async () => {
     const repository = new InMemoryDeliveryRepository();
-    await repository.saveCodexSession({
-      id: 'session-1',
-      owner_type: 'plan_item_workflow',
-      owner_id: 'workflow-1',
-      status: 'idle',
-      role: 'active',
-      runtime_profile_id: 'profile-1',
-      runtime_profile_revision_id: 'profile-revision-1',
-      credential_binding_id: 'credential-1',
-      credential_binding_version_id: 'credential-version-1',
-      lease_epoch: 0,
-      created_by_actor_id: 'actor-tech',
-      created_at: now,
-      updated_at: now,
-    });
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+    await repository.savePlanItemWorkflow({ ...workflow, status: 'archived', active_codex_session_id: undefined });
 
     await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
   });
@@ -1393,6 +1579,12 @@ describe('Plan Item Workflow repository', () => {
   it('rejects turn-based fork when the turn output snapshot belongs to another session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+    });
     await repository.createCodexSessionTurn(turnInput);
     await repository.saveCodexSessionTurn({
       ...turnInput,
@@ -1400,21 +1592,6 @@ describe('Plan Item Workflow repository', () => {
       output_snapshot_id: 'snapshot-other',
       output_snapshot_digest: 'sha256:snapshot-other',
       updated_at: '2026-05-31T00:02:00.000Z',
-    });
-    await repository.saveCodexSession({
-      id: 'session-other',
-      owner_type: 'plan_item_workflow',
-      owner_id: 'workflow-1',
-      status: 'idle',
-      role: 'inactive_fork',
-      runtime_profile_id: 'profile-1',
-      runtime_profile_revision_id: 'profile-revision-1',
-      credential_binding_id: 'credential-1',
-      credential_binding_version_id: 'credential-version-1',
-      lease_epoch: 0,
-      created_by_actor_id: 'actor-tech',
-      created_at: now,
-      updated_at: now,
     });
     await repository.createCodexSessionSnapshot({
       ...snapshotInput,
@@ -1460,6 +1637,37 @@ describe('Plan Item Workflow repository', () => {
           parent_session_id: 'session-1',
           forked_from_turn_id: 'turn-1',
           fork_reason: 'Try the stale turn output.',
+          created_by_actor_id: 'actor-tech',
+          now: '2026-05-31T00:04:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+  });
+
+  it('rejects turn-based fork when the persisted output snapshot came from a different turn', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionSnapshot({
+      ...snapshotInput,
+      created_from_turn_id: 'turn-other',
+    });
+    await repository.saveCodexSessionTurn({
+      ...turnInput,
+      status: 'succeeded',
+      output_snapshot_id: 'snapshot-1',
+      output_snapshot_digest: 'sha256:snapshot-1',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionFork({
+          id: 'session-fork',
+          workflow_id: 'workflow-1',
+          parent_session_id: 'session-1',
+          forked_from_turn_id: 'turn-1',
+          fork_reason: 'Try the stale-provenance turn output.',
           created_by_actor_id: 'actor-tech',
           now: '2026-05-31T00:04:00.000Z',
         }),
@@ -1623,20 +1831,11 @@ describe('Plan Item Workflow repository', () => {
   it('rejects fork creation when requested snapshot is missing or belongs to another session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.saveCodexSession({
-      id: 'session-other',
-      owner_type: 'plan_item_workflow',
-      owner_id: 'workflow-1',
-      status: 'idle',
-      role: 'inactive_fork',
-      runtime_profile_id: 'profile-1',
-      runtime_profile_revision_id: 'profile-revision-1',
-      credential_binding_id: 'credential-1',
-      credential_binding_version_id: 'credential-version-1',
-      lease_epoch: 0,
-      created_by_actor_id: 'actor-tech',
-      created_at: now,
-      updated_at: now,
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
     });
     await repository.createCodexSessionSnapshot({
       ...snapshotInput,
