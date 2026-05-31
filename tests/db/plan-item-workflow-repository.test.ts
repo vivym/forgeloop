@@ -401,6 +401,7 @@ const applyWorkflowProjectionTransition = async (
     projection_patch?: Parameters<InMemoryDeliveryRepository['applyPlanItemWorkflowTransition']>[0]['projection_patch'];
     supporting_evidence?: Parameters<InMemoryDeliveryRepository['applyPlanItemWorkflowTransition']>[0]['transition']['supporting_evidence'];
     actor_id?: string;
+    codex_session_id?: string;
     codex_session_turn_id?: string;
   },
 ) =>
@@ -413,6 +414,7 @@ const applyWorkflowProjectionTransition = async (
       actor_id: input.actor_id ?? 'actor-tech',
       evidence_object_type: input.evidence_object_type,
       evidence_object_id: input.evidence_object_id,
+      codex_session_id: input.codex_session_id ?? transitionInput.codex_session_id,
       codex_session_turn_id: input.codex_session_turn_id,
       ...(input.supporting_evidence === undefined ? {} : { supporting_evidence: input.supporting_evidence }),
     },
@@ -870,6 +872,118 @@ describe('Plan Item Workflow repository', () => {
       status: 'implementation_plan_review',
     });
     expect(workflow?.active_implementation_plan_doc_revision_id).toBeUndefined();
+  });
+
+  it('rejects product transitions that use candidate fork evidence and preserves workflow state', async () => {
+    const candidateSessionId = 'session-candidate-fork';
+
+    const createRepositoryWithCandidateFork = async () => {
+      const repository = new InMemoryDeliveryRepository();
+      await repository.createPlanItemWorkflowWithInitialSession({
+        ...baseWorkflowInput,
+        actor_id: 'actor-product',
+      });
+      await repository.createCodexSessionTurn(turnInput);
+      await repository.createCodexSessionFork({
+        id: candidateSessionId,
+        workflow_id: 'workflow-1',
+        parent_session_id: 'session-1',
+        forked_from_turn_id: 'turn-1',
+        fork_reason: 'Try another approach.',
+        created_by_actor_id: 'actor-tech',
+        now,
+      });
+      return repository;
+    };
+
+    const manualRepository = await createRepositoryWithCandidateFork();
+    await manualRepository.saveWorkflowManualDecision({
+      ...manualDecisionInput,
+      id: 'decision-candidate-start',
+      codex_session_id: candidateSessionId,
+      created_by_actor_id: 'actor-product',
+    });
+    const manualWorkflowBefore = await manualRepository.getPlanItemWorkflow('workflow-1');
+
+    await expectDomainErrorCode(
+      () =>
+        applyWorkflowTransition(manualRepository, {
+          ...transitionInput,
+          id: 'transition-candidate-manual-start',
+          actor_id: 'actor-product',
+          evidence_object_id: 'decision-candidate-start',
+          codex_session_id: candidateSessionId,
+          codex_session_turn_id: undefined,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(manualRepository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(manualWorkflowBefore);
+    await expect(manualRepository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+
+    const documentRepository = await createRepositoryWithCandidateFork();
+    await documentRepository.saveWorkflowManualDecision(manualDecisionInput);
+    await applyWorkflowProjectionTransition(documentRepository, {
+      transition_id: 'transition-active-start-before-candidate-doc',
+      from_status: 'not_started',
+      to_status: 'brainstorming',
+      evidence_object_type: 'manual_decision',
+      evidence_object_id: 'decision-1',
+    });
+    await documentRepository.saveBoundarySummaryRevision({
+      ...boundarySummaryRevisionInput,
+      id: 'boundary-candidate',
+      boundary_summary_id: 'boundary-summary-candidate',
+      codex_session_id: candidateSessionId,
+    });
+    const documentWorkflowBefore = await documentRepository.getPlanItemWorkflow('workflow-1');
+
+    await expectDomainErrorCode(
+      () =>
+        applyWorkflowProjectionTransition(documentRepository, {
+          transition_id: 'transition-candidate-boundary',
+          from_status: 'brainstorming',
+          to_status: 'boundary_review',
+          evidence_object_type: 'boundary_summary_revision',
+          evidence_object_id: 'boundary-candidate',
+          codex_session_id: candidateSessionId,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(documentRepository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(documentWorkflowBefore);
+    await expect(documentRepository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(1);
+
+    const readinessRepository = await createRepositoryWithCandidateFork();
+    await seedWorkflowActiveApprovalFields(readinessRepository);
+    await readinessRepository.saveExecutionReadinessRecord({
+      ...readinessRecordInput,
+      id: 'readiness-candidate',
+      codex_session_id: candidateSessionId,
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+    });
+    const readinessWorkflowBefore = await readinessRepository.getPlanItemWorkflow('workflow-1');
+
+    await expectDomainErrorCode(
+      () =>
+        readinessRepository.applyPlanItemWorkflowTransition({
+          transition: {
+            ...transitionInput,
+            id: 'transition-candidate-readiness',
+            from_status: 'implementation_plan_review',
+            to_status: 'execution_ready',
+            actor_id: 'actor-product',
+            reason: 'Mark ready.',
+            evidence_object_type: 'execution_readiness_record',
+            evidence_object_id: 'readiness-candidate',
+            codex_session_id: candidateSessionId,
+            codex_session_turn_id: undefined,
+            supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+          },
+          projection_patch: { active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1' },
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(readinessRepository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(readinessWorkflowBefore);
+    await expect(readinessRepository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(6);
   });
 
   it('rejects duplicate atomic workflow transition ids without updating workflow projections', async () => {
@@ -3563,6 +3677,86 @@ describe('Plan Item Workflow repository', () => {
     });
 
     await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toContainEqual(readinessTransition);
+  });
+
+  it('rejects old inactive fork evidence after selecting a new active fork', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      actor_id: 'actor-product',
+    });
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+    await repository.selectActiveCodexSessionFork({
+      workflow_id: 'workflow-1',
+      selected_codex_session_id: 'session-fork',
+      manual_decision_id: 'decision-fork-select',
+      transition_id: 'transition-fork-select',
+      actor_id: 'actor-tech',
+      reason: 'Use the alternate path.',
+      now: '2026-05-31T00:03:00.000Z',
+    });
+    await repository.saveWorkflowManualDecision({
+      ...manualDecisionInput,
+      id: 'decision-old-session-start',
+      codex_session_id: 'session-1',
+      created_by_actor_id: 'actor-product',
+    });
+    await repository.saveBoundarySummaryRevision(boundarySummaryRevisionInput);
+    const workflowBeforeManual = await repository.getPlanItemWorkflow('workflow-1');
+
+    await expectDomainErrorCode(
+      () =>
+        applyWorkflowTransition(repository, {
+          ...transitionInput,
+          id: 'transition-old-session-manual-start',
+          actor_id: 'actor-product',
+          evidence_object_id: 'decision-old-session-start',
+          codex_session_turn_id: undefined,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflowBeforeManual);
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(1);
+
+    await repository.saveWorkflowManualDecision({
+      ...manualDecisionInput,
+      id: 'decision-new-session-start',
+      codex_session_id: 'session-fork',
+      created_by_actor_id: 'actor-product',
+    });
+    await applyWorkflowTransition(repository, {
+      ...transitionInput,
+      id: 'transition-new-session-start',
+      actor_id: 'actor-product',
+      evidence_object_id: 'decision-new-session-start',
+      codex_session_id: 'session-fork',
+      codex_session_turn_id: undefined,
+    });
+    const workflowBeforeDocument = await repository.getPlanItemWorkflow('workflow-1');
+
+    await expectDomainErrorCode(
+      () =>
+        applyWorkflowProjectionTransition(repository, {
+          transition_id: 'transition-old-session-boundary',
+          from_status: 'brainstorming',
+          to_status: 'boundary_review',
+          evidence_object_type: 'boundary_summary_revision',
+          evidence_object_id: 'boundary-summary-revision-1',
+          codex_session_id: 'session-1',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflowBeforeDocument);
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(2);
   });
 
   it('rejects workflow transitions with unresolved repository or internal artifact evidence', async () => {

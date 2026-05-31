@@ -3089,6 +3089,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       transition.codex_session_id,
       `Transition ${transition.id}`,
     );
+    this.assertWorkflowActiveCodexSessionProvenance(
+      transition.workflow_id,
+      transition.codex_session_id,
+      `Transition ${transition.id}`,
+    );
     if (transition.codex_session_turn_id !== undefined) {
       this.assertWorkflowCodexSessionTurnProvenance(
         transition.workflow_id,
@@ -4382,6 +4387,16 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw new DomainError(
         'workflow_invalid_transition',
         `workflow_invalid_transition: ${context} Codex session provenance is invalid`,
+      );
+    }
+  }
+
+  private assertWorkflowActiveCodexSessionProvenance(workflowId: string, sessionId: string, context: string): void {
+    const workflow = this.planItemWorkflows.get(workflowId);
+    if (workflow === undefined || workflow.active_codex_session_id !== sessionId) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: ${context} Codex session is not the active workflow session`,
       );
     }
   }
