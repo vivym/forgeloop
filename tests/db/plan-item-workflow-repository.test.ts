@@ -548,6 +548,31 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSession('session-1')).resolves.toEqual(session);
   });
 
+  it('rejects saving a Codex Session with direct archived_at changes and preserves audit-owned state', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected seeded Codex session');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSession({
+          ...session,
+          archived_at: '2026-05-31T00:04:00.000Z',
+          updated_at: '2026-05-31T00:04:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+
+    const savedSession = await repository.getCodexSession('session-1');
+    expect(savedSession?.archived_at).toBe(session.archived_at);
+    expect(savedSession).toMatchObject({
+      status: 'idle',
+      role: 'active',
+      updated_at: now,
+    });
+  });
+
   it('rejects saving a Codex Session with a role change on an existing active session and preserves active ownership', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);

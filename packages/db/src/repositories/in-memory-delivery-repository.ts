@@ -3193,7 +3193,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       existingSession.codex_thread_id !== session.codex_thread_id ||
       existingSession.codex_thread_id_digest !== session.codex_thread_id_digest ||
       existingSession.active_lease_id !== session.active_lease_id ||
-      existingSession.lease_epoch !== session.lease_epoch
+      existingSession.lease_epoch !== session.lease_epoch ||
+      existingSession.archived_at !== session.archived_at
     ) {
       throw new DomainError(
         'workflow_invalid_transition',
