@@ -3125,6 +3125,21 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `workflow_invalid_transition: Codex session ${session.id} fork provenance fields cannot change`,
       );
     }
+    if (
+      existingSession.latest_turn_id !== session.latest_turn_id ||
+      existingSession.latest_turn_digest !== session.latest_turn_digest ||
+      existingSession.latest_snapshot_id !== session.latest_snapshot_id ||
+      existingSession.latest_snapshot_digest !== session.latest_snapshot_digest ||
+      existingSession.codex_thread_id !== session.codex_thread_id ||
+      existingSession.codex_thread_id_digest !== session.codex_thread_id_digest ||
+      existingSession.active_lease_id !== session.active_lease_id ||
+      existingSession.lease_epoch !== session.lease_epoch
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session ${session.id} service-owned state fields cannot change`,
+      );
+    }
     this.assertCanSaveCodexSession(session);
     this.codexSessions.set(session.id, clone(session));
   }
@@ -3175,6 +3190,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (
       existingTurn.codex_session_id !== turn.codex_session_id ||
       existingTurn.workflow_id !== turn.workflow_id ||
+      existingTurn.intent !== turn.intent ||
+      existingTurn.input_digest !== turn.input_digest ||
+      existingTurn.expected_previous_snapshot_digest !== turn.expected_previous_snapshot_digest ||
+      existingTurn.output_snapshot_id !== turn.output_snapshot_id ||
+      existingTurn.output_snapshot_digest !== turn.output_snapshot_digest ||
+      existingTurn.lease_id !== turn.lease_id ||
+      existingTurn.lease_epoch !== turn.lease_epoch ||
       existingTurn.created_at !== turn.created_at ||
       existingTurn.created_by_actor_id !== turn.created_by_actor_id
     ) {
@@ -3187,6 +3209,21 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void> {
+    if (!this.codexSessions.has(snapshot.codex_session_id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session snapshot ${snapshot.id} session ${snapshot.codex_session_id} does not exist`,
+      );
+    }
+    if (snapshot.created_from_turn_id !== undefined) {
+      const sourceTurn = this.codexSessionTurns.get(snapshot.created_from_turn_id);
+      if (sourceTurn === undefined || sourceTurn.codex_session_id !== snapshot.codex_session_id) {
+        throw new DomainError(
+          'codex_session_snapshot_stale',
+          `codex_session_snapshot_stale: Codex session snapshot ${snapshot.id} source turn is stale`,
+        );
+      }
+    }
     let parsedArtifactRef: ReturnType<typeof parseInternalArtifactRef>;
     try {
       parsedArtifactRef = parseInternalArtifactRef(snapshot.artifact_ref);

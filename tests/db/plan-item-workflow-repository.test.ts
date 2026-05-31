@@ -56,12 +56,31 @@ const leaseInput = {
 
 const seedWorkflowWithSnapshot = async (repository: InMemoryDeliveryRepository) => {
   await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-  const session = await repository.getCodexSession('session-1');
-  if (session === undefined) throw new Error('Expected seeded Codex session');
-  await repository.saveCodexSession({
-    ...session,
-    latest_snapshot_id: 'snapshot-1',
-    latest_snapshot_digest: 'sha256:snapshot-1',
+  await repository.createCodexSessionTurn({
+    ...turnInput,
+    id: 'turn-seed',
+    input_digest: 'sha256:turn-seed',
+  });
+  const claimed = await repository.claimCodexSessionLease({
+    ...leaseInput,
+    lease_id: 'lease-seed',
+    lease_token_hash: 'sha256:lease-token-seed',
+  });
+  await repository.terminalizeCodexSessionTurn({
+    session_id: 'session-1',
+    turn_id: 'turn-seed',
+    lease_id: claimed.lease.id,
+    lease_token_hash: 'sha256:lease-token-seed',
+    lease_epoch: 1,
+    worker_id: 'worker-1',
+    worker_session_digest: 'sha256:worker-session',
+    status: 'succeeded',
+    expected_previous_snapshot_digest: undefined,
+    output_snapshot: {
+      ...snapshotInput,
+      created_from_turn_id: 'turn-seed',
+    },
+    now: '2026-05-31T00:02:00.000Z',
   });
 };
 
@@ -78,6 +97,70 @@ const snapshotInput = {
   created_by_actor_id: 'actor-tech',
   created_at: '2026-05-31T00:02:00.000Z',
 } as const;
+
+const terminalizeTurnWithSnapshot = async (
+  repository: InMemoryDeliveryRepository,
+  options: {
+    turn_id?: string;
+    turn_input_digest?: string;
+    previous_snapshot_digest?: string;
+    snapshot_id?: string;
+    snapshot_sequence?: number;
+    snapshot_digest?: string;
+    manifest_digest?: string;
+    lease_id?: string;
+    lease_token_hash?: string;
+    claim_now?: string;
+    terminalize_now?: string;
+    codex_thread_id?: string;
+    codex_thread_id_digest?: string;
+  } = {},
+) => {
+  const turnId = options.turn_id ?? 'turn-1';
+  const snapshotId = options.snapshot_id ?? 'snapshot-1';
+  const snapshotDigest = options.snapshot_digest ?? `sha256:${snapshotId}`;
+  const claimNow = options.claim_now ?? '2026-05-31T00:01:00.000Z';
+  const terminalizeNow = options.terminalize_now ?? '2026-05-31T00:02:00.000Z';
+  await repository.createCodexSessionTurn({
+    ...turnInput,
+    id: turnId,
+    input_digest: options.turn_input_digest ?? `sha256:${turnId}`,
+    expected_previous_snapshot_digest: options.previous_snapshot_digest,
+    created_at: claimNow,
+    updated_at: claimNow,
+  });
+  const claimed = await repository.claimCodexSessionLease({
+    ...leaseInput,
+    lease_id: options.lease_id ?? `lease-${turnId}`,
+    lease_token_hash: options.lease_token_hash ?? `sha256:lease-${turnId}`,
+    expected_previous_snapshot_digest: options.previous_snapshot_digest,
+    now: claimNow,
+  });
+  await repository.terminalizeCodexSessionTurn({
+    session_id: 'session-1',
+    turn_id: turnId,
+    lease_id: claimed.lease.id,
+    lease_token_hash: claimed.lease.lease_token_hash,
+    lease_epoch: claimed.lease.lease_epoch,
+    worker_id: 'worker-1',
+    worker_session_digest: 'sha256:worker-session',
+    status: 'succeeded',
+    expected_previous_snapshot_digest: options.previous_snapshot_digest,
+    output_snapshot: {
+      ...snapshotInput,
+      id: snapshotId,
+      sequence: options.snapshot_sequence ?? 1,
+      artifact_ref: `artifact://internal/codex_session_snapshot/codex_session/session-1/${snapshotId}`,
+      digest: snapshotDigest,
+      manifest_digest: options.manifest_digest ?? `sha256:manifest-${snapshotId}`,
+      created_from_turn_id: turnId,
+      created_at: terminalizeNow,
+    },
+    ...(options.codex_thread_id === undefined ? {} : { codex_thread_id: options.codex_thread_id }),
+    ...(options.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: options.codex_thread_id_digest }),
+    now: terminalizeNow,
+  });
+};
 
 describe('Plan Item Workflow repository', () => {
   it('creates workflow with initial active Codex Session', async () => {
@@ -338,7 +421,53 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
-  it('allows saving a Codex Session with mutable lease, latest, thread, role, and status fields changed', async () => {
+  it('rejects saving a Codex Session with changed latest, thread, or lease fields and preserves the original session', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      lease_id: claimed.lease.id,
+      lease_token_hash: 'sha256:lease-token',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      output_snapshot: snapshotInput,
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+      now: '2026-05-31T00:02:00.000Z',
+    });
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected terminalized Codex session');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSession({
+          ...session,
+          latest_snapshot_id: 'snapshot-drifted',
+          latest_snapshot_digest: 'sha256:snapshot-drifted',
+          latest_turn_id: 'turn-drifted',
+          latest_turn_digest: 'sha256:turn-drifted',
+          codex_thread_id: 'thread-drifted',
+          codex_thread_id_digest: 'sha256:thread-drifted',
+          active_lease_id: 'lease-drifted',
+          lease_epoch: 99,
+          status: 'archived',
+          role: 'inactive_fork',
+          archived_at: '2026-05-31T00:03:00.000Z',
+          updated_at: '2026-05-31T00:03:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toEqual(session);
+  });
+
+  it('allows saving a Codex Session with legitimate mutable role, status, archived_at, and updated_at changed', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const session = await repository.getCodexSession('session-1');
@@ -348,14 +477,6 @@ describe('Plan Item Workflow repository', () => {
       ...session,
       status: 'archived',
       role: 'inactive_fork',
-      active_lease_id: 'lease-1',
-      latest_snapshot_id: 'snapshot-1',
-      latest_snapshot_digest: 'sha256:snapshot-1',
-      latest_turn_id: 'turn-1',
-      latest_turn_digest: 'sha256:turn-1',
-      codex_thread_id: 'thread-1',
-      codex_thread_id_digest: 'sha256:thread-1',
-      lease_epoch: 1,
       archived_at: '2026-05-31T00:01:00.000Z',
       updated_at: '2026-05-31T00:01:00.000Z',
     });
@@ -369,14 +490,7 @@ describe('Plan Item Workflow repository', () => {
       created_by_actor_id: 'actor-tech',
       status: 'archived',
       role: 'inactive_fork',
-      active_lease_id: 'lease-1',
-      latest_snapshot_id: 'snapshot-1',
-      latest_snapshot_digest: 'sha256:snapshot-1',
-      latest_turn_id: 'turn-1',
-      latest_turn_digest: 'sha256:turn-1',
-      codex_thread_id: 'thread-1',
-      codex_thread_id_digest: 'sha256:thread-1',
-      lease_epoch: 1,
+      lease_epoch: 0,
       archived_at: '2026-05-31T00:01:00.000Z',
       updated_at: '2026-05-31T00:01:00.000Z',
     });
@@ -438,7 +552,7 @@ describe('Plan Item Workflow repository', () => {
       lease_token_hash: 'sha256:lease-token',
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
-      lease_epoch: 1,
+      lease_epoch: 2,
       now: '2026-05-31T00:02:30.000Z',
       expires_at: '2026-05-31T00:08:00.000Z',
     })).rejects.toMatchObject({ code: 'codex_session_lease_conflict' });
@@ -484,7 +598,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       lease_epoch: 1,
-      now: '2026-05-31T00:00:30.000Z',
+      now: '2026-05-31T00:00:00.500Z',
       expires_at: '2026-05-31T00:08:00.000Z',
     })).resolves.toMatchObject({ id: 'lease-1', status: 'active' });
   });
@@ -524,8 +638,8 @@ describe('Plan Item Workflow repository', () => {
       lease_token_hash: 'sha256:lease-token',
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
-      lease_epoch: 1,
-      now: '2026-05-31T00:00:30.000Z',
+      lease_epoch: 2,
+      now: '2026-05-31T00:00:00.500Z',
       expires_at: '2026-05-31T00:08:00.000Z',
     })).resolves.toMatchObject({ id: 'lease-1', status: 'active' });
   });
@@ -686,6 +800,54 @@ describe('Plan Item Workflow repository', () => {
       created_at: now,
       status: 'running',
     });
+  });
+
+  it('rejects saving a Codex session turn with changed output, lease, or provenance fields without mutating the original turn', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      lease_id: claimed.lease.id,
+      lease_token_hash: 'sha256:lease-token',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      output_snapshot: snapshotInput,
+      now: '2026-05-31T00:02:00.000Z',
+    });
+    const originalTurn = await repository.getCodexSessionTurn('turn-1');
+    if (originalTurn === undefined) throw new Error('Expected terminalized turn');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSessionTurn({
+          ...originalTurn,
+          intent: 'address_review_feedback',
+          input_digest: 'sha256:drifted-input',
+          expected_previous_snapshot_digest: 'sha256:drifted-previous',
+          output_snapshot_id: 'snapshot-drifted',
+          output_snapshot_digest: 'sha256:snapshot-drifted',
+          lease_id: 'lease-drifted',
+          lease_epoch: 99,
+          created_at: '2026-05-31T00:01:00.000Z',
+          created_by_actor_id: 'actor-drifted',
+          status: 'failed',
+          output_object_type: 'internal_artifact',
+          output_object_id: 'snapshot-drifted',
+          codex_thread_id_digest: 'sha256:thread-drifted',
+          automation_action_run_id: 'automation-run-1',
+          runtime_job_id: 'runtime-job-1',
+          updated_at: '2026-05-31T00:03:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toEqual(originalTurn);
   });
 
   it('rejects creating a turn for a candidate fork because turns are created before lease claim sets running', async () => {
@@ -1232,57 +1394,6 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
   });
 
-  it('rejects terminalization when a reused persisted output snapshot provenance points at a different turn', async () => {
-    const repository = new InMemoryDeliveryRepository();
-    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await repository.createCodexSessionSnapshot({
-      ...snapshotInput,
-      id: 'snapshot-2',
-      sequence: 2,
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-      digest: 'sha256:snapshot-2',
-      manifest_digest: 'sha256:manifest-2',
-      created_from_turn_id: 'turn-2',
-    });
-    const claimed = await repository.claimCodexSessionLease(leaseInput);
-
-    await expectDomainErrorCode(
-      () =>
-        repository.terminalizeCodexSessionTurn({
-          session_id: 'session-1',
-          turn_id: 'turn-1',
-          lease_id: claimed.lease.id,
-          lease_token_hash: 'sha256:lease-token',
-          lease_epoch: 1,
-          worker_id: 'worker-1',
-          worker_session_digest: 'sha256:worker-session',
-          status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
-          output_snapshot: {
-            ...snapshotInput,
-            id: 'snapshot-2',
-            sequence: 2,
-            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-            digest: 'sha256:snapshot-2',
-            manifest_digest: 'sha256:manifest-2',
-            created_from_turn_id: 'turn-2',
-          },
-          now: '2026-05-31T00:03:00.000Z',
-        }),
-      'codex_session_snapshot_stale',
-    );
-
-    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
-      status: 'running',
-      active_lease_id: claimed.lease.id,
-    });
-    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
-    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toMatchObject({
-      created_from_turn_id: 'turn-2',
-    });
-  });
-
   it('rejects snapshots with non-internal artifact refs before saving them', async () => {
     const repository = new InMemoryDeliveryRepository();
 
@@ -1326,6 +1437,63 @@ describe('Plan Item Workflow repository', () => {
       'workflow_invalid_transition',
     );
     await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+  });
+
+  it('rejects creating a snapshot for a missing Codex session before saving it', async () => {
+    const repository = new InMemoryDeliveryRepository();
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionSnapshot({
+          ...snapshotInput,
+          codex_session_id: 'session-missing',
+          artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-missing/snapshot-1',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+  });
+
+  it('rejects creating a snapshot when created_from_turn_id is missing or belongs to another session before saving it', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+    });
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-other',
+      codex_session_id: 'session-other',
+      workflow_id: 'workflow-other',
+      input_digest: 'sha256:turn-other',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionSnapshot({
+          ...snapshotInput,
+          created_from_turn_id: 'turn-missing',
+        }),
+      'codex_session_snapshot_stale',
+    );
+    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionSnapshot({
+          ...snapshotInput,
+          id: 'snapshot-2',
+          artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
+          digest: 'sha256:snapshot-2',
+          manifest_digest: 'sha256:manifest-2',
+          created_from_turn_id: 'turn-other',
+        }),
+      'codex_session_snapshot_stale',
+    );
+    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
   });
 
   it('rejects terminalizing an older non-latest running turn without moving the session backward', async () => {
@@ -1429,23 +1597,14 @@ describe('Plan Item Workflow repository', () => {
   it('forks from the requested persisted snapshot instead of parent latest', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionSnapshot(snapshotInput);
-    await repository.createCodexSessionSnapshot({
-      ...snapshotInput,
-      id: 'snapshot-2',
-      sequence: 2,
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-      digest: 'sha256:snapshot-2',
-      manifest_digest: 'sha256:manifest-2',
-      created_from_turn_id: 'turn-2',
-      created_at: '2026-05-31T00:03:00.000Z',
-    });
-    const session = await repository.getCodexSession('session-1');
-    if (session === undefined) throw new Error('Expected seeded Codex session');
-    await repository.saveCodexSession({
-      ...session,
-      latest_snapshot_id: 'snapshot-2',
-      latest_snapshot_digest: 'sha256:snapshot-2',
+    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
+    await terminalizeTurnWithSnapshot(repository, {
+      turn_id: 'turn-2',
+      snapshot_id: 'snapshot-2',
+      snapshot_sequence: 2,
+      previous_snapshot_digest: 'sha256:snapshot-1',
+      claim_now: '2026-05-31T00:03:00.000Z',
+      terminalize_now: '2026-05-31T00:04:00.000Z',
     });
 
     const fork = await repository.createCodexSessionFork({
@@ -1455,7 +1614,7 @@ describe('Plan Item Workflow repository', () => {
       forked_from_snapshot_id: 'snapshot-1',
       fork_reason: 'Try the older checkpoint.',
       created_by_actor_id: 'actor-tech',
-      now: '2026-05-31T00:04:00.000Z',
+      now: '2026-05-31T00:05:00.000Z',
     });
 
     expect(fork).toMatchObject({
@@ -1469,13 +1628,9 @@ describe('Plan Item Workflow repository', () => {
   it('does not inherit parent Codex thread identity when forking from a historical snapshot', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionSnapshot(snapshotInput);
-    const session = await repository.getCodexSession('session-1');
-    if (session === undefined) throw new Error('Expected seeded Codex session');
-    await repository.saveCodexSession({
-      ...session,
-      latest_snapshot_id: 'snapshot-1',
-      latest_snapshot_digest: 'sha256:snapshot-1',
+    await terminalizeTurnWithSnapshot(repository, {
+      turn_id: 'turn-1',
+      snapshot_id: 'snapshot-1',
       codex_thread_id: 'thread-parent-current',
       codex_thread_id_digest: 'sha256:thread-parent-current',
     });
@@ -1503,31 +1658,14 @@ describe('Plan Item Workflow repository', () => {
   it('forks from a turn output snapshot instead of a newer parent latest snapshot', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await repository.createCodexSessionSnapshot(snapshotInput);
-    await repository.saveCodexSessionTurn({
-      ...turnInput,
-      status: 'succeeded',
-      output_snapshot_id: 'snapshot-1',
-      output_snapshot_digest: 'sha256:snapshot-1',
-      updated_at: '2026-05-31T00:02:00.000Z',
-    });
-    await repository.createCodexSessionSnapshot({
-      ...snapshotInput,
-      id: 'snapshot-2',
-      sequence: 2,
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-      digest: 'sha256:snapshot-2',
-      manifest_digest: 'sha256:manifest-2',
-      created_from_turn_id: 'turn-2',
-      created_at: '2026-05-31T00:03:00.000Z',
-    });
-    const session = await repository.getCodexSession('session-1');
-    if (session === undefined) throw new Error('Expected seeded Codex session');
-    await repository.saveCodexSession({
-      ...session,
-      latest_snapshot_id: 'snapshot-2',
-      latest_snapshot_digest: 'sha256:snapshot-2',
+    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
+    await terminalizeTurnWithSnapshot(repository, {
+      turn_id: 'turn-2',
+      snapshot_id: 'snapshot-2',
+      snapshot_sequence: 2,
+      previous_snapshot_digest: 'sha256:snapshot-1',
+      claim_now: '2026-05-31T00:03:00.000Z',
+      terminalize_now: '2026-05-31T00:04:00.000Z',
     });
 
     const fork = await repository.createCodexSessionFork({
@@ -1537,7 +1675,7 @@ describe('Plan Item Workflow repository', () => {
       forked_from_turn_id: 'turn-1',
       fork_reason: 'Try the first turn output.',
       created_by_actor_id: 'actor-tech',
-      now: '2026-05-31T00:04:00.000Z',
+      now: '2026-05-31T00:05:00.000Z',
     });
 
     expect(fork).toMatchObject({
@@ -1553,26 +1691,17 @@ describe('Plan Item Workflow repository', () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
-    await repository.saveCodexSessionTurn({
-      ...turnInput,
-      status: 'succeeded',
-      output_snapshot_id: 'snapshot-missing',
-      output_snapshot_digest: 'sha256:snapshot-missing',
-      updated_at: '2026-05-31T00:02:00.000Z',
-    });
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionFork({
-          id: 'session-fork',
-          workflow_id: 'workflow-1',
-          parent_session_id: 'session-1',
-          forked_from_turn_id: 'turn-1',
-          fork_reason: 'Try the missing turn output.',
-          created_by_actor_id: 'actor-tech',
-          now: '2026-05-31T00:04:00.000Z',
+        repository.saveCodexSessionTurn({
+          ...turnInput,
+          status: 'succeeded',
+          output_snapshot_id: 'snapshot-missing',
+          output_snapshot_digest: 'sha256:snapshot-missing',
+          updated_at: '2026-05-31T00:02:00.000Z',
         }),
-      'codex_session_fork_invalid',
+      'workflow_invalid_transition',
     );
   });
 
@@ -1586,12 +1715,12 @@ describe('Plan Item Workflow repository', () => {
       development_plan_item_id: 'item-other',
     });
     await repository.createCodexSessionTurn(turnInput);
-    await repository.saveCodexSessionTurn({
+    await repository.createCodexSessionTurn({
       ...turnInput,
-      status: 'succeeded',
-      output_snapshot_id: 'snapshot-other',
-      output_snapshot_digest: 'sha256:snapshot-other',
-      updated_at: '2026-05-31T00:02:00.000Z',
+      id: 'turn-other',
+      codex_session_id: 'session-other',
+      workflow_id: 'workflow-other',
+      input_digest: 'sha256:turn-other',
     });
     await repository.createCodexSessionSnapshot({
       ...snapshotInput,
@@ -1599,48 +1728,36 @@ describe('Plan Item Workflow repository', () => {
       codex_session_id: 'session-other',
       artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-other/snapshot-other',
       digest: 'sha256:snapshot-other',
+      created_from_turn_id: 'turn-other',
     });
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionFork({
-          id: 'session-fork',
-          workflow_id: 'workflow-1',
-          parent_session_id: 'session-1',
-          forked_from_turn_id: 'turn-1',
-          fork_reason: 'Try the foreign turn output.',
-          created_by_actor_id: 'actor-tech',
-          now: '2026-05-31T00:04:00.000Z',
+        repository.saveCodexSessionTurn({
+          ...turnInput,
+          status: 'succeeded',
+          output_snapshot_id: 'snapshot-other',
+          output_snapshot_digest: 'sha256:snapshot-other',
+          updated_at: '2026-05-31T00:02:00.000Z',
         }),
-      'codex_session_fork_invalid',
+      'workflow_invalid_transition',
     );
   });
 
   it('rejects turn-based fork when the turn output snapshot digest differs from persisted snapshot', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await repository.createCodexSessionSnapshot(snapshotInput);
-    await repository.saveCodexSessionTurn({
-      ...turnInput,
-      status: 'succeeded',
-      output_snapshot_id: 'snapshot-1',
-      output_snapshot_digest: 'sha256:stale-snapshot-1',
-      updated_at: '2026-05-31T00:02:00.000Z',
-    });
+    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
 
+    const terminalizedTurn = await repository.getCodexSessionTurn('turn-1');
+    if (terminalizedTurn === undefined) throw new Error('Expected terminalized turn');
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionFork({
-          id: 'session-fork',
-          workflow_id: 'workflow-1',
-          parent_session_id: 'session-1',
-          forked_from_turn_id: 'turn-1',
-          fork_reason: 'Try the stale turn output.',
-          created_by_actor_id: 'actor-tech',
-          now: '2026-05-31T00:04:00.000Z',
+        repository.saveCodexSessionTurn({
+          ...terminalizedTurn,
+          output_snapshot_digest: 'sha256:stale-snapshot-1',
         }),
-      'codex_session_fork_invalid',
+      'workflow_invalid_transition',
     );
   });
 
@@ -1648,30 +1765,14 @@ describe('Plan Item Workflow repository', () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
-    await repository.createCodexSessionSnapshot({
-      ...snapshotInput,
-      created_from_turn_id: 'turn-other',
-    });
-    await repository.saveCodexSessionTurn({
-      ...turnInput,
-      status: 'succeeded',
-      output_snapshot_id: 'snapshot-1',
-      output_snapshot_digest: 'sha256:snapshot-1',
-      updated_at: '2026-05-31T00:02:00.000Z',
-    });
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionFork({
-          id: 'session-fork',
-          workflow_id: 'workflow-1',
-          parent_session_id: 'session-1',
-          forked_from_turn_id: 'turn-1',
-          fork_reason: 'Try the stale-provenance turn output.',
-          created_by_actor_id: 'actor-tech',
-          now: '2026-05-31T00:04:00.000Z',
+        repository.createCodexSessionSnapshot({
+          ...snapshotInput,
+          created_from_turn_id: 'turn-other',
         }),
-      'codex_session_fork_invalid',
+      'codex_session_snapshot_stale',
     );
   });
 
@@ -1705,24 +1806,14 @@ describe('Plan Item Workflow repository', () => {
   it('rejects fork creation when requested turn and snapshot fork points do not match', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await repository.createCodexSessionSnapshot(snapshotInput);
-    await repository.saveCodexSessionTurn({
-      ...turnInput,
-      status: 'succeeded',
-      output_snapshot_id: 'snapshot-1',
-      output_snapshot_digest: 'sha256:snapshot-1',
-      updated_at: '2026-05-31T00:02:00.000Z',
-    });
-    await repository.createCodexSessionSnapshot({
-      ...snapshotInput,
-      id: 'snapshot-2',
-      sequence: 2,
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-      digest: 'sha256:snapshot-2',
-      manifest_digest: 'sha256:manifest-2',
-      created_from_turn_id: 'turn-2',
-      created_at: '2026-05-31T00:03:00.000Z',
+    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
+    await terminalizeTurnWithSnapshot(repository, {
+      turn_id: 'turn-2',
+      snapshot_id: 'snapshot-2',
+      snapshot_sequence: 2,
+      previous_snapshot_digest: 'sha256:snapshot-1',
+      claim_now: '2026-05-31T00:03:00.000Z',
+      terminalize_now: '2026-05-31T00:04:00.000Z',
     });
 
     await expectDomainErrorCode(
@@ -1735,7 +1826,7 @@ describe('Plan Item Workflow repository', () => {
           forked_from_snapshot_id: 'snapshot-2',
           fork_reason: 'Try mismatched provenance.',
           created_by_actor_id: 'actor-tech',
-          now: '2026-05-31T00:04:00.000Z',
+          now: '2026-05-31T00:05:00.000Z',
         }),
       'codex_session_fork_invalid',
     );
@@ -1831,15 +1922,7 @@ describe('Plan Item Workflow repository', () => {
   it('rejects saving a fork when immutable provenance fields change', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await repository.createCodexSessionSnapshot(snapshotInput);
-    await repository.saveCodexSessionTurn({
-      ...turnInput,
-      status: 'succeeded',
-      output_snapshot_id: 'snapshot-1',
-      output_snapshot_digest: 'sha256:snapshot-1',
-      updated_at: '2026-05-31T00:02:00.000Z',
-    });
+    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
     const fork = await repository.createCodexSessionFork({
       id: 'session-fork',
       workflow_id: 'workflow-1',
@@ -1897,12 +1980,20 @@ describe('Plan Item Workflow repository', () => {
       codex_session_id: 'session-other',
       development_plan_item_id: 'item-other',
     });
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-other',
+      codex_session_id: 'session-other',
+      workflow_id: 'workflow-other',
+      input_digest: 'sha256:turn-other',
+    });
     await repository.createCodexSessionSnapshot({
       ...snapshotInput,
       id: 'snapshot-other',
       codex_session_id: 'session-other',
       artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-other/snapshot-other',
       digest: 'sha256:snapshot-other',
+      created_from_turn_id: 'turn-other',
     });
 
     await expectDomainErrorCode(
