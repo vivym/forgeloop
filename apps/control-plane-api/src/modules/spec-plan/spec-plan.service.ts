@@ -1374,7 +1374,7 @@ export class SpecPlanService {
   }
 
   private boundarySummaryRevisionApproved(revision: BoundarySummaryRevision): boolean {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     return (
       record.status === 'approved' &&
       typeof record.source_round_id === 'string' &&

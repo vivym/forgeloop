@@ -680,7 +680,7 @@ export class ExecutionsService {
   }
 
   private boundarySummaryRevisionApproved(revision: BoundarySummaryRevision): boolean {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     return (
       record.status === 'approved' &&
       typeof record.source_round_id === 'string' &&
@@ -696,7 +696,7 @@ export class ExecutionsService {
   }
 
   private boundarySummaryRevisionSessionId(revision: BoundarySummaryRevision): string | undefined {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     const sessionId = record.session_id ?? record.brainstorming_session_id;
     return typeof sessionId === 'string' ? sessionId : undefined;
   }
