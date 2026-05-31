@@ -55,7 +55,21 @@ export type DomainErrorCode =
   | 'codex_worker_registration_denied'
   | 'codex_runtime_job_unavailable'
   | 'codex_launch_lease_denied'
-  | 'codex_launch_materialization_denied';
+  | 'codex_launch_materialization_denied'
+  | 'workflow_invalid_transition'
+  | 'workflow_evidence_missing'
+  | 'workflow_evidence_type_invalid'
+  | 'workflow_evidence_not_owned'
+  | 'workflow_actor_not_authorized'
+  | 'workflow_active_session_missing'
+  | 'workflow_active_session_conflict'
+  | 'codex_session_lease_conflict'
+  | 'codex_session_lease_expired'
+  | 'codex_session_stale_terminalization'
+  | 'codex_session_snapshot_stale'
+  | 'codex_session_thread_binding_conflict'
+  | 'codex_session_fork_invalid'
+  | 'workflow_legacy_entrypoint_disabled';
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode;
