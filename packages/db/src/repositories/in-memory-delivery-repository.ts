@@ -3114,6 +3114,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveCodexSessionTurn(turn: CodexSessionTurn): Promise<void> {
+    const existingTurn = this.codexSessionTurns.get(turn.id);
+    if (existingTurn === undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session turn ${turn.id} does not exist`,
+      );
+    }
+    if (
+      existingTurn.codex_session_id !== turn.codex_session_id ||
+      existingTurn.workflow_id !== turn.workflow_id ||
+      existingTurn.created_at !== turn.created_at ||
+      existingTurn.created_by_actor_id !== turn.created_by_actor_id
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session turn ${turn.id} identity fields cannot change`,
+      );
+    }
     this.codexSessionTurns.set(turn.id, clone(turn));
   }
 

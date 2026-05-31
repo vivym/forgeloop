@@ -465,6 +465,43 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
+  it('rejects saving a Codex session turn that does not already exist', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await expectDomainErrorCode(() => repository.saveCodexSessionTurn(turnInput), 'workflow_invalid_transition');
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toBeUndefined();
+  });
+
+  it('rejects saving a Codex session turn with changed immutable ownership fields', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSessionTurn({
+          ...turnInput,
+          codex_session_id: 'session-other',
+          workflow_id: 'workflow-other',
+          created_by_actor_id: 'actor-other',
+          created_at: '2026-05-31T00:01:00.000Z',
+          status: 'succeeded',
+          output_snapshot_id: 'snapshot-1',
+          output_snapshot_digest: 'sha256:snapshot-1',
+          updated_at: '2026-05-31T00:02:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({
+      codex_session_id: 'session-1',
+      workflow_id: 'workflow-1',
+      created_by_actor_id: 'actor-tech',
+      created_at: now,
+      status: 'running',
+    });
+  });
+
   it('rejects creating a turn for a candidate fork because turns are created before lease claim sets running', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -1517,25 +1554,17 @@ describe('Plan Item Workflow repository', () => {
   it('rejects fork creation when requested turn is missing or belongs to another session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.saveCodexSession({
-      id: 'session-other',
-      owner_type: 'plan_item_workflow',
-      owner_id: 'workflow-1',
-      status: 'idle',
-      role: 'inactive_fork',
-      runtime_profile_id: 'profile-1',
-      runtime_profile_revision_id: 'profile-revision-1',
-      credential_binding_id: 'credential-1',
-      credential_binding_version_id: 'credential-version-1',
-      lease_epoch: 0,
-      created_by_actor_id: 'actor-tech',
-      created_at: now,
-      updated_at: now,
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
     });
-    await repository.saveCodexSessionTurn({
+    await repository.createCodexSessionTurn({
       ...turnInput,
       id: 'turn-other',
       codex_session_id: 'session-other',
+      workflow_id: 'workflow-other',
       input_digest: 'sha256:turn-other',
     });
 
