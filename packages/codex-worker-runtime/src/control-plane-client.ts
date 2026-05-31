@@ -1,8 +1,10 @@
+import { Buffer } from 'node:buffer';
 import { lstat, mkdir, open, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import {
   codexCanonicalDigest,
+  runtimeArtifactUploadProofPayload,
   type CodexRuntimeStatusProjection,
   type CodexDockerPolicy,
   type CodexEffectiveConfigAssertions,
@@ -250,10 +252,9 @@ export class CodexRuntimeControlPlaneClient {
   }
 
   async uploadRuntimeJobArtifact(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
-    return this.#workerPost(
-      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/artifacts`,
-      input,
-    );
+    const requestPath = `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/artifacts`;
+    const proofPath = `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/artifacts`;
+    return this.#workerPostArtifact(requestPath, proofPath, workerId, jobId, input);
   }
 
   async getRuntimeJobControl(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
@@ -364,6 +365,45 @@ export class CodexRuntimeControlPlaneClient {
     return this.#postJson(path, this.#workerPayload(input));
   }
 
+  async #workerPostArtifact(
+    requestPath: string,
+    proofPath: string,
+    workerId: string,
+    jobId: string,
+    input: WorkerRequestInput,
+  ): Promise<any> {
+    const { bytes, ...metadataInput } = input;
+    if (!(bytes instanceof Uint8Array)) {
+      throw new Error('codex_control_plane_runtime_artifact_bytes_required');
+    }
+    const metadata = this.#workerArtifactUploadMetadata(metadataInput);
+    const metadataWithDigest = {
+      ...metadata,
+      body_digest: codexCanonicalDigest(
+        runtimeArtifactUploadProofPayload({
+          method: 'POST',
+          path: proofPath,
+          worker_id: workerId,
+          runtime_job_id: jobId,
+          metadata,
+        }),
+      ),
+    };
+    const response = await this.#fetch(`${this.#baseUrl}${requestPath}`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/octet-stream',
+        'x-forgeloop-runtime-artifact-metadata': Buffer.from(JSON.stringify(metadataWithDigest), 'utf8').toString('base64url'),
+      },
+      body: bytes,
+    });
+    if (!response.ok) {
+      throw new Error(`codex_control_plane_request_failed:${response.status}`);
+    }
+    return response.json();
+  }
+
   async #getJson(pathAndQuery: string, headers: Record<string, string> = {}): Promise<any> {
     const response = await this.#fetch(`${this.#baseUrl}${pathAndQuery}`, {
       method: 'GET',
@@ -430,6 +470,86 @@ export class CodexRuntimeControlPlaneClient {
     return {
       ...unsignedBody,
       body_digest: codexCanonicalDigest(unsignedBody),
+    };
+  }
+
+  #workerArtifactUploadMetadata(input: WorkerRequestInput): {
+    schema_version: 'codex_runtime_job_artifact_upload.v2';
+    worker_session_token: string;
+    nonce: string;
+    nonce_timestamp: string;
+    artifact_idempotency_key: string;
+    kind: string;
+    name: string;
+    content_type: string;
+    digest: string;
+    size_bytes: string;
+    metadata_json: Record<string, unknown>;
+  } {
+    const {
+      workerSessionToken,
+      worker_session_token: workerSessionTokenSnake,
+      nonce,
+      nonceTimestamp,
+      nonce_timestamp: nonceTimestampSnake,
+      body_digest: _bodyDigest,
+      artifact_idempotency_key: artifactIdempotencyKey,
+      kind,
+      name,
+      content_type: contentType,
+      digest,
+      size_bytes: sizeBytes,
+      metadata_json: metadataJson,
+      ...extra
+    } = input;
+    if (Object.keys(extra).length > 0) {
+      throw new Error('codex_control_plane_runtime_artifact_metadata_unexpected');
+    }
+    const workerSessionTokenValue = workerSessionTokenSnake ?? workerSessionToken;
+    if (typeof workerSessionTokenValue !== 'string' || workerSessionTokenValue.length === 0) {
+      throw new Error('codex_control_plane_worker_session_token_required');
+    }
+    const nonceValue = nonce ?? this.#nonceFactory();
+    if (typeof nonceValue !== 'string' || nonceValue.length === 0) {
+      throw new Error('codex_control_plane_worker_nonce_required');
+    }
+    const nonceTimestampValue = nonceTimestampSnake ?? nonceTimestamp ?? this.#now();
+    if (typeof nonceTimestampValue !== 'string' || nonceTimestampValue.length === 0) {
+      throw new Error('codex_control_plane_worker_nonce_timestamp_required');
+    }
+    if (typeof artifactIdempotencyKey !== 'string' || artifactIdempotencyKey.length === 0) {
+      throw new Error('codex_control_plane_runtime_artifact_idempotency_key_required');
+    }
+    if (typeof kind !== 'string' || kind.length === 0) {
+      throw new Error('codex_control_plane_runtime_artifact_kind_required');
+    }
+    if (typeof name !== 'string' || name.length === 0) {
+      throw new Error('codex_control_plane_runtime_artifact_name_required');
+    }
+    if (typeof contentType !== 'string' || contentType.length === 0) {
+      throw new Error('codex_control_plane_runtime_artifact_content_type_required');
+    }
+    if (typeof digest !== 'string' || digest.length === 0) {
+      throw new Error('codex_control_plane_runtime_artifact_digest_required');
+    }
+    if (typeof sizeBytes !== 'number' || !Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
+      throw new Error('codex_control_plane_runtime_artifact_size_required');
+    }
+    if (metadataJson !== undefined && !isRecord(metadataJson)) {
+      throw new Error('codex_control_plane_runtime_artifact_metadata_json_required');
+    }
+    return {
+      schema_version: 'codex_runtime_job_artifact_upload.v2',
+      worker_session_token: workerSessionTokenValue,
+      nonce: nonceValue,
+      nonce_timestamp: nonceTimestampValue,
+      artifact_idempotency_key: artifactIdempotencyKey,
+      kind,
+      name,
+      content_type: contentType,
+      digest,
+      size_bytes: String(sizeBytes),
+      metadata_json: metadataJson ?? {},
     };
   }
 }

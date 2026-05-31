@@ -48,6 +48,7 @@ import {
   codex_credential_binding_versions,
   codex_launch_leases,
   codex_launch_token_envelopes,
+  internal_artifact_objects,
   codex_pending_workspace_bundles,
   codex_runtime_job_artifacts,
   codex_runtime_jobs,
@@ -107,6 +108,7 @@ const requiredTables = {
   codex_worker_session_nonces,
   codex_runtime_jobs,
   codex_launch_token_envelopes,
+  internal_artifact_objects,
   codex_runtime_job_artifacts,
   codex_pending_workspace_bundles,
   codex_launch_leases,
@@ -207,6 +209,12 @@ const hasUniqueIndex = (table: ConfiguredTable, indexName: string, columnNames: 
   );
 };
 
+const hasIndex = (table: ConfiguredTable, indexName: string, columnNames: string[]) => {
+  const index = getTableConfig(table).indexes.find((candidate) => candidate.config.name === indexName);
+
+  return index?.config.columns.map((indexColumn) => (indexColumn as { name: string }).name).join(',') === columnNames.join(',');
+};
+
 const uniqueIndexColumns = (table: ConfiguredTable, indexName: string) => {
   const index = getTableConfig(table).indexes.find((candidate) => candidate.config.name === indexName);
   if (index === undefined || index.config.unique !== true) {
@@ -237,6 +245,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'codex_credential_binding_versions',
         'codex_launch_leases',
         'codex_launch_token_envelopes',
+        'internal_artifact_objects',
         'codex_pending_workspace_bundles',
         'codex_runtime_job_artifacts',
         'codex_runtime_jobs',
@@ -652,6 +661,60 @@ describe('P1 core schema release flow Drizzle schema', () => {
       'content_type',
     ])).toBe(true);
     expect(hasUniqueIndex(codex_pending_workspace_bundles, 'codex_pending_workspace_bundles_bundle_idx', ['bundle_id'])).toBe(true);
+  });
+
+  it('defines internal artifact objects with non-public storage metadata', () => {
+    const columns = getTableColumns(internal_artifact_objects);
+    expect(Object.keys(columns)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'artifactId',
+        'ref',
+        'storageKey',
+        'kind',
+        'contentType',
+        'sizeBytes',
+        'digest',
+        'visibility',
+        'ownerType',
+        'ownerId',
+        'idempotencyKey',
+        'requestDigest',
+        'metadataJson',
+        'createdByActorType',
+        'createdByActorId',
+        'createdAt',
+        'deletedAt',
+      ]),
+    );
+    expect(hasUniqueIndex(internal_artifact_objects, 'internal_artifact_objects_ref_idx', ['ref'])).toBe(true);
+    expect(
+      hasUniqueIndex(internal_artifact_objects, 'internal_artifact_objects_owner_idempotency_idx', [
+        'owner_type',
+        'owner_id',
+        'idempotency_key',
+      ]),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(internal_artifact_objects, 'internal_artifact_objects_owner_kind_artifact_idx', [
+        'owner_type',
+        'owner_id',
+        'kind',
+        'artifact_id',
+      ]),
+    ).toBe(true);
+    expect(
+      hasIndex(internal_artifact_objects, 'internal_artifact_objects_owner_kind_created_idx', [
+        'owner_type',
+        'owner_id',
+        'kind',
+        'created_at',
+      ]),
+    ).toBe(true);
+    expect(hasIndex(internal_artifact_objects, 'internal_artifact_objects_storage_key_idx', ['storage_key'])).toBe(true);
+    expect(
+      hasIndex(internal_artifact_objects, 'internal_artifact_objects_digest_content_type_idx', ['digest', 'content_type']),
+    ).toBe(true);
   });
 
   it('defines release uniqueness and evidence contract constraints', () => {

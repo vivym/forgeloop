@@ -1100,6 +1100,164 @@ describe('automation daemon loop', () => {
     ).rejects.toMatchObject({ name: 'CodexGenerationError', code: 'generated_output_schema_invalid' });
   });
 
+  it('accepts canonical internal remote terminal generation artifact refs for the runtime job', async () => {
+    const spec = generatedRemotePackageDrafts();
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => ({ action_run: { id: actionRunId, status: 'running' } }),
+        getRuntimeJob: async (jobId) => {
+          const issuedInternalRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${jobId}/artifact-1`;
+          return {
+            runtime_job: {
+              id: jobId,
+              status: 'terminal',
+              terminal_status: 'succeeded',
+              terminal_result_json: {
+                task_kind: 'package_drafts',
+                prompt_version: 'package-drafts.remote.v1',
+                output_schema_version: 'package_drafts.v1',
+                generated_payload: spec,
+                generated_payload_digest: codexCanonicalDigest(spec),
+                generation_artifacts: [
+                  {
+                    kind: 'raw_metadata',
+                    name: 'generated-metadata.json',
+                    content_type: 'application/json',
+                    digest: `sha256:${'5'.repeat(64)}`,
+                    internal_ref: issuedInternalRef,
+                  },
+                ],
+                public_summary: 'Remote runtime generated package drafts.',
+              },
+            },
+          };
+        },
+        cancelRuntimeJob: async () => ({}),
+      },
+    });
+
+    await expect(
+      runtime.generatePackageDrafts({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_package_drafts',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).resolves.toMatchObject({
+      generationArtifacts: [
+        {
+          kind: 'raw_metadata',
+          storage_uri: expect.stringMatching(
+            /^artifact:\/\/internal\/codex_runtime_job_artifact\/codex_runtime_job\/codex-generation-job-[a-f0-9]+\/artifact-1$/,
+          ),
+        },
+      ],
+    });
+  });
+
+  it('rejects old-prefix remote terminal generation artifact refs even for the runtime job', async () => {
+    const spec = generatedRemotePackageDrafts();
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async () => ({
+          runtime_profile_revision_id: 'profile-rev-1',
+          runtime_profile_digest: `sha256:${'1'.repeat(64)}`,
+          credential_binding_id: 'credential-binding-1',
+          credential_binding_version_id: 'credential-version-1',
+          credential_payload_digest: `sha256:${'2'.repeat(64)}`,
+          docker_image_digest: `sha256:${'3'.repeat(64)}`,
+          network_policy_digest: `sha256:${'4'.repeat(64)}`,
+        }),
+        createRuntimeJob: async (input) => ({ runtime_job: { id: String(input.runtime_job_id), status: 'queued' } }),
+        renewAutomationActionRunClaim: async (actionRunId) => ({ action_run: { id: actionRunId, status: 'running' } }),
+        getRuntimeJob: async (jobId) => ({
+          runtime_job: {
+            id: jobId,
+            status: 'terminal',
+            terminal_status: 'succeeded',
+            terminal_result_json: {
+              task_kind: 'package_drafts',
+              prompt_version: 'package-drafts.remote.v1',
+              output_schema_version: 'package_drafts.v1',
+              generated_payload: spec,
+              generated_payload_digest: codexCanonicalDigest(spec),
+              generation_artifacts: [
+                {
+                  kind: 'raw_metadata',
+                  name: 'legacy-ref',
+                  content_type: 'application/json',
+                  digest: `sha256:${'5'.repeat(64)}`,
+                  internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/legacy-ref`,
+                },
+              ],
+              public_summary: 'Remote runtime generated package drafts.',
+            },
+          },
+        }),
+        cancelRuntimeJob: async () => ({}),
+      },
+    });
+
+    await expect(
+      runtime.generatePackageDrafts({
+        actionRunId: 'spec-action-run-1',
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { context_version: 'generation_context.package.v1' },
+        promptVersion: 'package-drafts.remote.v1',
+        outputSchemaVersion: 'package_drafts.v1',
+        policyDigests: {},
+        orchestration: {
+          targetType: 'automation_action_run',
+          actionRunId: 'spec-action-run-1',
+          actionType: 'ensure_package_drafts',
+          actionAttempt: 1,
+          claimToken: 'claim-token-1',
+          preconditionFingerprint: 'precondition-fingerprint-1',
+          automationScope: repoScope,
+          idempotencyKey: 'spec-action-run-1-idempotency',
+        },
+      }),
+    ).rejects.toMatchObject({ name: 'CodexGenerationError', code: 'generated_output_schema_invalid' });
+  });
+
   it('rejects remote generated payload artifact refs until daemon artifact fetch is implemented', async () => {
     const runtime = createRemoteCodexGenerationRuntime({
       runtimeProfileId: 'profile-1',
@@ -1137,7 +1295,7 @@ describe('automation daemon loop', () => {
                   name: 'generated-payload.json',
                   content_type: 'application/json',
                   digest: `sha256:${'5'.repeat(64)}`,
-                  internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/generated_payload`,
+                  internal_ref: `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${jobId}/generated_payload`,
                 },
               },
               generated_payload_digest: `sha256:${'5'.repeat(64)}`,
@@ -1147,7 +1305,7 @@ describe('automation daemon loop', () => {
                   name: 'generated-payload.json',
                   content_type: 'application/json',
                   digest: `sha256:${'5'.repeat(64)}`,
-                  internal_ref: `artifact://codex-runtime-jobs/${jobId}/artifacts/generated_payload`,
+                  internal_ref: `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${jobId}/generated_payload`,
                 },
               ],
               public_summary: 'Remote runtime generated an oversized spec.',

@@ -46,6 +46,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Configure internal artifact store
+        run: |
+          mkdir -p "$RUNNER_TEMP/forgeloop-artifacts"
+          echo "FORGELOOP_ARTIFACT_STORE_ROOT=$RUNNER_TEMP/forgeloop-artifacts" >> "$GITHUB_ENV"
+
       - name: Run tests
         run: pnpm test
 

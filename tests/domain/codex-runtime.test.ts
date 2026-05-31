@@ -15,6 +15,7 @@ import {
   codexRuntimeScopeMatches,
   codexWorkerScopeMatchesTarget,
   codexWorkspaceAcquisitionDigest,
+  isLegacyCodexRuntimeJobArtifactRefString,
   assertCodexRuntimePublicSafeValue,
   redactCodexLaunchMaterialization,
   validateCodexRuntimeJobTerminalResult,
@@ -78,6 +79,9 @@ const assertCodexRuntimeTypeExports = <T extends ExportedCodexRuntimeContracts>(
 const digestA = `sha256:${'a'.repeat(64)}`;
 const digestB = `sha256:${'b'.repeat(64)}`;
 const digestC = `sha256:${'c'.repeat(64)}`;
+const generatedPayload = { schema_version: 'generated_payload.test.v1', value: 'ok' };
+const generatedPayloadDigest = codexCanonicalDigest(generatedPayload);
+const generatedPayloadArtifactByteDigest = `sha256:${'9'.repeat(64)}`;
 
 const runtimeEvidence = (overrides: Partial<CodexDockerRuntimeEvidence> = {}): CodexDockerRuntimeEvidence => ({
   runtime_profile_id: 'profile-1',
@@ -307,6 +311,20 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it('rejects internal artifact refs in free-form public summaries', () => {
+    expectDomainErrorCode(
+      () =>
+        assertCodexRuntimePublicSafeValue(
+          {
+            public_summary:
+              'Stored output at artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+          },
+          'generic public value',
+        ),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
   it('creates stable runtime job and envelope digests', () => {
     const workloadInput = {
       schema_version: 'codex_generation_workload_ref.v1',
@@ -417,7 +435,7 @@ describe('codex runtime domain contracts', () => {
   it('validates public-safe terminal runtime job results', () => {
     const generatedPayload = {
       title: 'Public spec title',
-      artifact_ref: 'artifact://codex-runtime-jobs/runtime-job-1/generated-payload',
+      artifact_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
     };
     const generationResult = {
       task_kind: 'spec_draft',
@@ -431,7 +449,7 @@ describe('codex runtime domain contracts', () => {
           name: 'generated payload',
           content_type: 'application/json',
           digest: digestA,
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1',
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
         },
       ],
       public_summary: 'Generated a spec draft.',
@@ -448,7 +466,7 @@ describe('codex runtime domain contracts', () => {
           content_type: 'application/json',
           digest: digestA,
           internal_ref:
-            'artifact://codex-runtime-jobs/dfb5b095-3534-4297-934a-b066af8441ec/artifacts/d8def3cb-2878-4349-be42-74c912d8ee78',
+            'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/dfb5b095-3534-4297-934a-b066af8441ec/d8def3cb-2878-4349-be42-74c912d8ee78',
         },
       ],
     };
@@ -533,7 +551,7 @@ describe('codex runtime domain contracts', () => {
           name: 'generated-payload.json',
           content_type: 'application/json',
           digest: digestA,
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
         },
       ],
     };
@@ -541,7 +559,7 @@ describe('codex runtime domain contracts', () => {
     expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
     expect(collectCodexRuntimeJobTerminalArtifactRefs(result)).toEqual([
       {
-        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
         digest: digestA,
         content_type: 'application/json',
       },
@@ -585,6 +603,63 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it('accepts generated payload artifact refs with byte digest separate from payload digest', () => {
+    expect(() =>
+      validateCodexRuntimeJobTerminalResult({
+        task_kind: 'spec_draft',
+        prompt_version: 'prompt-v1',
+        output_schema_version: 'spec_draft.v1',
+        generated_payload: {
+          schema_version: 'generated_payload_ref.v1',
+          artifact: {
+            kind: 'generated_payload',
+            name: 'payload.json',
+            content_type: 'application/json',
+            digest: generatedPayloadArtifactByteDigest,
+            internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+          },
+        },
+        generated_payload_digest: generatedPayloadDigest,
+        generation_artifacts: [],
+        public_summary: 'Generated payload stored as an internal artifact.',
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    [
+      'wrong internal kind',
+      'artifact://internal/generated_payload/codex_runtime_job/runtime-job-1/artifact-1',
+    ],
+    [
+      'wrong owner namespace',
+      'artifact://internal/codex_runtime_job_artifact/run_session/run-session-1/artifact-1',
+    ],
+  ])('rejects generated payload artifact refs with %s', (_name, internalRef) => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'spec_draft',
+          prompt_version: 'prompt-v1',
+          output_schema_version: 'spec_draft.v1',
+          generated_payload: {
+            schema_version: 'generated_payload_ref.v1',
+            artifact: {
+              kind: 'generated_payload',
+              name: 'payload.json',
+              content_type: 'application/json',
+              digest: generatedPayloadArtifactByteDigest,
+              internal_ref: internalRef,
+            },
+          },
+          generated_payload_digest: generatedPayloadDigest,
+          generation_artifacts: [],
+          public_summary: 'Generated payload stored as an internal artifact.',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
   it.each([
     ['boundary_brainstorming_round', boundaryRoundRuntimeResultPayload],
     ['development_plan_item_spec_revision', generatedSpecRevisionPayload],
@@ -617,7 +692,7 @@ describe('codex runtime domain contracts', () => {
         name: 'generated-payload.json',
         content_type: 'application/json',
         digest: oversizedPayloadDigest,
-        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
       },
     };
     const result = {
@@ -629,7 +704,7 @@ describe('codex runtime domain contracts', () => {
           name: 'generated-payload.json',
           content_type: 'application/json',
           digest: oversizedPayloadDigest,
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
         },
       ],
     };
@@ -637,7 +712,7 @@ describe('codex runtime domain contracts', () => {
     expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
     expect(collectCodexRuntimeJobTerminalArtifactRefs(result)).toEqual([
       {
-        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
         digest: oversizedPayloadDigest,
         content_type: 'application/json',
       },
@@ -660,7 +735,7 @@ describe('codex runtime domain contracts', () => {
         name: 'generated-payload.json',
         content_type: patch.content_type,
         digest: oversizedPayloadDigest,
-        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
       },
     };
 
@@ -683,7 +758,7 @@ describe('codex runtime domain contracts', () => {
           name: 'generated-payload.json',
           content_type: 'application/json',
           digest: digestA,
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
         },
         generated_payload_digest: digestA,
       },
@@ -696,20 +771,20 @@ describe('codex runtime domain contracts', () => {
           name: 'generated-payload.json',
           content_type: 'text/plain',
           digest: digestA,
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
         },
         generated_payload_digest: digestA,
       },
     ],
     [
-      'digest mismatch',
+      'malformed digest',
       {
         artifact: {
           kind: 'generated_payload',
           name: 'generated-payload.json',
           content_type: 'application/json',
-          digest: digestB,
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+          digest: 'sha256:not-a-digest',
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated-payload',
         },
         generated_payload_digest: digestA,
       },
@@ -726,7 +801,20 @@ describe('codex runtime domain contracts', () => {
         generated_payload_digest: digestA,
       },
     ],
-  ])('rejects invalid legacy generated payload refs for %s', (_name, input) => {
+    [
+      'old-prefix internal ref',
+      {
+        artifact: {
+          kind: 'generated_payload',
+          name: 'generated-payload.json',
+          content_type: 'application/json',
+          digest: digestA,
+          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+        },
+        generated_payload_digest: digestA,
+      },
+    ],
+  ])('rejects invalid generated payload refs for %s', (_name, input) => {
     expectDomainErrorCode(
       () =>
         validateCodexRuntimeJobTerminalResult({
@@ -867,7 +955,7 @@ describe('codex runtime domain contracts', () => {
       patch_artifact: {
         content_type: 'text/x-diff',
         digest: digestB,
-        internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/patch',
+        internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/patch',
       },
       check_results: [
         {
@@ -875,7 +963,7 @@ describe('codex runtime domain contracts', () => {
           status: 'passed',
           summary: 'Node.js tests passed after updating app/server documentation',
           output_digest: digestC,
-          output_internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/check-output',
+          output_internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/check-output',
         },
       ],
       execution_artifacts: [
@@ -884,27 +972,266 @@ describe('codex runtime domain contracts', () => {
           name: 'check-output.log',
           content_type: 'text/plain',
           digest: digestA,
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/summary',
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/summary',
         },
         {
           kind: 'screenshot',
           name: 'screenshot.png',
           content_type: 'image/png',
           digest: digestB,
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/screenshot',
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/screenshot',
         },
         {
           kind: 'test_report',
           name: 'junit.xml',
           content_type: 'application/xml',
           digest: digestC,
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/junit',
+          internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/junit',
         },
       ],
       public_summary: `Checks:3 passed; Result:passed after updating Dockerfile.dev and vite.config.mts with digest ${digestA}.`,
     } satisfies CodexRunExecutionRuntimeJobResult;
 
     expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
+  });
+
+  it('accepts canonical internal runtime artifact refs in terminal artifacts', () => {
+    expect(() =>
+      validateCodexRuntimeJobTerminalResult({
+        task_kind: 'run_execution',
+        output_schema_version: 'codex_run_execution_result.v1',
+        execution_package_id: 'execution-package-1',
+        execution_package_version: 1,
+        run_session_id: 'run-session-1',
+        workspace_bundle_digest: digestA,
+        workspace_bundle_manifest_digest: digestB,
+        mounted_task_workspace_digest: digestC,
+        changed_files: [],
+        check_results: [],
+        execution_artifacts: [
+          {
+            kind: 'logs',
+            name: 'log.txt',
+            content_type: 'text/plain',
+            digest: digestA,
+            internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+          },
+        ],
+        public_summary: 'ok',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects canonical internal runtime artifact refs in terminal public summaries', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          output_schema_version: 'codex_run_execution_result.v1',
+          execution_package_id: 'execution-package-1',
+          execution_package_version: 1,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          workspace_bundle_manifest_digest: digestB,
+          mounted_task_workspace_digest: digestC,
+          changed_files: [],
+          check_results: [],
+          execution_artifacts: [],
+          public_summary:
+            'Stored output at artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('does not accept old runtime artifact refs in normal terminal validation', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          output_schema_version: 'codex_run_execution_result.v1',
+          execution_package_id: 'execution-package-1',
+          execution_package_version: 1,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          workspace_bundle_manifest_digest: digestB,
+          mounted_task_workspace_digest: digestC,
+          changed_files: [],
+          check_results: [],
+          execution_artifacts: [
+            {
+              kind: 'logs',
+              name: 'log.txt',
+              content_type: 'text/plain',
+              digest: digestA,
+              internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1',
+            },
+          ],
+          public_summary: 'ok',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('rejects non-canonical patch artifact internal refs in terminal validation', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          output_schema_version: 'codex_run_execution_result.v1',
+          execution_package_id: 'execution-package-1',
+          execution_package_version: 1,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          workspace_bundle_manifest_digest: digestB,
+          mounted_task_workspace_digest: digestC,
+          changed_files: [],
+          patch_artifact: {
+            content_type: 'text/x-diff',
+            digest: digestA,
+            internal_ref: 'artifact://runs/run-session-1/artifacts/patch',
+          },
+          check_results: [],
+          execution_artifacts: [],
+          public_summary: 'ok',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('rejects patch artifact internal refs outside the runtime-job artifact namespace', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          output_schema_version: 'codex_run_execution_result.v1',
+          execution_package_id: 'execution-package-1',
+          execution_package_version: 1,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          workspace_bundle_manifest_digest: digestB,
+          mounted_task_workspace_digest: digestC,
+          changed_files: [],
+          patch_artifact: {
+            content_type: 'text/x-diff',
+            digest: digestA,
+            internal_ref: 'artifact://internal/execution_patch/codex_runtime_job/runtime-job-1/patch',
+          },
+          check_results: [],
+          execution_artifacts: [],
+          public_summary: 'ok',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('rejects non-canonical check output internal refs in terminal validation', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          output_schema_version: 'codex_run_execution_result.v1',
+          execution_package_id: 'execution-package-1',
+          execution_package_version: 1,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          workspace_bundle_manifest_digest: digestB,
+          mounted_task_workspace_digest: digestC,
+          changed_files: [],
+          check_results: [
+            {
+              name: 'unit',
+              status: 'passed',
+              summary: 'Unit tests passed.',
+              output_digest: digestA,
+              output_internal_ref: 'artifact://automation/action-runs/action-run-1/artifacts/check-output',
+            },
+          ],
+          execution_artifacts: [],
+          public_summary: 'ok',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('rejects check output internal refs outside the runtime-job artifact namespace', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          output_schema_version: 'codex_run_execution_result.v1',
+          execution_package_id: 'execution-package-1',
+          execution_package_version: 1,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          workspace_bundle_manifest_digest: digestB,
+          mounted_task_workspace_digest: digestC,
+          changed_files: [],
+          check_results: [
+            {
+              name: 'unit',
+              status: 'passed',
+              summary: 'Unit tests passed.',
+              output_digest: digestA,
+              output_internal_ref: 'artifact://internal/codex_runtime_job_artifact/run_session/run-session-1/check-output',
+            },
+          ],
+          execution_artifacts: [],
+          public_summary: 'ok',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('rejects execution artifact internal refs outside the runtime-job artifact namespace', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          output_schema_version: 'codex_run_execution_result.v1',
+          execution_package_id: 'execution-package-1',
+          execution_package_version: 1,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          workspace_bundle_manifest_digest: digestB,
+          mounted_task_workspace_digest: digestC,
+          changed_files: [],
+          check_results: [],
+          execution_artifacts: [
+            {
+              kind: 'logs',
+              name: 'log.txt',
+              content_type: 'text/plain',
+              digest: digestA,
+              internal_ref: 'artifact://internal/raw_metadata/codex_runtime_job/runtime-job-1/artifact-1',
+            },
+          ],
+          public_summary: 'ok',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('keeps legacy runtime artifact refs isolated to the migration helper', () => {
+    expect(isLegacyCodexRuntimeJobArtifactRefString('artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1')).toBe(
+      true,
+    );
+    expect(
+      isLegacyCodexRuntimeJobArtifactRefString(
+        'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1?x=1',
+    'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1#x',
+    'artifact://codex-runtime-jobs/runtime-job-1/artifacts/%2F',
+    'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact\\1',
+    'artifact://codex-runtime-jobs/runtime-job-1/artifacts/CAPS',
+    'artifact://codex-runtime-jobs/runtime-job-1',
+  ])('rejects unsafe legacy runtime artifact ref %s', (ref) => {
+    expect(isLegacyCodexRuntimeJobArtifactRefString(ref)).toBe(false);
   });
 
   it('accepts run-execution terminal schema and public-safe app-server runtime evidence', () => {

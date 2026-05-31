@@ -6,6 +6,7 @@ const localHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 export const resettableTables = [
   'codex_runtime_setup_nonces',
   'codex_worker_session_nonces',
+  'internal_artifact_objects',
   'codex_runtime_job_artifacts',
   'codex_launch_token_envelopes',
   'codex_pending_workspace_bundles',

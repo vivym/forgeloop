@@ -29,6 +29,7 @@ import type {
   CodexPublicBlockerCode,
   CodexWorkerBootstrapToken,
   CodexWorkerRegistration,
+  InternalArtifactObject,
   CommandIdempotencyRecord,
   ContextManifest,
   CodeReviewHandoff,
@@ -107,6 +108,7 @@ import {
   codex_credential_binding_versions,
   codex_launch_leases,
   codex_launch_token_envelopes,
+  internal_artifact_objects,
   codex_pending_workspace_bundles,
   codex_runtime_job_artifacts,
   codex_runtime_jobs,
@@ -183,11 +185,15 @@ import type {
   CodexLaunchTokenEnvelopeSealer,
   CodexRuntimeRecoveryResult,
   CodexWorkerReplayProtectionInput,
+  BindReservedCodexRuntimeJobArtifactInput,
   ConsumeCodexRuntimeSetupNonceInput,
+  CreateInternalArtifactObjectInput,
   CreatePendingWorkspaceBundleArtifactInput,
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeJobArtifactInput,
   CreateCodexRuntimeProfileWithRevisionInput,
+  PreflightCreateCodexRuntimeJobArtifactInput,
+  ReserveCodexRuntimeJobArtifactUploadInput,
   CreateCodexWorkerBootstrapTokenInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
@@ -207,17 +213,20 @@ import type {
   GetCodexRuntimeStatusInput,
   GetCodexWorkerReadinessDiagnosticInput,
   GetWorkspaceBundleDownloadForRuntimeJobInput,
+  GetInternalArtifactObjectByRefInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
   ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
   ListCodexCredentialBindingReadinessCandidatesInput,
   ListCodexRuntimeJobArtifactsInput,
+  GetCodexRuntimeJobArtifactByInternalRefInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
   MaterializeCodexRuntimeJobInput,
   MaterializeCodexLaunchLeaseInput,
   PendingWorkspaceBundleInput,
+  PendingWorkspaceBundleReplayInput,
   PollCodexRuntimeJobsInput,
   DeliveryRepository,
   RecoverStaleCodexRuntimeJobsInput,
@@ -242,6 +251,7 @@ import type {
   SupersedeExecutionPackageGenerationRunInput,
   StartCodexRuntimeJobInput,
   TerminalizeCodexRuntimeJobInput,
+  TombstoneInternalArtifactObjectInput,
   TerminalizeCodexLaunchLeaseInput,
   TraceArtifactRefRecord,
   TraceEventRecord,
@@ -253,6 +263,7 @@ import type {
   BoundaryRoundRecord,
 } from './delivery-repository';
 import {
+  assertInternalArtifactObjectInput,
   runtimeSnapshotBlockerFieldsFor,
   runtimeSnapshotBlockersForActionRun,
   runtimeSnapshotBlockersForExecutionPackage,
@@ -400,6 +411,18 @@ const workspaceBundleAcquisitionMatches = (
   value.manifest_digest === expected.manifest_digest &&
   value.size_bytes === expected.size_bytes &&
   value.expires_at === expected.expires_at;
+const workspaceBundleArchiveManifestDigest = (archiveBytes: Uint8Array): string | undefined => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(archiveBytes).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || parsed.schema_version !== 'workspace_bundle_archive.v1' || !isRecord(parsed.manifest)) {
+    return undefined;
+  }
+  return rawSha256(JSON.stringify(parsed.manifest));
+};
 const objectRefIdentityMatches = (left: ObjectRef | undefined, right: ObjectRef): boolean =>
   left?.type === right.type && left.id === right.id;
 
@@ -576,7 +599,7 @@ type CodexPendingWorkspaceBundleDbRecord = PendingWorkspaceBundleInput & {
   id: string;
   run_session_id: string;
   execution_package_id: string;
-  archive_bytes_base64: string;
+  archive_bytes_base64?: string;
   request_digest: string;
   runtime_job_id?: string;
   status: string;
@@ -592,11 +615,22 @@ type CodexRuntimeJobArtifactDbRecord = {
   content_type: string;
   digest: string;
   internal_ref: string;
+  internal_artifact_object_id?: string;
   size_bytes: number;
   metadata_json: Record<string, unknown>;
   request_digest?: string;
   created_at: string;
 };
+
+type InternalArtifactObjectDbRecord = Omit<InternalArtifactObject, 'size_bytes'> & {
+  size_bytes: bigint | string | number;
+};
+
+const internalArtifactOwnerIdempotencyKey = (input: Pick<InternalArtifactObject, 'owner_type' | 'owner_id' | 'idempotency_key'>) =>
+  `${input.owner_type}:${input.owner_id}:${input.idempotency_key}`;
+
+const internalArtifactOwnerKindArtifactKey = (input: Pick<InternalArtifactObject, 'owner_type' | 'owner_id' | 'kind' | 'artifact_id'>) =>
+  `${input.owner_type}:${input.owner_id}:${input.kind}:${input.artifact_id}`;
 
 interface DrizzleDeliveryRepositoryOptions {
   codexLaunchTokenEnvelopeSealer?: CodexLaunchTokenEnvelopeSealer;
@@ -776,9 +810,17 @@ const runtimeJobArtifactFromDbRecord = (
   content_type: artifact.content_type,
   digest: artifact.digest,
   internal_ref: artifact.internal_ref,
+  ...(artifact.internal_artifact_object_id === undefined
+    ? {}
+    : { internal_artifact_object_id: artifact.internal_artifact_object_id }),
   size_bytes: artifact.size_bytes,
   metadata_json: artifact.metadata_json,
   created_at: artifact.created_at,
+});
+
+const internalArtifactObjectFromDbRecord = (record: InternalArtifactObjectDbRecord): InternalArtifactObject => ({
+  ...record,
+  size_bytes: record.size_bytes.toString(),
 });
 
 const runtimeJobTargetFromDbRecord = (record: CodexRuntimeJobDbRecord): CodexLaunchLease['target'] => ({
@@ -1900,6 +1942,49 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
   }
 
+  async createOrReplayInternalArtifactObject(input: CreateInternalArtifactObjectInput): Promise<InternalArtifactObject> {
+    return this.withAdvisoryLocks(
+      [
+        `internal-artifact-ref:${input.ref}`,
+        `internal-artifact-owner-idempotency:${internalArtifactOwnerIdempotencyKey(input)}`,
+        `internal-artifact-owner-kind-artifact:${internalArtifactOwnerKindArtifactKey(input)}`,
+      ],
+      async (repository) => (repository as DrizzleDeliveryRepository).createOrReplayInternalArtifactObjectUnlocked(input),
+    );
+  }
+
+  async getInternalArtifactObjectByRef(input: GetInternalArtifactObjectByRefInput): Promise<InternalArtifactObject | undefined> {
+    const conditions = [eq(internal_artifact_objects.ref, input.ref)];
+    if (input.include_deleted !== true) {
+      conditions.push(isNull(internal_artifact_objects.deletedAt));
+    }
+    const [row] = await this.db
+      .select()
+      .from(internal_artifact_objects)
+      .where(and(...conditions))
+      .limit(1);
+    return row === undefined
+      ? undefined
+      : internalArtifactObjectFromDbRecord(fromDbRecord<InternalArtifactObjectDbRecord>(row as Record<string, unknown>));
+  }
+
+  async getInternalArtifactObjectById(id: string): Promise<InternalArtifactObject | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(internal_artifact_objects)
+      .where(and(eq(internal_artifact_objects.id, id), isNull(internal_artifact_objects.deletedAt)))
+      .limit(1);
+    return row === undefined
+      ? undefined
+      : internalArtifactObjectFromDbRecord(fromDbRecord<InternalArtifactObjectDbRecord>(row as Record<string, unknown>));
+  }
+
+  async tombstoneInternalArtifactObject(input: TombstoneInternalArtifactObjectInput): Promise<InternalArtifactObject> {
+    return this.withAdvisoryLocks([`internal-artifact-ref:${input.ref}`], async (repository) =>
+      (repository as DrizzleDeliveryRepository).tombstoneInternalArtifactObjectUnlocked(input),
+    );
+  }
+
   async createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
     return this.withAdvisoryLocks(
       [
@@ -1908,6 +1993,30 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         `codex-runtime-artifact-idempotency:${input.runtime_job_id}:${input.artifact_idempotency_key}`,
       ],
       async (repository) => (repository as DrizzleDeliveryRepository).createCodexRuntimeJobArtifactUnlocked(input),
+    );
+  }
+
+  async reserveCodexRuntimeJobArtifactUpload(input: ReserveCodexRuntimeJobArtifactUploadInput): Promise<void> {
+    return this.withAdvisoryLocks(
+      [
+        ...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id),
+        `codex-runtime-artifact:${input.runtime_job_id}:${input.artifact_id}`,
+        `codex-runtime-artifact-idempotency:${input.runtime_job_id}:${input.artifact_idempotency_key}`,
+      ],
+      async (repository) => {
+        await (repository as DrizzleDeliveryRepository).reserveCodexRuntimeJobArtifactUploadUnlocked(input);
+      },
+    );
+  }
+
+  async bindReservedCodexRuntimeJobArtifact(input: BindReservedCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    return this.withAdvisoryLocks(
+      [
+        ...this.codexRuntimeJobStateLockKeys(input.runtime_job_id, input.worker_id),
+        `codex-runtime-artifact:${input.runtime_job_id}:${input.artifact_id}`,
+        `codex-runtime-artifact-idempotency:${input.runtime_job_id}:${input.artifact_idempotency_key}`,
+      ],
+      async (repository) => (repository as DrizzleDeliveryRepository).bindReservedCodexRuntimeJobArtifactUnlocked(input),
     );
   }
 
@@ -1929,6 +2038,50 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return rows.map((row) => runtimeJobArtifactFromDbRecord(fromDbRecord<CodexRuntimeJobArtifactDbRecord>(row as Record<string, unknown>), job));
   }
 
+  async getCodexRuntimeJobArtifactByInternalRef(
+    input: GetCodexRuntimeJobArtifactByInternalRefInput,
+  ): Promise<CodexRuntimeJobArtifact | undefined> {
+    const [jobRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.runtime_job_id))
+      .limit(1);
+    if (jobRow === undefined) {
+      return undefined;
+    }
+    const job = fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>);
+    const [artifactRow] = await this.db
+      .select()
+      .from(codex_runtime_job_artifacts)
+      .where(
+        and(
+          eq(codex_runtime_job_artifacts.runtimeJobId, input.runtime_job_id),
+          eq(codex_runtime_job_artifacts.internalRef, input.internal_ref),
+        ),
+      )
+      .limit(1);
+    if (artifactRow === undefined) {
+      return undefined;
+    }
+    const artifact = fromDbRecord<CodexRuntimeJobArtifactDbRecord>(artifactRow as Record<string, unknown>);
+    const object =
+      artifact.internal_artifact_object_id === undefined ? undefined : await this.getInternalArtifactObjectById(artifact.internal_artifact_object_id);
+    if (
+      object === undefined ||
+      object.ref !== artifact.internal_ref ||
+      object.owner_type !== 'codex_runtime_job' ||
+      object.owner_id !== input.runtime_job_id ||
+      object.kind !== 'codex_runtime_job_artifact' ||
+      object.artifact_id !== artifact.id ||
+      object.digest !== artifact.digest ||
+      object.content_type !== artifact.content_type ||
+      object.size_bytes !== String(artifact.size_bytes)
+    ) {
+      return undefined;
+    }
+    return runtimeJobArtifactFromDbRecord(artifact, job);
+  }
+
   async createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
     return this.withAdvisoryLocks([`codex-pending-workspace-bundle:${input.bundle_id}`], async (repository) =>
       (repository as DrizzleDeliveryRepository).createPendingWorkspaceBundleArtifactUnlocked(input),
@@ -1948,7 +2101,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .limit(1);
     const lease = leaseRow === undefined ? undefined : fromDbRecord<RunWorkerLease>(leaseRow as Record<string, unknown>);
     const runSession = runSessionRow === undefined ? undefined : fromDbRecord<RunSession>(runSessionRow as Record<string, unknown>);
-    const archiveBytes = Buffer.from(input.archive_bytes_base64, 'base64');
+    const archiveBytes =
+      input.archive_bytes_base64 === undefined ? undefined : Buffer.from(input.archive_bytes_base64, 'base64');
+    const object =
+      input.internal_artifact_object_id === undefined ? undefined : await this.getInternalArtifactObjectById(input.internal_artifact_object_id);
     if (
       lease === undefined ||
       runSession === undefined ||
@@ -1956,18 +2112,34 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       lease.id !== input.run_worker_lease_id ||
       lease.status !== 'active' ||
       lease.expires_at <= input.created_at ||
-      archiveBytes.toString('base64') !== input.archive_bytes_base64 ||
-      archiveBytes.byteLength !== input.size_bytes ||
-      rawSha256(archiveBytes) !== input.archive_digest ||
+      input.internal_artifact_object_id === undefined ||
+      (archiveBytes !== undefined &&
+        (archiveBytes.toString('base64') !== input.archive_bytes_base64 ||
+          archiveBytes.byteLength !== input.size_bytes ||
+          rawSha256(archiveBytes) !== input.archive_digest)) ||
       input.expires_at <= input.created_at ||
-      input.pending_artifact_ref !== `artifact:codex-pending-bundles:${input.bundle_id}` ||
+      input.pending_artifact_ref !==
+        `artifact://internal/workspace_bundle/run_session/${input.run_session_id}/${input.bundle_id}` ||
       input.workspace_acquisition_json.bundle_id !== input.bundle_id ||
       input.workspace_acquisition_json.archive_ref !== input.pending_artifact_ref ||
       input.workspace_acquisition_json.archive_digest !== input.archive_digest ||
       input.workspace_acquisition_json.manifest_digest !== input.manifest_digest ||
       input.workspace_acquisition_json.size_bytes !== input.size_bytes ||
       !workspaceBundleAcquisitionMatches(input.workspace_acquisition_json, input) ||
-      input.workspace_acquisition_digest !== codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json)
+      input.workspace_acquisition_digest !== codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json) ||
+      (input.internal_artifact_object_id !== undefined &&
+        (object === undefined ||
+          object.ref !== input.pending_artifact_ref ||
+          object.kind !== 'workspace_bundle' ||
+          object.owner_type !== 'run_session' ||
+          object.owner_id !== input.run_session_id ||
+          object.artifact_id !== input.bundle_id ||
+          object.digest !== input.archive_digest ||
+          object.size_bytes !== String(input.size_bytes) ||
+          object.content_type !== 'application/vnd.forgeloop.workspace-bundle' ||
+          object.metadata_json.manifest_digest !== input.manifest_digest ||
+          object.metadata_json.execution_package_id !== input.execution_package_id ||
+          object.metadata_json.run_worker_lease_id !== input.run_worker_lease_id))
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle artifact was rejected.');
     }
@@ -1977,9 +2149,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       run_session_id: input.run_session_id,
       execution_package_id: input.execution_package_id,
       pending_artifact_ref: input.pending_artifact_ref,
+      ...(input.internal_artifact_object_id === undefined
+        ? {}
+        : { internal_artifact_object_id: input.internal_artifact_object_id }),
       archive_digest: input.archive_digest,
       manifest_digest: input.manifest_digest,
-      archive_bytes_base64: input.archive_bytes_base64,
+      ...(input.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: input.archive_bytes_base64 }),
       size_bytes: input.size_bytes,
       run_worker_lease_id: input.run_worker_lease_id,
       workspace_acquisition_digest: input.workspace_acquisition_digest,
@@ -2003,17 +2178,104 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         existing.status === 'pending' &&
         existing.runtime_job_id === undefined &&
         existing.run_session_id === input.run_session_id &&
-        existing.execution_package_id === input.execution_package_id
+        existing.execution_package_id === input.execution_package_id &&
+        existing.id === input.id &&
+        existing.request_digest === input.request_digest &&
+        existing.pending_artifact_ref === input.pending_artifact_ref &&
+        existing.internal_artifact_object_id === input.internal_artifact_object_id &&
+        existing.archive_digest === input.archive_digest &&
+        existing.manifest_digest === input.manifest_digest &&
+        existing.run_worker_lease_id === input.run_worker_lease_id &&
+        existing.size_bytes === input.size_bytes &&
+        existing.expires_at === input.expires_at &&
+        existing.workspace_acquisition_digest === input.workspace_acquisition_digest &&
+        valuesEqual(existing.workspace_acquisition_json, input.workspace_acquisition_json) &&
+        existing.archive_bytes_base64 === input.archive_bytes_base64
       ) {
-        await this.db
-          .update(codex_pending_workspace_bundles)
-          .set(toDbRecord(pending, codex_pending_workspace_bundles) as never)
-          .where(eq(codex_pending_workspace_bundles.bundleId, input.bundle_id));
         return;
       }
-      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle replay was rejected.');
+      throw codexDenied('codex_runtime_job_unavailable', 'workspace_bundle_idempotency_drift');
     }
     await this.db.insert(codex_pending_workspace_bundles).values(toDbRecord(pending, codex_pending_workspace_bundles) as never);
+  }
+
+  private async createOrReplayInternalArtifactObjectUnlocked(input: CreateInternalArtifactObjectInput): Promise<InternalArtifactObject> {
+    assertInternalArtifactObjectInput(input);
+    const [existingRefRow] = await this.db
+      .select()
+      .from(internal_artifact_objects)
+      .where(eq(internal_artifact_objects.ref, input.ref))
+      .limit(1);
+    const [existingIdempotencyRow] = await this.db
+      .select()
+      .from(internal_artifact_objects)
+      .where(
+        and(
+          eq(internal_artifact_objects.ownerType, input.owner_type),
+          eq(internal_artifact_objects.ownerId, input.owner_id),
+          eq(internal_artifact_objects.idempotencyKey, input.idempotency_key),
+        ),
+      )
+      .limit(1);
+    const [existingOwnerKindArtifactRow] = await this.db
+      .select()
+      .from(internal_artifact_objects)
+      .where(
+        and(
+          eq(internal_artifact_objects.ownerType, input.owner_type),
+          eq(internal_artifact_objects.ownerId, input.owner_id),
+          eq(internal_artifact_objects.kind, input.kind),
+          eq(internal_artifact_objects.artifactId, input.artifact_id),
+        ),
+      )
+      .limit(1);
+    const existingByRef =
+      existingRefRow === undefined
+        ? undefined
+        : internalArtifactObjectFromDbRecord(fromDbRecord<InternalArtifactObjectDbRecord>(existingRefRow as Record<string, unknown>));
+    const existingByIdempotency =
+      existingIdempotencyRow === undefined
+        ? undefined
+        : internalArtifactObjectFromDbRecord(
+            fromDbRecord<InternalArtifactObjectDbRecord>(existingIdempotencyRow as Record<string, unknown>),
+          );
+    const existingByOwnerKindArtifact =
+      existingOwnerKindArtifactRow === undefined
+        ? undefined
+        : internalArtifactObjectFromDbRecord(
+            fromDbRecord<InternalArtifactObjectDbRecord>(existingOwnerKindArtifactRow as Record<string, unknown>),
+          );
+    if (
+      existingByRef !== undefined &&
+      existingByIdempotency !== undefined &&
+      existingByRef.id !== existingByIdempotency.id
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_ref_conflict');
+    }
+    const existing = existingByIdempotency ?? existingByRef ?? existingByOwnerKindArtifact;
+    if (existing !== undefined) {
+      if (existingByRef !== undefined && existing.idempotency_key !== input.idempotency_key) {
+        throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_ref_conflict');
+      }
+      if (
+        existingByOwnerKindArtifact !== undefined &&
+        (existing.idempotency_key !== input.idempotency_key || existing.ref !== input.ref)
+      ) {
+        throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_owner_kind_artifact_conflict');
+      }
+      if (this.internalArtifactObjectReplayMatches(existing, input)) {
+        return existing;
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_idempotency_drift');
+    }
+    const [row] = await this.db
+      .insert(internal_artifact_objects)
+      .values(toDbRecord({ ...input, size_bytes: BigInt(input.size_bytes) }, internal_artifact_objects) as never)
+      .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_create_failed');
+    }
+    return internalArtifactObjectFromDbRecord(fromDbRecord<InternalArtifactObjectDbRecord>(row as Record<string, unknown>));
   }
 
   async getWorkspaceBundleDownloadForRuntimeJob(
@@ -2073,6 +2335,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       artifact.digest !== pending.archive_digest ||
       artifact.size_bytes !== pending.size_bytes ||
       artifact.internal_ref !== pending.pending_artifact_ref ||
+      artifact.internal_artifact_object_id !== pending.internal_artifact_object_id ||
       job.workspace_acquisition_json?.bundle_id !== pending.bundle_id ||
       job.workspace_acquisition_json?.archive_ref !== pending.pending_artifact_ref ||
       job.workspace_acquisition_json?.archive_digest !== pending.archive_digest ||
@@ -2081,13 +2344,23 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle download was denied.');
     }
-    const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
-    if (archiveBytes.byteLength !== pending.size_bytes || rawSha256(archiveBytes) !== pending.archive_digest) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
+    if (pending.archive_bytes_base64 !== undefined) {
+      const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
+      if (
+        archiveBytes.byteLength !== pending.size_bytes ||
+        rawSha256(archiveBytes) !== pending.archive_digest ||
+        workspaceBundleArchiveManifestDigest(archiveBytes) !== pending.manifest_digest
+      ) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
+      }
     }
     return {
       bundle_id: pending.bundle_id,
-      archive_bytes_base64: pending.archive_bytes_base64,
+      ...(pending.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: pending.archive_bytes_base64 }),
+      archive_ref: pending.pending_artifact_ref,
+      ...(pending.internal_artifact_object_id === undefined
+        ? {}
+        : { internal_artifact_object_id: pending.internal_artifact_object_id }),
       archive_digest: pending.archive_digest,
       manifest_digest: pending.manifest_digest,
       content_type: 'application/vnd.forgeloop.workspace-bundle',
@@ -2528,16 +2801,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async createCodexRuntimeJobArtifactUnlocked(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
-    const session = await this.assertCodexRuntimeJobWorkerSession(
-      input.runtime_job_id,
-      input.worker_id,
-      input.worker_session_token,
-      'codex_runtime_job_unavailable',
-      input.now,
-      {
-        requireConnected: false,
-      },
-    );
+    await this.reserveCodexRuntimeJobArtifactUploadUnlocked(input);
+    return this.bindReservedCodexRuntimeJobArtifactUnlocked(input);
+  }
+
+  private async reserveCodexRuntimeJobArtifactUploadUnlocked(input: ReserveCodexRuntimeJobArtifactUploadInput): Promise<void> {
+    const session = await this.preflightCreateCodexRuntimeJobArtifactUnlocked(input);
     await this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -2547,27 +2816,24 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.replay_protection,
       session.session_epoch,
     );
-    this.assertCodexRuntimeJobArtifactIntake(input);
+  }
+
+  private async bindReservedCodexRuntimeJobArtifactUnlocked(
+    input: BindReservedCodexRuntimeJobArtifactInput,
+  ): Promise<CodexRuntimeJobArtifact> {
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
-    const preStartFailureEvidenceAllowed =
-      input.kind === 'startup_failure_evidence' &&
-      (bundle.job?.status === 'accepted' || bundle.job?.status === 'materializing') &&
-      bundle.lease?.status === 'active';
-    if (
-      bundle.job === undefined ||
-      bundle.lease === undefined ||
-      bundle.job.worker_id !== input.worker_id ||
-      (bundle.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
-      bundle.job.expires_at <= input.now ||
-      (bundle.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
-      bundle.lease.expires_at <= input.now
-    ) {
+    if (bundle.job === undefined || bundle.job.accepted_session_epoch === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
-    const expectedInternalRef = `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${input.artifact_id}`;
-    if (input.internal_ref !== expectedInternalRef) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
-    }
+    this.assertCodexRuntimeJobArtifactEligibility(bundle, input);
+    await this.assertCodexWorkerNonceRecorded(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.replay_protection,
+      bundle.job.accepted_session_epoch,
+    );
+    await this.assertCodexRuntimeJobArtifactObjectBinding(input);
     const existing = await this.findCodexRuntimeJobArtifactReplay(input);
     if (existing !== undefined) {
       if (this.codexRuntimeJobArtifactReplayMatches(existing, input)) {
@@ -2586,6 +2852,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         contentType: input.content_type,
         digest: input.digest,
         internalRef: input.internal_ref,
+        internalArtifactObjectId: input.internal_artifact_object_id,
         sizeBytes: input.size_bytes,
         metadataJson: input.metadata_json,
         requestDigest: input.request_digest,
@@ -3161,7 +3428,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     record: CodexRuntimeJobDbRecord,
     stored: CodexPendingWorkspaceBundleDbRecord | undefined,
     artifact: CodexRuntimeJobArtifactDbRecord | undefined,
-    input: PendingWorkspaceBundleInput | undefined,
+    input: PendingWorkspaceBundleReplayInput | undefined,
   ): boolean {
     if (stored === undefined || input === undefined) {
       return stored === undefined && input === undefined && artifact === undefined;
@@ -3175,20 +3442,28 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       artifact.name === stored.bundle_id &&
       artifact.digest === stored.archive_digest &&
       artifact.internal_ref === stored.pending_artifact_ref &&
+      artifact.internal_artifact_object_id === stored.internal_artifact_object_id &&
       artifact.metadata_json.bundle_id === stored.bundle_id &&
       artifact.metadata_json.manifest_digest === stored.manifest_digest &&
       artifact.metadata_json.run_worker_lease_id === stored.run_worker_lease_id &&
       artifact.metadata_json.workspace_acquisition_digest === stored.workspace_acquisition_digest &&
       artifact.size_bytes === stored.size_bytes &&
+      stored.id === input.id &&
       stored.bundle_id === input.bundle_id &&
+      stored.run_session_id === input.run_session_id &&
+      stored.execution_package_id === input.execution_package_id &&
       stored.pending_artifact_ref === input.pending_artifact_ref &&
+      stored.internal_artifact_object_id === input.internal_artifact_object_id &&
       stored.archive_digest === input.archive_digest &&
       stored.manifest_digest === input.manifest_digest &&
+      stored.archive_bytes_base64 === input.archive_bytes_base64 &&
       stored.run_worker_lease_id === input.run_worker_lease_id &&
       stored.size_bytes === input.size_bytes &&
       stored.workspace_acquisition_digest === input.workspace_acquisition_digest &&
       valuesEqual(stored.workspace_acquisition_json, input.workspace_acquisition_json) &&
-      stored.expires_at === input.expires_at
+      stored.expires_at === input.expires_at &&
+      stored.request_digest === input.request_digest &&
+      stored.created_at === input.created_at
     );
   }
 
@@ -3220,17 +3495,24 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       stored !== undefined &&
       stored.status === 'pending' &&
       stored.runtime_job_id === undefined &&
+      stored.id === pending.id &&
       stored.bundle_id === pending.bundle_id &&
+      stored.run_session_id === pending.run_session_id &&
+      stored.execution_package_id === pending.execution_package_id &&
       stored.pending_artifact_ref === pending.pending_artifact_ref &&
+      stored.internal_artifact_object_id === pending.internal_artifact_object_id &&
       stored.archive_digest === pending.archive_digest &&
       stored.manifest_digest === pending.manifest_digest &&
+      stored.archive_bytes_base64 === pending.archive_bytes_base64 &&
       stored.run_worker_lease_id === pending.run_worker_lease_id &&
       stored.size_bytes === pending.size_bytes &&
       stored.expires_at === pending.expires_at &&
       stored.workspace_acquisition_digest === pending.workspace_acquisition_digest &&
       valuesEqual(stored.workspace_acquisition_json, pending.workspace_acquisition_json) &&
       stored.run_session_id === input.target.target_id &&
-      stored.execution_package_id === input.execution_package_id
+      stored.execution_package_id === input.execution_package_id &&
+      stored.request_digest === pending.request_digest &&
+      stored.created_at === pending.created_at
     );
   }
 
@@ -3399,6 +3681,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         contentType: 'application/vnd.forgeloop.workspace-bundle',
         digest: pending.archive_digest,
         internalRef: pending.pending_artifact_ref,
+        internalArtifactObjectId: pending.internal_artifact_object_id ?? null,
         sizeBytes: pending.size_bytes,
         metadataJson: {
           bundle_id: pending.bundle_id,
@@ -6379,7 +6662,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     });
   }
 
-  private assertCodexRuntimeJobArtifactIntake(input: CreateCodexRuntimeJobArtifactInput): void {
+  private assertCodexRuntimeJobArtifactIntake(input: PreflightCreateCodexRuntimeJobArtifactInput): void {
     try {
       validateCodexRuntimeJobArtifactIntake(input);
     } catch {
@@ -6387,8 +6670,173 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
   }
 
+  private async assertCodexRuntimeJobArtifactObjectBinding(input: CreateCodexRuntimeJobArtifactInput): Promise<void> {
+    const object = await this.getInternalArtifactObjectById(input.internal_artifact_object_id);
+    if (
+      object === undefined ||
+      object.ref !== input.internal_ref ||
+      object.owner_type !== 'codex_runtime_job' ||
+      object.owner_id !== input.runtime_job_id ||
+      object.kind !== 'codex_runtime_job_artifact' ||
+      object.artifact_id !== input.artifact_id ||
+      object.digest !== input.digest ||
+      object.content_type !== input.content_type ||
+      object.size_bytes !== String(input.size_bytes)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact object binding was denied.');
+    }
+  }
+
+  private async preflightCreateCodexRuntimeJobArtifactUnlocked(
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): Promise<CodexWorkerSessionProof> {
+    const session = await this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      'codex_runtime_job_unavailable',
+      input.now,
+      {
+        requireConnected: false,
+      },
+    );
+    this.assertCodexRuntimeJobArtifactIntake(input);
+    const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
+    if (bundle.job === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    this.assertCodexRuntimeJobArtifactEligibility(bundle, input);
+    const expectedInternalRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${input.artifact_id}`;
+    if (input.internal_ref !== expectedInternalRef) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
+    }
+    await this.assertCodexWorkerNonceAvailable(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const existing = await this.findCodexRuntimeJobArtifactReplay(input);
+    if (existing !== undefined && !this.codexRuntimeJobArtifactPreflightReplayMatches(existing, input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    return session;
+  }
+
+  private async assertCodexWorkerNonceAvailable(
+    workerId: string,
+    sessionToken: string,
+    nonce: string,
+    replayProtection?: CodexWorkerReplayProtectionInput,
+    sessionEpochOverride?: number,
+  ): Promise<void> {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    const nonceHash = codexCredentialPayloadDigest(nonce);
+    const [worker] = await this.db
+      .select({ sessionEpoch: codex_worker_registrations.sessionEpoch })
+      .from(codex_worker_registrations)
+      .where(eq(codex_worker_registrations.id, workerId))
+      .limit(1);
+    const sessionEpoch = sessionEpochOverride ?? worker?.sessionEpoch ?? 1;
+    const replayKeyHash = codexCanonicalDigest({
+      method: replayProtection?.method ?? 'LEGACY',
+      path: replayProtection?.path ?? 'legacy-worker-session',
+      body_digest: replayProtection?.body_digest ?? sessionTokenHash,
+      worker_id: workerId,
+      session_epoch: sessionEpoch,
+      nonce,
+    });
+    const [existing] = await this.db
+      .select({ id: codex_worker_session_nonces.id })
+      .from(codex_worker_session_nonces)
+      .where(
+        or(
+          and(
+            eq(codex_worker_session_nonces.workerId, workerId),
+            eq(codex_worker_session_nonces.sessionTokenHash, sessionTokenHash),
+            eq(codex_worker_session_nonces.nonceHash, nonceHash),
+          ),
+          and(
+            eq(codex_worker_session_nonces.workerId, workerId),
+            eq(codex_worker_session_nonces.sessionEpoch, sessionEpoch),
+            eq(codex_worker_session_nonces.nonceHash, nonceHash),
+          ),
+          eq(codex_worker_session_nonces.replayKeyHash, replayKeyHash),
+        ),
+      )
+      .limit(1);
+    if (existing !== undefined) {
+      throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce was already used.');
+    }
+  }
+
+  private assertCodexRuntimeJobArtifactEligibility(
+    bundle: {
+      job?: CodexRuntimeJobDbRecord;
+      lease?: CodexLaunchLeaseDbRecord;
+    },
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): void {
+    const preStartFailureEvidenceAllowed =
+      input.kind === 'startup_failure_evidence' &&
+      ((bundle.lease?.status === 'active' && (bundle.job?.status === 'accepted' || bundle.job?.status === 'materializing')) ||
+        (bundle.job?.status === 'materializing' && bundle.lease?.status === 'materialized'));
+    if (
+      bundle.job === undefined ||
+      bundle.lease === undefined ||
+      bundle.job.worker_id !== input.worker_id ||
+      (bundle.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
+      !timestampIsAfter(bundle.job.expires_at, input.now) ||
+      (bundle.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
+      !timestampIsAfter(bundle.lease.expires_at, input.now)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+  }
+
+  private async assertCodexWorkerNonceRecorded(
+    workerId: string,
+    sessionToken: string,
+    nonce: string,
+    replayProtection: CodexWorkerReplayProtectionInput | undefined,
+    sessionEpoch: number,
+  ): Promise<void> {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    const nonceHash = codexCredentialPayloadDigest(nonce);
+    const requestBindingDigest =
+      replayProtection === undefined
+        ? codexCanonicalDigest({ method: 'LEGACY', path: 'legacy-worker-session', body_digest: sessionTokenHash })
+        : codexCanonicalDigest(replayProtection);
+    const replayKeyHash = codexCanonicalDigest({
+      method: replayProtection?.method ?? 'LEGACY',
+      path: replayProtection?.path ?? 'legacy-worker-session',
+      body_digest: replayProtection?.body_digest ?? sessionTokenHash,
+      worker_id: workerId,
+      session_epoch: sessionEpoch,
+      nonce,
+    });
+    const [existing] = await this.db
+      .select({ id: codex_worker_session_nonces.id })
+      .from(codex_worker_session_nonces)
+      .where(
+        and(
+          eq(codex_worker_session_nonces.workerId, workerId),
+          eq(codex_worker_session_nonces.sessionTokenHash, sessionTokenHash),
+          eq(codex_worker_session_nonces.nonceHash, nonceHash),
+          eq(codex_worker_session_nonces.sessionEpoch, sessionEpoch),
+          eq(codex_worker_session_nonces.requestBindingDigest, requestBindingDigest),
+          eq(codex_worker_session_nonces.replayKeyHash, replayKeyHash),
+        ),
+      )
+      .limit(1);
+    if (existing === undefined) {
+      throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce reservation was not found.');
+    }
+  }
+
   private async findCodexRuntimeJobArtifactReplay(
-    input: CreateCodexRuntimeJobArtifactInput,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
   ): Promise<CodexRuntimeJobArtifactDbRecord | undefined> {
     const rows = await this.db
       .select()
@@ -6430,10 +6878,66 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       artifact.content_type === input.content_type &&
       artifact.digest === input.digest &&
       artifact.internal_ref === input.internal_ref &&
+      artifact.internal_artifact_object_id === input.internal_artifact_object_id &&
       artifact.size_bytes === input.size_bytes &&
-      artifact.request_digest === input.request_digest &&
       valuesEqual(artifact.metadata_json, input.metadata_json)
     );
+  }
+
+  private codexRuntimeJobArtifactPreflightReplayMatches(
+    artifact: CodexRuntimeJobArtifactDbRecord,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): boolean {
+    return (
+      artifact.runtime_job_id === input.runtime_job_id &&
+      artifact.artifact_idempotency_key === input.artifact_idempotency_key &&
+      artifact.kind === input.kind &&
+      artifact.name === input.name &&
+      artifact.content_type === input.content_type &&
+      artifact.digest === input.digest &&
+      artifact.internal_ref === input.internal_ref &&
+      artifact.size_bytes === input.size_bytes &&
+      valuesEqual(artifact.metadata_json, input.metadata_json)
+    );
+  }
+
+  private internalArtifactObjectReplayMatches(
+    object: InternalArtifactObject,
+    input: CreateInternalArtifactObjectInput,
+  ): boolean {
+    return (
+      object.id === input.id &&
+      object.artifact_id === input.artifact_id &&
+      object.ref === input.ref &&
+      object.storage_key === input.storage_key &&
+      object.kind === input.kind &&
+      object.content_type === input.content_type &&
+      object.size_bytes === input.size_bytes &&
+      object.digest === input.digest &&
+      object.visibility === input.visibility &&
+      object.owner_type === input.owner_type &&
+      object.owner_id === input.owner_id &&
+      object.idempotency_key === input.idempotency_key &&
+      object.request_digest === input.request_digest &&
+      object.created_by_actor_type === input.created_by_actor_type &&
+      object.created_by_actor_id === input.created_by_actor_id &&
+      object.deleted_at === input.deleted_at &&
+      valuesEqual(object.metadata_json, input.metadata_json)
+    );
+  }
+
+  private async tombstoneInternalArtifactObjectUnlocked(
+    input: TombstoneInternalArtifactObjectInput,
+  ): Promise<InternalArtifactObject> {
+    const [row] = await this.db
+      .update(internal_artifact_objects)
+      .set({ deletedAt: input.deleted_at })
+      .where(eq(internal_artifact_objects.ref, input.ref))
+      .returning();
+    if (row === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_not_found');
+    }
+    return internalArtifactObjectFromDbRecord(fromDbRecord<InternalArtifactObjectDbRecord>(row as Record<string, unknown>));
   }
 
   private async assertCodexRuntimeTerminalArtifactRefs(runtimeJobId: string, terminalResultJson: Record<string, unknown>): Promise<void> {

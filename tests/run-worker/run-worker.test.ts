@@ -8,8 +8,20 @@ import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
-import { InMemoryDeliveryRepository, type CreatePendingWorkspaceBundleArtifactInput } from '../../packages/db/src';
-import { codexCanonicalDigest, codexRuntimeJobInputDigest, codexWorkspaceAcquisitionDigest, transitionExecutionPackage, transitionRunSession } from '../../packages/domain/src';
+import {
+  InMemoryDeliveryRepository,
+  LocalInternalArtifactStore,
+  type CreatePendingWorkspaceBundleArtifactInput,
+  type CreateInternalArtifactObjectInput,
+} from '../../packages/db/src';
+import {
+  buildInternalArtifactRef,
+  codexCanonicalDigest,
+  codexRuntimeJobInputDigest,
+  codexWorkspaceAcquisitionDigest,
+  transitionExecutionPackage,
+  transitionRunSession,
+} from '../../packages/domain/src';
 import type { CodexDriverStartInput, CodexSessionDriver, LocalCodexEvidenceInput, RunRuntimeMetadata } from '../../packages/executor/src';
 
 import { createRunWorkerPendingWorkspaceBundleArtifact, FakeCodexSessionDriver, RunWorker, type RemoteRunExecutionClient } from '../../packages/run-worker/src';
@@ -80,6 +92,32 @@ const stableUuidFromDigestForTest = (input: Record<string, unknown>): string => 
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 };
 
+const internalRuntimeArtifactRefForTest = (runtimeJobId: string, artifactIdempotencyKey: string): string => {
+  const artifactId = stableUuidFromDigestForTest({
+    kind: 'codex_runtime_job_artifact',
+    runtime_job_id: runtimeJobId,
+    artifact_idempotency_key: artifactIdempotencyKey,
+  });
+  return buildInternalArtifactRef({
+    kind: 'codex_runtime_job_artifact',
+    owner_type: 'codex_runtime_job',
+    owner_id: runtimeJobId,
+    artifact_id: artifactId,
+  });
+};
+
+const remoteRunExecutionStatusForTest = () => ({
+  profile_status: 'active' as const,
+  worker_status: 'online' as const,
+  runtime_profile_revision_id: 'profile-rev-run-1',
+  runtime_profile_digest: `sha256:${'a'.repeat(64)}`,
+  credential_binding_id: 'credential-binding-run-1',
+  credential_binding_version_id: 'credential-version-run-1',
+  credential_payload_digest: `sha256:${'b'.repeat(64)}`,
+  docker_image_digest: `sha256:${'c'.repeat(64)}`,
+  network_policy_digest: `sha256:${'d'.repeat(64)}`,
+});
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -95,6 +133,7 @@ const runWorker = (input: {
   leaseDurationMs?: number;
   evidenceCollector?: (input: LocalCodexEvidenceInput) => Promise<ExecutorResult>;
   remoteRunExecutionClient?: RemoteRunExecutionClient;
+  internalArtifactStoreRoot?: string;
   remoteRunExecutionWaitTimeoutMs?: number;
   remoteRunExecutionPollIntervalMs?: number;
 }) =>
@@ -115,6 +154,7 @@ const runWorker = (input: {
     commandPollIntervalMs: input.commandPollIntervalMs ?? 10,
     leaseDurationMs: input.leaseDurationMs ?? 60_000,
     idleThresholdMs: input.idleThresholdMs ?? 30_000,
+    ...(input.internalArtifactStoreRoot === undefined ? {} : { internalArtifactStoreRoot: input.internalArtifactStoreRoot }),
     ...(input.remoteRunExecutionClient === undefined ? {} : { remoteRunExecutionClient: input.remoteRunExecutionClient }),
     ...(input.remoteRunExecutionWaitTimeoutMs === undefined ? {} : { remoteRunExecutionWaitTimeoutMs: input.remoteRunExecutionWaitTimeoutMs }),
     ...(input.remoteRunExecutionPollIntervalMs === undefined ? {} : { remoteRunExecutionPollIntervalMs: input.remoteRunExecutionPollIntervalMs }),
@@ -135,11 +175,32 @@ class FailingHeartbeatRepository extends InMemoryDeliveryRepository {
 class CapturingWorkspaceBundleRepository extends InMemoryDeliveryRepository {
   pendingWorkspaceBundleInputs: CreatePendingWorkspaceBundleArtifactInput[] = [];
 
+  get capturedInternalArtifactObjects(): CreateInternalArtifactObjectInput[] {
+    return [
+      ...(this as unknown as { internalArtifactObjects: Map<string, CreateInternalArtifactObjectInput> }).internalArtifactObjects.values(),
+    ];
+  }
+
   override async createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
     this.pendingWorkspaceBundleInputs.push(input);
     await super.createPendingWorkspaceBundleArtifact(input);
   }
 }
+
+const createTestInternalArtifactStore = async (repository: CapturingWorkspaceBundleRepository) =>
+  new LocalInternalArtifactStore({
+    root: process.env.FORGELOOP_ARTIFACT_STORE_ROOT ?? (await makeTempDir()),
+    repository,
+    requestId: 'run-worker-test',
+  });
+
+const readStoredWorkspaceBundleArchive = async (repository: CapturingWorkspaceBundleRepository, index = 0) => {
+  const input = repository.pendingWorkspaceBundleInputs[index]!;
+  const object = await createTestInternalArtifactStore(repository).then((store) => store.getObject(input.pending_artifact_ref));
+  return JSON.parse(Buffer.from(object.bytes).toString('utf8')) as {
+    entries: Array<{ path: string; content_base64?: string }>;
+  };
+};
 
 describe('RunWorker', () => {
   it('runs a follow-up drain when kick is called during an active drain', async () => {
@@ -1028,13 +1089,30 @@ describe('RunWorker', () => {
     });
 
     expect(repository.pendingWorkspaceBundleInputs).toHaveLength(1);
+    expect(repository.pendingWorkspaceBundleInputs[0]).not.toHaveProperty('archive_bytes_base64');
     expect(repository.pendingWorkspaceBundleInputs[0]).toMatchObject({
       bundle_id: 'run-worker-workspace-bundle-1',
       run_session_id: runSession.id,
       execution_package_id: executionPackage.id,
       run_worker_lease_id: activeLease.id,
       size_bytes: expect.any(Number),
-      archive_bytes_base64: expect.any(String),
+      pending_artifact_ref: `artifact://internal/workspace_bundle/run_session/${runSession.id}/run-worker-workspace-bundle-1`,
+      internal_artifact_object_id: expect.any(String),
+    });
+    expect(repository.capturedInternalArtifactObjects).toHaveLength(1);
+    expect(repository.capturedInternalArtifactObjects[0]).toMatchObject({
+      id: repository.pendingWorkspaceBundleInputs[0]!.internal_artifact_object_id,
+      ref: repository.pendingWorkspaceBundleInputs[0]!.pending_artifact_ref,
+      kind: 'workspace_bundle',
+      owner_type: 'run_session',
+      owner_id: runSession.id,
+      digest: repository.pendingWorkspaceBundleInputs[0]!.archive_digest,
+      size_bytes: String(repository.pendingWorkspaceBundleInputs[0]!.size_bytes),
+      metadata_json: expect.objectContaining({
+        manifest_digest: repository.pendingWorkspaceBundleInputs[0]!.manifest_digest,
+        execution_package_id: executionPackage.id,
+        run_worker_lease_id: activeLease.id,
+      }),
     });
     expect(pending.pending_workspace_bundle).toMatchObject({
       bundle_id: 'run-worker-workspace-bundle-1',
@@ -1089,9 +1167,7 @@ describe('RunWorker', () => {
       maxSizeBytes: 1_000_000,
     });
 
-    const archive = JSON.parse(Buffer.from(repository.pendingWorkspaceBundleInputs[0]!.archive_bytes_base64, 'base64').toString('utf8')) as {
-      entries: Array<{ path: string }>;
-    };
+    const archive = await readStoredWorkspaceBundleArchive(repository);
     expect(archive.entries.map((entry) => entry.path)).not.toContain('.git');
     expect(JSON.stringify(archive)).not.toContain(repo);
   });
@@ -1136,9 +1212,7 @@ describe('RunWorker', () => {
       maxSizeBytes: 1_000_000,
     });
 
-    const archive = JSON.parse(Buffer.from(repository.pendingWorkspaceBundleInputs[0]!.archive_bytes_base64, 'base64').toString('utf8')) as {
-      entries: Array<{ path: string }>;
-    };
+    const archive = await readStoredWorkspaceBundleArchive(repository);
     expect(archive.entries.map((entry) => entry.path)).toContain('packages/workflow/src.ts');
     expect(archive.entries.map((entry) => entry.path)).toContain('.forgeloop/repo-owned.toml');
     expect(archive.entries.map((entry) => entry.path)).not.toContain('packages/workflow/.git/config');
@@ -1209,17 +1283,7 @@ describe('RunWorker', () => {
     });
     const createdRuntimeJobs: Record<string, unknown>[] = [];
     const remoteClient: RemoteRunExecutionClient = {
-      getStatus: async () => ({
-        profile_status: 'active',
-        worker_status: 'online',
-        runtime_profile_revision_id: 'profile-rev-run-1',
-        runtime_profile_digest: `sha256:${'a'.repeat(64)}`,
-        credential_binding_id: 'credential-binding-run-1',
-        credential_binding_version_id: 'credential-version-run-1',
-        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
-        docker_image_digest: `sha256:${'c'.repeat(64)}`,
-        network_policy_digest: `sha256:${'d'.repeat(64)}`,
-      }),
+      getStatus: async () => remoteRunExecutionStatusForTest(),
       createRuntimeJob: async (input) => {
         createdRuntimeJobs.push(input);
         return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
@@ -1242,7 +1306,7 @@ describe('RunWorker', () => {
             patch_artifact: {
               content_type: 'text/x-diff',
               digest: `sha256:${'e'.repeat(64)}`,
-              internal_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/run_execution_patch`,
+              internal_ref: internalRuntimeArtifactRefForTest(runtimeJobId, 'run_execution_patch'),
             },
             check_results: [],
             execution_artifacts: [],
@@ -1311,9 +1375,7 @@ describe('RunWorker', () => {
     expect(() => codexRuntimeJobInputDigest(created.input_json)).not.toThrow();
     expect(() => codexWorkspaceAcquisitionDigest(created.workspace_acquisition_json)).not.toThrow();
     expect(JSON.stringify(created)).not.toContain(repo);
-    const archive = JSON.parse(Buffer.from(repository.pendingWorkspaceBundleInputs[0]!.archive_bytes_base64, 'base64').toString('utf8')) as {
-      entries: Array<{ path: string; content_base64?: string }>;
-    };
+    const archive = await readStoredWorkspaceBundleArchive(repository);
     const contextEntry = archive.entries.find((entry) => entry.path === '.forgeloop/codex-runtime/execution-context.json');
     expect(contextEntry?.content_base64).toBeDefined();
     const executionContext = JSON.parse(Buffer.from(contextEntry!.content_base64!, 'base64').toString('utf8')) as Record<string, unknown>;
@@ -1341,17 +1403,7 @@ describe('RunWorker', () => {
       executor_type: 'local_codex',
     });
     const remoteClient: RemoteRunExecutionClient = {
-      getStatus: async () => ({
-        profile_status: 'active',
-        worker_status: 'online',
-        runtime_profile_revision_id: 'profile-rev-run-1',
-        runtime_profile_digest: `sha256:${'a'.repeat(64)}`,
-        credential_binding_id: 'credential-binding-run-1',
-        credential_binding_version_id: 'credential-version-run-1',
-        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
-        docker_image_digest: `sha256:${'c'.repeat(64)}`,
-        network_policy_digest: `sha256:${'d'.repeat(64)}`,
-      }),
+      getStatus: async () => remoteRunExecutionStatusForTest(),
       createRuntimeJob: async (input) => ({ runtime_job: { id: input.runtime_job_id, status: 'queued' } }),
       getRuntimeJob: async (runtimeJobId) => ({
         runtime_job: {
@@ -1415,17 +1467,7 @@ describe('RunWorker', () => {
     });
     let createdRuntimeJob: Record<string, unknown> | undefined;
     const remoteClient: RemoteRunExecutionClient = {
-      getStatus: async () => ({
-        profile_status: 'active',
-        worker_status: 'online',
-        runtime_profile_revision_id: 'profile-rev-run-1',
-        runtime_profile_digest: `sha256:${'a'.repeat(64)}`,
-        credential_binding_id: 'credential-binding-run-1',
-        credential_binding_version_id: 'credential-version-run-1',
-        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
-        docker_image_digest: `sha256:${'c'.repeat(64)}`,
-        network_policy_digest: `sha256:${'d'.repeat(64)}`,
-      }),
+      getStatus: async () => remoteRunExecutionStatusForTest(),
       createRuntimeJob: async (input) => {
         createdRuntimeJob = input;
         return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
@@ -1448,7 +1490,7 @@ describe('RunWorker', () => {
             patch_artifact: {
               content_type: 'text/x-diff',
               digest: `sha256:${'e'.repeat(64)}`,
-              internal_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/run_execution_patch`,
+              internal_ref: internalRuntimeArtifactRefForTest(runtimeJobId, 'run_execution_patch'),
             },
             check_results: [],
             execution_artifacts: [],
@@ -1497,7 +1539,7 @@ describe('RunWorker', () => {
     const workspaceAcquisitionJson = {
       schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: `run-worker-workspace-bundle-${runSession.id}`,
-      archive_ref: `artifact:codex-pending-bundles:run-worker-workspace-bundle-${runSession.id}`,
+      archive_ref: `artifact://internal/workspace_bundle/run_session/${runSession.id}/run-worker-workspace-bundle-${runSession.id}`,
       archive_digest: `sha256:${'c'.repeat(64)}`,
       manifest_digest: `sha256:${'d'.repeat(64)}`,
       size_bytes: 128,
@@ -1511,10 +1553,40 @@ describe('RunWorker', () => {
       now: '2026-05-23T00:00:00.000Z',
       expires_at: '2026-05-23T00:10:00.000Z',
     });
+    const runSpec = localCodexRunSpec(runSession.run_spec!, repo, head);
+    const persistedPending = await createRunWorkerPendingWorkspaceBundleArtifact({
+      repository,
+      runSession,
+      executionPackage,
+      runWorkerLease: activeLease,
+      workspacePath,
+      bundleId: workspaceAcquisitionJson.bundle_id,
+      now: '2026-05-23T00:00:00.000Z',
+      expiresAt: workspaceAcquisitionJson.expires_at,
+      extraFiles: [
+        {
+          path: '.forgeloop/codex-runtime/package-prompt.txt',
+          content: [`Objective: ${runSpec.objective}`, '', `Package instructions: ${runSpec.context.package_instructions}`].join('\n'),
+        },
+        {
+          path: '.forgeloop/codex-runtime/execution-context.json',
+          content: JSON.stringify({
+            schema_version: 'codex_run_execution_context.v1',
+            run_spec: {
+              ...runSpec,
+              repo: {
+                ...runSpec.repo,
+                local_path: '/workspace',
+              },
+            },
+          }),
+        },
+      ],
+    });
     await repository.saveRunSession({
       ...runSession,
       executor_type: 'local_codex',
-      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
+      run_spec: runSpec,
       updated_at: persistedUpdatedAt,
       runtime_metadata: {
         durability_mode: 'durable',
@@ -1526,14 +1598,19 @@ describe('RunWorker', () => {
         source_repo_before_dirty_fingerprint: 'fingerprint-before',
         launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
         remote_runtime_job_id: runtimeJobId,
+        remote_runtime_job_created: true,
         remote_run_worker_lease_id: activeLease.id,
-        remote_workspace_bundle_id: workspaceAcquisitionJson.bundle_id,
-        remote_workspace_bundle_digest: workspaceAcquisitionJson.archive_digest,
-        remote_workspace_manifest_digest: workspaceAcquisitionJson.manifest_digest,
-        remote_workspace_bundle_size_bytes: workspaceAcquisitionJson.size_bytes,
-        remote_workspace_bundle_expires_at: workspaceAcquisitionJson.expires_at,
-        remote_workspace_acquisition_digest: codexCanonicalDigest(workspaceAcquisitionJson),
-        remote_workspace_acquisition_json: workspaceAcquisitionJson,
+        remote_workspace_bundle_id: persistedPending.pending_workspace_bundle.bundle_id,
+        remote_workspace_bundle_digest: persistedPending.archive_digest,
+        remote_workspace_manifest_digest: persistedPending.manifest_digest,
+        remote_workspace_bundle_size_bytes: persistedPending.size_bytes,
+        remote_workspace_bundle_expires_at: persistedPending.pending_workspace_bundle.expires_at,
+        remote_workspace_bundle_artifact_record_id: persistedPending.pending_artifact_record.id,
+        remote_workspace_bundle_artifact_request_digest: persistedPending.pending_artifact_record.request_digest,
+        remote_workspace_bundle_created_at: persistedPending.pending_artifact_record.created_at,
+        remote_workspace_internal_artifact_object_id: persistedPending.pending_workspace_bundle.internal_artifact_object_id,
+        remote_workspace_acquisition_digest: persistedPending.pending_workspace_bundle.workspace_acquisition_digest,
+        remote_workspace_acquisition_json: persistedPending.pending_workspace_bundle.workspace_acquisition_json,
         recovery_attempt_count: 0,
         effective_dangerous_mode: 'confirmed',
       } satisfies RunRuntimeMetadata,
@@ -1541,14 +1618,7 @@ describe('RunWorker', () => {
     const createInputs: Record<string, unknown>[] = [];
     const polledRuntimeJobIds: string[] = [];
     const remoteClient: RemoteRunExecutionClient = {
-      getStatus: async () => ({
-        profile_status: 'active',
-        worker_status: 'online',
-        runtime_profile_revision_id: 'profile-rev-run-1',
-        credential_binding_id: 'credential-binding-run-1',
-        credential_binding_version_id: 'credential-version-run-1',
-        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
-      }),
+      getStatus: async () => remoteRunExecutionStatusForTest(),
       createRuntimeJob: async (input) => {
         createInputs.push(input);
         return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
@@ -1592,17 +1662,8 @@ describe('RunWorker', () => {
         remote_runtime_reason_code: 'codex_runtime_job_unavailable',
       },
     });
-    expect(createInputs).toHaveLength(1);
-    expect(createInputs[0]).toMatchObject({
-      runtime_job_id: runtimeJobId,
-      launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
-      run_session_updated_at: persistedUpdatedAt,
-      pending_workspace_bundle: expect.objectContaining({
-        bundle_id: workspaceAcquisitionJson.bundle_id,
-        run_worker_lease_id: activeLease.id,
-        archive_digest: workspaceAcquisitionJson.archive_digest,
-      }),
-    });
+    expect(createInputs).toHaveLength(0);
+    expect(repository.pendingWorkspaceBundleInputs).toHaveLength(1);
     expect(polledRuntimeJobIds).toEqual([runtimeJobId]);
     expect((await repository.getRunSession(runSession.id))?.updated_at).toBe(persistedUpdatedAt);
   });
@@ -1628,7 +1689,7 @@ describe('RunWorker', () => {
     const staleWorkspaceAcquisitionJson = {
       schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: `run-worker-workspace-bundle-${runSession.id}`,
-      archive_ref: `artifact:codex-pending-bundles:run-worker-workspace-bundle-${runSession.id}`,
+      archive_ref: `artifact://internal/workspace_bundle/run_session/${runSession.id}/run-worker-workspace-bundle-${runSession.id}`,
       archive_digest: `sha256:${'c'.repeat(64)}`,
       manifest_digest: `sha256:${'d'.repeat(64)}`,
       size_bytes: 128,
@@ -1668,14 +1729,7 @@ describe('RunWorker', () => {
     });
     const createInputs: Record<string, unknown>[] = [];
     const remoteClient: RemoteRunExecutionClient = {
-      getStatus: async () => ({
-        profile_status: 'active',
-        worker_status: 'online',
-        runtime_profile_revision_id: 'profile-rev-run-1',
-        credential_binding_id: 'credential-binding-run-1',
-        credential_binding_version_id: 'credential-version-run-1',
-        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
-      }),
+      getStatus: async () => remoteRunExecutionStatusForTest(),
       createRuntimeJob: async (input) => {
         createInputs.push(input);
         return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
@@ -1738,7 +1792,7 @@ describe('RunWorker', () => {
     const staleWorkspaceAcquisitionJson = {
       schema_version: 'workspace_bundle_acquisition.v1',
       bundle_id: `run-worker-workspace-bundle-${runSession.id}`,
-      archive_ref: `artifact:codex-pending-bundles:run-worker-workspace-bundle-${runSession.id}`,
+      archive_ref: `artifact://internal/workspace_bundle/run_session/${runSession.id}/run-worker-workspace-bundle-${runSession.id}`,
       archive_digest: `sha256:${'c'.repeat(64)}`,
       manifest_digest: `sha256:${'d'.repeat(64)}`,
       size_bytes: 128,
@@ -1779,14 +1833,7 @@ describe('RunWorker', () => {
     });
     const createInputs: Record<string, unknown>[] = [];
     const remoteClient: RemoteRunExecutionClient = {
-      getStatus: async () => ({
-        profile_status: 'active',
-        worker_status: 'online',
-        runtime_profile_revision_id: 'profile-rev-run-1',
-        credential_binding_id: 'credential-binding-run-1',
-        credential_binding_version_id: 'credential-version-run-1',
-        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
-      }),
+      getStatus: async () => remoteRunExecutionStatusForTest(),
       createRuntimeJob: async (input) => {
         createInputs.push(input);
         return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
@@ -1851,23 +1898,7 @@ describe('RunWorker', () => {
       now: '2026-05-23T00:00:00.000Z',
       expires_at: '2026-05-23T00:10:00.000Z',
     });
-    await repository.saveRunSession({
-      ...runSession,
-      executor_type: 'local_codex',
-      run_spec: localCodexRunSpec(runSession.run_spec!, repo, head),
-      runtime_metadata: {
-        durability_mode: 'durable',
-        driver_kind: 'app_server',
-        driver_status: 'active',
-        workspace_path: workspacePath,
-        source_repo_path: repo,
-        source_repo_before_status: '',
-        source_repo_before_dirty_fingerprint: 'fingerprint-before',
-        launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
-        recovery_attempt_count: 0,
-        effective_dangerous_mode: 'confirmed',
-      } satisfies RunRuntimeMetadata,
-    });
+    const runSpec = localCodexRunSpec(runSession.run_spec!, repo, head);
     const stalePending = await createRunWorkerPendingWorkspaceBundleArtifact({
       repository,
       runSession,
@@ -1877,17 +1908,59 @@ describe('RunWorker', () => {
       bundleId: `run-worker-workspace-bundle-${runSession.id}`,
       now: '2026-05-23T00:00:00.000Z',
       expiresAt: '2026-05-23T00:10:00.000Z',
+      extraFiles: [
+        {
+          path: '.forgeloop/codex-runtime/package-prompt.txt',
+          content: [`Objective: ${runSpec.objective}`, '', `Package instructions: ${runSpec.context.package_instructions}`].join('\n'),
+        },
+        {
+          path: '.forgeloop/codex-runtime/execution-context.json',
+          content: JSON.stringify({
+            schema_version: 'codex_run_execution_context.v1',
+            run_spec: {
+              ...runSpec,
+              repo: {
+                ...runSpec.repo,
+                local_path: '/workspace',
+              },
+            },
+          }),
+        },
+      ],
+    });
+    await repository.saveRunSession({
+      ...runSession,
+      executor_type: 'local_codex',
+      run_spec: runSpec,
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'active',
+        workspace_path: workspacePath,
+        source_repo_path: repo,
+        source_repo_before_status: '',
+        source_repo_before_dirty_fingerprint: 'fingerprint-before',
+        launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
+        remote_runtime_job_id: runtimeJobId,
+        remote_run_worker_lease_id: activeLease.id,
+        remote_workspace_bundle_id: stalePending.pending_workspace_bundle.bundle_id,
+        remote_workspace_bundle_digest: stalePending.archive_digest,
+        remote_workspace_manifest_digest: stalePending.manifest_digest,
+        remote_workspace_bundle_size_bytes: stalePending.size_bytes,
+        remote_workspace_bundle_expires_at: stalePending.pending_workspace_bundle.expires_at,
+        remote_workspace_bundle_artifact_record_id: stalePending.pending_artifact_record.id,
+        remote_workspace_bundle_artifact_request_digest: stalePending.pending_artifact_record.request_digest,
+        remote_workspace_bundle_created_at: stalePending.pending_artifact_record.created_at,
+        remote_workspace_internal_artifact_object_id: stalePending.pending_workspace_bundle.internal_artifact_object_id,
+        remote_workspace_acquisition_digest: stalePending.pending_workspace_bundle.workspace_acquisition_digest,
+        remote_workspace_acquisition_json: stalePending.pending_workspace_bundle.workspace_acquisition_json,
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+      } satisfies RunRuntimeMetadata,
     });
     const createInputs: Record<string, unknown>[] = [];
     const remoteClient: RemoteRunExecutionClient = {
-      getStatus: async () => ({
-        profile_status: 'active',
-        worker_status: 'online',
-        runtime_profile_revision_id: 'profile-rev-run-1',
-        credential_binding_id: 'credential-binding-run-1',
-        credential_binding_version_id: 'credential-version-run-1',
-        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
-      }),
+      getStatus: async () => remoteRunExecutionStatusForTest(),
       createRuntimeJob: async (input) => {
         createInputs.push(input);
         return { runtime_job: { id: input.runtime_job_id, status: 'queued' } };
@@ -1925,9 +1998,10 @@ describe('RunWorker', () => {
       pending_workspace_bundle: expect.objectContaining({
         bundle_id: stalePending.pending_workspace_bundle.bundle_id,
         run_worker_lease_id: activeLease.id,
+        internal_artifact_object_id: stalePending.pending_workspace_bundle.internal_artifact_object_id,
       }),
     });
-    expect((createInputs[0]!.pending_workspace_bundle as Record<string, unknown>).archive_digest).not.toBe(stalePending.archive_digest);
+    expect((createInputs[0]!.pending_workspace_bundle as Record<string, unknown>).archive_digest).toBe(stalePending.archive_digest);
   });
 
   it('maps run-session cancel commands to remote runtime job cancellation while waiting for terminal result', async () => {
@@ -1953,14 +2027,7 @@ describe('RunWorker', () => {
     });
     const cancelRuntimeJobIds: string[] = [];
     const remoteClient: RemoteRunExecutionClient = {
-      getStatus: async () => ({
-        profile_status: 'active',
-        worker_status: 'online',
-        runtime_profile_revision_id: 'profile-rev-run-1',
-        credential_binding_id: 'credential-binding-run-1',
-        credential_binding_version_id: 'credential-version-run-1',
-        credential_payload_digest: `sha256:${'b'.repeat(64)}`,
-      }),
+      getStatus: async () => remoteRunExecutionStatusForTest(),
       createRuntimeJob: async (input) => ({ runtime_job: { id: input.runtime_job_id, status: 'queued' } }),
       getRuntimeJob: async () => new Promise<never>(() => undefined),
       cancelRuntimeJob: async (id) => {

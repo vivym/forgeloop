@@ -28,6 +28,7 @@ import type {
   CodexPublicBlockerCode,
   CodexWorkerBootstrapToken,
   CodexWorkerRegistration,
+  InternalArtifactObject,
   CommandIdempotencyRecord,
   ContextManifest,
   CodeReviewHandoff,
@@ -113,10 +114,14 @@ import type {
   CodexRuntimeRecoveryResult,
   CodexWorkerReplayProtectionInput,
   ConsumeCodexRuntimeSetupNonceInput,
+  CreateInternalArtifactObjectInput,
   CreatePendingWorkspaceBundleArtifactInput,
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeProfileWithRevisionInput,
+  BindReservedCodexRuntimeJobArtifactInput,
   CreateCodexRuntimeJobArtifactInput,
+  PreflightCreateCodexRuntimeJobArtifactInput,
+  ReserveCodexRuntimeJobArtifactUploadInput,
   CreateCodexWorkerBootstrapTokenInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult,
@@ -136,17 +141,20 @@ import type {
   GetCodexRuntimeStatusInput,
   GetCodexWorkerReadinessDiagnosticInput,
   GetWorkspaceBundleDownloadForRuntimeJobInput,
+  GetInternalArtifactObjectByRefInput,
   HeartbeatCodexWorkerInput,
   LatestCompletedProjectionActionRunInput,
   ListActiveCodexRuntimeProfileReadinessDiagnosticsInput,
   ListCodexCredentialBindingReadinessCandidatesInput,
   ListCodexRuntimeJobArtifactsInput,
+  GetCodexRuntimeJobArtifactByInternalRefInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
   MarkAutomationActionGatePendingInput,
   MaterializeCodexRuntimeJobInput,
   MaterializeCodexLaunchLeaseInput,
   PendingWorkspaceBundleInput,
+  PendingWorkspaceBundleReplayInput,
   PollCodexRuntimeJobsInput,
   DeliveryRepository,
   RecoverStaleCodexRuntimeJobsInput,
@@ -171,6 +179,7 @@ import type {
   SupersedeExecutionPackageGenerationRunInput,
   StartCodexRuntimeJobInput,
   TerminalizeCodexRuntimeJobInput,
+  TombstoneInternalArtifactObjectInput,
   TerminalizeCodexLaunchLeaseInput,
   TraceArtifactRefRecord,
   TraceEventRecord,
@@ -182,6 +191,7 @@ import type {
   BoundaryRoundRecord,
 } from './delivery-repository';
 import {
+  assertInternalArtifactObjectInput,
   runtimeSnapshotBlockerFieldsFor,
   runtimeSnapshotBlockersForActionRun,
   runtimeSnapshotBlockersForExecutionPackage,
@@ -245,6 +255,18 @@ const workspaceBundleAcquisitionMatches = (
   value.manifest_digest === expected.manifest_digest &&
   value.size_bytes === expected.size_bytes &&
   value.expires_at === expected.expires_at;
+const workspaceBundleArchiveManifestDigest = (archiveBytes: Uint8Array): string | undefined => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(archiveBytes).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || parsed.schema_version !== 'workspace_bundle_archive.v1' || !isRecord(parsed.manifest)) {
+    return undefined;
+  }
+  return rawSha256(JSON.stringify(parsed.manifest));
+};
 const objectRefIdentityMatches = (left: ObjectRef | undefined, right: ObjectRef): boolean =>
   left?.type === right.type && left.id === right.id;
 
@@ -446,7 +468,7 @@ interface CodexPendingWorkspaceBundlePrivateRecord extends PendingWorkspaceBundl
   id: string;
   run_session_id: string;
   execution_package_id: string;
-  archive_bytes_base64: string;
+  archive_bytes_base64?: string;
   request_digest: string;
   runtime_job_id?: string;
   status: 'pending' | 'bound';
@@ -462,11 +484,18 @@ interface CodexRuntimeJobArtifactPrivateRecord {
   content_type: string;
   digest: string;
   internal_ref: string;
+  internal_artifact_object_id?: string;
   size_bytes: number;
   metadata_json: Record<string, unknown>;
   request_digest: string;
   created_at: string;
 }
+
+const internalArtifactOwnerIdempotencyKey = (input: Pick<InternalArtifactObject, 'owner_type' | 'owner_id' | 'idempotency_key'>) =>
+  `${input.owner_type}\0${input.owner_id}\0${input.idempotency_key}`;
+
+const internalArtifactOwnerKindArtifactKey = (input: Pick<InternalArtifactObject, 'owner_type' | 'owner_id' | 'kind' | 'artifact_id'>) =>
+  `${input.owner_type}\0${input.owner_id}\0${input.kind}\0${input.artifact_id}`;
 
 interface CodexRuntimeJobPrivateRecord {
   job: CodexRuntimeJob;
@@ -622,6 +651,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly codexLaunchTokenEnvelopes = new Map<string, CodexLaunchTokenEnvelope>();
   private readonly codexRuntimeJobArtifacts = new Map<string, CodexRuntimeJobArtifactPrivateRecord>();
   private readonly codexPendingWorkspaceBundles = new Map<string, CodexPendingWorkspaceBundlePrivateRecord>();
+  private readonly internalArtifactObjects = new Map<string, InternalArtifactObject>();
+  private readonly internalArtifactObjectRefs = new Map<string, string>();
+  private readonly internalArtifactObjectOwnerIdempotency = new Map<string, string>();
+  private readonly internalArtifactObjectOwnerKindArtifact = new Map<string, string>();
   private readonly codexRuntimeJobEventIds = new Map<
     string,
     {
@@ -1852,17 +1885,90 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return clone(updated.job);
   }
 
-  async createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
-    const session = this.assertCodexRuntimeJobWorkerSession(
-      input.runtime_job_id,
-      input.worker_id,
-      input.worker_session_token,
-      input.now,
-      'codex_runtime_job_unavailable',
-      {
-        requireConnected: false,
-      },
+  async createOrReplayInternalArtifactObject(input: CreateInternalArtifactObjectInput): Promise<InternalArtifactObject> {
+    assertInternalArtifactObjectInput(input);
+    const existingByRefId = this.internalArtifactObjectRefs.get(input.ref);
+    const existingByIdempotencyId = this.internalArtifactObjectOwnerIdempotency.get(internalArtifactOwnerIdempotencyKey(input));
+    const existingByOwnerKindArtifactId = this.internalArtifactObjectOwnerKindArtifact.get(
+      internalArtifactOwnerKindArtifactKey(input),
     );
+    const existingByRef =
+      existingByRefId === undefined ? undefined : this.internalArtifactObjects.get(existingByRefId);
+    const existingByIdempotency =
+      existingByIdempotencyId === undefined ? undefined : this.internalArtifactObjects.get(existingByIdempotencyId);
+    const existingByOwnerKindArtifact =
+      existingByOwnerKindArtifactId === undefined ? undefined : this.internalArtifactObjects.get(existingByOwnerKindArtifactId);
+
+    if (
+      existingByRef !== undefined &&
+      existingByIdempotency !== undefined &&
+      existingByRef.id !== existingByIdempotency.id
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_ref_conflict');
+    }
+    const existing = existingByIdempotency ?? existingByRef ?? existingByOwnerKindArtifact;
+    if (existing !== undefined) {
+      if (existingByRef !== undefined && existing.idempotency_key !== input.idempotency_key) {
+        throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_ref_conflict');
+      }
+      if (
+        existingByOwnerKindArtifact !== undefined &&
+        (existing.idempotency_key !== input.idempotency_key || existing.ref !== input.ref)
+      ) {
+        throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_owner_kind_artifact_conflict');
+      }
+      if (this.internalArtifactObjectReplayMatches(existing, input)) {
+        return clone(existing);
+      }
+      throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_idempotency_drift');
+    }
+
+    const object = clone(input);
+    this.internalArtifactObjects.set(object.id, object);
+    this.internalArtifactObjectRefs.set(object.ref, object.id);
+    this.internalArtifactObjectOwnerIdempotency.set(internalArtifactOwnerIdempotencyKey(object), object.id);
+    this.internalArtifactObjectOwnerKindArtifact.set(internalArtifactOwnerKindArtifactKey(object), object.id);
+    return clone(object);
+  }
+
+  async getInternalArtifactObjectByRef(input: GetInternalArtifactObjectByRefInput): Promise<InternalArtifactObject | undefined> {
+    const id = this.internalArtifactObjectRefs.get(input.ref);
+    const object = id === undefined ? undefined : this.internalArtifactObjects.get(id);
+    if (object === undefined || (object.deleted_at !== undefined && input.include_deleted !== true)) {
+      return undefined;
+    }
+    return clone(object);
+  }
+
+  async getInternalArtifactObjectById(id: string): Promise<InternalArtifactObject | undefined> {
+    const object = this.internalArtifactObjects.get(id);
+    if (object === undefined || object.deleted_at !== undefined) {
+      return undefined;
+    }
+    return clone(object);
+  }
+
+  async tombstoneInternalArtifactObject(input: TombstoneInternalArtifactObjectInput): Promise<InternalArtifactObject> {
+    const id = this.internalArtifactObjectRefs.get(input.ref);
+    const object = id === undefined ? undefined : this.internalArtifactObjects.get(id);
+    if (object === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'internal_artifact_not_found');
+    }
+    const tombstoned = {
+      ...object,
+      deleted_at: input.deleted_at,
+    };
+    this.internalArtifactObjects.set(object.id, clone(tombstoned));
+    return clone(tombstoned);
+  }
+
+  async createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
+    await this.reserveCodexRuntimeJobArtifactUpload(input);
+    return this.bindReservedCodexRuntimeJobArtifact(input);
+  }
+
+  async reserveCodexRuntimeJobArtifactUpload(input: ReserveCodexRuntimeJobArtifactUploadInput): Promise<void> {
+    const session = this.preflightCreateCodexRuntimeJobArtifactUnlocked(input);
     this.recordCodexWorkerNonce(
       input.worker_id,
       input.worker_session_token,
@@ -1872,28 +1978,25 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.replay_protection,
       session.session_epoch,
     );
-    this.assertCodexRuntimeJobArtifactIntake(input);
+  }
+
+  async bindReservedCodexRuntimeJobArtifact(input: BindReservedCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact> {
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
-    const leaseRecord = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
-    const preStartFailureEvidenceAllowed =
-      input.kind === 'startup_failure_evidence' &&
-      (record?.job.status === 'accepted' || record?.job.status === 'materializing') &&
-      leaseRecord?.lease.status === 'active';
-    if (
-      record === undefined ||
-      leaseRecord === undefined ||
-      record.job.worker_id !== input.worker_id ||
-      (record.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
-      record.job.expires_at <= input.now ||
-      (leaseRecord.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
-      leaseRecord.lease.expires_at <= input.now
-    ) {
+    if (record === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
-    const expectedInternalRef = `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${input.artifact_id}`;
-    if (input.internal_ref !== expectedInternalRef) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
+    if (record.job.accepted_session_epoch === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
     }
+    this.assertCodexRuntimeJobArtifactEligibility(record, input);
+    this.assertCodexWorkerNonceRecorded(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.replay_protection,
+      record.job.accepted_session_epoch,
+    );
+    this.assertCodexRuntimeJobArtifactObjectBinding(input);
     const existing = this.findCodexRuntimeJobArtifactReplay(input);
     if (existing !== undefined) {
       if (this.codexRuntimeJobArtifactReplayMatches(existing, input)) {
@@ -1910,6 +2013,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       content_type: input.content_type,
       digest: input.digest,
       internal_ref: input.internal_ref,
+      internal_artifact_object_id: input.internal_artifact_object_id,
       size_bytes: input.size_bytes,
       metadata_json: clone(input.metadata_json),
       request_digest: input.request_digest,
@@ -1930,34 +2034,85 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       .map((artifact) => this.codexRuntimeJobArtifactPublic(artifact, record));
   }
 
+  async getCodexRuntimeJobArtifactByInternalRef(
+    input: GetCodexRuntimeJobArtifactByInternalRefInput,
+  ): Promise<CodexRuntimeJobArtifact | undefined> {
+    const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    if (record === undefined) {
+      return undefined;
+    }
+    const artifact = valuesFor(this.codexRuntimeJobArtifacts).find(
+      (candidate) => candidate.runtime_job_id === input.runtime_job_id && candidate.internal_ref === input.internal_ref,
+    );
+    if (artifact === undefined) {
+      return undefined;
+    }
+    const object =
+      artifact.internal_artifact_object_id === undefined ? undefined : this.internalArtifactObjects.get(artifact.internal_artifact_object_id);
+    if (
+      object === undefined ||
+      object.deleted_at !== undefined ||
+      object.ref !== artifact.internal_ref ||
+      object.owner_type !== 'codex_runtime_job' ||
+      object.owner_id !== input.runtime_job_id ||
+      object.kind !== 'codex_runtime_job_artifact' ||
+      object.artifact_id !== artifact.id ||
+      object.digest !== artifact.digest ||
+      object.content_type !== artifact.content_type ||
+      object.size_bytes !== String(artifact.size_bytes)
+    ) {
+      return undefined;
+    }
+    return this.codexRuntimeJobArtifactPublic(artifact, record);
+  }
+
   async createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
     const activeLease = this.runWorkerLeases.get(input.run_session_id);
     const runSession = this.runSessions.get(input.run_session_id);
+    const archiveBytes =
+      input.archive_bytes_base64 === undefined ? undefined : Buffer.from(input.archive_bytes_base64, 'base64');
+    const object =
+      input.internal_artifact_object_id === undefined ? undefined : this.internalArtifactObjects.get(input.internal_artifact_object_id);
     if (
       activeLease === undefined ||
       runSession === undefined ||
       runSession.execution_package_id !== input.execution_package_id ||
       activeLease.id !== input.run_worker_lease_id ||
       activeLease.status !== 'active' ||
-      activeLease.expires_at <= input.created_at
+      activeLease.expires_at <= input.created_at ||
+      input.internal_artifact_object_id === undefined
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle fence was rejected.');
     }
-    const archiveBytes = Buffer.from(input.archive_bytes_base64, 'base64');
-    const archiveBytesBase64 = archiveBytes.toString('base64');
+    const archiveBytesBase64 = archiveBytes?.toString('base64');
     if (
-      archiveBytesBase64 !== input.archive_bytes_base64 ||
-      archiveBytes.byteLength !== input.size_bytes ||
-      rawSha256(archiveBytes) !== input.archive_digest ||
+      (archiveBytes !== undefined &&
+        (archiveBytesBase64 !== input.archive_bytes_base64 ||
+          archiveBytes.byteLength !== input.size_bytes ||
+          rawSha256(archiveBytes) !== input.archive_digest)) ||
       input.expires_at <= input.created_at ||
-      input.pending_artifact_ref !== `artifact:codex-pending-bundles:${input.bundle_id}` ||
+      input.pending_artifact_ref !==
+        `artifact://internal/workspace_bundle/run_session/${input.run_session_id}/${input.bundle_id}` ||
       input.workspace_acquisition_json.bundle_id !== input.bundle_id ||
       input.workspace_acquisition_json.archive_ref !== input.pending_artifact_ref ||
       input.workspace_acquisition_json.archive_digest !== input.archive_digest ||
       input.workspace_acquisition_json.manifest_digest !== input.manifest_digest ||
       input.workspace_acquisition_json.size_bytes !== input.size_bytes ||
       !workspaceBundleAcquisitionMatches(input.workspace_acquisition_json, input) ||
-      input.workspace_acquisition_digest !== codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json)
+      input.workspace_acquisition_digest !== codexWorkspaceAcquisitionDigest(input.workspace_acquisition_json) ||
+      (input.internal_artifact_object_id !== undefined &&
+        (object === undefined ||
+          object.ref !== input.pending_artifact_ref ||
+          object.kind !== 'workspace_bundle' ||
+          object.owner_type !== 'run_session' ||
+          object.owner_id !== input.run_session_id ||
+          object.artifact_id !== input.bundle_id ||
+          object.digest !== input.archive_digest ||
+          object.size_bytes !== String(input.size_bytes) ||
+          object.content_type !== 'application/vnd.forgeloop.workspace-bundle' ||
+          object.metadata_json.manifest_digest !== input.manifest_digest ||
+          object.metadata_json.execution_package_id !== input.execution_package_id ||
+          object.metadata_json.run_worker_lease_id !== input.run_worker_lease_id))
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle artifact was rejected.');
     }
@@ -1966,12 +2121,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       id: input.id,
       bundle_id: input.bundle_id,
       pending_artifact_ref: input.pending_artifact_ref,
+      ...(input.internal_artifact_object_id === undefined
+        ? {}
+        : { internal_artifact_object_id: input.internal_artifact_object_id }),
       archive_digest: input.archive_digest,
       manifest_digest: input.manifest_digest,
       run_worker_lease_id: input.run_worker_lease_id,
       run_session_id: input.run_session_id,
       execution_package_id: input.execution_package_id,
-      archive_bytes_base64: input.archive_bytes_base64,
+      ...(input.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: input.archive_bytes_base64 }),
       size_bytes: input.size_bytes,
       workspace_acquisition_digest: input.workspace_acquisition_digest,
       workspace_acquisition_json: clone(input.workspace_acquisition_json),
@@ -1993,12 +2151,23 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         existing.status === 'pending' &&
         existing.runtime_job_id === undefined &&
         existing.run_session_id === input.run_session_id &&
-        existing.execution_package_id === input.execution_package_id
+        existing.execution_package_id === input.execution_package_id &&
+        existing.id === input.id &&
+        existing.request_digest === input.request_digest &&
+        existing.pending_artifact_ref === input.pending_artifact_ref &&
+        existing.internal_artifact_object_id === input.internal_artifact_object_id &&
+        existing.archive_digest === input.archive_digest &&
+        existing.manifest_digest === input.manifest_digest &&
+        existing.run_worker_lease_id === input.run_worker_lease_id &&
+        existing.size_bytes === input.size_bytes &&
+        existing.expires_at === input.expires_at &&
+        existing.workspace_acquisition_digest === input.workspace_acquisition_digest &&
+        valuesEqual(existing.workspace_acquisition_json, input.workspace_acquisition_json) &&
+        existing.archive_bytes_base64 === input.archive_bytes_base64
       ) {
-        this.codexPendingWorkspaceBundles.set(input.bundle_id, clone(pending));
         return;
       }
-      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle replay was rejected.');
+      throw codexDenied('codex_runtime_job_unavailable', 'workspace_bundle_idempotency_drift');
     }
     this.codexPendingWorkspaceBundles.set(input.bundle_id, clone(pending));
   }
@@ -2051,6 +2220,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       artifact.digest !== pending.archive_digest ||
       artifact.size_bytes !== pending.size_bytes ||
       artifact.internal_ref !== pending.pending_artifact_ref ||
+      artifact.internal_artifact_object_id !== pending.internal_artifact_object_id ||
       record.job.workspace_acquisition_json?.bundle_id !== pending.bundle_id ||
       record.job.workspace_acquisition_json?.archive_ref !== pending.pending_artifact_ref ||
       record.job.workspace_acquisition_json?.archive_digest !== pending.archive_digest ||
@@ -2059,13 +2229,23 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle download was denied.');
     }
-    const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
-    if (archiveBytes.byteLength !== pending.size_bytes || rawSha256(archiveBytes) !== pending.archive_digest) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
+    if (pending.archive_bytes_base64 !== undefined) {
+      const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
+      if (
+        archiveBytes.byteLength !== pending.size_bytes ||
+        rawSha256(archiveBytes) !== pending.archive_digest ||
+        workspaceBundleArchiveManifestDigest(archiveBytes) !== pending.manifest_digest
+      ) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
+      }
     }
     return {
       bundle_id: pending.bundle_id,
-      archive_bytes_base64: pending.archive_bytes_base64,
+      ...(pending.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: pending.archive_bytes_base64 }),
+      archive_ref: pending.pending_artifact_ref,
+      ...(pending.internal_artifact_object_id === undefined
+        ? {}
+        : { internal_artifact_object_id: pending.internal_artifact_object_id }),
       archive_digest: pending.archive_digest,
       manifest_digest: pending.manifest_digest,
       content_type: 'application/vnd.forgeloop.workspace-bundle',
@@ -5863,7 +6043,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   private codexRuntimePendingBundleReplayMatches(
     record: CodexRuntimeJobPrivateRecord,
-    input: PendingWorkspaceBundleInput | undefined,
+    input: PendingWorkspaceBundleReplayInput | undefined,
   ): boolean {
     const stored = record.pending_workspace_bundle;
     if (stored === undefined || input === undefined) {
@@ -5875,25 +6055,36 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         : this.codexRuntimeJobArtifacts.get(record.workspace_bundle_artifact_id);
     return (
       artifact !== undefined &&
+      stored.runtime_job_id === record.job.id &&
+      stored.status === 'bound' &&
       artifact.runtime_job_id === stored.runtime_job_id &&
+      artifact.runtime_job_id === record.job.id &&
       artifact.kind === 'workspace_bundle' &&
       artifact.name === stored.bundle_id &&
       artifact.digest === stored.archive_digest &&
       artifact.internal_ref === stored.pending_artifact_ref &&
+      artifact.internal_artifact_object_id === stored.internal_artifact_object_id &&
       artifact.metadata_json.bundle_id === stored.bundle_id &&
       artifact.metadata_json.manifest_digest === stored.manifest_digest &&
       artifact.metadata_json.run_worker_lease_id === stored.run_worker_lease_id &&
       artifact.metadata_json.workspace_acquisition_digest === stored.workspace_acquisition_digest &&
       artifact.size_bytes === stored.size_bytes &&
+      stored.id === input.id &&
       stored.bundle_id === input.bundle_id &&
+      stored.run_session_id === input.run_session_id &&
+      stored.execution_package_id === input.execution_package_id &&
       stored.pending_artifact_ref === input.pending_artifact_ref &&
+      stored.internal_artifact_object_id === input.internal_artifact_object_id &&
       stored.archive_digest === input.archive_digest &&
       stored.manifest_digest === input.manifest_digest &&
+      stored.archive_bytes_base64 === input.archive_bytes_base64 &&
       stored.run_worker_lease_id === input.run_worker_lease_id &&
       stored.size_bytes === input.size_bytes &&
       stored.workspace_acquisition_digest === input.workspace_acquisition_digest &&
       valuesEqual(stored.workspace_acquisition_json, input.workspace_acquisition_json) &&
-      stored.expires_at === input.expires_at
+      stored.expires_at === input.expires_at &&
+      stored.request_digest === input.request_digest &&
+      stored.created_at === input.created_at
     );
   }
 
@@ -5920,6 +6111,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       content_type: 'application/vnd.forgeloop.workspace-bundle',
       digest: pending.archive_digest,
       internal_ref: pending.pending_artifact_ref,
+      ...(pending.internal_artifact_object_id === undefined
+        ? {}
+        : { internal_artifact_object_id: pending.internal_artifact_object_id }),
       size_bytes: pending.size_bytes,
       metadata_json,
       request_digest: codexCanonicalDigest({
@@ -5949,13 +6143,133 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       content_type: artifact.content_type,
       digest: artifact.digest,
       internal_ref: artifact.internal_ref,
+      ...(artifact.internal_artifact_object_id === undefined
+        ? {}
+        : { internal_artifact_object_id: artifact.internal_artifact_object_id }),
       size_bytes: artifact.size_bytes,
       metadata_json: clone(artifact.metadata_json),
       created_at: artifact.created_at,
     };
   }
 
-  private assertCodexRuntimeJobArtifactIntake(input: CreateCodexRuntimeJobArtifactInput): void {
+  private assertCodexRuntimeJobArtifactObjectBinding(input: CreateCodexRuntimeJobArtifactInput): void {
+    const object = this.internalArtifactObjects.get(input.internal_artifact_object_id);
+    if (
+      object === undefined ||
+      object.deleted_at !== undefined ||
+      object.ref !== input.internal_ref ||
+      object.owner_type !== 'codex_runtime_job' ||
+      object.owner_id !== input.runtime_job_id ||
+      object.kind !== 'codex_runtime_job_artifact' ||
+      object.artifact_id !== input.artifact_id ||
+      object.digest !== input.digest ||
+      object.content_type !== input.content_type ||
+      object.size_bytes !== String(input.size_bytes)
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact object binding was denied.');
+    }
+  }
+
+  private preflightCreateCodexRuntimeJobArtifactUnlocked(
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): CodexWorkerSessionProof {
+    const session = this.assertCodexRuntimeJobWorkerSession(
+      input.runtime_job_id,
+      input.worker_id,
+      input.worker_session_token,
+      input.now,
+      'codex_runtime_job_unavailable',
+      {
+        requireConnected: false,
+      },
+    );
+    this.assertCodexRuntimeJobArtifactIntake(input);
+    const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    if (record === undefined) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+    this.assertCodexRuntimeJobArtifactEligibility(record, input);
+    const expectedInternalRef =
+      `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${input.artifact_id}`;
+    if (input.internal_ref !== expectedInternalRef) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact ref was denied.');
+    }
+    this.assertCodexWorkerNonceAvailable(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.replay_protection,
+      session.session_epoch,
+    );
+    const existing = this.findCodexRuntimeJobArtifactReplay(input);
+    if (existing !== undefined && !this.codexRuntimeJobArtifactPreflightReplayMatches(existing, input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact replay was denied.');
+    }
+    return session;
+  }
+
+  private assertCodexWorkerNonceAvailable(
+    workerId: string,
+    sessionToken: string,
+    nonce: string,
+    replayProtection?: CodexWorkerReplayProtectionInput,
+    sessionEpochOverride?: number,
+  ): void {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    const nonceHash = codexCredentialPayloadDigest(nonce);
+    const sessionEpoch = sessionEpochOverride ?? this.codexWorkerRegistrations.get(workerId)?.session_epoch ?? 1;
+    const replayKeyHash = codexCanonicalDigest({
+      method: replayProtection?.method ?? 'LEGACY',
+      path: replayProtection?.path ?? 'legacy-worker-session',
+      body_digest: replayProtection?.body_digest ?? sessionTokenHash,
+      worker_id: workerId,
+      session_epoch: sessionEpoch,
+      nonce,
+    });
+    const used = valuesFor(this.codexWorkerSessionNonces).some(
+      (record) =>
+        (record.worker_id === workerId && record.session_token_hash === sessionTokenHash && record.nonce_hash === nonceHash) ||
+        (record.worker_id === workerId && record.session_epoch === sessionEpoch && record.nonce_hash === nonceHash) ||
+        record.replay_key_hash === replayKeyHash,
+    );
+    if (used) {
+      throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce was already used.');
+    }
+  }
+
+  private assertCodexWorkerNonceRecorded(
+    workerId: string,
+    sessionToken: string,
+    nonce: string,
+    replayProtection: CodexWorkerReplayProtectionInput | undefined,
+    sessionEpoch: number,
+  ): void {
+    const sessionTokenHash = codexCredentialPayloadDigest(sessionToken);
+    const nonceHash = codexCredentialPayloadDigest(nonce);
+    const requestBindingDigest =
+      replayProtection === undefined
+        ? codexCanonicalDigest({ method: 'LEGACY', path: 'legacy-worker-session', body_digest: sessionTokenHash })
+        : codexCanonicalDigest(replayProtection);
+    const replayKeyHash = codexCanonicalDigest({
+      method: replayProtection?.method ?? 'LEGACY',
+      path: replayProtection?.path ?? 'legacy-worker-session',
+      body_digest: replayProtection?.body_digest ?? sessionTokenHash,
+      worker_id: workerId,
+      session_epoch: sessionEpoch,
+      nonce,
+    });
+    const record = this.codexWorkerSessionNonces.get(`${workerId}:${sessionEpoch}:${nonceHash}`);
+    if (
+      record === undefined ||
+      record.session_token_hash !== sessionTokenHash ||
+      record.request_binding_digest !== requestBindingDigest ||
+      record.replay_key_hash !== replayKeyHash
+    ) {
+      throw codexDenied('codex_worker_nonce_replay', 'Codex worker session nonce reservation was not found.');
+    }
+  }
+
+  private assertCodexRuntimeJobArtifactIntake(input: PreflightCreateCodexRuntimeJobArtifactInput): void {
     try {
       validateCodexRuntimeJobArtifactIntake(input);
     } catch {
@@ -5963,8 +6277,29 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
   }
 
+  private assertCodexRuntimeJobArtifactEligibility(
+    record: CodexRuntimeJobPrivateRecord,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): void {
+    const leaseRecord = this.codexLaunchLeases.get(record.job.launch_lease_id);
+    const preStartFailureEvidenceAllowed =
+      input.kind === 'startup_failure_evidence' &&
+      ((leaseRecord?.lease.status === 'active' && (record.job.status === 'accepted' || record.job.status === 'materializing')) ||
+        (record.job.status === 'materializing' && leaseRecord?.lease.status === 'materialized'));
+    if (
+      leaseRecord === undefined ||
+      record.job.worker_id !== input.worker_id ||
+      (record.job.status !== 'running' && !preStartFailureEvidenceAllowed) ||
+      record.job.expires_at <= input.now ||
+      (leaseRecord.lease.status !== 'materialized' && !preStartFailureEvidenceAllowed) ||
+      leaseRecord.lease.expires_at <= input.now
+    ) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job artifact upload was denied.');
+    }
+  }
+
   private findCodexRuntimeJobArtifactReplay(
-    input: CreateCodexRuntimeJobArtifactInput,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
   ): CodexRuntimeJobArtifactPrivateRecord | undefined {
     const candidates = valuesFor(this.codexRuntimeJobArtifacts).filter(
       (artifact) =>
@@ -5996,9 +6331,51 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       artifact.content_type === input.content_type &&
       artifact.digest === input.digest &&
       artifact.internal_ref === input.internal_ref &&
+      artifact.internal_artifact_object_id === input.internal_artifact_object_id &&
       artifact.size_bytes === input.size_bytes &&
-      artifact.request_digest === input.request_digest &&
       valuesEqual(artifact.metadata_json, input.metadata_json)
+    );
+  }
+
+  private codexRuntimeJobArtifactPreflightReplayMatches(
+    artifact: CodexRuntimeJobArtifactPrivateRecord,
+    input: PreflightCreateCodexRuntimeJobArtifactInput,
+  ): boolean {
+    return (
+      artifact.runtime_job_id === input.runtime_job_id &&
+      artifact.artifact_idempotency_key === input.artifact_idempotency_key &&
+      artifact.kind === input.kind &&
+      artifact.name === input.name &&
+      artifact.content_type === input.content_type &&
+      artifact.digest === input.digest &&
+      artifact.internal_ref === input.internal_ref &&
+      artifact.size_bytes === input.size_bytes &&
+      valuesEqual(artifact.metadata_json, input.metadata_json)
+    );
+  }
+
+  private internalArtifactObjectReplayMatches(
+    object: InternalArtifactObject,
+    input: CreateInternalArtifactObjectInput,
+  ): boolean {
+    return (
+      object.id === input.id &&
+      object.artifact_id === input.artifact_id &&
+      object.ref === input.ref &&
+      object.storage_key === input.storage_key &&
+      object.kind === input.kind &&
+      object.content_type === input.content_type &&
+      object.size_bytes === input.size_bytes &&
+      object.digest === input.digest &&
+      object.visibility === input.visibility &&
+      object.owner_type === input.owner_type &&
+      object.owner_id === input.owner_id &&
+      object.idempotency_key === input.idempotency_key &&
+      object.request_digest === input.request_digest &&
+      object.created_by_actor_type === input.created_by_actor_type &&
+      object.created_by_actor_id === input.created_by_actor_id &&
+      object.deleted_at === input.deleted_at &&
+      valuesEqual(object.metadata_json, input.metadata_json)
     );
   }
 
@@ -6042,17 +6419,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       existing !== undefined &&
       existing.status === 'pending' &&
       existing.runtime_job_id === undefined &&
+      existing.id === pending.id &&
       existing.bundle_id === pending.bundle_id &&
+      existing.run_session_id === pending.run_session_id &&
+      existing.execution_package_id === pending.execution_package_id &&
       existing.pending_artifact_ref === pending.pending_artifact_ref &&
+      existing.internal_artifact_object_id === pending.internal_artifact_object_id &&
       existing.archive_digest === pending.archive_digest &&
       existing.manifest_digest === pending.manifest_digest &&
+      existing.archive_bytes_base64 === pending.archive_bytes_base64 &&
       existing.run_worker_lease_id === pending.run_worker_lease_id &&
       existing.size_bytes === pending.size_bytes &&
       existing.expires_at === pending.expires_at &&
       existing.workspace_acquisition_digest === pending.workspace_acquisition_digest &&
       valuesEqual(existing.workspace_acquisition_json, pending.workspace_acquisition_json) &&
       existing.run_session_id === input.target.target_id &&
-      existing.execution_package_id === input.execution_package_id
+      existing.execution_package_id === input.execution_package_id &&
+      existing.request_digest === pending.request_digest &&
+      existing.created_at === pending.created_at
     );
   }
 
@@ -6322,6 +6706,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.codexLaunchTokenEnvelopes,
       this.codexRuntimeJobArtifacts,
       this.codexPendingWorkspaceBundles,
+      this.internalArtifactObjects,
+      this.internalArtifactObjectRefs,
+      this.internalArtifactObjectOwnerIdempotency,
+      this.internalArtifactObjectOwnerKindArtifact,
       this.codexRuntimeJobEventIds,
       this.codexRuntimeJobEventIdempotency,
     ] as Array<Map<string, unknown>>;

@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
+
 import { INestApplication } from '@nestjs/common';
-import type { DeliveryRepository } from '@forgeloop/db';
 import type { AttachmentRef } from '@forgeloop/contracts';
 import type { Attachment, ExecutionPackage } from '@forgeloop/domain';
 import { Test } from '@nestjs/testing';
@@ -8,10 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { ProductGenerationResultService } from '../../apps/control-plane-api/src/modules/automation/product-generation-result.service';
-import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { CodexRuntimeService } from '../../apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service';
 import { DEFAULT_SOURCE_MUTATION_POLICY, defaultPackagePolicyFields } from '../../apps/control-plane-api/src/modules/execution-packages/package-policy-fields';
 import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
+import { LocalInternalArtifactStore, type DeliveryRepository } from '../../packages/db/src/index';
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
@@ -29,6 +31,43 @@ const actorTech = 'actor-tech';
 const actorReviewer = 'actor-reviewer';
 type RuntimeJobRef = Pick<CodexRuntimeJob, 'id' | 'worker_id' | 'launch_lease_id' | 'project_id' | 'repo_id'>;
 const now = '2026-05-23T00:00:00.000Z';
+
+const createRuntimeArtifactObject = async (
+  repository: DeliveryRepository,
+  input: {
+    id: string;
+    artifact_id: string;
+    ref: string;
+    digest: string;
+    content_type: string;
+    size_bytes: number;
+    runtime_job_id: string;
+    idempotency_key: string;
+    request_digest: string;
+    metadata_json: Record<string, unknown>;
+    worker_id: string;
+    created_at: string;
+  },
+) =>
+  repository.createOrReplayInternalArtifactObject({
+    id: input.id,
+    artifact_id: input.artifact_id,
+    ref: input.ref,
+    storage_key: `objects/${input.digest.slice('sha256:'.length)}`,
+    kind: 'codex_runtime_job_artifact',
+    content_type: input.content_type,
+    size_bytes: String(input.size_bytes),
+    digest: input.digest,
+    visibility: 'internal',
+    owner_type: 'codex_runtime_job',
+    owner_id: input.runtime_job_id,
+    idempotency_key: input.idempotency_key,
+    request_digest: input.request_digest,
+    metadata_json: input.metadata_json,
+    created_by_actor_type: 'codex_worker',
+    created_by_actor_id: input.worker_id,
+    created_at: input.created_at,
+  });
 
 describe('SpecPlanService item-scoped delivery API', () => {
   let app: INestApplication;
@@ -1011,7 +1050,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const generated = generatedSpecRevision(item.id, boundary.revision_id);
     const generatedPayloadDigest = codexCanonicalDigest(generated);
     const artifactId = 'generated-payload-ref';
-    const internalRef = `artifact://codex-runtime-jobs/${runtimeJob.id}/artifacts/${artifactId}`;
+    const internalRef = `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${runtimeJob.id}/${artifactId}`;
+    const internalArtifactObjectId = stableUuid({ test: 'unsupported-payload-ref', runtime_job_id: runtimeJob.id });
     const artifact = {
       kind: 'generated_payload',
       name: 'generated-spec.json',
@@ -1019,6 +1059,20 @@ describe('SpecPlanService item-scoped delivery API', () => {
       digest: generatedPayloadDigest,
       internal_ref: internalRef,
     };
+    await createRuntimeArtifactObject(repository, {
+      id: internalArtifactObjectId,
+      artifact_id: artifactId,
+      ref: internalRef,
+      digest: generatedPayloadDigest,
+      content_type: 'application/json',
+      size_bytes: 70_000,
+      runtime_job_id: runtimeJob.id,
+      idempotency_key: artifactId,
+      request_digest: digest('unsupported-payload-ref-artifact'),
+      metadata_json: {},
+      worker_id: runtimeJob.worker_id,
+      created_at: terminalAt,
+    });
     await repository.createCodexRuntimeJobArtifact({
       runtime_job_id: runtimeJob.id,
       worker_id: runtimeJob.worker_id,
@@ -1028,6 +1082,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       artifact_id: artifactId,
       artifact_idempotency_key: artifactId,
       ...artifact,
+      internal_artifact_object_id: internalArtifactObjectId,
       size_bytes: 70_000,
       metadata_json: {},
       request_digest: digest('unsupported-payload-ref-artifact'),
@@ -1098,15 +1153,37 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const runtimeJob = actionResponse.runtime_job;
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, runtimeJob, 'payload-ref-success');
     const generated = generatedSpecRevision(item.id, boundary.revision_id);
+    const generatedPayloadBytes = Buffer.from(`${JSON.stringify(generated)}\n`, 'utf8');
     const generatedPayloadDigest = codexCanonicalDigest(generated);
+    const generatedPayloadByteDigest = rawSha256(generatedPayloadBytes);
     const artifactId = 'generated-payload-ref-success';
-    const internalRef = `artifact://codex-runtime-jobs/${runtimeJob.id}/artifacts/${artifactId}`;
+    const internalArtifactObject = await new LocalInternalArtifactStore({
+      root: app.get(INTERNAL_ARTIFACT_STORE_ROOT) as string,
+      repository,
+      requestId: 'payload-ref-success',
+    }).putObject({
+      artifact_id: artifactId,
+      kind: 'codex_runtime_job_artifact',
+      owner_type: 'codex_runtime_job',
+      owner_id: runtimeJob.id,
+      visibility: 'internal',
+      content_type: 'application/json',
+      declared_size_bytes: String(generatedPayloadBytes.byteLength),
+      declared_artifact_digest: generatedPayloadByteDigest,
+      idempotency_key: artifactId,
+      metadata_json: { output_schema_version: 'spec_revision.v1' },
+      created_by_actor_type: 'codex_worker',
+      created_by_actor_id: runtimeJob.worker_id,
+      now: terminalAt,
+      max_size_bytes: 1_000_000,
+      bytes: generatedPayloadBytes,
+    });
     const artifact = {
       kind: 'generated_payload',
       name: 'generated-spec.json',
       content_type: 'application/json',
-      digest: generatedPayloadDigest,
-      internal_ref: internalRef,
+      digest: generatedPayloadByteDigest,
+      internal_ref: internalArtifactObject.ref,
     };
     await repository.createCodexRuntimeJobArtifact({
       runtime_job_id: runtimeJob.id,
@@ -1117,8 +1194,9 @@ describe('SpecPlanService item-scoped delivery API', () => {
       artifact_id: artifactId,
       artifact_idempotency_key: artifactId,
       ...artifact,
-      size_bytes: 70_000,
-      metadata_json: { generated_payload: generated },
+      internal_artifact_object_id: internalArtifactObject.id,
+      size_bytes: generatedPayloadBytes.byteLength,
+      metadata_json: { output_schema_version: 'spec_revision.v1' },
       request_digest: digest('payload-ref-success-artifact'),
       replay_protection: {
         method: 'POST',
@@ -1165,6 +1243,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ).resolves.toEqual({ applied: true });
     const [spec] = await repository.listSpecs();
     expect(spec).toMatchObject({ development_plan_item_id: item.id, status: 'draft' });
+    const [runtimeArtifact] = await repository.listCodexRuntimeJobArtifacts({ runtime_job_id: runtimeJob.id });
+    expect(JSON.stringify(runtimeArtifact?.metadata_json)).not.toContain('generated_payload');
     await expect(repository.getAutomationActionRun(actionResponse.action_run.id)).resolves.toMatchObject({
       status: 'succeeded',
       result_json: { product_generation_result: 'applied' },
@@ -2234,6 +2314,10 @@ function stableUuid(input: Record<string, unknown>): string {
 
 function digest(label: string): string {
   return codexCanonicalDigest({ label });
+}
+
+function rawSha256(bytes: Uint8Array): string {
+  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
 const withBodyDigest = <T extends Record<string, unknown>>(body: T): T & { body_digest: string } => ({

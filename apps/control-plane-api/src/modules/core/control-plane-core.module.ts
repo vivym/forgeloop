@@ -1,4 +1,7 @@
 import { Module } from '@nestjs/common';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { sealCodexLaunchTokenEnvelope } from '@forgeloop/codex-worker-runtime';
 import {
   createDbClient,
@@ -10,6 +13,7 @@ import {
 
 import {
   DELIVERY_REPOSITORY,
+  INTERNAL_ARTIFACT_STORE_ROOT,
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from './control-plane-tokens';
@@ -55,13 +59,31 @@ const durabilityMode = (): RunDurabilityMode =>
     ? 'volatile_demo'
     : 'durable';
 
+const internalArtifactStoreRoot = (): string => {
+  const configuredRoot = process.env.FORGELOOP_ARTIFACT_STORE_ROOT?.trim();
+  if (configuredRoot !== undefined && configuredRoot.length > 0) {
+    return configuredRoot;
+  }
+  if (durabilityMode() === 'volatile_demo') {
+    return mkdtempSync(join(tmpdir(), 'forgeloop-internal-artifacts-'));
+  }
+  throw new Error('FORGELOOP_ARTIFACT_STORE_ROOT is required when the control plane uses durable runtime state');
+};
+
 @Module({
   providers: [
     { provide: DELIVERY_REPOSITORY, useFactory: createControlPlaneRepository },
     { provide: RUN_DURABILITY_MODE, useFactory: durabilityMode },
+    { provide: INTERNAL_ARTIFACT_STORE_ROOT, useFactory: internalArtifactStoreRoot },
     ControlPlaneRuntimeService,
     RunExecutionRuntimeConfigService,
   ],
-  exports: [DELIVERY_REPOSITORY, RUN_DURABILITY_MODE, ControlPlaneRuntimeService, RunExecutionRuntimeConfigService],
+  exports: [
+    DELIVERY_REPOSITORY,
+    RUN_DURABILITY_MODE,
+    INTERNAL_ARTIFACT_STORE_ROOT,
+    ControlPlaneRuntimeService,
+    RunExecutionRuntimeConfigService,
+  ],
 })
 export class ControlPlaneCoreModule {}

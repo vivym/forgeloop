@@ -8,6 +8,11 @@ import {
 } from '@forgeloop/automation';
 import type { AutomationActorClass } from '@forgeloop/domain';
 
+import {
+  INTERNAL_ARTIFACT_METADATA_HEADER_NAME,
+  INTERNAL_ARTIFACT_UPLOAD_WIRE_PATH,
+} from '../internal-artifacts/internal-artifacts.constants';
+
 type AutomationRequest = {
   method: string;
   originalUrl?: string;
@@ -37,6 +42,11 @@ const requestDeclaresBody = (headers: Record<string, string | string[] | undefin
   return firstHeaderValue(headers, 'transfer-encoding') !== undefined;
 };
 
+const signedHeadersForPath = (pathAndQuery: string): string[] | undefined => {
+  const path = pathAndQuery.split('?')[0];
+  return path === INTERNAL_ARTIFACT_UPLOAD_WIRE_PATH ? [INTERNAL_ARTIFACT_METADATA_HEADER_NAME] : undefined;
+};
+
 @Injectable()
 export class TrustedAutomationActorGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
@@ -64,15 +74,18 @@ export class TrustedAutomationActorGuard implements CanActivate {
       throw new UnauthorizedException('Internal automation request raw body is required');
     }
     const rawBody = request.rawBody ?? Buffer.alloc(0);
+    const pathAndQuery = request.originalUrl ?? request.url ?? '';
+    const requiredSignedHeaders = signedHeadersForPath(pathAndQuery);
     const verification = verifyAutomationRequestSignature({
       method: request.method,
-      pathAndQuery: request.originalUrl ?? request.url ?? '',
+      pathAndQuery,
       rawBody,
       actorId,
       actorClass: actorClass as AutomationActorClass,
       daemonIdentity,
       headers: request.headers,
       secret,
+      ...(requiredSignedHeaders === undefined ? {} : { requiredSignedHeaders }),
     });
     if (!verification.ok) {
       throw new UnauthorizedException('Internal automation request signature is invalid');

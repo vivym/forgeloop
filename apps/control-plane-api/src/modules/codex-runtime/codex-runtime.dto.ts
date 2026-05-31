@@ -319,8 +319,12 @@ const workspaceBundleAcquisitionSchema = z.object({
   expires_at: z.string().min(1),
 }).strict();
 const pendingWorkspaceBundleSchema = z.object({
+  id: z.string().min(1),
   bundle_id: z.string().min(1),
+  run_session_id: z.string().min(1),
+  execution_package_id: z.string().min(1),
   pending_artifact_ref: z.string().min(1),
+  internal_artifact_object_id: z.string().min(1).optional(),
   archive_digest: sha256DigestSchema,
   manifest_digest: sha256DigestSchema,
   run_worker_lease_id: z.string().min(1),
@@ -328,6 +332,8 @@ const pendingWorkspaceBundleSchema = z.object({
   workspace_acquisition_digest: sha256DigestSchema,
   workspace_acquisition_json: workspaceBundleAcquisitionSchema,
   expires_at: z.string().min(1),
+  request_digest: sha256DigestSchema,
+  created_at: z.string().min(1),
 }).strict();
 
 export const createCodexRuntimeJobSchema = z.object({
@@ -468,15 +474,16 @@ export const appendCodexRuntimeJobEventSchema = workerSessionRequestSchema.exten
   event_payload_digest: sha256DigestSchema,
 });
 
-export const createCodexRuntimeJobArtifactSchema = workerSessionRequestSchema.extend({
+export const createCodexRuntimeJobArtifactUploadMetadataSchema = workerSessionRequestSchema.extend({
+  schema_version: z.literal('codex_runtime_job_artifact_upload.v2'),
   artifact_idempotency_key: z.string().min(1),
   kind: z.string().min(1),
   name: z.string().min(1),
   content_type: z.string().min(1),
   digest: sha256DigestSchema,
-  size_bytes: z.number().int().nonnegative(),
-  metadata_json: runtimeJobInputSchema.optional(),
-});
+  size_bytes: z.string().regex(/^\d+$/),
+  metadata_json: z.record(z.string(), z.unknown()).default({}),
+}).strict();
 
 export const terminalizeCodexRuntimeJobSchema = workerSessionRequestSchema.extend({
   launch_lease_id: z.string().min(1),
@@ -573,7 +580,14 @@ export type CodexRuntimeWorkerQueryDto = z.infer<typeof codexRuntimeWorkerQueryS
 export type MaterializeCodexRuntimeJobDto = z.infer<typeof materializeCodexRuntimeJobSchema>;
 export type StartCodexRuntimeJobDto = z.infer<typeof startCodexRuntimeJobSchema>;
 export type AppendCodexRuntimeJobEventDto = z.infer<typeof appendCodexRuntimeJobEventSchema>;
-export type CreateCodexRuntimeJobArtifactDto = z.infer<typeof createCodexRuntimeJobArtifactSchema>;
+export type CreateCodexRuntimeJobArtifactUploadMetadataDto = z.infer<
+  typeof createCodexRuntimeJobArtifactUploadMetadataSchema
+>;
+export type CreateCodexRuntimeJobArtifactDto = {
+  proof_path: string;
+  metadata: CreateCodexRuntimeJobArtifactUploadMetadataDto & { body_digest: string };
+  bytes: Buffer;
+};
 export type TerminalizeCodexRuntimeJobDto = z.infer<typeof terminalizeCodexRuntimeJobSchema>;
 export type CreateCodexLaunchLeaseDto = z.infer<typeof createCodexLaunchLeaseSchema>;
 export type RevokeCodexLaunchLeaseDto = z.infer<typeof revokeCodexLaunchLeaseSchema>;

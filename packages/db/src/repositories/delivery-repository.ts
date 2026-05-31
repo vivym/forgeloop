@@ -32,6 +32,7 @@ import type {
   CodexRuntimeTargetKind,
   CodexWorkerBootstrapToken,
   CodexWorkerRegistration,
+  InternalArtifactObject,
   ResolvedCodexCredential,
   CommandIdempotencyRecord,
   ContextManifest,
@@ -73,6 +74,7 @@ import type {
   Task,
   WorkItem,
 } from '@forgeloop/domain';
+import { DomainError, parseInternalArtifactRef } from '@forgeloop/domain';
 import type { BoundaryRound, ObjectRef } from '@forgeloop/contracts';
 
 import type { trace_link_relationship_values } from '../schema/_shared';
@@ -321,6 +323,7 @@ export interface CodexLaunchTokenEnvelopeSealer {
 export interface PendingWorkspaceBundleInput {
   bundle_id: string;
   pending_artifact_ref: string;
+  internal_artifact_object_id?: string;
   archive_digest: string;
   manifest_digest: string;
   run_worker_lease_id: string;
@@ -328,6 +331,15 @@ export interface PendingWorkspaceBundleInput {
   workspace_acquisition_digest: string;
   workspace_acquisition_json: Record<string, unknown>;
   expires_at: string;
+}
+
+export interface PendingWorkspaceBundleReplayInput extends PendingWorkspaceBundleInput {
+  id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  archive_bytes_base64?: string;
+  request_digest: string;
+  created_at: string;
 }
 
 export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
@@ -350,7 +362,7 @@ export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
   input_digest: string;
   workspace_acquisition_json?: Record<string, unknown>;
   workspace_acquisition_digest?: string;
-  pending_workspace_bundle?: PendingWorkspaceBundleInput;
+  pending_workspace_bundle?: PendingWorkspaceBundleReplayInput;
   action_type?: string;
   action_attempt?: number;
   action_claim_token_hash?: string;
@@ -485,6 +497,7 @@ export interface CreateCodexRuntimeJobArtifactInput {
   content_type: string;
   digest: string;
   internal_ref: string;
+  internal_artifact_object_id: string;
   size_bytes: number;
   metadata_json: Record<string, unknown>;
   request_digest: string;
@@ -492,18 +505,25 @@ export interface CreateCodexRuntimeJobArtifactInput {
   now: string;
 }
 
+export type PreflightCreateCodexRuntimeJobArtifactInput = Omit<
+  CreateCodexRuntimeJobArtifactInput,
+  'internal_artifact_object_id'
+>;
+
+export type ReserveCodexRuntimeJobArtifactUploadInput = PreflightCreateCodexRuntimeJobArtifactInput;
+
+export type BindReservedCodexRuntimeJobArtifactInput = CreateCodexRuntimeJobArtifactInput;
+
 export interface ListCodexRuntimeJobArtifactsInput {
   runtime_job_id: string;
 }
 
-export interface CreatePendingWorkspaceBundleArtifactInput extends PendingWorkspaceBundleInput {
-  id: string;
-  run_session_id: string;
-  execution_package_id: string;
-  archive_bytes_base64: string;
-  request_digest: string;
-  created_at: string;
+export interface GetCodexRuntimeJobArtifactByInternalRefInput {
+  runtime_job_id: string;
+  internal_ref: string;
 }
+
+export interface CreatePendingWorkspaceBundleArtifactInput extends PendingWorkspaceBundleReplayInput {}
 
 export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
   runtime_job_id: string;
@@ -518,12 +538,46 @@ export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
 
 export interface WorkspaceBundleDownloadForRuntimeJob {
   bundle_id: string;
-  archive_bytes_base64: string;
+  archive_bytes_base64?: string;
+  archive_ref: string;
+  internal_artifact_object_id?: string;
   archive_digest: string;
   manifest_digest: string;
   content_type: 'application/vnd.forgeloop.workspace-bundle';
   size_bytes: number;
   expires_at: string;
+}
+
+export type CreateInternalArtifactObjectInput = InternalArtifactObject;
+
+export const assertInternalArtifactObjectInput = (input: CreateInternalArtifactObjectInput): void => {
+  let parsed;
+  try {
+    parsed = parseInternalArtifactRef(input.ref);
+  } catch {
+    throw new DomainError('codex_runtime_job_unavailable', 'internal_artifact_ref_mismatch');
+  }
+  if (
+    parsed.kind !== input.kind ||
+    parsed.owner_type !== input.owner_type ||
+    parsed.owner_id !== input.owner_id ||
+    parsed.artifact_id !== input.artifact_id
+  ) {
+    throw new DomainError('codex_runtime_job_unavailable', 'internal_artifact_ref_mismatch');
+  }
+  if (!/^(0|[1-9][0-9]*)$/.test(input.size_bytes)) {
+    throw new DomainError('codex_runtime_job_unavailable', 'internal_artifact_invalid_size_bytes');
+  }
+};
+
+export interface GetInternalArtifactObjectByRefInput {
+  ref: string;
+  include_deleted?: boolean;
+}
+
+export interface TombstoneInternalArtifactObjectInput {
+  ref: string;
+  deleted_at: string;
 }
 
 export interface CancelCodexRuntimeJobInput {
@@ -1320,8 +1374,17 @@ export interface DeliveryRepository {
   materializeCodexRuntimeJob(input: MaterializeCodexRuntimeJobInput): Promise<CodexLaunchMaterialization>;
   startCodexRuntimeJob(input: StartCodexRuntimeJobInput): Promise<CodexRuntimeJob>;
   appendCodexRuntimeJobEvent(input: AppendCodexRuntimeJobEventInput): Promise<CodexRuntimeJob>;
+  createOrReplayInternalArtifactObject(input: CreateInternalArtifactObjectInput): Promise<InternalArtifactObject>;
+  getInternalArtifactObjectByRef(input: GetInternalArtifactObjectByRefInput): Promise<InternalArtifactObject | undefined>;
+  getInternalArtifactObjectById(id: string): Promise<InternalArtifactObject | undefined>;
+  tombstoneInternalArtifactObject(input: TombstoneInternalArtifactObjectInput): Promise<InternalArtifactObject>;
+  reserveCodexRuntimeJobArtifactUpload(input: ReserveCodexRuntimeJobArtifactUploadInput): Promise<void>;
+  bindReservedCodexRuntimeJobArtifact(input: BindReservedCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
   createCodexRuntimeJobArtifact(input: CreateCodexRuntimeJobArtifactInput): Promise<CodexRuntimeJobArtifact>;
   listCodexRuntimeJobArtifacts(input: ListCodexRuntimeJobArtifactsInput): Promise<CodexRuntimeJobArtifact[]>;
+  getCodexRuntimeJobArtifactByInternalRef(
+    input: GetCodexRuntimeJobArtifactByInternalRefInput,
+  ): Promise<CodexRuntimeJobArtifact | undefined>;
   createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void>;
   getWorkspaceBundleDownloadForRuntimeJob(input: GetWorkspaceBundleDownloadForRuntimeJobInput): Promise<WorkspaceBundleDownloadForRuntimeJob>;
   cancelCodexRuntimeJob(input: CancelCodexRuntimeJobInput): Promise<CodexRuntimeJob>;

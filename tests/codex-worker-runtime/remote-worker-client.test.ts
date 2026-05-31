@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +31,9 @@ import {
 } from '../../packages/codex-worker-runtime/src/workspace-bundle';
 
 const digest = (char: string) => `sha256:${char.repeat(64)}`;
+const rawDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+const runtimeArtifactRef = (runtimeJobId: string, kind: unknown) =>
+  `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${runtimeJobId}/${String(kind)}`;
 
 const generatedSpec = (patch: Partial<GeneratedSpecDraftV1> = {}): GeneratedSpecDraftV1 => ({
   schema_version: 'spec_draft.v1',
@@ -378,7 +382,7 @@ describe('remote codex worker client', () => {
             name: input.name,
             content_type: input.content_type,
             digest: input.digest,
-            internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+            internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
           },
         };
       },
@@ -454,6 +458,18 @@ describe('remote codex worker client', () => {
     expect(uploadedArtifacts.map((entry) => entry.kind)).toEqual(
       expect.arrayContaining(['generated_payload', 'generation_validation_report']),
     );
+    for (const artifact of uploadedArtifacts) {
+      expect(artifact.bytes).toBeInstanceOf(Uint8Array);
+      expect(artifact.digest).toBe(rawDigest(artifact.bytes as Uint8Array));
+      expect(artifact.size_bytes).toBe((artifact.bytes as Uint8Array).byteLength);
+      expect(artifact.artifact_idempotency_key).toBe(
+        codexCanonicalDigest({
+          kind: artifact.kind,
+          name: artifact.name,
+          digest: artifact.digest,
+        }),
+      );
+    }
     expect(terminalized[0]).toMatchObject({
       launch_lease_id: 'lease-1',
       terminal_status: 'succeeded',
@@ -464,7 +480,7 @@ describe('remote codex worker client', () => {
         generation_artifacts: expect.arrayContaining([
           expect.objectContaining({
             kind: 'generated_payload',
-            internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+            internal_ref: runtimeArtifactRef('runtime-job-1', 'generated_payload'),
           }),
         ]),
       },
@@ -539,7 +555,7 @@ describe('remote codex worker client', () => {
             name: input.name,
             content_type: input.content_type,
             digest: input.digest,
-            internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+            internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
           },
         }),
         terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
@@ -696,7 +712,7 @@ describe('remote codex worker client', () => {
             name: input.name,
             content_type: input.content_type,
             digest: input.digest,
-            internal_ref: `artifact://codex-runtime-jobs/runtime-job-run-1/artifacts/${String(input.kind)}`,
+            internal_ref: runtimeArtifactRef('runtime-job-run-1', input.kind),
           },
         };
       },
@@ -783,6 +799,11 @@ describe('remote codex worker client', () => {
     expect(driverInputs).toEqual(['/workspace']);
     expect(driverObjectives).toEqual(['Implement the package and report changed files.']);
     expect(uploadedArtifacts.map((entry) => entry.kind)).toContain('run_execution_patch');
+    const patchUpload = uploadedArtifacts.find((entry) => entry.kind === 'run_execution_patch');
+    expect(patchUpload?.bytes).toEqual(
+      Buffer.from('diff --git a/.forgeloop/repo-owned.toml b/.forgeloop/repo-owned.toml\ndiff --git a/README.md b/README.md\n'),
+    );
+    expect(patchUpload?.digest).toBe(rawDigest(patchUpload?.bytes as Uint8Array));
     expect(terminalized[0]).toMatchObject({
       launch_lease_id: 'lease-run-1',
       terminal_status: 'succeeded',
@@ -802,7 +823,7 @@ describe('remote codex worker client', () => {
           digest: workspaceBundleArchiveDigest(
             Buffer.from('diff --git a/.forgeloop/repo-owned.toml b/.forgeloop/repo-owned.toml\ndiff --git a/README.md b/README.md\n'),
           ),
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-run-1/artifacts/run_execution_patch',
+          internal_ref: runtimeArtifactRef('runtime-job-run-1', 'run_execution_patch'),
         },
         runtime_evidence: expect.objectContaining({
           app_server_attempted: true,
@@ -891,7 +912,7 @@ describe('remote codex worker client', () => {
             name: input.name,
             content_type: input.content_type,
             digest: input.digest,
-            internal_ref: `artifact://codex-runtime-jobs/runtime-job-run-1/artifacts/${String(input.kind)}`,
+            internal_ref: runtimeArtifactRef('runtime-job-run-1', input.kind),
           },
         };
       },
@@ -1527,7 +1548,7 @@ describe('remote codex worker client', () => {
               name: input.name,
               content_type: input.content_type,
               digest: input.digest,
-              internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+              internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
             },
           };
         },
@@ -2267,7 +2288,7 @@ describe('remote codex worker client', () => {
             name: input.name,
             content_type: input.content_type,
             digest: input.digest,
-            internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+            internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
           },
         }),
         terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
@@ -2355,7 +2376,7 @@ describe('remote codex worker client', () => {
             name: input.name,
             content_type: input.content_type,
             digest: input.digest,
-            internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+            internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
           },
         }),
         terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
@@ -2445,7 +2466,7 @@ describe('remote codex worker client', () => {
             name: input.name,
             content_type: input.content_type,
             digest: input.digest,
-            internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+            internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
           },
         }),
         terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
@@ -2538,7 +2559,7 @@ describe('remote codex worker client', () => {
               name: input.name,
               content_type: input.content_type,
               digest: input.digest,
-              internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+              internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
             },
           };
         },
@@ -2583,15 +2604,17 @@ describe('remote codex worker client', () => {
         schema_version: 'generated_payload_ref.v1',
         artifact: {
           kind: 'generated_payload',
-          internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/generated_payload',
+          internal_ref: runtimeArtifactRef('runtime-job-1', 'generated_payload'),
         },
       },
     });
-    expect(uploadedArtifacts.find((artifact) => artifact.kind === 'generated_payload')).toMatchObject({
+    const generatedPayloadArtifact = uploadedArtifacts.find((artifact) => artifact.kind === 'generated_payload');
+    expect(generatedPayloadArtifact).toMatchObject({
       metadata_json: {
-        generated_payload: expect.objectContaining({ content: 'x'.repeat(70_000) }),
+        generated_payload_digest: codexCanonicalDigest(generatedSpec({ content: 'x'.repeat(70_000) })),
       },
     });
+    expect(JSON.stringify(generatedPayloadArtifact?.metadata_json)).not.toContain('generated_payload":{"content"');
     expect(JSON.stringify(terminalized[0]?.terminal_result_json)).not.toContain('x'.repeat(100));
   });
 
@@ -2736,7 +2759,7 @@ describe('remote codex worker client', () => {
               name: input.name,
               content_type: input.content_type,
               digest: input.digest,
-              internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+              internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
             },
           };
         },
@@ -2835,7 +2858,7 @@ describe('remote codex worker client', () => {
               name: input.name,
               content_type: input.content_type,
               digest: input.digest,
-              internal_ref: `artifact://codex-runtime-jobs/runtime-job-1/artifacts/${String(input.kind)}`,
+              internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
             },
           };
         },

@@ -44,6 +44,9 @@ describe('database reset guard', () => {
     );
 
     const launchLeaseIndex = resettableTables.indexOf('codex_launch_leases');
+    expect(resettableTables.indexOf('internal_artifact_objects')).toBeLessThan(
+      resettableTables.indexOf('codex_runtime_job_artifacts'),
+    );
     expect(resettableTables.indexOf('codex_runtime_job_artifacts')).toBeLessThan(launchLeaseIndex);
     expect(resettableTables.indexOf('codex_launch_token_envelopes')).toBeLessThan(launchLeaseIndex);
     expect(resettableTables.indexOf('codex_runtime_jobs')).toBeLessThan(launchLeaseIndex);

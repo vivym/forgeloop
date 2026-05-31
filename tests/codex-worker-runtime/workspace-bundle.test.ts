@@ -285,8 +285,10 @@ describe('workspace bundle validation and safe unpack', () => {
       content_type: 'text/x-diff',
       changed_files: ['src/app.ts'],
       digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-      internal_ref: expect.stringMatching(/^artifact:\/\/codex-runtime-jobs\/runtime-job-1\/artifacts\//),
+      bytes: Buffer.from('diff --git a/src/app.ts b/src/app.ts\n'),
+      size_bytes: Buffer.byteLength('diff --git a/src/app.ts b/src/app.ts\n', 'utf8'),
     });
+    expect(patchArtifact).not.toHaveProperty('internal_ref');
 
     expect(() =>
       createWorkspaceBundlePatchArtifact({

@@ -21,3 +21,5 @@ export * from './queries/public-evidence-serialization';
 export * from './queries/web-product-queries';
 export * from './queries/project-management-queries';
 export * from './reset';
+export * from './internal-artifacts/types';
+export * from './internal-artifacts/local-internal-artifact-store';

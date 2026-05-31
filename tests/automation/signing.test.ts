@@ -90,4 +90,76 @@ describe('automation request signing', () => {
       reason: 'timestamp_invalid',
     });
   });
+
+  it('optionally signs selected request headers without changing default signatures', () => {
+    const verifierNow = '2026-05-15T00:00:00.000Z';
+    const signingInput = {
+      method: 'POST',
+      pathAndQuery: '/internal/artifacts:upload',
+      rawBody: Buffer.from('hello'),
+      actorId: 'daemon-actor',
+      actorClass: 'automation_daemon',
+      daemonIdentity: 'daemon-1',
+      timestamp: verifierNow,
+      secret: 'secret',
+      signedHeaders: {
+        'x-forgeloop-artifact-metadata': 'metadata-v1',
+      },
+    } satisfies SignAutomationRequestInput;
+
+    const signed = signAutomationRequest(signingInput);
+
+    expect(canonicalAutomationSignaturePayload(signingInput)).toContain(
+      '\nsigned_headers\nx-forgeloop-artifact-metadata:metadata-v1',
+    );
+    expect(
+      verifyAutomationRequestSignature({
+        ...signingInput,
+        headers: {
+          ...signed,
+          'X-Forgeloop-Artifact-Metadata': 'metadata-v1',
+        },
+        now: verifierNow,
+        requiredSignedHeaders: ['x-forgeloop-artifact-metadata'],
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      verifyAutomationRequestSignature({
+        ...signingInput,
+        headers: {
+          ...signed,
+          'X-Forgeloop-Artifact-Metadata': 'metadata-v2',
+        },
+        now: verifierNow,
+        requiredSignedHeaders: ['x-forgeloop-artifact-metadata'],
+      }),
+    ).toEqual({ ok: false, reason: 'signature_mismatch' });
+    expect(
+      verifyAutomationRequestSignature({
+        ...signingInput,
+        headers: signed,
+        now: verifierNow,
+        requiredSignedHeaders: ['x-forgeloop-artifact-metadata'],
+      }),
+    ).toEqual({ ok: false, reason: 'signed_header_mismatch' });
+  });
+
+  it('rejects non-string signed header values at signing time', () => {
+    const signingInput = {
+      method: 'POST',
+      pathAndQuery: '/internal/artifacts:upload',
+      rawBody: Buffer.from('hello'),
+      actorId: 'daemon-actor',
+      actorClass: 'automation_daemon',
+      daemonIdentity: 'daemon-1',
+      timestamp: '2026-05-15T00:00:00.000Z',
+      secret: 'secret',
+      signedHeaders: {
+        'x-forgeloop-artifact-metadata': ['metadata-v1'],
+      },
+    } as unknown as SignAutomationRequestInput;
+
+    expect(() => signAutomationRequest(signingInput)).toThrow(/signed header/i);
+    expect(() => canonicalAutomationSignaturePayload(signingInput)).toThrow(/signed header/i);
+  });
 });

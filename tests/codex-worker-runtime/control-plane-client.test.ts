@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { codexCanonicalDigest } from '@forgeloop/domain';
+import { codexCanonicalDigest, runtimeArtifactUploadProofPayload } from '@forgeloop/domain';
 
 import { CodexRuntimeControlPlaneClient } from '../../packages/codex-worker-runtime/src/control-plane-client';
 import { workspaceBundleArchiveDigest } from '../../packages/codex-worker-runtime/src/workspace-bundle';
@@ -36,6 +36,9 @@ const expectWorkerDigest = (body: Record<string, unknown>) => {
   const { body_digest: bodyDigest, ...unsignedBody } = body;
   expect(bodyDigest).toBe(codexCanonicalDigest(unsignedBody));
 };
+
+const parseRuntimeArtifactMetadata = (request: CapturedRequest): Record<string, unknown> =>
+  JSON.parse(Buffer.from(String((request.init.headers as Record<string, string>)['x-forgeloop-runtime-artifact-metadata']), 'base64url').toString('utf8'));
 
 const tempRoots: string[] = [];
 
@@ -172,16 +175,6 @@ describe('CodexRuntimeControlPlaneClient', () => {
       event_payload_json: { stage: 'started' },
       event_payload_digest: codexCanonicalDigest({ stage: 'started' }),
     });
-    await client.uploadRuntimeJobArtifact('worker-1', 'runtime-job-1', {
-      workerSessionToken: 'session-1',
-      artifact_idempotency_key: 'artifact-1',
-      kind: 'generation_output',
-      name: 'payload.json',
-      content_type: 'application/json',
-      digest: 'sha256:' + 'd'.repeat(64),
-      size_bytes: 12,
-      metadata_json: { schema: 'test' },
-    });
     await client.terminalizeRuntimeJob('worker-1', 'runtime-job-1', {
       workerSessionToken: 'session-1',
       launch_lease_id: 'lease-1',
@@ -199,7 +192,6 @@ describe('CodexRuntimeControlPlaneClient', () => {
       ['POST', '/internal/codex-workers/worker-1/runtime-jobs/runtime-job-1/materialize'],
       ['POST', '/internal/codex-workers/worker-1/runtime-jobs/runtime-job-1/started'],
       ['POST', '/internal/codex-workers/worker-1/runtime-jobs/runtime-job-1/events'],
-      ['POST', '/internal/codex-workers/worker-1/runtime-jobs/runtime-job-1/artifacts'],
       ['POST', '/internal/codex-workers/worker-1/runtime-jobs/runtime-job-1/terminal'],
     ]);
 
@@ -221,8 +213,112 @@ describe('CodexRuntimeControlPlaneClient', () => {
     expect(bodyAt(4)).toMatchObject({ materialization_request_id: 'materialize-1' });
     expect(bodyAt(5)).toMatchObject({ start_idempotency_key: 'start-1' });
     expect(bodyAt(6)).toMatchObject({ event_idempotency_key: 'event-key-1' });
-    expect(bodyAt(7)).toMatchObject({ artifact_idempotency_key: 'artifact-1' });
-    expect(bodyAt(8)).toMatchObject({ terminal_idempotency_key: 'terminal-1' });
+    expect(bodyAt(7)).toMatchObject({ terminal_idempotency_key: 'terminal-1' });
+  });
+
+  it('uploads runtime artifact bytes as octet-stream with metadata in the runtime artifact header', async () => {
+    const artifactBytes = Buffer.from('{"ok":true}', 'utf8');
+    const { fetchImpl, requests } = createFetchRecorder();
+    const client = new CodexRuntimeControlPlaneClient({
+      baseUrl: 'https://control.test',
+      fetchImpl,
+      nonceFactory: () => 'nonce-artifact',
+      now: () => '2026-05-23T01:02:03.000Z',
+    });
+
+    await client.uploadRuntimeJobArtifact('worker-1', 'runtime-job-1', {
+      workerSessionToken: 'session-1',
+      artifact_idempotency_key: 'artifact-1',
+      kind: 'generation_output',
+      name: 'payload.json',
+      content_type: 'application/json',
+      digest: 'sha256:' + 'd'.repeat(64),
+      size_bytes: artifactBytes.byteLength,
+      metadata_json: { schema: 'test' },
+      bytes: artifactBytes,
+    });
+
+    expect(requests).toHaveLength(1);
+    const request = requests[0]!;
+    expect([request.init.method, new URL(request.url).pathname]).toEqual([
+      'POST',
+      '/internal/codex-workers/worker-1/runtime-jobs/runtime-job-1/artifacts',
+    ]);
+    expect(request.init.body).toEqual(artifactBytes);
+    expect(request.init.headers).toMatchObject({
+      'content-type': 'application/octet-stream',
+      accept: 'application/json',
+      'x-forgeloop-runtime-artifact-metadata': expect.any(String),
+    });
+    expect(request.init.headers).not.toHaveProperty('content-length');
+    const metadata = parseRuntimeArtifactMetadata(request);
+    const { body_digest: bodyDigest, ...unsignedMetadata } = metadata;
+    expect(unsignedMetadata).toEqual({
+      schema_version: 'codex_runtime_job_artifact_upload.v2',
+      worker_session_token: 'session-1',
+      nonce: 'nonce-artifact',
+      nonce_timestamp: '2026-05-23T01:02:03.000Z',
+      artifact_idempotency_key: 'artifact-1',
+      kind: 'generation_output',
+      name: 'payload.json',
+      content_type: 'application/json',
+      digest: 'sha256:' + 'd'.repeat(64),
+      size_bytes: String(artifactBytes.byteLength),
+      metadata_json: { schema: 'test' },
+    });
+    expect(bodyDigest).toBe(
+      codexCanonicalDigest(
+        runtimeArtifactUploadProofPayload({
+          method: 'POST',
+          path: '/internal/codex-workers/worker-1/runtime-jobs/runtime-job-1/artifacts',
+          worker_id: 'worker-1',
+          runtime_job_id: 'runtime-job-1',
+          metadata: unsignedMetadata as Parameters<typeof runtimeArtifactUploadProofPayload>[0]['metadata'],
+        }),
+      ),
+    );
+  });
+
+  it('sends encoded runtime artifact upload paths while signing the server proof path', async () => {
+    const artifactBytes = Buffer.from('artifact bytes', 'utf8');
+    const { fetchImpl, requests } = createFetchRecorder();
+    const client = new CodexRuntimeControlPlaneClient({
+      baseUrl: 'https://control.test',
+      fetchImpl,
+      nonceFactory: () => 'nonce-encoded-artifact',
+      now: () => '2026-05-23T01:02:03.000Z',
+    });
+
+    await client.uploadRuntimeJobArtifact('worker/1', 'runtime/job/1', {
+      workerSessionToken: 'session-1',
+      artifact_idempotency_key: 'artifact-encoded',
+      kind: 'startup_failure_evidence',
+      name: 'startup-failure.json',
+      content_type: 'application/json',
+      digest: 'sha256:' + 'e'.repeat(64),
+      size_bytes: artifactBytes.byteLength,
+      bytes: artifactBytes,
+    });
+
+    expect(requests).toHaveLength(1);
+    const request = requests[0]!;
+    expect([request.init.method, new URL(request.url).pathname]).toEqual([
+      'POST',
+      '/internal/codex-workers/worker%2F1/runtime-jobs/runtime%2Fjob%2F1/artifacts',
+    ]);
+    const metadata = parseRuntimeArtifactMetadata(request);
+    const { body_digest: bodyDigest, ...unsignedMetadata } = metadata;
+    expect(bodyDigest).toBe(
+      codexCanonicalDigest(
+        runtimeArtifactUploadProofPayload({
+          method: 'POST',
+          path: '/internal/codex-workers/worker/1/runtime-jobs/runtime/job/1/artifacts',
+          worker_id: 'worker/1',
+          runtime_job_id: 'runtime/job/1',
+          metadata: unsignedMetadata as Parameters<typeof runtimeArtifactUploadProofPayload>[0]['metadata'],
+        }),
+      ),
+    );
   });
 
   it('binds worker GET proofs to the requested workload and control paths without a request body', async () => {

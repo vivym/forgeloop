@@ -16,6 +16,7 @@ import {
   type Organization,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
+  type InternalArtifactObject,
   type RunSession,
 } from '../../packages/domain/src/index';
 import {
@@ -656,7 +657,9 @@ const runtimeJobArtifactInput = (
   input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   seed: Awaited<ReturnType<typeof seedRuntime>>,
   artifactId: string,
-) => ({
+) => {
+  const digest = tokenHash(`artifact-digest-${input.runtime_job_id}`);
+  return {
   runtime_job_id: input.runtime_job_id,
   worker_id: seed.workerId,
   worker_session_token: seed.sessionToken,
@@ -667,12 +670,73 @@ const runtimeJobArtifactInput = (
   kind: 'generated_payload',
   name: 'generated-payload.json',
   content_type: 'application/json',
-  digest: tokenHash(`artifact-digest-${input.runtime_job_id}`),
-  internal_ref: `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${artifactId}`,
+  digest,
+  internal_ref: `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${artifactId}`,
+  internal_artifact_object_id: randomUUID(),
   size_bytes: 128,
   metadata_json: {},
   request_digest: tokenHash(`artifact-request-${input.runtime_job_id}`),
   now: later,
+  };
+};
+
+const internalArtifactObjectForRuntimeArtifact = (
+  input: ReturnType<typeof runtimeJobArtifactInput>,
+): InternalArtifactObject => ({
+  id: input.internal_artifact_object_id,
+  artifact_id: input.artifact_id,
+  ref: input.internal_ref,
+  storage_key: `objects/${input.digest.slice('sha256:'.length)}`,
+  kind: 'codex_runtime_job_artifact',
+  content_type: input.content_type,
+  size_bytes: String(input.size_bytes),
+  digest: input.digest,
+  visibility: 'internal',
+  owner_type: 'codex_runtime_job',
+  owner_id: input.runtime_job_id,
+  idempotency_key: input.artifact_idempotency_key,
+  request_digest: input.request_digest,
+  metadata_json: input.metadata_json,
+  created_by_actor_type: 'codex_worker',
+  created_by_actor_id: input.worker_id,
+  created_at: input.now,
+});
+
+const internalArtifactObjectForPendingWorkspaceBundle = (input: {
+  id: string;
+  bundle_id: string;
+  pending_artifact_ref: string;
+  archive_digest: string;
+  manifest_digest: string;
+  run_worker_lease_id: string;
+  run_session_id: string;
+  execution_package_id: string;
+  size_bytes: number;
+  request_digest: string;
+  created_at: string;
+  created_by_actor_id: string;
+}): InternalArtifactObject => ({
+  id: input.id,
+  artifact_id: input.bundle_id,
+  ref: input.pending_artifact_ref,
+  storage_key: `objects/${input.archive_digest.slice('sha256:'.length)}`,
+  kind: 'workspace_bundle',
+  content_type: 'application/vnd.forgeloop.workspace-bundle',
+  size_bytes: String(input.size_bytes),
+  digest: input.archive_digest,
+  visibility: 'internal',
+  owner_type: 'run_session',
+  owner_id: input.run_session_id,
+  idempotency_key: `pending-workspace-bundle:${input.bundle_id}`,
+  request_digest: input.request_digest,
+  metadata_json: {
+    manifest_digest: input.manifest_digest,
+    execution_package_id: input.execution_package_id,
+    run_worker_lease_id: input.run_worker_lease_id,
+  },
+  created_by_actor_type: 'codex_worker',
+  created_by_actor_id: input.created_by_actor_id,
+  created_at: input.created_at,
 });
 
 const installLaunchLeaseUpdateDelay = async (client: ReturnType<typeof createDbClient>, leaseId: string) => {
@@ -788,10 +852,11 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
         await installPendingWorkspaceBundleInsertDelay(firstClient, bundleId);
 
         const archiveBytes = Buffer.from('pending workspace bundle race\n');
+        const archiveRef = `artifact://internal/workspace_bundle/run_session/${run.id}/${bundleId}`;
         const workspaceAcquisitionJson = {
           schema_version: 'workspace_bundle_acquisition.v1',
           bundle_id: bundleId,
-          archive_ref: `artifact:codex-pending-bundles:${bundleId}`,
+          archive_ref: archiveRef,
           archive_digest: bytesDigest(archiveBytes),
           manifest_digest: tokenHash('pending-bundle-race-manifest'),
           size_bytes: archiveBytes.byteLength,
@@ -801,12 +866,12 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           id: randomUUID(),
           bundle_id: bundleId,
           pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+          internal_artifact_object_id: randomUUID(),
           archive_digest: workspaceAcquisitionJson.archive_digest,
           manifest_digest: workspaceAcquisitionJson.manifest_digest,
           run_worker_lease_id: runWorkerLease.id,
           run_session_id: run.id,
           execution_package_id: run.execution_package_id,
-          archive_bytes_base64: archiveBytes.toString('base64'),
           size_bytes: archiveBytes.byteLength,
           workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
           workspace_acquisition_json: workspaceAcquisitionJson,
@@ -814,6 +879,22 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
           request_digest: tokenHash('pending-bundle-race-request'),
           created_at: now,
         };
+        await firstRepository.createOrReplayInternalArtifactObject(
+          internalArtifactObjectForPendingWorkspaceBundle({
+            id: input.internal_artifact_object_id,
+            bundle_id: input.bundle_id,
+            pending_artifact_ref: input.pending_artifact_ref,
+            archive_digest: input.archive_digest,
+            manifest_digest: input.manifest_digest,
+            run_worker_lease_id: input.run_worker_lease_id,
+            run_session_id: input.run_session_id,
+            execution_package_id: input.execution_package_id,
+            size_bytes: input.size_bytes,
+            request_digest: tokenHash('pending-bundle-race-object-request'),
+            created_at: input.created_at,
+            created_by_actor_id: runWorkerLease.worker_id,
+          }),
+        );
 
         await expect(
           Promise.all([
@@ -1056,6 +1137,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
 
         const artifactId = randomUUID();
         const artifactInput = runtimeJobArtifactInput(input, seed, artifactId);
+        await repository.createOrReplayInternalArtifactObject(internalArtifactObjectForRuntimeArtifact(artifactInput));
         const artifact = await repository.createCodexRuntimeJobArtifact(artifactInput);
 
         await expect(
@@ -1077,7 +1159,7 @@ describe('Codex runtime Drizzle materialization concurrency', () => {
             nonce: `artifact-same-digest-different-key-${conflictingArtifactId}`,
             artifact_id: conflictingArtifactId,
             artifact_idempotency_key: `artifact-conflict-${input.runtime_job_id}`,
-            internal_ref: `artifact://codex-runtime-jobs/${input.runtime_job_id}/artifacts/${conflictingArtifactId}`,
+            internal_ref: `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${input.runtime_job_id}/${conflictingArtifactId}`,
             request_digest: tokenHash(`artifact-same-digest-conflict-request-${input.runtime_job_id}`),
           }),
         ).rejects.toMatchObject({ name: 'DomainError', code: 'codex_runtime_job_unavailable' });

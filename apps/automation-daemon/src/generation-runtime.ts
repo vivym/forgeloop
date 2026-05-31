@@ -23,6 +23,7 @@ import {
 } from '@forgeloop/codex-runtime';
 import {
   codexCanonicalDigest,
+  parseInternalArtifactRef,
   type CodexDockerRuntimeEvidence,
   validateCodexRuntimeJobTerminalResult,
   type CodexGenerationRuntimeJobResult,
@@ -335,7 +336,12 @@ const validateRemoteTerminalResult = <TTaskKind extends GenerationTaskKind>(
   outputSchemaVersion: string,
   terminalResultJson: unknown,
 ): CodexGenerationResult<GeneratedForTask<TTaskKind>> => {
-  const terminalResult = validateCodexRuntimeJobTerminalResult(terminalResultJson);
+  let terminalResult: ReturnType<typeof validateCodexRuntimeJobTerminalResult>;
+  try {
+    terminalResult = validateCodexRuntimeJobTerminalResult(terminalResultJson);
+  } catch {
+    throw new CodexGenerationError('generated_output_schema_invalid', { retryable: false });
+  }
   if (terminalResult.task_kind === 'run_execution') {
     throw new CodexGenerationError('generated_output_schema_invalid', { retryable: false });
   }
@@ -366,8 +372,13 @@ const validateRemoteTerminalResult = <TTaskKind extends GenerationTaskKind>(
       if (artifact.internal_ref === undefined || artifact.digest === undefined) {
         return [];
       }
-      const expectedPrefix = `artifact://codex-runtime-jobs/${runtimeJobId}/artifacts/`;
-      if (!artifact.internal_ref.startsWith(expectedPrefix)) {
+      let parsed: ReturnType<typeof parseInternalArtifactRef>;
+      try {
+        parsed = parseInternalArtifactRef(artifact.internal_ref);
+      } catch {
+        throw new CodexGenerationError('generated_output_schema_invalid', { retryable: false });
+      }
+      if (parsed.kind !== 'codex_runtime_job_artifact' || parsed.owner_type !== 'codex_runtime_job' || parsed.owner_id !== runtimeJobId) {
         throw new CodexGenerationError('generated_output_schema_invalid', { retryable: false });
       }
       return [
