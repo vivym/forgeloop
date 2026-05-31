@@ -900,7 +900,7 @@ describe('DeliveryRepository in-memory adapter', () => {
     expect(await repository.getPlanRevision('missing-plan-revision')).toBeUndefined();
   });
 
-  it('keeps the original object event when the same event id is appended again', async () => {
+  it('rejects duplicate object event ids instead of ignoring the conflicting audit row', async () => {
     const repository = new InMemoryDeliveryRepository();
     const duplicateEvent: ObjectEvent = {
       ...objectEvent,
@@ -910,12 +910,15 @@ describe('DeliveryRepository in-memory adapter', () => {
     };
 
     await repository.appendObjectEvent(objectEvent);
-    await repository.appendObjectEvent(duplicateEvent);
 
+    await expectDomainErrorCode(
+      () => repository.appendObjectEvent(duplicateEvent),
+      'workflow_invalid_transition',
+    );
     expect(await repository.listObjectEvents(executionPackage.id)).toEqual([objectEvent]);
   });
 
-  it('keeps the original status history when the same history id is appended again', async () => {
+  it('rejects duplicate status history ids instead of ignoring the conflicting audit row', async () => {
     const repository = new InMemoryDeliveryRepository();
     const duplicateStatusHistory: StatusHistory = {
       ...statusHistory,
@@ -926,9 +929,48 @@ describe('DeliveryRepository in-memory adapter', () => {
     };
 
     await repository.appendStatusHistory(statusHistory);
-    await repository.appendStatusHistory(duplicateStatusHistory);
 
+    await expectDomainErrorCode(
+      () => repository.appendStatusHistory(duplicateStatusHistory),
+      'workflow_invalid_transition',
+    );
     expect(await repository.listStatusHistory(executionPackage.id)).toEqual([statusHistory]);
+  });
+
+  it('rejects duplicate artifact ids instead of overwriting the evidence row', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const duplicateArtifact: Artifact = {
+      ...artifact,
+      kind: 'run_log',
+      uri: 's3://bucket/conflicting-log.md',
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveArtifact(artifact);
+
+    await expectDomainErrorCode(
+      () => repository.saveArtifact(duplicateArtifact),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listArtifactsForObject('run_session', runSession.id)).toEqual([artifact]);
+  });
+
+  it('rejects duplicate decision ids instead of overwriting the decision row', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const duplicateDecision: Decision = {
+      ...decision,
+      decision: 'reject',
+      rationale: 'Conflicting duplicate decision.',
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveDecision(decision);
+
+    await expectDomainErrorCode(
+      () => repository.saveDecision(duplicateDecision),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listDecisionsForObject('review_packet', reviewPacket.id)).toEqual([decision]);
   });
 
   it('persists artifact trace subject fields', async () => {

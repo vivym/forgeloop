@@ -5622,9 +5622,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async appendObjectEvent(objectEvent: ObjectEvent): Promise<void> {
-    if (!this.objectEvents.has(objectEvent.id)) {
-      this.objectEvents.set(objectEvent.id, clone(objectEvent));
+    if (this.objectEvents.has(objectEvent.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Object event ${objectEvent.id} already exists`);
     }
+    this.objectEvents.set(objectEvent.id, clone(objectEvent));
   }
 
   async listObjectEvents(objectId: string, objectType?: string): Promise<ObjectEvent[]> {
@@ -5637,9 +5638,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async appendStatusHistory(statusHistory: StatusHistory): Promise<void> {
-    if (!this.statusHistories.has(statusHistory.id)) {
-      this.statusHistories.set(statusHistory.id, clone(statusHistory));
+    if (this.statusHistories.has(statusHistory.id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Status history ${statusHistory.id} already exists`,
+      );
     }
+    this.statusHistories.set(statusHistory.id, clone(statusHistory));
   }
 
   async listStatusHistory(objectId: string, objectType?: string): Promise<StatusHistory[]> {
@@ -5652,6 +5657,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveArtifact(artifact: Artifact): Promise<void> {
+    if (this.artifacts.has(artifact.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Artifact ${artifact.id} already exists`);
+    }
     this.artifacts.set(artifact.id, clone(artifact));
   }
 
@@ -5662,6 +5670,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveDecision(decision: Decision): Promise<void> {
+    if (this.decisions.has(decision.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Decision ${decision.id} already exists`);
+    }
     this.decisions.set(decision.id, clone(decision));
   }
 
