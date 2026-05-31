@@ -1,6 +1,7 @@
 import type {
   BoundarySummary as ContractBoundarySummary,
   BoundarySummaryRevision as ContractBoundarySummaryRevision,
+  BoundaryRound as ContractBoundaryRound,
   BrainstormingAnswer as ContractBoundaryAnswer,
   BrainstormingDecision as ContractBoundaryDecision,
   BrainstormingQuestion as ContractBoundaryQuestion,
@@ -13,6 +14,8 @@ export interface BoundaryQuestion extends ContractBoundaryQuestion {}
 export interface BoundaryAnswer extends ContractBoundaryAnswer {}
 
 export interface BoundaryDecision extends ContractBoundaryDecision {}
+
+export interface BoundaryRound extends ContractBoundaryRound {}
 
 export interface BrainstormingSession extends ContractBrainstormingSession, WorkflowPersistenceRefs {
   created_at: IsoDateTime;

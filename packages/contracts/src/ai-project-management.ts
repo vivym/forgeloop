@@ -191,6 +191,7 @@ export const boundaryRoundSchema = z
     leader_input_markdown: nonEmpty.optional(),
     ai_output_markdown: nonEmpty.optional(),
     runtime_job_id: nonEmpty.optional(),
+    codex_session_turn_id: nonEmpty.optional(),
     runtime_profile_revision_id: nonEmpty.optional(),
     credential_binding_version_id: nonEmpty.optional(),
     app_server_thread_digest: nonEmpty.optional(),
