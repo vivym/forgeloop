@@ -1153,7 +1153,7 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
-  it('recovers an expired active lease at claim time and allows a new claim', async () => {
+  it('rejects claiming over an expired active lease without explicit recovery', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const expiredClaim = await repository.claimCodexSessionLease({
@@ -1161,34 +1161,86 @@ describe('Plan Item Workflow repository', () => {
       expires_at: '2026-05-31T00:01:00.000Z',
     });
 
-    const recovered = await repository.claimCodexSessionLease({
-      ...leaseInput,
-      lease_id: 'lease-2',
-      lease_token_hash: 'sha256:lease-token-2',
-      worker_id: 'worker-2',
-      worker_session_digest: 'sha256:worker-session-2',
-      now: '2026-05-31T00:02:00.000Z',
-      expires_at: '2026-05-31T00:07:00.000Z',
-    });
+    await expectDomainErrorCode(
+      () =>
+        repository.claimCodexSessionLease({
+          ...leaseInput,
+          lease_id: 'lease-2',
+          lease_token_hash: 'sha256:lease-token-2',
+          worker_id: 'worker-2',
+          worker_session_digest: 'sha256:worker-session-2',
+          now: '2026-05-31T00:02:00.000Z',
+          expires_at: '2026-05-31T00:07:00.000Z',
+        }),
+      'codex_session_lease_conflict',
+    );
 
-    expect(recovered.lease).toMatchObject({ id: 'lease-2', status: 'active', lease_epoch: 2 });
-    expect(recovered.session).toMatchObject({
-      id: 'session-1',
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       status: 'running',
-      active_lease_id: 'lease-2',
-      lease_epoch: 2,
+      active_lease_id: 'lease-1',
+      lease_epoch: 1,
     });
-    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({ active_lease_id: 'lease-2' });
     await expect(repository.renewCodexSessionLease({
       session_id: 'session-1',
       lease_id: expiredClaim.lease.id,
       lease_token_hash: 'sha256:lease-token',
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
-      lease_epoch: 2,
-      now: '2026-05-31T00:02:30.000Z',
+      lease_epoch: 1,
+      now: '2026-05-31T00:00:00.500Z',
       expires_at: '2026-05-31T00:08:00.000Z',
-    })).rejects.toMatchObject({ code: 'codex_session_lease_conflict' });
+    })).resolves.toMatchObject({ id: 'lease-1', status: 'active' });
+  });
+
+  it('explicitly recovers an expired active lease before claiming a recovering session', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.claimCodexSessionLease({
+      ...leaseInput,
+      expires_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    const recovered = await repository.recoverCodexSessionLeaseForClaim({
+      session_id: 'session-1',
+      workflow_id: 'workflow-1',
+      lease_id: 'lease-1',
+      lease_token_hash: 'sha256:lease-token',
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      lease_epoch: 1,
+      expected_previous_snapshot_digest: undefined,
+      now: '2026-05-31T00:02:00.000Z',
+    });
+
+    expect(recovered.lease).toMatchObject({
+      id: 'lease-1',
+      status: 'fenced',
+      fenced_at: '2026-05-31T00:02:00.000Z',
+    });
+    expect(recovered.session).toMatchObject({
+      id: 'session-1',
+      status: 'recovering',
+      lease_epoch: 1,
+    });
+    expect(recovered.session).not.toHaveProperty('active_lease_id');
+
+    const claimed = await repository.claimCodexSessionLease({
+      ...leaseInput,
+      lease_id: 'lease-2',
+      lease_token_hash: 'sha256:lease-token-2',
+      worker_id: 'worker-2',
+      worker_session_digest: 'sha256:worker-session-2',
+      now: '2026-05-31T00:03:00.000Z',
+      expires_at: '2026-05-31T00:08:00.000Z',
+    });
+
+    expect(claimed.lease).toMatchObject({ id: 'lease-2', status: 'active', lease_epoch: 2 });
+    expect(claimed.session).toMatchObject({
+      id: 'session-1',
+      status: 'running',
+      active_lease_id: 'lease-2',
+      lease_epoch: 2,
+    });
   });
 
   it('does not recover an expired active lease before rejecting a claim for the wrong workflow', async () => {
@@ -1236,7 +1288,7 @@ describe('Plan Item Workflow repository', () => {
     })).resolves.toMatchObject({ id: 'lease-1', status: 'active' });
   });
 
-  it('does not recover an expired active lease before rejecting a claim with a stale snapshot expectation', async () => {
+  it('does not recover an expired active lease before rejecting a strict claim with a stale snapshot expectation', async () => {
     const repository = new InMemoryDeliveryRepository();
     await seedWorkflowWithSnapshot(repository);
     await repository.claimCodexSessionLease({
@@ -1257,7 +1309,7 @@ describe('Plan Item Workflow repository', () => {
           now: '2026-05-31T00:02:00.000Z',
           expires_at: '2026-05-31T00:07:00.000Z',
         }),
-      'codex_session_snapshot_stale',
+      'codex_session_lease_conflict',
     );
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({

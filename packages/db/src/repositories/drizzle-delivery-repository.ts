@@ -273,6 +273,7 @@ import type {
   ApplyPlanItemWorkflowTransitionInput,
   CreateCodexSessionForkInput,
   CreatePlanItemWorkflowWithInitialSessionInput,
+  RecoverCodexSessionLeaseForClaimInput,
   RenewCodexSessionLeaseInput,
   SelectActiveCodexSessionForkInput,
   TerminalizeCodexSessionTurnInput,
@@ -990,6 +991,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async claimCodexSessionLease(_input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    return this.workflowRepositoryNotImplemented();
+  }
+
+  async recoverCodexSessionLeaseForClaim(
+    _input: RecoverCodexSessionLeaseForClaimInput,
+  ): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
     return this.workflowRepositoryNotImplemented();
   }
 

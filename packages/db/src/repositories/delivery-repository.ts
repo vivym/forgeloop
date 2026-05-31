@@ -323,6 +323,18 @@ export interface RenewCodexSessionLeaseInput {
   expires_at: string;
 }
 
+export interface RecoverCodexSessionLeaseForClaimInput {
+  session_id: string;
+  workflow_id: string;
+  lease_id: string;
+  lease_token_hash: string;
+  worker_id: string;
+  worker_session_digest: string;
+  lease_epoch: number;
+  expected_previous_snapshot_digest?: string;
+  now: string;
+}
+
 export interface TerminalizeCodexSessionTurnInput {
   session_id: string;
   turn_id: string;
@@ -1464,6 +1476,9 @@ export interface DeliveryRepository {
   saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void>;
   listStaleCodexSessionTerminalizationAttempts(sessionId: string): Promise<CodexSessionStaleTerminalizationAttempt[]>;
   claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }>;
+  recoverCodexSessionLeaseForClaim(
+    input: RecoverCodexSessionLeaseForClaimInput,
+  ): Promise<{ session: CodexSession; lease: CodexSessionLease }>;
   renewCodexSessionLease(input: RenewCodexSessionLeaseInput): Promise<CodexSessionLease>;
   terminalizeCodexSessionTurn(
     input: TerminalizeCodexSessionTurnInput,
