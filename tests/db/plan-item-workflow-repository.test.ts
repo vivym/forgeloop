@@ -853,6 +853,7 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-1',
       selected_codex_session_id: 'session-fork',
       manual_decision_id: 'decision-fork-before-lease',
+      transition_id: 'transition-fork-before-lease',
       actor_id: 'actor-tech',
       reason: 'Use the alternate path.',
       now: '2026-05-31T00:03:00.000Z',
@@ -887,6 +888,7 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-1',
       selected_codex_session_id: 'session-fork',
       manual_decision_id: 'decision-fork-before-lease-role-check',
+      transition_id: 'transition-fork-before-lease-role-check',
       actor_id: 'actor-tech',
       reason: 'Use the alternate path.',
       now: '2026-05-31T00:03:00.000Z',
@@ -1181,6 +1183,7 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-1',
       selected_codex_session_id: 'session-fork',
       manual_decision_id: 'decision-fork-before-inactive-turn-check',
+      transition_id: 'transition-fork-before-inactive-turn-check',
       actor_id: 'actor-tech',
       reason: 'Use the alternate path.',
       now: '2026-05-31T00:03:00.000Z',
@@ -1243,6 +1246,7 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-1',
       selected_codex_session_id: 'session-fork',
       manual_decision_id: 'decision-fork-before-turn',
+      transition_id: 'transition-fork-before-turn',
       actor_id: 'actor-tech',
       reason: 'Use the alternate path.',
       now: '2026-05-31T00:03:00.000Z',
@@ -2382,6 +2386,7 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-1',
       selected_codex_session_id: 'session-fork',
       manual_decision_id: 'decision-fork',
+      transition_id: 'transition-fork',
       actor_id: 'actor-tech',
       reason: 'Use the alternate path.',
       now: '2026-05-31T00:03:00.000Z',
@@ -2393,6 +2398,56 @@ describe('Plan Item Workflow repository', () => {
       kind: 'fork_select',
       selected_codex_session_id: 'session-fork',
     });
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([
+      {
+        id: 'transition-fork',
+        workflow_id: 'workflow-1',
+        from_status: 'not_started',
+        to_status: 'not_started',
+        actor_id: 'actor-tech',
+        reason: 'Use the alternate path.',
+        evidence_object_type: 'manual_decision',
+        evidence_object_id: 'decision-fork',
+        codex_session_id: 'session-1',
+        created_at: '2026-05-31T00:03:00.000Z',
+      },
+    ]);
+  });
+
+  it('rejects fork selection with duplicate transition id without switching active session', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
+    await repository.appendPlanItemWorkflowTransition(transitionInput);
+    await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.selectActiveCodexSessionFork({
+          workflow_id: 'workflow-1',
+          selected_codex_session_id: 'session-fork',
+          manual_decision_id: 'decision-fork',
+          transition_id: 'transition-1',
+          actor_id: 'actor-tech',
+          reason: 'Use the alternate path.',
+          now: '2026-05-31T00:03:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({ active_codex_session_id: 'session-1' });
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({ role: 'active' });
+    await expect(repository.getCodexSession('session-fork')).resolves.toMatchObject({ role: 'candidate_fork' });
+    await expect(repository.getWorkflowManualDecision('decision-fork')).resolves.toBeUndefined();
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([transitionInput]);
   });
 
   it('stores a workflow transition only when workflow, session, and turn provenance match', async () => {
@@ -2502,6 +2557,155 @@ describe('Plan Item Workflow repository', () => {
       'workflow_invalid_transition',
     );
     await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
+  it('rejects workflow transitions that fail full contract validation', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          actor_id: '',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          supporting_evidence: [{ object_type: 'codex_session_turn', object_id: 'turn-1' }],
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
+  it('rejects manual decision transitions with missing, foreign, or mismatched decision evidence', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+    });
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
+    await repository.saveWorkflowManualDecision({
+      ...manualDecisionInput,
+      id: 'decision-foreign-workflow',
+      workflow_id: 'workflow-other',
+      codex_session_id: 'session-other',
+    });
+    await repository.saveWorkflowManualDecision({
+      ...manualDecisionInput,
+      id: 'decision-foreign-workflow-session',
+      workflow_id: 'workflow-other',
+      codex_session_id: 'session-other',
+    });
+    await repository.saveWorkflowManualDecision({
+      ...manualDecisionInput,
+      id: 'decision-wrong-actor',
+      created_by_actor_id: 'actor-other',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-missing-decision',
+          evidence_object_id: 'decision-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-foreign-workflow-decision',
+          evidence_object_id: 'decision-foreign-workflow',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-foreign-workflow-session-decision',
+          evidence_object_id: 'decision-foreign-workflow-session',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-wrong-actor-decision',
+          evidence_object_id: 'decision-wrong-actor',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
+  it('rejects execution readiness transitions with missing or foreign readiness evidence', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      actor_id: 'actor-product',
+    });
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+      actor_id: 'actor-product',
+    });
+    await repository.saveExecutionReadinessRecord(readinessRecordInput);
+    await repository.saveExecutionReadinessRecord({
+      ...readinessRecordInput,
+      id: 'readiness-foreign',
+      workflow_id: 'workflow-other',
+      development_plan_item_id: 'item-other',
+      codex_session_id: 'session-other',
+    });
+
+    const readinessTransition = {
+      ...transitionInput,
+      id: 'transition-readiness',
+      from_status: 'implementation_plan_review',
+      to_status: 'execution_ready',
+      actor_id: 'actor-product',
+      reason: 'Mark ready.',
+      evidence_object_type: 'execution_readiness_record',
+      evidence_object_id: 'readiness-1',
+      codex_session_turn_id: undefined,
+    } as const;
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...readinessTransition,
+          id: 'transition-missing-readiness',
+          evidence_object_id: 'readiness-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...readinessTransition,
+          id: 'transition-foreign-readiness',
+          evidence_object_id: 'readiness-foreign',
+        }),
+      'workflow_invalid_transition',
+    );
+
+    await repository.appendPlanItemWorkflowTransition(readinessTransition);
+
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([readinessTransition]);
   });
 
   it('rejects duplicate workflow manual decision ids without overwriting evidence', async () => {
@@ -2628,6 +2832,7 @@ describe('Plan Item Workflow repository', () => {
           workflow_id: 'workflow-1',
           selected_codex_session_id: 'session-fork',
           manual_decision_id: 'decision-duplicate',
+          transition_id: 'transition-duplicate-decision',
           actor_id: 'actor-tech',
           reason: 'Use the alternate path.',
           now: '2026-05-31T00:03:00.000Z',
@@ -2653,6 +2858,7 @@ describe('Plan Item Workflow repository', () => {
           workflow_id: 'workflow-1',
           selected_codex_session_id: 'session-1',
           manual_decision_id: 'decision-current',
+          transition_id: 'transition-current',
           actor_id: 'actor-tech',
           reason: 'Keep current path.',
           now: '2026-05-31T00:03:00.000Z',
@@ -2678,6 +2884,7 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-1',
       selected_codex_session_id: 'session-inactive-fork',
       manual_decision_id: 'decision-inactive-fork',
+      transition_id: 'transition-inactive-fork',
       actor_id: 'actor-tech',
       reason: 'Use an inactive fork.',
       now: '2026-05-31T00:03:00.000Z',
@@ -2686,6 +2893,7 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-1',
       selected_codex_session_id: 'session-1',
       manual_decision_id: 'decision-reactivate-original',
+      transition_id: 'transition-reactivate-original',
       actor_id: 'actor-tech',
       reason: 'Return to the original path.',
       now: '2026-05-31T00:04:00.000Z',

@@ -365,6 +365,7 @@ export interface SelectActiveCodexSessionForkInput {
   workflow_id: string;
   selected_codex_session_id: string;
   manual_decision_id: string;
+  transition_id: string;
   actor_id: string;
   reason: string;
   now: string;

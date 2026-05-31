@@ -81,9 +81,14 @@ import type {
   WorkflowManualDecision,
 } from '@forgeloop/domain';
 import type { ObjectRef } from '@forgeloop/contracts';
-import { workflowTransitionEvidenceObjectTypeSchema } from '@forgeloop/contracts';
+import {
+  planItemWorkflowTransitionSchema,
+  workflowManualDecisionSchema,
+  workflowTransitionEvidenceObjectTypeSchema,
+} from '@forgeloop/contracts';
 import {
   DomainError,
+  assertWorkflowManualDecisionAllowedForTransition,
   assertCodexRuntimeRecoveryReasonCode,
   assertAutomationCapabilityActor,
   assertCanonicalManualScopeKey,
@@ -3029,10 +3034,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.planItemWorkflowTransitions.has(transition.id)) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} already exists`);
     }
-    if (!workflowTransitionEvidenceObjectTypeSchema.safeParse(transition.evidence_object_type).success) {
+    if (!planItemWorkflowTransitionSchema.safeParse(transition).success) {
       throw new DomainError(
         'workflow_invalid_transition',
-        `workflow_invalid_transition: Transition ${transition.id} evidence object type is invalid`,
+        `workflow_invalid_transition: Transition ${transition.id} payload is invalid`,
       );
     }
     this.assertWorkflowCodexSessionProvenance(
@@ -3048,7 +3053,143 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `Transition ${transition.id}`,
       );
     }
+    this.assertPlanItemWorkflowTransitionEvidence(transition);
     this.planItemWorkflowTransitions.set(transition.id, clone(transition));
+  }
+
+  private assertPlanItemWorkflowTransitionEvidence(transition: PlanItemWorkflowTransition): void {
+    this.assertPlanItemWorkflowTransitionPrimaryEvidence(transition);
+    for (const evidence of transition.supporting_evidence ?? []) {
+      this.assertPlanItemWorkflowTransitionEvidenceObject(transition, evidence.object_type, evidence.object_id);
+    }
+  }
+
+  private assertPlanItemWorkflowTransitionPrimaryEvidence(transition: PlanItemWorkflowTransition): void {
+    this.assertPlanItemWorkflowTransitionEvidenceObject(
+      transition,
+      transition.evidence_object_type,
+      transition.evidence_object_id,
+      true,
+    );
+  }
+
+  private assertPlanItemWorkflowTransitionEvidenceObject(
+    transition: PlanItemWorkflowTransition,
+    evidenceObjectType: PlanItemWorkflowTransition['evidence_object_type'],
+    evidenceObjectId: string,
+    isPrimaryEvidence = false,
+  ): void {
+    if (!workflowTransitionEvidenceObjectTypeSchema.safeParse(evidenceObjectType).success) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Transition ${transition.id} evidence object type is invalid`,
+      );
+    }
+
+    if (evidenceObjectType === 'manual_decision') {
+      const decision = this.workflowManualDecisions.get(evidenceObjectId);
+      if (
+        decision === undefined ||
+        decision.workflow_id !== transition.workflow_id ||
+        decision.codex_session_id !== transition.codex_session_id ||
+        decision.created_by_actor_id !== transition.actor_id
+      ) {
+        throw new DomainError(
+          'workflow_invalid_transition',
+          `workflow_invalid_transition: Transition ${transition.id} manual decision evidence is invalid`,
+        );
+      }
+      if (isPrimaryEvidence) {
+        const workflow = this.planItemWorkflows.get(transition.workflow_id);
+        assertWorkflowManualDecisionAllowedForTransition(decision, {
+          from_status: transition.from_status,
+          to_status: transition.to_status,
+          ...(workflow?.previous_status === undefined ? {} : { previous_status: workflow.previous_status }),
+        });
+      }
+      return;
+    }
+
+    if (evidenceObjectType === 'execution_readiness_record') {
+      const record = this.executionReadinessRecords.get(evidenceObjectId);
+      if (
+        record === undefined ||
+        record.workflow_id !== transition.workflow_id ||
+        record.codex_session_id !== transition.codex_session_id
+      ) {
+        throw new DomainError(
+          'workflow_invalid_transition',
+          `workflow_invalid_transition: Transition ${transition.id} execution readiness evidence is invalid`,
+        );
+      }
+    }
+
+    if (evidenceObjectType === 'boundary_summary_revision') {
+      this.assertWorkflowScopedEvidenceRecord(
+        transition,
+        this.boundarySummaryRevisions.get(evidenceObjectId),
+        `Transition ${transition.id} boundary summary revision evidence is invalid`,
+      );
+      return;
+    }
+
+    if (evidenceObjectType === 'spec_revision') {
+      this.assertWorkflowScopedEvidenceRecord(
+        transition,
+        this.specRevisions.get(evidenceObjectId),
+        `Transition ${transition.id} spec revision evidence is invalid`,
+      );
+      return;
+    }
+
+    if (evidenceObjectType === 'implementation_plan_revision') {
+      this.assertWorkflowScopedEvidenceRecord(
+        transition,
+        this.executionPlanRevisions.get(evidenceObjectId),
+        `Transition ${transition.id} implementation plan revision evidence is invalid`,
+      );
+      return;
+    }
+
+    if (evidenceObjectType === 'execution_package') {
+      this.assertWorkflowScopedEvidenceRecord(
+        transition,
+        this.executionPackages.get(evidenceObjectId),
+        `Transition ${transition.id} execution package evidence is invalid`,
+      );
+      return;
+    }
+
+    if (evidenceObjectType === 'run_session') {
+      this.assertWorkflowScopedEvidenceRecord(
+        transition,
+        this.runSessions.get(evidenceObjectId),
+        `Transition ${transition.id} run session evidence is invalid`,
+      );
+      return;
+    }
+
+    if (evidenceObjectType === 'review_packet') {
+      this.assertWorkflowScopedEvidenceRecord(
+        transition,
+        this.reviewPackets.get(evidenceObjectId),
+        `Transition ${transition.id} review packet evidence is invalid`,
+      );
+    }
+  }
+
+  private assertWorkflowScopedEvidenceRecord(
+    transition: PlanItemWorkflowTransition,
+    record: { workflow_id?: string; codex_session_id?: string } | undefined,
+    message: string,
+  ): void {
+    if (
+      record === undefined ||
+      record.workflow_id !== transition.workflow_id ||
+      (record.codex_session_id !== undefined && record.codex_session_id !== transition.codex_session_id)
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: ${message}`);
+    }
   }
 
   async listPlanItemWorkflowTransitions(workflowId: string): Promise<PlanItemWorkflowTransition[]> {
@@ -3733,10 +3874,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `workflow_invalid_transition: Workflow manual decision ${input.manual_decision_id} already exists`,
       );
     }
+    if (this.planItemWorkflowTransitions.has(input.transition_id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${input.transition_id} already exists`);
+    }
     const inactivePrevious: CodexSession = { ...clone(previousActive), role: 'inactive_fork', updated_at: input.now };
     const activeSelected: CodexSession = { ...clone(selected), role: 'active', updated_at: input.now };
     const updatedWorkflow: PlanItemWorkflow = { ...clone(workflow), active_codex_session_id: activeSelected.id, updated_at: input.now };
-    this.workflowManualDecisions.set(input.manual_decision_id, {
+    const manualDecision: WorkflowManualDecision = {
       id: input.manual_decision_id,
       workflow_id: workflow.id,
       codex_session_id: previousActive.id,
@@ -3745,7 +3889,32 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       selected_codex_session_id: selected.id,
       created_by_actor_id: input.actor_id,
       created_at: input.now,
+    };
+    const transition: PlanItemWorkflowTransition = {
+      id: input.transition_id,
+      workflow_id: workflow.id,
+      from_status: workflow.status,
+      to_status: workflow.status,
+      actor_id: input.actor_id,
+      reason: input.reason,
+      evidence_object_type: 'manual_decision',
+      evidence_object_id: manualDecision.id,
+      codex_session_id: previousActive.id,
+      created_at: input.now,
+    };
+    if (!workflowManualDecisionSchema.safeParse(manualDecision).success || !planItemWorkflowTransitionSchema.safeParse(transition).success) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Fork selection transition ${input.transition_id} payload is invalid`,
+      );
+    }
+    assertWorkflowManualDecisionAllowedForTransition(manualDecision, {
+      from_status: transition.from_status,
+      to_status: transition.to_status,
+      ...(workflow.previous_status === undefined ? {} : { previous_status: workflow.previous_status }),
     });
+    this.workflowManualDecisions.set(manualDecision.id, clone(manualDecision));
+    this.planItemWorkflowTransitions.set(transition.id, clone(transition));
     this.codexSessions.set(inactivePrevious.id, clone(inactivePrevious));
     this.codexSessions.set(activeSelected.id, clone(activeSelected));
     this.planItemWorkflows.set(updatedWorkflow.id, clone(updatedWorkflow));
