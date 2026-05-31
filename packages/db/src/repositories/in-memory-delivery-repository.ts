@@ -3206,6 +3206,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `workflow_invalid_transition: Codex session ${session.id} status cannot change through save`,
       );
     }
+    if (existingSession.role !== session.role) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session ${session.id} role cannot change through save`,
+      );
+    }
     this.assertCanSaveCodexSession(session);
     this.codexSessions.set(session.id, clone(session));
   }

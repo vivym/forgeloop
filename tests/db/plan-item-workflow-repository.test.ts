@@ -548,17 +548,21 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSession('session-1')).resolves.toEqual(session);
   });
 
-  it('allows saving a Codex Session with legitimate mutable role and updated_at changes', async () => {
+  it('rejects saving a Codex Session with a role change on an existing active session and preserves active ownership', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const session = await repository.getCodexSession('session-1');
     if (session === undefined) throw new Error('Expected seeded Codex session');
 
-    await repository.saveCodexSession({
-      ...session,
-      role: 'inactive_fork',
-      updated_at: '2026-05-31T00:01:00.000Z',
-    });
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSession({
+          ...session,
+          role: 'inactive_fork',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       owner_id: 'workflow-1',
@@ -568,9 +572,47 @@ describe('Plan Item Workflow repository', () => {
       credential_binding_version_id: 'credential-version-1',
       created_by_actor_id: 'actor-tech',
       status: 'idle',
-      role: 'inactive_fork',
+      role: 'active',
       lease_epoch: 0,
-      updated_at: '2026-05-31T00:01:00.000Z',
+      updated_at: now,
+    });
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
+      active_codex_session_id: 'session-1',
+    });
+  });
+
+  it('rejects saving a candidate fork as active and preserves original role and active ownership', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+    const fork = await repository.getCodexSession('session-fork');
+    if (fork === undefined) throw new Error('Expected seeded fork');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSession({
+          ...fork,
+          role: 'active',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+
+    await expect(repository.getCodexSession('session-fork')).resolves.toMatchObject({
+      role: 'candidate_fork',
+      updated_at: now,
+    });
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
+      active_codex_session_id: 'session-1',
     });
   });
 
@@ -797,13 +839,33 @@ describe('Plan Item Workflow repository', () => {
   it('rejects lease claim for inactive role or candidate fork sessions', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    const session = await repository.getCodexSession('session-1');
-    if (session === undefined) throw new Error('Expected seeded Codex session');
-
-    await repository.saveCodexSession({ ...session, role: 'inactive_fork' });
-    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
-
-    await repository.saveCodexSession({ ...session, role: 'candidate_fork' });
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+    await expectDomainErrorCode(
+      () =>
+        repository.claimCodexSessionLease({
+          ...leaseInput,
+          session_id: 'session-fork',
+          lease_id: 'lease-candidate',
+        }),
+      'codex_session_lease_conflict',
+    );
+    await repository.selectActiveCodexSessionFork({
+      workflow_id: 'workflow-1',
+      selected_codex_session_id: 'session-fork',
+      manual_decision_id: 'decision-fork-before-lease-role-check',
+      actor_id: 'actor-tech',
+      reason: 'Use the alternate path.',
+      now: '2026-05-31T00:03:00.000Z',
+    });
     await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
   });
 
@@ -1077,7 +1139,7 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
-  it('rejects creating a turn for an inactive fork because turns are created before lease claim sets running', async () => {
+  it('rejects creating a turn for an inactive previous session because turns require the selected active fork', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
@@ -1090,16 +1152,21 @@ describe('Plan Item Workflow repository', () => {
       created_by_actor_id: 'actor-tech',
       now,
     });
-    const fork = await repository.getCodexSession('session-fork');
-    if (fork === undefined) throw new Error('Expected seeded fork');
-    await repository.saveCodexSession({ ...fork, role: 'inactive_fork' });
+    await repository.selectActiveCodexSessionFork({
+      workflow_id: 'workflow-1',
+      selected_codex_session_id: 'session-fork',
+      manual_decision_id: 'decision-fork-before-inactive-turn-check',
+      actor_id: 'actor-tech',
+      reason: 'Use the alternate path.',
+      now: '2026-05-31T00:03:00.000Z',
+    });
 
     await expectDomainErrorCode(
       () =>
         repository.createCodexSessionTurn({
           ...turnInput,
-          id: 'turn-fork',
-          codex_session_id: 'session-fork',
+          id: 'turn-previous-active',
+          input_digest: 'sha256:turn-previous-active',
         }),
       'workflow_active_session_missing',
     );
@@ -2206,11 +2273,10 @@ describe('Plan Item Workflow repository', () => {
 
     await repository.saveCodexSession({
       ...fork,
-      role: 'inactive_fork',
       updated_at: '2026-05-31T00:05:00.000Z',
     });
     await expect(repository.getCodexSession('session-fork')).resolves.toMatchObject({
-      role: 'inactive_fork',
+      role: 'candidate_fork',
       status: 'idle',
       forked_from_session_id: 'session-1',
       forked_from_turn_id: 'turn-1',
@@ -2563,11 +2629,7 @@ describe('Plan Item Workflow repository', () => {
       created_by_actor_id: 'actor-tech',
       now,
     });
-    const inactiveFork = await repository.getCodexSession('session-inactive-fork');
-    if (inactiveFork === undefined) throw new Error('Expected seeded fork');
-    await repository.saveCodexSession({ ...inactiveFork, role: 'inactive_fork' });
-
-    const selected = await repository.selectActiveCodexSessionFork({
+    await repository.selectActiveCodexSessionFork({
       workflow_id: 'workflow-1',
       selected_codex_session_id: 'session-inactive-fork',
       manual_decision_id: 'decision-inactive-fork',
@@ -2575,13 +2637,21 @@ describe('Plan Item Workflow repository', () => {
       reason: 'Use an inactive fork.',
       now: '2026-05-31T00:03:00.000Z',
     });
+    const selected = await repository.selectActiveCodexSessionFork({
+      workflow_id: 'workflow-1',
+      selected_codex_session_id: 'session-1',
+      manual_decision_id: 'decision-reactivate-original',
+      actor_id: 'actor-tech',
+      reason: 'Return to the original path.',
+      now: '2026-05-31T00:04:00.000Z',
+    });
 
-    expect(selected.workflow.active_codex_session_id).toBe('session-inactive-fork');
-    await expect(repository.getCodexSession('session-inactive-fork')).resolves.toMatchObject({ role: 'active' });
-    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({ role: 'inactive_fork' });
-    await expect(repository.getWorkflowManualDecision('decision-inactive-fork')).resolves.toMatchObject({
+    expect(selected.workflow.active_codex_session_id).toBe('session-1');
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({ role: 'active' });
+    await expect(repository.getCodexSession('session-inactive-fork')).resolves.toMatchObject({ role: 'inactive_fork' });
+    await expect(repository.getWorkflowManualDecision('decision-reactivate-original')).resolves.toMatchObject({
       kind: 'fork_select',
-      selected_codex_session_id: 'session-inactive-fork',
+      selected_codex_session_id: 'session-1',
     });
   });
 
