@@ -235,16 +235,9 @@ describe('Plan Item Workflow repository', () => {
     ).rejects.toThrow(DomainError);
   });
 
-  it('rejects creating an initial session with an existing archived workflow id', async () => {
+  it('rejects creating an initial session with an existing workflow id', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    const workflow = await repository.getPlanItemWorkflow('workflow-1');
-    if (workflow === undefined) throw new Error('Expected seeded workflow');
-    await repository.savePlanItemWorkflow({
-      ...workflow,
-      status: 'archived',
-      updated_at: '2026-05-31T00:01:00.000Z',
-    });
 
     await expectDomainErrorCode(
       () =>
@@ -256,7 +249,7 @@ describe('Plan Item Workflow repository', () => {
     );
     await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
       development_plan_item_id: 'item-1',
-      status: 'archived',
+      status: 'not_started',
     });
     await expect(repository.getCodexSession('session-2')).resolves.toBeUndefined();
   });
@@ -264,13 +257,6 @@ describe('Plan Item Workflow repository', () => {
   it('rejects creating an initial session with an existing Codex session id', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    const workflow = await repository.getPlanItemWorkflow('workflow-1');
-    if (workflow === undefined) throw new Error('Expected seeded workflow');
-    await repository.savePlanItemWorkflow({
-      ...workflow,
-      status: 'archived',
-      updated_at: '2026-05-31T00:01:00.000Z',
-    });
 
     await expectDomainErrorCode(
       () =>
@@ -341,7 +327,33 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
-  it('allows saving a Plan Item Workflow with status and updated_at changed', async () => {
+  it('rejects saving a Plan Item Workflow with direct status changes and preserves the original row', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.savePlanItemWorkflow({
+          ...workflow,
+          status: 'in_progress',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({
+      development_plan_id: 'plan-1',
+      development_plan_item_id: 'item-1',
+      created_by_actor_id: 'actor-tech',
+      status: 'not_started',
+      active_codex_session_id: 'session-1',
+      updated_at: now,
+    });
+  });
+
+  it('allows saving a Plan Item Workflow with only updated_at changed', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const workflow = await repository.getPlanItemWorkflow('workflow-1');
@@ -349,7 +361,6 @@ describe('Plan Item Workflow repository', () => {
 
     await repository.savePlanItemWorkflow({
       ...workflow,
-      status: 'in_progress',
       updated_at: '2026-05-31T00:01:00.000Z',
     });
 
@@ -357,7 +368,7 @@ describe('Plan Item Workflow repository', () => {
       development_plan_id: 'plan-1',
       development_plan_item_id: 'item-1',
       created_by_actor_id: 'actor-tech',
-      status: 'in_progress',
+      status: 'not_started',
       active_codex_session_id: 'session-1',
       updated_at: '2026-05-31T00:01:00.000Z',
     });

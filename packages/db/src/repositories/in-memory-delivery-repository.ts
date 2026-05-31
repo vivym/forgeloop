@@ -3014,6 +3014,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `workflow_invalid_transition: Plan Item Workflow ${workflow.id} service-owned projection fields cannot change`,
       );
     }
+    if (existingWorkflow.status !== workflow.status) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow ${workflow.id} status cannot change through save`,
+      );
+    }
     this.assertCanSavePlanItemWorkflow(workflow);
     this.planItemWorkflows.set(workflow.id, clone(workflow));
   }
