@@ -3069,11 +3069,21 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.codexSessionTurns.has(turn.id)) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session turn ${turn.id} already exists`);
     }
-    this.codexSessionTurns.set(turn.id, clone(turn));
     const session = this.codexSessions.get(turn.codex_session_id);
-    if (session !== undefined) {
-      this.codexSessions.set(session.id, clone({ ...session, latest_turn_id: turn.id, latest_turn_digest: turn.input_digest, updated_at: turn.updated_at }));
+    if (session === undefined || session.owner_type !== 'plan_item_workflow' || session.owner_id !== turn.workflow_id) {
+      throw new DomainError(
+        'workflow_active_session_missing',
+        `workflow_active_session_missing: Codex session ${turn.codex_session_id} is not active for workflow ${turn.workflow_id}`,
+      );
     }
+    if (session.latest_snapshot_digest !== turn.expected_previous_snapshot_digest) {
+      throw new DomainError(
+        'codex_session_snapshot_stale',
+        `codex_session_snapshot_stale: Codex session ${turn.codex_session_id} snapshot is stale`,
+      );
+    }
+    this.codexSessionTurns.set(turn.id, clone(turn));
+    this.codexSessions.set(session.id, clone({ ...session, latest_turn_id: turn.id, latest_turn_digest: turn.input_digest, updated_at: turn.updated_at }));
   }
 
   async getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined> {
@@ -3112,7 +3122,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
-    const session = this.codexSessions.get(input.session_id);
+    if (this.codexSessionLeases.has(input.lease_id)) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not unique`);
+    }
+    const session = this.recoverExpiredCodexSessionLeaseForClaim(input);
     const workflow = session === undefined ? undefined : this.planItemWorkflows.get(session.owner_id);
     const cannotClaim =
       session === undefined ||
@@ -3190,6 +3203,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       turn === undefined ||
       lease === undefined ||
       turn.codex_session_id !== session.id ||
+      session.latest_turn_id !== turn.id ||
+      session.latest_turn_digest !== turn.input_digest ||
+      turn.status !== 'running' ||
       lease.codex_session_id !== session.id ||
       session.active_lease_id !== lease.id ||
       lease.status !== 'active' ||
@@ -3265,12 +3281,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   async createCodexSessionFork(input: CreateCodexSessionForkInput): Promise<CodexSession> {
     const workflow = this.planItemWorkflows.get(input.workflow_id);
     const parent = this.codexSessions.get(input.parent_session_id);
+    const forkSnapshot =
+      input.forked_from_snapshot_id === undefined ? undefined : this.codexSessionSnapshots.get(input.forked_from_snapshot_id);
     if (
       workflow === undefined ||
       parent === undefined ||
       parent.owner_id !== workflow.id ||
       parent.status === 'archived' ||
-      this.codexSessions.has(input.id)
+      this.codexSessions.has(input.id) ||
+      (input.forked_from_snapshot_id !== undefined && (forkSnapshot === undefined || forkSnapshot.codex_session_id !== parent.id))
     ) {
       throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);
     }
@@ -3292,6 +3311,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       forked_from_session_id: parent.id,
       ...(input.forked_from_turn_id === undefined ? {} : { forked_from_turn_id: input.forked_from_turn_id }),
       ...(input.forked_from_snapshot_id === undefined ? {} : { forked_from_snapshot_id: input.forked_from_snapshot_id }),
+      ...(forkSnapshot === undefined
+        ? {}
+        : { latest_snapshot_id: forkSnapshot.id, latest_snapshot_digest: forkSnapshot.digest }),
       fork_reason: input.fork_reason,
       created_by_actor_id: input.created_by_actor_id,
       created_at: input.now,
@@ -3443,6 +3465,35 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   private findActiveCodexSessionLease(sessionId: string): CodexSessionLease | undefined {
     return valuesFor(this.codexSessionLeases).find((lease) => lease.codex_session_id === sessionId && lease.status === 'active');
+  }
+
+  private recoverExpiredCodexSessionLeaseForClaim(input: ClaimCodexSessionLeaseInput): CodexSession | undefined {
+    const session = this.codexSessions.get(input.session_id);
+    if (session?.active_lease_id === undefined) {
+      return session;
+    }
+    const lease = this.codexSessionLeases.get(session.active_lease_id);
+    if (lease === undefined || lease.status !== 'active' || lease.expires_at > input.now) {
+      return session;
+    }
+    const expiredLease: CodexSessionLease = {
+      ...clone(lease),
+      status: 'expired',
+      fenced_at: input.now,
+      updated_at: input.now,
+    };
+    const {
+      active_lease_id: _activeLeaseId,
+      ...sessionWithoutActiveLease
+    } = clone(session);
+    const recoveredSession: CodexSession = {
+      ...sessionWithoutActiveLease,
+      status: 'recovering',
+      updated_at: input.now,
+    };
+    this.codexSessionLeases.set(expiredLease.id, clone(expiredLease));
+    this.codexSessions.set(recoveredSession.id, clone(recoveredSession));
+    return recoveredSession;
   }
 
   private assertCanSavePlanItemWorkflow(workflow: PlanItemWorkflow): void {

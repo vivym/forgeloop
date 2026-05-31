@@ -894,7 +894,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
 
   private workflowRepositoryNotImplemented(): never {
-    throw new Error('not implemented: Drizzle workflow session repository persistence is Task 2C');
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      'workflow_legacy_entrypoint_disabled: Drizzle workflow session repository persistence is Task 2C',
+    );
   }
 
   async createPlanItemWorkflowWithInitialSession(
