@@ -122,6 +122,22 @@ export const workflowManualDecisionSchema = z
         message: 'fork_select requires selected_codex_session_id',
       });
     }
+
+    if (decision.kind !== 'fork_select' && decision.selected_codex_session_id !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['selected_codex_session_id'],
+        message: 'selected_codex_session_id is only allowed for fork_select',
+      });
+    }
+
+    if ((decision.related_object_type === undefined) !== (decision.related_object_id === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['related_object_id'],
+        message: 'related_object_type and related_object_id must be provided together',
+      });
+    }
   });
 export type WorkflowManualDecision = z.infer<typeof workflowManualDecisionSchema>;
 

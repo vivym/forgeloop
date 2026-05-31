@@ -10,6 +10,34 @@ import {
 } from '@forgeloop/domain';
 
 describe('plan item workflow domain', () => {
+  const baseSession = (overrides: Partial<CodexSession> = {}): CodexSession => ({
+    id: 'session-1',
+    owner_type: 'plan_item_workflow',
+    owner_id: 'workflow-1',
+    status: 'idle',
+    role: 'active',
+    runtime_profile_id: 'profile-1',
+    runtime_profile_revision_id: 'profile-revision-1',
+    credential_binding_id: 'credential-1',
+    credential_binding_version_id: 'credential-version-1',
+    lease_epoch: 0,
+    created_by_actor_id: 'actor-tech',
+    created_at: '2026-05-31T00:00:00.000Z',
+    updated_at: '2026-05-31T00:00:00.000Z',
+    ...overrides,
+  });
+
+  const baseDecision = (overrides: Partial<WorkflowManualDecision> = {}): WorkflowManualDecision => ({
+    id: 'decision-1',
+    workflow_id: 'workflow-1',
+    codex_session_id: 'session-1',
+    kind: 'change_request',
+    reason: 'Revise the scope.',
+    created_by_actor_id: 'actor-tech',
+    created_at: '2026-05-31T00:00:00.000Z',
+    ...overrides,
+  });
+
   it('accepts only allowed transition/evidence combinations', () => {
     expect(() =>
       assertPlanItemWorkflowTransitionAllowed({
@@ -102,17 +130,10 @@ describe('plan item workflow domain', () => {
   });
 
   it('validates manual decision kinds against transition intent', () => {
-    const decision: WorkflowManualDecision = {
-      id: 'decision-1',
-      workflow_id: 'workflow-1',
-      codex_session_id: 'session-1',
-      kind: 'change_request',
-      reason: 'Revise the scope.',
+    const decision = baseDecision({
       related_object_type: 'spec_revision',
       related_object_id: 'spec-revision-1',
-      created_by_actor_id: 'actor-tech',
-      created_at: '2026-05-31T00:00:00.000Z',
-    };
+    });
 
     expect(() =>
       assertWorkflowManualDecisionAllowedForTransition(decision, {
@@ -122,33 +143,60 @@ describe('plan item workflow domain', () => {
     ).not.toThrow();
   });
 
-  it('does not project raw runtime internals into public session DTOs', () => {
-    const session: CodexSession = {
-      id: 'session-1',
-      owner_type: 'plan_item_workflow',
-      owner_id: 'workflow-1',
-      status: 'idle',
-      role: 'active',
-      codex_thread_id: 'raw-thread',
-      codex_thread_id_digest: 'sha256:abc',
-      latest_snapshot_id: 'snapshot-1',
-      latest_snapshot_digest: 'sha256:def',
-      runtime_profile_id: 'profile-1',
-      runtime_profile_revision_id: 'profile-revision-1',
-      credential_binding_id: 'credential-1',
-      credential_binding_version_id: 'credential-version-1',
-      lease_epoch: 0,
-      created_by_actor_id: 'actor-tech',
-      created_at: '2026-05-31T00:00:00.000Z',
-      updated_at: '2026-05-31T00:00:00.000Z',
-    };
+  it('enforces manual decision payload invariants for direct domain objects', () => {
+    expect(() =>
+      assertWorkflowManualDecisionAllowedForTransition(baseDecision({ kind: 'fork_select' }), {
+        from_status: 'spec_review',
+        to_status: 'spec_review',
+      }),
+    ).toThrow(/workflow_invalid_transition/);
 
-    expect(codexSessionPublicProjection(session)).toEqual({
+    expect(() =>
+      assertWorkflowManualDecisionAllowedForTransition(
+        baseDecision({ kind: 'change_request', selected_codex_session_id: 'session-2' }),
+        {
+          from_status: 'spec_review',
+          to_status: 'spec_generation_queued',
+        },
+      ),
+    ).toThrow(/workflow_invalid_transition/);
+
+    expect(() =>
+      assertWorkflowManualDecisionAllowedForTransition(baseDecision({ related_object_type: 'spec_revision' }), {
+        from_status: 'spec_review',
+        to_status: 'spec_generation_queued',
+      }),
+    ).toThrow(/workflow_invalid_transition/);
+  });
+
+  it('does not project raw runtime internals into public session DTOs', () => {
+    expect(
+      codexSessionPublicProjection(
+        baseSession({
+          codex_thread_id: 'raw-thread',
+          codex_thread_id_digest: 'sha256:abc',
+          latest_snapshot_id: 'snapshot-1',
+          latest_snapshot_digest: 'sha256:def',
+        }),
+      ),
+    ).toEqual({
       id: 'session-1',
       status: 'idle',
       role: 'active',
       continuity_state: 'ready',
       can_continue: true,
+    });
+  });
+
+  it.each([
+    ['starting', 'running', false],
+    ['recovering', 'running', false],
+    ['archived', 'stale', false],
+  ] as const)('projects %s sessions as %s and not continuable', (status, continuityState, canContinue) => {
+    expect(codexSessionPublicProjection(baseSession({ status }))).toMatchObject({
+      status,
+      continuity_state: continuityState,
+      can_continue: canContinue,
     });
   });
 

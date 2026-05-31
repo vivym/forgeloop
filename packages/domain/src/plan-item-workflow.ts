@@ -273,19 +273,52 @@ export const assertPlanItemWorkflowTransitionAllowed = (input: TransitionCheck):
 export const assertWorkflowManualDecisionAllowedForTransition = (
   decision: WorkflowManualDecision,
   transition: Pick<TransitionCheck, 'from_status' | 'to_status' | 'previous_status'>,
-): void =>
+): void => {
+  if (decision.kind === 'fork_select' && decision.selected_codex_session_id === undefined) {
+    throw new DomainError('workflow_invalid_transition', 'workflow_invalid_transition: fork_select requires selected_codex_session_id');
+  }
+
+  if (decision.kind !== 'fork_select' && decision.selected_codex_session_id !== undefined) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      'workflow_invalid_transition: selected_codex_session_id is only allowed for fork_select',
+    );
+  }
+
+  if ((decision.related_object_type === undefined) !== (decision.related_object_id === undefined)) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      'workflow_invalid_transition: related_object_type and related_object_id must be provided together',
+    );
+  }
+
   assertPlanItemWorkflowTransitionAllowed({
     ...transition,
     evidence_object_type: 'manual_decision',
     manual_decision_kind: decision.kind,
   });
+};
+
+const codexSessionContinuityState = (status: CodexSessionStatus): 'ready' | 'running' | 'blocked' | 'stale' => {
+  switch (status) {
+    case 'idle':
+      return 'ready';
+    case 'running':
+    case 'starting':
+    case 'recovering':
+      return 'running';
+    case 'blocked':
+      return 'blocked';
+    case 'archived':
+      return 'stale';
+  }
+};
 
 export const codexSessionPublicProjection = (session: CodexSession) => ({
   id: session.id,
   status: session.status,
   role: session.role,
-  continuity_state:
-    session.status === 'blocked' ? ('blocked' as const) : session.status === 'running' ? ('running' as const) : ('ready' as const),
+  continuity_state: codexSessionContinuityState(session.status),
   can_continue: session.status === 'idle' && session.role === 'active',
   ...(session.latest_turn_id === undefined ? {} : { last_turn_at: session.updated_at }),
   ...(session.status === 'blocked' ? { blocked_reason_code: 'codex_session_blocked' } : {}),
