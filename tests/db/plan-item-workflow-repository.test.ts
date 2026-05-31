@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DomainError, type BoundarySummaryRevision, type DevelopmentPlan } from '@forgeloop/domain';
+import {
+  DomainError,
+  type BoundarySummaryRevision,
+  type DevelopmentPlan,
+  type ExecutionPlanRevision,
+  type InternalArtifactObject,
+  type PlanItemWorkflow,
+} from '@forgeloop/domain';
 
 import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
 
@@ -93,6 +100,83 @@ const readinessRecordInput = {
   created_by_actor_id: 'actor-tech',
   created_at: now,
 } as const;
+
+const executionPlanRevisionInput: ExecutionPlanRevision = {
+  id: 'implementation-plan-revision-1',
+  execution_plan_id: 'implementation-plan-1',
+  development_plan_item_id: 'item-1',
+  based_on_spec_revision_id: 'spec-revision-1',
+  revision_number: 1,
+  summary: 'Approved implementation plan.',
+  content: 'Implementation plan content.',
+  workflow_id: 'workflow-1',
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'turn-1',
+  created_at: now,
+};
+
+const internalArtifactObjectInput: InternalArtifactObject = {
+  id: 'internal-artifact-1',
+  artifact_id: 'artifact-1',
+  ref: 'artifact://internal/generated_payload/codex_session/session-1/artifact-1',
+  storage_key: 'objects/sha256/aa/' + 'a'.repeat(64),
+  kind: 'generated_payload',
+  content_type: 'application/json',
+  size_bytes: '12',
+  digest: 'sha256:' + 'a'.repeat(64),
+  visibility: 'internal',
+  owner_type: 'codex_session',
+  owner_id: 'session-1',
+  idempotency_key: 'internal-artifact-1',
+  request_digest: 'sha256:internal-artifact-request',
+  metadata_json: {},
+  created_by_actor_type: 'system',
+  created_by_actor_id: 'actor-tech',
+  created_at: now,
+};
+
+const seedWorkflowActiveApprovalFields = async (
+  repository: InMemoryDeliveryRepository,
+  overrides: Partial<PlanItemWorkflow> = {},
+) => {
+  const workflow = await repository.getPlanItemWorkflow('workflow-1');
+  if (workflow === undefined) throw new Error('Expected seeded workflow');
+  (repository as unknown as { planItemWorkflows: Map<string, PlanItemWorkflow> }).planItemWorkflows.set('workflow-1', {
+    ...workflow,
+    active_boundary_summary_revision_id: 'boundary-summary-revision-1',
+    active_spec_doc_revision_id: 'spec-revision-1',
+    active_implementation_plan_doc_revision_id: 'implementation-plan-revision-1',
+    ...overrides,
+  });
+};
+
+const seedWorkflowRepositoryEvidence = async (repository: InMemoryDeliveryRepository) => {
+  const developmentPlan: DevelopmentPlan = {
+    id: 'plan-1',
+    project_id: 'project-1',
+    revision_id: 'plan-revision-1',
+    title: 'Plan',
+    status: 'active',
+    source_refs: [{ type: 'requirement', id: 'requirement-1' }],
+    items: [],
+    created_at: now,
+    updated_at: now,
+  };
+  await repository.saveDevelopmentPlan(developmentPlan);
+  await repository.saveProjectRepo({
+    id: 'repo-1',
+    repo_id: 'repo-1',
+    project_id: 'project-1',
+    name: 'owner/repo',
+    status: 'active',
+    local_path: '/tmp/repo',
+    default_branch: 'main',
+    remote_url: 'https://github.com/owner/repo.git',
+    base_commit_sha: 'a'.repeat(40),
+    created_at: now,
+    updated_at: now,
+  });
+};
 
 const seedWorkflowWithSnapshot = async (repository: InMemoryDeliveryRepository) => {
   await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -2559,6 +2643,26 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
   });
 
+  it('rejects workflow transitions when the evidence type is illegal for the requested status change', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-wrong-evidence-type',
+          from_status: 'implementation_plan_review',
+          to_status: 'execution_ready',
+          evidence_object_type: 'commit',
+          evidence_object_id: 'a'.repeat(40),
+          codex_session_turn_id: undefined,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
   it('rejects workflow transitions that fail full contract validation', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -2663,13 +2767,19 @@ describe('Plan Item Workflow repository', () => {
       development_plan_item_id: 'item-other',
       actor_id: 'actor-product',
     });
-    await repository.saveExecutionReadinessRecord(readinessRecordInput);
+    await seedWorkflowActiveApprovalFields(repository);
+    await repository.saveExecutionPlanRevision(executionPlanRevisionInput);
+    await repository.saveExecutionReadinessRecord({
+      ...readinessRecordInput,
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+    });
     await repository.saveExecutionReadinessRecord({
       ...readinessRecordInput,
       id: 'readiness-foreign',
       workflow_id: 'workflow-other',
       development_plan_item_id: 'item-other',
       codex_session_id: 'session-other',
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
     });
 
     const readinessTransition = {
@@ -2681,6 +2791,7 @@ describe('Plan Item Workflow repository', () => {
       reason: 'Mark ready.',
       evidence_object_type: 'execution_readiness_record',
       evidence_object_id: 'readiness-1',
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
       codex_session_turn_id: undefined,
     } as const;
 
@@ -2706,6 +2817,176 @@ describe('Plan Item Workflow repository', () => {
     await repository.appendPlanItemWorkflowTransition(readinessTransition);
 
     await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([readinessTransition]);
+  });
+
+  it('rejects execution readiness transitions when readiness is not ready or lacks implementation plan support', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      actor_id: 'actor-product',
+    });
+    await seedWorkflowActiveApprovalFields(repository);
+    await repository.saveExecutionPlanRevision(executionPlanRevisionInput);
+    await repository.saveExecutionReadinessRecord({
+      ...readinessRecordInput,
+      id: 'readiness-not-ready',
+      readiness_state: 'not_ready',
+      blocker_codes: ['missing_tests'],
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+    });
+    await repository.saveExecutionReadinessRecord({
+      ...readinessRecordInput,
+      id: 'readiness-missing-plan-support',
+      supporting_evidence: [{ object_type: 'commit', object_id: 'a'.repeat(40) }],
+    });
+
+    const readinessTransition = {
+      ...transitionInput,
+      id: 'transition-readiness',
+      from_status: 'implementation_plan_review',
+      to_status: 'execution_ready',
+      actor_id: 'actor-product',
+      reason: 'Mark ready.',
+      evidence_object_type: 'execution_readiness_record',
+      evidence_object_id: 'readiness-not-ready',
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+      codex_session_turn_id: undefined,
+    } as const;
+
+    await expectDomainErrorCode(
+      () => repository.appendPlanItemWorkflowTransition(readinessTransition),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...readinessTransition,
+          id: 'transition-readiness-missing-plan-support',
+          evidence_object_id: 'readiness-missing-plan-support',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...readinessTransition,
+          id: 'transition-readiness-missing-transition-support',
+          evidence_object_id: 'readiness-1',
+          supporting_evidence: [{ object_type: 'commit', object_id: 'a'.repeat(40) }],
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
+  it('accepts execution readiness transitions with ready revision-matched readiness and implementation plan support', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      actor_id: 'actor-product',
+    });
+    await seedWorkflowActiveApprovalFields(repository);
+    await repository.saveExecutionPlanRevision(executionPlanRevisionInput);
+    await repository.saveExecutionReadinessRecord({
+      ...readinessRecordInput,
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+    });
+
+    const readinessTransition = {
+      ...transitionInput,
+      id: 'transition-readiness-with-support',
+      from_status: 'implementation_plan_review',
+      to_status: 'execution_ready',
+      actor_id: 'actor-product',
+      reason: 'Mark ready.',
+      evidence_object_type: 'execution_readiness_record',
+      evidence_object_id: 'readiness-1',
+      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: 'implementation-plan-revision-1' }],
+      codex_session_turn_id: undefined,
+    } as const;
+
+    await repository.appendPlanItemWorkflowTransition(readinessTransition);
+
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([readinessTransition]);
+  });
+
+  it('rejects workflow transitions with unresolved repository or internal artifact evidence', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-unresolved-commit',
+          from_status: 'execution_running',
+          to_status: 'code_review',
+          evidence_object_type: 'commit',
+          evidence_object_id: 'a'.repeat(40),
+          codex_session_turn_id: undefined,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-unresolved-pr',
+          from_status: 'code_review',
+          to_status: 'qa',
+          evidence_object_type: 'pull_request',
+          evidence_object_id: 'https://github.com/owner/repo/pull/123',
+          codex_session_turn_id: undefined,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-unresolved-internal-artifact-support',
+          supporting_evidence: [{ object_type: 'internal_artifact', object_id: 'internal-artifact-missing' }],
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
+  it('rejects workflow transitions with foreign repository or internal artifact evidence', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await seedWorkflowRepositoryEvidence(repository);
+    await repository.createOrReplayInternalArtifactObject({
+      ...internalArtifactObjectInput,
+      id: 'internal-artifact-foreign',
+      artifact_id: 'artifact-foreign',
+      ref: 'artifact://internal/generated_payload/codex_session/session-foreign/artifact-foreign',
+      owner_id: 'session-foreign',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-foreign-pr',
+          from_status: 'code_review',
+          to_status: 'qa',
+          evidence_object_type: 'pull_request',
+          evidence_object_id: 'https://github.com/other/repo/pull/123',
+          codex_session_turn_id: undefined,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-foreign-internal-artifact-support',
+          supporting_evidence: [{ object_type: 'internal_artifact', object_id: 'internal-artifact-foreign' }],
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
   });
 
   it('rejects duplicate workflow manual decision ids without overwriting evidence', async () => {

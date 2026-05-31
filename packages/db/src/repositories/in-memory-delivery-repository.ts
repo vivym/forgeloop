@@ -88,6 +88,7 @@ import {
 } from '@forgeloop/contracts';
 import {
   DomainError,
+  assertPlanItemWorkflowTransitionAllowed,
   assertWorkflowManualDecisionAllowedForTransition,
   assertCodexRuntimeRecoveryReasonCode,
   assertAutomationCapabilityActor,
@@ -3058,6 +3059,19 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   private assertPlanItemWorkflowTransitionEvidence(transition: PlanItemWorkflowTransition): void {
+    const workflow = this.planItemWorkflows.get(transition.workflow_id);
+    let primaryManualDecisionKind;
+    if (transition.evidence_object_type === 'manual_decision') {
+      const decision = this.workflowManualDecisions.get(transition.evidence_object_id);
+      primaryManualDecisionKind = decision?.kind;
+    }
+    assertPlanItemWorkflowTransitionAllowed({
+      from_status: transition.from_status,
+      to_status: transition.to_status,
+      evidence_object_type: transition.evidence_object_type,
+      ...(workflow?.previous_status === undefined ? {} : { previous_status: workflow.previous_status }),
+      ...(primaryManualDecisionKind === undefined ? {} : { manual_decision_kind: primaryManualDecisionKind }),
+    });
     this.assertPlanItemWorkflowTransitionPrimaryEvidence(transition);
     for (const evidence of transition.supporting_evidence ?? []) {
       this.assertPlanItemWorkflowTransitionEvidenceObject(transition, evidence.object_type, evidence.object_id);
@@ -3111,17 +3125,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
 
     if (evidenceObjectType === 'execution_readiness_record') {
-      const record = this.executionReadinessRecords.get(evidenceObjectId);
-      if (
-        record === undefined ||
-        record.workflow_id !== transition.workflow_id ||
-        record.codex_session_id !== transition.codex_session_id
-      ) {
-        throw new DomainError(
-          'workflow_invalid_transition',
-          `workflow_invalid_transition: Transition ${transition.id} execution readiness evidence is invalid`,
-        );
-      }
+      this.assertPlanItemWorkflowExecutionReadinessEvidence(transition, evidenceObjectId, isPrimaryEvidence);
+      return;
     }
 
     if (evidenceObjectType === 'boundary_summary_revision') {
@@ -3174,6 +3179,104 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         transition,
         this.reviewPackets.get(evidenceObjectId),
         `Transition ${transition.id} review packet evidence is invalid`,
+      );
+      return;
+    }
+
+    if (evidenceObjectType === 'commit' || evidenceObjectType === 'pull_request') {
+      this.assertPlanItemWorkflowRepositoryEvidence(transition, evidenceObjectType, evidenceObjectId);
+      return;
+    }
+
+    if (evidenceObjectType === 'internal_artifact') {
+      this.assertPlanItemWorkflowInternalArtifactEvidence(transition, evidenceObjectId);
+    }
+  }
+
+  private assertPlanItemWorkflowExecutionReadinessEvidence(
+    transition: PlanItemWorkflowTransition,
+    evidenceObjectId: string,
+    isPrimaryEvidence: boolean,
+  ): void {
+    const workflow = this.planItemWorkflows.get(transition.workflow_id);
+    const record = this.executionReadinessRecords.get(evidenceObjectId);
+    const activeImplementationPlanRevisionId = workflow?.active_implementation_plan_doc_revision_id;
+    const hasReadinessPlanSupport =
+      activeImplementationPlanRevisionId !== undefined &&
+      record?.supporting_evidence.some(
+        (evidence) => evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId,
+      ) === true;
+    const hasTransitionPlanSupport =
+      activeImplementationPlanRevisionId !== undefined &&
+      transition.supporting_evidence?.some(
+        (evidence) => evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId,
+      ) === true;
+
+    if (
+      workflow === undefined ||
+      record === undefined ||
+      record.workflow_id !== transition.workflow_id ||
+      record.development_plan_id !== workflow.development_plan_id ||
+      record.development_plan_item_id !== workflow.development_plan_item_id ||
+      record.codex_session_id !== transition.codex_session_id ||
+      (isPrimaryEvidence &&
+        (record.readiness_state !== 'ready' ||
+          record.approved_boundary_summary_revision_id !== workflow.active_boundary_summary_revision_id ||
+          record.approved_spec_revision_id !== workflow.active_spec_doc_revision_id ||
+          record.approved_implementation_plan_revision_id !== activeImplementationPlanRevisionId ||
+          !hasReadinessPlanSupport ||
+          !hasTransitionPlanSupport))
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Transition ${transition.id} execution readiness evidence is invalid`,
+      );
+    }
+  }
+
+  private assertPlanItemWorkflowRepositoryEvidence(
+    transition: PlanItemWorkflowTransition,
+    evidenceObjectType: 'commit' | 'pull_request',
+    evidenceObjectId: string,
+  ): void {
+    const workflow = this.planItemWorkflows.get(transition.workflow_id);
+    if (
+      workflow === undefined ||
+      this.resolveWorkflowRepositoryEvidenceSync({
+        evidence_object_type: evidenceObjectType,
+        evidence_object_id: evidenceObjectId,
+        workflow_id: transition.workflow_id,
+        development_plan_id: workflow.development_plan_id,
+        development_plan_item_id: workflow.development_plan_item_id,
+      }) === undefined
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Transition ${transition.id} repository evidence is invalid`,
+      );
+    }
+  }
+
+  private assertPlanItemWorkflowInternalArtifactEvidence(
+    transition: PlanItemWorkflowTransition,
+    evidenceObjectId: string,
+  ): void {
+    const workflow = this.planItemWorkflows.get(transition.workflow_id);
+    const artifact = this.internalArtifactObjects.get(evidenceObjectId);
+    const allowedOwners = new Set(
+      [
+        workflow?.id,
+        workflow?.active_codex_session_id,
+        workflow?.execution_package_id,
+        ...valuesFor(this.codexSessions)
+          .filter((session) => session.owner_type === 'plan_item_workflow' && session.owner_id === transition.workflow_id)
+          .map((session) => session.id),
+      ].filter((ownerId): ownerId is string => ownerId !== undefined),
+    );
+    if (artifact === undefined || artifact.deleted_at !== undefined || !allowedOwners.has(artifact.owner_id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Transition ${transition.id} internal artifact evidence is invalid`,
       );
     }
   }
@@ -3255,6 +3358,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   async resolveWorkflowRepositoryEvidence(
     input: WorkflowRepositoryEvidenceInput,
   ): Promise<{ repository_id: string; resolved_ref: string } | undefined> {
+    return this.resolveWorkflowRepositoryEvidenceSync(input);
+  }
+
+  private resolveWorkflowRepositoryEvidenceSync(
+    input: WorkflowRepositoryEvidenceInput,
+  ): { repository_id: string; resolved_ref: string } | undefined {
     const workflow = this.planItemWorkflows.get(input.workflow_id);
     if (
       workflow === undefined ||
