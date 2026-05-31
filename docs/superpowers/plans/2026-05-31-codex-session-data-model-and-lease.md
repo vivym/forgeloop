@@ -794,6 +794,7 @@ export interface CodexSessionSnapshot {
   codex_thread_id_digest?: string;
   runtime_profile_revision_id: string;
   created_from_turn_id?: string;
+  created_by_actor_id: string;
   created_at: IsoDateTime;
 }
 
@@ -1502,7 +1503,8 @@ Modify root `package.json` scripts to keep the existing local push workflow and 
 Run:
 
 ```bash
-FORGELOOP_DATABASE_URL=postgres://forgeloop:forgeloop@127.0.0.1:65432/forgeloop pnpm db:generate
+export FORGELOOP_POSTGRES_PORT="${FORGELOOP_POSTGRES_PORT:-35432}"
+FORGELOOP_DATABASE_URL="postgresql://forgeloop:forgeloop@127.0.0.1:${FORGELOOP_POSTGRES_PORT}/forgeloop" pnpm db:generate
 ```
 
 Expected: PASS and a new SQL migration file under `packages/db/migrations/`.
@@ -1513,10 +1515,26 @@ In either case, the SQL must include the new workflow/session/lease tables, null
 
 - [ ] **Step 6: Verify migration applies to a disposable database**
 
-Run against a disposable local database URL, not a shared developer database:
+Run against a disposable local database URL, not a shared developer database. The default local Postgres port is `35432`; if that port is already used, set `FORGELOOP_POSTGRES_PORT` to a free port before starting compose.
+
+Start or reuse the project Postgres container:
 
 ```bash
-FORGELOOP_DATABASE_URL=postgres://forgeloop:forgeloop@127.0.0.1:65432/forgeloop_migration_check pnpm db:migrate
+export FORGELOOP_POSTGRES_PORT="${FORGELOOP_POSTGRES_PORT:-35432}"
+docker compose up -d postgres
+```
+
+Create a disposable migration-check database inside that Postgres instance:
+
+```bash
+docker compose exec -T postgres dropdb -U forgeloop --if-exists forgeloop_migration_check
+docker compose exec -T postgres createdb -U forgeloop forgeloop_migration_check
+```
+
+Apply migrations to the disposable database:
+
+```bash
+FORGELOOP_DATABASE_URL="postgresql://forgeloop:forgeloop@127.0.0.1:${FORGELOOP_POSTGRES_PORT}/forgeloop_migration_check" pnpm db:migrate
 ```
 
 Expected: PASS.
@@ -1524,10 +1542,16 @@ Expected: PASS.
 Then run:
 
 ```bash
-FORGELOOP_DATABASE_URL=postgres://forgeloop:forgeloop@127.0.0.1:65432/forgeloop_migration_check pnpm vitest run tests/db/schema.test.ts tests/db/reset.test.ts
+FORGELOOP_DATABASE_URL="postgresql://forgeloop:forgeloop@127.0.0.1:${FORGELOOP_POSTGRES_PORT}/forgeloop_migration_check" pnpm vitest run tests/db/schema.test.ts tests/db/reset.test.ts
 ```
 
 Expected: PASS.
+
+Clean up only the disposable migration-check database:
+
+```bash
+docker compose exec -T postgres dropdb -U forgeloop --if-exists forgeloop_migration_check
+```
 
 - [ ] **Step 7: Write failing repository tests**
 
@@ -3512,8 +3536,10 @@ Create `codex-session-lease.service.ts`:
 ```ts
 import { createHash, randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import type { Request } from 'express';
 import { DomainError } from '@forgeloop/domain';
 import type { CodexSessionLease } from '@forgeloop/domain';
+import { automationActorIdHeaderName } from '@forgeloop/automation';
 
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import type { DeliveryRepository } from '@forgeloop/db';
@@ -3585,7 +3611,8 @@ export class CodexSessionLeaseService {
     return this.toLeaseResponse(lease);
   }
 
-  async terminalize(sessionId: string, turnId: string, dto: TerminalizeCodexSessionTurnDto) {
+  async terminalize(sessionId: string, turnId: string, dto: TerminalizeCodexSessionTurnDto, request: Request) {
+    const trustedActorId = this.requireTrustedActorId(request);
     const outputSnapshot: CodexSessionSnapshot | undefined = hasOutputSnapshot(dto)
       ? {
           id: dto.output_snapshot_id,
@@ -3598,6 +3625,7 @@ export class CodexSessionLeaseService {
           codex_thread_id_digest: dto.codex_thread_id_digest,
           runtime_profile_revision_id: dto.runtime_profile_revision_id,
           created_from_turn_id: turnId,
+          created_by_actor_id: trustedActorId,
           created_at: this.now(),
         }
       : undefined;
@@ -3665,6 +3693,14 @@ export class CodexSessionLeaseService {
   private now() {
     return new Date().toISOString();
   }
+
+  private requireTrustedActorId(request: Request) {
+    const value = request.header(automationActorIdHeaderName)?.trim();
+    if (value === undefined || value.length === 0) {
+      throw new DomainError('workflow_actor_not_authorized', 'Trusted automation actor id is required for snapshot attribution');
+    }
+    return value;
+  }
 }
 ```
 
@@ -3681,7 +3717,8 @@ Stale terminalization requirements:
 Create `internal-codex-session.controller.ts`:
 
 ```ts
-import { Body, Controller, Inject, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Inject, Param, Post, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 
 import { TrustedAutomationActorGuard } from '../automation/trusted-automation-actor.guard';
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
@@ -3721,9 +3758,10 @@ export class InternalCodexSessionController {
   terminalize(
     @Param('sessionId') sessionId: string,
     @Param('turnId') turnId: string,
+    @Req() request: Request,
     @Body(new ZodValidationPipe(terminalizeCodexSessionTurnSchema)) body: TerminalizeCodexSessionTurnDto,
   ) {
-    return this.service.terminalize(sessionId, turnId, body);
+    return this.service.terminalize(sessionId, turnId, body, request);
   }
 }
 ```
@@ -3783,7 +3821,7 @@ it('stores workflow and Codex session refs on boundary brainstorming child recor
   const session = (
     await request(app.getHttpServer())
       .post(`/plan-item-workflows/${workflow.id}/boundary-brainstorming`)
-      .send({ actor_id: ids.actorLeader, leader_actor_id: ids.actorLeader })
+      .send({ actor_id: ids.actorLeader })
       .expect(201)
   ).body;
 
@@ -3862,7 +3900,7 @@ submitSpecRevision(workflowId, revisionId, dto)
 approveSpec(workflowId, revisionId, dto)
 generateImplementationPlanRevision(workflowId, dto)
 submitImplementationPlanRevision(workflowId, revisionId, dto)
-approveImplementationPlanAndMarkExecutionReady(workflowId, revisionId, dto)
+approveImplementationPlanAndMarkExecutionReady(workflowId, dto)
 ```
 
 These methods may call existing services as adapters, but they must:
@@ -3908,12 +3946,12 @@ startBoundaryBrainstorming(@Param('workflowId') workflowId: string, @Body(new Zo
   return this.service.startBoundaryBrainstorming(workflowId, body);
 }
 
-@Post('plan-item-workflows/:workflowId/boundary-summary/:revisionId/submit')
+@Post('plan-item-workflows/:workflowId/boundary-summary-revisions/:revisionId/submit')
 submitBoundarySummary(@Param('workflowId') workflowId: string, @Param('revisionId') revisionId: string, @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto) {
   return this.service.submitBoundarySummary(workflowId, revisionId, body);
 }
 
-@Post('plan-item-workflows/:workflowId/boundary-summary/:revisionId/approve')
+@Post('plan-item-workflows/:workflowId/boundary-summary-revisions/:revisionId/approve')
 approveBoundary(@Param('workflowId') workflowId: string, @Param('revisionId') revisionId: string, @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto) {
   return this.service.approveBoundary(workflowId, revisionId, body);
 }
@@ -3923,12 +3961,12 @@ generateSpecRevision(@Param('workflowId') workflowId: string, @Body(new ZodValid
   return this.service.generateSpecRevision(workflowId, body);
 }
 
-@Post('plan-item-workflows/:workflowId/spec/:revisionId/submit')
+@Post('plan-item-workflows/:workflowId/spec-revisions/:revisionId/submit')
 submitSpecRevision(@Param('workflowId') workflowId: string, @Param('revisionId') revisionId: string, @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto) {
   return this.service.submitSpecRevision(workflowId, revisionId, body);
 }
 
-@Post('plan-item-workflows/:workflowId/spec/:revisionId/approve')
+@Post('plan-item-workflows/:workflowId/spec-revisions/:revisionId/approve')
 approveSpec(@Param('workflowId') workflowId: string, @Param('revisionId') revisionId: string, @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto) {
   return this.service.approveSpec(workflowId, revisionId, body);
 }
@@ -3938,7 +3976,7 @@ generateImplementationPlanRevision(@Param('workflowId') workflowId: string, @Bod
   return this.service.generateImplementationPlanRevision(workflowId, body);
 }
 
-@Post('plan-item-workflows/:workflowId/implementation-plan/:revisionId/submit')
+@Post('plan-item-workflows/:workflowId/implementation-plan-revisions/:revisionId/submit')
 submitImplementationPlanRevision(@Param('workflowId') workflowId: string, @Param('revisionId') revisionId: string, @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto) {
   return this.service.submitImplementationPlanRevision(workflowId, revisionId, body);
 }
@@ -4160,7 +4198,7 @@ Expected: FAIL for missing readiness/fork API implementation.
 
 In `PlanItemWorkflowService`:
 
-- Add `approveImplementationPlanAndMarkExecutionReady(workflowId, actorId, approvedImplementationPlanRevisionId)`.
+- Use the existing Task 3 method shape `approveImplementationPlanAndMarkExecutionReady(workflowId, input)`, where `input` contains `actor_id`, `approved_implementation_plan_revision_id`, and optional `reason`. Do not introduce an overload that takes `(workflowId, actorId, approvedImplementationPlanRevisionId)`.
 - Validate active approved Boundary Summary, Spec Doc, and Implementation Plan Doc revision ids exist.
 - In Wave 2, use current known checks only:
   - active approved boundary id present;
