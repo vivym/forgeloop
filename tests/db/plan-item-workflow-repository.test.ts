@@ -738,6 +738,121 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('forks from a turn output snapshot instead of a newer parent latest snapshot', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionSnapshot(snapshotInput);
+    await repository.saveCodexSessionTurn({
+      ...turnInput,
+      status: 'succeeded',
+      output_snapshot_id: 'snapshot-1',
+      output_snapshot_digest: 'sha256:snapshot-1',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+    await repository.createCodexSessionSnapshot({
+      ...snapshotInput,
+      id: 'snapshot-2',
+      sequence: 2,
+      artifact_ref: 'artifact://snapshot-2',
+      digest: 'sha256:snapshot-2',
+      manifest_digest: 'sha256:manifest-2',
+      created_from_turn_id: 'turn-2',
+      created_at: '2026-05-31T00:03:00.000Z',
+    });
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected seeded Codex session');
+    await repository.saveCodexSession({
+      ...session,
+      latest_snapshot_id: 'snapshot-2',
+      latest_snapshot_digest: 'sha256:snapshot-2',
+    });
+
+    const fork = await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try the first turn output.',
+      created_by_actor_id: 'actor-tech',
+      now: '2026-05-31T00:04:00.000Z',
+    });
+
+    expect(fork).toMatchObject({
+      id: 'session-fork',
+      latest_snapshot_id: 'snapshot-1',
+      latest_snapshot_digest: 'sha256:snapshot-1',
+      forked_from_turn_id: 'turn-1',
+    });
+    expect(fork.forked_from_snapshot_id).toBeUndefined();
+  });
+
+  it('does not inherit parent latest snapshot when forking from a turn without output snapshot', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await seedWorkflowWithSnapshot(repository);
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+    });
+
+    const fork = await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try the pre-output turn.',
+      created_by_actor_id: 'actor-tech',
+      now: '2026-05-31T00:04:00.000Z',
+    });
+
+    expect(fork).toMatchObject({
+      id: 'session-fork',
+      forked_from_turn_id: 'turn-1',
+    });
+    expect(fork.latest_snapshot_id).toBeUndefined();
+    expect(fork.latest_snapshot_digest).toBeUndefined();
+    expect(fork.forked_from_snapshot_id).toBeUndefined();
+  });
+
+  it('rejects fork creation when requested turn and snapshot fork points do not match', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionSnapshot(snapshotInput);
+    await repository.saveCodexSessionTurn({
+      ...turnInput,
+      status: 'succeeded',
+      output_snapshot_id: 'snapshot-1',
+      output_snapshot_digest: 'sha256:snapshot-1',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+    await repository.createCodexSessionSnapshot({
+      ...snapshotInput,
+      id: 'snapshot-2',
+      sequence: 2,
+      artifact_ref: 'artifact://snapshot-2',
+      digest: 'sha256:snapshot-2',
+      manifest_digest: 'sha256:manifest-2',
+      created_from_turn_id: 'turn-2',
+      created_at: '2026-05-31T00:03:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionFork({
+          id: 'session-fork',
+          workflow_id: 'workflow-1',
+          parent_session_id: 'session-1',
+          forked_from_turn_id: 'turn-1',
+          forked_from_snapshot_id: 'snapshot-2',
+          fork_reason: 'Try mismatched provenance.',
+          created_by_actor_id: 'actor-tech',
+          now: '2026-05-31T00:04:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+  });
+
   it('rejects fork creation without an explicit turn or snapshot fork point', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -1045,6 +1160,32 @@ describe('Plan Item Workflow repository', () => {
 
     await expect(repository.getBoundarySummaryRevisionById('boundary-revision-1')).resolves.toEqual(revision);
     await expect(repository.listStaleCodexSessionTerminalizationAttempts('session-1')).resolves.toHaveLength(1);
+  });
+
+  it('rejects duplicate stale terminalization attempt ids', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const attempt = {
+      id: 'stale-1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+      lease_id: 'lease-1',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      failure_code: 'codex_session_lease_conflict',
+      created_at: now,
+    } as const;
+
+    await repository.saveStaleCodexSessionTerminalizationAttempt(attempt);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveStaleCodexSessionTerminalizationAttempt({
+          ...attempt,
+          codex_session_id: 'session-2',
+        }),
+      'workflow_invalid_transition',
+    );
   });
 
   it('resolves narrow repository evidence only for matching workflow project repos', async () => {

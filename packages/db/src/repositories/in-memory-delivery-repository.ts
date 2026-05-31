@@ -3122,6 +3122,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void> {
+    if (this.codexSessionStaleTerminalizationAttempts.has(attempt.id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} already exists`,
+      );
+    }
     this.codexSessionStaleTerminalizationAttempts.set(attempt.id, clone(attempt));
   }
 
@@ -3313,14 +3319,30 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.codexSessions.has(input.id) ||
       (input.forked_from_turn_id === undefined && input.forked_from_snapshot_id === undefined) ||
       (input.forked_from_turn_id !== undefined && (forkTurn === undefined || forkTurn.codex_session_id !== parent.id)) ||
-      (input.forked_from_snapshot_id !== undefined && (forkSnapshot === undefined || forkSnapshot.codex_session_id !== parent.id))
+      (input.forked_from_snapshot_id !== undefined && (forkSnapshot === undefined || forkSnapshot.codex_session_id !== parent.id)) ||
+      (forkTurn !== undefined &&
+        forkSnapshot !== undefined &&
+        (forkTurn.output_snapshot_id !== forkSnapshot.id || forkTurn.output_snapshot_digest !== forkSnapshot.digest))
     ) {
       throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);
     }
+    const forkOutputSnapshot =
+      forkSnapshot ??
+      (forkTurn?.output_snapshot_id === undefined || forkTurn.output_snapshot_digest === undefined
+        ? undefined
+        : this.codexSessionSnapshots.get(forkTurn.output_snapshot_id));
+    const forkLatestSnapshot =
+      forkOutputSnapshot !== undefined &&
+      forkOutputSnapshot.codex_session_id === parent.id &&
+      forkOutputSnapshot.digest === (forkSnapshot?.digest ?? forkTurn?.output_snapshot_digest)
+        ? forkOutputSnapshot
+        : undefined;
     const {
       active_lease_id: _forkActiveLeaseId,
       latest_turn_id: _forkLatestTurnId,
       latest_turn_digest: _forkLatestTurnDigest,
+      latest_snapshot_id: _forkLatestSnapshotId,
+      latest_snapshot_digest: _forkLatestSnapshotDigest,
       forked_from_turn_id: _parentForkedFromTurnId,
       forked_from_snapshot_id: _parentForkedFromSnapshotId,
       archived_at: _forkArchivedAt,
@@ -3335,9 +3357,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       forked_from_session_id: parent.id,
       ...(input.forked_from_turn_id === undefined ? {} : { forked_from_turn_id: input.forked_from_turn_id }),
       ...(input.forked_from_snapshot_id === undefined ? {} : { forked_from_snapshot_id: input.forked_from_snapshot_id }),
-      ...(forkSnapshot === undefined
+      ...(forkLatestSnapshot === undefined
         ? {}
-        : { latest_snapshot_id: forkSnapshot.id, latest_snapshot_digest: forkSnapshot.digest }),
+        : { latest_snapshot_id: forkLatestSnapshot.id, latest_snapshot_digest: forkLatestSnapshot.digest }),
       fork_reason: input.fork_reason,
       created_by_actor_id: input.created_by_actor_id,
       created_at: input.now,
