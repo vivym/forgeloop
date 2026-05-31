@@ -738,6 +738,40 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('does not inherit parent Codex thread identity when forking from a historical snapshot', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionSnapshot(snapshotInput);
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected seeded Codex session');
+    await repository.saveCodexSession({
+      ...session,
+      latest_snapshot_id: 'snapshot-1',
+      latest_snapshot_digest: 'sha256:snapshot-1',
+      codex_thread_id: 'thread-parent-current',
+      codex_thread_id_digest: 'sha256:thread-parent-current',
+    });
+
+    const fork = await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_snapshot_id: 'snapshot-1',
+      fork_reason: 'Try the older checkpoint without current thread baggage.',
+      created_by_actor_id: 'actor-tech',
+      now: '2026-05-31T00:04:00.000Z',
+    });
+
+    expect(fork).toMatchObject({
+      id: 'session-fork',
+      latest_snapshot_id: 'snapshot-1',
+      latest_snapshot_digest: 'sha256:snapshot-1',
+      forked_from_snapshot_id: 'snapshot-1',
+    });
+    expect(fork.codex_thread_id).toBeUndefined();
+    expect(fork.codex_thread_id_digest).toBeUndefined();
+  });
+
   it('forks from a turn output snapshot instead of a newer parent latest snapshot', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);

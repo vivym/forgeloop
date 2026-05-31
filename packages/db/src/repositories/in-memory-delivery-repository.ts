@@ -3364,6 +3364,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       latest_snapshot_digest: _forkLatestSnapshotDigest,
       forked_from_turn_id: _parentForkedFromTurnId,
       forked_from_snapshot_id: _parentForkedFromSnapshotId,
+      codex_thread_id: _parentCodexThreadId,
+      codex_thread_id_digest: _parentCodexThreadIdDigest,
       archived_at: _forkArchivedAt,
       ...forkBase
     } = clone(parent);
