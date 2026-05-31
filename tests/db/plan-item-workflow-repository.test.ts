@@ -3838,6 +3838,43 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
   });
 
+  it('rejects active-session workflow transitions supported by candidate fork-owned internal artifacts', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
+    await repository.createOrReplayInternalArtifactObject({
+      ...internalArtifactObjectInput,
+      id: 'internal-artifact-fork',
+      artifact_id: 'artifact-fork',
+      ref: 'artifact://internal/generated_payload/codex_session/session-fork/artifact-fork',
+      owner_id: 'session-fork',
+    });
+    const workflowBefore = await repository.getPlanItemWorkflow('workflow-1');
+
+    await expectDomainErrorCode(
+      () =>
+        applyWorkflowTransition(repository, {
+          ...transitionInput,
+          id: 'transition-fork-artifact-support',
+          codex_session_turn_id: undefined,
+          supporting_evidence: [{ object_type: 'internal_artifact', object_id: 'internal-artifact-fork' }],
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflowBefore);
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
   it('rejects duplicate workflow manual decision ids without overwriting evidence', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);

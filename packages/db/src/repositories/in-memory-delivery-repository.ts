@@ -3397,17 +3397,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   ): void {
     const workflow = this.planItemWorkflows.get(transition.workflow_id);
     const artifact = this.internalArtifactObjects.get(evidenceObjectId);
-    const allowedOwners = new Set(
-      [
-        workflow?.id,
-        workflow?.active_codex_session_id,
-        workflow?.execution_package_id,
-        ...valuesFor(this.codexSessions)
-          .filter((session) => session.owner_type === 'plan_item_workflow' && session.owner_id === transition.workflow_id)
-          .map((session) => session.id),
-      ].filter((ownerId): ownerId is string => ownerId !== undefined),
-    );
-    if (artifact === undefined || artifact.deleted_at !== undefined || !allowedOwners.has(artifact.owner_id)) {
+    const isValidArtifact =
+      workflow !== undefined &&
+      artifact !== undefined &&
+      artifact.deleted_at === undefined &&
+      ((artifact.owner_type === 'codex_session' && artifact.owner_id === transition.codex_session_id) ||
+        (artifact.owner_type === 'execution_package' && artifact.owner_id === workflow.execution_package_id));
+    if (!isValidArtifact) {
       throw new DomainError(
         'workflow_invalid_transition',
         `workflow_invalid_transition: Transition ${transition.id} internal artifact evidence is invalid`,
