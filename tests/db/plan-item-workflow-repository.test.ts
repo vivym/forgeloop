@@ -61,8 +61,8 @@ const transitionInput = {
   to_status: 'brainstorming',
   actor_id: 'actor-tech',
   reason: 'Start brainstorming.',
-  evidence_object_type: 'codex_session_turn',
-  evidence_object_id: 'turn-1',
+  evidence_object_type: 'manual_decision',
+  evidence_object_id: 'decision-1',
   codex_session_id: 'session-1',
   codex_session_turn_id: 'turn-1',
   created_at: now,
@@ -2399,6 +2399,7 @@ describe('Plan Item Workflow repository', () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
 
     await repository.appendPlanItemWorkflowTransition(transitionInput);
 
@@ -2414,6 +2415,7 @@ describe('Plan Item Workflow repository', () => {
       codex_session_id: 'session-other',
       development_plan_item_id: 'item-other',
     });
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
 
     await expectDomainErrorCode(
       () =>
@@ -2462,6 +2464,7 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-other',
       input_digest: 'sha256:turn-other',
     });
+    await repository.saveWorkflowManualDecision(manualDecisionInput);
 
     await expectDomainErrorCode(
       () =>
@@ -2478,6 +2481,23 @@ describe('Plan Item Workflow repository', () => {
           ...transitionInput,
           id: 'transition-foreign-turn',
           codex_session_turn_id: 'turn-other',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
+  it('rejects workflow transitions with evidence object types outside the contract', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          evidence_object_type: 'codex_session_turn',
+          evidence_object_id: 'turn-1',
         }),
       'workflow_invalid_transition',
     );
@@ -2743,6 +2763,9 @@ describe('Plan Item Workflow repository', () => {
       created_at: now,
     };
 
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.claimCodexSessionLease(leaseInput);
     await repository.saveBoundarySummaryRevision(revision);
     await repository.saveStaleCodexSessionTerminalizationAttempt({
       id: 'stale-1',
@@ -2762,6 +2785,9 @@ describe('Plan Item Workflow repository', () => {
 
   it('rejects duplicate stale terminalization attempt ids', async () => {
     const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.claimCodexSessionLease(leaseInput);
     const attempt = {
       id: 'stale-1',
       codex_session_id: 'session-1',
@@ -2784,6 +2810,101 @@ describe('Plan Item Workflow repository', () => {
         }),
       'workflow_invalid_transition',
     );
+  });
+
+  it('rejects stale terminalization attempts with missing or foreign provenance', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+    });
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-other',
+      codex_session_id: 'session-other',
+      workflow_id: 'workflow-other',
+      input_digest: 'sha256:turn-other',
+    });
+    await repository.claimCodexSessionLease(leaseInput);
+    await repository.claimCodexSessionLease({
+      ...leaseInput,
+      session_id: 'session-other',
+      workflow_id: 'workflow-other',
+      lease_id: 'lease-other',
+      lease_token_hash: 'sha256:lease-other',
+    });
+
+    const attempt = {
+      id: 'stale-1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+      lease_id: 'lease-1',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      failure_code: 'codex_session_lease_conflict',
+      created_at: now,
+    } as const;
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveStaleCodexSessionTerminalizationAttempt({
+          ...attempt,
+          id: 'stale-missing-session',
+          codex_session_id: 'session-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveStaleCodexSessionTerminalizationAttempt({
+          ...attempt,
+          id: 'stale-missing-turn',
+          codex_session_turn_id: 'turn-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveStaleCodexSessionTerminalizationAttempt({
+          ...attempt,
+          id: 'stale-foreign-turn',
+          codex_session_turn_id: 'turn-other',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveStaleCodexSessionTerminalizationAttempt({
+          ...attempt,
+          id: 'stale-missing-lease',
+          lease_id: 'lease-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveStaleCodexSessionTerminalizationAttempt({
+          ...attempt,
+          id: 'stale-foreign-lease',
+          lease_id: 'lease-other',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveStaleCodexSessionTerminalizationAttempt({
+          ...attempt,
+          id: 'stale-lease-epoch-mismatch',
+          lease_epoch: 2,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts('session-1')).resolves.toHaveLength(0);
   });
 
   it('rejects duplicate execution readiness record ids without overwriting evidence', async () => {

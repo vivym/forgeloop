@@ -81,6 +81,7 @@ import type {
   WorkflowManualDecision,
 } from '@forgeloop/domain';
 import type { ObjectRef } from '@forgeloop/contracts';
+import { workflowTransitionEvidenceObjectTypeSchema } from '@forgeloop/contracts';
 import {
   DomainError,
   assertCodexRuntimeRecoveryReasonCode,
@@ -3028,6 +3029,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.planItemWorkflowTransitions.has(transition.id)) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} already exists`);
     }
+    if (!workflowTransitionEvidenceObjectTypeSchema.safeParse(transition.evidence_object_type).success) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Transition ${transition.id} evidence object type is invalid`,
+      );
+    }
     this.assertWorkflowCodexSessionProvenance(
       transition.workflow_id,
       transition.codex_session_id,
@@ -3365,6 +3372,35 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         'workflow_invalid_transition',
         `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} already exists`,
       );
+    }
+    const session = this.codexSessions.get(attempt.codex_session_id);
+    if (session === undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} session provenance is invalid`,
+      );
+    }
+    if (attempt.codex_session_turn_id !== undefined) {
+      const turn = this.codexSessionTurns.get(attempt.codex_session_turn_id);
+      if (turn === undefined || turn.codex_session_id !== attempt.codex_session_id) {
+        throw new DomainError(
+          'workflow_invalid_transition',
+          `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} turn provenance is invalid`,
+        );
+      }
+    }
+    if (attempt.lease_id !== undefined) {
+      const lease = this.codexSessionLeases.get(attempt.lease_id);
+      if (
+        lease === undefined ||
+        lease.codex_session_id !== attempt.codex_session_id ||
+        (attempt.lease_epoch !== undefined && lease.lease_epoch !== attempt.lease_epoch)
+      ) {
+        throw new DomainError(
+          'workflow_invalid_transition',
+          `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} lease provenance is invalid`,
+        );
+      }
     }
     this.codexSessionStaleTerminalizationAttempts.set(attempt.id, clone(attempt));
   }
