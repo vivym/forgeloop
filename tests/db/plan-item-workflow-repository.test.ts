@@ -54,6 +54,46 @@ const leaseInput = {
   expires_at: '2026-05-31T00:05:00.000Z',
 };
 
+const transitionInput = {
+  id: 'transition-1',
+  workflow_id: 'workflow-1',
+  from_status: 'not_started',
+  to_status: 'brainstorming',
+  actor_id: 'actor-tech',
+  reason: 'Start brainstorming.',
+  evidence_object_type: 'codex_session_turn',
+  evidence_object_id: 'turn-1',
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'turn-1',
+  created_at: now,
+} as const;
+
+const manualDecisionInput = {
+  id: 'decision-1',
+  workflow_id: 'workflow-1',
+  codex_session_id: 'session-1',
+  kind: 'start_brainstorming',
+  reason: 'Start.',
+  created_by_actor_id: 'actor-tech',
+  created_at: now,
+} as const;
+
+const readinessRecordInput = {
+  id: 'readiness-1',
+  workflow_id: 'workflow-1',
+  development_plan_id: 'plan-1',
+  development_plan_item_id: 'item-1',
+  codex_session_id: 'session-1',
+  approved_boundary_summary_revision_id: 'boundary-summary-revision-1',
+  approved_spec_revision_id: 'spec-revision-1',
+  approved_implementation_plan_revision_id: 'implementation-plan-revision-1',
+  readiness_state: 'ready',
+  blocker_codes: [],
+  supporting_evidence: [{ object_type: 'commit', object_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+  created_by_actor_id: 'actor-tech',
+  created_at: now,
+} as const;
+
 const seedWorkflowWithSnapshot = async (repository: InMemoryDeliveryRepository) => {
   await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
   await repository.createCodexSessionTurn({
@@ -200,18 +240,9 @@ describe('Plan Item Workflow repository', () => {
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const workflow = await repository.getPlanItemWorkflow('workflow-1');
     if (workflow === undefined) throw new Error('Expected seeded workflow');
-    const session = await repository.getCodexSession('session-1');
-    if (session === undefined) throw new Error('Expected seeded Codex session');
     await repository.savePlanItemWorkflow({
       ...workflow,
       status: 'archived',
-      updated_at: '2026-05-31T00:01:00.000Z',
-    });
-    await repository.saveCodexSession({
-      ...session,
-      status: 'archived',
-      active_lease_id: undefined,
-      archived_at: '2026-05-31T00:01:00.000Z',
       updated_at: '2026-05-31T00:01:00.000Z',
     });
 
@@ -230,23 +261,14 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSession('session-2')).resolves.toBeUndefined();
   });
 
-  it('rejects creating an initial session with an existing archived Codex session id', async () => {
+  it('rejects creating an initial session with an existing Codex session id', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const workflow = await repository.getPlanItemWorkflow('workflow-1');
     if (workflow === undefined) throw new Error('Expected seeded workflow');
-    const session = await repository.getCodexSession('session-1');
-    if (session === undefined) throw new Error('Expected seeded Codex session');
     await repository.savePlanItemWorkflow({
       ...workflow,
       status: 'archived',
-      updated_at: '2026-05-31T00:01:00.000Z',
-    });
-    await repository.saveCodexSession({
-      ...session,
-      status: 'archived',
-      active_lease_id: undefined,
-      archived_at: '2026-05-31T00:01:00.000Z',
       updated_at: '2026-05-31T00:01:00.000Z',
     });
 
@@ -262,7 +284,7 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getPlanItemWorkflow('workflow-2')).resolves.toBeUndefined();
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       owner_id: 'workflow-1',
-      status: 'archived',
+      status: 'idle',
     });
   });
 
@@ -515,7 +537,7 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSession('session-1')).resolves.toEqual(session);
   });
 
-  it('allows saving a Codex Session with legitimate mutable role, status, archived_at, and updated_at changed', async () => {
+  it('allows saving a Codex Session with legitimate mutable role and updated_at changes', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const session = await repository.getCodexSession('session-1');
@@ -523,9 +545,7 @@ describe('Plan Item Workflow repository', () => {
 
     await repository.saveCodexSession({
       ...session,
-      status: 'archived',
       role: 'inactive_fork',
-      archived_at: '2026-05-31T00:01:00.000Z',
       updated_at: '2026-05-31T00:01:00.000Z',
     });
 
@@ -536,12 +556,31 @@ describe('Plan Item Workflow repository', () => {
       credential_binding_id: 'credential-1',
       credential_binding_version_id: 'credential-version-1',
       created_by_actor_id: 'actor-tech',
-      status: 'archived',
+      status: 'idle',
       role: 'inactive_fork',
       lease_epoch: 0,
-      archived_at: '2026-05-31T00:01:00.000Z',
       updated_at: '2026-05-31T00:01:00.000Z',
     });
+  });
+
+  it('rejects saving a Codex Session with direct status changes and preserves the active lease state', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.claimCodexSessionLease(leaseInput);
+    const runningSession = await repository.getCodexSession('session-1');
+    if (runningSession === undefined) throw new Error('Expected running Codex session');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSession({
+          ...runningSession,
+          status: 'idle',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getCodexSession('session-1')).resolves.toEqual(runningSession);
   });
 
   it('claims only the workflow active session and rejects a second active lease', async () => {
@@ -770,16 +809,24 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflow);
   });
 
-  it('rejects lease claim for disallowed session statuses', async () => {
+  it('rejects lease claim for blocked session status', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    const session = await repository.getCodexSession('session-1');
-    if (session === undefined) throw new Error('Expected seeded Codex session');
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      lease_id: claimed.lease.id,
+      lease_token_hash: 'sha256:lease-token',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'failed',
+      expected_previous_snapshot_digest: undefined,
+      now: '2026-05-31T00:02:00.000Z',
+    });
 
-    await repository.saveCodexSession({ ...session, status: 'archived', archived_at: now });
-    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
-
-    await repository.saveCodexSession({ ...session, status: 'running' });
     await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
   });
 
@@ -966,6 +1013,34 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toEqual(originalTurn);
   });
 
+  it('rejects saving a Codex session turn with direct status changes and preserves the original turn', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const originalTurn = await repository.getCodexSessionTurn('turn-1');
+    if (originalTurn === undefined) throw new Error('Expected seeded turn');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSessionTurn({
+          ...originalTurn,
+          status: 'succeeded',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSessionTurn({
+          ...originalTurn,
+          status: 'stale',
+          updated_at: '2026-05-31T00:02:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toEqual(originalTurn);
+  });
+
   it('rejects creating a turn for a candidate fork because turns are created before lease claim sets running', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -1019,14 +1094,33 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
-  it('rejects creating a turn for an archived session because turns are created before lease claim sets running', async () => {
+  it('rejects creating a turn for a blocked session because turns are created before lease claim sets running', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    const session = await repository.getCodexSession('session-1');
-    if (session === undefined) throw new Error('Expected seeded Codex session');
-    await repository.saveCodexSession({ ...session, status: 'archived', archived_at: now });
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      lease_id: claimed.lease.id,
+      lease_token_hash: 'sha256:lease-token',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      status: 'failed',
+      expected_previous_snapshot_digest: undefined,
+      now: '2026-05-31T00:02:00.000Z',
+    });
 
-    await expectDomainErrorCode(() => repository.createCodexSessionTurn(turnInput), 'workflow_active_session_missing');
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionTurn({
+          ...turnInput,
+          id: 'turn-blocked',
+          input_digest: 'sha256:turn-blocked',
+        }),
+      'workflow_active_session_missing',
+    );
   });
 
   it('rejects creating a turn for the previous active session after fork selection', async () => {
@@ -2102,13 +2196,11 @@ describe('Plan Item Workflow repository', () => {
     await repository.saveCodexSession({
       ...fork,
       role: 'inactive_fork',
-      status: 'archived',
-      archived_at: '2026-05-31T00:05:00.000Z',
       updated_at: '2026-05-31T00:05:00.000Z',
     });
     await expect(repository.getCodexSession('session-fork')).resolves.toMatchObject({
       role: 'inactive_fork',
-      status: 'archived',
+      status: 'idle',
       forked_from_session_id: 'session-1',
       forked_from_turn_id: 'turn-1',
       forked_from_snapshot_id: 'snapshot-1',
@@ -2201,17 +2293,99 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('stores a workflow transition only when workflow, session, and turn provenance match', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+
+    await repository.appendPlanItemWorkflowTransition(transitionInput);
+
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toEqual([transitionInput]);
+  });
+
+  it('rejects workflow transitions with missing workflow, missing session, or foreign session provenance', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-missing-workflow',
+          workflow_id: 'workflow-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-missing-session',
+          codex_session_id: 'session-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-foreign-session',
+          codex_session_id: 'session-other',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
+  it('rejects workflow transitions with missing or foreign turn provenance', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+    });
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-other',
+      codex_session_id: 'session-other',
+      workflow_id: 'workflow-other',
+      input_digest: 'sha256:turn-other',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-missing-turn',
+          codex_session_turn_id: 'turn-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.appendPlanItemWorkflowTransition({
+          ...transitionInput,
+          id: 'transition-foreign-turn',
+          codex_session_turn_id: 'turn-other',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.listPlanItemWorkflowTransitions('workflow-1')).resolves.toHaveLength(0);
+  });
+
   it('rejects duplicate workflow manual decision ids without overwriting evidence', async () => {
     const repository = new InMemoryDeliveryRepository();
-    const decision = {
-      id: 'decision-1',
-      workflow_id: 'workflow-1',
-      codex_session_id: 'session-1',
-      kind: 'start_brainstorming',
-      reason: 'Start.',
-      created_by_actor_id: 'actor-tech',
-      created_at: now,
-    } as const;
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const decision = manualDecisionInput;
 
     await repository.saveWorkflowManualDecision(decision);
 
@@ -2228,6 +2402,79 @@ describe('Plan Item Workflow repository', () => {
       kind: 'start_brainstorming',
       reason: 'Start.',
     });
+  });
+
+  it('rejects manual decisions with missing workflow or session provenance', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveWorkflowManualDecision({
+          ...manualDecisionInput,
+          id: 'decision-missing-workflow',
+          workflow_id: 'workflow-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveWorkflowManualDecision({
+          ...manualDecisionInput,
+          id: 'decision-missing-session',
+          codex_session_id: 'session-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+  });
+
+  it('rejects manual decisions with missing or foreign selected fork provenance', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+    });
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-other',
+      codex_session_id: 'session-other',
+      workflow_id: 'workflow-other',
+      input_digest: 'sha256:turn-other',
+    });
+    await repository.createCodexSessionFork({
+      id: 'session-other-fork',
+      workflow_id: 'workflow-other',
+      parent_session_id: 'session-other',
+      forked_from_turn_id: 'turn-other',
+      fork_reason: 'Try another workflow.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveWorkflowManualDecision({
+          ...manualDecisionInput,
+          id: 'decision-missing-selected-fork',
+          kind: 'fork_select',
+          selected_codex_session_id: 'session-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveWorkflowManualDecision({
+          ...manualDecisionInput,
+          id: 'decision-foreign-selected-fork',
+          kind: 'fork_select',
+          selected_codex_session_id: 'session-other-fork',
+        }),
+      'workflow_invalid_transition',
+    );
   });
 
   it('rejects fork selection with duplicate manual decision id without switching active session', async () => {
@@ -2435,16 +2682,8 @@ describe('Plan Item Workflow repository', () => {
 
   it('rejects duplicate execution readiness record ids without overwriting evidence', async () => {
     const repository = new InMemoryDeliveryRepository();
-    const record = {
-      id: 'readiness-1',
-      workflow_id: 'workflow-1',
-      codex_session_id: 'session-1',
-      readiness_state: 'ready',
-      blocker_codes: [],
-      supporting_evidence: [{ object_type: 'commit', object_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
-      created_by_actor_id: 'actor-tech',
-      created_at: now,
-    } as const;
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const record = readinessRecordInput;
 
     await repository.saveExecutionReadinessRecord(record);
 
@@ -2463,6 +2702,69 @@ describe('Plan Item Workflow repository', () => {
       blocker_codes: [],
       supporting_evidence: [{ object_type: 'commit', object_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
     });
+  });
+
+  it('rejects execution readiness records with mismatched workflow plan or item provenance', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveExecutionReadinessRecord({
+          ...readinessRecordInput,
+          id: 'readiness-plan-mismatch',
+          development_plan_id: 'plan-other',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveExecutionReadinessRecord({
+          ...readinessRecordInput,
+          id: 'readiness-item-mismatch',
+          development_plan_item_id: 'item-other',
+        }),
+      'workflow_invalid_transition',
+    );
+  });
+
+  it('rejects execution readiness records with missing or foreign workflow session provenance', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveExecutionReadinessRecord({
+          ...readinessRecordInput,
+          id: 'readiness-missing-workflow',
+          workflow_id: 'workflow-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveExecutionReadinessRecord({
+          ...readinessRecordInput,
+          id: 'readiness-missing-session',
+          codex_session_id: 'session-missing',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.saveExecutionReadinessRecord({
+          ...readinessRecordInput,
+          id: 'readiness-foreign-session',
+          codex_session_id: 'session-other',
+        }),
+      'workflow_invalid_transition',
+    );
   });
 
   it('resolves narrow repository evidence only for matching workflow project repos', async () => {

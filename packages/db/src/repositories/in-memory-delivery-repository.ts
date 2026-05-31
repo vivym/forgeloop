@@ -3022,6 +3022,19 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.planItemWorkflowTransitions.has(transition.id)) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} already exists`);
     }
+    this.assertWorkflowCodexSessionProvenance(
+      transition.workflow_id,
+      transition.codex_session_id,
+      `Transition ${transition.id}`,
+    );
+    if (transition.codex_session_turn_id !== undefined) {
+      this.assertWorkflowCodexSessionTurnProvenance(
+        transition.workflow_id,
+        transition.codex_session_id,
+        transition.codex_session_turn_id,
+        `Transition ${transition.id}`,
+      );
+    }
     this.planItemWorkflowTransitions.set(transition.id, clone(transition));
   }
 
@@ -3035,6 +3048,18 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.workflowManualDecisions.has(decision.id)) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Workflow manual decision ${decision.id} already exists`);
     }
+    this.assertWorkflowCodexSessionProvenance(
+      decision.workflow_id,
+      decision.codex_session_id,
+      `Workflow manual decision ${decision.id}`,
+    );
+    if (decision.selected_codex_session_id !== undefined) {
+      this.assertWorkflowCodexSessionProvenance(
+        decision.workflow_id,
+        decision.selected_codex_session_id,
+        `Workflow manual decision ${decision.id} selected Codex session`,
+      );
+    }
     this.workflowManualDecisions.set(decision.id, clone(decision));
   }
 
@@ -3046,6 +3071,22 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.executionReadinessRecords.has(record.id)) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Execution readiness record ${record.id} already exists`);
     }
+    const workflow = this.planItemWorkflows.get(record.workflow_id);
+    if (
+      workflow === undefined ||
+      workflow.development_plan_id !== record.development_plan_id ||
+      workflow.development_plan_item_id !== record.development_plan_item_id
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Execution readiness record ${record.id} workflow provenance is invalid`,
+      );
+    }
+    this.assertWorkflowCodexSessionProvenance(
+      record.workflow_id,
+      record.codex_session_id,
+      `Execution readiness record ${record.id}`,
+    );
     this.executionReadinessRecords.set(record.id, clone(record));
   }
 
@@ -3153,6 +3194,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `workflow_invalid_transition: Codex session ${session.id} service-owned state fields cannot change`,
       );
     }
+    if (existingSession.status !== session.status) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session ${session.id} status cannot change through save`,
+      );
+    }
     this.assertCanSaveCodexSession(session);
     this.codexSessions.set(session.id, clone(session));
   }
@@ -3238,6 +3285,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw new DomainError(
         'workflow_invalid_transition',
         `workflow_invalid_transition: Codex session turn ${turn.id} identity fields cannot change`,
+      );
+    }
+    if (existingTurn.status !== turn.status) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session turn ${turn.id} status cannot change through save`,
       );
     }
     this.codexSessionTurns.set(turn.id, clone(turn));
@@ -3804,6 +3857,37 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw new DomainError(
         'workflow_active_session_conflict',
         `workflow_active_session_conflict: Workflow ${session.owner_id} already has an active Codex session`,
+      );
+    }
+  }
+
+  private assertWorkflowCodexSessionProvenance(workflowId: string, sessionId: string, context: string): void {
+    const workflow = this.planItemWorkflows.get(workflowId);
+    const session = this.codexSessions.get(sessionId);
+    if (
+      workflow === undefined ||
+      session === undefined ||
+      session.owner_type !== 'plan_item_workflow' ||
+      session.owner_id !== workflow.id
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: ${context} Codex session provenance is invalid`,
+      );
+    }
+  }
+
+  private assertWorkflowCodexSessionTurnProvenance(
+    workflowId: string,
+    sessionId: string,
+    turnId: string,
+    context: string,
+  ): void {
+    const turn = this.codexSessionTurns.get(turnId);
+    if (turn === undefined || turn.workflow_id !== workflowId || turn.codex_session_id !== sessionId) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: ${context} Codex session turn provenance is invalid`,
       );
     }
   }
