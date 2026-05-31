@@ -16,6 +16,7 @@ import type {
   Project,
   ProjectRepo,
   Release,
+  ReleaseEvidence,
   ReviewPacket,
   RunSession,
   Spec,
@@ -401,6 +402,27 @@ const release: Release = {
   created_at: now,
   updated_at: now,
   updated_by_actor_id: 'actor-owner',
+};
+
+const releaseEvidence: ReleaseEvidence = {
+  id: 'release-evidence-1',
+  org_id: release.org_id,
+  project_id: release.project_id,
+  release_id: release.id,
+  key: 'REL-1-review',
+  evidence_type: 'review_authority',
+  summary: 'Review packet approved for release.',
+  object_ref: { object_type: 'review_packet', object_id: reviewPacket.id, relationship: 'review' },
+  artifact_id: artifact.id,
+  extra: { reviewer: 'actor-reviewer' },
+  redacted: false,
+  status: 'current',
+  visibility: 'internal',
+  labels: ['review'],
+  created_at: now,
+  created_by_actor_id: 'actor-reviewer',
+  updated_at: now,
+  updated_by_actor_id: 'actor-reviewer',
 };
 
 const traceEvent: TraceEventRecord = {
@@ -1089,6 +1111,27 @@ describe('DeliveryRepository in-memory adapter', () => {
     expect(await repository.getRelease(release.id)).toEqual(release);
     expect(await repository.listReleases(project.id)).toEqual([release]);
     expect(await repository.listReleases()).toEqual([release, otherProjectRelease]);
+  });
+
+  it('rejects duplicate release evidence ids instead of overwriting the evidence row', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const duplicateEvidence: ReleaseEvidence = {
+      ...releaseEvidence,
+      summary: 'Conflicting duplicate release evidence.',
+      extra: { reviewer: 'actor-conflict' },
+      created_at: '2026-05-05T00:01:00.000Z',
+      updated_at: '2026-05-05T00:01:00.000Z',
+      updated_by_actor_id: 'actor-conflict',
+    };
+
+    await repository.saveReleaseEvidence(releaseEvidence);
+
+    await expectDomainErrorCode(
+      () => repository.saveReleaseEvidence(duplicateEvidence),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.getReleaseEvidence(releaseEvidence.id)).toEqual(releaseEvidence);
+    expect(await repository.listReleaseEvidences(release.id)).toEqual([releaseEvidence]);
   });
 });
 

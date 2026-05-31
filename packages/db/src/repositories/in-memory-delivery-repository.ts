@@ -5608,6 +5608,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveReleaseEvidence(releaseEvidence: ReleaseEvidence): Promise<void> {
+    if (this.releaseEvidences.has(releaseEvidence.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Release evidence ${releaseEvidence.id} already exists`);
+    }
     this.releaseEvidences.set(releaseEvidence.id, clone(releaseEvidence));
   }
 
