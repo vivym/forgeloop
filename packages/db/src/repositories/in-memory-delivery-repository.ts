@@ -3118,12 +3118,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void> {
+    let parsedArtifactRef: ReturnType<typeof parseInternalArtifactRef>;
     try {
-      parseInternalArtifactRef(snapshot.artifact_ref);
+      parsedArtifactRef = parseInternalArtifactRef(snapshot.artifact_ref);
     } catch {
       throw new DomainError(
         'workflow_invalid_transition',
         `workflow_invalid_transition: Codex session snapshot ${snapshot.id} artifact_ref is not an internal artifact ref`,
+      );
+    }
+    if (
+      parsedArtifactRef.kind !== 'codex_session_snapshot' ||
+      parsedArtifactRef.owner_type !== 'codex_session' ||
+      parsedArtifactRef.owner_id !== snapshot.codex_session_id ||
+      parsedArtifactRef.artifact_id !== snapshot.id
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session snapshot ${snapshot.id} artifact_ref does not match the snapshot identity`,
       );
     }
     const existingForSequence = valuesFor(this.codexSessionSnapshots).find(
@@ -5660,8 +5672,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
-    const existing = this.traceEvents.get(traceEvent.id);
-    this.traceEvents.set(traceEvent.id, clone({ ...traceEvent, created_at: existing?.created_at ?? traceEvent.created_at }));
+    if (this.traceEvents.has(traceEvent.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Trace event ${traceEvent.id} already exists`);
+    }
+    this.traceEvents.set(traceEvent.id, clone(traceEvent));
   }
 
   async listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]> {
@@ -5671,9 +5685,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveTraceLink(traceLink: TraceLinkRecord): Promise<void> {
-    if (!this.traceLinks.has(traceLink.id)) {
-      this.traceLinks.set(traceLink.id, clone(traceLink));
+    if (this.traceLinks.has(traceLink.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Trace link ${traceLink.id} already exists`);
     }
+    this.traceLinks.set(traceLink.id, clone(traceLink));
   }
 
   async listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]> {
@@ -5683,9 +5698,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveTraceArtifactRef(traceArtifactRef: TraceArtifactRefRecord): Promise<void> {
-    if (!this.traceArtifactRefs.has(traceArtifactRef.id)) {
-      this.traceArtifactRefs.set(traceArtifactRef.id, clone(traceArtifactRef));
+    if (this.traceArtifactRefs.has(traceArtifactRef.id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Trace artifact ref ${traceArtifactRef.id} already exists`,
+      );
     }
+    this.traceArtifactRefs.set(traceArtifactRef.id, clone(traceArtifactRef));
   }
 
   async listTraceArtifactRefs(traceEventId: string): Promise<TraceArtifactRefRecord[]> {

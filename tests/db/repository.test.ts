@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DomainError } from '@forgeloop/domain';
 import type {
   Artifact,
   AutomationActionRun,
@@ -461,6 +462,17 @@ const traceArtifactRef: TraceArtifactRefRecord = {
   artifact_id: artifact.id,
   ref: artifactRef,
   created_at: now,
+};
+
+const expectDomainErrorCode = async (action: () => Promise<unknown>, code: string) => {
+  try {
+    await action();
+    throw new Error(`Expected DomainError ${code}`);
+  } catch (error) {
+    if (error instanceof Error && error.message === `Expected DomainError ${code}`) throw error;
+    expect(error).toBeInstanceOf(DomainError);
+    expect((error as DomainError).code).toBe(code as DomainError['code']);
+  }
 };
 
 const createInsertCaptureRepository = () => {
@@ -963,6 +975,60 @@ describe('DeliveryRepository in-memory adapter', () => {
     ]);
     expect(await repository.listTraceLinks(traceEvent.id)).toEqual([firstLink, secondLink]);
     expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([firstArtifactRef, secondArtifactRef]);
+  });
+
+  it('rejects duplicate trace event ids instead of overwriting the audit row', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
+    const duplicateEvent: TraceEventRecord = {
+      ...traceEvent,
+      summary: 'Conflicting duplicate trace event.',
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveTraceEvent(traceEvent);
+
+    await expectDomainErrorCode(
+      () => repository.saveTraceEvent(duplicateEvent),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listTraceEventsForSubject(traceEvent.subject_type, traceEvent.subject_id)).toEqual([traceEvent]);
+  });
+
+  it('rejects duplicate trace link ids instead of ignoring the conflicting audit row', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
+    const traceLink = traceLinks[0]!;
+    const duplicateLink: TraceLinkRecord = {
+      ...traceLink,
+      relationship: 'supersedes',
+      object_type: 'run_session',
+      object_id: runSession.id,
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveTraceLink(traceLink);
+
+    await expectDomainErrorCode(
+      () => repository.saveTraceLink(duplicateLink),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listTraceLinks(traceEvent.id)).toEqual([traceLink]);
+  });
+
+  it('rejects duplicate trace artifact ref ids instead of ignoring the conflicting audit row', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
+    const duplicateArtifactRef: TraceArtifactRefRecord = {
+      ...traceArtifactRef,
+      artifact_id: 'artifact-conflicting',
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveTraceArtifactRef(traceArtifactRef);
+
+    await expectDomainErrorCode(
+      () => repository.saveTraceArtifactRef(duplicateArtifactRef),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([traceArtifactRef]);
   });
 
   it('round-trips release canonical fields and lists releases with optional project filtering', async () => {

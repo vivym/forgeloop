@@ -1074,6 +1074,37 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
   });
 
+  it.each([
+    {
+      label: 'wrong kind',
+      artifact_ref: 'artifact://internal/execution_summary/codex_session/session-1/snapshot-1',
+    },
+    {
+      label: 'wrong owner_type',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/run_session/session-1/snapshot-1',
+    },
+    {
+      label: 'wrong owner_id',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-other/snapshot-1',
+    },
+    {
+      label: 'wrong artifact_id',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-other',
+    },
+  ])('rejects snapshots with $label in artifact refs before saving them', async ({ artifact_ref }) => {
+    const repository = new InMemoryDeliveryRepository();
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionSnapshot({
+          ...snapshotInput,
+          artifact_ref,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+  });
+
   it('rejects terminalizing an older non-latest running turn without moving the session backward', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
