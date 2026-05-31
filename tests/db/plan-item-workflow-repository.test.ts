@@ -600,6 +600,97 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('rejects terminalization when output snapshot provenance points at a different turn', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: undefined,
+          output_snapshot: {
+            ...snapshotInput,
+            id: 'snapshot-2',
+            sequence: 2,
+            artifact_ref: 'artifact://snapshot-2',
+            digest: 'sha256:snapshot-2',
+            manifest_digest: 'sha256:manifest-2',
+            created_from_turn_id: 'turn-2',
+          },
+          now: '2026-05-31T00:03:00.000Z',
+        }),
+      'codex_session_snapshot_stale',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: claimed.lease.id,
+    });
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
+  });
+
+  it('rejects terminalization when a reused persisted output snapshot provenance points at a different turn', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionSnapshot({
+      ...snapshotInput,
+      id: 'snapshot-2',
+      sequence: 2,
+      artifact_ref: 'artifact://snapshot-2',
+      digest: 'sha256:snapshot-2',
+      manifest_digest: 'sha256:manifest-2',
+      created_from_turn_id: 'turn-2',
+    });
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: undefined,
+          output_snapshot: {
+            ...snapshotInput,
+            id: 'snapshot-2',
+            sequence: 2,
+            artifact_ref: 'artifact://snapshot-2',
+            digest: 'sha256:snapshot-2',
+            manifest_digest: 'sha256:manifest-2',
+            created_from_turn_id: 'turn-2',
+          },
+          now: '2026-05-31T00:03:00.000Z',
+        }),
+      'codex_session_snapshot_stale',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: claimed.lease.id,
+    });
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toMatchObject({
+      created_from_turn_id: 'turn-2',
+    });
+  });
+
   it('rejects terminalizing an older non-latest running turn without moving the session backward', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -1407,7 +1498,7 @@ describe('Plan Item Workflow repository', () => {
       codex_session_id: 'session-1',
       readiness_state: 'ready',
       blocker_codes: [],
-      supporting_evidence: [{ type: 'commit', id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+      supporting_evidence: [{ object_type: 'commit', object_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
       created_by_actor_id: 'actor-tech',
       created_at: now,
     } as const;
@@ -1418,16 +1509,16 @@ describe('Plan Item Workflow repository', () => {
       () =>
         repository.saveExecutionReadinessRecord({
           ...record,
-          readiness_state: 'blocked',
+          readiness_state: 'not_ready',
           blocker_codes: ['missing_tests'],
-          supporting_evidence: [{ type: 'pull_request', id: '42' }],
+          supporting_evidence: [{ object_type: 'pull_request', object_id: '42' }],
         }),
       'workflow_invalid_transition',
     );
     await expect(repository.getExecutionReadinessRecord('readiness-1')).resolves.toMatchObject({
       readiness_state: 'ready',
       blocker_codes: [],
-      supporting_evidence: [{ type: 'commit', id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+      supporting_evidence: [{ object_type: 'commit', object_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
     });
   });
 

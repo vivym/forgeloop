@@ -3260,8 +3260,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot does not belong to session ${session.id}`);
     }
+    if (
+      input.output_snapshot !== undefined &&
+      input.output_snapshot.created_from_turn_id !== input.turn_id
+    ) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot ${input.output_snapshot.id} does not belong to turn ${input.turn_id}`);
+    }
     const existingOutputSnapshot =
       input.output_snapshot === undefined ? undefined : this.codexSessionSnapshots.get(input.output_snapshot.id);
+    if (
+      existingOutputSnapshot !== undefined &&
+      existingOutputSnapshot.created_from_turn_id !== input.turn_id
+    ) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot ${existingOutputSnapshot.id} does not belong to turn ${input.turn_id}`);
+    }
     if (input.output_snapshot !== undefined && existingOutputSnapshot !== undefined) {
       if (!codexSessionSnapshotDurableIdentityMatches(existingOutputSnapshot, input.output_snapshot)) {
         throw new DomainError(
