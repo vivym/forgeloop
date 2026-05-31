@@ -1363,6 +1363,33 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     await this.db.update(codex_session_turns).set(toDbRecord(turn, codex_session_turns) as never).where(eq(codex_session_turns.id, turn.id));
   }
 
+  async markCodexSessionTurnStale(input: { session_id: string; turn_id: string; now: string }): Promise<void> {
+    const turn = await this.getCodexSessionTurn(input.turn_id);
+    if (turn === undefined || turn.codex_session_id !== input.session_id) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Codex session turn ${input.turn_id} does not belong to session ${input.session_id}`,
+      );
+    }
+    if (turn.status !== 'running') return;
+    await this.db
+      .update(codex_session_turns)
+      .set({
+        status: 'stale',
+        outputSnapshotId: null,
+        outputSnapshotDigest: null,
+        codexThreadIdDigest: null,
+        updatedAt: input.now,
+      } as never)
+      .where(
+        and(
+          eq(codex_session_turns.id, input.turn_id),
+          eq(codex_session_turns.codexSessionId, input.session_id),
+          eq(codex_session_turns.status, 'running'),
+        ),
+      );
+  }
+
   async createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void> {
     if ((await this.getCodexSession(snapshot.codex_session_id)) === undefined) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} session ${snapshot.codex_session_id} does not exist`);
@@ -1428,11 +1455,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
     if (attempt.lease_id !== undefined) {
       const lease = await this.getCodexSessionLease(attempt.lease_id);
-      if (
-        lease === undefined ||
-        lease.codex_session_id !== attempt.codex_session_id ||
-        (attempt.lease_epoch !== undefined && lease.lease_epoch !== attempt.lease_epoch)
-      ) {
+      if (lease === undefined || lease.codex_session_id !== attempt.codex_session_id) {
         throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} lease provenance is invalid`);
       }
     }

@@ -1471,6 +1471,7 @@ export interface DeliveryRepository {
   createCodexSessionTurn(turn: CodexSessionTurn): Promise<void>;
   getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined>;
   saveCodexSessionTurn(turn: CodexSessionTurn): Promise<void>;
+  markCodexSessionTurnStale(input: { session_id: string; turn_id: string; now: string }): Promise<void>;
   createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void>;
   getCodexSessionSnapshot(id: string): Promise<CodexSessionSnapshot | undefined>;
   saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void>;

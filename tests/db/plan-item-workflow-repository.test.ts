@@ -4538,16 +4538,70 @@ describe('Plan Item Workflow repository', () => {
         }),
       'workflow_invalid_transition',
     );
-    await expectDomainErrorCode(
-      () =>
-        repository.saveStaleCodexSessionTerminalizationAttempt({
-          ...attempt,
-          id: 'stale-lease-epoch-mismatch',
-          lease_epoch: 2,
-        }),
-      'workflow_invalid_transition',
-    );
     await expect(repository.listStaleCodexSessionTerminalizationAttempts('session-1')).resolves.toHaveLength(0);
+  });
+
+  it('stores stale terminalization attempts with the attempted lease epoch', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.claimCodexSessionLease(leaseInput);
+
+    await repository.saveStaleCodexSessionTerminalizationAttempt({
+      id: 'stale-lease-epoch-mismatch',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+      lease_id: 'lease-1',
+      lease_epoch: 2,
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      attempted_output_snapshot_digest: 'sha256:attempted-output',
+      failure_code: 'codex_session_stale_terminalization',
+      created_at: now,
+    });
+
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts('session-1')).resolves.toEqual([
+      expect.objectContaining({
+        id: 'stale-lease-epoch-mismatch',
+        lease_id: 'lease-1',
+        lease_epoch: 2,
+        attempted_output_snapshot_digest: 'sha256:attempted-output',
+      }),
+    ]);
+  });
+
+  it('does not downgrade a terminalized turn when stale marking races behind success', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      lease_id: claimed.lease.id,
+      lease_token_hash: claimed.lease.lease_token_hash,
+      lease_epoch: claimed.lease.lease_epoch,
+      worker_id: claimed.lease.worker_id,
+      worker_session_digest: claimed.lease.worker_session_digest,
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: 'sha256:thread-1',
+      now: '2026-05-31T00:02:00.000Z',
+    });
+
+    await repository.markCodexSessionTurnStale({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      now: '2026-05-31T00:03:00.000Z',
+    });
+
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({
+      status: 'succeeded',
+      lease_id: claimed.lease.id,
+      lease_epoch: claimed.lease.lease_epoch,
+      codex_thread_id_digest: 'sha256:thread-1',
+    });
   });
 
   it('rejects duplicate execution readiness record ids without overwriting evidence', async () => {
@@ -4885,6 +4939,67 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       created_at: '2026-05-31T00:03:00.000Z',
     });
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(uuidFixture.sessionId)).resolves.toHaveLength(1);
+  });
+
+  drizzleTest('persists stale terminalization attempts with attempted lease epoch', async () => {
+    const repository = await createDrizzleWorkflowRepository();
+    await seedDrizzleWorkflow(repository);
+    await repository.claimCodexSessionLease(drizzleLeaseInput);
+
+    await repository.saveStaleCodexSessionTerminalizationAttempt({
+      id: uuidFixture.staleAttemptId,
+      codex_session_id: uuidFixture.sessionId,
+      codex_session_turn_id: uuidFixture.turnId,
+      lease_id: uuidFixture.leaseId,
+      lease_epoch: 2,
+      worker_id: 'worker-drizzle',
+      worker_session_digest: 'sha256:worker-session-drizzle',
+      attempted_output_snapshot_digest: 'sha256:attempted-drizzle-output',
+      failure_code: 'codex_session_stale_terminalization',
+      created_at: '2026-05-31T00:03:00.000Z',
+    });
+
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts(uuidFixture.sessionId)).resolves.toEqual([
+      expect.objectContaining({
+        id: uuidFixture.staleAttemptId,
+        lease_id: uuidFixture.leaseId,
+        lease_epoch: 2,
+        attempted_output_snapshot_digest: 'sha256:attempted-drizzle-output',
+      }),
+    ]);
+  });
+
+  drizzleTest('preserves a terminalized turn when stale marking races behind success', async () => {
+    const repository = await createDrizzleWorkflowRepository();
+    await seedDrizzleWorkflow(repository);
+    const claimed = await repository.claimCodexSessionLease(drizzleLeaseInput);
+    await repository.terminalizeCodexSessionTurn({
+      session_id: uuidFixture.sessionId,
+      turn_id: uuidFixture.turnId,
+      lease_id: claimed.lease.id,
+      lease_token_hash: claimed.lease.lease_token_hash,
+      lease_epoch: claimed.lease.lease_epoch,
+      worker_id: 'worker-drizzle',
+      worker_session_digest: 'sha256:worker-session-drizzle',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: undefined,
+      codex_thread_id: 'thread-drizzle',
+      codex_thread_id_digest: 'sha256:thread-drizzle',
+      now: '2026-05-31T00:02:00.000Z',
+    });
+
+    await repository.markCodexSessionTurnStale({
+      session_id: uuidFixture.sessionId,
+      turn_id: uuidFixture.turnId,
+      now: '2026-05-31T00:03:00.000Z',
+    });
+
+    await expect(repository.getCodexSessionTurn(uuidFixture.turnId)).resolves.toMatchObject({
+      status: 'succeeded',
+      lease_id: claimed.lease.id,
+      lease_epoch: claimed.lease.lease_epoch,
+      codex_thread_id_digest: 'sha256:thread-drizzle',
+    });
   });
 
   drizzleTest('rejects persisted Plan Item Workflow plan/item mismatch', async () => {

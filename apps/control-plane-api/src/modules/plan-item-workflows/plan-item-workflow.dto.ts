@@ -68,10 +68,74 @@ export const approveImplementationPlanAndMarkExecutionReadySchema = z
   })
   .strict();
 
+export const claimCodexSessionLeaseSchema = z
+  .object({
+    workflow_id: nonEmpty,
+    lease_token: nonEmpty,
+    worker_id: nonEmpty,
+    worker_session_digest: nonEmpty,
+    expected_previous_snapshot_digest: nonEmpty.nullable(),
+    expires_at: z.string().datetime(),
+  })
+  .strict();
+
+export const renewCodexSessionLeaseSchema = z
+  .object({
+    lease_token: nonEmpty,
+    worker_id: nonEmpty,
+    worker_session_digest: nonEmpty,
+    lease_epoch: z.number().int().positive(),
+    expires_at: z.string().datetime(),
+  })
+  .strict();
+
+export const terminalizeCodexSessionTurnSchema = z
+  .object({
+    lease_id: nonEmpty,
+    lease_token: nonEmpty,
+    lease_epoch: z.number().int().positive(),
+    worker_id: nonEmpty,
+    worker_session_digest: nonEmpty,
+    status: z.enum(['succeeded', 'failed', 'cancelled']),
+    expected_previous_snapshot_digest: nonEmpty.nullable(),
+    output_snapshot_id: nonEmpty.optional(),
+    output_snapshot_sequence: z.number().int().positive().optional(),
+    output_snapshot_artifact_ref: nonEmpty.optional(),
+    output_snapshot_digest: nonEmpty.optional(),
+    output_snapshot_size_bytes: nonEmpty.optional(),
+    output_snapshot_manifest_digest: nonEmpty.optional(),
+    runtime_profile_revision_id: nonEmpty.optional(),
+    codex_thread_id: nonEmpty.optional(),
+    codex_thread_id_digest: nonEmpty.optional(),
+    failure_code: nonEmpty.optional(),
+  })
+  .strict()
+  .superRefine((body, ctx) => {
+    const snapshotFields = [
+      'output_snapshot_id',
+      'output_snapshot_sequence',
+      'output_snapshot_artifact_ref',
+      'output_snapshot_digest',
+      'output_snapshot_size_bytes',
+      'output_snapshot_manifest_digest',
+      'runtime_profile_revision_id',
+    ] as const;
+    const snapshotProvided = snapshotFields.some((field) => body[field] !== undefined);
+    if (!snapshotProvided) return;
+    for (const field of snapshotFields) {
+      if (body[field] === undefined) {
+        ctx.addIssue({ code: 'custom', path: [field], message: `${field} is required when output snapshot is provided` });
+      }
+    }
+  });
+
 export type ManualDecisionBodyDto = z.infer<typeof manualDecisionBodySchema>;
 export type RequestWorkflowChangesDto = z.infer<typeof requestWorkflowChangesSchema>;
 export type ApproveImplementationPlanAndMarkExecutionReadyDto = z.infer<
   typeof approveImplementationPlanAndMarkExecutionReadySchema
 >;
+export type ClaimCodexSessionLeaseDto = z.infer<typeof claimCodexSessionLeaseSchema>;
+export type RenewCodexSessionLeaseDto = z.infer<typeof renewCodexSessionLeaseSchema>;
+export type TerminalizeCodexSessionTurnDto = z.infer<typeof terminalizeCodexSessionTurnSchema>;
 
 export { codexSessionPublicDtoSchema, planItemWorkflowPublicDtoSchema };

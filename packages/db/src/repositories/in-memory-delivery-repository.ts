@@ -3728,6 +3728,28 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.codexSessionTurns.set(turn.id, clone(turn));
   }
 
+  async markCodexSessionTurnStale(input: { session_id: string; turn_id: string; now: string }): Promise<void> {
+    const turn = this.codexSessionTurns.get(input.turn_id);
+    if (turn === undefined || turn.codex_session_id !== input.session_id) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Codex session turn ${input.turn_id} does not belong to session ${input.session_id}`,
+      );
+    }
+    if (turn.status !== 'running') return;
+    const {
+      output_snapshot_id: _outputSnapshotId,
+      output_snapshot_digest: _outputSnapshotDigest,
+      codex_thread_id_digest: _codexThreadIdDigest,
+      ...turnWithoutAttemptedOutput
+    } = clone(turn);
+    this.codexSessionTurns.set(input.turn_id, {
+      ...turnWithoutAttemptedOutput,
+      status: 'stale',
+      updated_at: input.now,
+    });
+  }
+
   async createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void> {
     if (!this.codexSessions.has(snapshot.codex_session_id)) {
       throw new DomainError(
@@ -3812,11 +3834,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
     if (attempt.lease_id !== undefined) {
       const lease = this.codexSessionLeases.get(attempt.lease_id);
-      if (
-        lease === undefined ||
-        lease.codex_session_id !== attempt.codex_session_id ||
-        (attempt.lease_epoch !== undefined && lease.lease_epoch !== attempt.lease_epoch)
-      ) {
+      if (lease === undefined || lease.codex_session_id !== attempt.codex_session_id) {
         throw new DomainError(
           'workflow_invalid_transition',
           `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} lease provenance is invalid`,
