@@ -831,6 +831,32 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
+  it.each([
+    { label: 'terminal status', serviceOwnedFields: { status: 'succeeded' } },
+    { label: 'output snapshot id', serviceOwnedFields: { output_snapshot_id: 'snapshot-1' } },
+    { label: 'output snapshot digest', serviceOwnedFields: { output_snapshot_digest: 'sha256:snapshot-1' } },
+    { label: 'output object type', serviceOwnedFields: { output_object_type: 'artifact' } },
+    { label: 'output object id', serviceOwnedFields: { output_object_id: 'artifact-1' } },
+    { label: 'thread digest', serviceOwnedFields: { codex_thread_id_digest: 'sha256:thread-1' } },
+    { label: 'lease id', serviceOwnedFields: { lease_id: 'lease-1' } },
+    { label: 'lease epoch', serviceOwnedFields: { lease_epoch: 1 } },
+    { label: 'automation action run id', serviceOwnedFields: { automation_action_run_id: 'action-run-1' } },
+    { label: 'runtime job id', serviceOwnedFields: { runtime_job_id: 'runtime-job-1' } },
+  ])('rejects creating a turn with caller-supplied $label', async ({ serviceOwnedFields }) => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionTurn({
+          ...turnInput,
+          ...serviceOwnedFields,
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toBeUndefined();
+  });
+
   it('rejects saving a Codex session turn that does not already exist', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -1583,6 +1609,13 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-other',
       input_digest: 'sha256:turn-other',
     });
+
+    const { created_from_turn_id: _createdFromTurnId, ...snapshotWithoutTurnProvenance } = snapshotInput;
+    await expectDomainErrorCode(
+      () => repository.createCodexSessionSnapshot(snapshotWithoutTurnProvenance),
+      'codex_session_snapshot_stale',
+    );
+    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
 
     await expectDomainErrorCode(
       () =>

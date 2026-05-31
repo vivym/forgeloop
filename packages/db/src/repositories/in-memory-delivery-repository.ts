@@ -3161,6 +3161,23 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.codexSessionTurns.has(turn.id)) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session turn ${turn.id} already exists`);
     }
+    if (
+      turn.status !== 'running' ||
+      turn.output_snapshot_id !== undefined ||
+      turn.output_snapshot_digest !== undefined ||
+      turn.output_object_type !== undefined ||
+      turn.output_object_id !== undefined ||
+      turn.codex_thread_id_digest !== undefined ||
+      turn.lease_id !== undefined ||
+      turn.lease_epoch !== undefined ||
+      turn.automation_action_run_id !== undefined ||
+      turn.runtime_job_id !== undefined
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session turn ${turn.id} service-owned fields cannot be set at creation`,
+      );
+    }
     const session = this.codexSessions.get(turn.codex_session_id);
     const workflow = session === undefined ? undefined : this.planItemWorkflows.get(session.owner_id);
     const cannotCreateTurn =
@@ -3233,14 +3250,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `workflow_invalid_transition: Codex session snapshot ${snapshot.id} session ${snapshot.codex_session_id} does not exist`,
       );
     }
-    if (snapshot.created_from_turn_id !== undefined) {
-      const sourceTurn = this.codexSessionTurns.get(snapshot.created_from_turn_id);
-      if (sourceTurn === undefined || sourceTurn.codex_session_id !== snapshot.codex_session_id) {
-        throw new DomainError(
-          'codex_session_snapshot_stale',
-          `codex_session_snapshot_stale: Codex session snapshot ${snapshot.id} source turn is stale`,
-        );
-      }
+    const sourceTurn = snapshot.created_from_turn_id === undefined ? undefined : this.codexSessionTurns.get(snapshot.created_from_turn_id);
+    if (sourceTurn === undefined || sourceTurn.codex_session_id !== snapshot.codex_session_id) {
+      throw new DomainError(
+        'codex_session_snapshot_stale',
+        `codex_session_snapshot_stale: Codex session snapshot ${snapshot.id} source turn is stale`,
+      );
     }
     let parsedArtifactRef: ReturnType<typeof parseInternalArtifactRef>;
     try {
