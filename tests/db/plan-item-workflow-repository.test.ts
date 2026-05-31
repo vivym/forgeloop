@@ -54,6 +54,17 @@ const leaseInput = {
   expires_at: '2026-05-31T00:05:00.000Z',
 };
 
+const seedWorkflowWithSnapshot = async (repository: InMemoryDeliveryRepository) => {
+  await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+  const session = await repository.getCodexSession('session-1');
+  if (session === undefined) throw new Error('Expected seeded Codex session');
+  await repository.saveCodexSession({
+    ...session,
+    latest_snapshot_id: 'snapshot-1',
+    latest_snapshot_digest: 'sha256:snapshot-1',
+  });
+};
+
 describe('Plan Item Workflow repository', () => {
   it('creates workflow with initial active Codex Session', async () => {
     const repository = new InMemoryDeliveryRepository();
@@ -108,6 +119,83 @@ describe('Plan Item Workflow repository', () => {
           expires_at: '2026-05-31T00:05:00.000Z',
         }),
       'codex_session_lease_conflict',
+    );
+  });
+
+  it('rejects lease claim when session is missing', async () => {
+    const repository = new InMemoryDeliveryRepository();
+
+    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
+  });
+
+  it('rejects lease claim when owner workflow is missing', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.saveCodexSession({
+      id: 'session-1',
+      owner_type: 'plan_item_workflow',
+      owner_id: 'workflow-1',
+      status: 'idle',
+      role: 'active',
+      runtime_profile_id: 'profile-1',
+      runtime_profile_revision_id: 'profile-revision-1',
+      credential_binding_id: 'credential-1',
+      credential_binding_version_id: 'credential-version-1',
+      lease_epoch: 0,
+      created_by_actor_id: 'actor-tech',
+      created_at: now,
+      updated_at: now,
+    });
+
+    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
+  });
+
+  it('rejects lease claim for inactive role or candidate fork sessions', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected seeded Codex session');
+
+    await repository.saveCodexSession({ ...session, role: 'inactive_fork' });
+    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
+
+    await repository.saveCodexSession({ ...session, role: 'candidate_fork' });
+    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
+  });
+
+  it('rejects lease claim when workflow active session does not match', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+    await repository.savePlanItemWorkflow({ ...workflow, active_codex_session_id: 'session-other' });
+
+    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
+  });
+
+  it('rejects lease claim for disallowed session statuses', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const session = await repository.getCodexSession('session-1');
+    if (session === undefined) throw new Error('Expected seeded Codex session');
+
+    await repository.saveCodexSession({ ...session, status: 'archived', archived_at: now });
+    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
+
+    await repository.saveCodexSession({ ...session, status: 'running' });
+    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
+  });
+
+  it('rejects lease claim when expected snapshot digest is stale', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await seedWorkflowWithSnapshot(repository);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.claimCodexSessionLease({
+          ...leaseInput,
+          expected_previous_snapshot_digest: 'sha256:stale',
+        }),
+      'codex_session_snapshot_stale',
     );
   });
 
@@ -227,6 +315,53 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('rejects selecting the current active Codex session', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.selectActiveCodexSessionFork({
+          workflow_id: 'workflow-1',
+          selected_codex_session_id: 'session-1',
+          manual_decision_id: 'decision-current',
+          actor_id: 'actor-tech',
+          reason: 'Keep current path.',
+          now: '2026-05-31T00:03:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+  });
+
+  it('rejects selecting a non-candidate fork session', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionFork({
+      id: 'session-inactive-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+    const inactiveFork = await repository.getCodexSession('session-inactive-fork');
+    if (inactiveFork === undefined) throw new Error('Expected seeded fork');
+    await repository.saveCodexSession({ ...inactiveFork, role: 'inactive_fork' });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.selectActiveCodexSessionFork({
+          workflow_id: 'workflow-1',
+          selected_codex_session_id: 'session-inactive-fork',
+          manual_decision_id: 'decision-inactive-fork',
+          actor_id: 'actor-tech',
+          reason: 'Use an inactive fork.',
+          now: '2026-05-31T00:03:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+  });
+
   it('copies workflow session maps through transaction state', async () => {
     const repository = new InMemoryDeliveryRepository();
 
@@ -326,5 +461,23 @@ describe('Plan Item Workflow repository', () => {
         development_plan_item_id: 'item-1',
       }),
     ).resolves.toBeUndefined();
+    await expect(
+      repository.resolveWorkflowRepositoryEvidence({
+        evidence_object_type: 'pull_request',
+        evidence_object_id: 'please see owner/repo/pull/123',
+        workflow_id: 'workflow-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      repository.resolveWorkflowRepositoryEvidence({
+        evidence_object_type: 'pull_request',
+        evidence_object_id: 'https://github.com/owner/repo/pull/123',
+        workflow_id: 'workflow-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+      }),
+    ).resolves.toEqual({ repository_id: 'repo-1', resolved_ref: 'https://github.com/owner/repo/pull/123' });
   });
 });

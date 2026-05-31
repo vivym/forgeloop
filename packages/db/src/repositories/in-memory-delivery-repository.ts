@@ -406,6 +406,47 @@ const claimableCodexSessionStatuses = new Set<CodexSession['status']>(['starting
 const eventCursor = (sequence: number) => String(sequence).padStart(10, '0');
 const invalidLease = (runSessionId: string): DomainErrorType =>
   new DomainError('INVALID_TRANSITION', `Run session ${runSessionId} does not have an active worker lease`);
+const normalizeRepositoryNamespace = (value: string): string | undefined => {
+  const trimmed = value.trim().replace(/\.git$/i, '');
+  const path = trimmed.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (path !== null) {
+    return `${path[1]}/${path[2]}`.toLowerCase();
+  }
+  const ssh = trimmed.match(/^[^@\s]+@[^:\s]+:([^/\s]+)\/([^/\s]+)$/);
+  if (ssh !== null) {
+    return `${ssh[1]}/${ssh[2]}`.toLowerCase();
+  }
+  try {
+    const url = new URL(trimmed);
+    const parts = url.pathname.replace(/^\/+|\/+$/g, '').split('/');
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && parts.length >= 2) {
+      return `${parts[0]}/${parts[1]!.replace(/\.git$/i, '')}`.toLowerCase();
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+const parseGitHubStylePullRequestUrl = (value: string): { namespace: string } | undefined => {
+  try {
+    const url = new URL(value);
+    const parts = url.pathname.replace(/^\/+|\/+$/g, '').split('/');
+    if (
+      (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+      parts.length !== 4 ||
+      parts[2] !== 'pull' ||
+      !/^\d+$/.test(parts[3]!)
+    ) {
+      return undefined;
+    }
+    return {
+      namespace: `${parts[0]}/${parts[1]}`.toLowerCase(),
+    };
+  } catch {
+    return undefined;
+  }
+};
 
 interface CodexCredentialBindingVersionPrivateRecord {
   version: CodexCredentialBindingVersion;
@@ -2985,13 +3026,23 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         : undefined;
     }
 
+    const evidence = input.evidence_object_id.trim();
+    if (/^\d+$/.test(evidence)) {
+      return repos.length === 1 ? { repository_id: repos[0]!.id, resolved_ref: evidence } : undefined;
+    }
+    const pullRequestUrl = parseGitHubStylePullRequestUrl(evidence);
+    if (pullRequestUrl === undefined) {
+      return undefined;
+    }
     const matchedRepo = repos.find((repo) => {
-      const candidates = [repo.name, repo.repo_id, repo.remote_url].filter((value): value is string => value !== undefined);
-      return candidates.some((candidate) => input.evidence_object_id.includes(candidate));
+      const candidates = [repo.name, repo.remote_url].filter((value): value is string => value !== undefined);
+      return candidates
+        .map((candidate) => normalizeRepositoryNamespace(candidate))
+        .some((namespace) => namespace === pullRequestUrl.namespace);
     });
     return matchedRepo === undefined
       ? undefined
-      : { repository_id: matchedRepo.id, resolved_ref: input.evidence_object_id };
+      : { repository_id: matchedRepo.id, resolved_ref: evidence };
   }
 
   async getCodexSession(id: string): Promise<CodexSession | undefined> {
@@ -3052,7 +3103,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   async claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
     const session = this.codexSessions.get(input.session_id);
     const workflow = session === undefined ? undefined : this.planItemWorkflows.get(session.owner_id);
-    if (
+    const cannotClaim =
       session === undefined ||
       workflow === undefined ||
       session.owner_type !== 'plan_item_workflow' ||
@@ -3062,10 +3113,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       workflow.active_codex_session_id !== session.id ||
       !claimableCodexSessionStatuses.has(session.status) ||
       this.findActiveCodexSessionLease(session.id) !== undefined ||
-      session.active_lease_id !== undefined ||
-      session.latest_snapshot_digest !== input.expected_previous_snapshot_digest
-    ) {
+      session.active_lease_id !== undefined;
+    if (cannotClaim) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    if (session.latest_snapshot_digest !== input.expected_previous_snapshot_digest) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${input.session_id} snapshot is stale`);
     }
     const leaseEpoch = session.lease_epoch + 1;
     const lease: CodexSessionLease = {
@@ -3240,6 +3293,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       previousActive === undefined ||
       selected.owner_id !== workflow.id ||
       previousActive.owner_id !== workflow.id ||
+      selected.id === previousActive.id ||
+      selected.role !== 'candidate_fork' ||
       selected.status === 'archived' ||
       previousActive.status === 'archived' ||
       selected.status === 'running' ||
