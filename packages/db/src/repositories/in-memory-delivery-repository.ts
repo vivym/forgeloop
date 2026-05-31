@@ -3291,6 +3291,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   async createCodexSessionFork(input: CreateCodexSessionForkInput): Promise<CodexSession> {
     const workflow = this.planItemWorkflows.get(input.workflow_id);
     const parent = this.codexSessions.get(input.parent_session_id);
+    const forkTurn =
+      input.forked_from_turn_id === undefined ? undefined : this.codexSessionTurns.get(input.forked_from_turn_id);
     const forkSnapshot =
       input.forked_from_snapshot_id === undefined ? undefined : this.codexSessionSnapshots.get(input.forked_from_snapshot_id);
     if (
@@ -3299,6 +3301,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       parent.owner_id !== workflow.id ||
       parent.status === 'archived' ||
       this.codexSessions.has(input.id) ||
+      (input.forked_from_turn_id === undefined && input.forked_from_snapshot_id === undefined) ||
+      (input.forked_from_turn_id !== undefined && (forkTurn === undefined || forkTurn.codex_session_id !== parent.id)) ||
       (input.forked_from_snapshot_id !== undefined && (forkSnapshot === undefined || forkSnapshot.codex_session_id !== parent.id))
     ) {
       throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);

@@ -309,10 +309,12 @@ describe('Plan Item Workflow repository', () => {
   it('rejects creating a turn for a candidate fork because turns are created before lease claim sets running', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
     await repository.createCodexSessionFork({
       id: 'session-fork',
       workflow_id: 'workflow-1',
       parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
       fork_reason: 'Try another approach.',
       created_by_actor_id: 'actor-tech',
       now,
@@ -332,10 +334,12 @@ describe('Plan Item Workflow repository', () => {
   it('rejects creating a turn for an inactive fork because turns are created before lease claim sets running', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
     await repository.createCodexSessionFork({
       id: 'session-fork',
       workflow_id: 'workflow-1',
       parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
       fork_reason: 'Try another approach.',
       created_by_actor_id: 'actor-tech',
       now,
@@ -378,10 +382,12 @@ describe('Plan Item Workflow repository', () => {
   it('rejects candidate fork lease and archived fork selection', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
     await repository.createCodexSessionFork({
       id: 'session-fork',
       workflow_id: 'workflow-1',
       parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
       fork_reason: 'Try another approach.',
       created_by_actor_id: 'actor-tech',
       now,
@@ -586,6 +592,101 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('rejects fork creation without an explicit turn or snapshot fork point', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionFork({
+          id: 'session-fork',
+          workflow_id: 'workflow-1',
+          parent_session_id: 'session-1',
+          fork_reason: 'Missing fork point.',
+          created_by_actor_id: 'actor-tech',
+          now: '2026-05-31T00:04:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+  });
+
+  it('rejects fork creation when requested turn is missing or belongs to another session', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.saveCodexSession({
+      id: 'session-other',
+      owner_type: 'plan_item_workflow',
+      owner_id: 'workflow-1',
+      status: 'idle',
+      role: 'inactive_fork',
+      runtime_profile_id: 'profile-1',
+      runtime_profile_revision_id: 'profile-revision-1',
+      credential_binding_id: 'credential-1',
+      credential_binding_version_id: 'credential-version-1',
+      lease_epoch: 0,
+      created_by_actor_id: 'actor-tech',
+      created_at: now,
+      updated_at: now,
+    });
+    await repository.saveCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-other',
+      codex_session_id: 'session-other',
+      input_digest: 'sha256:turn-other',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionFork({
+          id: 'session-fork-missing',
+          workflow_id: 'workflow-1',
+          parent_session_id: 'session-1',
+          forked_from_turn_id: 'turn-missing',
+          fork_reason: 'Missing turn.',
+          created_by_actor_id: 'actor-tech',
+          now: '2026-05-31T00:04:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionFork({
+          id: 'session-fork-foreign',
+          workflow_id: 'workflow-1',
+          parent_session_id: 'session-1',
+          forked_from_turn_id: 'turn-other',
+          fork_reason: 'Foreign turn.',
+          created_by_actor_id: 'actor-tech',
+          now: '2026-05-31T00:04:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+  });
+
+  it('forks from a requested parent-session turn without requiring a snapshot', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+
+    const fork = await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now: '2026-05-31T00:04:00.000Z',
+    });
+
+    expect(fork).toMatchObject({
+      id: 'session-fork',
+      role: 'candidate_fork',
+      forked_from_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+    });
+    expect(fork.forked_from_snapshot_id).toBeUndefined();
+  });
+
   it('rejects fork creation when requested snapshot is missing or belongs to another session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -643,10 +744,12 @@ describe('Plan Item Workflow repository', () => {
   it('selects candidate fork as active only when neither session is running or leased', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
     await repository.createCodexSessionFork({
       id: 'session-fork',
       workflow_id: 'workflow-1',
       parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
       fork_reason: 'Try another approach.',
       created_by_actor_id: 'actor-tech',
       now,
@@ -690,10 +793,12 @@ describe('Plan Item Workflow repository', () => {
   it('rejects selecting a non-candidate fork session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
     await repository.createCodexSessionFork({
       id: 'session-inactive-fork',
       workflow_id: 'workflow-1',
       parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
       fork_reason: 'Try another approach.',
       created_by_actor_id: 'actor-tech',
       now,
