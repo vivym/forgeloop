@@ -787,6 +787,110 @@ describe('Plan Item Workflow repository', () => {
     expect(fork.forked_from_snapshot_id).toBeUndefined();
   });
 
+  it('rejects turn-based fork when the turn output snapshot is missing', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.saveCodexSessionTurn({
+      ...turnInput,
+      status: 'succeeded',
+      output_snapshot_id: 'snapshot-missing',
+      output_snapshot_digest: 'sha256:snapshot-missing',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionFork({
+          id: 'session-fork',
+          workflow_id: 'workflow-1',
+          parent_session_id: 'session-1',
+          forked_from_turn_id: 'turn-1',
+          fork_reason: 'Try the missing turn output.',
+          created_by_actor_id: 'actor-tech',
+          now: '2026-05-31T00:04:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+  });
+
+  it('rejects turn-based fork when the turn output snapshot belongs to another session', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.saveCodexSessionTurn({
+      ...turnInput,
+      status: 'succeeded',
+      output_snapshot_id: 'snapshot-other',
+      output_snapshot_digest: 'sha256:snapshot-other',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+    await repository.saveCodexSession({
+      id: 'session-other',
+      owner_type: 'plan_item_workflow',
+      owner_id: 'workflow-1',
+      status: 'idle',
+      role: 'inactive_fork',
+      runtime_profile_id: 'profile-1',
+      runtime_profile_revision_id: 'profile-revision-1',
+      credential_binding_id: 'credential-1',
+      credential_binding_version_id: 'credential-version-1',
+      lease_epoch: 0,
+      created_by_actor_id: 'actor-tech',
+      created_at: now,
+      updated_at: now,
+    });
+    await repository.createCodexSessionSnapshot({
+      ...snapshotInput,
+      id: 'snapshot-other',
+      codex_session_id: 'session-other',
+      artifact_ref: 'artifact://snapshot-other',
+      digest: 'sha256:snapshot-other',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionFork({
+          id: 'session-fork',
+          workflow_id: 'workflow-1',
+          parent_session_id: 'session-1',
+          forked_from_turn_id: 'turn-1',
+          fork_reason: 'Try the foreign turn output.',
+          created_by_actor_id: 'actor-tech',
+          now: '2026-05-31T00:04:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+  });
+
+  it('rejects turn-based fork when the turn output snapshot digest differs from persisted snapshot', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionSnapshot(snapshotInput);
+    await repository.saveCodexSessionTurn({
+      ...turnInput,
+      status: 'succeeded',
+      output_snapshot_id: 'snapshot-1',
+      output_snapshot_digest: 'sha256:stale-snapshot-1',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionFork({
+          id: 'session-fork',
+          workflow_id: 'workflow-1',
+          parent_session_id: 'session-1',
+          forked_from_turn_id: 'turn-1',
+          fork_reason: 'Try the stale turn output.',
+          created_by_actor_id: 'actor-tech',
+          now: '2026-05-31T00:04:00.000Z',
+        }),
+      'codex_session_fork_invalid',
+    );
+  });
+
   it('does not inherit parent latest snapshot when forking from a turn without output snapshot', async () => {
     const repository = new InMemoryDeliveryRepository();
     await seedWorkflowWithSnapshot(repository);
@@ -1033,6 +1137,79 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('rejects duplicate workflow manual decision ids without overwriting evidence', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const decision = {
+      id: 'decision-1',
+      workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      kind: 'start_brainstorming',
+      reason: 'Start.',
+      created_by_actor_id: 'actor-tech',
+      created_at: now,
+    } as const;
+
+    await repository.saveWorkflowManualDecision(decision);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveWorkflowManualDecision({
+          ...decision,
+          kind: 'mark_ready',
+          reason: 'Overwrite attempt.',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getWorkflowManualDecision('decision-1')).resolves.toMatchObject({
+      kind: 'start_brainstorming',
+      reason: 'Start.',
+    });
+  });
+
+  it('rejects fork selection with duplicate manual decision id without switching active session', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+    await repository.saveWorkflowManualDecision({
+      id: 'decision-duplicate',
+      workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      kind: 'start_brainstorming',
+      reason: 'Existing evidence.',
+      created_by_actor_id: 'actor-tech',
+      created_at: now,
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.selectActiveCodexSessionFork({
+          workflow_id: 'workflow-1',
+          selected_codex_session_id: 'session-fork',
+          manual_decision_id: 'decision-duplicate',
+          actor_id: 'actor-tech',
+          reason: 'Use the alternate path.',
+          now: '2026-05-31T00:03:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({ active_codex_session_id: 'session-1' });
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({ role: 'active' });
+    await expect(repository.getCodexSession('session-fork')).resolves.toMatchObject({ role: 'candidate_fork' });
+    await expect(repository.getWorkflowManualDecision('decision-duplicate')).resolves.toMatchObject({
+      kind: 'start_brainstorming',
+      reason: 'Existing evidence.',
+    });
+  });
+
   it('rejects selecting the current active Codex session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -1186,6 +1363,38 @@ describe('Plan Item Workflow repository', () => {
         }),
       'workflow_invalid_transition',
     );
+  });
+
+  it('rejects duplicate execution readiness record ids without overwriting evidence', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const record = {
+      id: 'readiness-1',
+      workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      readiness_state: 'ready',
+      blocker_codes: [],
+      supporting_evidence: [{ type: 'commit', id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+      created_by_actor_id: 'actor-tech',
+      created_at: now,
+    } as const;
+
+    await repository.saveExecutionReadinessRecord(record);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveExecutionReadinessRecord({
+          ...record,
+          readiness_state: 'blocked',
+          blocker_codes: ['missing_tests'],
+          supporting_evidence: [{ type: 'pull_request', id: '42' }],
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getExecutionReadinessRecord('readiness-1')).resolves.toMatchObject({
+      readiness_state: 'ready',
+      blocker_codes: [],
+      supporting_evidence: [{ type: 'commit', id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+    });
   });
 
   it('resolves narrow repository evidence only for matching workflow project repos', async () => {

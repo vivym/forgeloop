@@ -2994,6 +2994,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveWorkflowManualDecision(decision: WorkflowManualDecision): Promise<void> {
+    if (this.workflowManualDecisions.has(decision.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Workflow manual decision ${decision.id} already exists`);
+    }
     this.workflowManualDecisions.set(decision.id, clone(decision));
   }
 
@@ -3002,6 +3005,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveExecutionReadinessRecord(record: ExecutionReadinessRecord): Promise<void> {
+    if (this.executionReadinessRecords.has(record.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Execution readiness record ${record.id} already exists`);
+    }
     this.executionReadinessRecords.set(record.id, clone(record));
   }
 
@@ -3326,11 +3332,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);
     }
+    const forkTurnOutputSnapshot =
+      forkTurn?.output_snapshot_id === undefined ? undefined : this.codexSessionSnapshots.get(forkTurn.output_snapshot_id);
+    if (
+      forkTurn !== undefined &&
+      (forkTurn.output_snapshot_id !== undefined || forkTurn.output_snapshot_digest !== undefined) &&
+      (forkTurn.output_snapshot_id === undefined ||
+        forkTurn.output_snapshot_digest === undefined ||
+        forkTurnOutputSnapshot === undefined ||
+        forkTurnOutputSnapshot.codex_session_id !== parent.id ||
+        forkTurnOutputSnapshot.digest !== forkTurn.output_snapshot_digest)
+    ) {
+      throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);
+    }
     const forkOutputSnapshot =
       forkSnapshot ??
       (forkTurn?.output_snapshot_id === undefined || forkTurn.output_snapshot_digest === undefined
         ? undefined
-        : this.codexSessionSnapshots.get(forkTurn.output_snapshot_id));
+        : forkTurnOutputSnapshot);
     const forkLatestSnapshot =
       forkOutputSnapshot !== undefined &&
       forkOutputSnapshot.codex_session_id === parent.id &&
@@ -3395,6 +3414,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       previousActive.active_lease_id !== undefined
     ) {
       throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot select Codex session fork ${input.selected_codex_session_id}`);
+    }
+    if (this.workflowManualDecisions.has(input.manual_decision_id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Workflow manual decision ${input.manual_decision_id} already exists`,
+      );
     }
     const inactivePrevious: CodexSession = { ...clone(previousActive), role: 'inactive_fork', updated_at: input.now };
     const activeSelected: CodexSession = { ...clone(selected), role: 'active', updated_at: input.now };
