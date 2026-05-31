@@ -3135,8 +3135,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.codexSessionLeases.has(input.lease_id)) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not unique`);
     }
-    const session = this.recoverExpiredCodexSessionLeaseForClaim(input);
+    const session = this.codexSessions.get(input.session_id);
     const workflow = session === undefined ? undefined : this.planItemWorkflows.get(session.owner_id);
+    const claimableStatusBeforeRecovery =
+      session !== undefined &&
+      (claimableCodexSessionStatuses.has(session.status) ||
+        (session.status === 'running' && session.active_lease_id !== undefined));
     const cannotClaim =
       session === undefined ||
       workflow === undefined ||
@@ -3145,19 +3149,25 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       workflow.id !== input.workflow_id ||
       session.role !== 'active' ||
       workflow.active_codex_session_id !== session.id ||
-      !claimableCodexSessionStatuses.has(session.status) ||
-      this.findActiveCodexSessionLease(session.id) !== undefined ||
-      session.active_lease_id !== undefined;
+      !claimableStatusBeforeRecovery;
     if (cannotClaim) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
     }
     if (session.latest_snapshot_digest !== input.expected_previous_snapshot_digest) {
       throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${input.session_id} snapshot is stale`);
     }
-    const leaseEpoch = session.lease_epoch + 1;
+    const recoveredSession = this.recoverExpiredCodexSessionLeaseForClaim(input);
+    if (
+      recoveredSession === undefined ||
+      this.findActiveCodexSessionLease(recoveredSession.id) !== undefined ||
+      recoveredSession.active_lease_id !== undefined
+    ) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    const leaseEpoch = recoveredSession.lease_epoch + 1;
     const lease: CodexSessionLease = {
       id: input.lease_id,
-      codex_session_id: session.id,
+      codex_session_id: recoveredSession.id,
       lease_token_hash: input.lease_token_hash,
       lease_epoch: leaseEpoch,
       worker_id: input.worker_id,
@@ -3169,7 +3179,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       updated_at: input.now,
     };
     const updatedSession: CodexSession = {
-      ...clone(session),
+      ...clone(recoveredSession),
       status: 'running',
       active_lease_id: lease.id,
       lease_epoch: leaseEpoch,

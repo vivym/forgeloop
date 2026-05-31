@@ -174,6 +174,92 @@ describe('Plan Item Workflow repository', () => {
     })).rejects.toMatchObject({ code: 'codex_session_lease_conflict' });
   });
 
+  it('does not recover an expired active lease before rejecting a claim for the wrong workflow', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-2',
+      codex_session_id: 'session-2',
+      development_plan_item_id: 'item-2',
+    });
+    await repository.claimCodexSessionLease({
+      ...leaseInput,
+      expires_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.claimCodexSessionLease({
+          ...leaseInput,
+          workflow_id: 'workflow-2',
+          lease_id: 'lease-2',
+          lease_token_hash: 'sha256:lease-token-2',
+          worker_id: 'worker-2',
+          worker_session_digest: 'sha256:worker-session-2',
+          now: '2026-05-31T00:02:00.000Z',
+          expires_at: '2026-05-31T00:07:00.000Z',
+        }),
+      'codex_session_lease_conflict',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: 'lease-1',
+    });
+    await expect(repository.renewCodexSessionLease({
+      session_id: 'session-1',
+      lease_id: 'lease-1',
+      lease_token_hash: 'sha256:lease-token',
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      lease_epoch: 1,
+      now: '2026-05-31T00:00:30.000Z',
+      expires_at: '2026-05-31T00:08:00.000Z',
+    })).resolves.toMatchObject({ id: 'lease-1', status: 'active' });
+  });
+
+  it('does not recover an expired active lease before rejecting a claim with a stale snapshot expectation', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await seedWorkflowWithSnapshot(repository);
+    await repository.claimCodexSessionLease({
+      ...leaseInput,
+      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+      expires_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.claimCodexSessionLease({
+          ...leaseInput,
+          lease_id: 'lease-2',
+          lease_token_hash: 'sha256:lease-token-2',
+          worker_id: 'worker-2',
+          worker_session_digest: 'sha256:worker-session-2',
+          expected_previous_snapshot_digest: 'sha256:stale',
+          now: '2026-05-31T00:02:00.000Z',
+          expires_at: '2026-05-31T00:07:00.000Z',
+        }),
+      'codex_session_snapshot_stale',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: 'lease-1',
+      latest_snapshot_digest: 'sha256:snapshot-1',
+    });
+    await expect(repository.renewCodexSessionLease({
+      session_id: 'session-1',
+      lease_id: 'lease-1',
+      lease_token_hash: 'sha256:lease-token',
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      lease_epoch: 1,
+      now: '2026-05-31T00:00:30.000Z',
+      expires_at: '2026-05-31T00:08:00.000Z',
+    })).resolves.toMatchObject({ id: 'lease-1', status: 'active' });
+  });
+
   it('rejects reusing a released lease id', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -545,11 +631,71 @@ describe('Plan Item Workflow repository', () => {
     );
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
       latest_turn_id: 'turn-2',
       latest_turn_digest: 'sha256:turn-2',
       active_lease_id: 'lease-1',
     });
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('rejects stale terminalization without updating latest snapshot fields or turn status', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await seedWorkflowWithSnapshot(repository);
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+    });
+    const claimed = await repository.claimCodexSessionLease({
+      ...leaseInput,
+      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: 'sha256:stale',
+          output_snapshot: {
+            ...snapshotInput,
+            id: 'snapshot-2',
+            sequence: 2,
+            artifact_ref: 'artifact://snapshot-2',
+            digest: 'sha256:snapshot-2',
+            manifest_digest: 'sha256:manifest-2',
+            created_at: '2026-05-31T00:03:00.000Z',
+          },
+          codex_thread_id: 'thread-1',
+          codex_thread_id_digest: 'sha256:thread-1',
+          now: '2026-05-31T00:03:00.000Z',
+        }),
+      'codex_session_stale_terminalization',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      latest_snapshot_id: 'snapshot-1',
+      latest_snapshot_digest: 'sha256:snapshot-1',
+      active_lease_id: claimed.lease.id,
+    });
+    const session = await repository.getCodexSession('session-1');
+    expect(session?.codex_thread_id).toBeUndefined();
+    expect(session?.codex_thread_id_digest).toBeUndefined();
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({
+      status: 'running',
+      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+    });
+    const turn = await repository.getCodexSessionTurn('turn-1');
+    expect(turn?.output_snapshot_id).toBeUndefined();
+    expect(turn?.output_snapshot_digest).toBeUndefined();
+    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
   });
 
   it('forks from the requested persisted snapshot instead of parent latest', async () => {
