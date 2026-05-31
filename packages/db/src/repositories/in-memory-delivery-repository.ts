@@ -3001,6 +3001,19 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `workflow_invalid_transition: Plan Item Workflow ${workflow.id} identity fields cannot change`,
       );
     }
+    if (
+      existingWorkflow.active_codex_session_id !== workflow.active_codex_session_id ||
+      existingWorkflow.active_boundary_summary_revision_id !== workflow.active_boundary_summary_revision_id ||
+      existingWorkflow.active_spec_doc_revision_id !== workflow.active_spec_doc_revision_id ||
+      existingWorkflow.active_implementation_plan_doc_revision_id !== workflow.active_implementation_plan_doc_revision_id ||
+      existingWorkflow.execution_package_id !== workflow.execution_package_id ||
+      existingWorkflow.previous_status !== workflow.previous_status
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow ${workflow.id} service-owned projection fields cannot change`,
+      );
+    }
     this.assertCanSavePlanItemWorkflow(workflow);
     this.planItemWorkflows.set(workflow.id, clone(workflow));
   }
@@ -3198,7 +3211,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       existingTurn.lease_id !== turn.lease_id ||
       existingTurn.lease_epoch !== turn.lease_epoch ||
       existingTurn.created_at !== turn.created_at ||
-      existingTurn.created_by_actor_id !== turn.created_by_actor_id
+      existingTurn.created_by_actor_id !== turn.created_by_actor_id ||
+      existingTurn.output_object_type !== turn.output_object_type ||
+      existingTurn.output_object_id !== turn.output_object_id ||
+      existingTurn.codex_thread_id_digest !== turn.codex_thread_id_digest ||
+      existingTurn.automation_action_run_id !== turn.automation_action_run_id ||
+      existingTurn.runtime_job_id !== turn.runtime_job_id
     ) {
       throw new DomainError(
         'workflow_invalid_transition',

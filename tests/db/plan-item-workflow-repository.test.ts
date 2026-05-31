@@ -205,7 +205,6 @@ describe('Plan Item Workflow repository', () => {
     await repository.savePlanItemWorkflow({
       ...workflow,
       status: 'archived',
-      active_codex_session_id: undefined,
       updated_at: '2026-05-31T00:01:00.000Z',
     });
     await repository.saveCodexSession({
@@ -241,7 +240,6 @@ describe('Plan Item Workflow repository', () => {
     await repository.savePlanItemWorkflow({
       ...workflow,
       status: 'archived',
-      active_codex_session_id: undefined,
       updated_at: '2026-05-31T00:01:00.000Z',
     });
     await repository.saveCodexSession({
@@ -321,7 +319,7 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
-  it('allows saving a Plan Item Workflow with mutable projection and status fields changed', async () => {
+  it('allows saving a Plan Item Workflow with status and updated_at changed', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const workflow = await repository.getPlanItemWorkflow('workflow-1');
@@ -330,10 +328,6 @@ describe('Plan Item Workflow repository', () => {
     await repository.savePlanItemWorkflow({
       ...workflow,
       status: 'in_progress',
-      active_codex_session_id: undefined,
-      active_boundary_summary_revision_id: 'boundary-summary-revision-1',
-      active_spec_doc_revision_id: 'spec-doc-revision-1',
-      active_implementation_plan_doc_revision_id: 'implementation-plan-doc-revision-1',
       updated_at: '2026-05-31T00:01:00.000Z',
     });
 
@@ -342,12 +336,66 @@ describe('Plan Item Workflow repository', () => {
       development_plan_item_id: 'item-1',
       created_by_actor_id: 'actor-tech',
       status: 'in_progress',
-      active_codex_session_id: undefined,
-      active_boundary_summary_revision_id: 'boundary-summary-revision-1',
-      active_spec_doc_revision_id: 'spec-doc-revision-1',
-      active_implementation_plan_doc_revision_id: 'implementation-plan-doc-revision-1',
+      active_codex_session_id: 'session-1',
       updated_at: '2026-05-31T00:01:00.000Z',
     });
+  });
+
+  it('rejects saving a Plan Item Workflow with direct active session changes and preserves the original row', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createPlanItemWorkflowWithInitialSession({
+      ...baseWorkflowInput,
+      id: 'workflow-other',
+      codex_session_id: 'session-other',
+      development_plan_item_id: 'item-other',
+    });
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.savePlanItemWorkflow({
+          ...workflow,
+          active_codex_session_id: 'session-missing',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflow);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.savePlanItemWorkflow({
+          ...workflow,
+          active_codex_session_id: 'session-other',
+          updated_at: '2026-05-31T00:02:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflow);
+  });
+
+  it('rejects saving a Plan Item Workflow with direct active evidence projection changes and preserves the original row', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    const workflow = await repository.getPlanItemWorkflow('workflow-1');
+    if (workflow === undefined) throw new Error('Expected seeded workflow');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.savePlanItemWorkflow({
+          ...workflow,
+          active_boundary_summary_revision_id: 'boundary-summary-revision-1',
+          active_spec_doc_revision_id: 'spec-doc-revision-1',
+          active_implementation_plan_doc_revision_id: 'implementation-plan-doc-revision-1',
+          execution_package_id: 'execution-package-1',
+          previous_status: 'not_started',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflow);
   });
 
   it('rejects saving a missing Codex Session', async () => {
@@ -671,12 +719,27 @@ describe('Plan Item Workflow repository', () => {
     await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
   });
 
-  it('rejects lease claim when owner workflow no longer points at the session', async () => {
+  it('rejects lease claim when owner workflow no longer points at the previous active session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    const workflow = await repository.getPlanItemWorkflow('workflow-1');
-    if (workflow === undefined) throw new Error('Expected seeded workflow');
-    await repository.savePlanItemWorkflow({ ...workflow, status: 'archived', active_codex_session_id: undefined });
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+    await repository.selectActiveCodexSessionFork({
+      workflow_id: 'workflow-1',
+      selected_codex_session_id: 'session-fork',
+      manual_decision_id: 'decision-fork-before-lease',
+      actor_id: 'actor-tech',
+      reason: 'Use the alternate path.',
+      now: '2026-05-31T00:03:00.000Z',
+    });
 
     await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
   });
@@ -694,14 +757,17 @@ describe('Plan Item Workflow repository', () => {
     await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
   });
 
-  it('rejects lease claim when workflow active session does not match', async () => {
+  it('rejects direct workflow active session mutation before lease claim', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const workflow = await repository.getPlanItemWorkflow('workflow-1');
     if (workflow === undefined) throw new Error('Expected seeded workflow');
-    await repository.savePlanItemWorkflow({ ...workflow, active_codex_session_id: 'session-other' });
 
-    await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
+    await expectDomainErrorCode(
+      () => repository.savePlanItemWorkflow({ ...workflow, active_codex_session_id: 'session-other' }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toEqual(workflow);
   });
 
   it('rejects lease claim for disallowed session statuses', async () => {
@@ -850,6 +916,30 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toEqual(originalTurn);
   });
 
+  it('rejects saving a Codex session turn with changed output object refs or service provenance and preserves the original turn', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const originalTurn = await repository.getCodexSessionTurn('turn-1');
+    if (originalTurn === undefined) throw new Error('Expected seeded turn');
+
+    await expectDomainErrorCode(
+      () =>
+        repository.saveCodexSessionTurn({
+          ...originalTurn,
+          output_object_type: 'internal_artifact',
+          output_object_id: 'artifact-1',
+          codex_thread_id_digest: 'sha256:thread-1',
+          automation_action_run_id: 'automation-run-1',
+          runtime_job_id: 'runtime-job-1',
+          updated_at: '2026-05-31T00:01:00.000Z',
+        }),
+      'workflow_invalid_transition',
+    );
+
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toEqual(originalTurn);
+  });
+
   it('rejects creating a turn for a candidate fork because turns are created before lease claim sets running', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -913,14 +1003,37 @@ describe('Plan Item Workflow repository', () => {
     await expectDomainErrorCode(() => repository.createCodexSessionTurn(turnInput), 'workflow_active_session_missing');
   });
 
-  it('rejects creating a turn when workflow active session does not match', async () => {
+  it('rejects creating a turn for the previous active session after fork selection', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    const workflow = await repository.getPlanItemWorkflow('workflow-1');
-    if (workflow === undefined) throw new Error('Expected seeded workflow');
-    await repository.savePlanItemWorkflow({ ...workflow, active_codex_session_id: 'session-other' });
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now,
+    });
+    await repository.selectActiveCodexSessionFork({
+      workflow_id: 'workflow-1',
+      selected_codex_session_id: 'session-fork',
+      manual_decision_id: 'decision-fork-before-turn',
+      actor_id: 'actor-tech',
+      reason: 'Use the alternate path.',
+      now: '2026-05-31T00:03:00.000Z',
+    });
 
-    await expectDomainErrorCode(() => repository.createCodexSessionTurn(turnInput), 'workflow_active_session_missing');
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionTurn({
+          ...turnInput,
+          id: 'turn-previous-active',
+          input_digest: 'sha256:turn-previous-active',
+        }),
+      'workflow_active_session_missing',
+    );
   });
 
   it('rejects candidate fork lease and archived fork selection', async () => {
