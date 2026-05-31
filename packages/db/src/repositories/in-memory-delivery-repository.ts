@@ -102,6 +102,7 @@ import {
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
   isActiveRunSessionStatus,
+  parseInternalArtifactRef,
   isOpenReviewPacketStatus,
   isWorkItemAutomationTerminal,
   normalizeAutomationCapabilities,
@@ -3117,6 +3118,14 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void> {
+    try {
+      parseInternalArtifactRef(snapshot.artifact_ref);
+    } catch {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session snapshot ${snapshot.id} artifact_ref is not an internal artifact ref`,
+      );
+    }
     const existingForSequence = valuesFor(this.codexSessionSnapshots).find(
       (candidate) => candidate.codex_session_id === snapshot.codex_session_id && candidate.sequence === snapshot.sequence,
     );
@@ -3452,7 +3461,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       selected.owner_id !== workflow.id ||
       previousActive.owner_id !== workflow.id ||
       selected.id === previousActive.id ||
-      selected.role !== 'candidate_fork' ||
+      (selected.role !== 'candidate_fork' && selected.role !== 'inactive_fork') ||
       selected.status === 'archived' ||
       previousActive.status === 'archived' ||
       selected.status === 'running' ||

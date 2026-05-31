@@ -69,7 +69,7 @@ const snapshotInput = {
   id: 'snapshot-1',
   codex_session_id: 'session-1',
   sequence: 1,
-  artifact_ref: 'artifact://snapshot-1',
+  artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1',
   digest: 'sha256:snapshot-1',
   size_bytes: '123',
   manifest_digest: 'sha256:manifest-1',
@@ -767,7 +767,7 @@ describe('Plan Item Workflow repository', () => {
             ...snapshotInput,
             id: 'snapshot-2',
             sequence: 2,
-            artifact_ref: 'artifact://snapshot-2',
+            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
             digest: 'sha256:snapshot-2',
             manifest_digest: 'sha256:manifest-2',
             created_from_turn_id: 'turn-2',
@@ -935,7 +935,7 @@ describe('Plan Item Workflow repository', () => {
             id: 'snapshot-1',
             codex_session_id: 'session-1',
             sequence: 1,
-            artifact_ref: 'artifact://snapshot-drifted',
+            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-drifted',
             digest: 'sha256:snapshot-drifted',
             size_bytes: '123',
             manifest_digest: 'sha256:manifest-1',
@@ -964,7 +964,7 @@ describe('Plan Item Workflow repository', () => {
     expect(turn?.output_snapshot_id).toBeUndefined();
     expect(turn?.output_snapshot_digest).toBeUndefined();
     await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toMatchObject({
-      artifact_ref: 'artifact://snapshot-1',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1',
       digest: 'sha256:snapshot-1',
     });
   });
@@ -991,7 +991,7 @@ describe('Plan Item Workflow repository', () => {
             ...snapshotInput,
             id: 'snapshot-2',
             sequence: 2,
-            artifact_ref: 'artifact://snapshot-2',
+            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
             digest: 'sha256:snapshot-2',
             manifest_digest: 'sha256:manifest-2',
             created_from_turn_id: 'turn-2',
@@ -1017,7 +1017,7 @@ describe('Plan Item Workflow repository', () => {
       ...snapshotInput,
       id: 'snapshot-2',
       sequence: 2,
-      artifact_ref: 'artifact://snapshot-2',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
       digest: 'sha256:snapshot-2',
       manifest_digest: 'sha256:manifest-2',
       created_from_turn_id: 'turn-2',
@@ -1040,7 +1040,7 @@ describe('Plan Item Workflow repository', () => {
             ...snapshotInput,
             id: 'snapshot-2',
             sequence: 2,
-            artifact_ref: 'artifact://snapshot-2',
+            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
             digest: 'sha256:snapshot-2',
             manifest_digest: 'sha256:manifest-2',
             created_from_turn_id: 'turn-2',
@@ -1058,6 +1058,20 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toMatchObject({
       created_from_turn_id: 'turn-2',
     });
+  });
+
+  it('rejects snapshots with non-internal artifact refs before saving them', async () => {
+    const repository = new InMemoryDeliveryRepository();
+
+    await expectDomainErrorCode(
+      () =>
+        repository.createCodexSessionSnapshot({
+          ...snapshotInput,
+          artifact_ref: 'artifact://snapshot-unsafe',
+        }),
+      'workflow_invalid_transition',
+    );
+    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
   });
 
   it('rejects terminalizing an older non-latest running turn without moving the session backward', async () => {
@@ -1127,7 +1141,7 @@ describe('Plan Item Workflow repository', () => {
             ...snapshotInput,
             id: 'snapshot-2',
             sequence: 2,
-            artifact_ref: 'artifact://snapshot-2',
+            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
             digest: 'sha256:snapshot-2',
             manifest_digest: 'sha256:manifest-2',
             created_at: '2026-05-31T00:03:00.000Z',
@@ -1166,7 +1180,7 @@ describe('Plan Item Workflow repository', () => {
       ...snapshotInput,
       id: 'snapshot-2',
       sequence: 2,
-      artifact_ref: 'artifact://snapshot-2',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
       digest: 'sha256:snapshot-2',
       manifest_digest: 'sha256:manifest-2',
       created_from_turn_id: 'turn-2',
@@ -1248,7 +1262,7 @@ describe('Plan Item Workflow repository', () => {
       ...snapshotInput,
       id: 'snapshot-2',
       sequence: 2,
-      artifact_ref: 'artifact://snapshot-2',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
       digest: 'sha256:snapshot-2',
       manifest_digest: 'sha256:manifest-2',
       created_from_turn_id: 'turn-2',
@@ -1338,7 +1352,7 @@ describe('Plan Item Workflow repository', () => {
       ...snapshotInput,
       id: 'snapshot-other',
       codex_session_id: 'session-other',
-      artifact_ref: 'artifact://snapshot-other',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-other/snapshot-other',
       digest: 'sha256:snapshot-other',
     });
 
@@ -1428,7 +1442,7 @@ describe('Plan Item Workflow repository', () => {
       ...snapshotInput,
       id: 'snapshot-2',
       sequence: 2,
-      artifact_ref: 'artifact://snapshot-2',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
       digest: 'sha256:snapshot-2',
       manifest_digest: 'sha256:manifest-2',
       created_from_turn_id: 'turn-2',
@@ -1568,7 +1582,7 @@ describe('Plan Item Workflow repository', () => {
       ...snapshotInput,
       id: 'snapshot-other',
       codex_session_id: 'session-other',
-      artifact_ref: 'artifact://snapshot-other',
+      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-other/snapshot-other',
       digest: 'sha256:snapshot-other',
     });
 
@@ -1722,7 +1736,7 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
-  it('rejects selecting a non-candidate fork session', async () => {
+  it('selects inactive fork as active and makes the previous active session inactive', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
@@ -1739,18 +1753,22 @@ describe('Plan Item Workflow repository', () => {
     if (inactiveFork === undefined) throw new Error('Expected seeded fork');
     await repository.saveCodexSession({ ...inactiveFork, role: 'inactive_fork' });
 
-    await expectDomainErrorCode(
-      () =>
-        repository.selectActiveCodexSessionFork({
-          workflow_id: 'workflow-1',
-          selected_codex_session_id: 'session-inactive-fork',
-          manual_decision_id: 'decision-inactive-fork',
-          actor_id: 'actor-tech',
-          reason: 'Use an inactive fork.',
-          now: '2026-05-31T00:03:00.000Z',
-        }),
-      'codex_session_fork_invalid',
-    );
+    const selected = await repository.selectActiveCodexSessionFork({
+      workflow_id: 'workflow-1',
+      selected_codex_session_id: 'session-inactive-fork',
+      manual_decision_id: 'decision-inactive-fork',
+      actor_id: 'actor-tech',
+      reason: 'Use an inactive fork.',
+      now: '2026-05-31T00:03:00.000Z',
+    });
+
+    expect(selected.workflow.active_codex_session_id).toBe('session-inactive-fork');
+    await expect(repository.getCodexSession('session-inactive-fork')).resolves.toMatchObject({ role: 'active' });
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({ role: 'inactive_fork' });
+    await expect(repository.getWorkflowManualDecision('decision-inactive-fork')).resolves.toMatchObject({
+      kind: 'fork_select',
+      selected_codex_session_id: 'session-inactive-fork',
+    });
   });
 
   it('copies workflow session maps through transaction state', async () => {
