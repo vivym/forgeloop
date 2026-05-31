@@ -3114,6 +3114,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `workflow_invalid_transition: Codex session ${session.id} identity fields cannot change`,
       );
     }
+    if (
+      existingSession.forked_from_session_id !== session.forked_from_session_id ||
+      existingSession.forked_from_turn_id !== session.forked_from_turn_id ||
+      existingSession.forked_from_snapshot_id !== session.forked_from_snapshot_id ||
+      existingSession.fork_reason !== session.fork_reason
+    ) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session ${session.id} fork provenance fields cannot change`,
+      );
+    }
     this.assertCanSaveCodexSession(session);
     this.codexSessions.set(session.id, clone(session));
   }

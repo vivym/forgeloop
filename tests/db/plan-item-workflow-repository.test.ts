@@ -1828,6 +1828,66 @@ describe('Plan Item Workflow repository', () => {
     expect(fork.forked_from_snapshot_id).toBeUndefined();
   });
 
+  it('rejects saving a fork when immutable provenance fields change', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.createCodexSessionSnapshot(snapshotInput);
+    await repository.saveCodexSessionTurn({
+      ...turnInput,
+      status: 'succeeded',
+      output_snapshot_id: 'snapshot-1',
+      output_snapshot_digest: 'sha256:snapshot-1',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+    const fork = await repository.createCodexSessionFork({
+      id: 'session-fork',
+      workflow_id: 'workflow-1',
+      parent_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      forked_from_snapshot_id: 'snapshot-1',
+      fork_reason: 'Try another approach.',
+      created_by_actor_id: 'actor-tech',
+      now: '2026-05-31T00:04:00.000Z',
+    });
+
+    const provenanceDrifts = [
+      { forked_from_session_id: 'session-drifted' },
+      { forked_from_turn_id: 'turn-drifted' },
+      { forked_from_snapshot_id: 'snapshot-drifted' },
+      { fork_reason: 'Rewrite the fork reason.' },
+    ];
+
+    for (const drift of provenanceDrifts) {
+      await expectDomainErrorCode(
+        () =>
+          repository.saveCodexSession({
+            ...fork,
+            ...drift,
+            updated_at: '2026-05-31T00:05:00.000Z',
+          }),
+        'workflow_invalid_transition',
+      );
+    }
+
+    await repository.saveCodexSession({
+      ...fork,
+      role: 'inactive_fork',
+      status: 'archived',
+      archived_at: '2026-05-31T00:05:00.000Z',
+      updated_at: '2026-05-31T00:05:00.000Z',
+    });
+    await expect(repository.getCodexSession('session-fork')).resolves.toMatchObject({
+      role: 'inactive_fork',
+      status: 'archived',
+      forked_from_session_id: 'session-1',
+      forked_from_turn_id: 'turn-1',
+      forked_from_snapshot_id: 'snapshot-1',
+      fork_reason: 'Try another approach.',
+      updated_at: '2026-05-31T00:05:00.000Z',
+    });
+  });
+
   it('rejects fork creation when requested snapshot is missing or belongs to another session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
