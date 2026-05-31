@@ -133,6 +133,7 @@ const runWorker = (input: {
   leaseDurationMs?: number;
   evidenceCollector?: (input: LocalCodexEvidenceInput) => Promise<ExecutorResult>;
   remoteRunExecutionClient?: RemoteRunExecutionClient;
+  internalArtifactStoreRoot?: string;
   remoteRunExecutionWaitTimeoutMs?: number;
   remoteRunExecutionPollIntervalMs?: number;
 }) =>
@@ -153,6 +154,7 @@ const runWorker = (input: {
     commandPollIntervalMs: input.commandPollIntervalMs ?? 10,
     leaseDurationMs: input.leaseDurationMs ?? 60_000,
     idleThresholdMs: input.idleThresholdMs ?? 30_000,
+    ...(input.internalArtifactStoreRoot === undefined ? {} : { internalArtifactStoreRoot: input.internalArtifactStoreRoot }),
     ...(input.remoteRunExecutionClient === undefined ? {} : { remoteRunExecutionClient: input.remoteRunExecutionClient }),
     ...(input.remoteRunExecutionWaitTimeoutMs === undefined ? {} : { remoteRunExecutionWaitTimeoutMs: input.remoteRunExecutionWaitTimeoutMs }),
     ...(input.remoteRunExecutionPollIntervalMs === undefined ? {} : { remoteRunExecutionPollIntervalMs: input.remoteRunExecutionPollIntervalMs }),
@@ -1596,6 +1598,7 @@ describe('RunWorker', () => {
         source_repo_before_dirty_fingerprint: 'fingerprint-before',
         launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
         remote_runtime_job_id: runtimeJobId,
+        remote_runtime_job_created: true,
         remote_run_worker_lease_id: activeLease.id,
         remote_workspace_bundle_id: persistedPending.pending_workspace_bundle.bundle_id,
         remote_workspace_bundle_digest: persistedPending.archive_digest,
@@ -1659,18 +1662,8 @@ describe('RunWorker', () => {
         remote_runtime_reason_code: 'codex_runtime_job_unavailable',
       },
     });
-    expect(createInputs).toHaveLength(1);
-    expect(createInputs[0]).toMatchObject({
-      runtime_job_id: runtimeJobId,
-      launch_lease_id: stableUuidFromDigestForTest({ kind: 'codex_launch_lease', runtime_job_id: runtimeJobId }),
-      run_session_updated_at: persistedUpdatedAt,
-      pending_workspace_bundle: expect.objectContaining({
-        bundle_id: persistedPending.pending_workspace_bundle.bundle_id,
-        run_worker_lease_id: activeLease.id,
-        archive_digest: persistedPending.archive_digest,
-        internal_artifact_object_id: persistedPending.pending_workspace_bundle.internal_artifact_object_id,
-      }),
-    });
+    expect(createInputs).toHaveLength(0);
+    expect(repository.pendingWorkspaceBundleInputs).toHaveLength(1);
     expect(polledRuntimeJobIds).toEqual([runtimeJobId]);
     expect((await repository.getRunSession(runSession.id))?.updated_at).toBe(persistedUpdatedAt);
   });

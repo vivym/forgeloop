@@ -311,6 +311,20 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
+  it('rejects internal artifact refs in free-form public summaries', () => {
+    expectDomainErrorCode(
+      () =>
+        assertCodexRuntimePublicSafeValue(
+          {
+            public_summary:
+              'Stored output at artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+          },
+          'generic public value',
+        ),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
   it('creates stable runtime job and envelope digests', () => {
     const workloadInput = {
       schema_version: 'codex_generation_workload_ref.v1',
@@ -1008,6 +1022,28 @@ describe('codex runtime domain contracts', () => {
     ).not.toThrow();
   });
 
+  it('rejects canonical internal runtime artifact refs in terminal public summaries', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          task_kind: 'run_execution',
+          output_schema_version: 'codex_run_execution_result.v1',
+          execution_package_id: 'execution-package-1',
+          execution_package_version: 1,
+          run_session_id: 'run-session-1',
+          workspace_bundle_digest: digestA,
+          workspace_bundle_manifest_digest: digestB,
+          mounted_task_workspace_digest: digestC,
+          changed_files: [],
+          check_results: [],
+          execution_artifacts: [],
+          public_summary:
+            'Stored output at artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
   it('does not accept old runtime artifact refs in normal terminal validation', () => {
     expectDomainErrorCode(
       () =>
@@ -1364,7 +1400,7 @@ describe('codex runtime domain contracts', () => {
       assertCodexRuntimePublicSafeValue(
         {
           next_step_links: [{ label: 'Open run', href: 'forgeloop://runs/run-1' }],
-          artifact_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+          artifact_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1',
           digest: digestA,
         },
         'runtime result',

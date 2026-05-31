@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { INTERNAL_ARTIFACT_STORE_ROOT } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 
 describe('RunControl boundary', () => {
@@ -47,6 +48,12 @@ describe('RunControl boundary', () => {
     expect(moduleSource).toContain('remoteRunExecutionClient: remoteRunExecution.client');
     expect(moduleSource).toContain('remoteRunExecutionWaitTimeoutMs: remoteRunExecution.waitTimeoutMs');
     expect(moduleSource).toContain("allowExecFallback: runWorkerMode === 'disabled'");
+    expect(moduleSource).toContain('internalArtifactStoreRoot: string');
+    expect(moduleSource).toContain('internalArtifactStoreRoot,');
+    expect(moduleSource).toContain('INTERNAL_ARTIFACT_STORE_ROOT');
+    expect(moduleSource).toContain(
+      'inject: [DELIVERY_REPOSITORY, CodexRuntimeService, RunExecutionRuntimeConfigService, INTERNAL_ARTIFACT_STORE_ROOT]',
+    );
     expect(moduleSource).toContain('globalCodexWorkerMode !== undefined &&');
     expect(moduleSource).toContain("globalCodexWorkerMode === 'local_docker'");
     expect(moduleSource).toContain("globalCodexWorkerMode === 'remote_outbound'");
@@ -55,5 +62,12 @@ describe('RunControl boundary', () => {
     expect(moduleSource).not.toContain("?? optionalEnv('FORGELOOP_CODEX_WORKER_MODE') ?? 'disabled'");
     expect(moduleSource).not.toContain('launchSelection()');
     expect(remoteClientSource).toContain('runExecutionRuntimeConfig.selection()');
+  });
+
+  it('does not bypass the configured internal artifact store root when wiring the run worker', () => {
+    const moduleSource = readFileSync('apps/control-plane-api/src/modules/run-control/run-control.module.ts', 'utf8');
+
+    expect(INTERNAL_ARTIFACT_STORE_ROOT).toBeDefined();
+    expect(moduleSource).not.toContain('createRunWorker(repository, codexRuntimeService, runExecutionRuntimeConfig)');
   });
 });

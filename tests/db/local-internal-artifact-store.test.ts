@@ -107,6 +107,15 @@ describe('LocalInternalArtifactStore', () => {
     expect(objectStat.isFile()).toBe(true);
   });
 
+  it('preserves the caller supplied creation time for new uploads', async () => {
+    const bytes = Buffer.from('created at should be real upload time', 'utf8');
+    const { store } = await makeStore();
+
+    const artifact = await store.putObject(inputFor(bytes, { now: '2026-05-30T09:30:00.000Z' }));
+
+    expect(artifact.created_at).toBe('2026-05-30T09:30:00.000Z');
+  });
+
   it('replays identical concurrent putObject calls without id drift', async () => {
     const bytes = Buffer.from('concurrent bytes', 'utf8');
     const { store } = await makeStore(new ConcurrentReplayRepository());

@@ -401,6 +401,7 @@ export interface RunRuntimeMetadata {
   docker_policy_self_check_digest?: string;
   workspace_isolation_digest?: string;
   remote_runtime_job_id?: string;
+  remote_runtime_job_created?: boolean;
   remote_run_worker_lease_id?: string;
   remote_workspace_bundle_id?: string;
   remote_workspace_bundle_artifact_record_id?: string;

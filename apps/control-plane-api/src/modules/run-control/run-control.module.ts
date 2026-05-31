@@ -31,7 +31,7 @@ import { FakeCodexSessionDriver, RunWorker, type RemoteRunExecutionClient } from
 
 import { AuditModule } from '../audit/audit.module';
 import { ControlPlaneCoreModule } from '../core/control-plane-core.module';
-import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
+import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../core/control-plane-tokens';
 import { RunExecutionRuntimeConfigService } from '../core/run-execution-runtime-config.service';
 import { CodexRuntimeModule } from '../codex-runtime/codex-runtime.module';
 import { CodexRuntimeService } from '../codex-runtime/codex-runtime.service';
@@ -593,6 +593,7 @@ const createRunWorker = (
   repository: DeliveryRepository,
   codexRuntimeService: CodexRuntimeService,
   runExecutionRuntimeConfig: RunExecutionRuntimeConfigService,
+  internalArtifactStoreRoot: string,
 ): RunWorker => {
   const artifactRoot = process.env.FORGELOOP_EXECUTOR_ARTIFACT_ROOT ?? join(tmpdir(), 'forgeloop-executor-artifacts');
   mkdirSync(artifactRoot, { recursive: true });
@@ -652,6 +653,7 @@ const createRunWorker = (
         : Promise.resolve(mockEvidence(input)),
     selfReview: (input) => Promise.resolve(mockSelfReview(input)),
     artifactRoot,
+    internalArtifactStoreRoot,
     allowExecFallback: runWorkerMode === 'disabled',
     ...(remoteRunExecution === undefined
       ? {}
@@ -670,7 +672,7 @@ const createRunWorker = (
     {
       provide: DELIVERY_RUN_WORKER,
       useFactory: createRunWorker,
-      inject: [DELIVERY_REPOSITORY, CodexRuntimeService, RunExecutionRuntimeConfigService],
+      inject: [DELIVERY_REPOSITORY, CodexRuntimeService, RunExecutionRuntimeConfigService, INTERNAL_ARTIFACT_STORE_ROOT],
     },
     RunControlService,
     RunWorkerLifecycleService,

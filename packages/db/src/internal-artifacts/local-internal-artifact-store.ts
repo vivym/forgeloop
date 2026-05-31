@@ -36,12 +36,6 @@ const deterministicArtifactObjectId = (ref: string, idempotencyKey: string): str
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 };
 
-const deterministicArtifactCreatedAt = (ref: string, requestDigest: string): string => {
-  const hex = createHash('sha256').update(`internal-artifact-created-at:${ref}:${requestDigest}`).digest('hex');
-  const offsetMs = Number.parseInt(hex.slice(0, 11), 16);
-  return new Date(offsetMs).toISOString();
-};
-
 const parseDeclaredSize = (value: string): number => {
   if (!decimalSizePattern.test(value)) {
     throw storeError('internal_artifact_invalid_size_bytes');
@@ -141,7 +135,7 @@ export class LocalInternalArtifactStore {
         metadata_json: input.metadata_json,
         created_by_actor_type: input.created_by_actor_type,
         created_by_actor_id: input.created_by_actor_id,
-        created_at: existing?.created_at ?? deterministicArtifactCreatedAt(ref, requestDigest),
+        created_at: existing?.created_at ?? input.now,
       });
     });
   }

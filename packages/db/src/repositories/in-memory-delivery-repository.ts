@@ -6374,7 +6374,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       object.request_digest === input.request_digest &&
       object.created_by_actor_type === input.created_by_actor_type &&
       object.created_by_actor_id === input.created_by_actor_id &&
-      object.created_at === input.created_at &&
       object.deleted_at === input.deleted_at &&
       valuesEqual(object.metadata_json, input.metadata_json)
     );

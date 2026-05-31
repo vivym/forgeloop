@@ -1065,11 +1065,13 @@ export class RunWorker {
     const persistedRemoteFenceMatches =
       runtimeMetadata.remote_runtime_job_id === remoteWorkload.runtimeJobId &&
       runtimeMetadata.launch_lease_id === remoteWorkload.launchLeaseId;
-    let runtimeJobId = persistedRemoteFenceMatches ? runtimeMetadata.remote_runtime_job_id : undefined;
+    const existingRuntimeJobId =
+      persistedRemoteFenceMatches && runtimeMetadata.remote_runtime_job_created === true ? runtimeMetadata.remote_runtime_job_id : undefined;
     let pendingBundle = persistedRemoteFenceMatches
       ? pendingWorkspaceBundleFromRuntimeMetadata(runtimeMetadata, activeRunSession.id, executionPackage.id, runWorkerLeaseId)
       : undefined;
     let workspaceBundleDigest = pendingBundle?.archive_digest;
+    const resumeExistingRuntimeJob = existingRuntimeJobId !== undefined && pendingBundle !== undefined && workspaceBundleDigest !== undefined;
     if (pendingBundle === undefined || workspaceBundleDigest === undefined) {
       const bundle = await createRunWorkerPendingWorkspaceBundleArtifact({
         repository: this.repository,
@@ -1112,20 +1114,24 @@ export class RunWorker {
         remote_workspace_acquisition_json: bundle.pending_workspace_bundle.workspace_acquisition_json,
       });
       runtimeMetadata = activeRunSession.runtime_metadata!;
-      runtimeJobId = remoteWorkload.runtimeJobId;
       pendingBundle = bundle.pending_artifact_record;
       workspaceBundleDigest = bundle.archive_digest;
-    } else {
-      await this.repository.createPendingWorkspaceBundleArtifact(pendingBundle);
     }
-    runtimeJobId = await this.createRemoteRunExecutionJob({
-      runSession: activeRunSession,
-      executionPackage,
-      lease,
-      bundle: pendingBundle,
-      expiresAt: pendingBundle.expires_at,
-      remoteWorkload,
-    });
+    let runtimeJobId = existingRuntimeJobId;
+    if (!resumeExistingRuntimeJob) {
+      runtimeJobId = await this.createRemoteRunExecutionJob({
+        runSession: activeRunSession,
+        executionPackage,
+        lease,
+        bundle: pendingBundle,
+        expiresAt: pendingBundle.expires_at,
+        remoteWorkload,
+      });
+      activeRunSession = await this.updateRuntimeMetadata(activeRunSession, lease, { remote_runtime_job_created: true });
+    }
+    if (runtimeJobId === undefined) {
+      throw new Error('codex_runtime_job_unavailable');
+    }
     const cancelRemoteRunExecutionJob = async () => {
       await this.cancelRemoteRunExecutionJob(runtimeJobId);
     };
