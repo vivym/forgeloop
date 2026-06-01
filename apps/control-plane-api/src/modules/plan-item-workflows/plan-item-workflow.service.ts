@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import {
   DomainError,
   assertPlanItemWorkflowTransitionAllowed,
@@ -13,18 +13,21 @@ import {
   type DevelopmentPlanItem,
   type ExecutionPlanRevision,
   type PlanItemWorkflow,
+  type RunSession,
   type SpecRevision,
   type WorkflowPersistenceRefs,
   type WorkflowManualDecision,
 } from '@forgeloop/domain';
-import type { PlanItemWorkflowStatus, WorkflowTransitionEvidenceObjectType } from '@forgeloop/contracts';
+import type { PlanItemWorkflowStatus, RunOperatorCommandResponse, WorkflowTransitionEvidenceObjectType } from '@forgeloop/contracts';
 import type { ApplyPlanItemWorkflowTransitionInput, DeliveryRepository } from '@forgeloop/db';
 
+import type { ActorContext } from '../auth/actor-context';
 import { BrainstormingService } from '../brainstorming/brainstorming.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
-import type { RegenerateArtifactDraftCommandDto } from '../delivery/dto';
+import type { RegenerateArtifactDraftCommandDto, RunControlDto, RunInputDto } from '../delivery/dto';
 import { ExecutionsService } from '../executions/executions.service';
-import { SpecPlanService } from '../spec-plan/spec-plan.service';
+import { RunControlService } from '../run-control/run-control.service';
+import { SpecPlanService, type ProductGenerationScheduleResult } from '../spec-plan/spec-plan.service';
 import type {
   ApproveImplementationPlanAndMarkExecutionReadyDto,
   ForkCodexSessionBodyDto,
@@ -67,6 +70,7 @@ type EvidenceValidationInput = {
   manual_decision_kind?: WorkflowManualDecision['kind'];
   supporting?: boolean;
 };
+type PendingRuntimeGenerationKind = 'spec' | 'implementation_plan';
 
 @Injectable()
 export class PlanItemWorkflowService {
@@ -75,6 +79,7 @@ export class PlanItemWorkflowService {
     @Inject(BrainstormingService) private readonly brainstorming: BrainstormingService,
     @Inject(SpecPlanService) private readonly specPlan: SpecPlanService,
     @Inject(ExecutionsService) private readonly executions: ExecutionsService,
+    @Inject(RunControlService) private readonly runControl: RunControlService,
   ) {}
 
   async startBrainstorming(developmentPlanId: string, itemId: string, dto: StartBrainstormingWorkflowDto) {
@@ -131,6 +136,7 @@ export class PlanItemWorkflowService {
           manual_decision_kind: dto.manual_decision_kind,
         }));
         await this.validateTransitionEvidence(repository, workflow, dto);
+        this.assertGenericTransitionDoesNotBypassDocumentGate(workflow, dto);
         const updated = await this.applyTransition(repository, workflow, dto, session.id, this.now());
         return this.toPublicWorkflowDto(updated, session);
       }),
@@ -139,17 +145,11 @@ export class PlanItemWorkflowService {
 
   async startBoundaryBrainstorming(workflowId: string, input: WorkflowBoundaryStartCommandDto) {
     const childContextInput: Parameters<PlanItemWorkflowService['prepareWorkflowChildContext']>[2] = {
-      action: 'submit_document_gate',
+      action: 'start_brainstorming',
       intent: 'continue_brainstorming',
       expectedStatus: 'brainstorming',
       operation: 'boundary-brainstorming',
     };
-    if (input.leader_actor_id !== undefined || input.leader_delegate_actor_ids !== undefined) {
-      childContextInput.developmentPlanItemPatch = {
-        leader_actor_id: input.leader_actor_id,
-        leader_delegate_actor_ids: input.leader_delegate_actor_ids,
-      };
-    }
     const { workflow, session, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, childContextInput);
     const result = await this.brainstorming.startBoundaryBrainstorming({
       development_plan_id: workflow.development_plan_id,
@@ -290,6 +290,14 @@ export class PlanItemWorkflowService {
   }
 
   async generateSpecRevisionRuntime(workflowId: string, input: WorkflowActorCommandDto) {
+    const replay = await this.replayPendingRuntimeGeneration(workflowId, input.actor_id, {
+      action: 'submit_document_gate',
+      expectedStatus: 'spec_generation_queued',
+      taskKind: 'spec',
+    });
+    if (replay !== undefined) {
+      return replay.result;
+    }
     const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
       action: 'submit_document_gate',
       intent: 'draft_spec_doc',
@@ -442,6 +450,14 @@ export class PlanItemWorkflowService {
   }
 
   async generateImplementationPlanRevisionRuntime(workflowId: string, input: WorkflowActorCommandDto) {
+    const replay = await this.replayPendingRuntimeGeneration(workflowId, input.actor_id, {
+      action: 'submit_document_gate',
+      expectedStatus: 'implementation_plan_generation_queued',
+      taskKind: 'implementation_plan',
+    });
+    if (replay !== undefined) {
+      return replay.result;
+    }
     const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
       action: 'submit_document_gate',
       intent: 'draft_implementation_plan_doc',
@@ -777,6 +793,64 @@ export class PlanItemWorkflowService {
     );
   }
 
+  sendRunInput(
+    workflowId: string,
+    runSessionId: string,
+    input: RunInputDto,
+    actorContext: ActorContext = {},
+  ): Promise<RunOperatorCommandResponse> {
+    return this.withWorkflowRunSessionCommand(workflowId, runSessionId, actorContext, (workflow) =>
+      this.runControl.createRunInputCommand(runSessionId, input, actorContext, workflow.id),
+    );
+  }
+
+  cancelRun(
+    workflowId: string,
+    runSessionId: string,
+    input: RunControlDto,
+    actorContext: ActorContext = {},
+  ): Promise<RunOperatorCommandResponse> {
+    return this.withWorkflowRunSessionCommand(workflowId, runSessionId, actorContext, (workflow) =>
+      this.runControl.createRunCancelCommand(runSessionId, input, actorContext, workflow.id),
+    );
+  }
+
+  resumeRun(
+    workflowId: string,
+    runSessionId: string,
+    input: RunControlDto,
+    actorContext: ActorContext = {},
+  ): Promise<RunOperatorCommandResponse> {
+    return this.withWorkflowRunSessionCommand(workflowId, runSessionId, actorContext, (workflow) =>
+      this.runControl.createRunResumeCommand(runSessionId, input, actorContext, workflow.id),
+    );
+  }
+
+  private async withWorkflowRunSessionCommand<T>(
+    workflowId: string,
+    runSessionId: string,
+    actorContext: ActorContext,
+    run: (workflow: PlanItemWorkflow, runSession: RunSession) => Promise<T>,
+  ): Promise<T> {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        const runSession = await repository.getRunSession(runSessionId);
+        if (
+          runSession === undefined ||
+          runSession.workflow_id !== workflow.id ||
+          runSession.codex_session_id !== workflow.active_codex_session_id
+        ) {
+          throw new NotFoundException(`RunSession ${runSessionId} not found`);
+        }
+        if (actorContext.authenticatedActorId !== undefined) {
+          await this.assertActorCanMutateWorkflow(repository, workflow, actorContext.authenticatedActorId, 'start_execution');
+        }
+        return run(workflow, runSession);
+      }),
+    );
+  }
+
   private async approveImplementationPlanAndMarkExecutionReadyWithRepository(
     repository: DeliveryRepository,
     workflowId: string,
@@ -924,6 +998,82 @@ export class PlanItemWorkflowService {
     }
     await repository.saveWorkflowManualDecision(decision);
     return decision;
+  }
+
+  private assertGenericTransitionDoesNotBypassDocumentGate(
+    workflow: PlanItemWorkflow,
+    dto: WorkflowTransitionCommandDto,
+  ): void {
+    const bypassesDedicatedDocumentRoute =
+      (workflow.status === 'brainstorming' &&
+        dto.to_status === 'boundary_review' &&
+        dto.evidence_object_type === 'boundary_summary_revision') ||
+      (workflow.status === 'boundary_review' &&
+        dto.to_status === 'spec_generation_queued' &&
+        dto.evidence_object_type === 'boundary_summary_revision') ||
+      (workflow.status === 'spec_generation_queued' &&
+        dto.to_status === 'spec_review' &&
+        dto.evidence_object_type === 'spec_revision') ||
+      (workflow.status === 'spec_review' &&
+        dto.to_status === 'implementation_plan_generation_queued' &&
+        dto.evidence_object_type === 'spec_revision') ||
+      (workflow.status === 'implementation_plan_generation_queued' &&
+        dto.to_status === 'implementation_plan_review' &&
+        dto.evidence_object_type === 'implementation_plan_revision') ||
+      (workflow.status === 'implementation_plan_review' &&
+        dto.to_status === 'execution_ready' &&
+        dto.evidence_object_type === 'execution_readiness_record');
+    if (bypassesDedicatedDocumentRoute) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        'workflow_invalid_transition: Document gate transitions must use the dedicated PlanItemWorkflow document routes',
+      );
+    }
+  }
+
+  private async replayPendingRuntimeGeneration(
+    workflowId: string,
+    actorId: string,
+    input: {
+      action: WorkflowAction;
+      expectedStatus: PlanItemWorkflowStatus;
+      taskKind: PendingRuntimeGenerationKind;
+    },
+  ): Promise<{ result: ProductGenerationScheduleResult } | undefined> {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        if (workflow.status !== input.expectedStatus) {
+          return undefined;
+        }
+        await this.assertActorCanMutateWorkflow(repository, workflow, actorId, input.action);
+        const session = await this.requireActiveSession(repository, workflow);
+        const context = {
+          workflow_id: workflow.id,
+          codex_session_id: session.id,
+        };
+        const result =
+          input.taskKind === 'spec'
+            ? await this.specPlan.replayScheduledItemSpecRevisionRuntimeWithRepository(
+                repository,
+                workflow.development_plan_id,
+                workflow.development_plan_item_id,
+                { actor_id: actorId },
+                context,
+              )
+            : await this.specPlan.replayScheduledItemImplementationPlanRevisionRuntimeWithRepository(
+                repository,
+                workflow.development_plan_id,
+                workflow.development_plan_item_id,
+                { actor_id: actorId },
+                context,
+              );
+        if (result !== undefined) {
+          return { result };
+        }
+        return undefined;
+      }),
+    );
   }
 
   private transitionCheck(input: {
@@ -1342,10 +1492,6 @@ export class PlanItemWorkflowService {
       intent: CodexSessionTurn['intent'];
       expectedStatus: PlanItemWorkflowStatus;
       operation: string;
-      developmentPlanItemPatch?: {
-        leader_actor_id?: string | undefined;
-        leader_delegate_actor_ids?: string[] | undefined;
-      };
     },
   ): Promise<{ workflow: PlanItemWorkflow; session: CodexSession; context: PlanItemWorkflowChildContext }> {
     return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
@@ -1357,7 +1503,11 @@ export class PlanItemWorkflowService {
             `${input.operation} requires workflow status ${input.expectedStatus}`,
           );
         }
-        await this.assertActorCanMutateWorkflow(repository, workflow, actorId, input.action, input.developmentPlanItemPatch);
+        if (input.operation === 'boundary-brainstorming' && input.action === 'start_brainstorming') {
+          await this.assertActorCanStartBoundaryBrainstorming(repository, workflow, actorId);
+        } else {
+          await this.assertActorCanMutateWorkflow(repository, workflow, actorId, input.action);
+        }
         const session = await this.requireActiveSession(repository, workflow);
         const turn = await this.createWorkflowChildTurn(repository, workflow, session, actorId, input.intent, input.operation);
         return {
@@ -1474,40 +1624,44 @@ export class PlanItemWorkflowService {
     assertWorkflowActorAuthorized({ development_plan_item_id: item.id }, 'start_brainstorming', actorContext);
   }
 
+  private async assertActorCanStartBoundaryBrainstorming(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    actorId: string,
+  ) {
+    const item = await repository.getDevelopmentPlanItem(workflow.development_plan_item_id);
+    if (item === undefined) {
+      throw new DomainError(
+        'workflow_actor_not_authorized',
+        `Actor ${actorId} cannot perform start_brainstorming on workflow item ${workflow.development_plan_item_id}`,
+      );
+    }
+    const workItem = await repository.getWorkItem(item.source_ref.id);
+    this.assertActorCanStartWorkflowItem(item, actorId, workItem?.driver_actor_id);
+  }
+
   private async assertActorCanMutateWorkflow(
     repository: DeliveryRepository,
     workflow: PlanItemWorkflow,
     actorId: string,
     action: WorkflowAction,
-    developmentPlanItemPatch?: {
-      leader_actor_id?: string | undefined;
-      leader_delegate_actor_ids?: string[] | undefined;
-    },
   ) {
     const item = await repository.getDevelopmentPlanItem(workflow.development_plan_item_id);
     const actorContext: Parameters<typeof assertWorkflowActorAuthorized>[2] = {
       actor_id: actorId,
     };
-    if (item !== undefined) actorContext.development_plan_item = this.workflowActorPlanItem(item, developmentPlanItemPatch);
+    if (item !== undefined) actorContext.development_plan_item = this.workflowActorPlanItem(item);
     const executionOwnerActorId = this.executionOwnerActorId(workflow);
     if (executionOwnerActorId !== undefined) actorContext.execution_owner_actor_id = executionOwnerActorId;
     assertWorkflowActorAuthorized(workflow, action, actorContext);
   }
 
-  private workflowActorPlanItem(
-    item: DevelopmentPlanItem,
-    patch?: {
-      leader_actor_id?: string | undefined;
-      leader_delegate_actor_ids?: string[] | undefined;
-    },
-  ): NonNullable<Parameters<typeof assertWorkflowActorAuthorized>[2]['development_plan_item']> {
+  private workflowActorPlanItem(item: DevelopmentPlanItem): NonNullable<Parameters<typeof assertWorkflowActorAuthorized>[2]['development_plan_item']> {
     const output: NonNullable<Parameters<typeof assertWorkflowActorAuthorized>[2]['development_plan_item']> = {};
     if (item.driver_actor_id !== undefined) output.driver_actor_id = item.driver_actor_id;
     if (item.reviewer_actor_id !== undefined) output.reviewer_actor_id = item.reviewer_actor_id;
-    const leaderActorId = patch?.leader_actor_id ?? item.leader_actor_id;
-    const leaderDelegateActorIds = patch?.leader_delegate_actor_ids ?? item.leader_delegate_actor_ids;
-    if (leaderActorId !== undefined) output.leader_actor_id = leaderActorId;
-    if (leaderDelegateActorIds !== undefined) output.leader_delegate_actor_ids = leaderDelegateActorIds;
+    if (item.leader_actor_id !== undefined) output.leader_actor_id = item.leader_actor_id;
+    if (item.leader_delegate_actor_ids !== undefined) output.leader_delegate_actor_ids = item.leader_delegate_actor_ids;
     return output;
   }
 

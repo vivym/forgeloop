@@ -1519,7 +1519,7 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
-  it('rejects claiming over an expired active lease without explicit recovery', async () => {
+  it('recovers an expired active lease before accepting a new claim', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     const expiredClaim = await repository.claimCodexSessionLease({
@@ -1527,25 +1527,22 @@ describe('Plan Item Workflow repository', () => {
       expires_at: '2026-05-31T00:01:00.000Z',
     });
 
-    await expectDomainErrorCode(
-      () =>
-        repository.claimCodexSessionLease({
-          ...leaseInput,
-          lease_id: 'lease-2',
-          lease_token_hash: 'sha256:lease-token-2',
-          worker_id: 'worker-2',
-          worker_session_digest: 'sha256:worker-session-2',
-          now: '2026-05-31T00:02:00.000Z',
-          expires_at: '2026-05-31T00:07:00.000Z',
-        }),
-      'codex_session_lease_conflict',
-    );
+    const secondClaim = await repository.claimCodexSessionLease({
+      ...leaseInput,
+      lease_id: 'lease-2',
+      lease_token_hash: 'sha256:lease-token-2',
+      worker_id: 'worker-2',
+      worker_session_digest: 'sha256:worker-session-2',
+      now: '2026-05-31T00:02:00.000Z',
+      expires_at: '2026-05-31T00:07:00.000Z',
+    });
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       status: 'running',
-      active_lease_id: 'lease-1',
-      lease_epoch: 1,
+      active_lease_id: 'lease-2',
+      lease_epoch: 2,
     });
+    expect(secondClaim.lease).toMatchObject({ id: 'lease-2', status: 'active', lease_epoch: 2 });
     await expect(repository.renewCodexSessionLease({
       session_id: 'session-1',
       lease_id: expiredClaim.lease.id,
@@ -1553,9 +1550,19 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       lease_epoch: 1,
-      now: '2026-05-31T00:00:00.500Z',
+      now: '2026-05-31T00:02:30.000Z',
       expires_at: '2026-05-31T00:08:00.000Z',
-    })).resolves.toMatchObject({ id: 'lease-1', status: 'active' });
+    })).rejects.toThrow(/codex_session_lease_conflict/);
+    await expect(repository.renewCodexSessionLease({
+      session_id: 'session-1',
+      lease_id: secondClaim.lease.id,
+      lease_token_hash: 'sha256:lease-token-2',
+      worker_id: 'worker-2',
+      worker_session_digest: 'sha256:worker-session-2',
+      lease_epoch: 2,
+      now: '2026-05-31T00:02:30.000Z',
+      expires_at: '2026-05-31T00:08:00.000Z',
+    })).resolves.toMatchObject({ id: 'lease-2', status: 'active' });
   });
 
   it('explicitly recovers an expired active lease before claiming a recovering session', async () => {

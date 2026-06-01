@@ -1,8 +1,13 @@
-import { Body, Controller, Inject, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Headers, Inject, Param, Patch, Post } from '@nestjs/common';
 import {
   regenerateArtifactDraftCommandSchema,
+  runControlSchema,
+  runInputSchema,
   type RegenerateArtifactDraftCommandDto,
+  type RunControlDto,
+  type RunInputDto,
 } from '../delivery/dto';
+import { actorContextFromHeaders } from '../auth/actor-context';
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import {
   approveImplementationPlanAndMarkExecutionReadySchema,
@@ -304,5 +309,35 @@ export class PlanItemWorkflowController {
     @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto,
   ) {
     return this.service.startExecution(workflowId, body);
+  }
+
+  @Post('plan-item-workflows/:workflowId/run-sessions/:runSessionId/input')
+  sendRunInput(
+    @Param('workflowId') workflowId: string,
+    @Param('runSessionId') runSessionId: string,
+    @Body(new ZodValidationPipe(runInputSchema)) body: RunInputDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.sendRunInput(workflowId, runSessionId, body, actorContextFromHeaders(headers));
+  }
+
+  @Post('plan-item-workflows/:workflowId/run-sessions/:runSessionId/cancel')
+  cancelRun(
+    @Param('workflowId') workflowId: string,
+    @Param('runSessionId') runSessionId: string,
+    @Body(new ZodValidationPipe(runControlSchema)) body: RunControlDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.cancelRun(workflowId, runSessionId, body, actorContextFromHeaders(headers));
+  }
+
+  @Post('plan-item-workflows/:workflowId/run-sessions/:runSessionId/resume')
+  resumeRun(
+    @Param('workflowId') workflowId: string,
+    @Param('runSessionId') runSessionId: string,
+    @Body(new ZodValidationPipe(runControlSchema)) body: RunControlDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.service.resumeRun(workflowId, runSessionId, body, actorContextFromHeaders(headers));
   }
 }

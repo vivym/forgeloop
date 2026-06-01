@@ -335,12 +335,14 @@ export class RunControlService {
     runSessionId: string,
     dto: RunInputDto,
     actorContext: ActorContext = {},
+    workflowId?: string,
   ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'input', {
       actorContext,
       payload: { message: dto.message },
       ...(dto.target_turn_id === undefined ? {} : { targetTurnId: dto.target_turn_id }),
       eventSummary: 'User input submitted.',
+      ...(workflowId === undefined ? {} : { workflowId }),
     });
   }
 
@@ -348,11 +350,13 @@ export class RunControlService {
     runSessionId: string,
     dto: RunControlDto,
     actorContext: ActorContext = {},
+    workflowId?: string,
   ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'cancel', {
       actorContext,
       payload: dto.reason === undefined ? {} : { reason: dto.reason },
       eventSummary: 'Cancel requested.',
+      ...(workflowId === undefined ? {} : { workflowId }),
     });
   }
 
@@ -360,11 +364,13 @@ export class RunControlService {
     runSessionId: string,
     dto: RunControlDto,
     actorContext: ActorContext = {},
+    workflowId?: string,
   ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'resume', {
       actorContext,
       payload: dto.reason === undefined ? {} : { reason: dto.reason },
       eventSummary: 'Run resume requested.',
+      ...(workflowId === undefined ? {} : { workflowId }),
     });
   }
 
@@ -445,11 +451,12 @@ export class RunControlService {
       payload: Record<string, unknown>;
       targetTurnId?: string;
       eventSummary: string;
+      workflowId?: string;
     },
   ): Promise<RunOperatorCommandResponse> {
     const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
     this.assertRunCommandTargetIsNonTerminal(runSession);
-    await this.assertWorkflowRunSessionFence(runSession);
+    await this.assertWorkflowRunSessionFence(runSession, input.workflowId);
     const actorId = this.resolveRunActor({
       ...(input.actorContext?.authenticatedActorId === undefined ? {} : { authenticatedActorId: input.actorContext.authenticatedActorId }),
     });
@@ -833,8 +840,11 @@ export class RunControlService {
     );
   }
 
-  private async assertWorkflowRunSessionFence(runSession: RunSession): Promise<void> {
+  private async assertWorkflowRunSessionFence(runSession: RunSession, workflowId?: string): Promise<void> {
     if (runSession.workflow_id === undefined) {
+      return;
+    }
+    if (runSession.workflow_id === workflowId) {
       return;
     }
     throw new DomainError(

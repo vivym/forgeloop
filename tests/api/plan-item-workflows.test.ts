@@ -296,6 +296,41 @@ describe('Plan Item Workflow API', () => {
       });
   });
 
+  it('does not let boundary start self-assign a leader before authorization', async () => {
+    const { ids: fixtureIds, plan, item } = await seedDevelopmentPlanItem(app, { idPrefix: '29292929' });
+    const workflow = await startWorkflow(app, plan.id, item.id);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const persistedItem = await repository.getDevelopmentPlanItem(item.id);
+    if (persistedItem === undefined) {
+      throw new Error('Development Plan Item fixture was not persisted');
+    }
+    await repository.saveDevelopmentPlanItem({
+      ...persistedItem,
+      leader_actor_id: undefined,
+      leader_delegate_actor_ids: [],
+      reviewer_actor_id: fixtureIds.actorDelegate,
+      updated_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${workflow.id}/boundary-brainstorming`)
+      .send({
+        actor_id: fixtureIds.actorUnauthorized,
+        leader_actor_id: fixtureIds.actorUnauthorized,
+      })
+      .expect(403)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_actor_not_authorized');
+      });
+
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({
+      leader_actor_id: undefined,
+      leader_delegate_actor_ids: [],
+    });
+    const activeSession = await repository.getCodexSession(workflow.active_codex_session_id);
+    expect(activeSession?.latest_turn_id).toBeUndefined();
+  });
+
   it('rejects document evidence from another workflow', async () => {
     const first = await seedBoundaryReviewWorkflow(app, { idPrefix: '11111111' });
     const second = await seedApprovedBoundaryWorkflow(app, { idPrefix: '22222222' });
@@ -474,7 +509,43 @@ describe('Plan Item Workflow API', () => {
     await expect(repository.getExecutionReadinessRecord(executionReady?.evidence_object_id ?? '')).resolves.toMatchObject({
       codex_session_turn_id: implementationPlanRevision.codex_session_turn_id,
     });
-    expect(specApproved).toMatchObject({ active_spec_doc_revision_id: specRevision.id });
+      expect(specApproved).toMatchObject({ active_spec_doc_revision_id: specRevision.id });
+  });
+
+  it('rejects generic document gate transitions that bypass document services', async () => {
+    const seeded = await seedApprovedBoundaryWorkflow(app, { idPrefix: '30303030' });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const specRevision = (
+      await request(app.getHttpServer())
+        .post(`/plan-item-workflows/${seeded.workflow.id}/spec/generate-draft`)
+        .send({ actor_id: seeded.ids.actorTech })
+        .expect(201)
+    ).body;
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/transitions`)
+      .send({
+        actor_id: seeded.ids.actorTech,
+        to_status: 'spec_review',
+        evidence_object_type: 'spec_revision',
+        evidence_object_id: specRevision.id,
+        reason: 'Generic document gate transition should not bypass Spec submission side effects.',
+      })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_invalid_transition');
+      });
+
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({
+      status: 'spec_generation_queued',
+    });
+    await expect(repository.getSpec(specRevision.spec_id)).resolves.toMatchObject({
+      status: 'draft',
+      current_revision_id: specRevision.id,
+    });
+    await expect(repository.getDevelopmentPlanItem(seeded.item.id)).resolves.toMatchObject({
+      spec_status: 'draft',
+    });
   });
 
   it('submits document revisions through workflow-addressed routes', async () => {
@@ -932,6 +1003,31 @@ describe('Plan Item Workflow API', () => {
       status: 'queued',
       workflow_id: seeded.workflow.id,
       codex_session_id: seeded.workflow.active_codex_session_id,
+    });
+
+    const workflowInput = await request(server)
+      .post(`/plan-item-workflows/${seeded.workflow.id}/run-sessions/${runSessionId}/input`)
+      .set(ownerHeaders)
+      .send({ message: 'Workflow-owned input command.' })
+      .expect(201);
+    expect(workflowInput.body).toMatchObject({
+      status: 'accepted',
+      run_session_id: runSessionId,
+      command_type: 'input',
+    });
+
+    const workflowCancel = await request(server)
+      .post(`/plan-item-workflows/${seeded.workflow.id}/run-sessions/${runSessionId}/cancel`)
+      .set(ownerHeaders)
+      .send({ reason: 'Workflow-owned cancel command.' })
+      .expect(201);
+    expect(workflowCancel.body).toMatchObject({
+      status: 'accepted',
+      run_session_id: runSessionId,
+      command_type: 'cancel',
+    });
+    await expect(repository.getRunSession(runSessionId)).resolves.toMatchObject({
+      status: 'cancel_requested',
     });
   });
 

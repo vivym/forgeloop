@@ -29,7 +29,7 @@ const optionalEnv = (key: string): string | undefined => {
   return value === undefined || value.length === 0 ? undefined : value;
 };
 
-const nowIso = (): string => process.env.FORGELOOP_AUTOMATION_TEST_NOW ?? new Date().toISOString();
+export const productGenerationRuntimeNowIso = (): string => process.env.FORGELOOP_AUTOMATION_TEST_NOW ?? new Date().toISOString();
 
 const stableUuid = (input: Record<string, unknown>): string => {
   const hex = codexCanonicalDigest(input).slice('sha256:'.length);
@@ -122,7 +122,7 @@ export class ProductGenerationRuntimeSchedulerService {
     context?: WorkflowChildContext | undefined;
   }): Promise<ProductGenerationRuntimeScheduleResult> {
     const repository = input.repository ?? this.defaultRepository;
-    const now = nowIso();
+    const now = productGenerationRuntimeNowIso();
     const repoIds = this.canonicalRepoIds(input.repo_ids);
     const actionRun = await repository.createOrReplayAutomationActionRun({
       ...input.action_run,
@@ -454,13 +454,11 @@ export class ProductGenerationRuntimeSchedulerService {
       actionRun.codex_session_id !== undefined &&
       actionRun.codex_session_turn_id !== undefined &&
       context?.workflow_id !== undefined &&
-      context.codex_session_id !== undefined &&
-      context.codex_session_turn_id !== undefined;
+      context.codex_session_id !== undefined;
     if (
       refsComplete &&
       actionRun.workflow_id === context.workflow_id &&
-      actionRun.codex_session_id === context.codex_session_id &&
-      (actionRun.status === 'pending' ? actionRun.codex_session_turn_id === context.codex_session_turn_id : true)
+      actionRun.codex_session_id === context.codex_session_id
     ) {
       return;
     }

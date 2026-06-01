@@ -3858,7 +3858,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (this.codexSessionLeases.has(input.lease_id)) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not unique`);
     }
-    const session = this.codexSessions.get(input.session_id);
+    let session = this.codexSessions.get(input.session_id);
     const workflow = session === undefined ? undefined : this.planItemWorkflows.get(session.owner_id);
     const cannotClaim =
       session === undefined ||
@@ -3867,18 +3867,26 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       session.owner_id !== input.workflow_id ||
       workflow.id !== input.workflow_id ||
       session.role !== 'active' ||
-      workflow.active_codex_session_id !== session.id ||
-      !claimableCodexSessionStatuses.has(session.status);
+      workflow.active_codex_session_id !== session.id;
     if (cannotClaim) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
     }
+    if (session === undefined) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    const activeLease = this.findActiveCodexSessionLease(session.id);
     if (session.latest_snapshot_digest !== input.expected_previous_snapshot_digest) {
+      if (activeLease !== undefined || session.active_lease_id !== undefined) {
+        throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+      }
       throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${input.session_id} snapshot is stale`);
     }
-    if (
-      this.findActiveCodexSessionLease(session.id) !== undefined ||
-      session.active_lease_id !== undefined
-    ) {
+    const recovered = this.recoverExpiredActiveCodexSessionLeaseForClaim(session, activeLease, input.now);
+    session = recovered.session;
+    if (recovered.conflict) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    if (!claimableCodexSessionStatuses.has(session.status)) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
     }
     const leaseEpoch = session.lease_epoch + 1;
@@ -3959,6 +3967,43 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.codexSessionLeases.set(fencedLease.id, clone(fencedLease));
     this.codexSessions.set(recoveredSession.id, clone(recoveredSession));
     return { session: clone(recoveredSession), lease: clone(fencedLease) };
+  }
+
+  private recoverExpiredActiveCodexSessionLeaseForClaim(
+    session: CodexSession,
+    activeLease: CodexSessionLease | undefined,
+    now: string,
+  ): { session: CodexSession; conflict: boolean } {
+    const leaseId = activeLease?.id ?? session.active_lease_id;
+    if (leaseId === undefined) {
+      return { session, conflict: false };
+    }
+    const lease = activeLease ?? this.codexSessionLeases.get(leaseId);
+    if (
+      lease === undefined ||
+      lease.codex_session_id !== session.id ||
+      lease.status !== 'active' ||
+      session.active_lease_id !== lease.id ||
+      session.status !== 'running' ||
+      lease.expires_at > now
+    ) {
+      return { session, conflict: true };
+    }
+    const fencedLease: CodexSessionLease = {
+      ...clone(lease),
+      status: 'fenced',
+      fenced_at: now,
+      updated_at: now,
+    };
+    const { active_lease_id: _activeLeaseId, ...sessionWithoutActiveLease } = clone(session);
+    const recoveredSession: CodexSession = {
+      ...sessionWithoutActiveLease,
+      status: 'recovering',
+      updated_at: now,
+    };
+    this.codexSessionLeases.set(fencedLease.id, clone(fencedLease));
+    this.codexSessions.set(recoveredSession.id, clone(recoveredSession));
+    return { session: recoveredSession, conflict: false };
   }
 
   async renewCodexSessionLease(input: RenewCodexSessionLeaseInput): Promise<CodexSessionLease> {

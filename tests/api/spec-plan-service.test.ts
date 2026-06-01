@@ -1277,6 +1277,28 @@ describe('SpecPlanService item-scoped delivery API', () => {
       });
   });
 
+  it('allows legacy Spec draft generation when no active workflow owns the item', async () => {
+    const { plan, item, workflow } = await seedApprovedBoundary(app);
+    const server = app.getHttpServer();
+
+    await request(server)
+      .post(`/plan-item-workflows/${workflow.id}/archive`)
+      .send({ actor_id: actorTech, reason: 'Archive workflow so the legacy compatibility route has no active owner.' })
+      .expect(201);
+
+    const specRevision = (
+      await request(server)
+        .post(`/development-plans/${plan.id}/items/${item.id}/spec/generate-draft`)
+        .send({ actor_id: actorTech })
+        .expect(201)
+    ).body;
+
+    expect(specRevision).toMatchObject({
+      development_plan_item_id: item.id,
+      author_actor_id: actorTech,
+    });
+  });
+
   it('does not create a Spec revision when the generation precondition is stale', async () => {
     const { plan, item, boundary } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
@@ -1549,6 +1571,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const { plan, item } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
     const workflow = await activeWorkflowForItem(app, item.id);
     const first = await generateItemSpecRevisionRuntime(app, item.id);
@@ -1561,6 +1584,10 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(second.action_run.id).toBe(first.action_run.id);
     expect(second.runtime_job.id).toBe(first.runtime_job.id);
     expect(second.runtime_job.input_digest).toBe(first.runtime_job.input_digest);
+    const updatedWorkflow = await activeWorkflowForItem(app, item.id);
+    const session = await repository.getCodexSession(updatedWorkflow.active_codex_session_id);
+    expect(session?.latest_turn_id).toBe(first.action_run.codex_session_turn_id);
+    expect(second.action_run.codex_session_turn_id).toBe(first.action_run.codex_session_turn_id);
   });
 
   it('replays runtime-backed Implementation Plan Doc generation scheduling for duplicate POSTs', async () => {
@@ -1586,6 +1613,11 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(second.action_run.id).toBe(first.action_run.id);
     expect(second.runtime_job.id).toBe(first.runtime_job.id);
     expect(second.runtime_job.input_digest).toBe(first.runtime_job.input_digest);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const workflow = await activeWorkflowForItem(app, item.id);
+    const session = await repository.getCodexSession(workflow.active_codex_session_id);
+    expect(session?.latest_turn_id).toBe(first.action_run.codex_session_turn_id);
+    expect(second.action_run.codex_session_turn_id).toBe(first.action_run.codex_session_turn_id);
   });
 
   it('creates retry runtime jobs from the new claim time instead of the first attempt start time', async () => {
@@ -1687,22 +1719,20 @@ async function generateItemImplementationPlanDraft(app: INestApplication, develo
 
 async function generateItemSpecRevisionRuntime(app: INestApplication, itemId: string) {
   const workflow = await activeWorkflowForItem(app, itemId);
-  return (
-    await request(app.getHttpServer())
-      .post(`/plan-item-workflows/${workflow.id}/spec-revisions/generate`)
-      .send({ actor_id: actorTech })
-      .expect(201)
-  ).body;
+  const response = await request(app.getHttpServer())
+    .post(`/plan-item-workflows/${workflow.id}/spec-revisions/generate`)
+    .send({ actor_id: actorTech });
+  expect(response.status, JSON.stringify(response.body)).toBe(201);
+  return response.body;
 }
 
 async function generateItemImplementationPlanRevisionRuntime(app: INestApplication, itemId: string) {
   const workflow = await activeWorkflowForItem(app, itemId);
-  return (
-    await request(app.getHttpServer())
-      .post(`/plan-item-workflows/${workflow.id}/implementation-plan-revisions/generate`)
-      .send({ actor_id: actorTech })
-      .expect(201)
-  ).body;
+  const response = await request(app.getHttpServer())
+    .post(`/plan-item-workflows/${workflow.id}/implementation-plan-revisions/generate`)
+    .send({ actor_id: actorTech });
+  expect(response.status, JSON.stringify(response.body)).toBe(201);
+  return response.body;
 }
 
 async function startWorkflowForPlanItem(app: INestApplication, planId: string, itemId: string, projectId: string) {
@@ -1829,7 +1859,7 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
   const session = (
     await request(server)
       .post(`/plan-item-workflows/${startedWorkflow.id}/boundary-brainstorming`)
-      .send({ actor_id: actorTech, leader_actor_id: actorTech })
+      .send({ actor_id: workflowActorId, leader_actor_id: actorTech })
       .expect(201)
   ).body;
 

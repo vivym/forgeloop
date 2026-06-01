@@ -1486,7 +1486,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if ((await this.getCodexSessionLease(input.lease_id)) !== undefined) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not unique`);
     }
-    const session = await this.getCodexSession(input.session_id);
+    let session = await this.getCodexSession(input.session_id);
     const workflow = session === undefined ? undefined : await this.getPlanItemWorkflow(session.owner_id);
     const cannotClaim =
       session === undefined ||
@@ -1495,15 +1495,26 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       session.owner_id !== input.workflow_id ||
       workflow.id !== input.workflow_id ||
       session.role !== 'active' ||
-      workflow.active_codex_session_id !== session.id ||
-      !claimableCodexSessionStatuses.has(session.status);
+      workflow.active_codex_session_id !== session.id;
     if (cannotClaim) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
     }
+    if (session === undefined) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    const activeLease = await this.findActiveCodexSessionLease(session.id);
     if (session.latest_snapshot_digest !== input.expected_previous_snapshot_digest) {
+      if (activeLease !== undefined || session.active_lease_id !== undefined) {
+        throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+      }
       throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${input.session_id} snapshot is stale`);
     }
-    if ((await this.findActiveCodexSessionLease(session.id)) !== undefined || session.active_lease_id !== undefined) {
+    const recovered = await this.recoverExpiredActiveCodexSessionLeaseForClaimUnlocked(session, activeLease, input.now);
+    session = recovered.session;
+    if (recovered.conflict) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    if (!claimableCodexSessionStatuses.has(session.status)) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
     }
     const leaseEpoch = session.lease_epoch + 1;
@@ -1579,6 +1590,34 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     await this.db.update(codex_session_leases).set(toDbRecord(fencedLease, codex_session_leases) as never).where(eq(codex_session_leases.id, lease.id));
     await this.db.update(codex_sessions).set(toDbRecord(recoveredSession, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
     return { session: recoveredSession, lease: fencedLease };
+  }
+
+  private async recoverExpiredActiveCodexSessionLeaseForClaimUnlocked(
+    session: CodexSession,
+    activeLease: CodexSessionLease | undefined,
+    now: string,
+  ): Promise<{ session: CodexSession; conflict: boolean }> {
+    const leaseId = activeLease?.id ?? session.active_lease_id;
+    if (leaseId === undefined) {
+      return { session, conflict: false };
+    }
+    const lease = activeLease ?? await this.getCodexSessionLease(leaseId);
+    if (
+      lease === undefined ||
+      lease.codex_session_id !== session.id ||
+      lease.status !== 'active' ||
+      session.active_lease_id !== lease.id ||
+      session.status !== 'running' ||
+      lease.expires_at > now
+    ) {
+      return { session, conflict: true };
+    }
+    const fencedLease: CodexSessionLease = { ...lease, status: 'fenced', fenced_at: now, updated_at: now };
+    const { active_lease_id: _activeLeaseId, ...sessionWithoutActiveLease } = session;
+    const recoveredSession: CodexSession = { ...sessionWithoutActiveLease, status: 'recovering', updated_at: now };
+    await this.db.update(codex_session_leases).set(toDbRecord(fencedLease, codex_session_leases) as never).where(eq(codex_session_leases.id, lease.id));
+    await this.db.update(codex_sessions).set(toDbRecord(recoveredSession, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+    return { session: recoveredSession, conflict: false };
   }
 
   async renewCodexSessionLease(input: RenewCodexSessionLeaseInput): Promise<CodexSessionLease> {
