@@ -9,6 +9,8 @@ import type {
   BrainstormingSession,
   ContextManifest,
   CodexSessionTurn,
+  DevelopmentPlanItem,
+  DevelopmentPlanItemRevision,
   ExecutionPlanRevision,
   ExecutionReadinessRecord,
   SpecRevision,
@@ -149,7 +151,7 @@ export async function seedDevelopmentPlanItem(app: INestApplication, options: { 
     created_at: now,
     updated_at: now,
   });
-  await repository.saveDevelopmentPlanItem({
+  const item: DevelopmentPlanItem = {
     id: fixtureIds.item,
     development_plan_id: fixtureIds.plan,
     revision_id: fixtureIds.itemRevision,
@@ -174,7 +176,19 @@ export async function seedDevelopmentPlanItem(app: INestApplication, options: { 
     next_action: 'Start brainstorming',
     created_at: now,
     updated_at: now,
-  });
+  };
+  await repository.saveDevelopmentPlanItem(item);
+  const itemRevision: DevelopmentPlanItemRevision = {
+    id: item.revision_id,
+    development_plan_item_id: item.id,
+    development_plan_id: item.development_plan_id,
+    revision_number: 1,
+    snapshot: item,
+    change_reason: 'plan_item_workflow_fixture_created',
+    edited_by_actor_id: fixtureIds.actorTech,
+    created_at: now,
+  };
+  await repository.saveDevelopmentPlanItemRevision(itemRevision);
 
   return { ids: fixtureIds, plan: { id: fixtureIds.plan }, item: { id: fixtureIds.item } };
 }
