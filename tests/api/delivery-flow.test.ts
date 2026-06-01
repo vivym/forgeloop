@@ -593,7 +593,10 @@ describe('delivery control plane API', () => {
       .post(`/development-plans/${draftSpec.developmentPlan.id}/items/${draftSpec.item.id}/spec/approve`)
       .set(reviewerHeaders)
       .send({ actor_id: actorReviewer })
-      .expect(400);
+      .expect(409)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
+      });
 
     await approveSpec(app, workItem.id);
     const { planRevisionId } = await approvePlan(app, workItem.id);
@@ -1120,7 +1123,7 @@ describe('delivery control plane API', () => {
     );
   });
 
-  it('supports item-scoped Spec and Implementation Plan Doc request-changes command paths', async () => {
+  it('rejects legacy item-scoped Spec and Implementation Plan Doc request-changes command paths', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
 
@@ -1130,15 +1133,14 @@ describe('delivery control plane API', () => {
       includePlan: false,
       specStatus: 'in_review',
     });
-    expect(
-      (
-        await request(server)
-          .post(`/development-plans/${specSeed.developmentPlan.id}/items/${specSeed.item.id}/spec/request-changes`)
-          .set(reviewerHeaders)
-          .send({ actor_id: actorReviewer, rationale: 'Clarify the API acceptance criteria.' })
-          .expect(201)
-      ).body,
-    ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
+    await request(server)
+      .post(`/development-plans/${specSeed.developmentPlan.id}/items/${specSeed.item.id}/spec/request-changes`)
+      .set(reviewerHeaders)
+      .send({ actor_id: actorReviewer, rationale: 'Clarify the API acceptance criteria.' })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
+      });
 
     const { workItem: planWorkItem } = await createProjectRepoWorkItem(app);
     const planSeed = await seedItemScopedSpecPlan(app, planWorkItem.id, {
@@ -1150,22 +1152,11 @@ describe('delivery control plane API', () => {
       await request(server)
         .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/generate-draft`)
         .send({ actor_id: actorOwner })
-        .expect(201)
+        .expect(409)
+        .expect(({ body }) => {
+          expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
+        })
     ).body;
-    expect(executionPlanRevision.id).toBeTruthy();
-    await request(server)
-      .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/submit-for-approval`)
-      .set(ownerHeaders)
-      .send({ actor_id: actorOwner })
-      .expect(201);
-    expect(
-      (
-        await request(server)
-          .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/request-changes`)
-          .set(reviewerHeaders)
-          .send({ actor_id: actorReviewer, rationale: 'Split the verification rollout steps.' })
-          .expect(201)
-      ).body,
-    ).toMatchObject({ status: 'changes_requested' });
+    expect(executionPlanRevision.id).toBeUndefined();
   });
 });

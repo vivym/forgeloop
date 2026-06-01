@@ -291,6 +291,7 @@ export interface PackageExecutionRepository {
   appendStatusHistory(statusHistory: StatusHistoryRecord): Promise<void>;
   saveArtifact(artifact: ArtifactRecord): Promise<void>;
   saveTraceEvent(traceEvent: TraceEventRecord): Promise<void>;
+  updateTraceEvent(traceEvent: TraceEventRecord): Promise<void>;
   listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]>;
   saveTraceLink(traceLink: TraceLinkRecord): Promise<void>;
   listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]>;

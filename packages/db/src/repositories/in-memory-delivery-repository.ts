@@ -6480,6 +6480,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.traceEvents.set(traceEvent.id, clone(traceEvent));
   }
 
+  async updateTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
+    if (!this.traceEvents.has(traceEvent.id)) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Trace event ${traceEvent.id} does not exist`);
+    }
+    this.traceEvents.set(traceEvent.id, clone(traceEvent));
+  }
+
   async listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]> {
     return valuesFor(this.traceEvents)
       .filter((traceEvent) => traceEvent.subject_type === subjectType && traceEvent.subject_id === subjectId)

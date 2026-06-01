@@ -8054,11 +8054,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async saveTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
     const record = toDbRecord(traceEvent, trace_events);
-    const { createdAt: _createdAt, ...set } = record;
-    await this.db
-      .insert(trace_events)
-      .values(record as never)
-      .onConflictDoUpdate({ target: trace_events.id, set: set as never });
+    await this.db.insert(trace_events).values(record as never);
+  }
+
+  async updateTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
+    const record = toDbRecord(traceEvent, trace_events);
+    const { id: _id, createdAt: _createdAt, ...set } = record;
+    await this.db.update(trace_events).set(set as never).where(eq(trace_events.id, traceEvent.id));
   }
 
   async listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]> {

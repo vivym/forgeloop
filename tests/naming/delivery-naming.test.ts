@@ -164,6 +164,7 @@ const matchesAny = (rel: string, patterns: RegExp[]): boolean => patterns.some((
 const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boolean => {
   const projectOwnerPaths = [
     /^apps\/control-plane-api\/src\/modules\/projects\//,
+    /^packages\/db\/migrations\//,
     /^packages\/db\/src\/schema\/project\.ts$/,
   ];
   const projectOwnerTestPaths = [
@@ -188,16 +189,18 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^packages\/workflow\/src\/activities\.ts$/,
     /^apps\/web\/src\/features\/work-items\/work-item-view-model\.ts$/,
     /^apps\/web\/src\/features\/work-items\/delivery-cockpit\/package-matrix\.tsx$/,
+    /^packages\/db\/migrations\//,
   ];
   const executionPackageOwnerTestPaths = [
-    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|product-lanes|query-module|release-module|spec-plan-service|task-scoped-evidence|test-acceptance-gate)\.test\.ts$/,
+    /^tests\/api\/(?:automation-commands|automation-daemon\.integration|automation-runtime-snapshot|codex-runtime-control-plane|delivery-flow|durable-id-generation|execution-package-service|local-codex-routing|plan-item-workflows|product-lanes|query-module|release-module|spec-plan-service|task-scoped-evidence|test-acceptance-gate)\.test\.ts$/,
     /^tests\/api\/project-management-query\.test\.ts$/,
-    /^tests\/db\/(?:automation-repository|codex-runtime-drizzle-concurrency|codex-runtime-repository|release-cockpit-queries|release-replay-queries|repository|task-repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
+    /^tests\/db\/(?:automation-repository|codex-runtime-drizzle-concurrency|codex-runtime-repository|plan-item-workflow-repository|release-cockpit-queries|release-replay-queries|repository|task-repository|work-item-delivery-readiness|work-item-delivery-selection|work-item-release-readiness)\.test\.ts$/,
     /^tests\/db\/repository-contract\.ts$/,
     /^tests\/contracts\/work-item-delivery-readiness\.test\.ts$/,
     /^tests\/domain\/(?:ai-native-planning-gates|release-gates|release-states|states|validators)\.test\.ts$/,
     /^tests\/helpers\/delivery-runtime-fixtures\.ts$/,
     /^tests\/helpers\/execution-supervision-fixtures\.ts$/,
+    /^tests\/helpers\/plan-item-workflow-fixtures\.ts$/,
     /^tests\/smoke\/(?:delivery-dogfood-script|delivery-dogfood-work-items-script|delivery-smoke|release-flow-dogfood-script)\.test\.ts$/,
     /^tests\/web\/(?:api|api-hooks|package-run-product-routes|review-release-product-routes)\.test\.tsx?$/,
     /^tests\/web\/fixtures\/product-(?:api-mock|data)\.ts$/,

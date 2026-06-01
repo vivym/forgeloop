@@ -504,6 +504,10 @@ const createInsertCaptureRepository = () => {
   const db = {
     insert: (table: unknown) => ({
       values: (values: Record<string, unknown>) => ({
+        then: (resolve: (value?: unknown) => unknown) => {
+          captures.push({ table, values });
+          return resolve();
+        },
         onConflictDoUpdate: async ({ set }: { set: Record<string, unknown> }) => {
           captures.push({ table, values, set });
         },
@@ -516,6 +520,13 @@ const createInsertCaptureRepository = () => {
       where: async (predicate: unknown) => {
         deletes.push({ table, predicate });
       },
+    }),
+    update: (table: unknown) => ({
+      set: (set: Record<string, unknown>) => ({
+        where: async () => {
+          captures.push({ table, values: {}, set });
+        },
+      }),
     }),
     transaction: async <T>(callback: (tx: never) => Promise<T>) => {
       transactions.push(db);
@@ -1324,12 +1335,14 @@ describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
 
     await repository.saveTraceEvent(traceEventWithoutActor);
     await repository.saveTraceArtifactRef(traceArtifactRefWithoutArtifact);
+    await repository.updateTraceEvent(traceEventWithoutActor);
 
     expect(captures[0]?.values.actorId).toBeNull();
-    expect(captures[0]?.set?.actorId).toBeNull();
-    expect(captures[0]?.set?.createdAt).toBeUndefined();
+    expect(captures[0]?.set).toBeUndefined();
     expect(captures[1]?.values.artifactId).toBeNull();
     expect(captures[1]?.set).toBeUndefined();
+    expect(captures[2]?.set?.actorId).toBeNull();
+    expect(captures[2]?.set?.createdAt).toBeUndefined();
   });
 
   it('writes release pointer arrays and normalized package links', async () => {

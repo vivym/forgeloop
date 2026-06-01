@@ -1819,6 +1819,7 @@ export interface DeliveryRepository {
   listDecisionsForObject(objectType: string, objectId: string): Promise<Decision[]>;
 
   saveTraceEvent(traceEvent: TraceEventRecord): Promise<void>;
+  updateTraceEvent(traceEvent: TraceEventRecord): Promise<void>;
   listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]>;
   saveTraceLink(traceLink: TraceLinkRecord): Promise<void>;
   listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]>;

@@ -484,7 +484,7 @@ const recordReplacementReviewPacketTrace = async (
       return;
     }
 
-    await repository.saveTraceEvent({
+    await repository.updateTraceEvent({
       ...replacementEvent,
       payload: {
         ...replacementEvent.payload,
