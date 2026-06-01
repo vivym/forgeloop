@@ -1,27 +1,44 @@
+import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
+
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  codexCanonicalDigest,
+  codexCredentialPayloadDigest,
+  codexRuntimeProfileRevisionDigest,
+  codexWorkspaceAcquisitionDigest,
   DomainError,
-  type CodexLaunchLease,
-  type CodexRuntimeJob,
   type BoundarySummaryRevision,
+  type CodexCredentialBinding,
+  type CodexCredentialBindingVersion,
+  type CodexDockerNetworkProxyConfig,
+  type CodexLaunchTarget,
+  type CodexRuntimeProfile,
+  type CodexRuntimeProfileRevision,
+  type CodexRuntimeScope,
   type DevelopmentPlan,
   type DevelopmentPlanItem,
+  type ExecutionPackage,
   type ExecutionPlanRevision,
   type InternalArtifactObject,
   type PlanItemWorkflow,
   type PlanItemWorkflowTransition,
+  type RunSession,
 } from '@forgeloop/domain';
 
 import {
   createDbClient,
   DrizzleDeliveryRepository,
   InMemoryDeliveryRepository,
+  type CodexLaunchLease,
   type DeliveryRepository,
   assertResettableDatabaseUrl,
   resetForgeloopDatabase,
 } from '../../packages/db/src/index';
 
 const now = '2026-05-31T00:00:00.000Z';
+const later = '2026-05-31T00:01:00.000Z';
+const runtimeExpiresAt = '2026-05-31T00:20:00.000Z';
 function isResettableDatabaseUrl(databaseUrl: string): boolean {
   try {
     assertResettableDatabaseUrl(databaseUrl);
@@ -168,112 +185,576 @@ const readinessRecordInput = {
   created_at: now,
 } as const;
 
-const seedAcceptedSessionRuntimeJob = (
-  repository: InMemoryDeliveryRepository,
-  input: {
-    runtimeJobId: string;
-    launchLeaseId: string;
-    workerId: string;
-    sessionId: string;
-    turnId: string;
-    workflowId: string;
-  },
-) => {
-  const launchLeases = (
-    repository as unknown as {
-      codexLaunchLeases: Map<
-        string,
-        {
-          lease: CodexLaunchLease;
-          lease_request_id: string;
-          runtime_profile_digest: string;
-          credential_binding_id: string;
-          credential_binding_version_id: string;
-          credential_payload_digest: string;
-          docker_image_digest: string;
-          network_policy_digest: string;
-          network_provider_config_digest?: string;
-        }
-      >;
-    }
-  ).codexLaunchLeases;
-  const runtimeJobs = (
-    repository as unknown as {
-      codexRuntimeJobs: Map<
-        string,
-        {
-          job: CodexRuntimeJob;
-          runtime_profile_digest: string;
-          credential_binding_id: string;
-          credential_binding_version_id: string;
-          credential_payload_digest: string;
-          docker_image_digest: string;
-          network_policy_digest: string;
-          network_provider_config_digest?: string;
-          envelope_id: string;
-          envelope_digest: string;
-        }
-      >;
-    }
-  ).codexRuntimeJobs;
+const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
+const bytesDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
-  launchLeases.set(input.launchLeaseId, {
-    lease: {
-      id: input.launchLeaseId,
-      target: {
-        target_type: 'run_session',
-        target_id: input.sessionId,
-        target_kind: 'run_execution',
-        project_id: 'project-1',
-      },
-      launch_attempt: 1,
-      profile_revision_id: 'profile-revision-1',
-      worker_id: input.workerId,
-      status: 'active',
-      lease_token_hash: 'sha256:attached-launch-token',
-      created_at: '2026-05-31T00:04:00.000Z',
-      expires_at: '2026-05-31T00:20:00.000Z',
-    },
-    lease_request_id: `${input.launchLeaseId}:request`,
-    runtime_profile_digest: 'sha256:profile',
-    credential_binding_id: 'credential-1',
-    credential_binding_version_id: 'credential-version-1',
-    credential_payload_digest: 'sha256:credential',
-    docker_image_digest: 'sha256:docker',
-    network_policy_digest: 'sha256:network',
+const workspaceBundleArchiveFixture = (input: { bundle_id: string; created_at?: string; files?: Record<string, string> }) => {
+  const files = Object.entries(input.files ?? { 'README.md': 'workspace bundle fixture\n' }).map(([path, content]) => {
+    const bytes = Buffer.from(content, 'utf8');
+    return {
+      path,
+      type: 'file',
+      digest: bytesDigest(bytes),
+      size_bytes: bytes.byteLength,
+    };
   });
-  runtimeJobs.set(input.runtimeJobId, {
-    job: {
-      id: input.runtimeJobId,
-      job_request_id: `${input.runtimeJobId}:request`,
-      target_type: 'run_session',
-      target_id: input.sessionId,
-      target_kind: 'run_execution',
-      project_id: 'project-1',
-      worker_id: input.workerId,
-      launch_lease_id: input.launchLeaseId,
-      launch_attempt: 1,
-      status: 'accepted',
-      input_digest: 'sha256:attached-input',
-      input_json: { codex_session_id: input.sessionId },
-      workflow_id: input.workflowId,
-      codex_session_id: input.sessionId,
-      codex_session_turn_id: input.turnId,
-      accepted_at: '2026-05-31T00:05:00.000Z',
-      expires_at: '2026-05-31T00:20:00.000Z',
-      created_at: '2026-05-31T00:04:00.000Z',
-      updated_at: '2026-05-31T00:05:00.000Z',
+  const manifest = {
+    schema_version: 'workspace_bundle.v1',
+    bundle_id: input.bundle_id,
+    created_at: input.created_at ?? now,
+    allowed_paths: ['**'],
+    forbidden_paths: [],
+    entries: files.sort((left, right) => left.path.localeCompare(right.path) || left.type.localeCompare(right.type)),
+  };
+  const archive = Buffer.from(
+    JSON.stringify({
+      schema_version: 'workspace_bundle_archive.v1',
+      manifest,
+      entries: Object.entries(input.files ?? { 'README.md': 'workspace bundle fixture\n' })
+        .map(([path, content]) => ({
+          path,
+          type: 'file',
+          content_base64: Buffer.from(content, 'utf8').toString('base64'),
+        }))
+        .sort((left, right) => left.path.localeCompare(right.path) || left.type.localeCompare(right.type)),
+    }),
+    'utf8',
+  );
+  return {
+    archive,
+    archive_digest: bytesDigest(archive),
+    manifest_digest: bytesDigest(JSON.stringify(manifest)),
+  };
+};
+
+const dockerProxyConfig = (): CodexDockerNetworkProxyConfig => {
+  const configWithoutDigest = {
+    proxy_image: 'ghcr.io/forgeloop/codex-net-proxy',
+    proxy_image_digest: `sha256:${'1'.repeat(64)}`,
+    self_test_image: 'ghcr.io/forgeloop/codex-net-self-test',
+    self_test_image_digest: `sha256:${'2'.repeat(64)}`,
+  };
+
+  return {
+    ...configWithoutDigest,
+    provider_config_digest: codexCanonicalDigest(configWithoutDigest),
+  };
+};
+
+const dockerProxyNetworkPolicy = () => {
+  const allowlistRules = [
+    {
+      id: 'openai',
+      protocol: 'https' as const,
+      host: 'api.openai.com',
+      purpose: 'model_provider' as const,
     },
-    runtime_profile_digest: 'sha256:profile',
-    credential_binding_id: 'credential-1',
-    credential_binding_version_id: 'credential-version-1',
-    credential_payload_digest: 'sha256:credential',
-    docker_image_digest: 'sha256:docker',
-    network_policy_digest: 'sha256:network',
-    envelope_id: `${input.runtimeJobId}:envelope`,
-    envelope_digest: 'sha256:envelope',
+  ];
+  return {
+    mode: 'egress_allowlist' as const,
+    provider: 'docker_network_proxy' as const,
+    allowlist_rules: allowlistRules,
+    provider_config: dockerProxyConfig(),
+    egress_allowlist_digest: codexCanonicalDigest({
+      provider: 'docker_network_proxy',
+      allowlist_rules: allowlistRules,
+    }),
+    self_test_digest: dockerProxyConfig().self_test_image_digest,
+  };
+};
+
+const runtimeProfileRevision = (
+  overrides: Partial<CodexRuntimeProfileRevision> = {},
+): { profile: CodexRuntimeProfile; revision: CodexRuntimeProfileRevision } => {
+  const targetKind = overrides.target_kind ?? 'run_execution';
+  const sourceAccessMode = overrides.source_access_mode ?? 'path_policy_scoped';
+  const profile: CodexRuntimeProfile = {
+    id: overrides.profile_id ?? `runtime-profile-${targetKind}`,
+    name: 'Codex run execution docker runtime',
+    environment: overrides.environment ?? 'test',
+    target_kind: targetKind,
+    active_revision_id: overrides.id ?? `runtime-profile-revision-${targetKind}`,
+    created_by_actor_id: overrides.created_by_actor_id ?? 'actor-admin',
+    created_at: overrides.created_at ?? now,
+    updated_at: overrides.created_at ?? now,
+  };
+  const codexConfigToml = overrides.codex_config_toml ?? 'model = "gpt-5"\napproval_policy = "never"\n';
+  const revisionWithoutDigest: CodexRuntimeProfileRevision = {
+    id: profile.active_revision_id ?? 'runtime-profile-revision-run_execution',
+    profile_id: profile.id,
+    revision_number: overrides.revision_number ?? 1,
+    status: overrides.status ?? 'active',
+    environment: profile.environment,
+    docker_image: overrides.docker_image ?? 'ghcr.io/forgeloop/codex-runtime',
+    docker_image_digest: overrides.docker_image_digest ?? `sha256:${'a'.repeat(64)}`,
+    target_kind: profile.target_kind,
+    source_access_mode: sourceAccessMode,
+    codex_config_toml: codexConfigToml,
+    codex_config_digest: overrides.codex_config_digest ?? codexCanonicalDigest(codexConfigToml),
+    expected_effective_config_digest: overrides.expected_effective_config_digest ?? `sha256:${'b'.repeat(64)}`,
+    effective_config_assertions:
+      overrides.effective_config_assertions ??
+      (targetKind === 'generation'
+        ? {
+            target_kind: 'generation',
+            approval_policy: 'never',
+            source_write_policy: 'artifact_only',
+            forbidden_writable_roots: ['workspace'],
+          }
+        : {
+            target_kind: 'run_execution',
+            approval_policy: 'never',
+            sandbox_type: 'danger-full-access',
+            writable_roots_policy: 'task_workspace_only',
+          }),
+    app_server_required: true,
+    allowed_driver_kind: 'app_server',
+    network_policy: overrides.network_policy ?? dockerProxyNetworkPolicy(),
+    resource_limits: overrides.resource_limits ?? {
+      cpu_ms: 120_000,
+      memory_mb: 4096,
+      pids: 512,
+      fds: 1024,
+      workspace_bytes: 2_000_000_000,
+      artifact_bytes: 500_000_000,
+      timeout_ms: 600_000,
+      output_limit_bytes: 1_000_000,
+      run_output_limit_bytes: 1_000_000,
+    },
+    docker_policy: overrides.docker_policy ?? {
+      app_server_only: true,
+      rootless: true,
+      read_only_rootfs: true,
+      no_new_privileges: true,
+      drop_capabilities: ['ALL'],
+    },
+    allowed_scopes: overrides.allowed_scopes ?? [{ project_id: 'project-1', repo_id: 'repo-1' }],
+    profile_digest: `sha256:${'c'.repeat(64)}`,
+    created_by_actor_id: profile.created_by_actor_id,
+    created_at: overrides.created_at ?? now,
+  };
+  const revision = {
+    ...revisionWithoutDigest,
+    ...overrides,
+    profile_digest: codexRuntimeProfileRevisionDigest({ ...revisionWithoutDigest, ...overrides }),
+  };
+
+  return { profile, revision };
+};
+
+const runtimeCredential = (
+  overrides: Partial<CodexCredentialBinding> = {},
+  versionOverrides: Partial<CodexCredentialBindingVersion> = {},
+) => {
+  const secretPayload = {
+    env: {
+      OPENAI_API_KEY: 'sk-test-private-key',
+    },
+  };
+  const binding: CodexCredentialBinding = {
+    id: overrides.id ?? 'credential-binding-run_execution',
+    profile_id: overrides.profile_id ?? 'runtime-profile-run_execution',
+    project_id: overrides.project_id ?? 'project-1',
+    repo_id: overrides.repo_id ?? 'repo-1',
+    provider: overrides.provider ?? 'unsafe_db',
+    purpose: overrides.purpose ?? 'model_provider',
+    active_version_id: versionOverrides.id ?? 'credential-version-run_execution',
+    created_by_actor_id: overrides.created_by_actor_id ?? 'actor-admin',
+    created_at: overrides.created_at ?? now,
+    updated_at: overrides.updated_at ?? now,
+  };
+  const version: CodexCredentialBindingVersion = {
+    id: binding.active_version_id ?? 'credential-version-run_execution',
+    binding_id: binding.id,
+    version_number: versionOverrides.version_number ?? 1,
+    status: versionOverrides.status ?? 'active',
+    payload_digest: versionOverrides.payload_digest ?? codexCredentialPayloadDigest(secretPayload),
+    created_by_actor_id: versionOverrides.created_by_actor_id ?? 'actor-admin',
+    created_at: versionOverrides.created_at ?? now,
+  };
+
+  return { binding, version, secretPayload };
+};
+
+const runExecutionTarget = (overrides: Partial<CodexLaunchTarget> = {}): CodexLaunchTarget => ({
+  target_type: overrides.target_type ?? 'run_session',
+  target_id: overrides.target_id ?? 'session-1',
+  target_kind: overrides.target_kind ?? 'run_execution',
+  project_id: overrides.project_id ?? 'project-1',
+  repo_id: overrides.repo_id ?? 'repo-1',
+});
+
+const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
+  id: overrides.id ?? 'execution-package-1',
+  work_item_id: overrides.work_item_id ?? 'item-1',
+  development_plan_item_id: overrides.development_plan_item_id ?? 'item-1',
+  workflow_id: overrides.workflow_id ?? 'workflow-1',
+  codex_session_id: overrides.codex_session_id ?? 'session-1',
+  codex_session_turn_id: overrides.codex_session_turn_id ?? 'turn-1',
+  spec_id: overrides.spec_id ?? 'spec-1',
+  spec_revision_id: overrides.spec_revision_id ?? 'spec-revision-1',
+  plan_id: overrides.plan_id ?? 'plan-1',
+  plan_revision_id: overrides.plan_revision_id ?? 'plan-revision-1',
+  project_id: overrides.project_id ?? 'project-1',
+  repo_id: overrides.repo_id ?? 'repo-1',
+  objective: overrides.objective ?? 'Continue Codex session.',
+  owner_actor_id: overrides.owner_actor_id ?? 'actor-owner',
+  reviewer_actor_id: overrides.reviewer_actor_id ?? 'actor-reviewer',
+  qa_owner_actor_id: overrides.qa_owner_actor_id ?? 'actor-qa',
+  phase: overrides.phase ?? 'execution',
+  activity_state: overrides.activity_state ?? 'idle',
+  gate_state: overrides.gate_state ?? 'not_submitted',
+  resolution: overrides.resolution ?? 'none',
+  required_checks: overrides.required_checks ?? [],
+  required_artifact_kinds: overrides.required_artifact_kinds ?? ['execution_summary'],
+  allowed_paths: overrides.allowed_paths ?? ['packages/**'],
+  forbidden_paths: overrides.forbidden_paths ?? [],
+  source_mutation_policy: overrides.source_mutation_policy ?? 'path_policy_scoped',
+  version: overrides.version ?? 1,
+  created_at: overrides.created_at ?? now,
+  updated_at: overrides.updated_at ?? now,
+});
+
+const runSession = (overrides: Partial<RunSession> = {}): RunSession => ({
+  id: overrides.id ?? 'runtime-run-session-1',
+  execution_package_id: overrides.execution_package_id ?? 'execution-package-1',
+  workflow_id: overrides.workflow_id ?? 'workflow-1',
+  codex_session_id: overrides.codex_session_id ?? 'session-1',
+  codex_session_turn_id: overrides.codex_session_turn_id ?? 'turn-1',
+  requested_by_actor_id: overrides.requested_by_actor_id ?? 'actor-owner',
+  status: overrides.status ?? 'running',
+  changed_files: overrides.changed_files ?? [],
+  check_results: overrides.check_results ?? [],
+  artifacts: overrides.artifacts ?? [],
+  log_refs: overrides.log_refs ?? [],
+  runtime_metadata:
+    overrides.runtime_metadata ??
+    {
+      durability_mode: 'durable',
+      recovery_attempt_count: 0,
+      effective_dangerous_mode: 'confirmed',
+    },
+  created_at: overrides.created_at ?? now,
+  updated_at: overrides.updated_at ?? now,
+  started_at: overrides.started_at ?? now,
+});
+
+const createInternalArtifactObject = (
+  repository: DeliveryRepository,
+  input: {
+    id: string;
+    artifact_id: string;
+    ref: string;
+    kind: InternalArtifactObject['kind'];
+    owner_type: InternalArtifactObject['owner_type'];
+    owner_id: string;
+    size_bytes: number;
+    digest: string;
+    metadata_json?: Record<string, unknown>;
+    idempotency_key?: string;
+    content_type?: string;
+    created_by_actor_type?: InternalArtifactObject['created_by_actor_type'];
+    created_by_actor_id?: string;
+  },
+) =>
+  repository.createOrReplayInternalArtifactObject({
+    id: input.id,
+    artifact_id: input.artifact_id,
+    ref: input.ref,
+    storage_key: `objects/${input.digest.slice('sha256:'.length)}`,
+    kind: input.kind,
+    content_type: input.content_type ?? 'application/vnd.forgeloop.workspace-bundle',
+    size_bytes: String(input.size_bytes),
+    digest: input.digest,
+    visibility: 'internal',
+    owner_type: input.owner_type,
+    owner_id: input.owner_id,
+    idempotency_key: input.idempotency_key ?? input.artifact_id,
+    request_digest: tokenHash(`internal-object-request:${input.id}`),
+    metadata_json: input.metadata_json ?? {},
+    created_by_actor_type: input.created_by_actor_type ?? 'run_worker',
+    created_by_actor_id: input.created_by_actor_id ?? 'run-worker-1',
+    created_at: now,
+  });
+
+const seedRuntimeWorker = async (
+  repository: DeliveryRepository,
+  overrides: {
+    worker_id?: string;
+    worker_identity?: string;
+    bootstrap_token_id?: string;
+    bootstrap_token_raw?: string;
+    session_token?: string;
+    session_expires_at?: string;
+    session_public_key_expires_at?: string;
+    capabilities?: readonly CodexLaunchTarget['target_kind'][];
+    allowedScopes?: readonly CodexRuntimeScope[];
+    docker_image_digests?: readonly string[];
+    network_policy_digests?: readonly string[];
+    network_provider_config_digests?: readonly string[];
+    lease_count?: number;
+    max_concurrency?: number;
+  } = {},
+) => {
+  const workerId = overrides.worker_id ?? 'worker-1';
+  const workerIdentity = overrides.worker_identity ?? (workerId === 'worker-1' ? 'local-worker-1' : `local-${workerId}`);
+  const bootstrapTokenRaw = overrides.bootstrap_token_raw ?? 'bootstrap-token-raw';
+  const sessionToken = overrides.session_token ?? 'session-token-1';
+  const capabilities = overrides.capabilities ?? ['run_execution'];
+  const allowedScopes = overrides.allowedScopes ?? [{ project_id: 'project-1', repo_id: 'repo-1' }];
+  const dockerImageDigests = overrides.docker_image_digests ?? [`sha256:${'a'.repeat(64)}`];
+  const networkPolicyDigests = overrides.network_policy_digests ?? [codexCanonicalDigest(runtimeProfileRevision().revision.network_policy)];
+  const networkProviderConfigDigests = overrides.network_provider_config_digests ?? [dockerProxyConfig().provider_config_digest];
+  await repository.createCodexWorkerBootstrapToken({
+    id: overrides.bootstrap_token_id ?? `bootstrap-token-${workerId}`,
+    worker_identity: workerIdentity,
+    bootstrap_token_hash: tokenHash(bootstrapTokenRaw),
+    bootstrap_token_version: 1,
+    status: 'active',
+    allowed_scopes_json: allowedScopes,
+    allowed_capabilities_json: {
+      target_kinds: capabilities,
+      docker_image_digests: dockerImageDigests,
+      network_policy_digests: networkPolicyDigests,
+      network_provider_config_digests: networkProviderConfigDigests,
+    },
+    created_by_actor_id: 'actor-admin',
+    created_at: now,
+    expires_at: runtimeExpiresAt,
+  });
+
+  const worker = await repository.upsertCodexWorkerRegistration({
+    worker_id: workerId,
+    worker_identity: workerIdentity,
+    version: '0.1.0',
+    bootstrap_token_hash: tokenHash(bootstrapTokenRaw),
+    bootstrap_token_version: 1,
+    session_token: sessionToken,
+    session_expires_at: overrides.session_expires_at ?? runtimeExpiresAt,
+    status: 'online',
+    control_channel_status: 'connected',
+    allowed_scopes: allowedScopes,
+    capabilities,
+    docker_image_digests: dockerImageDigests,
+    network_policy_digests: networkPolicyDigests,
+    network_provider_config_digests: networkProviderConfigDigests,
+    host_worker_uid: 501,
+    host_worker_gid: 20,
+    lease_count: overrides.lease_count ?? 0,
+    max_concurrency: overrides.max_concurrency ?? 2,
+    labels: { host: 'test-host' },
+    session_public_key_id: 'session-key-1',
+    session_public_key_algorithm: 'x25519',
+    session_public_key_material: 'public-key-material',
+    session_public_key_expires_at: overrides.session_public_key_expires_at ?? runtimeExpiresAt,
+    now,
+  });
+  await repository.heartbeatCodexWorker({
+    worker_id: worker.id,
+    session_token: sessionToken,
+    nonce: `runtime-worker-heartbeat-${worker.id}`,
+    nonce_timestamp: now,
+    status: 'online',
+    control_channel_status: 'connected',
+    active_lease_count: 0,
+    capabilities,
+    now,
+  });
+
+  return { worker, sessionToken };
+};
+
+const createAcceptedSessionRuntimeJob = async (
+  repository: DeliveryRepository,
+  overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> = {},
+) => {
+  const { profile, revision } = runtimeProfileRevision();
+  const { binding, version, secretPayload } = runtimeCredential({ profile_id: profile.id });
+  await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
+  await repository.createCodexCredentialBindingWithVersion({
+    binding,
+    version,
+    secret_payload_json: secretPayload,
+  });
+  const target =
+    overrides.target ??
+    runExecutionTarget({
+      target_id: 'runtime-run-session-1',
+    });
+  const run = runSession({
+    id: target.target_id,
+    execution_package_id: 'execution-package-1',
+  });
+  await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+  await repository.saveRunSession(run);
+  const runWorkerLease = await repository.claimRunWorkerLease({
+    run_session_id: run.id,
+    worker_id: 'run-worker-1',
+    lease_token: 'run-worker-token-1',
+    now,
+    expires_at: runtimeExpiresAt,
+  });
+  const archiveFixture = workspaceBundleArchiveFixture({ bundle_id: 'attached-pending-bundle-1' });
+  const workspaceAcquisitionJson = {
+    schema_version: 'workspace_bundle_acquisition.v1',
+    bundle_id: 'attached-pending-bundle-1',
+    archive_ref: 'artifact://internal/workspace_bundle/run_session/runtime-run-session-1/attached-pending-bundle-1',
+    archive_digest: archiveFixture.archive_digest,
+    manifest_digest: archiveFixture.manifest_digest,
+    size_bytes: archiveFixture.archive.byteLength,
+    expires_at: runtimeExpiresAt,
+  };
+  const pendingBundle = {
+    bundle_id: 'attached-pending-bundle-1',
+    pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+    internal_artifact_object_id: '22222222-2222-4222-8222-222222222223',
+    archive_digest: workspaceAcquisitionJson.archive_digest,
+    manifest_digest: workspaceAcquisitionJson.manifest_digest,
+    run_worker_lease_id: runWorkerLease.id,
+    size_bytes: archiveFixture.archive.byteLength,
+    workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+    workspace_acquisition_json: workspaceAcquisitionJson,
+    expires_at: runtimeExpiresAt,
+  };
+  await createInternalArtifactObject(repository, {
+    id: pendingBundle.internal_artifact_object_id,
+    artifact_id: pendingBundle.bundle_id,
+    ref: pendingBundle.pending_artifact_ref,
+    kind: 'workspace_bundle',
+    owner_type: 'run_session',
+    owner_id: run.id,
+    size_bytes: pendingBundle.size_bytes,
+    digest: pendingBundle.archive_digest,
+    metadata_json: {
+      manifest_digest: pendingBundle.manifest_digest,
+      execution_package_id: run.execution_package_id,
+      run_worker_lease_id: runWorkerLease.id,
+    },
+  });
+  const pendingBundleRecord = {
+    ...pendingBundle,
+    id: '22222222-2222-4222-8222-222222222222',
+    run_session_id: run.id,
+    execution_package_id: run.execution_package_id,
+    request_digest: tokenHash('attached-pending-workspace-request-1'),
+    created_at: now,
+  };
+  await repository.createPendingWorkspaceBundleArtifact(pendingBundleRecord);
+  const { worker, sessionToken } = await seedRuntimeWorker(repository, {
+    capabilities: [target.target_kind],
+    docker_image_digests: [revision.docker_image_digest],
+    network_policy_digests: [codexCanonicalDigest(revision.network_policy)],
+    network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
+  });
+  const input = {
+    runtime_job_id: 'attached-runtime-job-1',
+    launch_lease_id: 'attached-launch-lease-1',
+    envelope_id: 'attached-runtime-envelope-1',
+    job_request_id: 'attached-runtime-job-request-1',
+    target,
+    launch_attempt: 1,
+    worker_id: worker.id,
+    runtime_profile_revision_id: revision.id,
+    runtime_profile_digest: revision.profile_digest,
+    credential_binding_id: binding.id,
+    credential_binding_version_id: version.id,
+    credential_payload_digest: version.payload_digest,
+    docker_image_digest: revision.docker_image_digest,
+    network_policy_digest: codexCanonicalDigest(revision.network_policy),
+    network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+    input_json: { codex_session_id: 'session-1', task: 'continue Codex session' },
+    input_digest: tokenHash('attached-runtime-input-1'),
+    workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+    workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+    pending_workspace_bundle: pendingBundleRecord,
+    execution_package_id: run.execution_package_id,
+    run_worker_lease_id: runWorkerLease.id,
+    run_worker_lease_token_hash: tokenHash('run-worker-token-1'),
+    run_session_status: 'running',
+    run_session_updated_at: now,
+    execution_package_version: 1,
+    workflow_id: 'workflow-1',
+    codex_session_id: 'session-1',
+    codex_session_turn_id: 'turn-1',
+    expires_at: runtimeExpiresAt,
+    now: '2026-05-31T00:04:00.000Z',
+    ...overrides,
+  };
+  await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+  const accepted = await repository.acceptCodexRuntimeJob({
+    runtime_job_id: input.runtime_job_id,
+    worker_id: worker.id,
+    worker_session_token: sessionToken,
+    nonce: `accept-nonce-${input.runtime_job_id}`,
+    nonce_timestamp: later,
+    accepted_worker_session_digest: tokenHash(sessionToken),
+    accepted_session_public_key_id: 'session-key-1',
+    accepted_session_epoch: 1,
+    idempotency_key: `accept-${input.runtime_job_id}`,
+    request_digest: tokenHash(`accept-request-${input.runtime_job_id}`),
+    now: later,
+  });
+
+  return { input, accepted };
+};
+
+const createRunnerLaunchLease = async (
+  repository: DeliveryRepository,
+  overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexLaunchLease']>[0]> = {},
+) => {
+  const { profile, revision } = runtimeProfileRevision({
+    profile_id: 'runner-runtime-profile-run_execution',
+    id: 'runner-runtime-profile-revision-run_execution',
+  });
+  const { binding, version, secretPayload } = runtimeCredential(
+    {
+      id: 'runner-credential-binding-run_execution',
+      profile_id: profile.id,
+    },
+    { id: 'runner-credential-version-run_execution' },
+  );
+  await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
+  await repository.createCodexCredentialBindingWithVersion({
+    binding,
+    version,
+    secret_payload_json: secretPayload,
+  });
+  const { worker } = await seedRuntimeWorker(repository, {
+    worker_id: 'runner-worker-1',
+    worker_identity: 'runner-worker-identity-1',
+    bootstrap_token_id: 'runner-bootstrap-token-1',
+    bootstrap_token_raw: 'runner-bootstrap-token-raw',
+    session_token: 'runner-session-token-1',
+  });
+
+  return repository.createOrReplayCodexLaunchLease({
+    id: 'launch-lease-1',
+    lease_request_id: 'runner-launch-lease-request-1',
+    target: runExecutionTarget({ target_id: 'session-1' }),
+    worker_id: worker.id,
+    runtime_profile_revision_id: revision.id,
+    runtime_profile_digest: revision.profile_digest,
+    credential_binding_id: binding.id,
+    credential_binding_version_id: version.id,
+    credential_payload_digest: version.payload_digest,
+    docker_image_digest: revision.docker_image_digest,
+    network_policy_digest: codexCanonicalDigest(revision.network_policy),
+    network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+    launch_token: 'runner-launch-token-1',
+    launch_attempt: 99,
+    expires_at: runtimeExpiresAt,
+    now,
+    ...overrides,
   });
 };
+
+const publicLaunchLeaseStatus = async (
+  repository: DeliveryRepository,
+  launchLeaseId: string,
+): Promise<CodexLaunchLease | undefined> =>
+  repository.getCodexLaunchLeasePublicStatus({
+    launch_lease_id: launchLeaseId,
+  });
 
 const executionPlanRevisionInput: ExecutionPlanRevision = {
   id: 'implementation-plan-revision-1',
@@ -1503,12 +1984,20 @@ describe('Plan Item Workflow repository', () => {
       runner_expires_at: '2026-05-31T00:20:00.000Z',
       now: '2026-05-31T00:00:00.000Z',
     });
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:30:00.000Z',
+      now: '2026-05-31T00:01:00.000Z',
+    });
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       runner_worker_id: 'worker-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
-      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      runner_expires_at: '2026-05-31T00:30:00.000Z',
     });
 
     await repository.clearCodexSessionRunnerOwner({
@@ -1523,6 +2012,38 @@ describe('Plan Item Workflow repository', () => {
       runner_launch_lease_id: undefined,
       runner_runtime_job_id: undefined,
       runner_expires_at: undefined,
+    });
+  });
+
+  it('rejects overwriting a live session runner owner with a different tuple', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:00:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.markCodexSessionRunnerOwner({
+          session_id: 'session-1',
+          runner_worker_id: 'worker-2',
+          runner_launch_lease_id: 'launch-lease-2',
+          runner_runtime_job_id: 'runtime-job-2',
+          runner_expires_at: '2026-05-31T00:30:00.000Z',
+          now: '2026-05-31T00:10:00.000Z',
+        }),
+      'codex_session_runner_unavailable',
+    );
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
     });
   });
 
@@ -1615,6 +2136,7 @@ describe('Plan Item Workflow repository', () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
+    await createRunnerLaunchLease(repository);
     await repository.markCodexSessionRunnerOwner({
       session_id: 'session-1',
       runner_worker_id: 'worker-1',
@@ -1623,14 +2145,7 @@ describe('Plan Item Workflow repository', () => {
       runner_expires_at: '2026-05-31T00:20:00.000Z',
       now: '2026-05-31T00:00:00.000Z',
     });
-    seedAcceptedSessionRuntimeJob(repository, {
-      runtimeJobId: 'attached-runtime-job-1',
-      launchLeaseId: 'attached-launch-lease-1',
-      workerId: 'worker-1',
-      sessionId: 'session-1',
-      turnId: 'turn-1',
-      workflowId: 'workflow-1',
-    });
+    await createAcceptedSessionRuntimeJob(repository);
 
     const attached = await repository.attachCodexSessionRunnerRuntimeJob({
       session_id: 'session-1',
@@ -1656,14 +2171,45 @@ describe('Plan Item Workflow repository', () => {
       launch_materialization_digest: 'sha256:launch-materialization-live-runner',
       started_at: '2026-05-31T00:06:00.000Z',
     });
-    const launchLeases = (
-      repository as unknown as { codexLaunchLeases: Map<string, { lease: CodexLaunchLease }> }
-    ).codexLaunchLeases;
-    expect(launchLeases.get('attached-launch-lease-1')?.lease).toMatchObject({ status: 'materialized' });
+    await expect(publicLaunchLeaseStatus(repository, 'attached-launch-lease-1')).resolves.toMatchObject({ status: 'materialized' });
+    await expect(publicLaunchLeaseStatus(repository, 'launch-lease-1')).resolves.toMatchObject({ status: 'active' });
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
     });
+  });
+
+  it('rejects attaching a runtime job whose launch lease is the session runner launch lease', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await createAcceptedSessionRuntimeJob(repository);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'attached-launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:00:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.attachCodexSessionRunnerRuntimeJob({
+          session_id: 'session-1',
+          runner_launch_lease_id: 'attached-launch-lease-1',
+          runner_runtime_job_id: 'runtime-job-1',
+          attached_runtime_job_id: 'attached-runtime-job-1',
+          worker_id: 'worker-1',
+          runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
+          launch_materialization_digest: 'sha256:launch-materialization-live-runner',
+          idempotency_key: 'attach-runtime-job-1',
+          request_digest: 'sha256:attach-runtime-job-1',
+          now: '2026-05-31T00:06:00.000Z',
+        }),
+      'codex_runtime_job_unavailable',
+    );
+    await expect(publicLaunchLeaseStatus(repository, 'attached-launch-lease-1')).resolves.toMatchObject({ status: 'active' });
   });
 
   it('rejects saving a Codex Session with direct archived_at changes and preserves audit-owned state', async () => {

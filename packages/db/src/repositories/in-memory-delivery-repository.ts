@@ -3708,6 +3708,22 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
       );
     }
+    const hasOwner =
+      session.runner_worker_id !== undefined ||
+      session.runner_launch_lease_id !== undefined ||
+      session.runner_runtime_job_id !== undefined ||
+      session.runner_expires_at !== undefined;
+    const sameOwner =
+      session.runner_worker_id === input.runner_worker_id &&
+      session.runner_launch_lease_id === input.runner_launch_lease_id &&
+      session.runner_runtime_job_id === input.runner_runtime_job_id;
+    const ownerExpired = session.runner_expires_at !== undefined && session.runner_expires_at <= input.now;
+    if (hasOwner && !sameOwner && !ownerExpired) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
     const updated: CodexSession = {
       ...session,
       runner_worker_id: input.runner_worker_id,
@@ -3791,6 +3807,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (
       existing === undefined ||
       leaseRecord === undefined ||
+      existing.job.launch_lease_id === input.runner_launch_lease_id ||
       existing.job.worker_id !== input.worker_id ||
       existing.job.codex_session_id !== input.session_id ||
       existing.job.status === 'terminal' ||

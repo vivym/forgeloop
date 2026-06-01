@@ -1354,7 +1354,26 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         runnerExpiresAt: input.runner_expires_at,
         updatedAt: input.now,
       } as never)
-      .where(eq(codex_sessions.id, input.session_id))
+      .where(
+        and(
+          eq(codex_sessions.id, input.session_id),
+          or(
+            and(
+              isNull(codex_sessions.runnerWorkerId),
+              isNull(codex_sessions.runnerLaunchLeaseId),
+              isNull(codex_sessions.runnerRuntimeJobId),
+              isNull(codex_sessions.runnerExpiresAt),
+            ),
+            and(
+              eq(codex_sessions.runnerWorkerId, input.runner_worker_id),
+              eq(codex_sessions.runnerLaunchLeaseId, input.runner_launch_lease_id),
+              eq(codex_sessions.runnerRuntimeJobId, input.runner_runtime_job_id),
+              gt(codex_sessions.runnerExpiresAt, input.now),
+            ),
+            sql`${codex_sessions.runnerExpiresAt} <= ${input.now}`,
+          ),
+        ),
+      )
       .returning();
     if (row === undefined) {
       throw new DomainError(
@@ -1413,6 +1432,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async attachCodexSessionRunnerRuntimeJob(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
+    return this.db.transaction(async (tx) => {
+      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
+      return repository.attachCodexSessionRunnerRuntimeJobUnlocked(input);
+    });
+  }
+
+  private async attachCodexSessionRunnerRuntimeJobUnlocked(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
     const [sessionRow] = await this.db
       .select()
       .from(codex_sessions)
@@ -1447,6 +1473,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
     const existing = runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(existingRow as Record<string, unknown>));
     if (
+      existing.launch_lease_id === input.runner_launch_lease_id ||
       existing.worker_id !== input.worker_id ||
       existing.codex_session_id !== input.session_id ||
       existing.status === 'terminal' ||
