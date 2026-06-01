@@ -3861,6 +3861,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       materialization_request_hash: input.request_digest,
       materialized_at: input.now,
     };
+    const renewedSession: CodexSession = {
+      ...session,
+      runner_expires_at: input.runner_expires_at,
+      updated_at: input.now,
+    };
+    this.codexSessions.set(input.session_id, clone(renewedSession));
     this.codexRuntimeJobs.set(input.attached_runtime_job_id, clone(attached));
     this.codexLaunchLeases.set(existing.job.launch_lease_id, clone(materializedLease));
     return clone(attached.job);

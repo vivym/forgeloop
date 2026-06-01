@@ -2116,6 +2116,7 @@ describe('Plan Item Workflow repository', () => {
           session_id: 'session-1',
           runner_launch_lease_id: 'launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
+          runner_expires_at: '2026-05-31T00:30:00.000Z',
           attached_runtime_job_id: 'attached-runtime-job-1',
           worker_id: 'worker-1',
           runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
@@ -2151,6 +2152,7 @@ describe('Plan Item Workflow repository', () => {
       session_id: 'session-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:30:00.000Z',
       attached_runtime_job_id: 'attached-runtime-job-1',
       worker_id: 'worker-1',
       runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
@@ -2176,6 +2178,7 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:30:00.000Z',
     });
   });
 
@@ -2199,6 +2202,7 @@ describe('Plan Item Workflow repository', () => {
           session_id: 'session-1',
           runner_launch_lease_id: 'attached-launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
+          runner_expires_at: '2026-05-31T00:30:00.000Z',
           attached_runtime_job_id: 'attached-runtime-job-1',
           worker_id: 'worker-1',
           runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
@@ -5597,6 +5601,67 @@ describe('Plan Item Workflow repository', () => {
 });
 
 describe('Plan Item Workflow Drizzle repository critical paths', () => {
+  drizzleTest('persists, renews, and clears session-bound runner ownership', async () => {
+    const repository = await createDrizzleWorkflowRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(drizzleWorkflowInput);
+
+    await expect(
+      repository.markCodexSessionRunnerOwner({
+        session_id: uuidFixture.sessionId,
+        runner_worker_id: '10000000-0000-4000-8000-000000000030',
+        runner_launch_lease_id: '10000000-0000-4000-8000-000000000031',
+        runner_runtime_job_id: '10000000-0000-4000-8000-000000000032',
+        runner_expires_at: '2026-05-31T00:20:00.000Z',
+        now,
+      }),
+    ).resolves.toMatchObject({
+      runner_worker_id: '10000000-0000-4000-8000-000000000030',
+      runner_launch_lease_id: '10000000-0000-4000-8000-000000000031',
+      runner_runtime_job_id: '10000000-0000-4000-8000-000000000032',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.markCodexSessionRunnerOwner({
+          session_id: uuidFixture.sessionId,
+          runner_worker_id: '10000000-0000-4000-8000-000000000033',
+          runner_launch_lease_id: '10000000-0000-4000-8000-000000000034',
+          runner_runtime_job_id: '10000000-0000-4000-8000-000000000035',
+          runner_expires_at: '2026-05-31T00:30:00.000Z',
+          now: '2026-05-31T00:10:00.000Z',
+        }),
+      'codex_session_runner_unavailable',
+    );
+
+    await expect(
+      repository.renewCodexSessionRunnerOwner({
+        session_id: uuidFixture.sessionId,
+        runner_worker_id: '10000000-0000-4000-8000-000000000030',
+        runner_launch_lease_id: '10000000-0000-4000-8000-000000000031',
+        runner_runtime_job_id: '10000000-0000-4000-8000-000000000032',
+        runner_expires_at: '2026-05-31T00:40:00.000Z',
+        now: '2026-05-31T00:10:00.000Z',
+      }),
+    ).resolves.toMatchObject({
+      runner_expires_at: '2026-05-31T00:40:00.000Z',
+    });
+
+    await expect(
+      repository.clearCodexSessionRunnerOwner({
+        session_id: uuidFixture.sessionId,
+        runner_launch_lease_id: '10000000-0000-4000-8000-000000000031',
+        terminal_reason_code: 'succeeded',
+        now: '2026-05-31T00:11:00.000Z',
+      }),
+    ).resolves.toMatchObject({
+      runner_worker_id: undefined,
+      runner_launch_lease_id: undefined,
+      runner_runtime_job_id: undefined,
+      runner_expires_at: undefined,
+    });
+  });
+
   drizzleTest('serializes lease renewal on the Codex session object lock', async () => {
     if (drizzleDatabaseUrl === undefined) {
       throw new Error('Expected FORGELOOP_TEST_DATABASE_URL or FORGELOOP_DATABASE_URL');

@@ -376,6 +376,7 @@ export interface AttachCodexSessionRunnerRuntimeJobInput {
   session_id: string;
   runner_launch_lease_id: string;
   runner_runtime_job_id: string;
+  runner_expires_at: string;
   attached_runtime_job_id: string;
   worker_id: string;
   runtime_evidence_digest: string;

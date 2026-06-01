@@ -1440,8 +1440,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   private async attachCodexSessionRunnerRuntimeJobUnlocked(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
     const [sessionRow] = await this.db
-      .select()
-      .from(codex_sessions)
+      .update(codex_sessions)
+      .set({
+        runnerExpiresAt: input.runner_expires_at,
+        updatedAt: input.now,
+      } as never)
       .where(
         and(
           eq(codex_sessions.id, input.session_id),
@@ -1451,7 +1454,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           gt(codex_sessions.runnerExpiresAt, input.now),
         ),
       )
-      .limit(1);
+      .returning();
     const session = sessionRow === undefined ? undefined : fromDbRecord<CodexSession>(sessionRow as Record<string, unknown>);
     if (session === undefined || session.runner_expires_at === undefined) {
       throw new DomainError(
