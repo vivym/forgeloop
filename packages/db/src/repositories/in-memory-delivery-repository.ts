@@ -108,6 +108,7 @@ import {
   validateCodexLaunchTargetKind,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
+  validateCodexSessionRuntimeContext,
   isActiveRunSessionStatus,
   parseInternalArtifactRef,
   isOpenReviewPacketStatus,
@@ -389,6 +390,26 @@ const isCodexSessionResumeRuntimeJobInput = (inputJson: Record<string, unknown>)
   }
   const continuation = context.continuation;
   return isRecord(continuation) && continuation.kind === 'resume_thread';
+};
+
+const codexSessionResumeRuntimeJobMatchesAttach = (
+  job: CodexRuntimeJob,
+  input: AttachCodexSessionRunnerRuntimeJobInput,
+): boolean => {
+  try {
+    const context = validateCodexSessionRuntimeContext(job.input_json.codex_session_runtime_context);
+    return (
+      context.continuation.kind === 'resume_thread' &&
+      context.codex_session_id === input.session_id &&
+      context.codex_session_turn_id === job.codex_session_turn_id &&
+      context.worker_id === input.worker_id &&
+      context.worker_session_digest === job.accepted_worker_session_digest &&
+      context.runner_runtime_job_id === input.runner_runtime_job_id &&
+      context.runner_launch_lease_id === input.runner_launch_lease_id
+    );
+  } catch {
+    return false;
+  }
 };
 
 const changedFields = (base: unknown, compare: unknown): string[] => {
@@ -3831,6 +3852,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       existing.job.launch_lease_id === input.runner_launch_lease_id ||
       existing.job.worker_id !== input.worker_id ||
       existing.job.codex_session_id !== input.session_id ||
+      !codexSessionResumeRuntimeJobMatchesAttach(existing.job, input) ||
       existing.job.status === 'terminal' ||
       existing.job.cancel_requested_at !== undefined ||
       existing.job.expires_at <= input.now
@@ -3850,6 +3872,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         existing.job.runtime_evidence_digest === input.runtime_evidence_digest &&
         existing.job.launch_materialization_digest === input.launch_materialization_digest
       ) {
+        const renewedSession: CodexSession = {
+          ...session,
+          runner_expires_at: input.runner_expires_at,
+          updated_at: input.now,
+        };
+        this.codexSessions.set(input.session_id, clone(renewedSession));
         return clone(existing.job);
       }
       throw new DomainError(

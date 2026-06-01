@@ -109,6 +109,7 @@ import {
   validateCodexRuntimeJobArtifactIntake,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
+  validateCodexSessionRuntimeContext,
   isActiveRunSessionStatus,
   isWorkItemAutomationTerminal,
   normalizeAutomationCapabilities,
@@ -461,6 +462,26 @@ const isCodexSessionResumeRuntimeJobInput = (inputJson: Record<string, unknown>)
   }
   const continuation = context.continuation;
   return isRecord(continuation) && continuation.kind === 'resume_thread';
+};
+
+const codexSessionResumeRuntimeJobMatchesAttach = (
+  job: CodexRuntimeJob,
+  input: AttachCodexSessionRunnerRuntimeJobInput,
+): boolean => {
+  try {
+    const context = validateCodexSessionRuntimeContext(job.input_json.codex_session_runtime_context);
+    return (
+      context.continuation.kind === 'resume_thread' &&
+      context.codex_session_id === input.session_id &&
+      context.codex_session_turn_id === job.codex_session_turn_id &&
+      context.worker_id === input.worker_id &&
+      context.worker_session_digest === job.accepted_worker_session_digest &&
+      context.runner_runtime_job_id === input.runner_runtime_job_id &&
+      context.runner_launch_lease_id === input.runner_launch_lease_id
+    );
+  } catch {
+    return false;
+  }
 };
 
 const changedFields = (base: unknown, compare: unknown): string[] => {
@@ -1488,6 +1509,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       existing.launch_lease_id === input.runner_launch_lease_id ||
       existing.worker_id !== input.worker_id ||
       existing.codex_session_id !== input.session_id ||
+      !codexSessionResumeRuntimeJobMatchesAttach(existing, input) ||
       existing.status === 'terminal' ||
       existing.cancel_requested_at !== undefined ||
       existing.expires_at <= input.now
