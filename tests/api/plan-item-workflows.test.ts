@@ -19,6 +19,14 @@ import {
   startWorkflow,
 } from '../helpers/plan-item-workflow-fixtures';
 
+const expectHttpStatus =
+  (expectedStatus: number) =>
+  (response: { status: number; body: unknown }): void => {
+    if (response.status !== expectedStatus) {
+      throw new Error(`expected ${expectedStatus}, got ${response.status}: ${JSON.stringify(response.body)}`);
+    }
+  };
+
 async function seedLegacyCurrentPlanForWorkflowOwnedItem(
   repository: DeliveryRepository,
   seeded: Awaited<ReturnType<typeof seedWorkflowWithApprovedImplementationPlan>>,
@@ -432,7 +440,7 @@ describe('Plan Item Workflow API', () => {
         `/plan-item-workflows/${seeded.workflow.id}/implementation-plan-revisions/${implementationPlanRevision.id}/approve`,
       )
       .send({ actor_id: seeded.ids.actorTech, reason: 'Approve Implementation Plan for execution.' })
-      .expect(201);
+      .expect(expectHttpStatus(201));
 
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const transitions = await repository.listPlanItemWorkflowTransitions(seeded.workflow.id);
@@ -503,7 +511,7 @@ describe('Plan Item Workflow API', () => {
         approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
         reason: 'Implementation Plan reviewed and ready for execution.',
       })
-      .expect(201);
+      .expect(expectHttpStatus(201));
 
     expect(response.body).toMatchObject({
       status: 'execution_ready',
@@ -727,7 +735,7 @@ describe('Plan Item Workflow API', () => {
         approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
         reason: 'Execution readiness approved.',
       })
-      .expect(201);
+      .expect(expectHttpStatus(201));
 
     const response = await request(server)
       .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
@@ -871,7 +879,7 @@ describe('Plan Item Workflow API', () => {
         approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
         reason: 'Execution readiness approved.',
       })
-      .expect(201);
+      .expect(expectHttpStatus(201));
     const started = (
       await request(server)
         .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
@@ -934,7 +942,7 @@ describe('Plan Item Workflow API', () => {
         approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
         reason: 'Execution readiness approved.',
       })
-      .expect(201);
+      .expect(expectHttpStatus(201));
     await request(server)
       .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
       .send({ actor_id: seeded.ids.actorTech })
