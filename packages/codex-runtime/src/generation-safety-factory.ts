@@ -11,6 +11,7 @@ export interface CreateCodexGenerationRuntimeSafetyInput {
   repoIds: string[];
   artifactRoot: string | undefined;
   workspaceRoot?: string;
+  trustedContinuation?: 'session_bound';
   policyDigests: Record<string, string>;
 }
 
@@ -41,6 +42,7 @@ export const createCodexGenerationRuntimeSafety = (
     repoIds: [...input.repoIds],
     artifactRoot,
     ...(input.workspaceRoot === undefined ? {} : { workspaceRoot: input.workspaceRoot }),
+    ...(input.trustedContinuation === 'session_bound' ? { allowThreadResume: true } : {}),
     policyDigests: { ...input.policyDigests },
     async createGenerationLease(leaseInput): Promise<GenerationLease> {
       if (
@@ -64,6 +66,9 @@ export const createCodexGenerationRuntimeSafety = (
       return { lease_id: `gen_lease_${randomUUID()}`, expires_at: leaseInput.expiresAt };
     },
     async consumeGenerationCommand({ method }): Promise<void> {
+      if (method === 'thread/resume' && input.trustedContinuation === 'session_bound') {
+        return;
+      }
       if (!allowedGenerationCommands.has(method)) {
         throw new Error('codex_generation_command_invalid');
       }

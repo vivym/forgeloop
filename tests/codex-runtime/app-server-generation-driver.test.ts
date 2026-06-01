@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   AppServerGenerationDriver,
+  codexThreadIdDigest,
   createCodexGenerationRuntimeSafety,
   effectiveConfigFromResponse,
   parseCodexAppServerEndpoint,
@@ -121,6 +122,228 @@ describe('AppServerGenerationDriver', () => {
       sandboxPolicy: { type: 'readOnly', networkAccess: false },
       threadId: 'thread-1',
     });
+  });
+
+  it('returns codex thread metadata with digest and app-server turn id after first-turn start', async () => {
+    const transport: CodexAppServerTransport = {
+      async request(method) {
+        if (method === 'thread/start') {
+          return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } };
+        }
+        if (method === 'turn/start') {
+          return { turnId: 'turn-1' };
+        }
+        return {};
+      },
+      notifications: async function* () {
+        yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"ok"}' };
+        yield { type: 'turn_completed', status: 'completed' };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: fakeSafety() });
+
+    const result = await driver.generate({ taskKind: 'plan_draft', prompt: '{}', outputSchemaVersion: 'plan_draft.v1' });
+
+    expect(result.codexThread).toEqual({
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+      app_server_turn_id: 'turn-1',
+    });
+  });
+
+  it('resumes later turns before turn start without starting a new thread', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/resume') {
+        return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } };
+      }
+      if (method === 'turn/start') {
+        return { turnId: 'turn-2' };
+      }
+      return {};
+    });
+    const transport: CodexAppServerTransport = {
+      request,
+      notifications: async function* () {
+        yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"ok"}' };
+        yield { type: 'turn_completed', status: 'completed' };
+      },
+    };
+    const driver = new AppServerGenerationDriver({ transport, runtimeSafety: { ...fakeSafety(), allowThreadResume: true } });
+
+    const result = await driver.generate({
+      taskKind: 'plan_draft',
+      prompt: '{}',
+      outputSchemaVersion: 'plan_draft.v1',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+      },
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/resume', 'turn/start']);
+    expect(request).toHaveBeenNthCalledWith(1, 'thread/resume', {
+      threadId: 'thread-1',
+      excludeTurns: true,
+      persistExtendedHistory: false,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, 'turn/start', {
+      approvalPolicy: 'never',
+      input: [{ type: 'text', text: '{}', text_elements: [] }],
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+      threadId: 'thread-1',
+    });
+    expect(result.codexThread).toEqual({
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+      app_server_turn_id: 'turn-2',
+    });
+  });
+
+  it('rejects mismatched resumed thread ids without falling back to thread start', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/resume') {
+        return { threadId: 'thread-2', effectiveConfig: { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } };
+      }
+      return {};
+    });
+    const driver = new AppServerGenerationDriver({
+      transport: { request },
+      runtimeSafety: { ...fakeSafety(), allowThreadResume: true },
+    });
+
+    await expect(
+      driver.generate({
+        taskKind: 'plan_draft',
+        prompt: '{}',
+        outputSchemaVersion: 'plan_draft.v1',
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: 'thread-1',
+          codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+        },
+      }),
+    ).rejects.toThrow(/codex_app_server_thread_mismatch/);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/resume']);
+  });
+
+  it('rejects missing resumed thread ids without falling back to thread start', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/resume') {
+        return { effectiveConfig: { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } };
+      }
+      return {};
+    });
+    const driver = new AppServerGenerationDriver({
+      transport: { request },
+      runtimeSafety: { ...fakeSafety(), allowThreadResume: true },
+    });
+
+    await expect(
+      driver.generate({
+        taskKind: 'plan_draft',
+        prompt: '{}',
+        outputSchemaVersion: 'plan_draft.v1',
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: 'thread-1',
+          codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+        },
+      }),
+    ).rejects.toThrow(/codex_app_server_thread_id_missing/);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/resume']);
+  });
+
+  it('maps thread resume transport failures without falling back to thread start', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/resume') {
+        throw new Error('socket reset');
+      }
+      return {};
+    });
+    const driver = new AppServerGenerationDriver({
+      transport: { request },
+      runtimeSafety: { ...fakeSafety(), allowThreadResume: true },
+    });
+
+    await expect(
+      driver.generate({
+        taskKind: 'plan_draft',
+        prompt: '{}',
+        outputSchemaVersion: 'plan_draft.v1',
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: 'thread-1',
+          codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+        },
+      }),
+    ).rejects.toThrow(/codex_app_server_resume_failed/);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/resume']);
+  });
+
+  it('retries later-turn stream failures by resuming again without falling back to thread start', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/resume') {
+        return { threadId: 'thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } };
+      }
+      if (method === 'turn/start') {
+        return { turnId: `turn-${request.mock.calls.filter(([calledMethod]) => calledMethod === 'turn/start').length}` };
+      }
+      return { acknowledged: true };
+    });
+    let notificationStreams = 0;
+    const transport: CodexAppServerTransport = {
+      request,
+      notifications: async function* () {
+        notificationStreams += 1;
+        if (notificationStreams === 1) {
+          yield {
+            method: 'error',
+            params: {
+              error: {
+                message: 'stream disconnected',
+                codexErrorInfo: 'responseStreamDisconnected',
+              },
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              willRetry: false,
+            },
+          };
+          yield {
+            method: 'turn/completed',
+            params: {
+              turn: { id: 'turn-1', status: 'failed' },
+            },
+          };
+          return;
+        }
+        yield { type: 'assistant_message_delta', delta: '{"schema_version":"plan_draft.v1","summary":"ok"}' };
+        yield { type: 'turn_completed', status: 'completed' };
+      },
+      async close() {},
+    };
+    const driver = new AppServerGenerationDriver({
+      transport,
+      runtimeSafety: { ...fakeSafety(), allowThreadResume: true },
+      maxTurnAttempts: 2,
+    });
+
+    const result = await driver.generate({
+      taskKind: 'plan_draft',
+      prompt: '{}',
+      outputSchemaVersion: 'plan_draft.v1',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+      },
+    });
+
+    expect(result.extractedJson).toMatchObject({ schema_version: 'plan_draft.v1' });
+    const generationRequests = request.mock.calls
+      .map(([method]) => method)
+      .filter((method) => method === 'thread/resume' || method === 'turn/start' || method === 'thread/start');
+    expect(generationRequests).toEqual(['thread/resume', 'turn/start', 'thread/resume', 'turn/start']);
   });
 
   it('sends a complete bare app-server output schema when one is provided', async () => {
@@ -1214,5 +1437,25 @@ describe('app-server endpoint and generation safety contracts', () => {
         now: '2026-05-19T00:01:00.000Z',
       }),
     ).rejects.toThrow(/codex_generation_command_invalid/);
+
+    const sessionBoundSafety = createCodexGenerationRuntimeSafety({
+      taskKind: 'plan_draft',
+      actionRunId: 'action-1',
+      projectId: 'project-1',
+      repoIds: ['repo-main'],
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      policyDigests: { 'repo-main': 'sha256:policy' },
+      trustedContinuation: 'session_bound',
+    });
+    expect(sessionBoundSafety.allowThreadResume).toBe(true);
+    await expect(
+      sessionBoundSafety.consumeGenerationCommand({
+        lease: { lease_id: 'lease-1', expires_at: '2026-05-19T00:05:00.000Z' },
+        method: 'thread/resume',
+        commandDigest: 'sha256:resume',
+        nonce: 'nonce-3',
+        now: '2026-05-19T00:01:00.000Z',
+      }),
+    ).resolves.toBeUndefined();
   });
 });
