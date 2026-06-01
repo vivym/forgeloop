@@ -115,6 +115,10 @@ export interface CodexSession {
   credential_binding_version_id: string;
   active_lease_id?: string;
   lease_epoch: number;
+  runner_worker_id?: string | undefined;
+  runner_launch_lease_id?: string | undefined;
+  runner_runtime_job_id?: string | undefined;
+  runner_expires_at?: IsoDateTime | undefined;
   forked_from_session_id?: string;
   forked_from_turn_id?: string;
   forked_from_snapshot_id?: string;

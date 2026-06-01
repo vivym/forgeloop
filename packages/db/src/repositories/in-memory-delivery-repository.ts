@@ -170,6 +170,7 @@ import type {
   GetCodexRuntimeJobArtifactByInternalRefInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
+  MarkCodexSessionRunnerOwnerInput,
   MarkAutomationActionGatePendingInput,
   MaterializeCodexRuntimeJobInput,
   MaterializeCodexLaunchLeaseInput,
@@ -185,6 +186,7 @@ import type {
   ResolveCodexRuntimeForLaunchInput,
   RecoverCodexSessionLeaseForClaimInput,
   RenewCodexSessionLeaseInput,
+  RenewCodexSessionRunnerOwnerInput,
   RevokeCodexLaunchLeaseInput,
   RuntimeSnapshotRepositoryData,
   RuntimeSnapshotTargetRow,
@@ -212,7 +214,9 @@ import type {
   BoundaryDecisionRecord,
   BoundaryQuestionRecord,
   BoundaryRoundRecord,
+  AttachCodexSessionRunnerRuntimeJobInput,
   ClaimCodexSessionLeaseInput,
+  ClearCodexSessionRunnerOwnerInput,
   ApplyPlanItemWorkflowTransitionInput,
   SelectActiveCodexSessionForkInput,
   WorkflowRepositoryEvidenceInput,
@@ -3617,6 +3621,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       existingSession.codex_thread_id_digest !== session.codex_thread_id_digest ||
       existingSession.active_lease_id !== session.active_lease_id ||
       existingSession.lease_epoch !== session.lease_epoch ||
+      existingSession.runner_worker_id !== session.runner_worker_id ||
+      existingSession.runner_launch_lease_id !== session.runner_launch_lease_id ||
+      existingSession.runner_runtime_job_id !== session.runner_runtime_job_id ||
+      existingSession.runner_expires_at !== session.runner_expires_at ||
       existingSession.archived_at !== session.archived_at
     ) {
       throw new DomainError(
@@ -3690,6 +3698,155 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined> {
     return this.cloneMaybe(this.codexSessionTurns.get(id));
+  }
+
+  async markCodexSessionRunnerOwner(input: MarkCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    const session = this.codexSessions.get(input.session_id);
+    if (session === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    const updated: CodexSession = {
+      ...session,
+      runner_worker_id: input.runner_worker_id,
+      runner_launch_lease_id: input.runner_launch_lease_id,
+      runner_runtime_job_id: input.runner_runtime_job_id,
+      runner_expires_at: input.runner_expires_at,
+      updated_at: input.now,
+    };
+    this.codexSessions.set(session.id, clone(updated));
+    return clone(updated);
+  }
+
+  async clearCodexSessionRunnerOwner(input: ClearCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    const session = this.codexSessions.get(input.session_id);
+    if (session === undefined || session.runner_launch_lease_id !== input.runner_launch_lease_id) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    const {
+      runner_worker_id: _runnerWorkerId,
+      runner_launch_lease_id: _runnerLaunchLeaseId,
+      runner_runtime_job_id: _runnerRuntimeJobId,
+      runner_expires_at: _runnerExpiresAt,
+      ...sessionWithoutRunner
+    } = session;
+    const updated: CodexSession = {
+      ...sessionWithoutRunner,
+      runner_worker_id: undefined,
+      runner_launch_lease_id: undefined,
+      runner_runtime_job_id: undefined,
+      runner_expires_at: undefined,
+      updated_at: input.now,
+    };
+    this.codexSessions.set(session.id, clone(updated));
+    return clone(updated);
+  }
+
+  async renewCodexSessionRunnerOwner(input: RenewCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    const session = this.codexSessions.get(input.session_id);
+    if (
+      session === undefined ||
+      session.runner_worker_id !== input.runner_worker_id ||
+      session.runner_launch_lease_id !== input.runner_launch_lease_id ||
+      session.runner_runtime_job_id !== input.runner_runtime_job_id ||
+      session.runner_expires_at === undefined ||
+      session.runner_expires_at <= input.now
+    ) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    const updated: CodexSession = {
+      ...session,
+      runner_expires_at: input.runner_expires_at,
+      updated_at: input.now,
+    };
+    this.codexSessions.set(session.id, clone(updated));
+    return clone(updated);
+  }
+
+  async attachCodexSessionRunnerRuntimeJob(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
+    const session = this.codexSessions.get(input.session_id);
+    if (
+      session === undefined ||
+      session.runner_worker_id !== input.worker_id ||
+      session.runner_launch_lease_id !== input.runner_launch_lease_id ||
+      session.runner_runtime_job_id !== input.runner_runtime_job_id ||
+      session.runner_expires_at === undefined ||
+      session.runner_expires_at <= input.now
+    ) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    const existing = this.codexRuntimeJobs.get(input.attached_runtime_job_id);
+    const leaseRecord = existing === undefined ? undefined : this.codexLaunchLeases.get(existing.job.launch_lease_id);
+    if (
+      existing === undefined ||
+      leaseRecord === undefined ||
+      existing.job.worker_id !== input.worker_id ||
+      existing.job.codex_session_id !== input.session_id ||
+      existing.job.status === 'terminal' ||
+      existing.job.cancel_requested_at !== undefined ||
+      existing.job.expires_at <= input.now
+    ) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    if (existing.job.status === 'running') {
+      if (
+        existing.job.status === 'running' &&
+        existing.job.codex_session_id === input.session_id &&
+        existing.job.worker_id === input.worker_id &&
+        existing.job.start_idempotency_key === input.idempotency_key &&
+        existing.job.start_request_digest === input.request_digest &&
+        existing.job.runtime_evidence_digest === input.runtime_evidence_digest &&
+        existing.job.launch_materialization_digest === input.launch_materialization_digest
+      ) {
+        return clone(existing.job);
+      }
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    if (existing.job.status !== 'accepted' || leaseRecord.lease.status !== 'active' || leaseRecord.lease.expires_at <= input.now) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    const attached: CodexRuntimeJobPrivateRecord = {
+      ...existing,
+      job: {
+        ...existing.job,
+        status: 'running',
+        start_idempotency_key: input.idempotency_key,
+        start_request_digest: input.request_digest,
+        runtime_evidence_digest: input.runtime_evidence_digest,
+        launch_materialization_digest: input.launch_materialization_digest,
+        started_at: input.now,
+        updated_at: input.now,
+      },
+    };
+    const materializedLease: CodexLaunchLeasePrivateRecord = {
+      ...leaseRecord,
+      lease: { ...leaseRecord.lease, status: 'materialized', materialized_at: input.now },
+      materialization_request_hash: input.request_digest,
+      materialized_at: input.now,
+    };
+    this.codexRuntimeJobs.set(input.attached_runtime_job_id, clone(attached));
+    this.codexLaunchLeases.set(existing.job.launch_lease_id, clone(materializedLease));
+    return clone(attached.job);
   }
 
   async saveCodexSessionTurn(turn: CodexSessionTurn): Promise<void> {

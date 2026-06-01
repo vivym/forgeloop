@@ -249,6 +249,7 @@ import type {
   GetCodexRuntimeJobArtifactByInternalRefInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
+  MarkCodexSessionRunnerOwnerInput,
   MarkAutomationActionGatePendingInput,
   MaterializeCodexRuntimeJobInput,
   MaterializeCodexLaunchLeaseInput,
@@ -293,10 +294,13 @@ import type {
   CreatePlanItemWorkflowWithInitialSessionInput,
   RecoverCodexSessionLeaseForClaimInput,
   RenewCodexSessionLeaseInput,
+  RenewCodexSessionRunnerOwnerInput,
   SelectActiveCodexSessionForkInput,
   TerminalizeCodexSessionTurnInput,
   WorkflowRepositoryEvidenceInput,
   BoundaryRoundRecord,
+  AttachCodexSessionRunnerRuntimeJobInput,
+  ClearCodexSessionRunnerOwnerInput,
 } from './delivery-repository';
 import {
   assertInternalArtifactObjectInput,
@@ -1272,6 +1276,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       existingSession.codex_thread_id_digest !== session.codex_thread_id_digest ||
       existingSession.active_lease_id !== session.active_lease_id ||
       existingSession.lease_epoch !== session.lease_epoch ||
+      existingSession.runner_worker_id !== session.runner_worker_id ||
+      existingSession.runner_launch_lease_id !== session.runner_launch_lease_id ||
+      existingSession.runner_runtime_job_id !== session.runner_runtime_job_id ||
+      existingSession.runner_expires_at !== session.runner_expires_at ||
       existingSession.archived_at !== session.archived_at
     ) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${session.id} service-owned state fields cannot change`);
@@ -1334,6 +1342,182 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined> {
     return this.getById(codex_session_turns, codex_session_turns.id, id);
+  }
+
+  async markCodexSessionRunnerOwner(input: MarkCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    const [row] = await this.db
+      .update(codex_sessions)
+      .set({
+        runnerWorkerId: input.runner_worker_id,
+        runnerLaunchLeaseId: input.runner_launch_lease_id,
+        runnerRuntimeJobId: input.runner_runtime_job_id,
+        runnerExpiresAt: input.runner_expires_at,
+        updatedAt: input.now,
+      } as never)
+      .where(eq(codex_sessions.id, input.session_id))
+      .returning();
+    if (row === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    return fromDbRecord<CodexSession>(row as Record<string, unknown>);
+  }
+
+  async clearCodexSessionRunnerOwner(input: ClearCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    const [row] = await this.db
+      .update(codex_sessions)
+      .set({
+        runnerWorkerId: null,
+        runnerLaunchLeaseId: null,
+        runnerRuntimeJobId: null,
+        runnerExpiresAt: null,
+        updatedAt: input.now,
+      } as never)
+      .where(and(eq(codex_sessions.id, input.session_id), eq(codex_sessions.runnerLaunchLeaseId, input.runner_launch_lease_id)))
+      .returning();
+    if (row === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    return fromDbRecord<CodexSession>(row as Record<string, unknown>);
+  }
+
+  async renewCodexSessionRunnerOwner(input: RenewCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    const [row] = await this.db
+      .update(codex_sessions)
+      .set({
+        runnerExpiresAt: input.runner_expires_at,
+        updatedAt: input.now,
+      } as never)
+      .where(
+        and(
+          eq(codex_sessions.id, input.session_id),
+          eq(codex_sessions.runnerWorkerId, input.runner_worker_id),
+          eq(codex_sessions.runnerLaunchLeaseId, input.runner_launch_lease_id),
+          eq(codex_sessions.runnerRuntimeJobId, input.runner_runtime_job_id),
+          gt(codex_sessions.runnerExpiresAt, input.now),
+        ),
+      )
+      .returning();
+    if (row === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    return fromDbRecord<CodexSession>(row as Record<string, unknown>);
+  }
+
+  async attachCodexSessionRunnerRuntimeJob(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
+    const [sessionRow] = await this.db
+      .select()
+      .from(codex_sessions)
+      .where(
+        and(
+          eq(codex_sessions.id, input.session_id),
+          eq(codex_sessions.runnerWorkerId, input.worker_id),
+          eq(codex_sessions.runnerLaunchLeaseId, input.runner_launch_lease_id),
+          eq(codex_sessions.runnerRuntimeJobId, input.runner_runtime_job_id),
+          gt(codex_sessions.runnerExpiresAt, input.now),
+        ),
+      )
+      .limit(1);
+    const session = sessionRow === undefined ? undefined : fromDbRecord<CodexSession>(sessionRow as Record<string, unknown>);
+    if (session === undefined || session.runner_expires_at === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+
+    const [existingRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.attached_runtime_job_id))
+      .limit(1);
+    if (existingRow === undefined) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    const existing = runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(existingRow as Record<string, unknown>));
+    if (
+      existing.worker_id !== input.worker_id ||
+      existing.codex_session_id !== input.session_id ||
+      existing.status === 'terminal' ||
+      existing.cancel_requested_at !== undefined ||
+      existing.expires_at <= input.now
+    ) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    const [leaseRow] = await this.db
+      .select()
+      .from(codex_launch_leases)
+      .where(eq(codex_launch_leases.id, existing.launch_lease_id))
+      .limit(1);
+    const lease = leaseRow === undefined ? undefined : fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>);
+    if (lease === undefined) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    if (existing.status === 'running') {
+      if (
+        existing.status === 'running' &&
+        existing.codex_session_id === input.session_id &&
+        existing.worker_id === input.worker_id &&
+        existing.start_idempotency_key === input.idempotency_key &&
+        existing.start_request_digest === input.request_digest &&
+        existing.runtime_evidence_digest === input.runtime_evidence_digest &&
+        existing.launch_materialization_digest === input.launch_materialization_digest
+      ) {
+        return existing;
+      }
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    if (existing.status !== 'accepted' || lease.status !== 'active' || lease.expires_at <= input.now) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    const [jobRow] = await this.db
+      .update(codex_runtime_jobs)
+      .set({
+        status: 'running',
+        startIdempotencyKey: input.idempotency_key,
+        startRequestDigest: input.request_digest,
+        runtimeEvidenceDigest: input.runtime_evidence_digest,
+        launchMaterializationDigest: input.launch_materialization_digest,
+        startedAt: input.now,
+        updatedAt: input.now,
+      } as never)
+      .where(and(eq(codex_runtime_jobs.id, input.attached_runtime_job_id), eq(codex_runtime_jobs.status, 'accepted')))
+      .returning();
+    const [leaseUpdateRow] = await this.db
+      .update(codex_launch_leases)
+      .set({ status: 'materialized', materializationRequestHash: input.request_digest, materializedAt: input.now } as never)
+      .where(and(eq(codex_launch_leases.id, existing.launch_lease_id), eq(codex_launch_leases.status, 'active')))
+      .returning();
+    if (jobRow === undefined || leaseUpdateRow === undefined) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    return runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>));
   }
 
   async saveCodexSessionTurn(turn: CodexSessionTurn): Promise<void> {

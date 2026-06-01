@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DomainError,
+  type CodexLaunchLease,
+  type CodexRuntimeJob,
   type BoundarySummaryRevision,
   type DevelopmentPlan,
   type DevelopmentPlanItem,
@@ -165,6 +167,113 @@ const readinessRecordInput = {
   created_by_actor_id: 'actor-tech',
   created_at: now,
 } as const;
+
+const seedAcceptedSessionRuntimeJob = (
+  repository: InMemoryDeliveryRepository,
+  input: {
+    runtimeJobId: string;
+    launchLeaseId: string;
+    workerId: string;
+    sessionId: string;
+    turnId: string;
+    workflowId: string;
+  },
+) => {
+  const launchLeases = (
+    repository as unknown as {
+      codexLaunchLeases: Map<
+        string,
+        {
+          lease: CodexLaunchLease;
+          lease_request_id: string;
+          runtime_profile_digest: string;
+          credential_binding_id: string;
+          credential_binding_version_id: string;
+          credential_payload_digest: string;
+          docker_image_digest: string;
+          network_policy_digest: string;
+          network_provider_config_digest?: string;
+        }
+      >;
+    }
+  ).codexLaunchLeases;
+  const runtimeJobs = (
+    repository as unknown as {
+      codexRuntimeJobs: Map<
+        string,
+        {
+          job: CodexRuntimeJob;
+          runtime_profile_digest: string;
+          credential_binding_id: string;
+          credential_binding_version_id: string;
+          credential_payload_digest: string;
+          docker_image_digest: string;
+          network_policy_digest: string;
+          network_provider_config_digest?: string;
+          envelope_id: string;
+          envelope_digest: string;
+        }
+      >;
+    }
+  ).codexRuntimeJobs;
+
+  launchLeases.set(input.launchLeaseId, {
+    lease: {
+      id: input.launchLeaseId,
+      target: {
+        target_type: 'run_session',
+        target_id: input.sessionId,
+        target_kind: 'run_execution',
+        project_id: 'project-1',
+      },
+      launch_attempt: 1,
+      profile_revision_id: 'profile-revision-1',
+      worker_id: input.workerId,
+      status: 'active',
+      lease_token_hash: 'sha256:attached-launch-token',
+      created_at: '2026-05-31T00:04:00.000Z',
+      expires_at: '2026-05-31T00:20:00.000Z',
+    },
+    lease_request_id: `${input.launchLeaseId}:request`,
+    runtime_profile_digest: 'sha256:profile',
+    credential_binding_id: 'credential-1',
+    credential_binding_version_id: 'credential-version-1',
+    credential_payload_digest: 'sha256:credential',
+    docker_image_digest: 'sha256:docker',
+    network_policy_digest: 'sha256:network',
+  });
+  runtimeJobs.set(input.runtimeJobId, {
+    job: {
+      id: input.runtimeJobId,
+      job_request_id: `${input.runtimeJobId}:request`,
+      target_type: 'run_session',
+      target_id: input.sessionId,
+      target_kind: 'run_execution',
+      project_id: 'project-1',
+      worker_id: input.workerId,
+      launch_lease_id: input.launchLeaseId,
+      launch_attempt: 1,
+      status: 'accepted',
+      input_digest: 'sha256:attached-input',
+      input_json: { codex_session_id: input.sessionId },
+      workflow_id: input.workflowId,
+      codex_session_id: input.sessionId,
+      codex_session_turn_id: input.turnId,
+      accepted_at: '2026-05-31T00:05:00.000Z',
+      expires_at: '2026-05-31T00:20:00.000Z',
+      created_at: '2026-05-31T00:04:00.000Z',
+      updated_at: '2026-05-31T00:05:00.000Z',
+    },
+    runtime_profile_digest: 'sha256:profile',
+    credential_binding_id: 'credential-1',
+    credential_binding_version_id: 'credential-version-1',
+    credential_payload_digest: 'sha256:credential',
+    docker_image_digest: 'sha256:docker',
+    network_policy_digest: 'sha256:network',
+    envelope_id: `${input.runtimeJobId}:envelope`,
+    envelope_digest: 'sha256:envelope',
+  });
+};
 
 const executionPlanRevisionInput: ExecutionPlanRevision = {
   id: 'implementation-plan-revision-1',
@@ -1380,6 +1489,181 @@ describe('Plan Item Workflow repository', () => {
     );
 
     await expect(repository.getCodexSession('session-1')).resolves.toEqual(session);
+  });
+
+  it('persists and clears session-bound Codex runner ownership', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:00:00.000Z',
+    });
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+    });
+
+    await repository.clearCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      terminal_reason_code: 'succeeded',
+      now: '2026-05-31T00:10:00.000Z',
+    });
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      runner_worker_id: undefined,
+      runner_launch_lease_id: undefined,
+      runner_runtime_job_id: undefined,
+      runner_expires_at: undefined,
+    });
+  });
+
+  it('fails closed when clearing or renewing a stale session runner owner', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:00:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.clearCodexSessionRunnerOwner({
+          session_id: 'session-1',
+          runner_launch_lease_id: 'stale-launch-lease',
+          terminal_reason_code: 'succeeded',
+          now: '2026-05-31T00:10:00.000Z',
+        }),
+      'codex_session_runner_unavailable',
+    );
+    await expectDomainErrorCode(
+      () =>
+        repository.renewCodexSessionRunnerOwner({
+          session_id: 'session-1',
+          runner_worker_id: 'worker-2',
+          runner_launch_lease_id: 'launch-lease-1',
+          runner_runtime_job_id: 'runtime-job-1',
+          runner_expires_at: '2026-05-31T00:30:00.000Z',
+          now: '2026-05-31T00:10:00.000Z',
+        }),
+      'codex_session_runner_unavailable',
+    );
+    await expect(
+      repository.renewCodexSessionRunnerOwner({
+        session_id: 'session-1',
+        runner_worker_id: 'worker-1',
+        runner_launch_lease_id: 'launch-lease-1',
+        runner_runtime_job_id: 'runtime-job-1',
+        runner_expires_at: '2026-05-31T00:30:00.000Z',
+        now: '2026-05-31T00:10:00.000Z',
+      }),
+    ).resolves.toMatchObject({
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:30:00.000Z',
+    });
+  });
+
+  it('rejects attaching a missing later-turn runtime job to the persisted session runner owner', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:00:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.attachCodexSessionRunnerRuntimeJob({
+          session_id: 'session-1',
+          runner_launch_lease_id: 'launch-lease-1',
+          runner_runtime_job_id: 'runtime-job-1',
+          attached_runtime_job_id: 'attached-runtime-job-1',
+          worker_id: 'worker-1',
+          runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
+          launch_materialization_digest: 'sha256:launch-materialization-live-runner',
+          idempotency_key: 'attach-runtime-job-1',
+          request_digest: 'sha256:attach-runtime-job-1',
+          now: '2026-05-31T00:06:00.000Z',
+        }),
+      'codex_runtime_job_unavailable',
+    );
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+    });
+  });
+
+  it('attaches an accepted later-turn runtime job using the persisted session runner owner', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:00:00.000Z',
+    });
+    seedAcceptedSessionRuntimeJob(repository, {
+      runtimeJobId: 'attached-runtime-job-1',
+      launchLeaseId: 'attached-launch-lease-1',
+      workerId: 'worker-1',
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      workflowId: 'workflow-1',
+    });
+
+    const attached = await repository.attachCodexSessionRunnerRuntimeJob({
+      session_id: 'session-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      attached_runtime_job_id: 'attached-runtime-job-1',
+      worker_id: 'worker-1',
+      runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
+      launch_materialization_digest: 'sha256:launch-materialization-live-runner',
+      idempotency_key: 'attach-runtime-job-1',
+      request_digest: 'sha256:attach-runtime-job-1',
+      now: '2026-05-31T00:06:00.000Z',
+    });
+
+    expect(attached).toMatchObject({
+      id: 'attached-runtime-job-1',
+      worker_id: 'worker-1',
+      launch_lease_id: 'attached-launch-lease-1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+      status: 'running',
+      runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
+      launch_materialization_digest: 'sha256:launch-materialization-live-runner',
+      started_at: '2026-05-31T00:06:00.000Z',
+    });
+    const launchLeases = (
+      repository as unknown as { codexLaunchLeases: Map<string, { lease: CodexLaunchLease }> }
+    ).codexLaunchLeases;
+    expect(launchLeases.get('attached-launch-lease-1')?.lease).toMatchObject({ status: 'materialized' });
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+    });
   });
 
   it('rejects saving a Codex Session with direct archived_at changes and preserves audit-owned state', async () => {

@@ -354,6 +354,37 @@ export interface TerminalizeCodexSessionTurnInput {
   now: string;
 }
 
+export interface MarkCodexSessionRunnerOwnerInput {
+  session_id: string;
+  runner_worker_id: string;
+  runner_launch_lease_id: string;
+  runner_runtime_job_id: string;
+  runner_expires_at: string;
+  now: string;
+}
+
+export interface ClearCodexSessionRunnerOwnerInput {
+  session_id: string;
+  runner_launch_lease_id: string;
+  terminal_reason_code: string;
+  now: string;
+}
+
+export type RenewCodexSessionRunnerOwnerInput = MarkCodexSessionRunnerOwnerInput;
+
+export interface AttachCodexSessionRunnerRuntimeJobInput {
+  session_id: string;
+  runner_launch_lease_id: string;
+  runner_runtime_job_id: string;
+  attached_runtime_job_id: string;
+  worker_id: string;
+  runtime_evidence_digest: string;
+  launch_materialization_digest: string;
+  idempotency_key: string;
+  request_digest: string;
+  now: string;
+}
+
 export interface WorkflowRepositoryEvidenceInput {
   evidence_object_type: 'commit' | 'pull_request';
   evidence_object_id: string;
@@ -1498,6 +1529,10 @@ export interface DeliveryRepository {
   terminalizeCodexSessionTurn(
     input: TerminalizeCodexSessionTurnInput,
   ): Promise<{ session: CodexSession; turn: CodexSessionTurn }>;
+  markCodexSessionRunnerOwner(input: MarkCodexSessionRunnerOwnerInput): Promise<CodexSession>;
+  clearCodexSessionRunnerOwner(input: ClearCodexSessionRunnerOwnerInput): Promise<CodexSession>;
+  renewCodexSessionRunnerOwner(input: RenewCodexSessionRunnerOwnerInput): Promise<CodexSession>;
+  attachCodexSessionRunnerRuntimeJob(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob>;
   createCodexSessionFork(input: CreateCodexSessionForkInput): Promise<CodexSession>;
   selectActiveCodexSessionFork(
     input: SelectActiveCodexSessionForkInput,
