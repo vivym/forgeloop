@@ -3709,7 +3709,83 @@ describe('Plan Item Workflow repository', () => {
           codex_thread_id: 'thread-1',
           now: '2026-05-31T00:02:00.000Z',
         }),
-      'codex_session_stale_terminalization',
+      'codex_session_thread_binding_stale',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: claimed.lease.id,
+    });
+    const session = await repository.getCodexSession('session-1');
+    expect(session?.codex_thread_id).toBeUndefined();
+    expect(session?.codex_thread_id_digest).toBeUndefined();
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+  });
+
+  it('requires Codex thread id and digest for app-server-backed terminalization before mutation', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: undefined,
+          output_snapshot: { ...snapshotInput },
+          app_server_thread_binding_required: true,
+          now: '2026-05-31T00:02:00.000Z',
+        }),
+      'codex_app_server_thread_id_missing',
+    );
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: undefined,
+          output_snapshot: { ...snapshotInput },
+          app_server_thread_binding_required: true,
+          codex_thread_id: 'thread-1',
+          now: '2026-05-31T00:02:00.000Z',
+        }),
+      'codex_app_server_thread_id_missing',
+    );
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_previous_snapshot_digest: undefined,
+          output_snapshot: { ...snapshotInput },
+          app_server_thread_binding_required: true,
+          codex_thread_id_digest: 'sha256:thread-1',
+          now: '2026-05-31T00:02:00.000Z',
+        }),
+      'codex_app_server_thread_id_missing',
     );
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
@@ -3745,7 +3821,7 @@ describe('Plan Item Workflow repository', () => {
           codex_thread_id_digest: 'sha256:thread-1',
           now: '2026-05-31T00:02:00.000Z',
         }),
-      'codex_session_stale_terminalization',
+      'codex_session_thread_binding_stale',
     );
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
@@ -3847,7 +3923,7 @@ describe('Plan Item Workflow repository', () => {
           codex_thread_id_digest: 'sha256:thread-2',
           now: '2026-05-31T00:05:00.000Z',
         }),
-      'codex_session_stale_terminalization',
+      'codex_session_thread_binding_stale',
     );
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({

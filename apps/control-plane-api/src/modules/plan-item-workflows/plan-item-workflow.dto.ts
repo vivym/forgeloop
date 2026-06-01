@@ -7,6 +7,7 @@ import {
   workflowManualDecisionKindSchema,
   workflowTransitionEvidenceObjectTypeSchema,
 } from '@forgeloop/contracts';
+import { codexPublicBlockerCodes } from '@forgeloop/domain';
 
 const nonEmpty = z.string().trim().min(1);
 
@@ -196,6 +197,22 @@ export const terminalizeCodexSessionTurnSchema = z
   })
   .strict()
   .superRefine((body, ctx) => {
+    const hasThreadId = body.codex_thread_id !== undefined;
+    const hasThreadDigest = body.codex_thread_id_digest !== undefined;
+    if (hasThreadId !== hasThreadDigest) {
+      ctx.addIssue({
+        code: 'custom',
+        path: hasThreadId ? ['codex_thread_id_digest'] : ['codex_thread_id'],
+        message: 'codex_thread_id and codex_thread_id_digest must be provided together',
+      });
+    }
+    if (body.failure_code !== undefined && !codexPublicBlockerCodes.includes(body.failure_code as (typeof codexPublicBlockerCodes)[number])) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['failure_code'],
+        message: 'failure_code must be a public Codex blocker code',
+      });
+    }
     const snapshotFields = [
       'output_snapshot_id',
       'output_snapshot_sequence',

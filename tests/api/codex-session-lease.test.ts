@@ -12,7 +12,7 @@ import { ids, seedWorkflow } from '../helpers/plan-item-workflow-fixtures';
 const trustedSecret = 'test-secret';
 const trustedActorId = 'automation-daemon';
 const daemonIdentity = 'codex-session-lease-worker';
-const wrongTokenHash = 'sha256:5645a758e6a8f12b6a2715cc22565a9f68d1ed73d98d33a1c5adf99277cd0b73';
+const wrongTokenHash = 'sha256:1fbdf98262d91a0eaaf09bd7c942c8c60aafec9895d13062d2bc76c9a4c4ef1f';
 
 const signedAutomationPost = (
   app: INestApplication,
@@ -148,6 +148,7 @@ describe('Codex Session lease API', () => {
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
       expected_previous_snapshot_digest: null,
+      codex_thread_id: 'thread-output',
       codex_thread_id_digest: 'sha256:thread-output',
     }).expect(409);
 
@@ -174,6 +175,50 @@ describe('Codex Session lease API', () => {
         }),
       ]),
     );
+  });
+
+  it('rejects partial thread binding and non-public failure codes before terminalization', async () => {
+    const { workflow } = await seedWorkflow(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const sessionId = workflow.active_codex_session_id;
+    const turnId = '11111111-1111-4111-8111-111111119006';
+    await repository.createCodexSessionTurn({
+      id: turnId,
+      codex_session_id: sessionId,
+      workflow_id: workflow.id,
+      intent: 'continue_brainstorming',
+      status: 'running',
+      input_digest: 'sha256:turn-input-dto-validation',
+      expected_previous_snapshot_digest: undefined,
+      created_by_actor_id: ids.actorTech,
+      created_at: '2026-05-31T00:00:00.000Z',
+      updated_at: '2026-05-31T00:00:00.000Z',
+    });
+
+    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${turnId}/terminalize`, {
+      lease_id: 'lease-dto-validation',
+      lease_token: 'lease-token-dto-validation',
+      lease_epoch: 1,
+      worker_id: 'worker-dto-validation',
+      worker_session_digest: 'sha256:worker-dto-validation-session',
+      status: 'failed',
+      expected_previous_snapshot_digest: null,
+      codex_thread_id: 'thread-dto-validation',
+    }).expect(400);
+
+    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${turnId}/terminalize`, {
+      lease_id: 'lease-dto-validation',
+      lease_token: 'lease-token-dto-validation',
+      lease_epoch: 1,
+      worker_id: 'worker-dto-validation',
+      worker_session_digest: 'sha256:worker-dto-validation-session',
+      status: 'failed',
+      expected_previous_snapshot_digest: null,
+      failure_code: 'internal_not_public',
+    }).expect(400);
+
+    await expect(repository.getCodexSessionTurn(turnId)).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts(sessionId)).resolves.toEqual([]);
   });
 
   it('records stale terminalization with the attempted stale lease epoch', async () => {
@@ -283,6 +328,112 @@ describe('Codex Session lease API', () => {
           attempted_output_snapshot_digest: 'sha256:stale-epoch-output',
           attempted_codex_thread_id_digest: 'sha256:thread-stale-epoch',
           failure_code: 'codex_session_stale_terminalization',
+        }),
+      ]),
+    );
+  });
+
+  it('records stale thread-binding overwrite attempts without mutating the active session binding', async () => {
+    const { workflow } = await seedWorkflow(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const sessionId = workflow.active_codex_session_id;
+    const firstTurnId = '11111111-1111-4111-8111-111111119004';
+    const secondTurnId = '11111111-1111-4111-8111-111111119005';
+    await repository.createCodexSessionTurn({
+      id: firstTurnId,
+      codex_session_id: sessionId,
+      workflow_id: workflow.id,
+      intent: 'continue_brainstorming',
+      status: 'running',
+      input_digest: 'sha256:first-turn-input-thread-binding',
+      expected_previous_snapshot_digest: undefined,
+      created_by_actor_id: ids.actorTech,
+      created_at: '2026-05-31T00:00:00.000Z',
+      updated_at: '2026-05-31T00:00:00.000Z',
+    });
+
+    const firstClaim = await repository.claimCodexSessionLease({
+      session_id: sessionId,
+      workflow_id: workflow.id,
+      lease_id: 'lease-thread-binding-1',
+      lease_token_hash: 'sha256:38cfadc7174933eff930e5aa83e3dadb1eed51b79cff52dab29546a7b28cc8fa',
+      worker_id: 'worker-thread-binding',
+      worker_session_digest: 'sha256:worker-thread-binding-session',
+      expected_previous_snapshot_digest: undefined,
+      now: '2026-05-31T00:00:00.000Z',
+      expires_at: '2026-05-31T00:05:00.000Z',
+    });
+    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${firstTurnId}/terminalize`, {
+      lease_id: firstClaim.lease.id,
+      lease_token: 'lease-token-thread-binding-1',
+      lease_epoch: firstClaim.lease.lease_epoch,
+      worker_id: 'worker-thread-binding',
+      worker_session_digest: 'sha256:worker-thread-binding-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: null,
+      codex_thread_id: 'thread-current',
+      codex_thread_id_digest: 'sha256:thread-current',
+    }).expect(201);
+
+    await repository.createCodexSessionTurn({
+      id: secondTurnId,
+      codex_session_id: sessionId,
+      workflow_id: workflow.id,
+      intent: 'continue_brainstorming',
+      status: 'running',
+      input_digest: 'sha256:second-turn-input-thread-binding',
+      expected_previous_snapshot_digest: undefined,
+      created_by_actor_id: ids.actorTech,
+      created_at: '2026-05-31T00:02:00.000Z',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+    const secondClaim = await repository.claimCodexSessionLease({
+      session_id: sessionId,
+      workflow_id: workflow.id,
+      lease_id: 'lease-thread-binding-2',
+      lease_token_hash: 'sha256:f2363bdb4f60bd34d6144ea86ec1f5cfae6c274f2a65a6bc2a8a75dad869a18a',
+      worker_id: 'worker-thread-binding',
+      worker_session_digest: 'sha256:worker-thread-binding-session',
+      expected_previous_snapshot_digest: undefined,
+      now: '2026-05-31T00:03:00.000Z',
+      expires_at: '2026-05-31T00:08:00.000Z',
+    });
+
+    const staleTerminalizationResponse = await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${secondTurnId}/terminalize`, {
+      lease_id: secondClaim.lease.id,
+      lease_token: 'lease-token-thread-binding-2',
+      lease_epoch: secondClaim.lease.lease_epoch,
+      worker_id: 'worker-thread-binding',
+      worker_session_digest: 'sha256:worker-thread-binding-session',
+      status: 'succeeded',
+      expected_previous_snapshot_digest: null,
+      codex_thread_id: 'thread-overwrite',
+      codex_thread_id_digest: 'sha256:thread-overwrite',
+    });
+    expect(staleTerminalizationResponse.body).toMatchObject({});
+    expect(staleTerminalizationResponse.status).toBe(409);
+
+    await expect(repository.getCodexSession(sessionId)).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: secondClaim.lease.id,
+      lease_epoch: secondClaim.lease.lease_epoch,
+      codex_thread_id: 'thread-current',
+      codex_thread_id_digest: 'sha256:thread-current',
+    });
+    await expect(repository.getCodexSessionTurn(firstTurnId)).resolves.toMatchObject({
+      status: 'succeeded',
+      codex_thread_id_digest: 'sha256:thread-current',
+    });
+    await expect(repository.getCodexSessionTurn(secondTurnId)).resolves.toMatchObject({ status: 'stale' });
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts(sessionId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          codex_session_id: sessionId,
+          codex_session_turn_id: secondTurnId,
+          lease_id: secondClaim.lease.id,
+          lease_epoch: secondClaim.lease.lease_epoch,
+          attempted_codex_thread_id_digest: 'sha256:thread-overwrite',
+          failure_code: 'codex_session_thread_binding_stale',
         }),
       ]),
     );

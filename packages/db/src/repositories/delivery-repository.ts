@@ -348,6 +348,7 @@ export interface TerminalizeCodexSessionTurnInput {
   output_snapshot?: CodexSessionSnapshot;
   output_object_type?: WorkflowTransitionEvidenceObjectType;
   output_object_id?: string;
+  app_server_thread_binding_required?: boolean;
   codex_thread_id?: string;
   codex_thread_id_digest?: string;
   failure_code?: string;

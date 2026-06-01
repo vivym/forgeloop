@@ -2090,21 +2090,30 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
     const hasThreadIdInput = input.codex_thread_id !== undefined;
     const hasThreadDigestInput = input.codex_thread_id_digest !== undefined;
+    if (input.app_server_thread_binding_required === true && (!hasThreadIdInput || !hasThreadDigestInput)) {
+      throw new DomainError(
+        'codex_app_server_thread_id_missing',
+        `codex_app_server_thread_id_missing: Codex session ${input.session_id} app-server terminalization requires thread id and digest`,
+      );
+    }
     if (hasThreadIdInput !== hasThreadDigestInput) {
-      throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} thread binding is incomplete`);
+      throw new DomainError('codex_session_thread_binding_stale', `codex_session_thread_binding_stale: Codex session ${input.session_id} thread binding is incomplete`);
+    }
+    const hasSessionThreadId = session.codex_thread_id !== undefined;
+    const hasSessionThreadDigest = session.codex_thread_id_digest !== undefined;
+    if (hasSessionThreadId !== hasSessionThreadDigest) {
+      throw new DomainError('codex_session_thread_binding_stale', `codex_session_thread_binding_stale: Codex session ${input.session_id} has a partial thread binding`);
     }
     if (hasThreadIdInput && hasThreadDigestInput) {
-      const hasSessionThreadId = session.codex_thread_id !== undefined;
-      const hasSessionThreadDigest = session.codex_thread_id_digest !== undefined;
       if (hasSessionThreadId !== hasSessionThreadDigest) {
-        throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} has a partial thread binding`);
+        throw new DomainError('codex_session_thread_binding_stale', `codex_session_thread_binding_stale: Codex session ${input.session_id} has a partial thread binding`);
       }
       if (
         hasSessionThreadId &&
         hasSessionThreadDigest &&
         (session.codex_thread_id !== input.codex_thread_id || session.codex_thread_id_digest !== input.codex_thread_id_digest)
       ) {
-        throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} thread binding is stale`);
+        throw new DomainError('codex_session_thread_binding_stale', `codex_session_thread_binding_stale: Codex session ${input.session_id} thread binding is stale`);
       }
     }
     const outputSnapshot = existingOutputSnapshot ?? input.output_snapshot;
