@@ -1,3 +1,5 @@
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -18,14 +20,6 @@ import {
   seedWorkflowWithApprovedImplementationPlan,
   startWorkflow,
 } from '../helpers/plan-item-workflow-fixtures';
-
-const expectHttpStatus =
-  (expectedStatus: number) =>
-  (response: { status: number; body: unknown }): void => {
-    if (response.status !== expectedStatus) {
-      throw new Error(`expected ${expectedStatus}, got ${response.status}: ${JSON.stringify(response.body)}`);
-    }
-  };
 
 async function seedLegacyCurrentPlanForWorkflowOwnedItem(
   repository: DeliveryRepository,
@@ -133,6 +127,15 @@ describe('Plan Item Workflow API', () => {
       to_status: 'brainstorming',
       evidence_object_type: 'manual_decision',
     });
+  });
+
+  it('seeds workflow-owned plan items with a portable runtime policy repo', async () => {
+    const { ids: fixtureIds } = await seedDevelopmentPlanItem(app, { idPrefix: '12121212' });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const [repo] = await repository.listProjectRepos(fixtureIds.project);
+
+    expect(repo?.local_path).toContain('forgeloop-runtime-policy-repo-');
+    await expect(access(join(repo!.local_path, 'WORKFLOW.md'))).resolves.toBeUndefined();
   });
 
   it('rejects unauthorized workflow start before creating workflow/session rows', async () => {
@@ -440,7 +443,7 @@ describe('Plan Item Workflow API', () => {
         `/plan-item-workflows/${seeded.workflow.id}/implementation-plan-revisions/${implementationPlanRevision.id}/approve`,
       )
       .send({ actor_id: seeded.ids.actorTech, reason: 'Approve Implementation Plan for execution.' })
-      .expect(expectHttpStatus(201));
+      .expect(201);
 
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const transitions = await repository.listPlanItemWorkflowTransitions(seeded.workflow.id);
@@ -511,7 +514,7 @@ describe('Plan Item Workflow API', () => {
         approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
         reason: 'Implementation Plan reviewed and ready for execution.',
       })
-      .expect(expectHttpStatus(201));
+      .expect(201);
 
     expect(response.body).toMatchObject({
       status: 'execution_ready',
@@ -735,7 +738,7 @@ describe('Plan Item Workflow API', () => {
         approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
         reason: 'Execution readiness approved.',
       })
-      .expect(expectHttpStatus(201));
+      .expect(201);
 
     const response = await request(server)
       .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
@@ -879,7 +882,7 @@ describe('Plan Item Workflow API', () => {
         approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
         reason: 'Execution readiness approved.',
       })
-      .expect(expectHttpStatus(201));
+      .expect(201);
     const started = (
       await request(server)
         .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
@@ -942,7 +945,7 @@ describe('Plan Item Workflow API', () => {
         approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
         reason: 'Execution readiness approved.',
       })
-      .expect(expectHttpStatus(201));
+      .expect(201);
     await request(server)
       .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
       .send({ actor_id: seeded.ids.actorTech })

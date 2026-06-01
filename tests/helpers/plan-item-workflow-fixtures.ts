@@ -22,6 +22,7 @@ import {
   codexRuntimeProfileRevisionDigest,
   type CodexRuntimeProfileRevision,
 } from '../../packages/domain/src';
+import { createWorkflowPolicyRepoRoot } from './runtime-policy-repo';
 
 const now = '2026-05-31T00:00:00.000Z';
 
@@ -66,6 +67,7 @@ export const ids = idsFor();
 export async function seedDevelopmentPlanItem(app: INestApplication, options: { idPrefix?: string } = {}) {
   const fixtureIds = idsFor(options.idPrefix);
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const repoRoot = await createWorkflowPolicyRepoRoot();
 
   await repository.saveOrganization({ id: fixtureIds.org, name: 'ForgeLoop', created_at: now, updated_at: now });
   await repository.saveActor({
@@ -108,7 +110,7 @@ export async function seedDevelopmentPlanItem(app: INestApplication, options: { 
     project_id: fixtureIds.project,
     name: 'forgeloop',
     status: 'active',
-    local_path: '/Users/viv/projs/forgeloop',
+    local_path: repoRoot,
     default_branch: 'main',
     base_commit_sha: '0'.repeat(40),
     created_at: now,

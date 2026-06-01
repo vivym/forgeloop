@@ -17,14 +17,6 @@ import {
 
 const digest = (seed: string): string => `sha256:${seed.repeat(64).slice(0, 64)}`;
 
-const expectHttpStatus =
-  (expectedStatus: number) =>
-  (response: { status: number; body: unknown }): void => {
-    if (response.status !== expectedStatus) {
-      throw new Error(`expected ${expectedStatus}, got ${response.status}: ${JSON.stringify(response.body)}`);
-    }
-  };
-
 describe('Executions API', () => {
   let app: INestApplication;
 
@@ -151,7 +143,7 @@ describe('Executions API', () => {
         approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
         reason: 'Execution readiness approved.',
       })
-      .expect(expectHttpStatus(201));
+      .expect(201);
 
     await request(server)
       .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/execution/start`)
