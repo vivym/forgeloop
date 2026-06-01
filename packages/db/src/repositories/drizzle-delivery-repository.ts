@@ -19,6 +19,11 @@ import type {
   CodexLaunchTokenEnvelope,
   CodexLaunchLease,
   CodexLaunchMaterialization,
+  CodexSession,
+  CodexSessionLease,
+  CodexSessionSnapshot,
+  CodexSessionStaleTerminalizationAttempt,
+  CodexSessionTurn,
   CodexRuntimeJob,
   CodexRuntimeJobArtifact,
   CodexRuntimeProfile,
@@ -46,11 +51,14 @@ import type {
   ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
+  ExecutionReadinessRecord,
   ManualPathHold,
   ObjectEvent,
   Organization,
   Plan,
   PlanRevision,
+  PlanItemWorkflow,
+  PlanItemWorkflowTransition,
   Project,
   ProjectRepo,
   Release,
@@ -70,11 +78,19 @@ import type {
   StructuredRevisionDiff,
   Task,
   WorkItem,
+  WorkflowManualDecision,
   ResolvedCodexCredential,
 } from '@forgeloop/domain';
 import type { ObjectRef } from '@forgeloop/contracts';
 import {
+  planItemWorkflowTransitionSchema,
+  workflowManualDecisionSchema,
+  workflowTransitionEvidenceObjectTypeSchema,
+} from '@forgeloop/contracts';
+import {
   DomainError,
+  assertPlanItemWorkflowTransitionAllowed,
+  assertWorkflowManualDecisionAllowedForTransition,
   assertCodexRuntimeRecoveryReasonCode,
   assertAutomationCapabilityActor,
   assertCanonicalManualScopeKey,
@@ -96,6 +112,7 @@ import {
   isActiveRunSessionStatus,
   isWorkItemAutomationTerminal,
   normalizeAutomationCapabilities,
+  parseInternalArtifactRef,
 } from '@forgeloop/domain';
 
 import * as schema from '../schema';
@@ -115,6 +132,11 @@ import {
   codex_runtime_setup_nonces,
   codex_runtime_profiles,
   codex_runtime_profile_revisions,
+  codex_session_leases,
+  codex_session_snapshots,
+  codex_session_stale_terminalization_attempts,
+  codex_session_turns,
+  codex_sessions,
   codex_worker_bootstrap_tokens,
   codex_worker_registrations,
   codex_worker_session_nonces,
@@ -142,11 +164,14 @@ import {
   execution_package_generation_runs,
   execution_package_dependencies,
   execution_packages,
+  execution_readiness_records,
   manual_path_hold_idempotency_records,
   manual_path_holds,
   object_events,
   organizations,
   plan_revisions,
+  plan_item_workflow_transitions,
+  plan_item_workflows,
   plans,
   project_repos,
   projects,
@@ -169,6 +194,7 @@ import {
   trace_links,
   tasks,
   work_items,
+  workflow_manual_decisions,
 } from '../schema';
 import type {
   ClaimAutomationActionRunInput,
@@ -204,6 +230,7 @@ import type {
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
   GetActiveCodexGenerationActionRunFenceInput,
+  GetAutomationActionRunByIdempotencyKeyInput,
   GetClaimedAutomationActionRunInput,
   GetCodexLaunchLeasePublicStatusInput,
   GetCodexLaunchLeaseStatusInput,
@@ -260,6 +287,15 @@ import type {
   BoundaryAnswerRecord,
   BoundaryDecisionRecord,
   BoundaryQuestionRecord,
+  ClaimCodexSessionLeaseInput,
+  ApplyPlanItemWorkflowTransitionInput,
+  CreateCodexSessionForkInput,
+  CreatePlanItemWorkflowWithInitialSessionInput,
+  RecoverCodexSessionLeaseForClaimInput,
+  RenewCodexSessionLeaseInput,
+  SelectActiveCodexSessionForkInput,
+  TerminalizeCodexSessionTurnInput,
+  WorkflowRepositoryEvidenceInput,
   BoundaryRoundRecord,
 } from './delivery-repository';
 import {
@@ -318,6 +354,43 @@ const fromDbRecord = <T>(record: Record<string, unknown>): T =>
       .filter(([, value]) => value !== null)
       .map(([key, value]) => [camelToSnake(key), normalizeTimestampValue(key, value)]),
   ) as T;
+
+const executionDbRecord = (execution: Execution): Record<string, unknown> => {
+  const record = toDbRecord(execution, executions);
+  record.implementationPlanRevisionId = execution.implementation_plan_revision_id;
+  record.implementationPlanRevisionRef = execution.implementation_plan_revision_ref;
+  return record;
+};
+
+const executionFromDbRecord = (record: Record<string, unknown>): Execution => fromDbRecord<Execution>(record);
+
+const statusHistoryDbRecord = (statusHistory: StatusHistory): Record<string, unknown> => {
+  const record = toDbRecord(statusHistory, status_histories);
+  record.toStatus ??= statusHistory.to_value;
+  record.fromStatus ??= statusHistory.from_value;
+  return record;
+};
+
+const statusHistoryFromDbRecord = (record: Record<string, unknown>): StatusHistory => {
+  const statusHistory = fromDbRecord<StatusHistory>(record);
+  const shouldOmitToStatus = statusHistory.to_value !== undefined && statusHistory.to_status === statusHistory.to_value;
+  const shouldOmitFromStatus = statusHistory.from_value !== undefined && statusHistory.from_status === statusHistory.from_value;
+  if (!shouldOmitToStatus && !shouldOmitFromStatus) {
+    return statusHistory;
+  }
+  const {
+    to_status: omittedToStatus,
+    from_status: omittedFromStatus,
+    ...legacyStatusHistory
+  } = statusHistory;
+  void omittedToStatus;
+  void omittedFromStatus;
+  return {
+    ...legacyStatusHistory,
+    ...(shouldOmitFromStatus ? {} : { from_status: statusHistory.from_status }),
+    ...(shouldOmitToStatus ? {} : { to_status: statusHistory.to_status }),
+  } as StatusHistory;
+};
 
 const normalizedTimestampString = (value: string): string => {
   const normalized = normalizeTimestampValue('timestamp', value);
@@ -498,9 +571,48 @@ const activeBoundarySessionStatuses = new Set<BrainstormingSession['status']>([
   'changes_requested',
 ]);
 const terminalCommandStatuses = new Set<CommandIdempotencyRecord['status']>(['succeeded', 'skipped', 'blocked']);
+const claimableCodexSessionStatuses = new Set<CodexSession['status']>(['starting', 'idle', 'recovering']);
 const eventCursor = (sequence: number) => String(sequence).padStart(10, '0');
 const invalidLease = (runSessionId: string): DomainErrorType =>
   new DomainError('INVALID_TRANSITION', `Run session ${runSessionId} does not have an active worker lease`);
+const normalizeRepositoryNamespace = (value: string): string | undefined => {
+  const trimmed = value.trim().replace(/\.git$/i, '');
+  const path = trimmed.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (path !== null) {
+    return `${path[1]}/${path[2]}`.toLowerCase();
+  }
+  const ssh = trimmed.match(/^[^@\s]+@[^:\s]+:([^/\s]+)\/([^/\s]+)$/);
+  if (ssh !== null) {
+    return `${ssh[1]}/${ssh[2]}`.toLowerCase();
+  }
+  try {
+    const url = new URL(trimmed);
+    const parts = url.pathname.replace(/^\/+|\/+$/g, '').split('/');
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && parts.length >= 2) {
+      return `${parts[0]}/${parts[1]!.replace(/\.git$/i, '')}`.toLowerCase();
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+const parseGitHubStylePullRequestUrl = (value: string): { namespace: string } | undefined => {
+  try {
+    const url = new URL(value);
+    const parts = url.pathname.replace(/^\/+|\/+$/g, '').split('/');
+    if (
+      (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+      parts.length !== 4 ||
+      parts[2] !== 'pull' ||
+      !/^\d+$/.test(parts[3]!)
+    ) {
+      return undefined;
+    }
+    return { namespace: `${parts[0]}/${parts[1]}`.toLowerCase() };
+  } catch {
+    return undefined;
+  }
+};
 const RUNTIME_SNAPSHOT_RECENT_ACTION_RUN_LIMIT = 50;
 const RUNTIME_SNAPSHOT_MIN_ACTION_RUN_LOOKBACK = 100;
 const RUNTIME_SNAPSHOT_MAX_ACTION_RUN_LOOKBACK = 500;
@@ -639,6 +751,17 @@ interface DrizzleDeliveryRepositoryOptions {
 const codexDenied = (code: DomainErrorType['code'], message: string, details?: Record<string, unknown>): DomainErrorType =>
   new DomainError(code, message, details);
 
+const codexSessionSnapshotDurableIdentityMatches = (
+  existing: CodexSessionSnapshot,
+  candidate: CodexSessionSnapshot,
+): boolean =>
+  existing.codex_session_id === candidate.codex_session_id &&
+  existing.digest === candidate.digest &&
+  existing.artifact_ref === candidate.artifact_ref &&
+  existing.manifest_digest === candidate.manifest_digest &&
+  existing.sequence === candidate.sequence &&
+  existing.created_from_turn_id === candidate.created_from_turn_id;
+
 const capabilityList = (capabilities: Record<string, unknown>, key: string): readonly string[] => {
   const value = capabilities[key];
   return Array.isArray(value) && value.every((entry): entry is string => typeof entry === 'string') ? value : [];
@@ -750,6 +873,9 @@ const runtimeJobFromDbRecord = (record: CodexRuntimeJobDbRecord): CodexRuntimeJo
   status: record.status,
   input_digest: record.input_digest,
   input_json: record.input_json,
+  ...(record.workflow_id === undefined ? {} : { workflow_id: record.workflow_id }),
+  ...(record.codex_session_id === undefined ? {} : { codex_session_id: record.codex_session_id }),
+  ...(record.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: record.codex_session_turn_id }),
   ...(record.workspace_acquisition_digest === undefined
     ? {}
     : { workspace_acquisition_digest: record.workspace_acquisition_digest }),
@@ -874,6 +1000,1372 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async withObjectLock<T>(key: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T> {
     return this.withAdvisoryLocks([key], write);
+  }
+
+  async createPlanItemWorkflowWithInitialSession(
+    input: CreatePlanItemWorkflowWithInitialSessionInput,
+  ): Promise<{ workflow: PlanItemWorkflow; session: CodexSession }> {
+    return this.withObjectLock(`plan-item-workflow:item:${input.development_plan_item_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).createPlanItemWorkflowWithInitialSessionUnlocked(input),
+    );
+  }
+
+  private async createPlanItemWorkflowWithInitialSessionUnlocked(
+    input: CreatePlanItemWorkflowWithInitialSessionInput,
+  ): Promise<{ workflow: PlanItemWorkflow; session: CodexSession }> {
+    if ((await this.getPlanItemWorkflow(input.id)) !== undefined || (await this.getCodexSession(input.codex_session_id)) !== undefined) {
+      throw new DomainError('workflow_invalid_transition', 'workflow_invalid_transition: Workflow or Codex session already exists');
+    }
+    if ((await this.getActivePlanItemWorkflowByItem(input.development_plan_item_id)) !== undefined) {
+      throw new DomainError(
+        'workflow_active_session_conflict',
+        `workflow_active_session_conflict: Plan item ${input.development_plan_item_id} already has an active workflow`,
+      );
+    }
+    const item = await this.getDevelopmentPlanItem(input.development_plan_item_id);
+    if (item !== undefined && item.development_plan_id !== input.development_plan_id) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan item ${input.development_plan_item_id} does not belong to development plan ${input.development_plan_id}`,
+      );
+    }
+
+    const workflow: PlanItemWorkflow = {
+      id: input.id,
+      development_plan_id: input.development_plan_id,
+      development_plan_item_id: input.development_plan_item_id,
+      status: 'not_started',
+      active_codex_session_id: input.codex_session_id,
+      created_by_actor_id: input.actor_id,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    const session: CodexSession = {
+      id: input.codex_session_id,
+      owner_type: 'plan_item_workflow',
+      owner_id: input.id,
+      status: 'idle',
+      role: 'active',
+      runtime_profile_id: input.runtime_profile_id,
+      runtime_profile_revision_id: input.runtime_profile_revision_id,
+      credential_binding_id: input.credential_binding_id,
+      credential_binding_version_id: input.credential_binding_version_id,
+      lease_epoch: 0,
+      created_by_actor_id: input.actor_id,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    await this.assertCanSavePlanItemWorkflow(workflow);
+    await this.assertCanSaveCodexSession(session);
+    await this.db.insert(plan_item_workflows).values(toDbRecord(workflow, plan_item_workflows) as never);
+    await this.db.insert(codex_sessions).values(toDbRecord(session, codex_sessions) as never);
+    return { workflow, session };
+  }
+
+  async getPlanItemWorkflow(id: string): Promise<PlanItemWorkflow | undefined> {
+    return this.getById(plan_item_workflows, plan_item_workflows.id, id);
+  }
+
+  async getActivePlanItemWorkflowByItem(itemId: string): Promise<PlanItemWorkflow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(plan_item_workflows)
+      .where(and(eq(plan_item_workflows.developmentPlanItemId, itemId), sql`${plan_item_workflows.status} <> 'archived'`))
+      .orderBy(asc(plan_item_workflows.createdAt), asc(plan_item_workflows.id))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<PlanItemWorkflow>(row);
+  }
+
+  async savePlanItemWorkflow(workflow: PlanItemWorkflow): Promise<void> {
+    const existingWorkflow = await this.getPlanItemWorkflow(workflow.id);
+    if (existingWorkflow === undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Plan Item Workflow ${workflow.id} does not exist`);
+    }
+    if (
+      existingWorkflow.development_plan_id !== workflow.development_plan_id ||
+      existingWorkflow.development_plan_item_id !== workflow.development_plan_item_id ||
+      existingWorkflow.created_by_actor_id !== workflow.created_by_actor_id ||
+      existingWorkflow.created_at !== workflow.created_at
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Plan Item Workflow ${workflow.id} identity fields cannot change`);
+    }
+    if (
+      existingWorkflow.active_codex_session_id !== workflow.active_codex_session_id ||
+      existingWorkflow.active_boundary_summary_revision_id !== workflow.active_boundary_summary_revision_id ||
+      existingWorkflow.active_spec_doc_revision_id !== workflow.active_spec_doc_revision_id ||
+      existingWorkflow.active_implementation_plan_doc_revision_id !== workflow.active_implementation_plan_doc_revision_id ||
+      existingWorkflow.execution_package_id !== workflow.execution_package_id ||
+      existingWorkflow.previous_status !== workflow.previous_status
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Plan Item Workflow ${workflow.id} service-owned projection fields cannot change`);
+    }
+    if (existingWorkflow.status !== workflow.status) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Plan Item Workflow ${workflow.id} status cannot change through save`);
+    }
+    await this.assertCanSavePlanItemWorkflow(workflow);
+    await this.db.update(plan_item_workflows).set(toDbRecord(workflow, plan_item_workflows) as never).where(eq(plan_item_workflows.id, workflow.id));
+  }
+
+  async applyPlanItemWorkflowTransition(input: ApplyPlanItemWorkflowTransitionInput): Promise<PlanItemWorkflow> {
+    return this.withObjectLock(`plan-item-workflow:${input.transition.workflow_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).applyPlanItemWorkflowTransitionUnlocked(input),
+    );
+  }
+
+  private async applyPlanItemWorkflowTransitionUnlocked(input: ApplyPlanItemWorkflowTransitionInput): Promise<PlanItemWorkflow> {
+    const workflow = await this.getPlanItemWorkflow(input.transition.workflow_id);
+    if (workflow === undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Workflow ${input.transition.workflow_id} does not exist`);
+    }
+    if (input.transition.from_status !== workflow.status) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${input.transition.id} from_status does not match workflow status`);
+    }
+    await this.assertPlanItemWorkflowProjectionPatchAllowed(input);
+    await this.assertCanAppendPlanItemWorkflowTransition(input.transition, input.projection_patch);
+
+    const updatedWorkflow: PlanItemWorkflow = {
+      ...workflow,
+      status: input.transition.to_status,
+      ...this.nextWorkflowPreviousStatus(workflow, input.transition),
+      ...(input.projection_patch ?? {}),
+      updated_at: input.transition.created_at,
+    };
+    if (input.transition.from_status === 'blocked' && input.transition.to_status !== 'blocked') {
+      delete updatedWorkflow.previous_status;
+    }
+    await this.assertCanSavePlanItemWorkflow(updatedWorkflow);
+    await this.db.insert(plan_item_workflow_transitions).values(toDbRecord(input.transition, plan_item_workflow_transitions) as never);
+    await this.db
+      .update(plan_item_workflows)
+      .set(toDbRecord(updatedWorkflow, plan_item_workflows) as never)
+      .where(eq(plan_item_workflows.id, updatedWorkflow.id));
+    return updatedWorkflow;
+  }
+
+  async listPlanItemWorkflowTransitions(workflowId: string): Promise<PlanItemWorkflowTransition[]> {
+    return this.listWhere<PlanItemWorkflowTransition>(
+      plan_item_workflow_transitions,
+      eq(plan_item_workflow_transitions.workflowId, workflowId),
+      [plan_item_workflow_transitions.createdAt, plan_item_workflow_transitions.id],
+    );
+  }
+
+  async saveWorkflowManualDecision(decision: WorkflowManualDecision): Promise<void> {
+    if ((await this.getWorkflowManualDecision(decision.id)) !== undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Workflow manual decision ${decision.id} already exists`);
+    }
+    if (!workflowManualDecisionSchema.safeParse(decision).success) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Workflow manual decision ${decision.id} payload is invalid`);
+    }
+    await this.assertWorkflowCodexSessionProvenance(decision.workflow_id, decision.codex_session_id, `Workflow manual decision ${decision.id}`);
+    if (decision.selected_codex_session_id !== undefined) {
+      await this.assertWorkflowCodexSessionProvenance(
+        decision.workflow_id,
+        decision.selected_codex_session_id,
+        `Workflow manual decision ${decision.id} selected Codex session`,
+      );
+    }
+    await this.db.insert(workflow_manual_decisions).values(toDbRecord(decision, workflow_manual_decisions) as never);
+  }
+
+  async getWorkflowManualDecision(id: string): Promise<WorkflowManualDecision | undefined> {
+    return this.getById(workflow_manual_decisions, workflow_manual_decisions.id, id);
+  }
+
+  async saveExecutionReadinessRecord(record: ExecutionReadinessRecord): Promise<void> {
+    if ((await this.getExecutionReadinessRecord(record.id)) !== undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Execution readiness record ${record.id} already exists`);
+    }
+    const workflow = await this.getPlanItemWorkflow(record.workflow_id);
+    if (
+      workflow === undefined ||
+      workflow.development_plan_id !== record.development_plan_id ||
+      workflow.development_plan_item_id !== record.development_plan_item_id
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Execution readiness record ${record.id} workflow provenance is invalid`);
+    }
+    await this.assertWorkflowCodexSessionProvenance(record.workflow_id, record.codex_session_id, `Execution readiness record ${record.id}`);
+    await this.db.insert(execution_readiness_records).values(toDbRecord(record, execution_readiness_records) as never);
+  }
+
+  async getExecutionReadinessRecord(id: string): Promise<ExecutionReadinessRecord | undefined> {
+    return this.getById(execution_readiness_records, execution_readiness_records.id, id);
+  }
+
+  async getBoundarySummaryRevisionById(revisionId: string): Promise<BoundarySummaryRevision | undefined> {
+    return this.getById(boundary_summary_revisions, boundary_summary_revisions.id, revisionId);
+  }
+
+  async resolveWorkflowRepositoryEvidence(
+    input: WorkflowRepositoryEvidenceInput,
+  ): Promise<{ repository_id: string; resolved_ref: string } | undefined> {
+    const workflow = await this.getPlanItemWorkflow(input.workflow_id);
+    if (
+      workflow === undefined ||
+      workflow.development_plan_id !== input.development_plan_id ||
+      workflow.development_plan_item_id !== input.development_plan_item_id
+    ) {
+      return undefined;
+    }
+    const developmentPlan = await this.getDevelopmentPlan(input.development_plan_id);
+    if (developmentPlan === undefined) {
+      return undefined;
+    }
+    const repos = (await this.listProjectRepos(developmentPlan.project_id)).filter((repo) => repo.status !== 'archived');
+    if (input.evidence_object_type === 'commit') {
+      return /^[0-9a-f]{40}$/i.test(input.evidence_object_id) && repos.length === 1
+        ? { repository_id: repos[0]!.id, resolved_ref: input.evidence_object_id.toLowerCase() }
+        : undefined;
+    }
+    const evidence = input.evidence_object_id.trim();
+    if (/^\d+$/.test(evidence)) {
+      return repos.length === 1 ? { repository_id: repos[0]!.id, resolved_ref: evidence } : undefined;
+    }
+    const pullRequestUrl = parseGitHubStylePullRequestUrl(evidence);
+    if (pullRequestUrl === undefined) {
+      return undefined;
+    }
+    const matchedRepo = repos.find((repo) =>
+      [repo.name, repo.remote_url]
+        .filter((value): value is string => value !== undefined)
+        .map((candidate) => normalizeRepositoryNamespace(candidate))
+        .some((namespace) => namespace === pullRequestUrl.namespace),
+    );
+    return matchedRepo === undefined ? undefined : { repository_id: matchedRepo.id, resolved_ref: evidence };
+  }
+
+  async getCodexSession(id: string): Promise<CodexSession | undefined> {
+    return this.getById(codex_sessions, codex_sessions.id, id);
+  }
+
+  async saveCodexSession(session: CodexSession): Promise<void> {
+    const existingSession = await this.getCodexSession(session.id);
+    if (existingSession === undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${session.id} does not exist`);
+    }
+    if (
+      existingSession.owner_type !== session.owner_type ||
+      existingSession.owner_id !== session.owner_id ||
+      existingSession.runtime_profile_id !== session.runtime_profile_id ||
+      existingSession.runtime_profile_revision_id !== session.runtime_profile_revision_id ||
+      existingSession.credential_binding_id !== session.credential_binding_id ||
+      existingSession.credential_binding_version_id !== session.credential_binding_version_id ||
+      existingSession.created_by_actor_id !== session.created_by_actor_id ||
+      existingSession.created_at !== session.created_at
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${session.id} identity fields cannot change`);
+    }
+    if (
+      existingSession.forked_from_session_id !== session.forked_from_session_id ||
+      existingSession.forked_from_turn_id !== session.forked_from_turn_id ||
+      existingSession.forked_from_snapshot_id !== session.forked_from_snapshot_id ||
+      existingSession.fork_reason !== session.fork_reason
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${session.id} fork provenance fields cannot change`);
+    }
+    if (
+      existingSession.latest_turn_id !== session.latest_turn_id ||
+      existingSession.latest_turn_digest !== session.latest_turn_digest ||
+      existingSession.latest_snapshot_id !== session.latest_snapshot_id ||
+      existingSession.latest_snapshot_digest !== session.latest_snapshot_digest ||
+      existingSession.codex_thread_id !== session.codex_thread_id ||
+      existingSession.codex_thread_id_digest !== session.codex_thread_id_digest ||
+      existingSession.active_lease_id !== session.active_lease_id ||
+      existingSession.lease_epoch !== session.lease_epoch ||
+      existingSession.archived_at !== session.archived_at
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${session.id} service-owned state fields cannot change`);
+    }
+    if (existingSession.status !== session.status) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${session.id} status cannot change through save`);
+    }
+    if (existingSession.role !== session.role) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${session.id} role cannot change through save`);
+    }
+    await this.assertCanSaveCodexSession(session);
+    await this.db.update(codex_sessions).set(toDbRecord(session, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+  }
+
+  async createCodexSessionTurn(turn: CodexSessionTurn): Promise<void> {
+    return this.withObjectLock(`codex-session:${turn.codex_session_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).createCodexSessionTurnUnlocked(turn),
+    );
+  }
+
+  private async createCodexSessionTurnUnlocked(turn: CodexSessionTurn): Promise<void> {
+    if ((await this.getCodexSessionTurn(turn.id)) !== undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session turn ${turn.id} already exists`);
+    }
+    if (
+      turn.status !== 'running' ||
+      turn.output_snapshot_id !== undefined ||
+      turn.output_snapshot_digest !== undefined ||
+      turn.output_object_type !== undefined ||
+      turn.output_object_id !== undefined ||
+      turn.codex_thread_id_digest !== undefined ||
+      turn.lease_id !== undefined ||
+      turn.lease_epoch !== undefined ||
+      turn.automation_action_run_id !== undefined ||
+      turn.runtime_job_id !== undefined
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session turn ${turn.id} service-owned fields cannot be set at creation`);
+    }
+    const session = await this.getCodexSession(turn.codex_session_id);
+    const workflow = session === undefined ? undefined : await this.getPlanItemWorkflow(session.owner_id);
+    const cannotCreateTurn =
+      session === undefined ||
+      workflow === undefined ||
+      session.owner_type !== 'plan_item_workflow' ||
+      session.owner_id !== turn.workflow_id ||
+      workflow.id !== turn.workflow_id ||
+      workflow.active_codex_session_id !== session.id ||
+      session.role !== 'active' ||
+      !claimableCodexSessionStatuses.has(session.status);
+    if (cannotCreateTurn) {
+      throw new DomainError('workflow_active_session_missing', `workflow_active_session_missing: Codex session ${turn.codex_session_id} is not active for workflow ${turn.workflow_id}`);
+    }
+    if (session.latest_snapshot_digest !== turn.expected_previous_snapshot_digest) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${turn.codex_session_id} snapshot is stale`);
+    }
+    const updatedSession: CodexSession = { ...session, latest_turn_id: turn.id, latest_turn_digest: turn.input_digest, updated_at: turn.updated_at };
+    await this.db.insert(codex_session_turns).values(toDbRecord(turn, codex_session_turns) as never);
+    await this.db.update(codex_sessions).set(toDbRecord(updatedSession, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+  }
+
+  async getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined> {
+    return this.getById(codex_session_turns, codex_session_turns.id, id);
+  }
+
+  async saveCodexSessionTurn(turn: CodexSessionTurn): Promise<void> {
+    const existingTurn = await this.getCodexSessionTurn(turn.id);
+    if (existingTurn === undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session turn ${turn.id} does not exist`);
+    }
+    if (
+      existingTurn.codex_session_id !== turn.codex_session_id ||
+      existingTurn.workflow_id !== turn.workflow_id ||
+      existingTurn.intent !== turn.intent ||
+      existingTurn.input_digest !== turn.input_digest ||
+      existingTurn.expected_previous_snapshot_digest !== turn.expected_previous_snapshot_digest ||
+      existingTurn.output_snapshot_id !== turn.output_snapshot_id ||
+      existingTurn.output_snapshot_digest !== turn.output_snapshot_digest ||
+      existingTurn.lease_id !== turn.lease_id ||
+      existingTurn.lease_epoch !== turn.lease_epoch ||
+      existingTurn.created_at !== turn.created_at ||
+      existingTurn.created_by_actor_id !== turn.created_by_actor_id ||
+      existingTurn.output_object_type !== turn.output_object_type ||
+      existingTurn.output_object_id !== turn.output_object_id ||
+      existingTurn.codex_thread_id_digest !== turn.codex_thread_id_digest ||
+      existingTurn.automation_action_run_id !== turn.automation_action_run_id ||
+      existingTurn.runtime_job_id !== turn.runtime_job_id
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session turn ${turn.id} identity fields cannot change`);
+    }
+    if (existingTurn.status !== turn.status) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session turn ${turn.id} status cannot change through save`);
+    }
+    await this.db.update(codex_session_turns).set(toDbRecord(turn, codex_session_turns) as never).where(eq(codex_session_turns.id, turn.id));
+  }
+
+  async markCodexSessionTurnStale(input: { session_id: string; turn_id: string; now: string }): Promise<void> {
+    const turn = await this.getCodexSessionTurn(input.turn_id);
+    if (turn === undefined || turn.codex_session_id !== input.session_id) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Codex session turn ${input.turn_id} does not belong to session ${input.session_id}`,
+      );
+    }
+    if (turn.status !== 'running') return;
+    await this.db
+      .update(codex_session_turns)
+      .set({
+        status: 'stale',
+        outputSnapshotId: null,
+        outputSnapshotDigest: null,
+        codexThreadIdDigest: null,
+        updatedAt: input.now,
+      } as never)
+      .where(
+        and(
+          eq(codex_session_turns.id, input.turn_id),
+          eq(codex_session_turns.codexSessionId, input.session_id),
+          eq(codex_session_turns.status, 'running'),
+        ),
+      );
+  }
+
+  async createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void> {
+    if ((await this.getCodexSession(snapshot.codex_session_id)) === undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} session ${snapshot.codex_session_id} does not exist`);
+    }
+    const sourceTurn = snapshot.created_from_turn_id === undefined ? undefined : await this.getCodexSessionTurn(snapshot.created_from_turn_id);
+    if (sourceTurn === undefined || sourceTurn.codex_session_id !== snapshot.codex_session_id) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session snapshot ${snapshot.id} source turn is stale`);
+    }
+    let parsedArtifactRef: ReturnType<typeof parseInternalArtifactRef>;
+    try {
+      parsedArtifactRef = parseInternalArtifactRef(snapshot.artifact_ref);
+    } catch {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} artifact_ref is not an internal artifact ref`);
+    }
+    if (
+      parsedArtifactRef.kind !== 'codex_session_snapshot' ||
+      parsedArtifactRef.owner_type !== 'codex_session' ||
+      parsedArtifactRef.owner_id !== snapshot.codex_session_id ||
+      parsedArtifactRef.artifact_id !== snapshot.id
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} artifact_ref does not match the snapshot identity`);
+    }
+    const [existingForSequence] = await this.db
+      .select()
+      .from(codex_session_snapshots)
+      .where(and(eq(codex_session_snapshots.codexSessionId, snapshot.codex_session_id), eq(codex_session_snapshots.sequence, snapshot.sequence)))
+      .limit(1);
+    const [existingForArtifact] = await this.db
+      .select()
+      .from(codex_session_snapshots)
+      .where(eq(codex_session_snapshots.artifactRef, snapshot.artifact_ref))
+      .limit(1);
+    const maxSequenceResult = await this.db.execute(sql<{ max_sequence: number | null }>`
+      select max(sequence) as max_sequence from codex_session_snapshots where codex_session_id = ${snapshot.codex_session_id}
+    `);
+    const maxExistingSequence = Number(maxSequenceResult.rows[0]?.max_sequence ?? 0);
+    if ((await this.getCodexSessionSnapshot(snapshot.id)) !== undefined || existingForSequence !== undefined || existingForArtifact !== undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} is not unique`);
+    }
+    if (snapshot.sequence <= maxExistingSequence) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} sequence is stale`);
+    }
+    await this.db.insert(codex_session_snapshots).values(toDbRecord(snapshot, codex_session_snapshots) as never);
+  }
+
+  async getCodexSessionSnapshot(id: string): Promise<CodexSessionSnapshot | undefined> {
+    return this.getById(codex_session_snapshots, codex_session_snapshots.id, id);
+  }
+
+  async saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void> {
+    if ((await this.getById(codex_session_stale_terminalization_attempts, codex_session_stale_terminalization_attempts.id, attempt.id)) !== undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} already exists`);
+    }
+    const session = await this.getCodexSession(attempt.codex_session_id);
+    if (session === undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} session provenance is invalid`);
+    }
+    if (attempt.codex_session_turn_id !== undefined) {
+      const turn = await this.getCodexSessionTurn(attempt.codex_session_turn_id);
+      if (turn === undefined || turn.codex_session_id !== attempt.codex_session_id) {
+        throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} turn provenance is invalid`);
+      }
+    }
+    if (attempt.lease_id !== undefined) {
+      const lease = await this.getCodexSessionLease(attempt.lease_id);
+      if (lease === undefined || lease.codex_session_id !== attempt.codex_session_id) {
+        throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session stale terminalization attempt ${attempt.id} lease provenance is invalid`);
+      }
+    }
+    await this.db
+      .insert(codex_session_stale_terminalization_attempts)
+      .values(toDbRecord(attempt, codex_session_stale_terminalization_attempts) as never);
+  }
+
+  async listStaleCodexSessionTerminalizationAttempts(sessionId: string): Promise<CodexSessionStaleTerminalizationAttempt[]> {
+    return this.listWhere<CodexSessionStaleTerminalizationAttempt>(
+      codex_session_stale_terminalization_attempts,
+      eq(codex_session_stale_terminalization_attempts.codexSessionId, sessionId),
+      [codex_session_stale_terminalization_attempts.createdAt, codex_session_stale_terminalization_attempts.id],
+    );
+  }
+
+  async claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    return this.withObjectLock(`codex-session:${input.session_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).claimCodexSessionLeaseUnlocked(input),
+    );
+  }
+
+  private async claimCodexSessionLeaseUnlocked(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    if ((await this.getCodexSessionLease(input.lease_id)) !== undefined) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not unique`);
+    }
+    let session = await this.getCodexSession(input.session_id);
+    const workflow = session === undefined ? undefined : await this.getPlanItemWorkflow(session.owner_id);
+    const cannotClaim =
+      session === undefined ||
+      workflow === undefined ||
+      session.owner_type !== 'plan_item_workflow' ||
+      session.owner_id !== input.workflow_id ||
+      workflow.id !== input.workflow_id ||
+      session.role !== 'active' ||
+      workflow.active_codex_session_id !== session.id;
+    if (cannotClaim) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    if (session === undefined) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    const activeLease = await this.findActiveCodexSessionLease(session.id);
+    if (session.latest_snapshot_digest !== input.expected_previous_snapshot_digest) {
+      if (activeLease !== undefined || session.active_lease_id !== undefined) {
+        throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+      }
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${input.session_id} snapshot is stale`);
+    }
+    const recovered = await this.recoverExpiredActiveCodexSessionLeaseForClaimUnlocked(session, activeLease, input.now);
+    session = recovered.session;
+    if (recovered.conflict) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    if (!claimableCodexSessionStatuses.has(session.status)) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
+    }
+    const leaseEpoch = session.lease_epoch + 1;
+    const lease: CodexSessionLease = {
+      id: input.lease_id,
+      codex_session_id: session.id,
+      lease_token_hash: input.lease_token_hash,
+      lease_epoch: leaseEpoch,
+      worker_id: input.worker_id,
+      worker_session_digest: input.worker_session_digest,
+      status: 'active',
+      acquired_at: input.now,
+      expires_at: input.expires_at,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    const updatedSession: CodexSession = {
+      ...session,
+      status: 'running',
+      active_lease_id: lease.id,
+      lease_epoch: leaseEpoch,
+      updated_at: input.now,
+    };
+    await this.db.insert(codex_session_leases).values(toDbRecord(lease, codex_session_leases) as never);
+    await this.db.update(codex_sessions).set(toDbRecord(updatedSession, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+    return { session: updatedSession, lease };
+  }
+
+  async recoverCodexSessionLeaseForClaim(
+    input: RecoverCodexSessionLeaseForClaimInput,
+  ): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    return this.withObjectLock(`codex-session:${input.session_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).recoverCodexSessionLeaseForClaimUnlocked(input),
+    );
+  }
+
+  private async recoverCodexSessionLeaseForClaimUnlocked(
+    input: RecoverCodexSessionLeaseForClaimInput,
+  ): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    const session = await this.getCodexSession(input.session_id);
+    const workflow = session === undefined ? undefined : await this.getPlanItemWorkflow(session.owner_id);
+    const lease = await this.getCodexSessionLease(input.lease_id);
+    if (
+      session === undefined ||
+      workflow === undefined ||
+      lease === undefined ||
+      session.owner_type !== 'plan_item_workflow' ||
+      session.owner_id !== input.workflow_id ||
+      workflow.id !== input.workflow_id ||
+      session.role !== 'active' ||
+      workflow.active_codex_session_id !== session.id ||
+      session.status !== 'running' ||
+      session.active_lease_id !== lease.id ||
+      session.lease_epoch !== input.lease_epoch ||
+      lease.codex_session_id !== session.id ||
+      lease.status !== 'active' ||
+      lease.lease_token_hash !== input.lease_token_hash ||
+      lease.worker_id !== input.worker_id ||
+      lease.worker_session_digest !== input.worker_session_digest ||
+      lease.lease_epoch !== input.lease_epoch
+    ) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} cannot be recovered`);
+    }
+    if (session.latest_snapshot_digest !== input.expected_previous_snapshot_digest) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${input.session_id} snapshot is stale`);
+    }
+    if (lease.expires_at > input.now) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not stale`);
+    }
+    const fencedLease: CodexSessionLease = { ...lease, status: 'fenced', fenced_at: input.now, updated_at: input.now };
+    const { active_lease_id: _activeLeaseId, ...sessionWithoutActiveLease } = session;
+    const recoveredSession: CodexSession = { ...sessionWithoutActiveLease, status: 'recovering', updated_at: input.now };
+    await this.db.update(codex_session_leases).set(toDbRecord(fencedLease, codex_session_leases) as never).where(eq(codex_session_leases.id, lease.id));
+    await this.db.update(codex_sessions).set(toDbRecord(recoveredSession, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+    return { session: recoveredSession, lease: fencedLease };
+  }
+
+  private async recoverExpiredActiveCodexSessionLeaseForClaimUnlocked(
+    session: CodexSession,
+    activeLease: CodexSessionLease | undefined,
+    now: string,
+  ): Promise<{ session: CodexSession; conflict: boolean }> {
+    const leaseId = activeLease?.id ?? session.active_lease_id;
+    if (leaseId === undefined) {
+      return { session, conflict: false };
+    }
+    const lease = activeLease ?? await this.getCodexSessionLease(leaseId);
+    if (
+      lease === undefined ||
+      lease.codex_session_id !== session.id ||
+      lease.status !== 'active' ||
+      session.active_lease_id !== lease.id ||
+      session.status !== 'running' ||
+      lease.expires_at > now
+    ) {
+      return { session, conflict: true };
+    }
+    const fencedLease: CodexSessionLease = { ...lease, status: 'fenced', fenced_at: now, updated_at: now };
+    const { active_lease_id: _activeLeaseId, ...sessionWithoutActiveLease } = session;
+    const recoveredSession: CodexSession = { ...sessionWithoutActiveLease, status: 'recovering', updated_at: now };
+    await this.db.update(codex_session_leases).set(toDbRecord(fencedLease, codex_session_leases) as never).where(eq(codex_session_leases.id, lease.id));
+    await this.db.update(codex_sessions).set(toDbRecord(recoveredSession, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+    return { session: recoveredSession, conflict: false };
+  }
+
+  async renewCodexSessionLease(input: RenewCodexSessionLeaseInput): Promise<CodexSessionLease> {
+    return this.withObjectLock(`codex-session:${input.session_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).renewCodexSessionLeaseUnlocked(input),
+    );
+  }
+
+  private async renewCodexSessionLeaseUnlocked(input: RenewCodexSessionLeaseInput): Promise<CodexSessionLease> {
+    const lease = await this.getCodexSessionLease(input.lease_id);
+    const session = await this.getCodexSession(input.session_id);
+    if (
+      lease === undefined ||
+      session === undefined ||
+      lease.codex_session_id !== input.session_id ||
+      session.active_lease_id !== lease.id ||
+      lease.status !== 'active' ||
+      lease.lease_token_hash !== input.lease_token_hash ||
+      lease.worker_id !== input.worker_id ||
+      lease.worker_session_digest !== input.worker_session_digest ||
+      lease.lease_epoch !== input.lease_epoch
+    ) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} cannot be renewed`);
+    }
+    if (lease.expires_at <= input.now) {
+      throw new DomainError('codex_session_lease_expired', `codex_session_lease_expired: Codex session lease ${input.lease_id} has expired`);
+    }
+    const renewed: CodexSessionLease = { ...lease, heartbeat_at: input.now, expires_at: input.expires_at, updated_at: input.now };
+    const [updated] = await this.db
+      .update(codex_session_leases)
+      .set(toDbRecord(renewed, codex_session_leases) as never)
+      .where(
+        and(
+          eq(codex_session_leases.id, renewed.id),
+          eq(codex_session_leases.codexSessionId, input.session_id),
+          eq(codex_session_leases.status, 'active'),
+          eq(codex_session_leases.leaseTokenHash, input.lease_token_hash),
+          eq(codex_session_leases.workerId, input.worker_id),
+          eq(codex_session_leases.workerSessionDigest, input.worker_session_digest),
+          eq(codex_session_leases.leaseEpoch, input.lease_epoch),
+          gt(codex_session_leases.expiresAt, input.now),
+        ),
+      )
+      .returning();
+    if (updated === undefined) {
+      throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} cannot be renewed`);
+    }
+    return fromDbRecord<CodexSessionLease>(updated);
+  }
+
+  async terminalizeCodexSessionTurn(input: TerminalizeCodexSessionTurnInput): Promise<{ session: CodexSession; turn: CodexSessionTurn }> {
+    return this.withObjectLock(`codex-session:${input.session_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).terminalizeCodexSessionTurnUnlocked(input),
+    );
+  }
+
+  private async terminalizeCodexSessionTurnUnlocked(input: TerminalizeCodexSessionTurnInput): Promise<{ session: CodexSession; turn: CodexSessionTurn }> {
+    const session = await this.getCodexSession(input.session_id);
+    const turn = await this.getCodexSessionTurn(input.turn_id);
+    const lease = await this.getCodexSessionLease(input.lease_id);
+    if (
+      session === undefined ||
+      turn === undefined ||
+      lease === undefined ||
+      turn.codex_session_id !== session.id ||
+      session.latest_turn_id !== turn.id ||
+      session.latest_turn_digest !== turn.input_digest ||
+      turn.status !== 'running' ||
+      lease.codex_session_id !== session.id ||
+      session.active_lease_id !== lease.id ||
+      lease.status !== 'active' ||
+      lease.lease_token_hash !== input.lease_token_hash ||
+      lease.worker_id !== input.worker_id ||
+      lease.worker_session_digest !== input.worker_session_digest ||
+      lease.lease_epoch !== input.lease_epoch ||
+      session.lease_epoch !== input.lease_epoch ||
+      session.latest_snapshot_digest !== input.expected_previous_snapshot_digest ||
+      turn.expected_previous_snapshot_digest !== input.expected_previous_snapshot_digest
+    ) {
+      throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} terminalization is stale`);
+    }
+    if (lease.expires_at <= input.now) {
+      throw new DomainError('codex_session_lease_expired', `codex_session_lease_expired: Codex session lease ${input.lease_id} has expired`);
+    }
+    if (input.output_snapshot !== undefined && input.output_snapshot.codex_session_id !== session.id) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot does not belong to session ${session.id}`);
+    }
+    if (input.output_snapshot !== undefined && input.output_snapshot.created_from_turn_id !== input.turn_id) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot ${input.output_snapshot.id} does not belong to turn ${input.turn_id}`);
+    }
+    const existingOutputSnapshot = input.output_snapshot === undefined ? undefined : await this.getCodexSessionSnapshot(input.output_snapshot.id);
+    if (existingOutputSnapshot !== undefined && existingOutputSnapshot.created_from_turn_id !== input.turn_id) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot ${existingOutputSnapshot.id} does not belong to turn ${input.turn_id}`);
+    }
+    if (
+      input.output_snapshot !== undefined &&
+      existingOutputSnapshot !== undefined &&
+      !codexSessionSnapshotDurableIdentityMatches(existingOutputSnapshot, input.output_snapshot)
+    ) {
+      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot ${input.output_snapshot.id} durable identity is stale`);
+    }
+    const hasThreadIdInput = input.codex_thread_id !== undefined;
+    const hasThreadDigestInput = input.codex_thread_id_digest !== undefined;
+    if (hasThreadIdInput !== hasThreadDigestInput) {
+      throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} thread binding is incomplete`);
+    }
+    if (hasThreadIdInput && hasThreadDigestInput) {
+      const hasSessionThreadId = session.codex_thread_id !== undefined;
+      const hasSessionThreadDigest = session.codex_thread_id_digest !== undefined;
+      if (hasSessionThreadId !== hasSessionThreadDigest) {
+        throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} has a partial thread binding`);
+      }
+      if (
+        hasSessionThreadId &&
+        hasSessionThreadDigest &&
+        (session.codex_thread_id !== input.codex_thread_id || session.codex_thread_id_digest !== input.codex_thread_id_digest)
+      ) {
+        throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} thread binding is stale`);
+      }
+    }
+    const outputSnapshot = existingOutputSnapshot ?? input.output_snapshot;
+    const releasedLease: CodexSessionLease = { ...lease, status: 'released', released_at: input.now, updated_at: input.now };
+    const updatedTurn: CodexSessionTurn = {
+      ...turn,
+      status: input.status,
+      ...(outputSnapshot === undefined ? {} : { output_snapshot_id: outputSnapshot.id, output_snapshot_digest: outputSnapshot.digest }),
+      ...(input.output_object_type === undefined ? {} : { output_object_type: input.output_object_type }),
+      ...(input.output_object_id === undefined ? {} : { output_object_id: input.output_object_id }),
+      ...(input.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: input.codex_thread_id_digest }),
+      lease_id: lease.id,
+      lease_epoch: lease.lease_epoch,
+      updated_at: input.now,
+    };
+    const { active_lease_id: _activeLeaseId, ...sessionWithoutActiveLease } = session;
+    const updatedSession: CodexSession = {
+      ...sessionWithoutActiveLease,
+      status: input.status === 'succeeded' ? 'idle' : 'blocked',
+      latest_turn_id: updatedTurn.id,
+      latest_turn_digest: updatedTurn.output_snapshot_digest ?? updatedTurn.input_digest,
+      ...(outputSnapshot === undefined ? {} : { latest_snapshot_id: outputSnapshot.id, latest_snapshot_digest: outputSnapshot.digest }),
+      ...(input.codex_thread_id === undefined ? {} : { codex_thread_id: input.codex_thread_id }),
+      ...(input.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: input.codex_thread_id_digest }),
+      updated_at: input.now,
+    };
+    if (input.output_snapshot !== undefined && existingOutputSnapshot === undefined) {
+      await this.createCodexSessionSnapshot(input.output_snapshot);
+    }
+    await this.db.update(codex_session_leases).set(toDbRecord(releasedLease, codex_session_leases) as never).where(eq(codex_session_leases.id, releasedLease.id));
+    await this.db.update(codex_session_turns).set(toDbRecord(updatedTurn, codex_session_turns) as never).where(eq(codex_session_turns.id, updatedTurn.id));
+    await this.db.update(codex_sessions).set(toDbRecord(updatedSession, codex_sessions) as never).where(eq(codex_sessions.id, updatedSession.id));
+    return { session: updatedSession, turn: updatedTurn };
+  }
+
+  async createCodexSessionFork(input: CreateCodexSessionForkInput): Promise<CodexSession> {
+    return this.withObjectLock(`plan-item-workflow:${input.workflow_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).createCodexSessionForkUnlocked(input),
+    );
+  }
+
+  private async createCodexSessionForkUnlocked(input: CreateCodexSessionForkInput): Promise<CodexSession> {
+    const workflow = await this.getPlanItemWorkflow(input.workflow_id);
+    const parent = await this.getCodexSession(input.parent_session_id);
+    const forkTurn = input.forked_from_turn_id === undefined ? undefined : await this.getCodexSessionTurn(input.forked_from_turn_id);
+    const forkSnapshot = input.forked_from_snapshot_id === undefined ? undefined : await this.getCodexSessionSnapshot(input.forked_from_snapshot_id);
+    if (
+      workflow === undefined ||
+      parent === undefined ||
+      parent.owner_id !== workflow.id ||
+      parent.status === 'archived' ||
+      (await this.getCodexSession(input.id)) !== undefined ||
+      (input.forked_from_turn_id === undefined && input.forked_from_snapshot_id === undefined) ||
+      (input.forked_from_turn_id !== undefined && (forkTurn === undefined || forkTurn.codex_session_id !== parent.id)) ||
+      (input.forked_from_snapshot_id !== undefined && (forkSnapshot === undefined || forkSnapshot.codex_session_id !== parent.id)) ||
+      (forkTurn !== undefined &&
+        forkSnapshot !== undefined &&
+        (forkTurn.output_snapshot_id !== forkSnapshot.id || forkTurn.output_snapshot_digest !== forkSnapshot.digest))
+    ) {
+      throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);
+    }
+    const forkTurnOutputSnapshot =
+      forkTurn?.output_snapshot_id === undefined ? undefined : await this.getCodexSessionSnapshot(forkTurn.output_snapshot_id);
+    if (
+      forkTurn !== undefined &&
+      (forkTurn.output_snapshot_id !== undefined || forkTurn.output_snapshot_digest !== undefined) &&
+      (forkTurn.output_snapshot_id === undefined ||
+        forkTurn.output_snapshot_digest === undefined ||
+        forkTurnOutputSnapshot === undefined ||
+        forkTurnOutputSnapshot.codex_session_id !== parent.id ||
+        forkTurnOutputSnapshot.digest !== forkTurn.output_snapshot_digest ||
+        forkTurnOutputSnapshot.created_from_turn_id !== forkTurn.id)
+    ) {
+      throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);
+    }
+    const forkOutputSnapshot =
+      forkSnapshot ??
+      (forkTurn?.output_snapshot_id === undefined || forkTurn.output_snapshot_digest === undefined ? undefined : forkTurnOutputSnapshot);
+    const forkLatestSnapshot =
+      forkOutputSnapshot !== undefined &&
+      forkOutputSnapshot.codex_session_id === parent.id &&
+      forkOutputSnapshot.digest === (forkSnapshot?.digest ?? forkTurn?.output_snapshot_digest)
+        ? forkOutputSnapshot
+        : undefined;
+    const {
+      active_lease_id: _forkActiveLeaseId,
+      latest_turn_id: _forkLatestTurnId,
+      latest_turn_digest: _forkLatestTurnDigest,
+      latest_snapshot_id: _forkLatestSnapshotId,
+      latest_snapshot_digest: _forkLatestSnapshotDigest,
+      forked_from_turn_id: _parentForkedFromTurnId,
+      forked_from_snapshot_id: _parentForkedFromSnapshotId,
+      codex_thread_id: _parentCodexThreadId,
+      codex_thread_id_digest: _parentCodexThreadIdDigest,
+      archived_at: _forkArchivedAt,
+      ...forkBase
+    } = parent;
+    const fork: CodexSession = {
+      ...forkBase,
+      id: input.id,
+      status: 'idle',
+      role: 'candidate_fork',
+      lease_epoch: 0,
+      forked_from_session_id: parent.id,
+      ...(input.forked_from_turn_id === undefined ? {} : { forked_from_turn_id: input.forked_from_turn_id }),
+      ...(input.forked_from_snapshot_id === undefined ? {} : { forked_from_snapshot_id: input.forked_from_snapshot_id }),
+      ...(forkLatestSnapshot === undefined ? {} : { latest_snapshot_id: forkLatestSnapshot.id, latest_snapshot_digest: forkLatestSnapshot.digest }),
+      fork_reason: input.fork_reason,
+      created_by_actor_id: input.created_by_actor_id,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    await this.assertCanSaveCodexSession(fork);
+    await this.db.insert(codex_sessions).values(toDbRecord(fork, codex_sessions) as never);
+    return fork;
+  }
+
+  async selectActiveCodexSessionFork(
+    input: SelectActiveCodexSessionForkInput,
+  ): Promise<{ workflow: PlanItemWorkflow; selectedSession: CodexSession }> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const workflow = await this.getPlanItemWorkflow(input.workflow_id);
+      const previousActiveSessionId = workflow?.active_codex_session_id;
+      const result = await this.withAdvisoryLocks(
+        [
+          `plan-item-workflow:${input.workflow_id}`,
+          `codex-session:${input.selected_codex_session_id}`,
+          ...(previousActiveSessionId === undefined ? [] : [`codex-session:${previousActiveSessionId}`]),
+        ],
+        async (repository) => {
+          const lockedRepository = repository as DrizzleDeliveryRepository;
+          const lockedWorkflow = await lockedRepository.getPlanItemWorkflow(input.workflow_id);
+          if (lockedWorkflow?.active_codex_session_id !== previousActiveSessionId) {
+            return { type: 'retry' } as const;
+          }
+          return {
+            type: 'selected',
+            result: await lockedRepository.selectActiveCodexSessionForkUnlocked(input),
+          } as const;
+        },
+      );
+      if (result.type === 'selected') {
+        return result.result;
+      }
+    }
+    throw new DomainError(
+      'codex_session_fork_invalid',
+      `codex_session_fork_invalid: Workflow ${input.workflow_id} active Codex session changed while selecting a fork`,
+    );
+  }
+
+  private async selectActiveCodexSessionForkUnlocked(
+    input: SelectActiveCodexSessionForkInput,
+  ): Promise<{ workflow: PlanItemWorkflow; selectedSession: CodexSession }> {
+    const workflow = await this.getPlanItemWorkflow(input.workflow_id);
+    const selected = await this.getCodexSession(input.selected_codex_session_id);
+    const previousActive = workflow?.active_codex_session_id === undefined ? undefined : await this.getCodexSession(workflow.active_codex_session_id);
+    if (
+      workflow === undefined ||
+      selected === undefined ||
+      previousActive === undefined ||
+      selected.owner_id !== workflow.id ||
+      previousActive.owner_id !== workflow.id ||
+      selected.id === previousActive.id ||
+      (selected.role !== 'candidate_fork' && selected.role !== 'inactive_fork') ||
+      selected.status === 'archived' ||
+      previousActive.status === 'archived' ||
+      selected.status === 'running' ||
+      previousActive.status === 'running' ||
+      (await this.findActiveCodexSessionLease(selected.id)) !== undefined ||
+      (await this.findActiveCodexSessionLease(previousActive.id)) !== undefined ||
+      selected.active_lease_id !== undefined ||
+      previousActive.active_lease_id !== undefined
+    ) {
+      throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot select Codex session fork ${input.selected_codex_session_id}`);
+    }
+    if ((await this.getWorkflowManualDecision(input.manual_decision_id)) !== undefined || (await this.getPlanItemWorkflowTransition(input.transition_id)) !== undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Fork selection ${input.transition_id} already exists`);
+    }
+    const inactivePrevious: CodexSession = { ...previousActive, role: 'inactive_fork', updated_at: input.now };
+    const activeSelected: CodexSession = { ...selected, role: 'active', updated_at: input.now };
+    const updatedWorkflow: PlanItemWorkflow = { ...workflow, active_codex_session_id: activeSelected.id, updated_at: input.now };
+    const manualDecision: WorkflowManualDecision = {
+      id: input.manual_decision_id,
+      workflow_id: workflow.id,
+      codex_session_id: previousActive.id,
+      kind: 'fork_select',
+      reason: input.reason,
+      selected_codex_session_id: selected.id,
+      created_by_actor_id: input.actor_id,
+      created_at: input.now,
+    };
+    const transition: PlanItemWorkflowTransition = {
+      id: input.transition_id,
+      workflow_id: workflow.id,
+      from_status: workflow.status,
+      to_status: workflow.status,
+      actor_id: input.actor_id,
+      reason: input.reason,
+      evidence_object_type: 'manual_decision',
+      evidence_object_id: manualDecision.id,
+      codex_session_id: previousActive.id,
+      created_at: input.now,
+    };
+    if (!workflowManualDecisionSchema.safeParse(manualDecision).success || !planItemWorkflowTransitionSchema.safeParse(transition).success) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Fork selection transition ${input.transition_id} payload is invalid`);
+    }
+    assertWorkflowManualDecisionAllowedForTransition(manualDecision, {
+      from_status: transition.from_status,
+      to_status: transition.to_status,
+      ...(workflow.previous_status === undefined ? {} : { previous_status: workflow.previous_status }),
+    });
+    await this.db.insert(workflow_manual_decisions).values(toDbRecord(manualDecision, workflow_manual_decisions) as never);
+    await this.db.insert(plan_item_workflow_transitions).values(toDbRecord(transition, plan_item_workflow_transitions) as never);
+    await this.db.update(codex_sessions).set(toDbRecord(inactivePrevious, codex_sessions) as never).where(eq(codex_sessions.id, inactivePrevious.id));
+    await this.db.update(codex_sessions).set(toDbRecord(activeSelected, codex_sessions) as never).where(eq(codex_sessions.id, activeSelected.id));
+    await this.db.update(plan_item_workflows).set(toDbRecord(updatedWorkflow, plan_item_workflows) as never).where(eq(plan_item_workflows.id, updatedWorkflow.id));
+    return { workflow: updatedWorkflow, selectedSession: activeSelected };
+  }
+
+  private async getCodexSessionLease(id: string): Promise<CodexSessionLease | undefined> {
+    return this.getById(codex_session_leases, codex_session_leases.id, id);
+  }
+
+  private async getPlanItemWorkflowTransition(id: string): Promise<PlanItemWorkflowTransition | undefined> {
+    return this.getById(plan_item_workflow_transitions, plan_item_workflow_transitions.id, id);
+  }
+
+  private async findActiveCodexSessionForWorkflow(workflowId: string, exceptSessionId?: string): Promise<CodexSession | undefined> {
+    const conditions = [
+      eq(codex_sessions.ownerType, 'plan_item_workflow'),
+      eq(codex_sessions.ownerId, workflowId),
+      eq(codex_sessions.role, 'active'),
+      sql`${codex_sessions.status} <> 'archived'`,
+    ];
+    if (exceptSessionId !== undefined) {
+      conditions.push(sql`${codex_sessions.id} <> ${exceptSessionId}`);
+    }
+    const [row] = await this.db
+      .select()
+      .from(codex_sessions)
+      .where(and(...conditions))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<CodexSession>(row);
+  }
+
+  private async findActiveCodexSessionLease(sessionId: string): Promise<CodexSessionLease | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(codex_session_leases)
+      .where(and(eq(codex_session_leases.codexSessionId, sessionId), eq(codex_session_leases.status, 'active')))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<CodexSessionLease>(row);
+  }
+
+  private async assertCanSavePlanItemWorkflow(workflow: PlanItemWorkflow): Promise<void> {
+    if (workflow.status === 'archived') {
+      return;
+    }
+    const [existing] = await this.db
+      .select()
+      .from(plan_item_workflows)
+      .where(
+        and(
+          eq(plan_item_workflows.developmentPlanItemId, workflow.development_plan_item_id),
+          sql`${plan_item_workflows.status} <> 'archived'`,
+          sql`${plan_item_workflows.id} <> ${workflow.id}`,
+        ),
+      )
+      .limit(1);
+    if (existing !== undefined) {
+      throw new DomainError(
+        'workflow_active_session_conflict',
+        `workflow_active_session_conflict: Plan item ${workflow.development_plan_item_id} already has an active workflow`,
+      );
+    }
+  }
+
+  private async assertCanSaveCodexSession(session: CodexSession): Promise<void> {
+    if (session.role !== 'active' || session.status === 'archived') {
+      return;
+    }
+    const existing = await this.findActiveCodexSessionForWorkflow(session.owner_id, session.id);
+    if (existing !== undefined) {
+      throw new DomainError(
+        'workflow_active_session_conflict',
+        `workflow_active_session_conflict: Workflow ${session.owner_id} already has an active Codex session`,
+      );
+    }
+  }
+
+  private async assertWorkflowCodexSessionProvenance(workflowId: string, sessionId: string, context: string): Promise<void> {
+    const workflow = await this.getPlanItemWorkflow(workflowId);
+    const session = await this.getCodexSession(sessionId);
+    if (
+      workflow === undefined ||
+      session === undefined ||
+      session.owner_type !== 'plan_item_workflow' ||
+      session.owner_id !== workflow.id
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: ${context} Codex session provenance is invalid`);
+    }
+  }
+
+  private async assertWorkflowActiveCodexSessionProvenance(workflowId: string, sessionId: string, context: string): Promise<void> {
+    const workflow = await this.getPlanItemWorkflow(workflowId);
+    if (workflow === undefined || workflow.active_codex_session_id !== sessionId) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: ${context} Codex session is not the active workflow session`);
+    }
+  }
+
+  private async assertWorkflowCodexSessionTurnProvenance(
+    workflowId: string,
+    sessionId: string,
+    turnId: string,
+    context: string,
+  ): Promise<void> {
+    const turn = await this.getCodexSessionTurn(turnId);
+    if (turn === undefined || turn.workflow_id !== workflowId || turn.codex_session_id !== sessionId) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: ${context} Codex session turn provenance is invalid`);
+    }
+  }
+
+  private async assertCanAppendPlanItemWorkflowTransition(
+    transition: PlanItemWorkflowTransition,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): Promise<void> {
+    if ((await this.getPlanItemWorkflowTransition(transition.id)) !== undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} already exists`);
+    }
+    if (!planItemWorkflowTransitionSchema.safeParse(transition).success) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} payload is invalid`);
+    }
+    await this.assertWorkflowCodexSessionProvenance(transition.workflow_id, transition.codex_session_id, `Transition ${transition.id}`);
+    await this.assertWorkflowActiveCodexSessionProvenance(transition.workflow_id, transition.codex_session_id, `Transition ${transition.id}`);
+    if (transition.codex_session_turn_id !== undefined) {
+      await this.assertWorkflowCodexSessionTurnProvenance(
+        transition.workflow_id,
+        transition.codex_session_id,
+        transition.codex_session_turn_id,
+        `Transition ${transition.id}`,
+      );
+    }
+    await this.assertPlanItemWorkflowTransitionEvidence(transition, projectionPatch);
+  }
+
+  private nextWorkflowPreviousStatus(workflow: PlanItemWorkflow, transition: PlanItemWorkflowTransition): Pick<PlanItemWorkflow, 'previous_status'> {
+    if (transition.to_status === 'blocked' && transition.from_status !== 'blocked') {
+      return { previous_status: workflow.status };
+    }
+    if (transition.from_status === 'blocked' && transition.to_status !== 'blocked') {
+      return {};
+    }
+    return workflow.previous_status === undefined ? {} : { previous_status: workflow.previous_status };
+  }
+
+  private async assertPlanItemWorkflowProjectionPatchAllowed(input: ApplyPlanItemWorkflowTransitionInput): Promise<void> {
+    const patch = input.projection_patch;
+    if (patch === undefined) {
+      return;
+    }
+    const transition = input.transition;
+    const invalid =
+      (patch.active_boundary_summary_revision_id !== undefined &&
+        (transition.from_status !== 'boundary_review' ||
+          transition.to_status !== 'spec_generation_queued' ||
+          transition.evidence_object_type !== 'boundary_summary_revision' ||
+          transition.evidence_object_id !== patch.active_boundary_summary_revision_id)) ||
+      (patch.active_spec_doc_revision_id !== undefined &&
+        (transition.from_status !== 'spec_review' ||
+          transition.to_status !== 'implementation_plan_generation_queued' ||
+          transition.evidence_object_type !== 'spec_revision' ||
+          transition.evidence_object_id !== patch.active_spec_doc_revision_id)) ||
+      (patch.active_implementation_plan_doc_revision_id !== undefined &&
+        !(await this.isExecutionReadinessImplementationPlanProjectionPatchAllowed(
+          transition,
+          patch.active_implementation_plan_doc_revision_id,
+        ))) ||
+      (patch.execution_package_id !== undefined &&
+        (transition.from_status !== 'execution_ready' ||
+          transition.to_status !== 'execution_running' ||
+          transition.evidence_object_type !== 'execution_package' ||
+          transition.evidence_object_id !== patch.execution_package_id));
+    if (invalid) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} projection patch is invalid`);
+    }
+  }
+
+  private async isExecutionReadinessImplementationPlanProjectionPatchAllowed(
+    transition: PlanItemWorkflowTransition,
+    activeImplementationPlanRevisionId: string,
+  ): Promise<boolean> {
+    if (
+      transition.from_status !== 'implementation_plan_review' ||
+      transition.to_status !== 'execution_ready' ||
+      transition.evidence_object_type !== 'execution_readiness_record'
+    ) {
+      return false;
+    }
+    const record = await this.getExecutionReadinessRecord(transition.evidence_object_id);
+    return (
+      record?.approved_implementation_plan_revision_id === activeImplementationPlanRevisionId &&
+      record.supporting_evidence.some((evidence) => evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId) &&
+      transition.supporting_evidence?.some((evidence) => evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId) === true
+    );
+  }
+
+  private async assertPlanItemWorkflowTransitionEvidence(
+    transition: PlanItemWorkflowTransition,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): Promise<void> {
+    const workflow = await this.getPlanItemWorkflow(transition.workflow_id);
+    let primaryManualDecisionKind;
+    if (transition.evidence_object_type === 'manual_decision') {
+      primaryManualDecisionKind = (await this.getWorkflowManualDecision(transition.evidence_object_id))?.kind;
+    }
+    assertPlanItemWorkflowTransitionAllowed({
+      from_status: transition.from_status,
+      to_status: transition.to_status,
+      evidence_object_type: transition.evidence_object_type,
+      ...(workflow?.previous_status === undefined ? {} : { previous_status: workflow.previous_status }),
+      ...(primaryManualDecisionKind === undefined ? {} : { manual_decision_kind: primaryManualDecisionKind }),
+    });
+    await this.assertPlanItemWorkflowTransitionEvidenceObject(
+      transition,
+      transition.evidence_object_type,
+      transition.evidence_object_id,
+      true,
+      projectionPatch,
+    );
+    for (const evidence of transition.supporting_evidence ?? []) {
+      await this.assertPlanItemWorkflowTransitionEvidenceObject(transition, evidence.object_type, evidence.object_id);
+    }
+  }
+
+  private async assertPlanItemWorkflowTransitionEvidenceObject(
+    transition: PlanItemWorkflowTransition,
+    evidenceObjectType: PlanItemWorkflowTransition['evidence_object_type'],
+    evidenceObjectId: string,
+    isPrimaryEvidence = false,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): Promise<void> {
+    if (!workflowTransitionEvidenceObjectTypeSchema.safeParse(evidenceObjectType).success) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} evidence object type is invalid`);
+    }
+    if (evidenceObjectType === 'manual_decision') {
+      const decision = await this.getWorkflowManualDecision(evidenceObjectId);
+      if (
+        decision === undefined ||
+        decision.workflow_id !== transition.workflow_id ||
+        decision.codex_session_id !== transition.codex_session_id ||
+        decision.created_by_actor_id !== transition.actor_id
+      ) {
+        throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} manual decision evidence is invalid`);
+      }
+      if (isPrimaryEvidence) {
+        const workflow = await this.getPlanItemWorkflow(transition.workflow_id);
+        assertWorkflowManualDecisionAllowedForTransition(decision, {
+          from_status: transition.from_status,
+          to_status: transition.to_status,
+          ...(workflow?.previous_status === undefined ? {} : { previous_status: workflow.previous_status }),
+        });
+      }
+      return;
+    }
+    if (evidenceObjectType === 'execution_readiness_record') {
+      await this.assertPlanItemWorkflowExecutionReadinessEvidence(transition, evidenceObjectId, isPrimaryEvidence, projectionPatch);
+      return;
+    }
+    if (evidenceObjectType === 'boundary_summary_revision') {
+      await this.assertWorkflowDocumentGateEvidenceRecord(
+        transition,
+        await this.getBoundarySummaryRevisionById(evidenceObjectId),
+        `Transition ${transition.id} boundary summary revision evidence is invalid`,
+      );
+      return;
+    }
+    if (evidenceObjectType === 'spec_revision') {
+      await this.assertWorkflowDocumentGateEvidenceRecord(
+        transition,
+        await this.getSpecRevision(evidenceObjectId),
+        `Transition ${transition.id} spec revision evidence is invalid`,
+      );
+      return;
+    }
+    if (evidenceObjectType === 'implementation_plan_revision') {
+      await this.assertWorkflowDocumentGateEvidenceRecord(
+        transition,
+        await this.getExecutionPlanRevision(evidenceObjectId),
+        `Transition ${transition.id} implementation plan revision evidence is invalid`,
+      );
+      return;
+    }
+    if (evidenceObjectType === 'execution_package') {
+      await this.assertWorkflowScopedEvidenceRecord(
+        transition,
+        await this.getExecutionPackage(evidenceObjectId),
+        `Transition ${transition.id} execution package evidence is invalid`,
+      );
+      return;
+    }
+    if (evidenceObjectType === 'run_session') {
+      await this.assertWorkflowScopedEvidenceRecord(
+        transition,
+        await this.getRunSession(evidenceObjectId),
+        `Transition ${transition.id} run session evidence is invalid`,
+      );
+      return;
+    }
+    if (evidenceObjectType === 'review_packet') {
+      await this.assertWorkflowScopedEvidenceRecord(
+        transition,
+        await this.getReviewPacket(evidenceObjectId),
+        `Transition ${transition.id} review packet evidence is invalid`,
+      );
+      return;
+    }
+    if (evidenceObjectType === 'commit' || evidenceObjectType === 'pull_request') {
+      await this.assertPlanItemWorkflowRepositoryEvidence(transition, evidenceObjectType, evidenceObjectId);
+      return;
+    }
+    if (evidenceObjectType === 'internal_artifact') {
+      await this.assertPlanItemWorkflowInternalArtifactEvidence(transition, evidenceObjectId);
+    }
+  }
+
+  private async assertPlanItemWorkflowExecutionReadinessEvidence(
+    transition: PlanItemWorkflowTransition,
+    evidenceObjectId: string,
+    isPrimaryEvidence: boolean,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): Promise<void> {
+    const workflow = await this.getPlanItemWorkflow(transition.workflow_id);
+    const record = await this.getExecutionReadinessRecord(evidenceObjectId);
+    const transitionPatchPlanRevisionId =
+      transition.to_status === 'execution_ready' && isPrimaryEvidence
+        ? projectionPatch?.active_implementation_plan_doc_revision_id
+        : undefined;
+    const activeImplementationPlanRevisionId = workflow?.active_implementation_plan_doc_revision_id ?? transitionPatchPlanRevisionId;
+    const hasReadinessPlanSupport =
+      activeImplementationPlanRevisionId !== undefined &&
+      record?.supporting_evidence.some((evidence) => evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId) === true;
+    const hasTransitionPlanSupport =
+      activeImplementationPlanRevisionId !== undefined &&
+      transition.supporting_evidence?.some((evidence) => evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId) === true;
+    if (
+      workflow === undefined ||
+      record === undefined ||
+      record.workflow_id !== transition.workflow_id ||
+      record.development_plan_id !== workflow.development_plan_id ||
+      record.development_plan_item_id !== workflow.development_plan_item_id ||
+      record.codex_session_id !== transition.codex_session_id ||
+      (isPrimaryEvidence &&
+        (record.readiness_state !== 'ready' ||
+          record.approved_boundary_summary_revision_id !== workflow.active_boundary_summary_revision_id ||
+          record.approved_spec_revision_id !== workflow.active_spec_doc_revision_id ||
+          record.approved_implementation_plan_revision_id !== activeImplementationPlanRevisionId ||
+          !hasReadinessPlanSupport ||
+          !hasTransitionPlanSupport))
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} execution readiness evidence is invalid`);
+    }
+  }
+
+  private async assertPlanItemWorkflowRepositoryEvidence(
+    transition: PlanItemWorkflowTransition,
+    evidenceObjectType: 'commit' | 'pull_request',
+    evidenceObjectId: string,
+  ): Promise<void> {
+    const workflow = await this.getPlanItemWorkflow(transition.workflow_id);
+    if (
+      workflow === undefined ||
+      (await this.resolveWorkflowRepositoryEvidence({
+        evidence_object_type: evidenceObjectType,
+        evidence_object_id: evidenceObjectId,
+        workflow_id: transition.workflow_id,
+        development_plan_id: workflow.development_plan_id,
+        development_plan_item_id: workflow.development_plan_item_id,
+      })) === undefined
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} repository evidence is invalid`);
+    }
+  }
+
+  private async assertPlanItemWorkflowInternalArtifactEvidence(
+    transition: PlanItemWorkflowTransition,
+    evidenceObjectId: string,
+  ): Promise<void> {
+    const workflow = await this.getPlanItemWorkflow(transition.workflow_id);
+    const artifact = await this.getInternalArtifactObjectById(evidenceObjectId);
+    const isValidArtifact =
+      workflow !== undefined &&
+      artifact !== undefined &&
+      artifact.deleted_at === undefined &&
+      ((artifact.owner_type === 'codex_session' && artifact.owner_id === transition.codex_session_id) ||
+        (artifact.owner_type === 'execution_package' && artifact.owner_id === workflow.execution_package_id));
+    if (!isValidArtifact) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} internal artifact evidence is invalid`);
+    }
+  }
+
+  private async assertWorkflowScopedEvidenceRecord(
+    transition: PlanItemWorkflowTransition,
+    record: { workflow_id?: string; codex_session_id?: string } | undefined,
+    message: string,
+  ): Promise<void> {
+    if (
+      record === undefined ||
+      record.workflow_id !== transition.workflow_id ||
+      (record.codex_session_id !== undefined && record.codex_session_id !== transition.codex_session_id)
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: ${message}`);
+    }
+  }
+
+  private async assertWorkflowDocumentGateEvidenceRecord(
+    transition: PlanItemWorkflowTransition,
+    record: { workflow_id?: string; codex_session_id?: string; development_plan_item_id?: string } | undefined,
+    message: string,
+  ): Promise<void> {
+    const workflow = await this.getPlanItemWorkflow(transition.workflow_id);
+    if (
+      workflow === undefined ||
+      record === undefined ||
+      record.workflow_id !== transition.workflow_id ||
+      record.codex_session_id !== transition.codex_session_id ||
+      record.development_plan_item_id !== workflow.development_plan_item_id
+    ) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: ${message}`);
+    }
   }
 
   async createCodexRuntimeProfileWithRevision(
@@ -3390,6 +4882,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       record.launch_attempt === input.launch_attempt &&
       record.input_digest === input.input_digest &&
       valuesEqual(record.input_json, input.input_json) &&
+      record.workflow_id === input.workflow_id &&
+      record.codex_session_id === input.codex_session_id &&
+      record.codex_session_turn_id === input.codex_session_turn_id &&
       record.workspace_acquisition_digest === input.workspace_acquisition_digest &&
       valuesEqual(record.workspace_acquisition_json, input.workspace_acquisition_json) &&
       record.worker_id === input.worker_id &&
@@ -3630,6 +5125,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       status: 'queued',
       inputDigest: input.input_digest,
       inputJson: input.input_json,
+      workflowId: input.workflow_id ?? null,
+      codexSessionId: input.codex_session_id ?? null,
+      codexSessionTurnId: input.codex_session_turn_id ?? null,
       workspaceAcquisitionDigest: input.workspace_acquisition_digest ?? null,
       workspaceAcquisitionJson: input.workspace_acquisition_json ?? null,
       runtimeProfileRevisionId: input.runtime_profile_revision_id,
@@ -4906,7 +6404,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private boundarySummaryRevisionDbRecord(revision: BoundarySummaryRevision): Record<string, unknown> {
-    const record = { ...(revision as Record<string, unknown>) };
+    const record = { ...(revision as unknown as Record<string, unknown>) };
     const decisionSnapshot = this.normalizedBoundaryDecisionSnapshot(record.decision_snapshot);
     record.status ??= this.boundarySummaryRevisionStatus(revision);
     record.confirmed_scope ??= [];
@@ -4929,7 +6427,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private boundarySummaryRevisionBackfillComparisonRecord(revision: BoundarySummaryRevision): Record<string, unknown> {
-    const record = { ...(revision as Record<string, unknown>) };
+    const record = { ...(revision as unknown as Record<string, unknown>) };
     if (record.session_id !== undefined && record.brainstorming_session_id === undefined) {
       record.brainstorming_session_id = record.session_id;
     }
@@ -4944,7 +6442,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   private async hydrateBoundarySummaryRevisionForSave(
     revision: BoundarySummaryRevision,
   ): Promise<BoundarySummaryRevision> {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     const revisionSessionId = this.boundarySummaryRevisionSessionId(revision);
     const needsSummary = revisionSessionId === undefined || typeof record.development_plan_id !== 'string';
     const summary = needsSummary ? await this.getBoundarySummary(revision.boundary_summary_id) : undefined;
@@ -4959,7 +6457,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private boundarySummaryRevisionSessionId(revision: BoundarySummaryRevision): string | undefined {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     return typeof record.session_id === 'string'
       ? record.session_id
       : typeof record.brainstorming_session_id === 'string'
@@ -4979,7 +6477,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     session: BrainstormingSession | undefined,
     summary: BoundarySummary | undefined,
   ): Promise<BoundarySummaryRevision> {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     const sessionId = this.boundarySummaryRevisionSessionId(revision) ?? session?.id;
     const sessionRevisionId =
       typeof record.session_revision_id === 'string'
@@ -5074,7 +6572,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private boundarySummaryRevisionHasApprovedEvidence(revision: BoundarySummaryRevision): boolean {
-    const record = revision as Record<string, unknown>;
+    const record = revision as unknown as Record<string, unknown>;
     return (
       typeof record.session_id === 'string' &&
       typeof record.session_revision_id === 'string' &&
@@ -5124,15 +6622,21 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async saveExecution(execution: Execution): Promise<void> {
-    await this.upsert(executions, executions.id, execution);
+    const record = executionDbRecord(execution);
+    await this.db.insert(executions).values(record as never).onConflictDoUpdate({
+      target: executions.id,
+      set: record as never,
+    });
   }
 
   async getExecution(id: string): Promise<Execution | undefined> {
-    return this.getById(executions, executions.id, id);
+    const [record] = await this.db.select().from(executions).where(eq(executions.id, id)).limit(1);
+    return record === undefined ? undefined : executionFromDbRecord(record);
   }
 
   async listExecutions(): Promise<Execution[]> {
-    return this.listWhere<Execution>(executions, undefined, [executions.createdAt, executions.id]);
+    const records = await this.db.select().from(executions).orderBy(executions.createdAt, executions.id);
+    return records.map((record) => executionFromDbRecord(record));
   }
 
   async backfillExecutionApprovedSpecLinkage(input: { now: string }): Promise<{ updated_execution_ids: string[] }> {
@@ -6085,6 +7589,25 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, id);
   }
 
+  async getAutomationActionRunByIdempotencyKey(input: GetAutomationActionRunByIdempotencyKeyInput): Promise<AutomationActionRun | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(automation_action_runs)
+      .where(
+        and(
+          eq(automation_action_runs.idempotencyKey, input.idempotency_key),
+          eq(automation_action_runs.actionType, input.action_type),
+          eq(automation_action_runs.targetObjectType, input.target_object_type),
+          eq(automation_action_runs.targetObjectId, input.target_object_id),
+          input.target_revision_id === undefined
+            ? isNull(automation_action_runs.targetRevisionId)
+            : eq(automation_action_runs.targetRevisionId, input.target_revision_id),
+        ),
+      )
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<AutomationActionRun>(row);
+  }
+
   async latestCompletedProjectionActionRun(
     input: LatestCompletedProjectionActionRunInput,
   ): Promise<AutomationActionRun | undefined> {
@@ -6527,18 +8050,21 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   async appendStatusHistory(statusHistory: StatusHistory): Promise<void> {
     await this.db
       .insert(status_histories)
-      .values(toDbRecord(statusHistory, status_histories) as never)
+      .values(statusHistoryDbRecord(statusHistory) as never)
       .onConflictDoNothing();
   }
 
   async listStatusHistory(objectId: string, objectType?: string): Promise<StatusHistory[]> {
-    return this.listWhere<StatusHistory>(
-      status_histories,
-      objectType === undefined
-        ? eq(status_histories.objectId, objectId)
-        : and(eq(status_histories.objectId, objectId), eq(status_histories.objectType, objectType)),
-      status_histories.createdAt,
-    );
+    const records = await this.db
+      .select()
+      .from(status_histories)
+      .where(
+        objectType === undefined
+          ? eq(status_histories.objectId, objectId)
+          : and(eq(status_histories.objectId, objectId), eq(status_histories.objectType, objectType)),
+      )
+      .orderBy(status_histories.createdAt);
+    return records.map((record) => statusHistoryFromDbRecord(record));
   }
 
   async saveArtifact(artifact: Artifact): Promise<void> {
@@ -6567,11 +8093,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async saveTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
     const record = toDbRecord(traceEvent, trace_events);
-    const { createdAt: _createdAt, ...set } = record;
-    await this.db
-      .insert(trace_events)
-      .values(record as never)
-      .onConflictDoUpdate({ target: trace_events.id, set: set as never });
+    await this.db.insert(trace_events).values(record as never);
+  }
+
+  async updateTraceEvent(traceEvent: TraceEventRecord): Promise<void> {
+    const record = toDbRecord(traceEvent, trace_events);
+    const { id: _id, createdAt: _createdAt, ...set } = record;
+    await this.db.update(trace_events).set(set as never).where(eq(trace_events.id, traceEvent.id));
   }
 
   async listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]> {
@@ -7731,6 +9259,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       capability_fingerprint: input.capability_fingerprint,
       precondition_fingerprint: input.precondition_fingerprint,
       action_input_json: input.action_input_json,
+      ...(input.workflow_id === undefined ? {} : { workflow_id: input.workflow_id }),
+      ...(input.codex_session_id === undefined ? {} : { codex_session_id: input.codex_session_id }),
+      ...(input.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: input.codex_session_turn_id }),
       status: 'pending',
       attempt: 0,
       ...(input.created_by === undefined ? {} : { created_by: input.created_by }),
@@ -7825,6 +9356,15 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       capability_fingerprint: input.capability_fingerprint,
       precondition_fingerprint: input.precondition_fingerprint,
       action_input_json: input.action_input_json,
+      ...(existing?.workflow_id === undefined && input.workflow_id === undefined
+        ? {}
+        : { workflow_id: existing?.workflow_id ?? input.workflow_id }),
+      ...(existing?.codex_session_id === undefined && input.codex_session_id === undefined
+        ? {}
+        : { codex_session_id: existing?.codex_session_id ?? input.codex_session_id }),
+      ...(existing?.codex_session_turn_id === undefined && input.codex_session_turn_id === undefined
+        ? {}
+        : { codex_session_turn_id: existing?.codex_session_turn_id ?? input.codex_session_turn_id }),
       status: 'running',
       claim_token: input.claim_token,
       attempt: (existing?.attempt ?? 0) + 1,
@@ -7867,6 +9407,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       capability_fingerprint: actionRun.capability_fingerprint,
       precondition_fingerprint: actionRun.precondition_fingerprint,
       action_input_json: actionRun.action_input_json,
+      ...(actionRun.workflow_id === undefined ? {} : { workflow_id: actionRun.workflow_id }),
+      ...(actionRun.codex_session_id === undefined ? {} : { codex_session_id: actionRun.codex_session_id }),
+      ...(actionRun.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: actionRun.codex_session_turn_id }),
       status: 'running',
       claim_token: input.claim_token,
       attempt: actionRun.attempt + 1,
@@ -7900,6 +9443,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private assertAutomationActionIdentityMatches(existing: AutomationActionRun, input: ClaimAutomationActionRunInput): void {
+    const existingWorkflowOwned = existing.workflow_id !== undefined || existing.codex_session_id !== undefined;
+    const inputWorkflowOwned = input.workflow_id !== undefined || input.codex_session_id !== undefined;
+    const workflowContextMismatched =
+      existingWorkflowOwned || inputWorkflowOwned
+        ? existing.workflow_id !== input.workflow_id || existing.codex_session_id !== input.codex_session_id
+        : existing.codex_session_turn_id !== input.codex_session_turn_id;
     const mismatched =
       existing.action_type !== input.action_type ||
       existing.target_object_type !== input.target_object_type ||
@@ -7911,6 +9460,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       existing.automation_settings_version !== input.automation_settings_version ||
       existing.capability_fingerprint !== input.capability_fingerprint ||
       existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      workflowContextMismatched ||
       !valuesEqual(existing.action_input_json, input.action_input_json);
     if (mismatched) {
       throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} identity changed`);
@@ -7944,6 +9494,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       return;
     }
 
+    const existingWorkflowOwned = existing.workflow_id !== undefined || existing.codex_session_id !== undefined;
+    const inputWorkflowOwned = input.workflow_id !== undefined || input.codex_session_id !== undefined;
+    const workflowContextMismatched =
+      existingWorkflowOwned || inputWorkflowOwned
+        ? existing.workflow_id !== input.workflow_id || existing.codex_session_id !== input.codex_session_id
+        : existing.codex_session_turn_id !== input.codex_session_turn_id;
     const mismatched =
       existing.action_type !== input.action_type ||
       existing.target_object_type !== input.target_object_type ||
@@ -7955,6 +9511,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       existing.automation_settings_version !== input.automation_settings_version ||
       existing.capability_fingerprint !== input.capability_fingerprint ||
       existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      workflowContextMismatched ||
       !valuesEqual(existing.action_input_json, input.action_input_json);
     if (mismatched) {
       throw new DomainError(

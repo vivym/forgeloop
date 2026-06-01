@@ -58,7 +58,13 @@ import {
   codex_worker_bootstrap_tokens,
   codex_worker_registrations,
   codex_worker_session_nonces,
+  codex_sessions,
+  codex_session_leases,
+  codex_session_snapshots,
+  codex_session_stale_terminalization_attempts,
+  codex_session_turns,
   command_idempotency_records,
+  execution_readiness_records,
   boundary_answers,
   boundary_decisions,
   boundary_questions,
@@ -73,6 +79,9 @@ import {
   development_plan_items,
   development_plan_source_links,
   development_plans,
+  plan_item_workflows,
+  plan_item_workflow_transitions,
+  workflow_manual_decisions,
   executions,
   execution_plan_revisions,
   execution_plans,
@@ -113,10 +122,16 @@ const requiredTables = {
   codex_pending_workspace_bundles,
   codex_launch_leases,
   codex_runtime_setup_nonces,
+  codex_sessions,
+  codex_session_leases,
+  codex_session_snapshots,
+  codex_session_stale_terminalization_attempts,
+  codex_session_turns,
   automation_project_settings,
   manual_path_holds,
   manual_path_hold_idempotency_records,
   command_idempotency_records,
+  execution_readiness_records,
   boundary_answers,
   boundary_decisions,
   boundary_questions,
@@ -127,6 +142,9 @@ const requiredTables = {
   development_plan_source_links,
   development_plan_items,
   development_plan_item_revisions,
+  plan_item_workflows,
+  plan_item_workflow_transitions,
+  workflow_manual_decisions,
   brainstorming_sessions,
   boundary_summaries,
   boundary_summary_revisions,
@@ -187,7 +205,12 @@ const columnType = (table: TableLike, columnName: string) => column(table, colum
 const columnNotNull = (table: TableLike, columnName: string) => column(table, columnName).notNull === true;
 
 const primaryKeyColumnNames = (table: ConfiguredTable) =>
-  getTableConfig(table).primaryKeys.map((primaryKey) => primaryKey.columns.map((keyColumn) => keyColumn.name));
+  [
+    ...getTableConfig(table).primaryKeys.map((primaryKey) => primaryKey.columns.map((keyColumn) => keyColumn.name)),
+    ...Object.values(getTableColumns(table))
+      .filter((tableColumn) => (tableColumn as ColumnLike).primary === true)
+      .map((tableColumn) => [(tableColumn as ColumnLike).name]),
+  ];
 
 const hasForeignKey = (table: ConfiguredTable, columnName: string, foreignColumn: ColumnLike) =>
   getTableConfig(table).foreignKeys.some((foreignKey) => {
@@ -252,6 +275,11 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'codex_runtime_profiles',
         'codex_runtime_profile_revisions',
         'codex_runtime_setup_nonces',
+        'codex_session_leases',
+        'codex_session_snapshots',
+        'codex_session_stale_terminalization_attempts',
+        'codex_session_turns',
+        'codex_sessions',
         'codex_worker_bootstrap_tokens',
         'codex_worker_registrations',
         'codex_worker_session_nonces',
@@ -262,6 +290,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'development_plan_revisions',
         'development_plan_source_links',
         'development_plans',
+        'execution_readiness_records',
         'execution_plan_revisions',
         'execution_plans',
         'execution_package_dependencies',
@@ -273,6 +302,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'manual_path_holds',
         'manual_path_hold_idempotency_records',
         'organizations',
+        'plan_item_workflow_transitions',
+        'plan_item_workflows',
         'plan_revisions',
         'plans',
         'project_repos',
@@ -296,6 +327,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'trace_links',
         'tasks',
         'work_items',
+        'workflow_manual_decisions',
       ].sort(),
     );
 
@@ -490,6 +522,41 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnNotNull(brainstorming_sessions, 'leaderDelegateActorIds')).toBe(false);
     expect(columnNotNull(brainstorming_sessions, 'status')).toBe(false);
     expect(columnNotNull(boundary_summary_revisions, 'developmentPlanId')).toBe(false);
+  });
+
+  it('defines Plan Item Workflow and Codex Session tables', () => {
+    expect(primaryKeyColumnNames(plan_item_workflows)).toEqual([['id']]);
+    expect(columnType(plan_item_workflows, 'status')).toBe('PgText');
+    expect(columnNotNull(plan_item_workflows, 'development_plan_item_id')).toBe(true);
+    expect(columnNotNull(plan_item_workflows, 'created_by_actor_id')).toBe(true);
+    expect(hasIndex(plan_item_workflows, 'plan_item_workflows_item_idx', ['development_plan_id', 'development_plan_item_id'])).toBe(true);
+
+    expect(primaryKeyColumnNames(codex_sessions)).toEqual([['id']]);
+    expect(columnNotNull(codex_sessions, 'role')).toBe(true);
+    expect(columnNotNull(codex_sessions, 'lease_epoch')).toBe(true);
+    expect(columnNotNull(codex_sessions, 'created_by_actor_id')).toBe(true);
+    expect(hasIndex(codex_sessions, 'codex_sessions_owner_idx', ['owner_type', 'owner_id'])).toBe(true);
+
+    expect(columnNotNull(plan_item_workflow_transitions, 'actor_id')).toBe(true);
+    expect(columnNotNull(workflow_manual_decisions, 'created_by_actor_id')).toBe(true);
+    expect(columnNotNull(execution_readiness_records, 'created_by_actor_id')).toBe(true);
+    expect(columnNotNull(codex_session_turns, 'created_by_actor_id')).toBe(true);
+    expect(columnNotNull(codex_session_snapshots, 'created_by_actor_id')).toBe(true);
+
+    expect(primaryKeyColumnNames(codex_session_leases)).toEqual([['id']]);
+    expect(columnNotNull(codex_session_leases, 'lease_token_hash')).toBe(true);
+    expect(hasIndex(codex_session_leases, 'codex_session_leases_session_epoch_idx', ['codex_session_id', 'lease_epoch'])).toBe(true);
+  });
+
+  it('adds workflow references to child delivery records', () => {
+    expect(columnType(brainstorming_sessions, 'workflow_id')).toBe('PgUUID');
+    expect(columnType(boundary_summary_revisions, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(execution_readiness_records, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(spec_revisions, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(execution_plan_revisions, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(automation_action_runs, 'workflow_id')).toBe('PgUUID');
+    expect(columnType(codex_runtime_jobs, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(run_sessions, 'codex_session_turn_id')).toBe('PgUUID');
   });
 
   it('uses UUID ids for aggregate tables and text ids for runtime protocol tables', () => {
@@ -785,6 +852,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(brainstorming_sessions, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
     expect(hasForeignKey(boundary_summaries, 'brainstorming_session_id', column(brainstorming_sessions, 'id'))).toBe(true);
     expect(hasForeignKey(boundary_summary_revisions, 'boundary_summary_id', column(boundary_summaries, 'id'))).toBe(true);
+    expect(hasForeignKey(boundary_summary_revisions, 'codex_session_turn_id', column(codex_session_turns, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_readiness_records, 'codex_session_turn_id', column(codex_session_turns, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plans, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plan_revisions, 'execution_plan_id', column(execution_plans, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plan_revisions, 'based_on_spec_revision_id', column(spec_revisions, 'id'))).toBe(true);

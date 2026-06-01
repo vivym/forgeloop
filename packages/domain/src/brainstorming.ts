@@ -1,12 +1,13 @@
 import type {
   BoundarySummary as ContractBoundarySummary,
   BoundarySummaryRevision as ContractBoundarySummaryRevision,
+  BoundaryRound as ContractBoundaryRound,
   BrainstormingAnswer as ContractBoundaryAnswer,
   BrainstormingDecision as ContractBoundaryDecision,
   BrainstormingQuestion as ContractBoundaryQuestion,
   BrainstormingSession as ContractBrainstormingSession,
 } from '@forgeloop/contracts';
-import type { IsoDateTime } from './types.js';
+import type { IsoDateTime, WorkflowPersistenceRefs } from './types.js';
 
 export interface BoundaryQuestion extends ContractBoundaryQuestion {}
 
@@ -14,7 +15,9 @@ export interface BoundaryAnswer extends ContractBoundaryAnswer {}
 
 export interface BoundaryDecision extends ContractBoundaryDecision {}
 
-export interface BrainstormingSession extends ContractBrainstormingSession {
+export interface BoundaryRound extends ContractBoundaryRound {}
+
+export interface BrainstormingSession extends ContractBrainstormingSession, WorkflowPersistenceRefs {
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
 }
@@ -40,7 +43,9 @@ interface LegacyBoundarySummaryRevision {
   created_at: IsoDateTime;
 }
 
-export type BoundarySummaryRevision = ContractBoundarySummaryRevision | LegacyBoundarySummaryRevision;
+export type BoundarySummaryRevision =
+  | (ContractBoundarySummaryRevision & WorkflowPersistenceRefs)
+  | (LegacyBoundarySummaryRevision & WorkflowPersistenceRefs);
 
 export const actorCanActForBoundaryLeader = (
   session: Pick<BrainstormingSession, 'leader_actor_id'> & { leader_delegate_actor_ids?: string[] | undefined },

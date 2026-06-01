@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ExecutorResult, RunSpec } from '@forgeloop/contracts';
 import {
   InMemoryDeliveryRepository,
@@ -35,6 +35,7 @@ import {
 
 const execFile = promisify(execFileCallback);
 const tempRoots: string[] = [];
+let previousArtifactStoreRoot: string | undefined;
 
 const makeTempDir = async (): Promise<string> => {
   const dir = await mkdtemp(join(tmpdir(), 'forgeloop-run-worker-'));
@@ -118,7 +119,17 @@ const remoteRunExecutionStatusForTest = () => ({
   network_policy_digest: `sha256:${'d'.repeat(64)}`,
 });
 
+beforeEach(async () => {
+  previousArtifactStoreRoot = process.env.FORGELOOP_ARTIFACT_STORE_ROOT;
+  process.env.FORGELOOP_ARTIFACT_STORE_ROOT = await makeTempDir();
+});
+
 afterEach(async () => {
+  if (previousArtifactStoreRoot === undefined) {
+    delete process.env.FORGELOOP_ARTIFACT_STORE_ROOT;
+  } else {
+    process.env.FORGELOOP_ARTIFACT_STORE_ROOT = previousArtifactStoreRoot;
+  }
   await Promise.all(tempRoots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 

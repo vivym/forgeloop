@@ -988,6 +988,7 @@ describe('project management typed object contracts', () => {
         leader_input_markdown: 'Clarify runtime boundary.',
         ai_output_markdown: 'Open questions for the Leader.',
         runtime_job_id: 'job-1',
+        codex_session_turn_id: 'turn-1',
         runtime_profile_revision_id: 'profile-rev-1',
         credential_binding_version_id: 'credential-version-1',
         app_server_thread_digest: 'thread-digest-1',
@@ -996,7 +997,7 @@ describe('project management typed object contracts', () => {
         created_at: '2026-05-25T00:00:00.000Z',
         updated_at: '2026-05-25T00:00:00.000Z',
       }),
-    ).toMatchObject({ id: 'round-1', session_id: 'session-1' });
+    ).toMatchObject({ id: 'round-1', session_id: 'session-1', codex_session_turn_id: 'turn-1' });
   });
 
   it('requires product Execution to publicly link approved Spec revision', () => {

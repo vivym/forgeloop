@@ -21,6 +21,11 @@ import type {
   CodexLaunchMaterialization,
   CodexLaunchTokenEnvelope,
   CodexLaunchTarget,
+  CodexSession,
+  CodexSessionLease,
+  CodexSessionSnapshot,
+  CodexSessionStaleTerminalizationAttempt,
+  CodexSessionTurn,
   CodexRuntimeJob,
   CodexRuntimeJobArtifact,
   CodexRuntimeProfile,
@@ -49,11 +54,14 @@ import type {
   ExecutionPackageGenerationRun,
   ExecutionPackage,
   ExecutionPackageDependency,
+  ExecutionReadinessRecord,
   ManualPathHold,
   ObjectEvent,
   Organization,
   Plan,
   PlanRevision,
+  PlanItemWorkflow,
+  PlanItemWorkflowTransition,
   Project,
   ProjectRepo,
   Release,
@@ -73,9 +81,10 @@ import type {
   StructuredRevisionDiff,
   Task,
   WorkItem,
+  WorkflowManualDecision,
 } from '@forgeloop/domain';
 import { DomainError, parseInternalArtifactRef } from '@forgeloop/domain';
-import type { BoundaryRound, ObjectRef } from '@forgeloop/contracts';
+import type { BoundaryRound, ObjectRef, WorkflowTransitionEvidenceObjectType } from '@forgeloop/contracts';
 
 import type { trace_link_relationship_values } from '../schema/_shared';
 
@@ -278,6 +287,112 @@ export interface CodexLaunchFenceSnapshot {
   execution_package_version?: number;
 }
 
+export interface CreatePlanItemWorkflowWithInitialSessionInput {
+  id: string;
+  codex_session_id: string;
+  development_plan_id: string;
+  development_plan_item_id: string;
+  runtime_profile_id: string;
+  runtime_profile_revision_id: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+  actor_id: string;
+  now: string;
+}
+
+export interface ClaimCodexSessionLeaseInput {
+  session_id: string;
+  workflow_id: string;
+  lease_id: string;
+  lease_token_hash: string;
+  worker_id: string;
+  worker_session_digest: string;
+  expected_previous_snapshot_digest?: string;
+  now: string;
+  expires_at: string;
+}
+
+export interface RenewCodexSessionLeaseInput {
+  session_id: string;
+  lease_id: string;
+  lease_token_hash: string;
+  worker_id: string;
+  worker_session_digest: string;
+  lease_epoch: number;
+  now: string;
+  expires_at: string;
+}
+
+export interface RecoverCodexSessionLeaseForClaimInput {
+  session_id: string;
+  workflow_id: string;
+  lease_id: string;
+  lease_token_hash: string;
+  worker_id: string;
+  worker_session_digest: string;
+  lease_epoch: number;
+  expected_previous_snapshot_digest?: string;
+  now: string;
+}
+
+export interface TerminalizeCodexSessionTurnInput {
+  session_id: string;
+  turn_id: string;
+  lease_id: string;
+  lease_token_hash: string;
+  lease_epoch: number;
+  worker_id: string;
+  worker_session_digest: string;
+  status: 'succeeded' | 'failed' | 'cancelled';
+  expected_previous_snapshot_digest?: string;
+  output_snapshot?: CodexSessionSnapshot;
+  output_object_type?: WorkflowTransitionEvidenceObjectType;
+  output_object_id?: string;
+  codex_thread_id?: string;
+  codex_thread_id_digest?: string;
+  failure_code?: string;
+  now: string;
+}
+
+export interface WorkflowRepositoryEvidenceInput {
+  evidence_object_type: 'commit' | 'pull_request';
+  evidence_object_id: string;
+  workflow_id: string;
+  development_plan_id: string;
+  development_plan_item_id: string;
+}
+
+export interface ApplyPlanItemWorkflowTransitionInput {
+  transition: PlanItemWorkflowTransition;
+  projection_patch?: {
+    active_boundary_summary_revision_id?: string;
+    active_spec_doc_revision_id?: string;
+    active_implementation_plan_doc_revision_id?: string;
+    execution_package_id?: string;
+  };
+}
+
+export interface CreateCodexSessionForkInput {
+  id: string;
+  workflow_id: string;
+  parent_session_id: string;
+  forked_from_turn_id?: string;
+  forked_from_snapshot_id?: string;
+  fork_reason: string;
+  created_by_actor_id: string;
+  now: string;
+}
+
+export interface SelectActiveCodexSessionForkInput {
+  workflow_id: string;
+  selected_codex_session_id: string;
+  manual_decision_id: string;
+  transition_id: string;
+  actor_id: string;
+  reason: string;
+  now: string;
+}
+
 export interface CreateOrReplayCodexLaunchLeaseInput {
   id: string;
   lease_request_id: string;
@@ -373,6 +488,9 @@ export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
   run_session_status?: string;
   run_session_updated_at?: string;
   execution_package_version?: number;
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
   expires_at: string;
   now: string;
 }
@@ -919,12 +1037,23 @@ export interface CreateOrReplayAutomationActionRunInput
     | 'capability_fingerprint'
     | 'precondition_fingerprint'
     | 'action_input_json'
+    | 'workflow_id'
+    | 'codex_session_id'
+    | 'codex_session_turn_id'
   > {
   target_revision_id?: string;
   target_version?: number;
   created_by?: string;
   status?: Extract<AutomationActionRun['status'], 'pending'>;
   now: string;
+}
+
+export interface GetAutomationActionRunByIdempotencyKeyInput {
+  action_type: AutomationActionRun['action_type'];
+  target_object_type: AutomationActionRun['target_object_type'];
+  target_object_id: string;
+  target_revision_id?: string;
+  idempotency_key: string;
 }
 
 export interface ClaimNextAutomationActionRunInput {
@@ -1335,6 +1464,45 @@ export interface DeliveryRepository {
   withDeliveryTransaction<T>(write: (repository: DeliveryRepository) => Promise<T>): Promise<T>;
   withObjectLock<T>(key: string, write: (repository: DeliveryRepository) => Promise<T>): Promise<T>;
 
+  createPlanItemWorkflowWithInitialSession(
+    input: CreatePlanItemWorkflowWithInitialSessionInput,
+  ): Promise<{ workflow: PlanItemWorkflow; session: CodexSession }>;
+  getPlanItemWorkflow(id: string): Promise<PlanItemWorkflow | undefined>;
+  getActivePlanItemWorkflowByItem(itemId: string): Promise<PlanItemWorkflow | undefined>;
+  savePlanItemWorkflow(workflow: PlanItemWorkflow): Promise<void>;
+  applyPlanItemWorkflowTransition(input: ApplyPlanItemWorkflowTransitionInput): Promise<PlanItemWorkflow>;
+  listPlanItemWorkflowTransitions(workflowId: string): Promise<PlanItemWorkflowTransition[]>;
+  saveWorkflowManualDecision(decision: WorkflowManualDecision): Promise<void>;
+  getWorkflowManualDecision(id: string): Promise<WorkflowManualDecision | undefined>;
+  saveExecutionReadinessRecord(record: ExecutionReadinessRecord): Promise<void>;
+  getExecutionReadinessRecord(id: string): Promise<ExecutionReadinessRecord | undefined>;
+  getBoundarySummaryRevisionById(revisionId: string): Promise<BoundarySummaryRevision | undefined>;
+  resolveWorkflowRepositoryEvidence(
+    input: WorkflowRepositoryEvidenceInput,
+  ): Promise<{ repository_id: string; resolved_ref: string } | undefined>;
+  getCodexSession(id: string): Promise<CodexSession | undefined>;
+  saveCodexSession(session: CodexSession): Promise<void>;
+  createCodexSessionTurn(turn: CodexSessionTurn): Promise<void>;
+  getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined>;
+  saveCodexSessionTurn(turn: CodexSessionTurn): Promise<void>;
+  markCodexSessionTurnStale(input: { session_id: string; turn_id: string; now: string }): Promise<void>;
+  createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void>;
+  getCodexSessionSnapshot(id: string): Promise<CodexSessionSnapshot | undefined>;
+  saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void>;
+  listStaleCodexSessionTerminalizationAttempts(sessionId: string): Promise<CodexSessionStaleTerminalizationAttempt[]>;
+  claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }>;
+  recoverCodexSessionLeaseForClaim(
+    input: RecoverCodexSessionLeaseForClaimInput,
+  ): Promise<{ session: CodexSession; lease: CodexSessionLease }>;
+  renewCodexSessionLease(input: RenewCodexSessionLeaseInput): Promise<CodexSessionLease>;
+  terminalizeCodexSessionTurn(
+    input: TerminalizeCodexSessionTurnInput,
+  ): Promise<{ session: CodexSession; turn: CodexSessionTurn }>;
+  createCodexSessionFork(input: CreateCodexSessionForkInput): Promise<CodexSession>;
+  selectActiveCodexSessionFork(
+    input: SelectActiveCodexSessionForkInput,
+  ): Promise<{ workflow: PlanItemWorkflow; selectedSession: CodexSession }>;
+
   createCodexRuntimeProfileWithRevision(
     input: CreateCodexRuntimeProfileWithRevisionInput,
   ): Promise<CodexRuntimeProfileRevision>;
@@ -1616,6 +1784,7 @@ export interface DeliveryRepository {
   createOrReplayAutomationActionRun(input: CreateOrReplayAutomationActionRunInput): Promise<AutomationActionRun>;
   claimNextAutomationActionRun(input: ClaimNextAutomationActionRunInput): Promise<AutomationActionRun | undefined>;
   getAutomationActionRun(id: string): Promise<AutomationActionRun | undefined>;
+  getAutomationActionRunByIdempotencyKey(input: GetAutomationActionRunByIdempotencyKeyInput): Promise<AutomationActionRun | undefined>;
   getClaimedAutomationActionRun(input: GetClaimedAutomationActionRunInput): Promise<AutomationActionRun>;
   latestCompletedProjectionActionRun(
     input: LatestCompletedProjectionActionRunInput,
@@ -1650,6 +1819,7 @@ export interface DeliveryRepository {
   listDecisionsForObject(objectType: string, objectId: string): Promise<Decision[]>;
 
   saveTraceEvent(traceEvent: TraceEventRecord): Promise<void>;
+  updateTraceEvent(traceEvent: TraceEventRecord): Promise<void>;
   listTraceEventsForSubject(subjectType: string, subjectId: string): Promise<TraceEventRecord[]>;
   saveTraceLink(traceLink: TraceLinkRecord): Promise<void>;
   listTraceLinks(traceEventId: string): Promise<TraceLinkRecord[]>;

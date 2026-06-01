@@ -14,6 +14,7 @@ import type {
 
 import { timestampColumn } from './_shared';
 import { internal_artifact_objects } from './internal-artifact';
+import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
 
 export const codex_runtime_profiles = pgTable(
   'codex_runtime_profiles',
@@ -264,6 +265,9 @@ export const codex_runtime_jobs = pgTable(
     jobRequestId: text('job_request_id').notNull(),
     targetType: text('target_type').notNull(),
     targetId: text('target_id').notNull(),
+    workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+    codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
+    codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
     targetKind: text('target_kind').$type<CodexRuntimeTargetKind>().notNull(),
     projectId: uuid('project_id').notNull(),
     repoId: text('repo_id'),

@@ -903,7 +903,7 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
     expect(await repository.getExecutionPlanRevision(ids.executionPlanRevision)).toEqual(executionPlanRevisionFixture());
     expect(await repository.listExecutionPlanRevisions(ids.executionPlan)).toEqual([executionPlanRevisionFixture()]);
     expect(await repository.getExecution(ids.execution)).toMatchObject({
-      execution_plan_revision_id: ids.executionPlanRevision,
+      implementation_plan_revision_id: ids.executionPlanRevision,
     });
     expect(await repository.getExecutionPackage(ids.package)).toMatchObject({
       development_plan_item_id: ids.developmentPlanItem,
@@ -1010,6 +1010,63 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
         driver_actor_id: ids.system,
         leader_actor_id: ids.ai,
         leader_delegate_actor_ids: [ids.system],
+      }),
+    );
+    await repository.saveDevelopmentPlanItemRevision(
+      developmentPlanItemRevisionFixture({
+        id: reviewerItemRevisionId,
+        development_plan_item_id: reviewerItemId,
+        revision_number: 1,
+        snapshot: developmentPlanItemFixture({
+          id: reviewerItemId,
+          revision_id: reviewerItemRevisionId,
+          reviewer_actor_id: ids.human,
+          driver_actor_id: ids.system,
+          leader_actor_id: undefined,
+        }),
+      }),
+    );
+    await repository.saveDevelopmentPlanItemRevision(
+      developmentPlanItemRevisionFixture({
+        id: driverItemRevisionId,
+        development_plan_item_id: driverItemId,
+        revision_number: 1,
+        snapshot: developmentPlanItemFixture({
+          id: driverItemId,
+          revision_id: driverItemRevisionId,
+          reviewer_actor_id: undefined,
+          driver_actor_id: ids.system,
+          leader_actor_id: undefined,
+        }),
+      }),
+    );
+    await repository.saveDevelopmentPlanItemRevision(
+      developmentPlanItemRevisionFixture({
+        id: blockedItemRevisionId,
+        development_plan_item_id: blockedItemId,
+        revision_number: 1,
+        snapshot: developmentPlanItemFixture({
+          id: blockedItemId,
+          revision_id: blockedItemRevisionId,
+          reviewer_actor_id: undefined,
+          driver_actor_id: undefined,
+          leader_actor_id: undefined,
+        }),
+      }),
+    );
+    await repository.saveDevelopmentPlanItemRevision(
+      developmentPlanItemRevisionFixture({
+        id: storedLeaderItemRevisionId,
+        development_plan_item_id: storedLeaderItemId,
+        revision_number: 1,
+        snapshot: developmentPlanItemFixture({
+          id: storedLeaderItemId,
+          revision_id: storedLeaderItemRevisionId,
+          reviewer_actor_id: ids.human,
+          driver_actor_id: ids.system,
+          leader_actor_id: ids.ai,
+          leader_delegate_actor_ids: [ids.system],
+        }),
       }),
     );
 
@@ -1347,6 +1404,20 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       await transaction.saveContextManifest(contextManifestFixture());
       await transaction.saveDevelopmentPlan(developmentPlanFixture());
       await transaction.saveDevelopmentPlanItem(developmentPlanItemFixture());
+      await transaction.saveDevelopmentPlanItemRevision(
+        developmentPlanItemRevisionFixture({
+          id: ids.developmentPlanItemRevision2,
+          revision_number: 2,
+          snapshot: developmentPlanItemFixture({
+            revision_id: ids.developmentPlanItemRevision2,
+            boundary_status: 'approved',
+            next_action: 'Generate Spec from approved boundary.',
+            updated_at: '2026-05-24T00:03:00.000Z',
+          }),
+          change_reason: 'Boundary refinement',
+          created_at: '2026-05-24T00:03:00.000Z',
+        }),
+      );
       await transaction.saveBrainstormingSession(brainstormingSessionFixture());
       await transaction.saveBoundaryRound(boundaryRoundFixture());
       await transaction.saveBoundaryQuestion(boundaryQuestionFixture());
@@ -1432,7 +1503,9 @@ export function itPersistsAiNativePlanningGraph(factory: RepositoryFactory): voi
       revision_number: 2,
       change_reason: 'Current plan state',
     });
-    const boundaryRevision = boundarySummaryRevisionFixture();
+    const boundaryRevision = boundarySummaryRevisionFixture({
+      development_plan_item_revision_id: developmentPlanRevision.id,
+    });
     const executionRevision = executionPlanRevisionFixture();
 
     await repository.saveDevelopmentPlanItemRevision(developmentPlanRevision);
@@ -2271,8 +2344,10 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
 
   const activeRun = await repository.findActiveRunSessionForPackage(ids.package);
   expect(activeRun).toBeUndefined();
+  const queuedRunSessionId = '77777777-7777-4777-8777-777777777782';
+  const nextRunSessionId = '77777777-7777-4777-8777-777777777783';
   const queuedRun: RunSession = {
-    id: 'run-session-active-contract',
+    id: queuedRunSessionId,
     execution_package_id: ids.package,
     requested_by_actor_id: ids.human,
     status: 'queued',
@@ -2285,15 +2360,17 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   };
   await repository.saveRunSession(queuedRun);
   expect(await repository.findActiveRunSessionForPackage(ids.package)).toEqual(queuedRun);
-  await expect(repository.saveRunSession({ ...queuedRun, id: 'run-session-active-contract-2' })).rejects.toThrow(
+  await expect(repository.saveRunSession({ ...queuedRun, id: nextRunSessionId })).rejects.toThrow(
     /active|run/i,
   );
   await repository.saveRunSession({ ...queuedRun, status: 'succeeded', finished_at: later, updated_at: later });
-  await repository.saveRunSession({ ...queuedRun, id: 'run-session-active-contract-2', status: 'running' });
+  await repository.saveRunSession({ ...queuedRun, id: nextRunSessionId, status: 'running' });
 
   expect(await repository.findOpenReviewPacketForPackage(ids.package)).toBeUndefined();
+  const openReviewPacketId = '88888888-8888-4888-8888-888888888892';
+  const nextReviewPacketId = '88888888-8888-4888-8888-888888888893';
   const openReview: ReviewPacket = {
-    id: 'review-packet-open-contract',
+    id: openReviewPacketId,
     run_session_id: ids.runSession,
     execution_package_id: ids.package,
     reviewer_actor_id: ids.human,
@@ -2318,11 +2395,11 @@ async function expectAutomationRepositoryContract(repository: DeliveryRepository
   };
   await repository.saveReviewPacket(openReview);
   expect(await repository.findOpenReviewPacketForPackage(ids.package)).toEqual(openReview);
-  await expect(repository.saveReviewPacket({ ...openReview, id: 'review-packet-open-contract-2' })).rejects.toThrow(
+  await expect(repository.saveReviewPacket({ ...openReview, id: nextReviewPacketId })).rejects.toThrow(
     /open|review/i,
   );
   await repository.saveReviewPacket({ ...openReview, status: 'completed', completed_at: later, updated_at: later });
-  await repository.saveReviewPacket({ ...openReview, id: 'review-packet-open-contract-2', status: 'ready' });
+  await repository.saveReviewPacket({ ...openReview, id: nextReviewPacketId, status: 'ready' });
 
   const actionRun = await repository.claimAutomationActionRun({
     id: 'automation-action-contract',
@@ -3051,11 +3128,11 @@ const executionFixture = (overrides: Partial<Execution> = {}): Execution => ({
     revision_id: ids.developmentPlanItemRevision2,
     title: 'Persist planning graph',
   },
-  execution_plan_revision_id: ids.executionPlanRevision,
-  execution_plan_revision_ref: {
-    type: 'execution_plan_revision',
+  implementation_plan_revision_id: ids.executionPlanRevision,
+  implementation_plan_revision_ref: {
+    type: 'implementation_plan_revision',
     id: ids.executionPlanRevision,
-    execution_plan_id: ids.executionPlan,
+    implementation_plan_id: ids.executionPlan,
     title: 'Approved execution plan',
   },
   approved_spec_revision_id: ids.specRevision1,

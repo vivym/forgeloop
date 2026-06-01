@@ -3,6 +3,7 @@ export * from './ai-project-management.js';
 export * from './attachments.js';
 export * from './executor.js';
 export * from './markdown-document.js';
+export * from './plan-item-workflow.js';
 export * from './product-object-ref.js';
 export * from './project-management.js';
 export * from './public-evidence.js';

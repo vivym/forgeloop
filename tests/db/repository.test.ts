@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DomainError } from '@forgeloop/domain';
 import type {
   Artifact,
   AutomationActionRun,
@@ -15,6 +16,7 @@ import type {
   Project,
   ProjectRepo,
   Release,
+  ReleaseEvidence,
   ReviewPacket,
   RunSession,
   Spec,
@@ -402,6 +404,27 @@ const release: Release = {
   updated_by_actor_id: 'actor-owner',
 };
 
+const releaseEvidence: ReleaseEvidence = {
+  id: 'release-evidence-1',
+  org_id: release.org_id,
+  project_id: release.project_id,
+  release_id: release.id,
+  key: 'REL-1-review',
+  evidence_type: 'review_authority',
+  summary: 'Review packet approved for release.',
+  object_ref: { object_type: 'review_packet', object_id: reviewPacket.id, relationship: 'review' },
+  artifact_id: artifact.id,
+  extra: { reviewer: 'actor-reviewer' },
+  redacted: false,
+  status: 'current',
+  visibility: 'internal',
+  labels: ['review'],
+  created_at: now,
+  created_by_actor_id: 'actor-reviewer',
+  updated_at: now,
+  updated_by_actor_id: 'actor-reviewer',
+};
+
 const traceEvent: TraceEventRecord = {
   id: 'trace-event-1',
   event_type: 'run_replacement_recorded',
@@ -463,6 +486,17 @@ const traceArtifactRef: TraceArtifactRefRecord = {
   created_at: now,
 };
 
+const expectDomainErrorCode = async (action: () => Promise<unknown>, code: string) => {
+  try {
+    await action();
+    throw new Error(`Expected DomainError ${code}`);
+  } catch (error) {
+    if (error instanceof Error && error.message === `Expected DomainError ${code}`) throw error;
+    expect(error).toBeInstanceOf(DomainError);
+    expect((error as DomainError).code).toBe(code as DomainError['code']);
+  }
+};
+
 const createInsertCaptureRepository = () => {
   const captures: Array<{ table: unknown; values: Record<string, unknown>; set?: Record<string, unknown> }> = [];
   const deletes: Array<{ table: unknown; predicate: unknown }> = [];
@@ -470,6 +504,10 @@ const createInsertCaptureRepository = () => {
   const db = {
     insert: (table: unknown) => ({
       values: (values: Record<string, unknown>) => ({
+        then: (resolve: (value?: unknown) => unknown) => {
+          captures.push({ table, values });
+          return resolve();
+        },
         onConflictDoUpdate: async ({ set }: { set: Record<string, unknown> }) => {
           captures.push({ table, values, set });
         },
@@ -482,6 +520,13 @@ const createInsertCaptureRepository = () => {
       where: async (predicate: unknown) => {
         deletes.push({ table, predicate });
       },
+    }),
+    update: (table: unknown) => ({
+      set: (set: Record<string, unknown>) => ({
+        where: async () => {
+          captures.push({ table, values: {}, set });
+        },
+      }),
     }),
     transaction: async <T>(callback: (tx: never) => Promise<T>) => {
       transactions.push(db);
@@ -888,7 +933,7 @@ describe('DeliveryRepository in-memory adapter', () => {
     expect(await repository.getPlanRevision('missing-plan-revision')).toBeUndefined();
   });
 
-  it('keeps the original object event when the same event id is appended again', async () => {
+  it('rejects duplicate object event ids instead of ignoring the conflicting audit row', async () => {
     const repository = new InMemoryDeliveryRepository();
     const duplicateEvent: ObjectEvent = {
       ...objectEvent,
@@ -898,12 +943,15 @@ describe('DeliveryRepository in-memory adapter', () => {
     };
 
     await repository.appendObjectEvent(objectEvent);
-    await repository.appendObjectEvent(duplicateEvent);
 
+    await expectDomainErrorCode(
+      () => repository.appendObjectEvent(duplicateEvent),
+      'workflow_invalid_transition',
+    );
     expect(await repository.listObjectEvents(executionPackage.id)).toEqual([objectEvent]);
   });
 
-  it('keeps the original status history when the same history id is appended again', async () => {
+  it('rejects duplicate status history ids instead of ignoring the conflicting audit row', async () => {
     const repository = new InMemoryDeliveryRepository();
     const duplicateStatusHistory: StatusHistory = {
       ...statusHistory,
@@ -914,9 +962,48 @@ describe('DeliveryRepository in-memory adapter', () => {
     };
 
     await repository.appendStatusHistory(statusHistory);
-    await repository.appendStatusHistory(duplicateStatusHistory);
 
+    await expectDomainErrorCode(
+      () => repository.appendStatusHistory(duplicateStatusHistory),
+      'workflow_invalid_transition',
+    );
     expect(await repository.listStatusHistory(executionPackage.id)).toEqual([statusHistory]);
+  });
+
+  it('rejects duplicate artifact ids instead of overwriting the evidence row', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const duplicateArtifact: Artifact = {
+      ...artifact,
+      kind: 'run_log',
+      uri: 's3://bucket/conflicting-log.md',
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveArtifact(artifact);
+
+    await expectDomainErrorCode(
+      () => repository.saveArtifact(duplicateArtifact),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listArtifactsForObject('run_session', runSession.id)).toEqual([artifact]);
+  });
+
+  it('rejects duplicate decision ids instead of overwriting the decision row', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const duplicateDecision: Decision = {
+      ...decision,
+      decision: 'reject',
+      rationale: 'Conflicting duplicate decision.',
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveDecision(decision);
+
+    await expectDomainErrorCode(
+      () => repository.saveDecision(duplicateDecision),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listDecisionsForObject('review_packet', reviewPacket.id)).toEqual([decision]);
   });
 
   it('persists artifact trace subject fields', async () => {
@@ -965,6 +1052,60 @@ describe('DeliveryRepository in-memory adapter', () => {
     expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([firstArtifactRef, secondArtifactRef]);
   });
 
+  it('rejects duplicate trace event ids instead of overwriting the audit row', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
+    const duplicateEvent: TraceEventRecord = {
+      ...traceEvent,
+      summary: 'Conflicting duplicate trace event.',
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveTraceEvent(traceEvent);
+
+    await expectDomainErrorCode(
+      () => repository.saveTraceEvent(duplicateEvent),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listTraceEventsForSubject(traceEvent.subject_type, traceEvent.subject_id)).toEqual([traceEvent]);
+  });
+
+  it('rejects duplicate trace link ids instead of ignoring the conflicting audit row', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
+    const traceLink = traceLinks[0]!;
+    const duplicateLink: TraceLinkRecord = {
+      ...traceLink,
+      relationship: 'supersedes',
+      object_type: 'run_session',
+      object_id: runSession.id,
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveTraceLink(traceLink);
+
+    await expectDomainErrorCode(
+      () => repository.saveTraceLink(duplicateLink),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listTraceLinks(traceEvent.id)).toEqual([traceLink]);
+  });
+
+  it('rejects duplicate trace artifact ref ids instead of ignoring the conflicting audit row', async () => {
+    const repository: DeliveryRepository = new InMemoryDeliveryRepository();
+    const duplicateArtifactRef: TraceArtifactRefRecord = {
+      ...traceArtifactRef,
+      artifact_id: 'artifact-conflicting',
+      created_at: '2026-05-05T00:01:00.000Z',
+    };
+
+    await repository.saveTraceArtifactRef(traceArtifactRef);
+
+    await expectDomainErrorCode(
+      () => repository.saveTraceArtifactRef(duplicateArtifactRef),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.listTraceArtifactRefs(traceEvent.id)).toEqual([traceArtifactRef]);
+  });
+
   it('round-trips release canonical fields and lists releases with optional project filtering', async () => {
     const repository: DeliveryRepository = new InMemoryDeliveryRepository();
     const otherProjectRelease: Release = {
@@ -981,6 +1122,27 @@ describe('DeliveryRepository in-memory adapter', () => {
     expect(await repository.getRelease(release.id)).toEqual(release);
     expect(await repository.listReleases(project.id)).toEqual([release]);
     expect(await repository.listReleases()).toEqual([release, otherProjectRelease]);
+  });
+
+  it('rejects duplicate release evidence ids instead of overwriting the evidence row', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const duplicateEvidence: ReleaseEvidence = {
+      ...releaseEvidence,
+      summary: 'Conflicting duplicate release evidence.',
+      extra: { reviewer: 'actor-conflict' },
+      created_at: '2026-05-05T00:01:00.000Z',
+      updated_at: '2026-05-05T00:01:00.000Z',
+      updated_by_actor_id: 'actor-conflict',
+    };
+
+    await repository.saveReleaseEvidence(releaseEvidence);
+
+    await expectDomainErrorCode(
+      () => repository.saveReleaseEvidence(duplicateEvidence),
+      'workflow_invalid_transition',
+    );
+    expect(await repository.getReleaseEvidence(releaseEvidence.id)).toEqual(releaseEvidence);
+    expect(await repository.listReleaseEvidences(release.id)).toEqual([releaseEvidence]);
   });
 });
 
@@ -1173,12 +1335,14 @@ describe('DeliveryRepository Drizzle adapter persistence mapping', () => {
 
     await repository.saveTraceEvent(traceEventWithoutActor);
     await repository.saveTraceArtifactRef(traceArtifactRefWithoutArtifact);
+    await repository.updateTraceEvent(traceEventWithoutActor);
 
     expect(captures[0]?.values.actorId).toBeNull();
-    expect(captures[0]?.set?.actorId).toBeNull();
-    expect(captures[0]?.set?.createdAt).toBeUndefined();
+    expect(captures[0]?.set).toBeUndefined();
     expect(captures[1]?.values.artifactId).toBeNull();
     expect(captures[1]?.set).toBeUndefined();
+    expect(captures[2]?.set?.actorId).toBeNull();
+    expect(captures[2]?.set?.createdAt).toBeUndefined();
   });
 
   it('writes release pointer arrays and normalized package links', async () => {

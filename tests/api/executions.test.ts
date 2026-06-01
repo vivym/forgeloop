@@ -11,6 +11,9 @@ import {
   executionActorDeveloper,
   seedApprovedExecutionPlan,
 } from '../helpers/execution-supervision-fixtures';
+import {
+  seedWorkflowWithApprovedImplementationPlan,
+} from '../helpers/plan-item-workflow-fixtures';
 
 const digest = (seed: string): string => `sha256:${seed.repeat(64).slice(0, 64)}`;
 
@@ -128,6 +131,31 @@ describe('Executions API', () => {
       execution_status: 'running',
       next_action: 'monitor_execution',
     });
+  });
+
+  it('rejects direct execution start for workflow-owned items', async () => {
+    const seeded = await seedWorkflowWithApprovedImplementationPlan(app, { idPrefix: '13131313' });
+    const server = app.getHttpServer();
+    await request(server)
+      .post(`/plan-item-workflows/${seeded.workflow.id}/approve-implementation-plan-and-mark-execution-ready`)
+      .send({
+        actor_id: seeded.ids.actorTech,
+        approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
+        reason: 'Execution readiness approved.',
+      })
+      .expect(201);
+
+    await request(server)
+      .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorLeader })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
+      });
+
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await expect(repository.listExecutions()).resolves.toHaveLength(0);
+    await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
   it('starts execution after the item revision advances through Spec and Implementation Plan Doc approvals', async () => {

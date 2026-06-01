@@ -6,9 +6,9 @@ import type {
   ProductObjectRef,
 } from '@forgeloop/contracts';
 import { canGenerateExecutionPlanFromApprovedSpec, hasText, type DevelopmentPlanItem, type GateResult } from './development-plan.js';
-import type { ExecutionPackage, IsoDateTime, Spec, SpecRevision } from './types.js';
+import type { ExecutionPackage, IsoDateTime, Spec, SpecRevision, WorkflowPersistenceRefs } from './types.js';
 
-export interface ExecutionPlanDocument {
+export interface ExecutionPlanDocument extends Pick<WorkflowPersistenceRefs, 'workflow_id'> {
   id: string;
   development_plan_item_id: string;
   status: 'draft' | 'in_review' | 'approved' | 'changes_requested' | 'stale' | 'blocked';
@@ -20,7 +20,7 @@ export interface ExecutionPlanDocument {
   updated_at: IsoDateTime;
 }
 
-export interface ExecutionPlanRevision {
+export interface ExecutionPlanRevision extends WorkflowPersistenceRefs {
   id: string;
   execution_plan_id: string;
   development_plan_item_id: string;

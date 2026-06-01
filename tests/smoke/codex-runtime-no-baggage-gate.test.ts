@@ -59,6 +59,167 @@ const productFacingArtifactExposureFiles = [
   'packages/db/src/queries/work-item-release-readiness.ts',
 ];
 
+const workflowOwnedPublicMutatorControllers = [
+  {
+    controllerFile: 'apps/control-plane-api/src/modules/brainstorming/brainstorming.controller.ts',
+    serviceFile: 'apps/control-plane-api/src/modules/brainstorming/brainstorming.service.ts',
+    serviceProperty: 'service',
+  },
+  {
+    controllerFile: 'apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts',
+    serviceFile: 'apps/control-plane-api/src/modules/spec-plan/spec-plan.service.ts',
+    serviceProperty: 'specPlanService',
+  },
+  {
+    controllerFile: 'apps/control-plane-api/src/modules/execution-packages/execution-packages.controller.ts',
+    serviceFile: 'apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts',
+    serviceProperty: 'service',
+  },
+  {
+    controllerFile: 'apps/control-plane-api/src/modules/executions/executions.controller.ts',
+    serviceFile: 'apps/control-plane-api/src/modules/executions/executions.service.ts',
+    serviceProperty: 'executionsService',
+  },
+  {
+    controllerFile: 'apps/control-plane-api/src/modules/run-control/execution-package-runs.controller.ts',
+    serviceFile: 'apps/control-plane-api/src/modules/run-control/run-control.service.ts',
+    serviceProperty: 'runControlService',
+  },
+  {
+    controllerFile: 'apps/control-plane-api/src/modules/run-control/run-sessions.controller.ts',
+    serviceFile: 'apps/control-plane-api/src/modules/run-control/run-control.service.ts',
+    serviceProperty: 'runControlService',
+  },
+];
+
+type PublicWorkflowMutatorFinding = {
+  file: string;
+  route: string;
+  method: string;
+  reason: string;
+};
+
+type PublicMutatorRoute = {
+  decorator: string;
+  route: string;
+  method: string;
+  body: string;
+};
+
+const workflowGateMarkers = ['PlanItemWorkflowService', 'workflow_legacy_entrypoint_disabled'];
+const mutatorDecoratorPattern = /@(Post|Patch|Put|Delete)\('([^']+)'\)\s*(?:\n\s*(?:@[A-Za-z][^\n]*\n\s*)*)?([A-Za-z0-9_]+)\s*\(/g;
+const nonWorkflowStateMutatorRoutes = new Set(['Post run-sessions/:runSessionId/events/stream-token']);
+
+const findMatchingBrace = (source: string, openBraceIndex: number): number => {
+  let depth = 0;
+  for (let index = openBraceIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+};
+
+const extractBlockAfter = (source: string, startIndex: number): string | undefined => {
+  const openBraceIndex = source.indexOf('{', startIndex);
+  if (openBraceIndex === -1) return undefined;
+  const closeBraceIndex = findMatchingBrace(source, openBraceIndex);
+  if (closeBraceIndex === -1) return undefined;
+  return source.slice(openBraceIndex, closeBraceIndex + 1);
+};
+
+const publicMutatorRoutesIn = (source: string): PublicMutatorRoute[] =>
+  [...source.matchAll(mutatorDecoratorPattern)].flatMap((match) => {
+    const body = extractBlockAfter(source, match.index ?? 0);
+    if (body === undefined) return [];
+    return [
+      {
+        decorator: match[1],
+        route: match[2],
+        method: match[3],
+        body,
+      },
+    ];
+  });
+
+const serviceMethodsIn = (source: string): Map<string, string> => {
+  const methods = new Map<string, string>();
+  const methodPattern = /^  (?:(?:public|private|protected)\s+)?(?:async\s+)?([A-Za-z0-9_]+)\s*\(/gm;
+  for (const match of source.matchAll(methodPattern)) {
+    const methodName = match[1];
+    if (['if', 'for', 'while', 'switch', 'catch', 'function', 'constructor'].includes(methodName)) {
+      continue;
+    }
+    const parameterStartIndex = source.indexOf('(', match.index ?? 0);
+    let parameterDepth = 0;
+    let signatureEndIndex = -1;
+    for (let index = parameterStartIndex; index < source.length; index += 1) {
+      const char = source[index];
+      if (char === '(') parameterDepth += 1;
+      if (char === ')') {
+        parameterDepth -= 1;
+        if (parameterDepth === 0) {
+          signatureEndIndex = index;
+          break;
+        }
+      }
+    }
+    if (signatureEndIndex === -1) continue;
+    const openBraceIndex = source.indexOf('{', signatureEndIndex);
+    const closeBraceIndex = findMatchingBrace(source, openBraceIndex);
+    if (closeBraceIndex === -1) continue;
+    methods.set(methodName, source.slice(openBraceIndex, closeBraceIndex + 1));
+  }
+  return methods;
+};
+
+const serviceCallFromRoute = (body: string, serviceProperty: string): string | undefined =>
+  body.match(new RegExp(`this\\.${serviceProperty}\\.([A-Za-z0-9_]+)\\(`))?.[1];
+
+const blockHasWorkflowGate = (block: string): boolean => workflowGateMarkers.some((marker) => block.includes(marker));
+
+const methodReachesWorkflowGate = (methods: Map<string, string>, methodName: string, visited = new Set<string>()): boolean => {
+  if (visited.has(methodName)) return false;
+  visited.add(methodName);
+  const body = methods.get(methodName);
+  if (body === undefined) return false;
+  if (blockHasWorkflowGate(body)) return true;
+  return [...body.matchAll(/\bthis\.([A-Za-z0-9_]+)\(/g)].some((match) => methodReachesWorkflowGate(methods, match[1], visited));
+};
+
+const scanWorkflowOwnedPublicMutators = (rootDir: string): PublicWorkflowMutatorFinding[] =>
+  workflowOwnedPublicMutatorControllers.flatMap(({ controllerFile, serviceFile, serviceProperty }) => {
+    const controllerSource = readFileSync(join(rootDir, controllerFile), 'utf8');
+    const serviceMethods = serviceMethodsIn(readFileSync(join(rootDir, serviceFile), 'utf8'));
+    return publicMutatorRoutesIn(controllerSource).flatMap((route) => {
+      if (nonWorkflowStateMutatorRoutes.has(`${route.decorator} ${route.route}`)) return [];
+      if (blockHasWorkflowGate(route.body)) return [];
+      const serviceMethod = serviceCallFromRoute(route.body, serviceProperty);
+      if (serviceMethod === undefined) {
+        return [
+          {
+            file: controllerFile,
+            route: `${route.decorator} ${route.route}`,
+            method: route.method,
+            reason: `public mutator does not call ${serviceProperty}`,
+          },
+        ];
+      }
+      if (methodReachesWorkflowGate(serviceMethods, serviceMethod)) return [];
+      return [
+        {
+          file: serviceFile,
+          route: `${route.decorator} ${route.route}`,
+          method: serviceMethod,
+          reason: 'service method does not reach PlanItemWorkflowService or workflow_legacy_entrypoint_disabled',
+        },
+      ];
+    });
+  });
+
 describe('Codex runtime Superpowers no-baggage gate', () => {
   it('requires every allowlist entry to carry owner and reason', () => {
     expect(codexRuntimeSuperpowersNoBaggageAllowlist.length).toBeGreaterThan(0);
@@ -245,6 +406,76 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
     });
 
     expect(violations).toEqual([]);
+  });
+
+  it('requires workflow-owned public mutators to delegate through PlanItemWorkflowService or reject', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-workflow-mutator-gate-'));
+    try {
+      const weakControllerPath = join(tempRoot, 'apps/control-plane-api/src/modules/brainstorming');
+      mkdirSync(weakControllerPath, { recursive: true });
+      writeFileSync(
+        join(weakControllerPath, 'brainstorming.controller.ts'),
+        [
+          "import { Controller, Post } from '@nestjs/common';",
+          '@Controller()',
+          'export class BrainstormingController {',
+          '  constructor(private readonly service: BrainstormingService) {}',
+          "  @Post('development-plans/:developmentPlanId/items/:itemId/boundary-brainstorming')",
+          '  startBoundaryBrainstorming() {',
+          '    return this.service.startBoundaryBrainstorming();',
+          '  }',
+          '}',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(weakControllerPath, 'brainstorming.service.ts'),
+        [
+          'export class BrainstormingService {',
+          '  startBoundaryBrainstorming() {',
+          '    return this.repository.saveBrainstormingSession({});',
+          '  }',
+          '}',
+        ].join('\n'),
+      );
+      for (const { controllerFile, serviceFile } of workflowOwnedPublicMutatorControllers.filter(
+        (entry) => entry.controllerFile !== 'apps/control-plane-api/src/modules/brainstorming/brainstorming.controller.ts',
+      )) {
+        mkdirSync(join(tempRoot, controllerFile, '..'), { recursive: true });
+        writeFileSync(join(tempRoot, controllerFile), 'export class EmptyController {}');
+        writeFileSync(join(tempRoot, serviceFile), 'export class EmptyService {}');
+      }
+
+      expect(scanWorkflowOwnedPublicMutators(tempRoot)).toEqual([
+        {
+          file: 'apps/control-plane-api/src/modules/brainstorming/brainstorming.service.ts',
+          route: 'Post development-plans/:developmentPlanId/items/:itemId/boundary-brainstorming',
+          method: 'startBoundaryBrainstorming',
+          reason: 'service method does not reach PlanItemWorkflowService or workflow_legacy_entrypoint_disabled',
+        },
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+
+    const violations = scanWorkflowOwnedPublicMutators(repoRoot);
+
+    expect(violations).toEqual([]);
+  });
+
+  it('does not expose runtime worker or lease identifiers in product generation public DTOs', () => {
+    const scheduler = readFileSync(
+      join(repoRoot, 'apps/control-plane-api/src/modules/codex-runtime/product-generation-runtime-scheduler.service.ts'),
+      'utf8',
+    );
+    const publicDtoType = extractBlockAfter(scheduler, scheduler.indexOf('export type PublicProductGenerationRuntimeJob'));
+    const publicMapper = extractBlockAfter(scheduler, scheduler.indexOf('private publicRuntimeJob'));
+
+    expect(publicDtoType).toBeDefined();
+    expect(publicMapper).toBeDefined();
+    expect(publicDtoType).not.toContain('worker_id');
+    expect(publicDtoType).not.toContain('launch_lease_id');
+    expect(publicMapper).not.toContain('worker_id');
+    expect(publicMapper).not.toContain('launch_lease_id');
   });
 
   it('scans product reports by default and applies allowlist entries to specific occurrences', () => {

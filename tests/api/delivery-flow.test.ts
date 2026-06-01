@@ -19,6 +19,13 @@ import { RunWorkerLifecycleService } from '../../apps/control-plane-api/src/modu
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import { SpecPlanService } from '../../apps/control-plane-api/src/modules/spec-plan/spec-plan.service';
 import { WorkItemService } from '../../apps/control-plane-api/src/modules/work-items/work-item.service';
+import {
+  codexCanonicalDigest,
+  codexCredentialPayloadDigest,
+  codexRuntimeNetworkPolicyDigest,
+  codexRuntimeProfileRevisionDigest,
+  type CodexRuntimeProfileRevision,
+} from '../../packages/domain/src';
 import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
 import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
@@ -239,6 +246,118 @@ const createManualPackage = async (
 
   return (await request(app.getHttpServer()).post(`/plan-revisions/${planRevisionId}/execution-packages`).send(body).expect(201))
     .body;
+};
+
+const startWorkflowForItem = async (
+  app: INestApplication,
+  seed: Awaited<ReturnType<typeof seedItemScopedSpecPlan>>,
+): Promise<void> => {
+  const repository = repositoryFor(app);
+  const now = '2026-05-05T00:00:00.000Z';
+  const networkPolicy = { mode: 'disabled' as const };
+  const dockerImageDigest = codexCanonicalDigest({ label: 'delivery-flow-workflow-runtime-image', projectId: seed.developmentPlan.project_id });
+  const profileId = `workflow-runtime-profile:${seed.developmentPlan.project_id}`;
+  const profileRevisionId = `workflow-runtime-profile-revision:${seed.developmentPlan.project_id}`;
+  const credentialBindingId = `workflow-credential-binding:${seed.developmentPlan.project_id}`;
+  const credentialBindingVersionId = `workflow-credential-binding-version:${seed.developmentPlan.project_id}`;
+  const revisionWithoutDigest = {
+    id: profileRevisionId,
+    profile_id: profileId,
+    revision_number: 1,
+    status: 'active' as const,
+    environment: 'test' as const,
+    docker_image: 'ghcr.io/forgeloop/codex-worker:test',
+    docker_image_digest: dockerImageDigest,
+    target_kind: 'generation' as const,
+    source_access_mode: 'artifact_only' as const,
+    codex_config_toml: 'approval_policy = "never"\n',
+    codex_config_digest: codexCanonicalDigest('approval_policy = "never"\n'),
+    expected_effective_config_digest: codexCanonicalDigest({ label: 'delivery-flow-workflow-effective-config' }),
+    effective_config_assertions: {
+      target_kind: 'generation' as const,
+      approval_policy: 'never' as const,
+      source_write_policy: 'artifact_only' as const,
+      forbidden_writable_roots: ['workspace'] as const,
+    },
+    app_server_required: true,
+    allowed_driver_kind: 'app_server' as const,
+    network_policy: networkPolicy,
+    resource_limits: {
+      cpu_ms: 300_000,
+      memory_mb: 1024,
+      pids: 256,
+      fds: 1024,
+      workspace_bytes: 1,
+      artifact_bytes: 1_048_576,
+      timeout_ms: 300_000,
+      output_limit_bytes: 1_048_576,
+      run_output_limit_bytes: 1_048_576,
+    },
+    docker_policy: {
+      network_disabled: true,
+      app_server_only: true,
+      rootless: true,
+      read_only_rootfs: true,
+      no_new_privileges: true,
+      drop_capabilities: ['ALL'],
+    },
+    allowed_scopes: [{ project_id: seed.developmentPlan.project_id }],
+    profile_digest: 'placeholder',
+    created_by_actor_id: actorReviewer,
+    created_at: now,
+  } satisfies CodexRuntimeProfileRevision;
+  await repository.createCodexRuntimeProfileWithRevision({
+    profile: {
+      id: profileId,
+      name: 'Delivery flow workflow test profile',
+      environment: 'test',
+      target_kind: 'generation',
+      active_revision_id: profileRevisionId,
+      created_by_actor_id: actorReviewer,
+      created_at: now,
+      updated_at: now,
+    },
+    revision: {
+      ...revisionWithoutDigest,
+      profile_digest: codexRuntimeProfileRevisionDigest(revisionWithoutDigest),
+    },
+  });
+  const secretPayload = { auth: { api_key: 'test-api-key' } };
+  await repository.createCodexCredentialBindingWithVersion({
+    binding: {
+      id: credentialBindingId,
+      profile_id: profileId,
+      project_id: seed.developmentPlan.project_id,
+      provider: 'unsafe_db',
+      purpose: 'model_provider',
+      active_version_id: credentialBindingVersionId,
+      created_by_actor_id: actorReviewer,
+      created_at: now,
+      updated_at: now,
+    },
+    version: {
+      id: credentialBindingVersionId,
+      binding_id: credentialBindingId,
+      version_number: 1,
+      status: 'active',
+      payload_digest: codexCredentialPayloadDigest(secretPayload),
+      created_by_actor_id: actorReviewer,
+      created_at: now,
+    },
+    secret_payload_json: secretPayload,
+  });
+
+  await request(app.getHttpServer())
+    .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/workflow/start-brainstorming`)
+    .send({
+      actor_id: actorReviewer,
+      runtime_profile_id: profileId,
+      runtime_profile_revision_id: profileRevisionId,
+      credential_binding_id: credentialBindingId,
+      credential_binding_version_id: credentialBindingVersionId,
+      reason: 'Start workflow to verify legacy item-scoped document fences.',
+    })
+    .expect(201);
 };
 
 const repositoryFor = (app: INestApplication): InMemoryDeliveryRepository =>
@@ -593,7 +712,10 @@ describe('delivery control plane API', () => {
       .post(`/development-plans/${draftSpec.developmentPlan.id}/items/${draftSpec.item.id}/spec/approve`)
       .set(reviewerHeaders)
       .send({ actor_id: actorReviewer })
-      .expect(400);
+      .expect(400)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('not awaiting approval');
+      });
 
     await approveSpec(app, workItem.id);
     const { planRevisionId } = await approvePlan(app, workItem.id);
@@ -1120,7 +1242,7 @@ describe('delivery control plane API', () => {
     );
   });
 
-  it('supports item-scoped Spec and Implementation Plan Doc request-changes command paths', async () => {
+  it('rejects legacy item-scoped Spec and Implementation Plan Doc request-changes command paths', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
 
@@ -1130,15 +1252,15 @@ describe('delivery control plane API', () => {
       includePlan: false,
       specStatus: 'in_review',
     });
-    expect(
-      (
-        await request(server)
-          .post(`/development-plans/${specSeed.developmentPlan.id}/items/${specSeed.item.id}/spec/request-changes`)
-          .set(reviewerHeaders)
-          .send({ actor_id: actorReviewer, rationale: 'Clarify the API acceptance criteria.' })
-          .expect(201)
-      ).body,
-    ).toMatchObject({ status: 'draft', gate_state: 'changes_requested' });
+    await startWorkflowForItem(app, specSeed);
+    await request(server)
+      .post(`/development-plans/${specSeed.developmentPlan.id}/items/${specSeed.item.id}/spec/request-changes`)
+      .set(reviewerHeaders)
+      .send({ actor_id: actorReviewer, rationale: 'Clarify the API acceptance criteria.' })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
+      });
 
     const { workItem: planWorkItem } = await createProjectRepoWorkItem(app);
     const planSeed = await seedItemScopedSpecPlan(app, planWorkItem.id, {
@@ -1146,26 +1268,16 @@ describe('delivery control plane API', () => {
       reviewerActorId: actorReviewer,
       includePlan: false,
     });
+    await startWorkflowForItem(app, planSeed);
     const executionPlanRevision = (
       await request(server)
         .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/generate-draft`)
         .send({ actor_id: actorOwner })
-        .expect(201)
+        .expect(409)
+        .expect(({ body }) => {
+          expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
+        })
     ).body;
-    expect(executionPlanRevision.id).toBeTruthy();
-    await request(server)
-      .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/submit-for-approval`)
-      .set(ownerHeaders)
-      .send({ actor_id: actorOwner })
-      .expect(201);
-    expect(
-      (
-        await request(server)
-          .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/request-changes`)
-          .set(reviewerHeaders)
-          .send({ actor_id: actorReviewer, rationale: 'Split the verification rollout steps.' })
-          .expect(201)
-      ).body,
-    ).toMatchObject({ status: 'changes_requested' });
+    expect(executionPlanRevision.id).toBeUndefined();
   });
 });

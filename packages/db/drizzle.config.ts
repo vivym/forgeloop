@@ -8,6 +8,7 @@ if (url === undefined) {
 
 export default defineConfig({
   schema: './packages/db/src/schema/index.ts',
+  out: './packages/db/migrations',
   dialect: 'postgresql',
   dbCredentials: {
     url,

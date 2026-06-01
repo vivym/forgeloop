@@ -114,6 +114,7 @@ export class RunControlService {
     actorContext: ActorContext,
   ): Promise<RunAcceptedResponse> {
     const executionPackage = this.requireFound(await repository.getExecutionPackage(packageId), `ExecutionPackage ${packageId}`);
+    await this.assertPublicRunPackageMutationAllowed(repository, executionPackage, mode);
     await this.executionPackageService.assertExecutionPackageGraphStillCurrent(repository, executionPackage);
     const reviewPackets = await repository.listReviewPacketsForPackage(packageId);
     const requestedByActorId = this.resolveRunActor({
@@ -179,12 +180,18 @@ export class RunControlService {
     await repository.saveExecutionPackage(queuedPackage);
     await repository.saveRunSession({
       ...runSession,
+      ...(executionPackage.workflow_id === undefined ? {} : { workflow_id: executionPackage.workflow_id }),
+      ...(executionPackage.codex_session_id === undefined ? {} : { codex_session_id: executionPackage.codex_session_id }),
+      ...(executionPackage.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: executionPackage.codex_session_turn_id }),
       runtime_metadata: this.initialRuntimeMetadata(),
     });
     const context = await loadRunContext(repository, runSessionId);
     const runSpec = buildRunSpec(context, { defaultExecutorType: executorType, workflowOnly });
     await repository.saveRunSession({
       ...runSession,
+      ...(executionPackage.workflow_id === undefined ? {} : { workflow_id: executionPackage.workflow_id }),
+      ...(executionPackage.codex_session_id === undefined ? {} : { codex_session_id: executionPackage.codex_session_id }),
+      ...(executionPackage.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: executionPackage.codex_session_turn_id }),
       executor_type: executorType,
       run_spec: runSpec,
       runtime_metadata: this.initialRuntimeMetadata(),
@@ -328,12 +335,14 @@ export class RunControlService {
     runSessionId: string,
     dto: RunInputDto,
     actorContext: ActorContext = {},
+    workflowId?: string,
   ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'input', {
       actorContext,
       payload: { message: dto.message },
       ...(dto.target_turn_id === undefined ? {} : { targetTurnId: dto.target_turn_id }),
       eventSummary: 'User input submitted.',
+      ...(workflowId === undefined ? {} : { workflowId }),
     });
   }
 
@@ -341,11 +350,13 @@ export class RunControlService {
     runSessionId: string,
     dto: RunControlDto,
     actorContext: ActorContext = {},
+    workflowId?: string,
   ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'cancel', {
       actorContext,
       payload: dto.reason === undefined ? {} : { reason: dto.reason },
       eventSummary: 'Cancel requested.',
+      ...(workflowId === undefined ? {} : { workflowId }),
     });
   }
 
@@ -353,11 +364,13 @@ export class RunControlService {
     runSessionId: string,
     dto: RunControlDto,
     actorContext: ActorContext = {},
+    workflowId?: string,
   ): Promise<RunOperatorCommandResponse> {
     return this.createRunOperatorCommand(runSessionId, 'resume', {
       actorContext,
       payload: dto.reason === undefined ? {} : { reason: dto.reason },
       eventSummary: 'Run resume requested.',
+      ...(workflowId === undefined ? {} : { workflowId }),
     });
   }
 
@@ -438,10 +451,12 @@ export class RunControlService {
       payload: Record<string, unknown>;
       targetTurnId?: string;
       eventSummary: string;
+      workflowId?: string;
     },
   ): Promise<RunOperatorCommandResponse> {
     const runSession = this.requireFound(await this.repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
     this.assertRunCommandTargetIsNonTerminal(runSession);
+    await this.assertWorkflowRunSessionFence(runSession, input.workflowId);
     const actorId = this.resolveRunActor({
       ...(input.actorContext?.authenticatedActorId === undefined ? {} : { authenticatedActorId: input.actorContext.authenticatedActorId }),
     });
@@ -651,12 +666,18 @@ export class RunControlService {
     await repository.saveExecutionPackage(queuedPackage);
     await repository.saveRunSession({
       ...runSession,
+      ...(executionPackage.workflow_id === undefined ? {} : { workflow_id: executionPackage.workflow_id }),
+      ...(executionPackage.codex_session_id === undefined ? {} : { codex_session_id: executionPackage.codex_session_id }),
+      ...(executionPackage.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: executionPackage.codex_session_turn_id }),
       runtime_metadata: this.initialRuntimeMetadata(),
     });
     const context = await loadRunContext(repository, runSessionId);
     const runSpec = buildRunSpec(context, { defaultExecutorType: executorType, workflowOnly: input.workflowOnly });
     await repository.saveRunSession({
       ...runSession,
+      ...(executionPackage.workflow_id === undefined ? {} : { workflow_id: executionPackage.workflow_id }),
+      ...(executionPackage.codex_session_id === undefined ? {} : { codex_session_id: executionPackage.codex_session_id }),
+      ...(executionPackage.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: executionPackage.codex_session_turn_id }),
       executor_type: executorType,
       run_spec: runSpec,
       runtime_metadata: this.initialRuntimeMetadata(),
@@ -799,5 +820,36 @@ export class RunControlService {
       throw new NotFoundException(`${description} not found`);
     }
     return value;
+  }
+
+  private async assertPublicRunPackageMutationAllowed(
+    repository: DeliveryRepository,
+    executionPackage: ExecutionPackage,
+    mode: 'run' | 'rerun' | 'force_rerun',
+  ): Promise<void> {
+    if (executionPackage.development_plan_item_id === undefined) {
+      return;
+    }
+    const activeWorkflow = await repository.getActivePlanItemWorkflowByItem(executionPackage.development_plan_item_id);
+    if (activeWorkflow === undefined) {
+      return;
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Execution Package ${executionPackage.id} ${mode} must use PlanItemWorkflowService`,
+    );
+  }
+
+  private async assertWorkflowRunSessionFence(runSession: RunSession, workflowId?: string): Promise<void> {
+    if (runSession.workflow_id === undefined) {
+      return;
+    }
+    if (runSession.workflow_id === workflowId) {
+      return;
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Run Session ${runSession.id} commands must use PlanItemWorkflowService`,
+    );
   }
 }
