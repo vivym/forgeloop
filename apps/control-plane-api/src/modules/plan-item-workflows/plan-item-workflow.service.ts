@@ -607,11 +607,13 @@ export class PlanItemWorkflowService {
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const workflow = await this.requireWorkflow(repository, workflowId);
         await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'approve_document_gate');
+        const session = await this.requireActiveSession(repository, workflow);
         await this.specPlan.requestItemSpecChangesWithRepository(
           repository,
           workflow.development_plan_id,
           workflow.development_plan_item_id,
           { actor_id: input.actor_id, rationale: input.reason },
+          { workflow_id: workflow.id, codex_session_id: session.id },
         );
         const transitionInput = this.manualDecisionInput({
           actor_id: input.actor_id,
@@ -633,11 +635,13 @@ export class PlanItemWorkflowService {
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const workflow = await this.requireWorkflow(repository, workflowId);
         await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'approve_document_gate');
+        const session = await this.requireActiveSession(repository, workflow);
         await this.specPlan.requestItemImplementationPlanChangesWithRepository(
           repository,
           workflow.development_plan_id,
           workflow.development_plan_item_id,
           { actor_id: input.actor_id, rationale: input.reason },
+          { workflow_id: workflow.id, codex_session_id: session.id },
         );
         const transitionInput = this.manualDecisionInput({
           actor_id: input.actor_id,

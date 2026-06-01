@@ -717,7 +717,7 @@ export class SpecPlanService {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
       const { item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
       await this.assertLegacyPlanItemMutationAllowed(repository, item.id, context);
-      return this.requestItemSpecChangesWithRepository(repository, developmentPlanId, itemId, dto);
+      return this.requestItemSpecChangesWithRepository(repository, developmentPlanId, itemId, dto, context);
     });
   }
 
@@ -726,8 +726,10 @@ export class SpecPlanService {
     developmentPlanId: string,
     itemId: string,
     dto: RequestArtifactChangesCommandDto,
+    context?: WorkflowChildContext,
   ): Promise<Spec> {
     const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
+    await this.assertLegacyPlanItemMutationAllowed(repository, item.id, context);
     const spec = await this.requireItemSpec(item.id, repository);
     this.requireInReview(spec);
     const updated = transitionSpecPlan(spec, { type: 'request_changes', at: this.now() }) as Spec;
@@ -1332,7 +1334,7 @@ export class SpecPlanService {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
       const { item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
       await this.assertLegacyPlanItemMutationAllowed(repository, item.id, context);
-      return this.requestItemImplementationPlanChangesWithRepository(repository, developmentPlanId, itemId, dto);
+      return this.requestItemImplementationPlanChangesWithRepository(repository, developmentPlanId, itemId, dto, context);
     });
   }
 
@@ -1341,8 +1343,10 @@ export class SpecPlanService {
     developmentPlanId: string,
     itemId: string,
     dto: RequestArtifactChangesCommandDto,
+    context?: WorkflowChildContext,
   ): Promise<ExecutionPlanDocument> {
     const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
+    await this.assertLegacyPlanItemMutationAllowed(repository, item.id, context);
     const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
     if (executionPlan.status !== 'in_review') {
       throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} is not awaiting approval`);
@@ -1682,9 +1686,11 @@ export class SpecPlanService {
       activeWorkflow !== undefined &&
       activeWorkflow.id === expectedWorkflowId &&
       activeWorkflow.id === context.workflow_id &&
-      activeWorkflow.active_codex_session_id === context.codex_session_id &&
-      context.codex_session_turn_id !== undefined
+      activeWorkflow.active_codex_session_id === context.codex_session_id
     ) {
+      if (context.codex_session_turn_id === undefined) {
+        return;
+      }
       const turn = await repository.getCodexSessionTurn(context.codex_session_turn_id);
       if (turn?.workflow_id === context.workflow_id && turn.codex_session_id === context.codex_session_id) {
         return;
