@@ -326,15 +326,49 @@ export async function createExecutionReadinessRecord(
   return record;
 }
 
-export async function createFork(app: INestApplication, workflowId: string, options: { reason?: string } = {}) {
+export async function createFork(
+  app: INestApplication,
+  workflowId: string,
+  options: { reason?: string; forked_from_turn_id?: string; forked_from_snapshot_id?: string } = {},
+) {
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const workflow = await repository.getPlanItemWorkflow(workflowId);
   if (workflow?.active_codex_session_id === undefined) throw new Error(`Workflow ${workflowId} has no active session`);
+  const activeSession = await repository.getCodexSession(workflow.active_codex_session_id);
+  if (activeSession === undefined) throw new Error(`Workflow ${workflowId} active session does not exist`);
+  let forkedFromTurnId = options.forked_from_turn_id;
+  if (forkedFromTurnId === undefined && options.forked_from_snapshot_id === undefined) {
+    forkedFromTurnId = `${workflow.id.slice(0, 8)}-1111-4111-8111-111111119901`;
+    await repository.createCodexSessionTurn({
+      id: forkedFromTurnId,
+      workflow_id: workflow.id,
+      codex_session_id: workflow.active_codex_session_id,
+      intent: 'continue_brainstorming',
+      status: 'running',
+      input_digest: codexCanonicalDigest({
+        workflow_id: workflow.id,
+        codex_session_id: workflow.active_codex_session_id,
+        fixture_turn_id: forkedFromTurnId,
+        expected_previous_snapshot_digest: activeSession.latest_snapshot_digest ?? null,
+      }),
+      ...(activeSession.latest_snapshot_digest === undefined
+        ? {}
+        : { expected_previous_snapshot_digest: activeSession.latest_snapshot_digest }),
+      created_by_actor_id: workflow.created_by_actor_id,
+      created_at: now,
+      updated_at: now,
+    });
+  }
 
   return (
     await request(app.getHttpServer())
       .post(`/plan-item-workflows/${workflowId}/codex-sessions/${workflow.active_codex_session_id}/fork`)
-      .send({ actor_id: workflow.created_by_actor_id, reason: options.reason ?? 'Explore a candidate fork.' })
+      .send({
+        actor_id: workflow.created_by_actor_id,
+        reason: options.reason ?? 'Explore a candidate fork.',
+        ...(forkedFromTurnId === undefined ? {} : { forked_from_turn_id: forkedFromTurnId }),
+        ...(options.forked_from_snapshot_id === undefined ? {} : { forked_from_snapshot_id: options.forked_from_snapshot_id }),
+      })
       .expect(201)
   ).body;
 }

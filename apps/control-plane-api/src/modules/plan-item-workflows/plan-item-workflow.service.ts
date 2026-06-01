@@ -17,7 +17,6 @@ import {
   type WorkflowPersistenceRefs,
   type WorkflowManualDecision,
 } from '@forgeloop/domain';
-import type { MarkdownDocument } from '@forgeloop/contracts';
 import type { PlanItemWorkflowStatus, WorkflowTransitionEvidenceObjectType } from '@forgeloop/contracts';
 import type { ApplyPlanItemWorkflowTransitionInput, DeliveryRepository } from '@forgeloop/db';
 
@@ -28,8 +27,10 @@ import { ExecutionsService } from '../executions/executions.service';
 import { SpecPlanService } from '../spec-plan/spec-plan.service';
 import type {
   ApproveImplementationPlanAndMarkExecutionReadyDto,
+  ForkCodexSessionBodyDto,
   ManualDecisionBodyDto,
   RequestWorkflowChangesDto,
+  SelectCodexSessionForkBodyDto,
   StartBrainstormingWorkflowDto,
   WorkflowActorCommandDto,
   WorkflowBoundaryAnswerBodyDto,
@@ -37,6 +38,7 @@ import type {
   WorkflowBoundaryDecisionBodyDto,
   WorkflowBoundaryStartCommandDto,
   WorkflowBoundarySummaryChangesBodyDto,
+  WorkflowDraftDocumentBodyDto,
   WorkflowRevisionCommandDto,
   WorkflowTransitionCommandDto,
 } from './plan-item-workflow.dto';
@@ -317,8 +319,8 @@ export class PlanItemWorkflowService {
     );
   }
 
-  async saveSpecDraft(workflowId: string, input: MarkdownDocument) {
-    const { workflow, context } = await this.prepareWorkflowChildContextForExistingActor(workflowId, {
+  async saveSpecDraft(workflowId: string, input: WorkflowDraftDocumentBodyDto) {
+    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
       action: 'submit_document_gate',
       intent: 'revise_spec_doc',
       expectedStatus: 'spec_generation_queued',
@@ -327,7 +329,7 @@ export class PlanItemWorkflowService {
     return this.specPlan.saveItemSpecDraft(
       workflow.development_plan_id,
       workflow.development_plan_item_id,
-      input,
+      input.document,
       context,
     );
   }
@@ -469,8 +471,8 @@ export class PlanItemWorkflowService {
     );
   }
 
-  async saveImplementationPlanDraft(workflowId: string, input: MarkdownDocument) {
-    const { workflow, context } = await this.prepareWorkflowChildContextForExistingActor(workflowId, {
+  async saveImplementationPlanDraft(workflowId: string, input: WorkflowDraftDocumentBodyDto) {
+    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
       action: 'submit_document_gate',
       intent: 'revise_implementation_plan_doc',
       expectedStatus: 'implementation_plan_generation_queued',
@@ -479,7 +481,7 @@ export class PlanItemWorkflowService {
     return this.specPlan.saveItemImplementationPlanDraft(
       workflow.development_plan_id,
       workflow.development_plan_item_id,
-      input,
+      input.document,
       context,
     );
   }
@@ -588,6 +590,7 @@ export class PlanItemWorkflowService {
     return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'approve_document_gate');
         await this.specPlan.requestItemSpecChangesWithRepository(
           repository,
           workflow.development_plan_id,
@@ -613,6 +616,7 @@ export class PlanItemWorkflowService {
     return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'approve_document_gate');
         await this.specPlan.requestItemImplementationPlanChangesWithRepository(
           repository,
           workflow.development_plan_id,
@@ -683,6 +687,57 @@ export class PlanItemWorkflowService {
       lockedRepository.withDeliveryTransaction((repository) =>
         this.approveImplementationPlanAndMarkExecutionReadyWithRepository(repository, workflowId, input),
       ),
+    );
+  }
+
+  async forkCodexSession(workflowId: string, sessionId: string, input: ForkCodexSessionBodyDto) {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'select_fork');
+        const parent = await repository.getCodexSession(sessionId);
+        if (parent === undefined || parent.owner_id !== workflow.id) {
+          throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${sessionId}`);
+        }
+        const fork = await repository.createCodexSessionFork({
+          id: randomUUID(),
+          workflow_id: workflow.id,
+          parent_session_id: sessionId,
+          ...(input.forked_from_turn_id === undefined ? {} : { forked_from_turn_id: input.forked_from_turn_id }),
+          ...(input.forked_from_snapshot_id === undefined ? {} : { forked_from_snapshot_id: input.forked_from_snapshot_id }),
+          fork_reason: input.reason,
+          created_by_actor_id: input.actor_id,
+          now: this.now(),
+        });
+        return codexSessionPublicProjection(fork);
+      }),
+    );
+  }
+
+  async selectActiveCodexSessionFork(
+    workflowId: string,
+    sessionId: string,
+    input: SelectCodexSessionForkBodyDto,
+  ) {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'select_fork');
+        const selected = await repository.getCodexSession(sessionId);
+        if (selected === undefined || selected.owner_id !== workflow.id) {
+          throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot select Codex session fork ${sessionId}`);
+        }
+        const result = await repository.selectActiveCodexSessionFork({
+          workflow_id: workflow.id,
+          selected_codex_session_id: sessionId,
+          manual_decision_id: randomUUID(),
+          transition_id: randomUUID(),
+          actor_id: input.actor_id,
+          reason: input.reason,
+          now: this.now(),
+        });
+        return this.toPublicWorkflowDto(result.workflow, result.selectedSession);
+      }),
     );
   }
 
@@ -1303,42 +1358,6 @@ export class PlanItemWorkflowService {
           );
         }
         await this.assertActorCanMutateWorkflow(repository, workflow, actorId, input.action, input.developmentPlanItemPatch);
-        const session = await this.requireActiveSession(repository, workflow);
-        const turn = await this.createWorkflowChildTurn(repository, workflow, session, actorId, input.intent, input.operation);
-        return {
-          workflow,
-          session,
-          context: {
-            workflow_id: workflow.id,
-            codex_session_id: session.id,
-            codex_session_turn_id: turn.id,
-          },
-        };
-      }),
-    );
-  }
-
-  private async prepareWorkflowChildContextForExistingActor(
-    workflowId: string,
-    input: {
-      action: WorkflowAction;
-      intent: CodexSessionTurn['intent'];
-      expectedStatus: PlanItemWorkflowStatus;
-      operation: string;
-    },
-  ): Promise<{ workflow: PlanItemWorkflow; session: CodexSession; context: PlanItemWorkflowChildContext }> {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        const item = await repository.getDevelopmentPlanItem(workflow.development_plan_item_id);
-        const actorId = this.requireActorId(item?.driver_actor_id ?? item?.reviewer_actor_id ?? workflow.created_by_actor_id);
-        if (workflow.status !== input.expectedStatus) {
-          throw new DomainError(
-            'workflow_invalid_transition',
-            `${input.operation} requires workflow status ${input.expectedStatus}`,
-          );
-        }
-        await this.assertActorCanMutateWorkflow(repository, workflow, actorId, input.action);
         const session = await this.requireActiveSession(repository, workflow);
         const turn = await this.createWorkflowChildTurn(repository, workflow, session, actorId, input.intent, input.operation);
         return {

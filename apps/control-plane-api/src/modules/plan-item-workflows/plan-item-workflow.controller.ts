@@ -1,6 +1,4 @@
 import { Body, Controller, Inject, Param, Patch, Post } from '@nestjs/common';
-import { markdownDocumentSchema, type MarkdownDocument } from '@forgeloop/contracts';
-
 import {
   regenerateArtifactDraftCommandSchema,
   type RegenerateArtifactDraftCommandDto,
@@ -8,8 +6,10 @@ import {
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import {
   approveImplementationPlanAndMarkExecutionReadySchema,
+  forkCodexSessionBodySchema,
   manualDecisionBodySchema,
   requestWorkflowChangesSchema,
+  selectCodexSessionForkBodySchema,
   startBrainstormingWorkflowSchema,
   workflowActorCommandSchema,
   workflowBoundaryAnswerBodySchema,
@@ -17,11 +17,14 @@ import {
   workflowBoundaryDecisionBodySchema,
   workflowBoundaryStartCommandSchema,
   workflowBoundarySummaryChangesBodySchema,
+  workflowDraftDocumentBodySchema,
   workflowRevisionBodySchema,
   workflowTransitionCommandSchema,
   type ApproveImplementationPlanAndMarkExecutionReadyDto,
+  type ForkCodexSessionBodyDto,
   type ManualDecisionBodyDto,
   type RequestWorkflowChangesDto,
+  type SelectCodexSessionForkBodyDto,
   type StartBrainstormingWorkflowDto,
   type WorkflowActorCommandDto,
   type WorkflowBoundaryAnswerBodyDto,
@@ -29,6 +32,7 @@ import {
   type WorkflowBoundaryDecisionBodyDto,
   type WorkflowBoundaryStartCommandDto,
   type WorkflowBoundarySummaryChangesBodyDto,
+  type WorkflowDraftDocumentBodyDto,
   type WorkflowRevisionBodyDto,
   type WorkflowRevisionCommandDto,
   type WorkflowTransitionCommandDto,
@@ -146,7 +150,7 @@ export class PlanItemWorkflowController {
   @Patch('plan-item-workflows/:workflowId/spec/draft')
   saveSpecDraft(
     @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(markdownDocumentSchema)) body: MarkdownDocument,
+    @Body(new ZodValidationPipe(workflowDraftDocumentBodySchema)) body: WorkflowDraftDocumentBodyDto,
   ) {
     return this.service.saveSpecDraft(workflowId, body);
   }
@@ -196,7 +200,7 @@ export class PlanItemWorkflowController {
   @Patch('plan-item-workflows/:workflowId/implementation-plan/draft')
   saveImplementationPlanDraft(
     @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(markdownDocumentSchema)) body: MarkdownDocument,
+    @Body(new ZodValidationPipe(workflowDraftDocumentBodySchema)) body: WorkflowDraftDocumentBodyDto,
   ) {
     return this.service.saveImplementationPlanDraft(workflowId, body);
   }
@@ -274,6 +278,24 @@ export class PlanItemWorkflowController {
     body: ApproveImplementationPlanAndMarkExecutionReadyDto,
   ) {
     return this.service.approveImplementationPlanAndMarkExecutionReady(workflowId, body);
+  }
+
+  @Post('plan-item-workflows/:workflowId/codex-sessions/:sessionId/fork')
+  forkCodexSession(
+    @Param('workflowId') workflowId: string,
+    @Param('sessionId') sessionId: string,
+    @Body(new ZodValidationPipe(forkCodexSessionBodySchema)) body: ForkCodexSessionBodyDto,
+  ) {
+    return this.service.forkCodexSession(workflowId, sessionId, body);
+  }
+
+  @Post('plan-item-workflows/:workflowId/codex-sessions/:sessionId/select-active-fork')
+  selectActiveCodexSessionFork(
+    @Param('workflowId') workflowId: string,
+    @Param('sessionId') sessionId: string,
+    @Body(new ZodValidationPipe(selectCodexSessionForkBodySchema)) body: SelectCodexSessionForkBodyDto,
+  ) {
+    return this.service.selectActiveCodexSessionFork(workflowId, sessionId, body);
   }
 
   @Post('plan-item-workflows/:workflowId/execution/start')

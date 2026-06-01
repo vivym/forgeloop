@@ -524,6 +524,199 @@ describe('Plan Item Workflow API', () => {
     });
   });
 
+  it('rejects unauthorized workflow change requests before mutating child records', async () => {
+    const specSeeded = await seedSpecReviewWorkflow(app, { idPrefix: '24242424' });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${specSeeded.workflow.id}/request-spec-changes`)
+      .send({
+        actor_id: specSeeded.ids.actorLeader,
+        reason: 'Product driver cannot request workflow-owned Spec changes.',
+        rejected_revision_id: specSeeded.specRevision.id,
+      })
+      .expect(403)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_actor_not_authorized');
+      });
+
+    await expect(repository.getPlanItemWorkflow(specSeeded.workflow.id)).resolves.toMatchObject({ status: 'spec_review' });
+    await expect(repository.getDevelopmentPlanItem(specSeeded.item.id)).resolves.toMatchObject({ spec_status: 'missing' });
+
+    const planSeeded = await seedWorkflowWithApprovedImplementationPlan(app, { idPrefix: '25252525' });
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${planSeeded.workflow.id}/request-implementation-plan-changes`)
+      .send({
+        actor_id: planSeeded.ids.actorLeader,
+        reason: 'Product driver cannot request workflow-owned Implementation Plan changes.',
+        rejected_revision_id: planSeeded.implementationPlanRevision.id,
+      })
+      .expect(403)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_actor_not_authorized');
+      });
+
+    await expect(repository.getPlanItemWorkflow(planSeeded.workflow.id)).resolves.toMatchObject({
+      status: 'implementation_plan_review',
+    });
+    await expect(repository.getDevelopmentPlanItem(planSeeded.item.id)).resolves.toMatchObject({
+      implementation_plan_status: 'missing',
+    });
+  });
+
+  it('requires an authorized actor when saving workflow-owned document drafts', async () => {
+    const seeded = await seedApprovedBoundaryWorkflow(app, { idPrefix: '26262626' });
+    const server = app.getHttpServer();
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const specRevision = (
+      await request(server)
+        .post(`/plan-item-workflows/${seeded.workflow.id}/spec/generate-draft`)
+        .send({ actor_id: seeded.ids.actorTech })
+        .expect(201)
+    ).body;
+    const specDocument = {
+      markdown: '# Edited Spec draft\n\nAuthorized workflow edits must name the caller.',
+      object_ref: { type: 'spec_revision', id: specRevision.id, spec_id: specRevision.spec_id },
+      allowed_blocks: ['paragraph', 'heading', 'list', 'link', 'image', 'table', 'code_block', 'inline_code'],
+      attachment_refs: [],
+      validation_version: '2026-05-23',
+    };
+
+    await request(server)
+      .patch(`/plan-item-workflows/${seeded.workflow.id}/spec/draft`)
+      .send(specDocument)
+      .expect(400);
+    await request(server)
+      .patch(`/plan-item-workflows/${seeded.workflow.id}/spec/draft`)
+      .send({ actor_id: seeded.ids.actorLeader, document: specDocument })
+      .expect(403)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_actor_not_authorized');
+      });
+    await expect(repository.getSpecRevision(specRevision.id)).resolves.toMatchObject({ content: specRevision.content });
+
+    await request(server)
+      .post(`/plan-item-workflows/${seeded.workflow.id}/spec-revisions/${specRevision.id}/submit`)
+      .send({ actor_id: seeded.ids.actorTech, reason: 'Submit Spec for review.' })
+      .expect(201);
+    await request(server)
+      .post(`/plan-item-workflows/${seeded.workflow.id}/spec-revisions/${specRevision.id}/approve`)
+      .send({ actor_id: seeded.ids.actorTech, reason: 'Approve Spec for Implementation Plan generation.' })
+      .expect(201);
+    const planRevision = (
+      await request(server)
+        .post(`/plan-item-workflows/${seeded.workflow.id}/implementation-plan/generate-draft`)
+        .send({ actor_id: seeded.ids.actorTech })
+        .expect(201)
+    ).body;
+    const planDocument = {
+      markdown: '# Edited Implementation Plan draft\n\nAuthorized workflow edits must name the caller.',
+      object_ref: {
+        type: 'implementation_plan_revision',
+        id: planRevision.id,
+        implementation_plan_id: planRevision.implementation_plan_id,
+      },
+      allowed_blocks: ['paragraph', 'heading', 'list', 'link', 'image', 'table', 'code_block', 'inline_code'],
+      attachment_refs: [],
+      validation_version: '2026-05-23',
+    };
+    await request(server)
+      .patch(`/plan-item-workflows/${seeded.workflow.id}/implementation-plan/draft`)
+      .send(planDocument)
+      .expect(400);
+    await request(server)
+      .patch(`/plan-item-workflows/${seeded.workflow.id}/implementation-plan/draft`)
+      .send({ actor_id: seeded.ids.actorLeader, document: planDocument })
+      .expect(403)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_actor_not_authorized');
+      });
+    await expect(repository.getExecutionPlanRevision(planRevision.id)).resolves.toMatchObject({ content: planRevision.content });
+  });
+
+  it('creates and selects Codex session forks through public workflow routes without leaking runtime internals', async () => {
+    const seeded = await seedWorkflow(app, { idPrefix: '27272727' });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const activeSessionId = seeded.workflow.active_codex_session_id;
+    if (activeSessionId === undefined) throw new Error('Workflow fixture has no active session');
+    const forkTurnId = '27272727-1111-4111-8111-111111119001';
+    await repository.createCodexSessionTurn({
+      id: forkTurnId,
+      workflow_id: seeded.workflow.id,
+      codex_session_id: activeSessionId,
+      intent: 'continue_brainstorming',
+      status: 'running',
+      input_digest: 'sha256:fork-point',
+      created_by_actor_id: seeded.ids.actorTech,
+      created_at: '2026-05-31T00:00:00.000Z',
+      updated_at: '2026-05-31T00:00:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/codex-sessions/${activeSessionId}/fork`)
+      .send({ actor_id: seeded.ids.actorTech, reason: 'Missing explicit fork point.' })
+      .expect(400);
+
+    const fork = (
+      await request(app.getHttpServer())
+        .post(`/plan-item-workflows/${seeded.workflow.id}/codex-sessions/${activeSessionId}/fork`)
+        .send({
+          actor_id: seeded.ids.actorTech,
+          reason: 'Explore an alternate Codex session path.',
+          forked_from_turn_id: forkTurnId,
+        })
+        .expect(201)
+    ).body;
+
+    expect(fork).toMatchObject({
+      id: expect.any(String),
+      role: 'candidate_fork',
+      status: 'idle',
+      continuity_state: 'ready',
+      can_continue: false,
+    });
+    expect(fork.forked_from_turn_id).toBeUndefined();
+    expect(fork.latest_snapshot_digest).toBeUndefined();
+    expect(fork.codex_thread_id).toBeUndefined();
+    expect(fork.lease_token_hash).toBeUndefined();
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/codex-sessions/${fork.id}/select-active-fork`)
+      .send({ actor_id: seeded.ids.actorLeader, reason: 'Unauthorized fork selection.' })
+      .expect(403)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_actor_not_authorized');
+      });
+
+    const selected = (
+      await request(app.getHttpServer())
+        .post(`/plan-item-workflows/${seeded.workflow.id}/codex-sessions/${fork.id}/select-active-fork`)
+        .send({ actor_id: seeded.ids.actorTech, reason: 'Use the alternate Codex session path.' })
+        .expect(201)
+    ).body;
+
+    expect(selected).toMatchObject({
+      id: seeded.workflow.id,
+      status: 'brainstorming',
+      active_codex_session_id: fork.id,
+      session: { id: fork.id, role: 'active', status: 'idle' },
+    });
+    await expect(repository.getCodexSession(activeSessionId)).resolves.toMatchObject({ role: 'inactive_fork' });
+    const transitions = await repository.listPlanItemWorkflowTransitions(seeded.workflow.id);
+    const latestTransition = transitions.at(-1);
+    expect(latestTransition).toMatchObject({
+      from_status: 'brainstorming',
+      to_status: 'brainstorming',
+      evidence_object_type: 'manual_decision',
+      actor_id: seeded.ids.actorTech,
+      reason: 'Use the alternate Codex session path.',
+    });
+    await expect(repository.getWorkflowManualDecision(latestTransition?.evidence_object_id ?? '')).resolves.toMatchObject({
+      kind: 'fork_select',
+      selected_codex_session_id: fork.id,
+    });
+  });
+
   it('starts execution through workflow route and carries workflow session refs into package and run session', async () => {
     const seeded = await seedWorkflowWithApprovedImplementationPlan(app, { idPrefix: '19191919' });
     const server = app.getHttpServer();

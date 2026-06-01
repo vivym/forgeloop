@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   codexSessionPublicDtoSchema,
+  markdownDocumentSchema,
   planItemWorkflowPublicDtoSchema,
   planItemWorkflowStatusSchema,
   workflowManualDecisionKindSchema,
@@ -54,6 +55,24 @@ export const manualDecisionBodySchema = z
   })
   .strict();
 
+export const forkCodexSessionBodySchema = manualDecisionBodySchema
+  .extend({
+    forked_from_turn_id: nonEmpty.optional(),
+    forked_from_snapshot_id: nonEmpty.optional(),
+  })
+  .strict()
+  .superRefine((body, ctx) => {
+    if (body.forked_from_turn_id === undefined && body.forked_from_snapshot_id === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['forked_from_turn_id'],
+        message: 'Fork creation requires forked_from_turn_id or forked_from_snapshot_id',
+      });
+    }
+  });
+
+export const selectCodexSessionForkBodySchema = manualDecisionBodySchema;
+
 export const workflowActorCommandSchema = z
   .object({
     actor_id: nonEmpty,
@@ -78,6 +97,13 @@ export const workflowRevisionCommandSchema = workflowActorCommandSchema
 export const workflowRevisionBodySchema = workflowActorCommandSchema
   .extend({
     reason: nonEmpty.optional(),
+  })
+  .strict();
+
+export const workflowDraftDocumentBodySchema = z
+  .object({
+    actor_id: nonEmpty,
+    document: markdownDocumentSchema,
   })
   .strict();
 
@@ -189,10 +215,13 @@ export const terminalizeCodexSessionTurnSchema = z
   });
 
 export type ManualDecisionBodyDto = z.infer<typeof manualDecisionBodySchema>;
+export type ForkCodexSessionBodyDto = z.infer<typeof forkCodexSessionBodySchema>;
+export type SelectCodexSessionForkBodyDto = z.infer<typeof selectCodexSessionForkBodySchema>;
 export type WorkflowActorCommandDto = z.infer<typeof workflowActorCommandSchema>;
 export type WorkflowBoundaryStartCommandDto = z.infer<typeof workflowBoundaryStartCommandSchema>;
 export type WorkflowRevisionCommandDto = z.infer<typeof workflowRevisionCommandSchema>;
 export type WorkflowRevisionBodyDto = z.infer<typeof workflowRevisionBodySchema>;
+export type WorkflowDraftDocumentBodyDto = z.infer<typeof workflowDraftDocumentBodySchema>;
 export type WorkflowBoundaryAnswerBodyDto = z.infer<typeof workflowBoundaryAnswerBodySchema>;
 export type WorkflowBoundaryDecisionBodyDto = z.infer<typeof workflowBoundaryDecisionBodySchema>;
 export type WorkflowBoundaryContinueBodyDto = z.infer<typeof workflowBoundaryContinueBodySchema>;

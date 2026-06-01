@@ -334,11 +334,14 @@ describe('SpecPlanService item-scoped delivery API', () => {
       await request(server)
         .patch(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/spec/draft`)
         .send({
-          markdown,
-          object_ref: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
-          allowed_blocks: ['paragraph', 'heading', 'list', 'link', 'image', 'table', 'code_block', 'inline_code'],
-          attachment_refs: [],
-          validation_version: '2026-05-23',
+          actor_id: actorTech,
+          document: {
+            markdown,
+            object_ref: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
+            allowed_blocks: ['paragraph', 'heading', 'list', 'link', 'image', 'table', 'code_block', 'inline_code'],
+            attachment_refs: [],
+            validation_version: '2026-05-23',
+          },
         })
         .expect(200)
     ).body;
@@ -388,11 +391,14 @@ describe('SpecPlanService item-scoped delivery API', () => {
       await request(server)
         .patch(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/spec/draft`)
         .send({
-          markdown: '# Saved Spec draft\n\nText-only edit should keep the attached diagram available.',
-          object_ref: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
-          allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
-          attachment_refs: [attachment],
-          validation_version: '2026-05-23',
+          actor_id: actorTech,
+          document: {
+            markdown: '# Saved Spec draft\n\nText-only edit should keep the attached diagram available.',
+            object_ref: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
+            allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
+            attachment_refs: [attachment],
+            validation_version: '2026-05-23',
+          },
         })
         .expect(200)
     ).body;
@@ -588,15 +594,18 @@ describe('SpecPlanService item-scoped delivery API', () => {
       await request(server)
         .patch(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan/draft`)
         .send({
-          markdown: '# Saved Implementation Plan Doc draft\n\nPersisted through the item-scoped draft endpoint.',
-          object_ref: {
-            type: 'implementation_plan_revision',
-            id: firstExecutionPlanRevision.id,
-            implementation_plan_id: firstExecutionPlanRevision.implementation_plan_id,
+          actor_id: actorTech,
+          document: {
+            markdown: '# Saved Implementation Plan Doc draft\n\nPersisted through the item-scoped draft endpoint.',
+            object_ref: {
+              type: 'implementation_plan_revision',
+              id: firstExecutionPlanRevision.id,
+              implementation_plan_id: firstExecutionPlanRevision.implementation_plan_id,
+            },
+            allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
+            attachment_refs: [],
+            validation_version: '2026-05-23',
           },
-          allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
-          attachment_refs: [],
-          validation_version: '2026-05-23',
         })
         .expect(200)
     ).body;
@@ -646,15 +655,18 @@ describe('SpecPlanService item-scoped delivery API', () => {
       await request(server)
         .patch(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan/draft`)
         .send({
-          markdown: '# Saved Implementation Plan Doc draft\n\nText-only edit should keep the attached checklist available.',
-          object_ref: {
-            type: 'implementation_plan_revision',
-            id: firstExecutionPlanRevision.id,
-            implementation_plan_id: firstExecutionPlanRevision.implementation_plan_id,
+          actor_id: actorTech,
+          document: {
+            markdown: '# Saved Implementation Plan Doc draft\n\nText-only edit should keep the attached checklist available.',
+            object_ref: {
+              type: 'implementation_plan_revision',
+              id: firstExecutionPlanRevision.id,
+              implementation_plan_id: firstExecutionPlanRevision.implementation_plan_id,
+            },
+            allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
+            attachment_refs: [attachment],
+            validation_version: '2026-05-23',
           },
-          allowed_blocks: ['paragraph', 'heading', 'link', 'image', 'table', 'code_block', 'inline_code'],
-          attachment_refs: [attachment],
-          validation_version: '2026-05-23',
         })
         .expect(200)
     ).body;
