@@ -39,6 +39,9 @@ export type CodexGenerationErrorCode =
   | 'codex_generation_safety_unavailable'
   | 'codex_generation_sandbox_invalid'
   | 'codex_app_server_unavailable'
+  | 'codex_app_server_resume_failed'
+  | 'codex_app_server_thread_id_missing'
+  | 'codex_app_server_thread_mismatch'
   | 'codex_generation_timeout'
   | 'codex_generation_cancelled'
   | 'codex_generation_concurrency_limit_exceeded'
@@ -648,6 +651,9 @@ const appServerRetryableCodes = new Set<CodexGenerationErrorCode>([
 const appServerNonRetryableCodes = new Set<CodexGenerationErrorCode>([
   'codex_generation_safety_unavailable',
   'codex_generation_sandbox_invalid',
+  'codex_app_server_resume_failed',
+  'codex_app_server_thread_id_missing',
+  'codex_app_server_thread_mismatch',
   'codex_generation_raw_log_too_large',
   'generated_output_too_large',
 ]);
@@ -731,6 +737,7 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
         repoIds: input.repoIds,
         artifactRoot: config.artifactRoot,
         ...(config.workspaceRoot === undefined ? {} : { workspaceRoot: config.workspaceRoot }),
+        ...(input.continuation?.kind === 'resume_thread' ? { trustedContinuation: 'session_bound' as const } : {}),
         policyDigests: input.policyDigests,
         ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
         ...(config.outputLimitBytes === undefined ? {} : { outputLimitBytes: config.outputLimitBytes }),
@@ -746,6 +753,7 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
         outputSchemaVersion: input.outputSchemaVersion,
         ...(outputSchema === undefined ? {} : { outputSchema }),
         contextDigest: input.actionRunId,
+        ...(input.continuation === undefined ? {} : { continuation: input.continuation }),
         ...(input.signal === undefined ? {} : { signal: input.signal }),
         ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
         ...(config.outputLimitBytes === undefined ? {} : { outputLimitBytes: config.outputLimitBytes }),

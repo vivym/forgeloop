@@ -9,6 +9,10 @@ export type CodexGenerationTaskKind =
   | 'development_plan_item_execution_plan_revision';
 export type CodexGenerationDriverMode = 'disabled' | 'fake' | 'app_server';
 
+export type CodexThreadContinuation =
+  | { kind: 'start_thread' }
+  | { kind: 'resume_thread'; codex_thread_id: string; codex_thread_id_digest: string };
+
 export interface GeneratedSpecDraftV1 {
   schema_version: 'spec_draft.v1';
   summary: string;
@@ -158,6 +162,7 @@ export interface CodexGenerationRuntimeTaskInput<TContext extends Record<string,
   promptVersion: string;
   outputSchemaVersion: string;
   policyDigests: Record<string, string>;
+  continuation?: CodexThreadContinuation;
   orchestration?: CodexGenerationOrchestrationContext;
   signal?: AbortSignal;
 }

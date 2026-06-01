@@ -15,12 +15,8 @@ import {
   publicFailureSubcodeFromAppServerErrorShape,
   publicFailureSubcodeForCodexErrorInfo,
 } from './app-server-error-categories.js';
-import type { CodexGenerationTaskKind } from './types.js';
+import type { CodexGenerationTaskKind, CodexThreadContinuation } from './types.js';
 import type { CodexGenerationRuntimeSafety, GenerationLease } from './generation-safety.js';
-
-export type CodexThreadContinuation =
-  | { kind: 'start_thread' }
-  | { kind: 'resume_thread'; codex_thread_id: string; codex_thread_id_digest: string };
 
 export interface CodexThreadMetadata {
   codex_thread_id: string;

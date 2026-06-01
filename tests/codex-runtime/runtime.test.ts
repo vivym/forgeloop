@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  codexThreadIdDigest,
   createCodexGenerationRuntime,
   type CodexAppServerTransport,
 } from '../../packages/codex-runtime/src/index';
@@ -766,6 +767,82 @@ describe('createCodexGenerationRuntime', () => {
         failure_subcode: 'app_server_bad_request',
       },
     });
+  });
+
+  it('preserves app-server resume thread mismatches as non-retryable runtime errors', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/resume') {
+        return { threadId: 'thread-2', effectiveConfig: { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } };
+      }
+      return {};
+    });
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: () => ({
+        request,
+        notifications: async function* () {},
+        async close() {},
+      }),
+    });
+
+    await expect(
+      runtime.generatePlanDraft({
+        ...planInput,
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: 'thread-1',
+          codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'codex_app_server_thread_mismatch',
+      retryable: false,
+      publicResultJson: { status: 422, code: 'codex_app_server_thread_mismatch' },
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/resume']);
+  });
+
+  it('preserves app-server resume transport failures as non-retryable runtime errors', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/resume') {
+        throw new Error('socket reset');
+      }
+      return {};
+    });
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: () => ({
+        request,
+        notifications: async function* () {},
+        async close() {},
+      }),
+    });
+
+    await expect(
+      runtime.generatePlanDraft({
+        ...planInput,
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: 'thread-1',
+          codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'codex_app_server_resume_failed',
+      retryable: false,
+      publicResultJson: { status: 422, code: 'codex_app_server_resume_failed' },
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/resume']);
   });
 
   it('maps deterministic app-server output limits to public non-retryable errors', async () => {
