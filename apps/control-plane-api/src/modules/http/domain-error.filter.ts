@@ -14,6 +14,7 @@ const conflictDomainErrorCodes = new Set<DomainErrorCode>([
   'codex_session_stale_terminalization',
   'codex_session_snapshot_stale',
   'codex_session_thread_binding_conflict',
+  'codex_session_thread_binding_stale',
   'codex_session_fork_invalid',
 ]);
 

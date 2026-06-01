@@ -86,6 +86,26 @@ const generationWorkloadResponse = (overrides: Partial<CodexGenerationWorkloadV1
   signed_context: generationSignedContext(),
 });
 
+const sessionRuntimeContext = (overrides: Record<string, unknown> = {}) => ({
+  schema_version: 'codex_session_runtime_context.v1' as const,
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'session-turn-1',
+  lease_id: 'session-lease-1',
+  lease_epoch: 1,
+  worker_id: 'worker-1',
+  worker_session_digest: digest('a'),
+  turn_group_status: 'intermediate' as const,
+  continuation: { kind: 'start_thread' as const },
+  ...overrides,
+});
+
+const sessionTerminalization = (overrides: Record<string, unknown> = {}) => ({
+  schema_version: 'codex_session_terminalization.v1' as const,
+  lease_token: 'session-terminalization-token-secret',
+  expected_previous_snapshot_digest: digest('b'),
+  ...overrides,
+});
+
 const runExecutionWorkload = (archiveDigest = digest('c')): CodexRunExecutionWorkloadV1 & {
   package_prompt: string;
   execution_context_json: Record<string, unknown>;
@@ -610,6 +630,183 @@ describe('remote codex worker client', () => {
         generated_payload: generatedBoundaryRound(),
       },
     });
+  });
+
+  it('passes trusted session runtime context to generation runtime without leaking terminalization token', async () => {
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const terminalized: Record<string, unknown>[] = [];
+    const runtimeInputs: Record<string, unknown>[] = [];
+    const trustedContext = sessionRuntimeContext({
+      runner_runtime_job_id: 'runtime-job-previous',
+      runner_launch_lease_id: 'launch-lease-previous',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: digest('c'),
+      },
+    });
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-')),
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+        },
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+        fetchRuntimeJobWorkload: async () =>
+          generationWorkloadResponse({
+            codex_session_runtime_context: trustedContext,
+            codex_session_terminalization: sessionTerminalization(),
+          }),
+        materializeRuntimeJob: async () => materialization(),
+        startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
+        appendRuntimeJobEvent: async () => ({}),
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: {
+        startFromMaterialization: vi.fn(async () => ({
+          endpoint: 'docker-exec:' + digest('8'),
+          containerWorkspacePath: '/workspace' as const,
+          publicEvidence: {
+            runtime_profile_id: 'profile-1',
+            runtime_profile_revision_id: 'profile-rev-1',
+            runtime_profile_digest: digest('7'),
+            runtime_target_kind: 'generation' as const,
+            source_access_mode: 'artifact_only' as const,
+            environment: 'test' as const,
+            launch_lease_id: 'lease-1',
+            worker_id: 'worker-1',
+            docker_image_digest: digest('4'),
+            container_id_digest: digest('9'),
+            app_server_effective_config_digest: digest('6'),
+            docker_policy_self_check_digest: digest('a'),
+            app_server_attempted: true as const,
+            selected_execution_mode: 'app_server' as const,
+          },
+          close: async () => undefined,
+        })),
+      },
+      generationRuntimeFactory: () =>
+        ({
+          generateSpecDraft: async (input) => {
+            runtimeInputs.push(input);
+            return {
+              taskKind: 'spec_draft',
+              promptVersion: input.promptVersion,
+              outputSchemaVersion: input.outputSchemaVersion,
+              generated: generatedSpec(),
+              generationArtifacts: [],
+              publicSummary: 'Generated public spec.',
+            };
+          },
+          generatePlanDraft: vi.fn(),
+          generatePackageDrafts: vi.fn(),
+          generateBoundaryBrainstormingRound: vi.fn(),
+          generateDevelopmentPlanItemSpecRevision: vi.fn(),
+          generateDevelopmentPlanItemExecutionPlanRevision: vi.fn(),
+        }) as unknown as CodexGenerationRuntime,
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-1',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(runtimeInputs[0]).toMatchObject({ codexSessionRuntimeContext: trustedContext });
+    expect(JSON.stringify(runtimeInputs)).not.toContain('session-terminalization-token-secret');
+    expect(JSON.stringify(terminalized)).not.toContain('session-terminalization-token-secret');
+    expect(JSON.stringify(terminalized)).not.toContain('launch-token-secret');
+  });
+
+  it('rejects generation workload when session runtime context and terminalization are not paired', async () => {
+    const terminalized: Record<string, unknown>[] = [];
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const materializeRuntimeJob = vi.fn(async () => materialization());
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-')),
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+        },
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+        fetchRuntimeJobWorkload: async () =>
+          generationWorkloadResponse({
+            codex_session_runtime_context: sessionRuntimeContext(),
+          }),
+        materializeRuntimeJob,
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: { startFromMaterialization: vi.fn() },
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-1',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(materializeRuntimeJob).not.toHaveBeenCalled();
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'failed',
+      reason_code: 'codex_generation_workload_unsupported',
+    });
+    expect(JSON.stringify(terminalized[0])).not.toContain('launch-token-secret');
   });
 
   it('runs one assigned run-execution job by downloading the workspace bundle and terminalizing package evidence', async () => {

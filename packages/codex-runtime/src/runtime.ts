@@ -729,6 +729,7 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
     validate: (value: unknown) => TGenerated,
   ): Promise<CodexGenerationResult<TGenerated>> =>
     withConcurrency(async () => {
+      const continuation = input.codexSessionRuntimeContext?.continuation;
       const driver = createAppServerGenerationDriver({
         endpoint: config.appServerEndpoint,
         taskKind,
@@ -737,7 +738,7 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
         repoIds: input.repoIds,
         artifactRoot: config.artifactRoot,
         ...(config.workspaceRoot === undefined ? {} : { workspaceRoot: config.workspaceRoot }),
-        ...(input.continuation?.kind === 'resume_thread' ? { trustedContinuation: 'session_bound' as const } : {}),
+        ...(continuation?.kind === 'resume_thread' ? { trustedContinuation: 'session_bound' as const } : {}),
         policyDigests: input.policyDigests,
         ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
         ...(config.outputLimitBytes === undefined ? {} : { outputLimitBytes: config.outputLimitBytes }),
@@ -753,7 +754,7 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
         outputSchemaVersion: input.outputSchemaVersion,
         ...(outputSchema === undefined ? {} : { outputSchema }),
         contextDigest: input.actionRunId,
-        ...(input.continuation === undefined ? {} : { continuation: input.continuation }),
+        ...(continuation === undefined ? {} : { continuation }),
         ...(input.signal === undefined ? {} : { signal: input.signal }),
         ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
         ...(config.outputLimitBytes === undefined ? {} : { outputLimitBytes: config.outputLimitBytes }),
@@ -766,6 +767,7 @@ export const createCodexGenerationRuntime = (config: CodexGenerationRuntimeConfi
         generated: validateAppServerOutput(validate, output.extractedJson),
         generationArtifacts: output.rawArtifactRefs as CodexGenerationResult<TGenerated>['generationArtifacts'],
         publicSummary: 'Codex app-server draft generated.',
+        ...(output.codexThread === undefined ? {} : { codexThread: output.codexThread }),
       };
     }).catch((error: unknown) => {
       throw toCodexGenerationError(error);

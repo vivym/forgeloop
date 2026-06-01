@@ -355,6 +355,33 @@ export interface CodexGenerationWorkloadV1 {
   prompt_template_digest: string;
   created_at: string;
   expires_at: string;
+  codex_session_runtime_context?: CodexSessionRuntimeContextV1;
+  codex_session_terminalization?: CodexSessionTerminalizationV1;
+}
+
+export type CodexThreadContinuationV1 =
+  | { kind: 'start_thread' }
+  | { kind: 'resume_thread'; codex_thread_id: string; codex_thread_id_digest: string };
+
+export interface CodexSessionRuntimeContextV1 {
+  schema_version: 'codex_session_runtime_context.v1';
+  codex_session_id: string;
+  codex_session_turn_id: string;
+  lease_id: string;
+  lease_epoch: number;
+  worker_id: string;
+  worker_session_digest: string;
+  expected_previous_snapshot_digest?: string;
+  runner_runtime_job_id?: string;
+  runner_launch_lease_id?: string;
+  turn_group_status: 'intermediate' | 'complete';
+  continuation: CodexThreadContinuationV1;
+}
+
+export interface CodexSessionTerminalizationV1 {
+  schema_version: 'codex_session_terminalization.v1';
+  lease_token: string;
+  expected_previous_snapshot_digest?: string;
 }
 
 export interface CodexRunExecutionWorkloadV1 {
@@ -503,6 +530,15 @@ export const codexPublicBlockerCodes = [
   'codex_workspace_bundle_invalid',
   'codex_runtime_job_stale',
   'codex_runtime_job_lease_terminal',
+  'codex_session_resume_without_binding',
+  'codex_session_thread_binding_partial',
+  'codex_session_runner_unavailable',
+  'codex_app_server_resume_failed',
+  'codex_app_server_thread_mismatch',
+  'codex_session_thread_digest_mismatch',
+  'codex_session_thread_start_for_bound_session',
+  'codex_session_thread_binding_stale',
+  'codex_app_server_thread_id_missing',
 ] as const;
 
 export type CodexPublicBlockerCode = (typeof codexPublicBlockerCodes)[number];
@@ -587,6 +623,9 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 const invalidProfile = (message: string, details?: Record<string, unknown>): DomainError =>
   new DomainError('codex_runtime_profile_invalid', message, details);
 
+const unsupportedGenerationWorkload = (message: string, details?: Record<string, unknown>): DomainError =>
+  new DomainError('codex_generation_workload_unsupported', message, details);
+
 const dockerPolicyUnavailable = (message: string, details?: Record<string, unknown>): DomainError =>
   new DomainError('codex_worker_docker_policy_unavailable', `codex_worker_docker_policy_unavailable: ${message}`, details);
 
@@ -641,6 +680,111 @@ const canonicalize = (value: unknown, allowUndefinedObjectField = false): Canoni
 const stableJson = (value: unknown): string => JSON.stringify(canonicalize(value));
 
 const isSha256Digest = (value: unknown): value is string => typeof value === 'string' && sha256DigestPattern.test(value);
+
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
+const requireRuntimeContextString = (record: Record<string, unknown>, key: keyof CodexSessionRuntimeContextV1): string => {
+  const value = record[key];
+  if (!isNonEmptyString(value)) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${String(key)} is required.`);
+  }
+  return value;
+};
+
+const optionalRuntimeContextString = (record: Record<string, unknown>, key: keyof CodexSessionRuntimeContextV1): string | undefined => {
+  const value = record[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isNonEmptyString(value)) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${String(key)} is invalid.`);
+  }
+  return value;
+};
+
+export const validateCodexSessionRuntimeContext = (value: unknown): CodexSessionRuntimeContextV1 => {
+  if (!isPlainObject(value) || value.schema_version !== 'codex_session_runtime_context.v1') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: session runtime context is unsupported.');
+  }
+
+  const continuation = value.continuation;
+  if (!isPlainObject(continuation)) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: continuation is required.');
+  }
+  if (continuation.kind !== 'start_thread' && continuation.kind !== 'resume_thread') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: continuation kind is unsupported.');
+  }
+
+  const runnerRuntimeJobId = optionalRuntimeContextString(value, 'runner_runtime_job_id');
+  const runnerLaunchLeaseId = optionalRuntimeContextString(value, 'runner_launch_lease_id');
+  const expectedPreviousSnapshotDigest = optionalRuntimeContextString(value, 'expected_previous_snapshot_digest');
+  if ((runnerRuntimeJobId === undefined) !== (runnerLaunchLeaseId === undefined)) {
+    throw new DomainError(
+      'codex_session_thread_binding_partial',
+      'codex_session_thread_binding_partial: runner binding must be complete.',
+    );
+  }
+
+  let parsedContinuation: CodexThreadContinuationV1;
+  if (continuation.kind === 'start_thread') {
+    if ('codex_thread_id' in continuation || 'codex_thread_id_digest' in continuation) {
+      throw new DomainError(
+        'codex_session_thread_binding_partial',
+        'codex_session_thread_binding_partial: start_thread must not carry thread binding fields.',
+      );
+    }
+    if (runnerRuntimeJobId !== undefined || runnerLaunchLeaseId !== undefined) {
+      throw unsupportedGenerationWorkload(
+        'codex_generation_workload_unsupported: runner binding is forbidden for start_thread.',
+      );
+    }
+    parsedContinuation = { kind: 'start_thread' };
+  } else {
+    const codexThreadId = continuation.codex_thread_id;
+    const codexThreadIdDigest = continuation.codex_thread_id_digest;
+    if (!isNonEmptyString(codexThreadId) || !isNonEmptyString(codexThreadIdDigest)) {
+      throw new DomainError(
+        'codex_session_thread_binding_partial',
+        'codex_session_thread_binding_partial: resume_thread requires thread id and digest.',
+      );
+    }
+    if (runnerRuntimeJobId === undefined || runnerLaunchLeaseId === undefined) {
+      throw new DomainError(
+        'codex_session_thread_binding_partial',
+        'codex_session_thread_binding_partial: resume_thread requires runner binding.',
+      );
+    }
+    parsedContinuation = {
+      kind: 'resume_thread',
+      codex_thread_id: codexThreadId,
+      codex_thread_id_digest: codexThreadIdDigest,
+    };
+  }
+
+  if (!Number.isInteger(value.lease_epoch) || Number(value.lease_epoch) <= 0) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: lease_epoch must be a positive integer.');
+  }
+  if (value.turn_group_status !== 'intermediate' && value.turn_group_status !== 'complete') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: turn_group_status is unsupported.');
+  }
+
+  return {
+    schema_version: 'codex_session_runtime_context.v1',
+    codex_session_id: requireRuntimeContextString(value, 'codex_session_id'),
+    codex_session_turn_id: requireRuntimeContextString(value, 'codex_session_turn_id'),
+    lease_id: requireRuntimeContextString(value, 'lease_id'),
+    lease_epoch: Number(value.lease_epoch),
+    worker_id: requireRuntimeContextString(value, 'worker_id'),
+    worker_session_digest: requireRuntimeContextString(value, 'worker_session_digest'),
+    ...(expectedPreviousSnapshotDigest === undefined
+      ? {}
+      : { expected_previous_snapshot_digest: expectedPreviousSnapshotDigest }),
+    ...(runnerRuntimeJobId === undefined ? {} : { runner_runtime_job_id: runnerRuntimeJobId }),
+    ...(runnerLaunchLeaseId === undefined ? {} : { runner_launch_lease_id: runnerLaunchLeaseId }),
+    turn_group_status: value.turn_group_status,
+    continuation: parsedContinuation,
+  };
+};
 
 const isRawPathEndpointOrContainerId = (value: string): boolean =>
   /^\/|https?:\/\/|^unix:|\.sock$/i.test(value) || /^[a-f0-9]{12,64}$/i.test(value);

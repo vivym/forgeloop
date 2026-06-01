@@ -15,6 +15,7 @@ import {
   type CodexRuntimeJob,
   type CodexRuntimeTargetKind,
   type CodexRuntimeScope,
+  validateCodexSessionRuntimeContext,
   validateCodexRuntimeJobTerminalResult,
 } from '@forgeloop/domain';
 import {
@@ -1259,6 +1260,9 @@ const runGeneration = async (
       signed_context: workload.signed_context_digest,
       prompt_template: workload.prompt_template_digest,
     },
+    ...(workload.codex_session_runtime_context === undefined
+      ? {}
+      : { codexSessionRuntimeContext: workload.codex_session_runtime_context }),
     signal,
   };
   let result: CodexGenerationResult<Record<string, unknown>>;
@@ -1330,10 +1334,41 @@ const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkloa
     throw new Error('codex_generation_workload_unsupported');
   }
   const typedWorkload = workload as unknown as CodexGenerationWorkloadV1;
+  const hasSessionRuntimeContext = typedWorkload.codex_session_runtime_context !== undefined;
+  const hasSessionTerminalization = typedWorkload.codex_session_terminalization !== undefined;
+  if (hasSessionRuntimeContext !== hasSessionTerminalization) {
+    throw new Error('codex_generation_workload_unsupported');
+  }
+  if (hasSessionRuntimeContext) {
+    try {
+      validateCodexSessionRuntimeContext(typedWorkload.codex_session_runtime_context);
+      validateCodexSessionTerminalization(typedWorkload.codex_session_terminalization);
+    } catch (error) {
+      if (isRecord(error) && typeof error.code === 'string' && publicRuntimeWorkerErrorCodes.has(error.code)) {
+        throw new Error(error.code);
+      }
+      throw new Error('codex_generation_workload_unsupported');
+    }
+  }
   if (!isRecord(response.signed_context) || codexCanonicalDigest(response.signed_context) !== typedWorkload.signed_context_digest) {
     throw new Error('codex_runtime_job_unavailable');
   }
   return { workload: typedWorkload, signedContext: response.signed_context };
+};
+
+const validateCodexSessionTerminalization = (value: unknown): void => {
+  if (!isRecord(value) || value.schema_version !== 'codex_session_terminalization.v1') {
+    throw new Error('codex_generation_workload_unsupported');
+  }
+  if (typeof value.lease_token !== 'string' || value.lease_token.length === 0) {
+    throw new Error('codex_generation_workload_unsupported');
+  }
+  if (
+    value.expected_previous_snapshot_digest !== undefined &&
+    (typeof value.expected_previous_snapshot_digest !== 'string' || value.expected_previous_snapshot_digest.length === 0)
+  ) {
+    throw new Error('codex_generation_workload_unsupported');
+  }
 };
 
 const runSpecWithPackagePrompt = (

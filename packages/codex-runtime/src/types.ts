@@ -13,6 +13,25 @@ export type CodexThreadContinuation =
   | { kind: 'start_thread' }
   | { kind: 'resume_thread'; codex_thread_id: string; codex_thread_id_digest: string };
 
+export type CodexSessionRuntimeContextContinuation =
+  | { kind: 'start_thread' }
+  | { kind: 'resume_thread'; codex_thread_id: string; codex_thread_id_digest: string };
+
+export interface CodexSessionRuntimeContext {
+  schema_version: 'codex_session_runtime_context.v1';
+  codex_session_id: string;
+  codex_session_turn_id: string;
+  lease_id: string;
+  lease_epoch: number;
+  worker_id: string;
+  worker_session_digest: string;
+  expected_previous_snapshot_digest?: string;
+  runner_runtime_job_id?: string;
+  runner_launch_lease_id?: string;
+  turn_group_status: 'intermediate' | 'complete';
+  continuation: CodexSessionRuntimeContextContinuation;
+}
+
 export interface GeneratedSpecDraftV1 {
   schema_version: 'spec_draft.v1';
   summary: string;
@@ -141,6 +160,11 @@ export interface CodexGenerationResult<TGenerated> {
   generated: TGenerated;
   generationArtifacts: ArtifactRef[];
   publicSummary: string;
+  codexThread?: {
+    codex_thread_id: string;
+    codex_thread_id_digest: string;
+    app_server_turn_id?: string;
+  };
 }
 
 export type CodexGenerationOrchestrationContext = {
@@ -162,7 +186,7 @@ export interface CodexGenerationRuntimeTaskInput<TContext extends Record<string,
   promptVersion: string;
   outputSchemaVersion: string;
   policyDigests: Record<string, string>;
-  continuation?: CodexThreadContinuation;
+  codexSessionRuntimeContext?: CodexSessionRuntimeContext;
   orchestration?: CodexGenerationOrchestrationContext;
   signal?: AbortSignal;
 }

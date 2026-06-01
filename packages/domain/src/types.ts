@@ -68,7 +68,10 @@ export type DomainErrorCode =
   | 'codex_session_stale_terminalization'
   | 'codex_session_snapshot_stale'
   | 'codex_session_thread_binding_conflict'
+  | 'codex_session_thread_binding_partial'
+  | 'codex_session_thread_binding_stale'
   | 'codex_session_fork_invalid'
+  | 'codex_generation_workload_unsupported'
   | 'workflow_legacy_entrypoint_disabled';
 
 export class DomainError extends Error {

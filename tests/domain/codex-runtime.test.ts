@@ -20,6 +20,7 @@ import {
   redactCodexLaunchMaterialization,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeJobArtifactIntake,
+  validateCodexSessionRuntimeContext,
   validateCodexDockerNetworkProxyConfig,
   validateCodexDockerRuntimeEvidence,
   validateCodexEffectiveConfigAssertions,
@@ -300,7 +301,71 @@ describe('codex runtime domain contracts', () => {
         'codex_workspace_bundle_invalid',
         'codex_runtime_job_stale',
         'codex_runtime_job_lease_terminal',
+        'codex_session_resume_without_binding',
+        'codex_session_thread_binding_partial',
+        'codex_session_runner_unavailable',
+        'codex_app_server_resume_failed',
+        'codex_app_server_thread_mismatch',
+        'codex_session_thread_digest_mismatch',
+        'codex_session_thread_start_for_bound_session',
+        'codex_session_thread_binding_stale',
+        'codex_app_server_thread_id_missing',
       ]),
+    );
+  });
+
+  it('validates trusted Codex session runtime context for resume turns', () => {
+    const context = validateCodexSessionRuntimeContext({
+      schema_version: 'codex_session_runtime_context.v1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+      lease_id: 'lease-1',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: digestA,
+      expected_previous_snapshot_digest: digestB,
+      runner_runtime_job_id: 'runtime-job-previous',
+      runner_launch_lease_id: 'launch-lease-previous',
+      turn_group_status: 'intermediate',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: digestC,
+      },
+    });
+
+    expect(context).toMatchObject({
+      schema_version: 'codex_session_runtime_context.v1',
+      lease_epoch: 1,
+      turn_group_status: 'intermediate',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: digestC,
+      },
+    });
+  });
+
+  it('rejects partial Codex session thread binding context with a public blocker code', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexSessionRuntimeContext({
+          schema_version: 'codex_session_runtime_context.v1',
+          codex_session_id: 'session-1',
+          codex_session_turn_id: 'turn-1',
+          lease_id: 'lease-1',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: digestA,
+          runner_runtime_job_id: 'runtime-job-previous',
+          runner_launch_lease_id: 'launch-lease-previous',
+          turn_group_status: 'intermediate',
+          continuation: {
+            kind: 'resume_thread',
+            codex_thread_id: 'thread-1',
+          },
+        }),
+      'codex_session_thread_binding_partial',
     );
   });
 
