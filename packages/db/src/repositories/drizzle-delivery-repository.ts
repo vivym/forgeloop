@@ -1554,6 +1554,23 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
       );
     }
+    if (!(await this.codexLaunchFenceIsActive(lease, input.now))) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} launch fence is unavailable`,
+      );
+    }
+    try {
+      await this.assertCodexRuntimeJobMaterializationDependencies(
+        fromDbRecord<CodexRuntimeJobDbRecord>(existingRow as Record<string, unknown>),
+        lease,
+      );
+    } catch {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} launch dependencies are unavailable`,
+      );
+    }
     const [jobRow] = await this.db
       .update(codex_runtime_jobs)
       .set({

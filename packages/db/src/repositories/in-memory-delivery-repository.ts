@@ -3891,6 +3891,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
       );
     }
+    if (!this.codexLaunchFenceIsActive(leaseRecord, undefined, input.now)) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} launch fence is unavailable`,
+      );
+    }
+    try {
+      this.codexRuntimeJobMaterialization(existing, leaseRecord, input.now);
+    } catch {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} launch dependencies are unavailable`,
+      );
+    }
     const attached: CodexRuntimeJobPrivateRecord = {
       ...existing,
       job: {
