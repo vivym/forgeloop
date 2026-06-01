@@ -174,7 +174,7 @@ export class CodexSessionLeaseService {
       ...attempt,
       ...(dto.expected_previous_snapshot_digest === null ? {} : { expected_previous_snapshot_digest: dto.expected_previous_snapshot_digest }),
     });
-    if (safeTurn !== undefined) {
+    if (safeTurn !== undefined && failureCode !== 'codex_session_thread_binding_stale') {
       await repository.markCodexSessionTurnStale({ session_id: sessionId, turn_id: safeTurn.id, now });
     }
   }
