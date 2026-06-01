@@ -363,6 +363,9 @@ export type CodexThreadContinuationV1 =
   | { kind: 'start_thread' }
   | { kind: 'resume_thread'; codex_thread_id: string; codex_thread_id_digest: string };
 
+const codexSessionThreadIdDigest = (threadId: string): string =>
+  codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: threadId });
+
 export interface CodexSessionRuntimeContextV1 {
   schema_version: 'codex_session_runtime_context.v1';
   codex_session_id: string;
@@ -752,6 +755,12 @@ export const validateCodexSessionRuntimeContext = (value: unknown): CodexSession
       throw new DomainError(
         'codex_session_thread_binding_partial',
         'codex_session_thread_binding_partial: resume_thread requires runner binding.',
+      );
+    }
+    if (codexThreadIdDigest !== codexSessionThreadIdDigest(codexThreadId)) {
+      throw new DomainError(
+        'codex_session_thread_digest_mismatch',
+        'codex_session_thread_digest_mismatch: resume_thread thread digest does not match thread id.',
       );
     }
     parsedContinuation = {

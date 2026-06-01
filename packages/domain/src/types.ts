@@ -69,6 +69,7 @@ export type DomainErrorCode =
   | 'codex_session_snapshot_stale'
   | 'codex_session_thread_binding_conflict'
   | 'codex_session_thread_binding_partial'
+  | 'codex_session_thread_digest_mismatch'
   | 'codex_session_thread_binding_stale'
   | 'codex_session_fork_invalid'
   | 'codex_generation_workload_unsupported'

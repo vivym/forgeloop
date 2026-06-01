@@ -315,6 +315,10 @@ describe('codex runtime domain contracts', () => {
   });
 
   it('validates trusted Codex session runtime context for resume turns', () => {
+    const threadDigest = codexCanonicalDigest({
+      kind: 'codex_app_server_thread_id',
+      thread_id: 'thread-1',
+    });
     const context = validateCodexSessionRuntimeContext({
       schema_version: 'codex_session_runtime_context.v1',
       codex_session_id: 'session-1',
@@ -330,7 +334,7 @@ describe('codex runtime domain contracts', () => {
       continuation: {
         kind: 'resume_thread',
         codex_thread_id: 'thread-1',
-        codex_thread_id_digest: digestC,
+        codex_thread_id_digest: threadDigest,
       },
     });
 
@@ -341,9 +345,33 @@ describe('codex runtime domain contracts', () => {
       continuation: {
         kind: 'resume_thread',
         codex_thread_id: 'thread-1',
-        codex_thread_id_digest: digestC,
+        codex_thread_id_digest: threadDigest,
       },
     });
+  });
+
+  it('rejects mismatched Codex session thread digest with a public blocker code', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexSessionRuntimeContext({
+          schema_version: 'codex_session_runtime_context.v1',
+          codex_session_id: 'session-1',
+          codex_session_turn_id: 'turn-1',
+          lease_id: 'lease-1',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: digestA,
+          runner_runtime_job_id: 'runtime-job-previous',
+          runner_launch_lease_id: 'launch-lease-previous',
+          turn_group_status: 'intermediate',
+          continuation: {
+            kind: 'resume_thread',
+            codex_thread_id: 'thread-1',
+            codex_thread_id_digest: digestC,
+          },
+        }),
+      'codex_session_thread_digest_mismatch',
+    );
   });
 
   it('rejects partial Codex session thread binding context with a public blocker code', () => {

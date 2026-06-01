@@ -13,9 +13,7 @@ export type CodexThreadContinuation =
   | { kind: 'start_thread' }
   | { kind: 'resume_thread'; codex_thread_id: string; codex_thread_id_digest: string };
 
-export type CodexSessionRuntimeContextContinuation =
-  | { kind: 'start_thread' }
-  | { kind: 'resume_thread'; codex_thread_id: string; codex_thread_id_digest: string };
+export type CodexSessionRuntimeContextContinuation = CodexThreadContinuation;
 
 export interface CodexSessionRuntimeContext {
   schema_version: 'codex_session_runtime_context.v1';
