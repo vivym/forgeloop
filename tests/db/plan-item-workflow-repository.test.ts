@@ -698,6 +698,125 @@ const createAcceptedSessionRuntimeJob = async (
   return { input, accepted };
 };
 
+const codexSessionRuntimeContextInput = (continuation: Record<string, unknown>): Record<string, unknown> => ({
+  codex_session_runtime_context: {
+    schema_version: 'codex_session_runtime_context.v1',
+    codex_session_id: 'session-1',
+    codex_session_turn_id: 'turn-1',
+    lease_id: 'lease-1',
+    lease_epoch: 1,
+    worker_id: 'worker-1',
+    worker_session_digest: tokenHash('session-token-1'),
+    runner_runtime_job_id: 'runtime-job-1',
+    runner_launch_lease_id: 'launch-lease-1',
+    runner_launch_lease_id_digest: codexCanonicalDigest({ kind: 'codex_launch_lease_id', launch_lease_id: 'launch-lease-1' }),
+    turn_group_status: 'intermediate',
+    continuation,
+  },
+  task: 'continue Codex session',
+});
+
+const resumeThreadRuntimeInput = (): Record<string, unknown> =>
+  codexSessionRuntimeContextInput({
+    kind: 'resume_thread',
+    codex_thread_id: 'thread-1',
+    codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+  });
+
+const startThreadRuntimeInput = (): Record<string, unknown> =>
+  codexSessionRuntimeContextInput({
+    kind: 'start_thread',
+  });
+
+const replayProtectionFor = (path: string, bodyDigest: string) => ({
+  method: 'POST' as const,
+  path,
+  body_digest: bodyDigest,
+});
+
+const claimSessionRuntimeJobEnvelope = (
+  repository: DeliveryRepository,
+  input: Awaited<ReturnType<typeof createAcceptedSessionRuntimeJob>>['input'],
+  nonce: string,
+) =>
+  repository.claimCodexLaunchTokenEnvelope({
+    runtime_job_id: input.runtime_job_id,
+    envelope_id: input.envelope_id,
+    worker_id: input.worker_id,
+    worker_session_token: 'session-token-1',
+    nonce,
+    nonce_timestamp: later,
+    accepted_worker_session_digest: tokenHash('session-token-1'),
+    key_id: 'session-key-1',
+    accepted_session_epoch: 1,
+    claim_request_id: `claim-${input.runtime_job_id}`,
+    request_digest: tokenHash(`claim-request-${input.runtime_job_id}`),
+    replay_protection: replayProtectionFor(
+      `/codex-runtime/jobs/${input.runtime_job_id}/launch-token-envelope/claim`,
+      tokenHash(`claim-request-${input.runtime_job_id}`),
+    ),
+    now: later,
+  });
+
+const materializeSessionRuntimeJob = async (
+  repository: DeliveryRepository,
+  input: Awaited<ReturnType<typeof createAcceptedSessionRuntimeJob>>['input'],
+  nonce: string,
+) => {
+  const lease = await publicLaunchLeaseStatus(repository, input.launch_lease_id);
+  if (lease === undefined) {
+    throw new Error(`Expected launch lease ${input.launch_lease_id}`);
+  }
+  return repository.materializeCodexRuntimeJob({
+    runtime_job_id: input.runtime_job_id,
+    launch_lease_id: input.launch_lease_id,
+    worker_id: input.worker_id,
+    worker_session_token: 'session-token-1',
+    nonce,
+    nonce_timestamp: later,
+    launch_token_hash: lease.lease_token_hash,
+    accepted_worker_session_digest: tokenHash('session-token-1'),
+    accepted_session_public_key_id: 'session-key-1',
+    accepted_session_epoch: 1,
+    materialization_request_id: `materialize-${input.runtime_job_id}`,
+    request_digest: tokenHash(`materialize-request-${input.runtime_job_id}`),
+    replay_protection: replayProtectionFor(
+      `/codex-runtime/jobs/${input.runtime_job_id}/materializations`,
+      tokenHash(`materialize-request-${input.runtime_job_id}`),
+    ),
+    active_fence: {
+      run_worker_lease_id: input.run_worker_lease_id,
+      run_worker_lease_token_hash: input.run_worker_lease_token_hash,
+      run_session_status: input.run_session_status,
+      run_session_updated_at: input.run_session_updated_at,
+      execution_package_version: input.execution_package_version,
+    },
+    now: later,
+  });
+};
+
+const startSessionRuntimeJob = (
+  repository: DeliveryRepository,
+  input: Awaited<ReturnType<typeof createAcceptedSessionRuntimeJob>>['input'],
+  nonce: string,
+) =>
+  repository.startCodexRuntimeJob({
+    runtime_job_id: input.runtime_job_id,
+    worker_id: input.worker_id,
+    worker_session_token: 'session-token-1',
+    nonce,
+    nonce_timestamp: later,
+    idempotency_key: `start-${input.runtime_job_id}`,
+    request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
+    runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+    launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+    replay_protection: replayProtectionFor(
+      `/codex-runtime/jobs/${input.runtime_job_id}/start`,
+      tokenHash(`start-request-${input.runtime_job_id}`),
+    ),
+    now: later,
+  });
+
 const createRunnerLaunchLease = async (
   repository: DeliveryRepository,
   overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexLaunchLease']>[0]> = {},
@@ -2214,6 +2333,125 @@ describe('Plan Item Workflow repository', () => {
       'codex_runtime_job_unavailable',
     );
     await expect(publicLaunchLeaseStatus(repository, 'attached-launch-lease-1')).resolves.toMatchObject({ status: 'active' });
+  });
+
+  it('rejects generic materialization for resume-thread Codex Session runtime jobs', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const { input } = await createAcceptedSessionRuntimeJob(repository, {
+      input_json: resumeThreadRuntimeInput(),
+      input_digest: tokenHash('attached-runtime-resume-input'),
+    });
+    await claimSessionRuntimeJobEnvelope(repository, input, 'claim-resume-materialize-nonce');
+
+    await expectDomainErrorCode(
+      () => materializeSessionRuntimeJob(repository, input, 'materialize-resume-generic-nonce'),
+      'codex_session_runner_unavailable',
+    );
+
+    const job = await repository.getCodexRuntimeJob({ runtime_job_id: input.runtime_job_id });
+    expect(job).toMatchObject({ status: 'accepted' });
+    expect(job?.materializing_at).toBeUndefined();
+    await expect(publicLaunchLeaseStatus(repository, input.launch_lease_id)).resolves.toMatchObject({ status: 'active' });
+  });
+
+  it('rejects generic start for attached resume-thread Codex Session runtime jobs', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await createRunnerLaunchLease(repository);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:00:00.000Z',
+    });
+    const { input } = await createAcceptedSessionRuntimeJob(repository, {
+      input_json: resumeThreadRuntimeInput(),
+      input_digest: tokenHash('attached-runtime-resume-input'),
+    });
+    const attached = await repository.attachCodexSessionRunnerRuntimeJob({
+      session_id: 'session-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:30:00.000Z',
+      attached_runtime_job_id: input.runtime_job_id,
+      worker_id: 'worker-1',
+      runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+      launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+      idempotency_key: `start-${input.runtime_job_id}`,
+      request_digest: tokenHash(`start-request-${input.runtime_job_id}`),
+      now: '2026-05-31T00:06:00.000Z',
+    });
+    expect(attached).toMatchObject({
+      status: 'running',
+      start_idempotency_key: `start-${input.runtime_job_id}`,
+    });
+
+    await expectDomainErrorCode(
+      () => startSessionRuntimeJob(repository, input, 'start-attached-resume-generic-nonce'),
+      'codex_session_runner_unavailable',
+    );
+
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: input.runtime_job_id })).resolves.toMatchObject({
+      status: 'running',
+      runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+      launch_materialization_digest: tokenHash(`launch-materialization-${input.runtime_job_id}`),
+    });
+    await expect(publicLaunchLeaseStatus(repository, input.launch_lease_id)).resolves.toMatchObject({ status: 'materialized' });
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:30:00.000Z',
+    });
+  });
+
+  it('allows generic materialization and start for start-thread Codex Session runtime jobs', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const { input } = await createAcceptedSessionRuntimeJob(repository, {
+      input_json: startThreadRuntimeInput(),
+      input_digest: tokenHash('attached-runtime-start-thread-input'),
+    });
+    await claimSessionRuntimeJobEnvelope(repository, input, 'claim-start-thread-nonce');
+    await expect(materializeSessionRuntimeJob(repository, input, 'materialize-start-thread-nonce')).resolves.toMatchObject({
+      lease_id: input.launch_lease_id,
+      materialized_at: later,
+    });
+    await expect(startSessionRuntimeJob(repository, input, 'start-start-thread-nonce')).resolves.toMatchObject({
+      id: input.runtime_job_id,
+      status: 'running',
+      runtime_evidence_digest: tokenHash(`runtime-evidence-${input.runtime_job_id}`),
+    });
+    await expect(publicLaunchLeaseStatus(repository, input.launch_lease_id)).resolves.toMatchObject({ status: 'materialized' });
+  });
+
+  it('allows generic materialization and start for non-session runtime jobs', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const { input } = await createAcceptedSessionRuntimeJob(repository, {
+      runtime_job_id: 'one-shot-runtime-job-1',
+      launch_lease_id: 'one-shot-launch-lease-1',
+      envelope_id: 'one-shot-runtime-envelope-1',
+      job_request_id: 'one-shot-runtime-job-request-1',
+      input_json: { task: 'draft standalone output' },
+      input_digest: tokenHash('one-shot-runtime-input'),
+      workflow_id: undefined,
+      codex_session_id: undefined,
+      codex_session_turn_id: undefined,
+    });
+    await claimSessionRuntimeJobEnvelope(repository, input, 'claim-one-shot-nonce');
+    await expect(materializeSessionRuntimeJob(repository, input, 'materialize-one-shot-nonce')).resolves.toMatchObject({
+      lease_id: input.launch_lease_id,
+      materialized_at: later,
+    });
+    await expect(startSessionRuntimeJob(repository, input, 'start-one-shot-nonce')).resolves.toMatchObject({
+      id: input.runtime_job_id,
+      status: 'running',
+    });
   });
 
   it('rejects saving a Codex Session with direct archived_at changes and preserves audit-owned state', async () => {

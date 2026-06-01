@@ -454,6 +454,15 @@ const revisionDiff = (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
+const isCodexSessionResumeRuntimeJobInput = (inputJson: Record<string, unknown>): boolean => {
+  const context = inputJson.codex_session_runtime_context;
+  if (!isRecord(context)) {
+    return false;
+  }
+  const continuation = context.continuation;
+  return isRecord(continuation) && continuation.kind === 'resume_thread';
+};
+
 const changedFields = (base: unknown, compare: unknown): string[] => {
   if (valuesEqual(base, compare)) {
     return [];
@@ -4312,6 +4321,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
     }
+    if (isCodexSessionResumeRuntimeJobInput(bundle.job.input_json)) {
+      throw codexDenied(
+        'codex_session_runner_unavailable',
+        'codex_session_runner_unavailable: Codex session resume jobs must attach to the session runner.',
+      );
+    }
     if (bundle.job.status === 'materializing' || bundle.job.status === 'running') {
       if (
         bundle.job.materialization_request_id === input.materialization_request_id &&
@@ -4385,6 +4400,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       bundle.job.expires_at <= input.now
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
+    }
+    if (isCodexSessionResumeRuntimeJobInput(bundle.job.input_json)) {
+      throw codexDenied(
+        'codex_session_runner_unavailable',
+        'codex_session_runner_unavailable: Codex session resume jobs must attach to the session runner.',
+      );
     }
     if (bundle.job.status === 'running') {
       if (
