@@ -484,7 +484,7 @@ const recordReplacementReviewPacketTrace = async (
       return;
     }
 
-    await repository.saveTraceEvent({
+    await repository.updateTraceEvent({
       ...replacementEvent,
       payload: {
         ...replacementEvent.payload,
@@ -548,6 +548,9 @@ const createReviewPacket = async (
     id,
     run_session_id: runSession.id,
     execution_package_id: executionPackage.id,
+    ...(executionPackage.workflow_id === undefined ? {} : { workflow_id: executionPackage.workflow_id }),
+    ...(executionPackage.codex_session_id === undefined ? {} : { codex_session_id: executionPackage.codex_session_id }),
+    ...(executionPackage.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: executionPackage.codex_session_turn_id }),
     reviewer_actor_id: executionPackage.reviewer_actor_id,
     spec_revision_id: runSpec.spec_revision_id,
     plan_revision_id: runSpec.plan_revision_id,

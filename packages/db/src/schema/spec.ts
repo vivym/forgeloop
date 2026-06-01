@@ -3,11 +3,13 @@ import type { SpecRevision } from '@forgeloop/domain';
 
 import { specPlanEditingState, specPlanGateState, specPlanResolution, specPlanStatus, timestampColumn } from './_shared';
 import { actors } from './actor';
+import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
 
 export const specs = pgTable('specs', {
   id: uuid('id').primaryKey().defaultRandom(),
   workItemId: uuid('work_item_id').notNull(),
   developmentPlanItemId: uuid('development_plan_item_id'),
+  workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
   boundarySummaryId: uuid('boundary_summary_id'),
   contextManifestId: uuid('context_manifest_id'),
   entityType: text('entity_type').notNull(),
@@ -28,6 +30,9 @@ export const spec_revisions = pgTable('spec_revisions', {
   specId: uuid('spec_id').notNull(),
   workItemId: uuid('work_item_id').notNull(),
   developmentPlanItemId: uuid('development_plan_item_id'),
+  workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+  codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
+  codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
   boundarySummaryId: uuid('boundary_summary_id'),
   contextManifestId: uuid('context_manifest_id'),
   revisionNumber: integer('revision_number').notNull(),

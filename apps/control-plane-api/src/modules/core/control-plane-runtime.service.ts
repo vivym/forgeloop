@@ -19,6 +19,8 @@ const uuidBackedDeliveryIdPrefixes = new Set([
   'development-plan-revision',
   'development-plan-source-link',
   'project',
+  'release',
+  'release-evidence',
   'work-item',
   'spec',
   'spec-revision',

@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import {
   BadRequestException,
   ConflictException,
@@ -65,11 +63,8 @@ import {
   withReleaseTestAcceptanceExternalBlockers,
 } from '@forgeloop/db';
 
-import {
-  DELIVERY_REPOSITORY,
-  RUN_DURABILITY_MODE,
-  type RunDurabilityMode,
-} from '../core/control-plane-tokens';
+import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
+import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import type { ActorContext } from '../auth/actor-context';
 import { AuditWriterService } from '../audit/audit-writer.service';
 import {
@@ -243,7 +238,6 @@ const valueForHistory = (value: unknown): string | undefined => {
 };
 
 const sameValue = (left: unknown, right: unknown): boolean => valueForHistory(left) === valueForHistory(right);
-const uuidBackedIdPrefixes = new Set(['release', 'release-evidence', 'decision']);
 const releaseGateRejectedActorClasses = new Set([
   'automation_daemon',
   'source_adapter',
@@ -259,14 +253,9 @@ const byCreatedAtDesc = <T extends { created_at: string; id: string }>(left: T, 
 
 @Injectable()
 export class ReleaseService {
-  private idCounter = 0;
-  private timeCounter = 0;
-  private durableTimeMs = 0;
-  private readonly durableInstanceId = randomUUID().replace(/-/g, '').slice(0, 12);
-
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
-    @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
+    @Inject(ControlPlaneRuntimeService) private readonly runtime: ControlPlaneRuntimeService,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
   ) {}
 
@@ -1310,24 +1299,10 @@ export class ReleaseService {
   }
 
   private id(prefix: string): string {
-    this.idCounter += 1;
-    if (this.durabilityMode === 'durable' && uuidBackedIdPrefixes.has(prefix)) {
-      return randomUUID();
-    }
-    if (this.durabilityMode === 'durable') {
-      return `${prefix}-${this.durableInstanceId}-${this.idCounter}`;
-    }
-    return `${prefix}-${this.idCounter}`;
+    return this.runtime.id(prefix);
   }
 
   private now(): string {
-    if (this.durabilityMode === 'durable') {
-      const current = Date.now();
-      this.durableTimeMs = current > this.durableTimeMs ? current : this.durableTimeMs + 1;
-      return new Date(this.durableTimeMs).toISOString();
-    }
-
-    this.timeCounter += 1;
-    return new Date(Date.UTC(2026, 4, 5, 0, 0, this.timeCounter)).toISOString();
+    return this.runtime.now();
   }
 }

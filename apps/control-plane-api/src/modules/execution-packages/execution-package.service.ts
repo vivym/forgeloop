@@ -11,6 +11,7 @@ import {
 import {
   type AutomationActorClass,
   type DevelopmentPlanItem,
+  DomainError,
   type ExecutionPlanDocument,
   type ExecutionPlanRevision,
   type ExecutionPackage,
@@ -73,6 +74,18 @@ type ItemExecutionPackageContext = {
   executionPlan: ExecutionPlanDocument;
   executionPlanRevision: ExecutionPlanRevision;
   ownerActorId: string;
+};
+
+const workflowRefsFromRevision = (
+  revision: unknown,
+): Pick<ExecutionPackage, 'workflow_id' | 'codex_session_id' | 'codex_session_turn_id'> => {
+  if (revision === null || typeof revision !== 'object') return {};
+  const record = revision as Record<string, unknown>;
+  return {
+    ...(typeof record.workflow_id === 'string' ? { workflow_id: record.workflow_id } : {}),
+    ...(typeof record.codex_session_id === 'string' ? { codex_session_id: record.codex_session_id } : {}),
+    ...(typeof record.codex_session_turn_id === 'string' ? { codex_session_turn_id: record.codex_session_turn_id } : {}),
+  };
 };
 
 export type PublicExecutionPackage = Omit<ExecutionPackage, 'work_item_id'> & { scope_ref: ObjectRef };
@@ -149,6 +162,7 @@ export class ExecutionPackageService {
   async generatePackages(planRevisionId: string): Promise<ExecutionPackage[]> {
     return this.repository.withObjectLock(`plan-revision:${planRevisionId}`, async (repository) => {
       const context = await this.packageContextFromRepository(repository, planRevisionId);
+      await this.assertLegacyPackageContextMutationAllowed(repository, context, 'generate');
       const repo = (await repository.listProjectRepos(context.project.id))[0];
       if (repo === undefined) {
         throw new BadRequestException('Project has no bound repos');
@@ -212,9 +226,11 @@ export class ExecutionPackageService {
   }
 
   async createExecutionPackage(planRevisionId: string, dto: CreateExecutionPackageDto): Promise<ExecutionPackage> {
-    return this.repository.withObjectLock(`plan-revision:${planRevisionId}`, async (repository) =>
-      this.createExecutionPackageFromContext(repository, await this.packageContextFromRepository(repository, planRevisionId), dto, undefined, 'manual'),
-    );
+    return this.repository.withObjectLock(`plan-revision:${planRevisionId}`, async (repository) => {
+      const context = await this.packageContextFromRepository(repository, planRevisionId);
+      await this.assertLegacyPackageContextMutationAllowed(repository, context, 'create');
+      return this.createExecutionPackageFromContext(repository, context, dto, undefined, 'manual');
+    });
   }
 
   async createPublicExecutionPackage(planRevisionId: string, dto: CreateExecutionPackageDto): Promise<PublicExecutionPackage> {
@@ -254,6 +270,13 @@ export class ExecutionPackageService {
       let reusablePackage = existing.phase === 'draft' ? transitionExecutionPackage(existing, { type: 'mark_ready', at: this.now() }) : existing;
       if (context.execution !== undefined && reusablePackage.execution_id === undefined) {
         reusablePackage = { ...reusablePackage, execution_id: context.execution.id, updated_at: this.now() };
+      }
+      const workflowRefs = workflowRefsFromRevision(context.executionPlanRevision);
+      const refsChanged = Object.entries(workflowRefs).some(
+        ([key, value]) => reusablePackage[key as keyof typeof workflowRefs] !== value,
+      );
+      if (refsChanged) {
+        reusablePackage = { ...reusablePackage, ...workflowRefs, updated_at: this.now() };
       }
       validateExecutionPackage(context.project, reusablePackage);
       if (reusablePackage !== existing) {
@@ -303,6 +326,7 @@ export class ExecutionPackageService {
         at: createdAt,
       }),
       development_plan_item_id: context.item.id,
+      ...workflowRefsFromRevision(context.executionPlanRevision),
       ...(context.execution === undefined ? {} : { execution_id: context.execution.id }),
       execution_plan_id: context.executionPlan.id,
       execution_plan_revision_id: context.executionPlanRevision.id,
@@ -391,6 +415,7 @@ export class ExecutionPackageService {
   async patchExecutionPackage(packageId: string, dto: PatchExecutionPackageDto): Promise<ExecutionPackage> {
     return this.repository.withObjectLock(`execution-package:${packageId}`, async (repository) => {
       const executionPackage = this.requireFound(await repository.getExecutionPackage(packageId), `ExecutionPackage ${packageId}`);
+      await this.assertLegacyExecutionPackageMutationAllowed(repository, executionPackage, 'patch');
       const openPacket = await repository.findOpenReviewPacketForPackage(packageId);
       if (openPacket !== undefined && isOpenReviewPacketStatus(openPacket.status)) {
         throw new UnprocessableEntityException({
@@ -458,6 +483,7 @@ export class ExecutionPackageService {
     const actorId = this.actorIdForProductGate(dto.actor_id, actorContext);
     return this.repository.withObjectLock(`execution-package:${packageId}`, async (repository) => {
       const executionPackage = this.requireFound(await repository.getExecutionPackage(packageId), `ExecutionPackage ${packageId}`);
+      await this.assertLegacyExecutionPackageMutationAllowed(repository, executionPackage, 'mark-ready');
       if (executionPackage.version !== dto.expected_package_version) {
         throw new UnprocessableEntityException({
           code: 'stale_execution_package_revision',
@@ -737,6 +763,7 @@ export class ExecutionPackageService {
         at: createdAt,
       }),
       ...(context.item === undefined ? {} : { development_plan_item_id: context.item.id }),
+      ...workflowRefsFromRevision(context.planRevision),
       ...(generation === undefined
         ? {}
         : {
@@ -825,6 +852,42 @@ export class ExecutionPackageService {
       throw new NotFoundException(`${label} not found`);
     }
     return value;
+  }
+
+  private async assertLegacyExecutionPackageMutationAllowed(
+    repository: DeliveryRepository,
+    executionPackage: ExecutionPackage,
+    action: string,
+  ): Promise<void> {
+    if (executionPackage.development_plan_item_id === undefined) {
+      return;
+    }
+    const activeWorkflow = await repository.getActivePlanItemWorkflowByItem(executionPackage.development_plan_item_id);
+    if (activeWorkflow === undefined) {
+      return;
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Execution Package ${executionPackage.id} ${action} must use PlanItemWorkflowService`,
+    );
+  }
+
+  private async assertLegacyPackageContextMutationAllowed(
+    repository: DeliveryRepository,
+    context: PackageContext,
+    action: string,
+  ): Promise<void> {
+    if (context.item === undefined) {
+      return;
+    }
+    const activeWorkflow = await repository.getActivePlanItemWorkflowByItem(context.item.id);
+    if (activeWorkflow === undefined) {
+      return;
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Development Plan Item ${context.item.id} package ${action} must use PlanItemWorkflowService`,
+    );
   }
 
   private id(prefix: string): string {

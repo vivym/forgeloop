@@ -15,6 +15,8 @@
     "preview:product-review": "tsx --tsconfig tsconfig.node.json scripts/product-review-preview.ts",
     "tail:run-events": "tsx --tsconfig tsconfig.node.json scripts/tail-run-events.ts",
     "automation:dogfood": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/automation-dogfood.ts",
+    "db:generate": "drizzle-kit generate --config packages/db/drizzle.config.ts",
+    "db:migrate": "drizzle-kit migrate --config packages/db/drizzle.config.ts",
     "db:push": "drizzle-kit push --config packages/db/drizzle.config.ts",
     "e2e:run-console": "vitest run tests/e2e/run-console.e2e.test.ts",
     "smoke:delivery": "vitest run tests/smoke",

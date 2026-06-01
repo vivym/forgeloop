@@ -12,6 +12,7 @@ import type { BoundaryRound, BoundarySummaryRevision as ContractBoundarySummaryR
 import { timestampColumn } from './_shared';
 import { actors } from './actor';
 import { development_plan_item_revisions, development_plan_items, development_plans } from './development-plan';
+import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
 
 export const brainstorming_sessions = pgTable('brainstorming_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -24,6 +25,8 @@ export const brainstorming_sessions = pgTable('brainstorming_sessions', {
   developmentPlanItemId: uuid('development_plan_item_id')
     .notNull()
     .references(() => development_plan_items.id),
+  workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+  codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
   developmentPlanItemRevisionId: uuid('development_plan_item_revision_id').notNull(),
   leaderActorId: uuid('leader_actor_id').references(() => actors.id),
   leaderDelegateActorIds: jsonb('leader_delegate_actor_ids').$type<BrainstormingSession['leader_delegate_actor_ids']>(),
@@ -56,6 +59,7 @@ export const boundary_rounds = pgTable('boundary_rounds', {
   leaderInputMarkdown: text('leader_input_markdown'),
   aiOutputMarkdown: text('ai_output_markdown'),
   runtimeJobId: uuid('runtime_job_id'),
+  codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
   runtimeProfileRevisionId: uuid('runtime_profile_revision_id'),
   credentialBindingVersionId: uuid('credential_binding_version_id'),
   appServerThreadDigest: text('app_server_thread_digest'),
@@ -151,6 +155,9 @@ export const boundary_summary_revisions = pgTable(
     developmentPlanItemId: uuid('development_plan_item_id')
       .notNull()
       .references(() => development_plan_items.id),
+    workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+    codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
+    codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
     developmentPlanItemRevisionId: uuid('development_plan_item_revision_id')
       .notNull()
       .references(() => development_plan_item_revisions.id),

@@ -97,4 +97,16 @@ describe('database reset guard', () => {
     expect(resettableTables.indexOf('development_plan_revisions')).toBeLessThan(resettableTables.indexOf('development_plans'));
     expect(resettableTables.indexOf('development_plan_items')).toBeLessThan(resettableTables.indexOf('development_plans'));
   });
+
+  it('truncates plan item workflow session tables before parent records', () => {
+    expect(resettableTables.indexOf('codex_session_leases')).toBeLessThan(resettableTables.indexOf('codex_sessions'));
+    expect(resettableTables.indexOf('codex_session_stale_terminalization_attempts')).toBeLessThan(
+      resettableTables.indexOf('codex_sessions'),
+    );
+    expect(resettableTables.indexOf('codex_session_turns')).toBeLessThan(resettableTables.indexOf('codex_sessions'));
+    expect(resettableTables.indexOf('plan_item_workflow_transitions')).toBeLessThan(
+      resettableTables.indexOf('plan_item_workflows'),
+    );
+    expect(resettableTables.indexOf('plan_item_workflows')).toBeLessThan(resettableTables.indexOf('development_plan_items'));
+  });
 });

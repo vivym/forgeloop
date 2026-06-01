@@ -202,7 +202,7 @@ describe('evidence chain API', () => {
       unlinkedReviewPacketId,
     } = await track(seedEvidenceChainScenario());
     await repo.saveTraceEvent({
-      id: 'trace-event:run-replacement:run-session-approved',
+      id: 'trace-event:run-replacement:run-session-approved:selected-packet',
       event_type: 'run_replacement_recorded',
       subject_type: 'run_session',
       subject_id: 'run-session-approved',

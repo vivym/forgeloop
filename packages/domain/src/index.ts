@@ -12,4 +12,5 @@ export * from './identity.js';
 export * from './release-gates.js';
 export * from './codex-runtime.js';
 export * from './internal-artifacts.js';
+export * from './plan-item-workflow.js';
 export * from './work-item-delivery-readiness.js';

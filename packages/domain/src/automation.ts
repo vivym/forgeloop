@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { ArtifactRef } from '@forgeloop/contracts';
-import type { IsoDateTime } from './types.js';
+import type { IsoDateTime, WorkflowPersistenceRefs } from './types.js';
 import { DomainError, type WorkItem, type ReviewPacket, type RunSession } from './types.js';
 
 export type AutomationPreset = 'off' | 'ready_projection' | 'draft_only' | 'run_enqueue';
@@ -258,7 +258,7 @@ export interface CommandIdempotencyRecord {
 
 export type AutomationActionRunStatus = 'pending' | 'running' | 'gate_pending' | 'succeeded' | 'failed' | 'skipped' | 'blocked';
 
-export interface AutomationActionRun {
+export interface AutomationActionRun extends WorkflowPersistenceRefs {
   id: string;
   action_type: string;
   target_object_type: string;

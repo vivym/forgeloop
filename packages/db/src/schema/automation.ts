@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, integer, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type {
   AutomationActionRun,
   AutomationProjectSettings,
@@ -9,6 +9,7 @@ import type {
 } from '@forgeloop/domain';
 
 import { timestampColumn } from './_shared';
+import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
 
 export const automation_project_settings = pgTable(
   'automation_project_settings',
@@ -158,6 +159,9 @@ export const automation_action_runs = pgTable(
     actionType: text('action_type').notNull(),
     targetObjectType: text('target_object_type').notNull(),
     targetObjectId: text('target_object_id').notNull(),
+    workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+    codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
+    codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
     targetRevisionId: text('target_revision_id'),
     targetVersion: integer('target_version'),
     targetStatus: text('target_status').notNull(),
