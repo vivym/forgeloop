@@ -47,14 +47,23 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
       await execFile(codexBin, ['app-server', 'generate-ts', '--out', tsDir], { timeout: 30_000 });
 
       const threadStart = await readJson(join(schemaDir, 'v2', 'ThreadStartParams.json'));
+      const threadResume = await readJson(join(schemaDir, 'v2', 'ThreadResumeParams.json'));
       const turnStart = await readJson(join(schemaDir, 'v2', 'TurnStartParams.json'));
       const configRead = await readJson(join(schemaDir, 'v2', 'ConfigReadParams.json'));
+      const threadStartSource = await readFile(join(tsDir, 'v2', 'ThreadStartParams.ts'), 'utf8');
+      const threadResumeSource = await readFile(join(tsDir, 'v2', 'ThreadResumeParams.ts'), 'utf8');
+      const threadSource = await readFile(join(tsDir, 'v2', 'Thread.ts'), 'utf8');
       const turnStartResponseSource = await readFile(join(tsDir, 'v2', 'TurnStartResponse.ts'), 'utf8');
       const turnCompletedSource = await readFile(join(tsDir, 'v2', 'TurnCompletedNotification.ts'), 'utf8');
       const threadItemSource = await readFile(join(tsDir, 'v2', 'ThreadItem.ts'), 'utf8');
       const responseItemSource = await readFile(join(tsDir, 'ResponseItem.ts'), 'utf8');
       expect(Object.keys((threadStart.properties as Record<string, unknown>) ?? {})).toContain('sandbox');
       expect(Object.keys((threadStart.properties as Record<string, unknown>) ?? {})).not.toContain('sandboxPolicy');
+      expect(threadStart.required).toEqual(expect.arrayContaining(['experimentalRawEvents', 'persistExtendedHistory']));
+      expect(threadResume.required).toEqual(expect.arrayContaining(['threadId', 'persistExtendedHistory']));
+      expect(Object.keys((threadResume.properties as Record<string, unknown>) ?? {})).toEqual(
+        expect.arrayContaining(['threadId', 'excludeTurns', 'history', 'path', 'persistExtendedHistory']),
+      );
       expect(Object.keys((turnStart.properties as Record<string, unknown>) ?? {})).toContain('sandboxPolicy');
       expect(Object.keys((turnStart.properties as Record<string, unknown>) ?? {})).toContain('outputSchema');
       expect(turnStart.required).toEqual(['input', 'threadId']);
@@ -69,6 +78,15 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
       expect(sandboxPolicySource).toContain('{ "type": "readOnly", networkAccess: boolean, }');
       expect(userInputSource).toContain('{ "type": "text", text: string,');
       expect(userInputSource).toContain('text_elements: Array<TextElement>');
+      expect(threadStartSource).toContain('experimentalRawEvents: boolean');
+      expect(threadStartSource).toContain('persistExtendedHistory: boolean');
+      expect(threadResumeSource).toContain('threadId: string');
+      expect(threadResumeSource).toContain('excludeTurns?: boolean');
+      expect(threadResumeSource).toContain('history?: Array<ResponseItem> | null');
+      expect(threadResumeSource).toContain('path?: string | null');
+      expect(threadResumeSource).toContain('persistExtendedHistory: boolean');
+      expect(threadSource).toContain('id: string');
+      expect(threadSource).toContain('sessionId: string');
       expect(serverNotificationSource).toContain('"method": "item/agentMessage/delta"');
       expect(serverNotificationSource).toContain('"method": "item/completed"');
       expect(serverNotificationSource).toContain('"method": "rawResponseItem/completed"');
@@ -138,13 +156,26 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
         contractPath,
         `
 import type { ThreadStartParams } from './ts/v2/ThreadStartParams';
+import type { ThreadResumeParams } from './ts/v2/ThreadResumeParams';
 import type { TurnStartParams } from './ts/v2/TurnStartParams';
 import type { ConfigReadParams } from './ts/v2/ConfigReadParams';
 import type { UserInput } from './ts/v2/UserInput';
 
 const input: Array<UserInput> = [{ type: 'text', text: '{}', text_elements: [] }];
-const threadStart = { approvalPolicy: 'never', sandbox: 'read-only' } satisfies ThreadStartParams;
+const threadStart = {
+  approvalPolicy: 'never',
+  sandbox: 'read-only',
+  experimentalRawEvents: false,
+  persistExtendedHistory: false,
+} satisfies ThreadStartParams;
 const actualThreadStart = ${JSON.stringify(capturedRequests[0]?.params, null, 2)} satisfies ThreadStartParams;
+const threadResume = {
+  threadId: 'thread-1',
+  excludeTurns: false,
+  history: null,
+  path: null,
+  persistExtendedHistory: false,
+} satisfies ThreadResumeParams;
 const turnStart = {
   threadId: 'thread-1',
   input,
@@ -159,6 +190,8 @@ const invalidThreadStart = {
   // @ts-expect-error thread/start accepts sandbox, not turn-level sandboxPolicy.
   sandboxPolicy: { type: 'readOnly', networkAccess: false },
 } satisfies ThreadStartParams;
+// @ts-expect-error thread/resume requires threadId.
+const invalidThreadResume: ThreadResumeParams = { persistExtendedHistory: false };
 const invalidTurnStart = {
   threadId: 'thread-1',
   input,
@@ -174,10 +207,12 @@ const invalidInput: Array<UserInput> = [
 const invalidConfigRead = {} satisfies ConfigReadParams;
 void threadStart;
 void actualThreadStart;
+void threadResume;
 void turnStart;
 void actualTurnStart;
 void configRead;
 void invalidThreadStart;
+void invalidThreadResume;
 void invalidTurnStart;
 void invalidInput;
 void invalidConfigRead;

@@ -411,6 +411,8 @@ export class AppServerGenerationDriver {
     const threadResponse = await this.#withDeadline(
       this.options.transport.request('thread/start', {
         approvalPolicy: 'never',
+        experimentalRawEvents: false,
+        persistExtendedHistory: false,
         sandbox: 'read-only',
       }),
       deadline,

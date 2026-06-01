@@ -111,6 +111,8 @@ describe('AppServerGenerationDriver', () => {
 
     expect(request).toHaveBeenNthCalledWith(1, 'thread/start', {
       approvalPolicy: 'never',
+      experimentalRawEvents: false,
+      persistExtendedHistory: false,
       sandbox: 'read-only',
     });
     expect(request).toHaveBeenNthCalledWith(2, 'turn/start', {
