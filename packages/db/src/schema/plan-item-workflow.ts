@@ -167,6 +167,7 @@ export const execution_readiness_records = pgTable(
     codexSessionId: uuid('codex_session_id')
       .notNull()
       .references(() => codex_sessions.id),
+    codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
     approvedBoundarySummaryRevisionId: uuid('approved_boundary_summary_revision_id').notNull(),
     approvedSpecRevisionId: uuid('approved_spec_revision_id').notNull(),
     approvedImplementationPlanRevisionId: uuid('approved_implementation_plan_revision_id').notNull(),

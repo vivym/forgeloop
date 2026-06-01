@@ -3099,6 +3099,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "codex_session_turn_id": {
+          "name": "codex_session_turn_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "approved_boundary_summary_revision_id": {
           "name": "approved_boundary_summary_revision_id",
           "type": "uuid",
@@ -3256,6 +3262,19 @@
           "tableTo": "codex_sessions",
           "columnsFrom": [
             "codex_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "execution_readiness_records_codex_session_turn_id_codex_session_turns_id_fk": {
+          "name": "execution_readiness_records_codex_session_turn_id_codex_session_turns_id_fk",
+          "tableFrom": "execution_readiness_records",
+          "tableTo": "codex_session_turns",
+          "columnsFrom": [
+            "codex_session_turn_id"
           ],
           "columnsTo": [
             "id"
@@ -4502,6 +4521,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "codex_session_turn_id": {
+          "name": "codex_session_turn_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "development_plan_item_revision_id": {
           "name": "development_plan_item_revision_id",
           "type": "uuid",
@@ -4719,6 +4744,19 @@
           "tableTo": "codex_sessions",
           "columnsFrom": [
             "codex_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "boundary_summary_revisions_codex_session_turn_id_codex_session_turns_id_fk": {
+          "name": "boundary_summary_revisions_codex_session_turn_id_codex_session_turns_id_fk",
+          "tableFrom": "boundary_summary_revisions",
+          "tableTo": "codex_session_turns",
+          "columnsFrom": [
+            "codex_session_turn_id"
           ],
           "columnsTo": [
             "id"

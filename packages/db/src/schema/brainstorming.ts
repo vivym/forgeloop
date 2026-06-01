@@ -157,6 +157,7 @@ export const boundary_summary_revisions = pgTable(
       .references(() => development_plan_items.id),
     workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
     codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
+    codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
     developmentPlanItemRevisionId: uuid('development_plan_item_revision_id')
       .notNull()
       .references(() => development_plan_item_revisions.id),

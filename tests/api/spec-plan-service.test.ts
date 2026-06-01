@@ -30,6 +30,7 @@ const actorProduct = 'actor-product';
 const actorTech = 'actor-tech';
 const actorReviewer = 'actor-reviewer';
 type RuntimeJobRef = Pick<CodexRuntimeJob, 'id' | 'worker_id' | 'launch_lease_id' | 'project_id' | 'repo_id'>;
+type PublicRuntimeJobRef = Pick<CodexRuntimeJob, 'id' | 'project_id' | 'repo_id'>;
 const now = '2026-05-23T00:00:00.000Z';
 
 const createRuntimeArtifactObject = async (
@@ -86,16 +87,17 @@ describe('SpecPlanService item-scoped delivery API', () => {
   it('generates Spec only from an approved Development Plan Item boundary', async () => {
     const { plan: unapprovedPlan, item: unapprovedItem } = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
+    const unapprovedWorkflow = await startWorkflowForPlanItem(app, unapprovedPlan.id, unapprovedItem.id, unapprovedPlan.project_id);
 
     await request(server)
-      .post(`/development-plans/${unapprovedPlan.id}/items/${unapprovedItem.id}/spec/generate-draft`)
+      .post(`/plan-item-workflows/${unapprovedWorkflow.id}/spec/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400);
 
-    const { plan, item, boundary } = await seedApprovedBoundary(app);
+    const { plan, item, boundary, workflow } = await seedApprovedBoundary(app);
     const specRevision = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec/generate-draft`)
+        .post(`/plan-item-workflows/${workflow.id}/spec/generate-draft`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
@@ -117,11 +119,11 @@ describe('SpecPlanService item-scoped delivery API', () => {
   });
 
   it('rejects Implementation Plan Doc generation until Spec is approved', async () => {
-    const { plan, item } = await seedApprovedBoundary(app);
+    const { item, workflow } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
+      .post(`/plan-item-workflows/${workflow.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400);
   });
@@ -136,16 +138,10 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
     expect(specRevision.qa_owner_actor_id).toBe(actorProduct);
 
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id, actorTech, 'Spec approved with source driver QA fallback.');
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved with source driver QA fallback.' })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
+      .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(201);
   });
@@ -153,26 +149,14 @@ describe('SpecPlanService item-scoped delivery API', () => {
   it('rejects legacy direct Boundary approval before Spec generation', async () => {
     const seeded = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
+    const workflow = await startWorkflowForPlanItem(app, seeded.plan.id, seeded.item.id, seeded.plan.project_id);
     const session = (
       await request(server)
-        .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/brainstorming-sessions`)
-        .send({ actor_id: actorTech })
+        .post(`/plan-item-workflows/${workflow.id}/boundary-brainstorming`)
+        .send({ actor_id: actorTech, leader_actor_id: actorTech })
         .expect(201)
     ).body;
-    for (const question of session.questions) {
-      await request(server)
-        .post(`/brainstorming-sessions/${session.id}/answers`)
-        .send({
-          question_id: question.id,
-          text: `Answered legacy boundary question: ${question.text}`,
-          actor_id: actorTech,
-        })
-        .expect(201);
-    }
-    await request(server)
-      .post(`/brainstorming-sessions/${session.id}/decisions`)
-      .send({ text: 'Legacy direct approval decision.', actor_id: actorTech })
-      .expect(201);
+
     await request(server)
       .post(`/brainstorming-sessions/${session.id}/approve-boundary`)
       .send({
@@ -186,11 +170,11 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .expect(409);
 
     await request(server)
-      .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/spec/generate-draft`)
+      .post(`/plan-item-workflows/${workflow.id}/spec/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400)
       .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('boundary_not_approved');
+        expect(JSON.stringify(body)).toContain('workflow_invalid_transition');
       });
   });
 
@@ -200,14 +184,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
     const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved without QA evidence.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id, actorReviewer, 'Spec approved without QA evidence.');
     await repository.saveSpecRevision({
       ...specRevision,
       qa_owner_actor_id: undefined,
@@ -217,7 +195,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     });
 
     const response = await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
+      .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400);
 
@@ -235,14 +213,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
     const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved without QA evidence.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id, actorReviewer, 'Spec approved without QA evidence.');
     await repository.saveSpecRevision({
       ...specRevision,
       qa_owner_actor_id: undefined,
@@ -253,7 +225,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     });
 
     const response = await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
+      .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(400);
 
@@ -264,23 +236,21 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const workflow = await activeWorkflowForItem(app, item.id);
 
     const firstSpecRevision = await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
     await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ spec_status: 'in_review' });
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/request-changes`)
-      .send({ actor_id: actorReviewer, rationale: 'Clarify acceptance criteria.' })
+      .post(`/plan-item-workflows/${workflow.id}/request-spec-changes`)
+      .send({ actor_id: actorReviewer, reason: 'Clarify acceptance criteria.', rejected_revision_id: firstSpecRevision.id })
       .expect(201);
     await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ spec_status: 'changes_requested' });
 
     const secondSpecRevision = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec/regenerate-draft`)
+        .post(`/plan-item-workflows/${workflow.id}/spec/regenerate-draft`)
         .send({
           actor_id: actorTech,
           feedback: 'Add explicit route and API validation.',
@@ -303,17 +273,10 @@ describe('SpecPlanService item-scoped delivery API', () => {
       changed_fields: expect.arrayContaining(['content', 'context_manifest_id', 'revision_number']),
     });
 
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    const approvedSpec = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-        .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-        .expect(201)
-    ).body;
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id, actorReviewer, 'Spec approved.');
 
+    const approvedSpec = (await repository.listSpecs()).find((candidate) => candidate.development_plan_item_id === item.id);
     expect(approvedSpec).toMatchObject({
       approved_revision_id: secondSpecRevision.id,
       approved_by_actor_id: actorReviewer,
@@ -369,7 +332,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
 
     const savedRevision = (
       await request(server)
-        .patch(`/development-plans/${plan.id}/items/${item.id}/spec/draft`)
+        .patch(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/spec/draft`)
         .send({
           markdown,
           object_ref: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
@@ -423,7 +386,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
 
     const savedRevision = (
       await request(server)
-        .patch(`/development-plans/${plan.id}/items/${item.id}/spec/draft`)
+        .patch(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/spec/draft`)
         .send({
           markdown: '# Saved Spec draft\n\nText-only edit should keep the attached diagram available.',
           object_ref: { type: 'spec_revision', id: firstSpecRevision.id, spec_id: firstSpecRevision.spec_id },
@@ -444,16 +407,11 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const workflow = await activeWorkflowForItem(app, item.id);
 
     const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id);
 
     const firstExecutionPlanRevision = await generateItemImplementationPlanDraft(app, plan.id, item.id);
     expect(firstExecutionPlanRevision).toMatchObject({
@@ -465,29 +423,30 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(firstExecutionPlanRevision).not.toHaveProperty('execution_plan_id');
     await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'draft' });
 
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
+    await submitCurrentImplementationPlanRevision(app, item.id);
     await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'in_review' });
 
-    const rejected = (
+    const rejectedWorkflow = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/reject`)
-        .send({ actor_id: actorReviewer, rationale: 'Plan does not include QA handoff validation.' })
+        .post(`/plan-item-workflows/${workflow.id}/request-implementation-plan-changes`)
+        .send({
+          actor_id: actorReviewer,
+          reason: 'Plan does not include QA handoff validation.',
+          rejected_revision_id: firstExecutionPlanRevision.id,
+        })
         .expect(201)
     ).body;
-    expect(rejected.status).toBe('changes_requested');
+    expect(rejectedWorkflow.status).toBe('implementation_plan_generation_queued');
     await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'changes_requested' });
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/submit-for-approval`)
+      .post(`/plan-item-workflows/${workflow.id}/implementation-plan-revisions/${firstExecutionPlanRevision.id}/submit`)
       .send({ actor_id: actorTech })
       .expect(400);
 
     const secondExecutionPlanRevision = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/regenerate-draft`)
+        .post(`/plan-item-workflows/${workflow.id}/implementation-plan/regenerate-draft`)
         .send({
           actor_id: actorTech,
           feedback: 'Add QA handoff validation and visual checks.',
@@ -513,7 +472,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
       compare_revision_id: secondExecutionPlanRevision.id,
       changed_fields: expect.arrayContaining(['content', 'revision_number']),
     });
-    await expect(repository.listDecisionsForObject('implementation_plan_doc', rejected.id)).resolves.toEqual(
+    const implementationPlan = await repository.getExecutionPlan(firstExecutionPlanRevision.implementation_plan_id);
+    await expect(repository.listDecisionsForObject('implementation_plan_doc', implementationPlan!.id)).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           actor_id: actorReviewer,
@@ -530,14 +490,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
     const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id);
 
     const executionPlanRevision = await generateItemImplementationPlanDraft(app, plan.id, item.id);
     const requiredChecks = [
@@ -596,14 +550,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     };
     await repository.saveExecutionPackage(draftPackage);
 
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Implementation Plan Doc approved.' })
-      .expect(201);
+    await submitCurrentImplementationPlanRevision(app, item.id);
+    await approveCurrentImplementationPlanRevision(app, item.id);
 
     await expect(repository.listExecutionPackagesForWorkItem(item.source_ref.id)).resolves.toEqual(
       expect.arrayContaining([
@@ -632,19 +580,13 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
     await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id);
     const firstExecutionPlanRevision = await generateItemImplementationPlanDraft(app, plan.id, item.id);
 
     const savedRevision = (
       await request(server)
-        .patch(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/draft`)
+        .patch(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan/draft`)
         .send({
           markdown: '# Saved Implementation Plan Doc draft\n\nPersisted through the item-scoped draft endpoint.',
           object_ref: {
@@ -688,14 +630,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
     await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id);
     const firstExecutionPlanRevision = await generateItemImplementationPlanDraft(app, plan.id, item.id);
     const attachment = await seedRevisionAttachment(repository, {
       id: 'att-execution-plan-non-inline',
@@ -708,7 +644,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
 
     const savedRevision = (
       await request(server)
-        .patch(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/draft`)
+        .patch(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan/draft`)
         .send({
           markdown: '# Saved Implementation Plan Doc draft\n\nText-only edit should keep the attached checklist available.',
           object_ref: {
@@ -732,16 +668,10 @@ describe('SpecPlanService item-scoped delivery API', () => {
   it('schedules runtime-backed Spec generation and writes a draft revision from the approved Boundary Summary only', async () => {
     const { plan, item, boundary } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
-    const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const codexRuntimeService = app.get(CodexRuntimeService);
     const resultWriter = app.get(ProductGenerationResultService);
 
-    const generateResponse = await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-      .send({ actor_id: actorTech });
-    expect(generateResponse.status, JSON.stringify(generateResponse.body)).toBe(201);
-    const actionResponse = generateResponse.body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
 
     expect(actionResponse.action_run).toMatchObject({
       action_type: 'generate_development_plan_item_spec_revision',
@@ -841,12 +771,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       .expect(201);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-0');
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
 
     expect(actionResponse.runtime_job.repo_id).toBe('repo-0');
     const rawRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: actionResponse.runtime_job.id }))!;
@@ -861,12 +786,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     vi.stubEnv('FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID', 'stale-profile-from-another-control-plane');
     vi.stubEnv('FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID', 'stale-credential-from-another-control-plane');
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
 
     const rawRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: actionResponse.runtime_job.id }))!;
     expect(rawRuntimeJob.repo_id).toBe('repo-1');
@@ -892,12 +812,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const resultWriter = app.get(ProductGenerationResultService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
 
     const terminalResult = {
       ...generationTerminalResult('development_plan_item_spec_revision', generatedSpecRevision(item.id, boundary.revision_id)),
@@ -937,12 +852,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const resultWriter = app.get(ProductGenerationResultService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
 
     const terminalResult = {
       ...generationTerminalResult('development_plan_item_spec_revision', generatedSpecRevision(item.id, boundary.revision_id)),
@@ -972,12 +882,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const resultWriter = app.get(ProductGenerationResultService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
 
     await expect(
       resultWriter.handleGenerationRuntimeTerminal({
@@ -1000,12 +905,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const resultWriter = app.get(ProductGenerationResultService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
     const storedTerminalResult = generationTerminalResult(
       'development_plan_item_spec_revision',
       generatedSpecRevision(item.id, boundary.revision_id),
@@ -1039,13 +939,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const resultWriter = app.get(ProductGenerationResultService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
-    const runtimeJob = actionResponse.runtime_job;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
+    const runtimeJob = await requireInternalRuntimeJob(repository, actionResponse.runtime_job.id);
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, runtimeJob, 'unsupported-payload-ref');
     const generated = generatedSpecRevision(item.id, boundary.revision_id);
     const generatedPayloadDigest = codexCanonicalDigest(generated);
@@ -1144,13 +1039,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const resultWriter = app.get(ProductGenerationResultService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
-    const runtimeJob = actionResponse.runtime_job;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
+    const runtimeJob = await requireInternalRuntimeJob(repository, actionResponse.runtime_job.id);
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, runtimeJob, 'payload-ref-success');
     const generated = generatedSpecRevision(item.id, boundary.revision_id);
     const generatedPayloadBytes = Buffer.from(`${JSON.stringify(generated)}\n`, 'utf8');
@@ -1259,23 +1149,19 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const codexRuntimeService = app.get(CodexRuntimeService);
     const resultWriter = app.get(ProductGenerationResultService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
     const terminalResult = generationTerminalResult('development_plan_item_spec_revision', generatedSpecRevision(item.id, boundary.revision_id));
+    const runtimeJob = await requireInternalRuntimeJob(repository, actionResponse.runtime_job.id);
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, actionResponse.runtime_job, 'spec-service-terminal');
 
     await codexRuntimeService.terminalizeRuntimeJob(
-      actionResponse.runtime_job.worker_id,
+      runtimeJob.worker_id,
       actionResponse.runtime_job.id,
       withBodyDigest({
         worker_session_token: sessionToken,
         nonce: 'spec-service-terminal',
         nonce_timestamp: terminalAt,
-        launch_lease_id: actionResponse.runtime_job.launch_lease_id,
+        launch_lease_id: runtimeJob.launch_lease_id,
         terminal_status: 'succeeded',
         reason_code: 'completed',
         terminal_idempotency_key: 'spec-service-terminal',
@@ -1297,12 +1183,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
         terminalResult,
       }),
     ).resolves.toEqual({ applied: true });
-    const replayed = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const replayed = await generateItemSpecRevisionRuntime(app, item.id);
     expect(replayed.action_run.id).toBe(actionResponse.action_run.id);
     expect(replayed.runtime_job.id).toBe(actionResponse.runtime_job.id);
   });
@@ -1314,23 +1195,19 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const codexRuntimeService = app.get(CodexRuntimeService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
     const terminalResult = generationTerminalResult('development_plan_item_spec_revision', generatedSpecRevision(item.id, boundary.revision_id));
+    const runtimeJob = await requireInternalRuntimeJob(repository, actionResponse.runtime_job.id);
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, actionResponse.runtime_job, 'spec-qa-owner');
 
     await codexRuntimeService.terminalizeRuntimeJob(
-      actionResponse.runtime_job.worker_id,
+      runtimeJob.worker_id,
       actionResponse.runtime_job.id,
       withBodyDigest({
         worker_session_token: sessionToken,
         nonce: 'spec-qa-owner-terminal',
         nonce_timestamp: terminalAt,
-        launch_lease_id: actionResponse.runtime_job.launch_lease_id,
+        launch_lease_id: runtimeJob.launch_lease_id,
         terminal_status: 'succeeded',
         reason_code: 'completed',
         terminal_idempotency_key: 'spec-qa-owner-terminal',
@@ -1347,16 +1224,10 @@ describe('SpecPlanService item-scoped delivery API', () => {
       test_strategy_summary: 'API writer tests',
     });
 
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id, actorReviewer, 'Runtime Spec approved with QA evidence.');
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Runtime Spec approved with QA evidence.' })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
+      .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan-revisions/generate`)
       .send({ actor_id: actorTech })
       .expect(201);
   });
@@ -1371,8 +1242,9 @@ describe('SpecPlanService item-scoped delivery API', () => {
       updated_at: '2026-05-05T00:02:00.000Z',
     });
 
+    const workflow = await activeWorkflowForItem(app, item.id);
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
+      .post(`/plan-item-workflows/${workflow.id}/spec-revisions/generate`)
       .send({ actor_id: actorTech })
       .expect(400)
       .expect(({ body }) => {
@@ -1380,22 +1252,16 @@ describe('SpecPlanService item-scoped delivery API', () => {
       });
   });
 
-  it('rejects legacy Spec draft generation when the approved Boundary Summary belongs to an older item revision', async () => {
+  it('rejects legacy Spec draft generation through the disabled public mutator', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
-    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    await repository.saveDevelopmentPlanItem({
-      ...(await repository.getDevelopmentPlanItem(item.id))!,
-      revision_id: 'legacy-item-revision-after-boundary-approval',
-      updated_at: '2026-05-05T00:02:00.000Z',
-    });
 
     await request(server)
       .post(`/development-plans/${plan.id}/items/${item.id}/spec/generate-draft`)
       .send({ actor_id: actorTech })
-      .expect(400)
+      .expect(409)
       .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('stale_boundary_summary_revision');
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
       });
   });
 
@@ -1406,12 +1272,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const resultWriter = app.get(ProductGenerationResultService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
     await repository.saveDevelopmentPlanItem({
       ...(await repository.getDevelopmentPlanItem(item.id))!,
       revision_id: 'stale-spec-item-revision',
@@ -1437,12 +1298,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const specPlanService = app.get(SpecPlanService);
 
-    const actionResponse = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
     const actionRun = (await repository.getAutomationActionRun(actionResponse.action_run.id))!;
     const generated = generatedSpecRevision(item.id, boundary.revision_id);
 
@@ -1470,18 +1326,12 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const resultWriter = app.get(ProductGenerationResultService);
     const codexRuntimeService = app.get(CodexRuntimeService);
     const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id);
 
     const actionResponse = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
+        .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan-revisions/generate`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
@@ -1523,15 +1373,16 @@ describe('SpecPlanService item-scoped delivery API', () => {
       'development_plan_item_execution_plan_revision',
       generatedExecutionPlanRevision(item.id, specRevision.id),
     );
+    const runtimeJob = await requireInternalRuntimeJob(repository, actionResponse.runtime_job.id);
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, actionResponse.runtime_job, 'execution-plan-success');
     await codexRuntimeService.terminalizeRuntimeJob(
-      actionResponse.runtime_job.worker_id,
+      runtimeJob.worker_id,
       actionResponse.runtime_job.id,
       withBodyDigest({
         worker_session_token: sessionToken,
         nonce: 'execution-plan-success-terminal',
         nonce_timestamp: terminalAt,
-        launch_lease_id: actionResponse.runtime_job.launch_lease_id,
+        launch_lease_id: runtimeJob.launch_lease_id,
         terminal_status: 'succeeded',
         reason_code: 'completed',
         terminal_idempotency_key: 'execution-plan-success-terminal',
@@ -1570,12 +1421,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       }),
     });
     await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'draft' });
-    const replayed = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const replayed = await generateItemImplementationPlanRevisionRuntime(app, item.id);
     expect(replayed.action_run.id).toBe(actionResponse.action_run.id);
     expect(replayed.runtime_job.id).toBe(actionResponse.runtime_job.id);
   });
@@ -1587,19 +1433,12 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const resultWriter = app.get(ProductGenerationResultService);
     const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    const spec = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-        .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-        .expect(201)
-    ).body;
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id);
+    const spec = (await repository.listSpecs()).find((candidate) => candidate.development_plan_item_id === item.id)!;
     const actionResponse = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
+        .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan-revisions/generate`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
@@ -1630,14 +1469,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id);
     await repository.saveDevelopmentPlanItem({
       ...(await repository.getDevelopmentPlanItem(item.id))!,
       revision_id: 'item-revision-after-spec-approval-drift',
@@ -1645,7 +1478,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     });
 
     await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
+      .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan-revisions/generate`)
       .send({ actor_id: actorTech })
       .expect(400)
       .expect(({ body }) => {
@@ -1660,17 +1493,11 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const specPlanService = app.get(SpecPlanService);
     const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id);
     const actionResponse = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
+        .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan-revisions/generate`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
@@ -1693,33 +1520,16 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ).resolves.toMatchObject({ applied: true, revision: { id: first.applied ? first.revision.id : undefined } });
   });
 
-  it('rejects legacy Implementation Plan Doc draft generation when the approved Spec no longer matches the approved Boundary Summary revision', async () => {
+  it('rejects legacy Implementation Plan Doc draft generation through the disabled public mutator', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
-    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-      .expect(201);
-    await repository.saveSpecRevision({
-      ...specRevision,
-      structured_document: {
-        ...(specRevision.structured_document ?? {}),
-        boundary_summary_revision_id: 'stale-boundary-summary-revision',
-      },
-    });
 
     await request(server)
       .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
-      .expect(400)
+      .expect(409)
       .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('stale_boundary_summary_revision');
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
       });
   });
 
@@ -1728,14 +1538,10 @@ describe('SpecPlanService item-scoped delivery API', () => {
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
 
-    const first = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const workflow = await activeWorkflowForItem(app, item.id);
+    const first = await generateItemSpecRevisionRuntime(app, item.id);
     const secondResponse = await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
+      .post(`/plan-item-workflows/${workflow.id}/spec-revisions/generate`)
       .send({ actor_id: actorTech });
     expect(secondResponse.status, JSON.stringify(secondResponse.body)).toBe(201);
     const second = secondResponse.body;
@@ -1750,23 +1556,17 @@ describe('SpecPlanService item-scoped delivery API', () => {
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
     await generateItemSpecDraft(app, plan.id, item.id);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/submit-for-approval`)
-      .send({ actor_id: actorTech })
-      .expect(201);
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/spec/approve`)
-      .send({ actor_id: actorReviewer, rationale: 'Spec approved.' })
-      .expect(201);
+    await submitCurrentSpecRevision(app, item.id);
+    await approveCurrentSpecRevision(app, item.id);
 
     const first = (
       await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
+        .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan-revisions/generate`)
         .send({ actor_id: actorTech })
         .expect(201)
     ).body;
     const secondResponse = await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan-revisions/generate`)
+      .post(`/plan-item-workflows/${(await activeWorkflowForItem(app, item.id)).id}/implementation-plan-revisions/generate`)
       .send({ actor_id: actorTech });
     expect(secondResponse.status, JSON.stringify(secondResponse.body)).toBe(201);
     const second = secondResponse.body;
@@ -1782,12 +1582,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
-    const first = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const first = await generateItemSpecRevisionRuntime(app, item.id);
     const firstClaim = await repository.getAutomationActionRun(first.action_run.id);
     expect(firstClaim?.claim_token).toBeDefined();
     await repository.completeAutomationActionRun({
@@ -1812,12 +1607,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       capabilities: ['generation'],
       now: retryNow,
     });
-    const second = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/spec-revisions/generate`)
-        .send({ actor_id: actorTech })
-        .expect(201)
-    ).body;
+    const second = await generateItemSpecRevisionRuntime(app, item.id);
 
     expect(second.action_run.id).toBe(first.action_run.id);
     expect(second.runtime_job.id).not.toBe(first.runtime_job.id);
@@ -1864,21 +1654,144 @@ async function seedRevisionAttachment(
 }
 
 async function generateItemSpecDraft(app: INestApplication, developmentPlanId: string, itemId: string) {
+  const workflow = await activeWorkflowForItem(app, itemId);
   return (
     await request(app.getHttpServer())
-      .post(`/development-plans/${developmentPlanId}/items/${itemId}/spec/generate-draft`)
+      .post(`/plan-item-workflows/${workflow.id}/spec/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(201)
   ).body;
 }
 
 async function generateItemImplementationPlanDraft(app: INestApplication, developmentPlanId: string, itemId: string) {
+  const workflow = await activeWorkflowForItem(app, itemId);
   return (
     await request(app.getHttpServer())
-      .post(`/development-plans/${developmentPlanId}/items/${itemId}/implementation-plan/generate-draft`)
+      .post(`/plan-item-workflows/${workflow.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
       .expect(201)
   ).body;
+}
+
+async function generateItemSpecRevisionRuntime(app: INestApplication, itemId: string) {
+  const workflow = await activeWorkflowForItem(app, itemId);
+  return (
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${workflow.id}/spec-revisions/generate`)
+      .send({ actor_id: actorTech })
+      .expect(201)
+  ).body;
+}
+
+async function generateItemImplementationPlanRevisionRuntime(app: INestApplication, itemId: string) {
+  const workflow = await activeWorkflowForItem(app, itemId);
+  return (
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${workflow.id}/implementation-plan-revisions/generate`)
+      .send({ actor_id: actorTech })
+      .expect(201)
+  ).body;
+}
+
+async function startWorkflowForPlanItem(app: INestApplication, planId: string, itemId: string, projectId: string) {
+  const generationRuntime = await seedGenerationRuntimeForProject(app, projectId);
+  return (
+    await request(app.getHttpServer())
+      .post(`/development-plans/${planId}/items/${itemId}/workflow/start-brainstorming`)
+      .send({
+        actor_id: actorTech,
+        runtime_profile_id: generationRuntime.profileId,
+        runtime_profile_revision_id: generationRuntime.profileRevisionId,
+        credential_binding_id: generationRuntime.credentialBindingId,
+        credential_binding_version_id: generationRuntime.credentialVersionId,
+        reason: 'Start Spec/Plan service workflow fixture.',
+      })
+      .expect(201)
+  ).body;
+}
+
+async function submitCurrentSpecRevision(app: INestApplication, itemId: string, actorId = actorTech) {
+  const workflow = await activeWorkflowForItem(app, itemId);
+  const revision = await currentSpecRevisionForItem(app, itemId);
+  return (
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${workflow.id}/spec-revisions/${revision.id}/submit`)
+      .send({ actor_id: actorId, reason: 'Submit Spec for review.' })
+      .expect(201)
+  ).body;
+}
+
+async function approveCurrentSpecRevision(app: INestApplication, itemId: string, actorId = actorReviewer, reason = 'Spec approved.') {
+  const workflow = await activeWorkflowForItem(app, itemId);
+  const revision = await currentSpecRevisionForItem(app, itemId);
+  return (
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${workflow.id}/spec-revisions/${revision.id}/approve`)
+      .send({ actor_id: actorId, reason })
+      .expect(201)
+  ).body;
+}
+
+async function submitCurrentImplementationPlanRevision(app: INestApplication, itemId: string, actorId = actorTech) {
+  const workflow = await activeWorkflowForItem(app, itemId);
+  const revision = await currentImplementationPlanRevisionForItem(app, itemId);
+  return (
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${workflow.id}/implementation-plan-revisions/${revision.id}/submit`)
+      .send({ actor_id: actorId, reason: 'Submit Implementation Plan Doc for review.' })
+      .expect(201)
+  ).body;
+}
+
+async function approveCurrentImplementationPlanRevision(
+  app: INestApplication,
+  itemId: string,
+  actorId = actorReviewer,
+  reason = 'Implementation Plan Doc approved.',
+) {
+  const workflow = await activeWorkflowForItem(app, itemId);
+  const revision = await currentImplementationPlanRevisionForItem(app, itemId);
+  return (
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${workflow.id}/implementation-plan-revisions/${revision.id}/approve`)
+      .send({ actor_id: actorId, reason })
+      .expect(201)
+  ).body;
+}
+
+async function activeWorkflowForItem(app: INestApplication, itemId: string) {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const workflow = await repository.getActivePlanItemWorkflowByItem(itemId);
+  if (workflow === undefined) {
+    throw new Error(`Active workflow for item ${itemId} was not found`);
+  }
+  return workflow;
+}
+
+async function currentSpecRevisionForItem(app: INestApplication, itemId: string) {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const spec = (await repository.listSpecs()).find((candidate) => candidate.development_plan_item_id === itemId);
+  if (spec?.current_revision_id === undefined) {
+    throw new Error(`Current Spec revision for item ${itemId} was not found`);
+  }
+  const revision = await repository.getSpecRevision(spec.current_revision_id);
+  if (revision === undefined) {
+    throw new Error(`Spec revision ${spec.current_revision_id} was not found`);
+  }
+  return revision;
+}
+
+async function currentImplementationPlanRevisionForItem(app: INestApplication, itemId: string) {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const [executionPlan] = await repository.listExecutionPlansForDevelopmentPlanItem(itemId);
+  if (executionPlan?.current_revision_id === undefined) {
+    throw new Error(`Current Implementation Plan Doc revision for item ${itemId} was not found`);
+  }
+  const revision = await repository.getExecutionPlanRevision(executionPlan.current_revision_id);
+  if (revision === undefined) {
+    throw new Error(`Implementation Plan Doc revision ${executionPlan.current_revision_id} was not found`);
+  }
+  return revision;
 }
 
 async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSeedOverrides = {}) {
@@ -1886,10 +1799,24 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
   const server = app.getHttpServer();
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const codexRuntimeService = app.get(CodexRuntimeService);
-  await seedGenerationRuntimeForProject(app, seeded.plan.project_id);
+  const generationRuntime = await seedGenerationRuntimeForProject(app, seeded.plan.project_id);
+  const workflowActorId = seeded.item.driver_actor_id ?? seeded.item.reviewer_actor_id ?? seeded.workItem.driver_actor_id;
+  const startedWorkflow = (
+    await request(server)
+      .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/workflow/start-brainstorming`)
+      .send({
+        actor_id: workflowActorId,
+        runtime_profile_id: generationRuntime.profileId,
+        runtime_profile_revision_id: generationRuntime.profileRevisionId,
+        credential_binding_id: generationRuntime.credentialBindingId,
+        credential_binding_version_id: generationRuntime.credentialVersionId,
+        reason: 'Start Spec/Plan service workflow fixture.',
+      })
+      .expect(201)
+  ).body;
   const session = (
     await request(server)
-      .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/boundary-brainstorming`)
+      .post(`/plan-item-workflows/${startedWorkflow.id}/boundary-brainstorming`)
       .send({ actor_id: actorTech, leader_actor_id: actorTech })
       .expect(201)
   ).body;
@@ -1923,7 +1850,7 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
   );
   const [question] = await repository.listBoundaryQuestions(session.id);
   await request(server)
-    .post(`/boundary-brainstorming-sessions/${session.id}/answers`)
+    .post(`/plan-item-workflows/${startedWorkflow.id}/boundary-brainstorming-sessions/${session.id}/answers`)
     .send({
       question_id: question.id,
       text: `Answered boundary question: ${question.text}`,
@@ -1932,7 +1859,7 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
     .expect(201);
 
   await request(server)
-    .post(`/boundary-brainstorming-sessions/${session.id}/decisions`)
+    .post(`/plan-item-workflows/${startedWorkflow.id}/boundary-brainstorming-sessions/${session.id}/decisions`)
     .send({
       text: 'Keep implementation scoped to item-level Spec and Implementation Plan Doc gates.',
       rationale: 'The Development Plan Item is the product boundary.',
@@ -1940,7 +1867,7 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
     })
     .expect(201);
   await request(server)
-    .post(`/boundary-brainstorming-sessions/${session.id}/continue`)
+    .post(`/plan-item-workflows/${startedWorkflow.id}/boundary-brainstorming-sessions/${session.id}/continue`)
     .send({ actor_id: actorTech, leader_input_markdown: 'Please propose the Boundary Summary for approval.' })
     .expect(201);
   rounds = await repository.listBoundaryRounds(session.id);
@@ -1974,20 +1901,28 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
   );
   const [proposed] = await repository.listBoundarySummaryRevisions((await repository.getBrainstormingSession(session.id))!.boundary_summary_id!);
 
-  const approved = (
-    await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${proposed.id}/approve`)
-      .send({
-        actor_id: actorTech,
-        final_decision: 'Approve this Development Plan Item boundary.',
-      })
-      .expect(201)
-  ).body;
+  await request(server)
+    .post(`/plan-item-workflows/${startedWorkflow.id}/boundary-summary-revisions/${proposed.id}/submit`)
+    .send({
+      actor_id: actorTech,
+      reason: 'Submit this Development Plan Item boundary.',
+    })
+    .expect(201);
+  await request(server)
+    .post(`/plan-item-workflows/${startedWorkflow.id}/boundary-summary-revisions/${proposed.id}/approve`)
+    .send({
+      actor_id: actorTech,
+      reason: 'Approve this Development Plan Item boundary.',
+    })
+    .expect(201);
 
-  const boundary = await repository.getBoundarySummary(approved.boundary_summary_id);
+  const approved = (await repository.getBrainstormingSession(session.id))!;
+  const boundary = await repository.getBoundarySummary(approved.boundary_summary_id!);
   expect(boundary).toBeDefined();
+  const workflow = await repository.getActivePlanItemWorkflowByItem(seeded.item.id);
+  expect(workflow).toBeDefined();
 
-  return { ...seeded, session: approved, boundary: boundary! };
+  return { ...seeded, workflow: workflow!, session: approved, boundary: boundary! };
 }
 
 type ItemSeedOverrides = Partial<{
@@ -2035,10 +1970,10 @@ async function seedDevelopmentPlanItem(app: INestApplication, itemOverrides: Ite
 
 async function startGenerationRuntimeJob(
   repository: DeliveryRepository,
-  runtimeJob: RuntimeJobRef,
+  runtimeJob: PublicRuntimeJobRef,
   suffix: string,
 ): Promise<{ sessionToken: string; terminalAt: string; materialization: CodexLaunchMaterialization }> {
-  const job = (await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJob.id })) ?? runtimeJob;
+  const job = await requireInternalRuntimeJob(repository, runtimeJob.id);
   const terminalAt = '2026-05-05T00:00:45.000Z';
   const projectScopedWorkerId = stableUuid({ kind: 'generation-worker', projectId: job.project_id, repoId: 'project' });
   const sessionScopeKey =
@@ -2119,12 +2054,12 @@ async function startGenerationRuntimeJob(
 
 async function terminalizeGenerationRuntimeJob(
   repository: DeliveryRepository,
-  runtimeJob: RuntimeJobRef,
+  runtimeJob: PublicRuntimeJobRef,
   terminalResult: CodexGenerationRuntimeJobResult,
   suffix: string,
 ) {
-  const job = (await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJob.id })) ?? runtimeJob;
-  const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, runtimeJob, suffix);
+  const job = await requireInternalRuntimeJob(repository, runtimeJob.id);
+  const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, job, suffix);
   const replayProtection = (step: string) => ({
     method: 'POST' as const,
     path: `/test/product-generation-runtime/${job.id}/${suffix}/${step}`,
@@ -2145,6 +2080,14 @@ async function terminalizeGenerationRuntimeJob(
     replay_protection: replayProtection('terminal'),
     now: terminalAt,
   });
+}
+
+async function requireInternalRuntimeJob(repository: DeliveryRepository, runtimeJobId: string): Promise<CodexRuntimeJob> {
+  const job = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
+  if (job === undefined) {
+    throw new Error(`Runtime job ${runtimeJobId} was not found`);
+  }
+  return job;
 }
 
 async function seedGenerationRuntimeForProject(app: INestApplication, projectId: string, repoId?: string) {

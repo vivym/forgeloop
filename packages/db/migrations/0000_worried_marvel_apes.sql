@@ -412,6 +412,7 @@ CREATE TABLE "execution_readiness_records" (
 	"development_plan_id" uuid NOT NULL,
 	"development_plan_item_id" uuid NOT NULL,
 	"codex_session_id" uuid NOT NULL,
+	"codex_session_turn_id" uuid,
 	"approved_boundary_summary_revision_id" uuid NOT NULL,
 	"approved_spec_revision_id" uuid NOT NULL,
 	"approved_implementation_plan_revision_id" uuid NOT NULL,
@@ -554,6 +555,7 @@ CREATE TABLE "boundary_summary_revisions" (
 	"development_plan_item_id" uuid NOT NULL,
 	"workflow_id" uuid,
 	"codex_session_id" uuid,
+	"codex_session_turn_id" uuid,
 	"development_plan_item_revision_id" uuid NOT NULL,
 	"revision_number" integer NOT NULL,
 	"status" text,
@@ -1513,6 +1515,7 @@ ALTER TABLE "execution_readiness_records" ADD CONSTRAINT "execution_readiness_re
 ALTER TABLE "execution_readiness_records" ADD CONSTRAINT "execution_readiness_records_development_plan_id_development_plans_id_fk" FOREIGN KEY ("development_plan_id") REFERENCES "public"."development_plans"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "execution_readiness_records" ADD CONSTRAINT "execution_readiness_records_development_plan_item_id_development_plan_items_id_fk" FOREIGN KEY ("development_plan_item_id") REFERENCES "public"."development_plan_items"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "execution_readiness_records" ADD CONSTRAINT "execution_readiness_records_codex_session_id_codex_sessions_id_fk" FOREIGN KEY ("codex_session_id") REFERENCES "public"."codex_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "execution_readiness_records" ADD CONSTRAINT "execution_readiness_records_codex_session_turn_id_codex_session_turns_id_fk" FOREIGN KEY ("codex_session_turn_id") REFERENCES "public"."codex_session_turns"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "execution_readiness_records" ADD CONSTRAINT "execution_readiness_records_created_by_actor_id_actors_id_fk" FOREIGN KEY ("created_by_actor_id") REFERENCES "public"."actors"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "plan_item_workflow_transitions" ADD CONSTRAINT "plan_item_workflow_transitions_workflow_id_plan_item_workflows_id_fk" FOREIGN KEY ("workflow_id") REFERENCES "public"."plan_item_workflows"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "plan_item_workflow_transitions" ADD CONSTRAINT "plan_item_workflow_transitions_actor_id_actors_id_fk" FOREIGN KEY ("actor_id") REFERENCES "public"."actors"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -1543,6 +1546,7 @@ ALTER TABLE "boundary_summary_revisions" ADD CONSTRAINT "boundary_summary_revisi
 ALTER TABLE "boundary_summary_revisions" ADD CONSTRAINT "boundary_summary_revisions_development_plan_item_id_development_plan_items_id_fk" FOREIGN KEY ("development_plan_item_id") REFERENCES "public"."development_plan_items"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "boundary_summary_revisions" ADD CONSTRAINT "boundary_summary_revisions_workflow_id_plan_item_workflows_id_fk" FOREIGN KEY ("workflow_id") REFERENCES "public"."plan_item_workflows"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "boundary_summary_revisions" ADD CONSTRAINT "boundary_summary_revisions_codex_session_id_codex_sessions_id_fk" FOREIGN KEY ("codex_session_id") REFERENCES "public"."codex_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "boundary_summary_revisions" ADD CONSTRAINT "boundary_summary_revisions_codex_session_turn_id_codex_session_turns_id_fk" FOREIGN KEY ("codex_session_turn_id") REFERENCES "public"."codex_session_turns"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "boundary_summary_revisions" ADD CONSTRAINT "boundary_summary_revisions_development_plan_item_revision_id_development_plan_item_revisions_id_fk" FOREIGN KEY ("development_plan_item_revision_id") REFERENCES "public"."development_plan_item_revisions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "boundary_summary_revisions" ADD CONSTRAINT "boundary_summary_revisions_approved_by_actor_id_actors_id_fk" FOREIGN KEY ("approved_by_actor_id") REFERENCES "public"."actors"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "brainstorming_sessions" ADD CONSTRAINT "brainstorming_sessions_development_plan_id_development_plans_id_fk" FOREIGN KEY ("development_plan_id") REFERENCES "public"."development_plans"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

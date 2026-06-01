@@ -11,6 +11,7 @@ import {
   canCreateQaHandoff,
   canStartExecutionFromApprovedExecutionPlan,
   codeReviewReadyGate,
+  DomainError,
   isTrustedHumanReviewActorClass,
   requiredBoundaryQuestionsClosed,
   type BoundarySummary,
@@ -74,6 +75,16 @@ type ApprovedExecutionPlanContext = {
   executionPlanRevision: ExecutionPlanRevision;
   executionPackage: ExecutionPackage;
 };
+type WorkflowExecutionStartContext = {
+  workflowId: string;
+  codexSessionId: string;
+  codexSessionTurnId: string;
+};
+type StartedExecutionResult = {
+  execution: Execution;
+  executionPackage: ExecutionPackage;
+  runSessionId: string;
+};
 
 @Injectable()
 export class ExecutionsService {
@@ -87,17 +98,48 @@ export class ExecutionsService {
 
   async startExecution(developmentPlanId: string, itemId: string, dto: StartExecutionCommand): Promise<Execution> {
     return this.withPlanItemMutation(developmentPlanId, async (repository) => {
+      const activeWorkflow = await repository.getActivePlanItemWorkflowByItem(itemId);
+      if (activeWorkflow !== undefined) {
+        throw new DomainError(
+          'workflow_legacy_entrypoint_disabled',
+          `workflow_legacy_entrypoint_disabled: Development Plan Item ${itemId} execution must start through PlanItemWorkflowService`,
+        );
+      }
+      return (await this.startExecutionWithRepository(repository, developmentPlanId, itemId, dto)).execution;
+    });
+  }
+
+  async startExecutionWithRepository(
+    repository: DeliveryRepository,
+    developmentPlanId: string,
+    itemId: string,
+    dto: StartExecutionCommand,
+    workflowContext?: WorkflowExecutionStartContext,
+  ): Promise<StartedExecutionResult> {
       const replayedExecution = await this.findReplayableItemExecution(repository, developmentPlanId, itemId);
       if (replayedExecution !== undefined) {
-        return replayedExecution;
+        const executionPackage = await this.executionPackageForExecution(repository, replayedExecution);
+        return {
+          execution: replayedExecution,
+          executionPackage,
+          runSessionId: this.requireRuntimeEvidenceRef(replayedExecution, 'run_session'),
+        };
       }
       const context = await this.requireApprovedExecutionPlanContext(developmentPlanId, itemId, repository);
       if (context.item.execution_status !== 'not_started' && context.item.execution_status !== 'ready') {
         const existingExecution = await this.findItemExecution(repository, context.item.id, context.executionPlanRevision.id);
         if (existingExecution !== undefined) {
-          return existingExecution;
+          const executionPackage = await this.executionPackageForExecution(repository, existingExecution);
+          return {
+            execution: existingExecution,
+            executionPackage,
+            runSessionId: this.requireRuntimeEvidenceRef(existingExecution, 'run_session'),
+          };
         }
         throw new ConflictException(`DevelopmentPlanItem ${context.item.id} already has an active execution`);
+      }
+      if (workflowContext !== undefined) {
+        this.assertExecutionPackageWorkflowContext(context.executionPackage, workflowContext);
       }
       const execution = this.buildExecution(context, 'running');
       await repository.saveExecution(execution);
@@ -108,6 +150,13 @@ export class ExecutionsService {
       const executionPackage = {
         ...context.executionPackage,
         execution_id: execution.id,
+        ...(workflowContext === undefined
+          ? {}
+          : {
+              workflow_id: workflowContext.workflowId,
+              codex_session_id: workflowContext.codexSessionId,
+              codex_session_turn_id: workflowContext.codexSessionTurnId,
+            }),
         updated_at: this.now(),
       };
       await repository.saveExecutionPackage(executionPackage);
@@ -139,13 +188,44 @@ export class ExecutionsService {
         execution_package_id: executionPackage.id,
         run_session_id: run.run_session_id,
       });
-      return linkedExecution;
-    });
+      return { execution: linkedExecution, executionPackage, runSessionId: run.run_session_id };
+  }
+
+  private assertExecutionPackageWorkflowContext(
+    executionPackage: ExecutionPackage,
+    workflowContext: WorkflowExecutionStartContext,
+  ): void {
+    if (
+      executionPackage.workflow_id !== workflowContext.workflowId ||
+      executionPackage.codex_session_id !== workflowContext.codexSessionId
+    ) {
+      throw new DomainError(
+        'workflow_evidence_not_owned',
+        `workflow_evidence_not_owned: Execution Package ${executionPackage.id} does not belong to the active PlanItemWorkflow session`,
+      );
+    }
+  }
+
+  private async executionPackageForExecution(
+    repository: DeliveryRepository,
+    execution: Execution,
+  ): Promise<ExecutionPackage> {
+    const executionPackageId = this.requireRuntimeEvidenceRef(execution, 'execution_package');
+    return this.requireFound(await repository.getExecutionPackage(executionPackageId), `ExecutionPackage ${executionPackageId}`);
+  }
+
+  private requireRuntimeEvidenceRef(execution: Execution, type: 'execution_package' | 'run_session'): string {
+    const ref = execution.runtime_evidence_refs.find((evidenceRef) => evidenceRef.type === type);
+    if (ref === undefined) {
+      throw new ConflictException(`Execution ${execution.id} is missing runtime evidence ref ${type}`);
+    }
+    return ref.id;
   }
 
   async continueExecution(executionId: string, dto: ActorCommand): Promise<Execution> {
     return this.withExecutionMutation(executionId, async (repository) => {
       const execution = this.requireFound(await repository.getExecution(executionId), `Execution ${executionId}`);
+      await this.assertLegacyExecutionItemMutationAllowed(repository, execution.development_plan_item_id, 'continue');
       if (execution.status !== 'paused' && execution.status !== 'interrupted') {
         throw new BadRequestException(`Execution ${execution.id} cannot continue from ${execution.status}`);
       }
@@ -178,6 +258,7 @@ export class ExecutionsService {
   async interruptExecution(executionId: string, dto: ActorCommand): Promise<Execution> {
     return this.withExecutionMutation(executionId, async (repository) => {
       const execution = this.requireFound(await repository.getExecution(executionId), `Execution ${executionId}`);
+      await this.assertLegacyExecutionItemMutationAllowed(repository, execution.development_plan_item_id, 'interrupt');
       if (execution.status !== 'running' && execution.status !== 'paused') {
         throw new BadRequestException(`Execution ${execution.id} cannot be interrupted from ${execution.status}`);
       }
@@ -210,6 +291,7 @@ export class ExecutionsService {
   async markReadyForCodeReview(executionId: string, dto: ReadyForCodeReviewCommand): Promise<CodeReviewHandoff> {
     return this.withExecutionMutation(executionId, async (repository) => {
       const execution = this.requireFound(await repository.getExecution(executionId), `Execution ${executionId}`);
+      await this.assertLegacyExecutionItemMutationAllowed(repository, execution.development_plan_item_id, 'ready-for-code-review');
       const gate = codeReviewReadyGate({
         execution,
         changedSurfaces: dto.changed_surfaces,
@@ -267,6 +349,7 @@ export class ExecutionsService {
     const actorId = this.trustedHumanActorId(dto.actor_id, actorContext);
     return this.withCodeReviewMutation(handoffId, async (repository) => {
       const handoff = this.requireFound(await repository.getCodeReviewHandoff(handoffId), `CodeReviewHandoff ${handoffId}`);
+      await this.assertLegacyExecutionItemMutationAllowed(repository, handoff.development_plan_item_id, 'code-review-approve');
       this.assertAssignedReviewer(handoff, actorId);
       if (handoff.status !== 'in_review') {
         throw new BadRequestException(`CodeReviewHandoff ${handoff.id} cannot be approved from ${handoff.status}`);
@@ -304,6 +387,7 @@ export class ExecutionsService {
     const actorId = this.trustedHumanActorId(dto.actor_id, actorContext);
     return this.withCodeReviewMutation(handoffId, async (repository) => {
       const handoff = this.requireFound(await repository.getCodeReviewHandoff(handoffId), `CodeReviewHandoff ${handoffId}`);
+      await this.assertLegacyExecutionItemMutationAllowed(repository, handoff.development_plan_item_id, 'code-review-request-changes');
       this.assertAssignedReviewer(handoff, actorId);
       if (handoff.status !== 'in_review') {
         throw new BadRequestException(`CodeReviewHandoff ${handoff.id} cannot request changes from ${handoff.status}`);
@@ -351,6 +435,7 @@ export class ExecutionsService {
     const actorId = this.trustedHumanActorId(dto.actor_id, actorContext);
     return this.withCodeReviewMutation(handoffId, async (repository) => {
       const handoff = this.requireFound(await repository.getCodeReviewHandoff(handoffId), `CodeReviewHandoff ${handoffId}`);
+      await this.assertLegacyExecutionItemMutationAllowed(repository, handoff.development_plan_item_id, 'code-review-audited-exception');
       const updated: CodeReviewHandoff = {
         ...handoff,
         audited_exception: {
@@ -373,6 +458,7 @@ export class ExecutionsService {
   async createQaHandoff(handoffId: string, dto: QaHandoffCommand): Promise<QaHandoff> {
     return this.withCodeReviewMutation(handoffId, async (repository) => {
       const handoff = this.requireFound(await repository.getCodeReviewHandoff(handoffId), `CodeReviewHandoff ${handoffId}`);
+      await this.assertLegacyExecutionItemMutationAllowed(repository, handoff.development_plan_item_id, 'qa-handoff-create');
       const gate = canCreateQaHandoff({ codeReviewHandoff: handoff });
       if (!gate.ok) {
         throw new BadRequestException(`CodeReviewHandoff ${handoff.id} cannot create QA handoff: ${gate.reason}`);
@@ -447,6 +533,7 @@ export class ExecutionsService {
   async blockQaHandoff(qaHandoffId: string, dto: QaDecisionCommand): Promise<QaHandoff> {
     return this.withQaMutation(qaHandoffId, async (repository) => {
       const qa = this.requireFound(await repository.getQaHandoff(qaHandoffId), `QaHandoff ${qaHandoffId}`);
+      await this.assertLegacyExecutionItemMutationAllowed(repository, qa.development_plan_item_id, 'qa-handoff-block');
       if (qa.status !== 'pending') {
         throw new BadRequestException(`QaHandoff ${qa.id} cannot be blocked from ${qa.status}`);
       }
@@ -480,6 +567,7 @@ export class ExecutionsService {
     }
     return this.withQaMutation(qaHandoffId, async (repository) => {
       const qa = this.requireFound(await repository.getQaHandoff(qaHandoffId), `QaHandoff ${qaHandoffId}`);
+      await this.assertLegacyExecutionItemMutationAllowed(repository, qa.development_plan_item_id, 'qa-handoff-accept');
       const codeReview = this.requireFound(
         await repository.getCodeReviewHandoff(qa.code_review_handoff_id),
         `CodeReviewHandoff ${qa.code_review_handoff_id}`,
@@ -980,6 +1068,21 @@ export class ExecutionsService {
         created_at: this.now(),
       },
       repository,
+    );
+  }
+
+  private async assertLegacyExecutionItemMutationAllowed(
+    repository: DeliveryRepository,
+    itemId: string,
+    action: string,
+  ): Promise<void> {
+    const activeWorkflow = await repository.getActivePlanItemWorkflowByItem(itemId);
+    if (activeWorkflow === undefined) {
+      return;
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Development Plan Item ${itemId} execution ${action} must use PlanItemWorkflowService`,
     );
   }
 

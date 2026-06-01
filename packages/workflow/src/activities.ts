@@ -123,6 +123,9 @@ export interface ExecutionPackageRecord {
   id: string;
   work_item_id: string;
   development_plan_item_id?: string;
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
   execution_id?: string;
   spec_id: string;
   spec_revision_id: string;
@@ -156,6 +159,9 @@ export interface ExecutionPackageRecord {
 export interface RunSessionRecord {
   id: string;
   execution_package_id: string;
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
   requested_by_actor_id: string;
   status: RunSessionStatus;
   executor_type?: ExecutorType;
@@ -178,6 +184,9 @@ export interface ReviewPacketRecord {
   id: string;
   run_session_id: string;
   execution_package_id: string;
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
   reviewer_actor_id: string;
   spec_revision_id: string;
   plan_revision_id: string;

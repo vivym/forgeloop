@@ -31,6 +31,100 @@ const withBodyDigest = <T extends Record<string, unknown>>(body: T): T & { body_
   body_digest: codexCanonicalDigest(body),
 });
 
+async function startWorkflowForPlanItem(app: INestApplication, plan: { id: string }, item: { id: string }, actorId = 'actor-tech') {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const planRecord = await repository.getDevelopmentPlan(plan.id);
+  if (planRecord === undefined) {
+    throw new Error(`Development Plan ${plan.id} not found`);
+  }
+  const runtime = runtimeBindingForProject(planRecord.project_id);
+  return (
+    await request(app.getHttpServer())
+      .post(`/development-plans/${plan.id}/items/${item.id}/workflow/start-brainstorming`)
+      .send({
+        actor_id: actorId,
+        runtime_profile_id: runtime.profileId,
+        runtime_profile_revision_id: runtime.profileRevisionId,
+        credential_binding_id: runtime.credentialBindingId,
+        credential_binding_version_id: runtime.credentialBindingVersionId,
+        reason: 'Start workflow-scoped Boundary Brainstorming.',
+      })
+      .expect(201)
+  ).body;
+}
+
+async function startWorkflowBoundaryBrainstorming(
+  app: INestApplication,
+  workflowId: string,
+  input: {
+    actor_id: string;
+    leader_actor_id?: string;
+    leader_delegate_actor_ids?: string[];
+    initial_leader_context_markdown?: string;
+  },
+) {
+  return (
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${workflowId}/boundary-brainstorming`)
+      .send(input)
+      .expect(201)
+  ).body;
+}
+
+async function startWorkflowAndBoundaryBrainstorming(
+  app: INestApplication,
+  plan: { id: string },
+  item: { id: string },
+  input: {
+    actor_id: string;
+    leader_actor_id?: string;
+    leader_delegate_actor_ids?: string[];
+    initial_leader_context_markdown?: string;
+  },
+) {
+  const workflow = await startWorkflowForPlanItem(app, plan, item);
+  const session = await startWorkflowBoundaryBrainstorming(app, workflow.id, input);
+  return { workflow, session };
+}
+
+function runtimeBindingForProject(projectId: string) {
+  return {
+    profileId: stableUuid({ kind: 'boundary-generation-profile', projectId }),
+    profileRevisionId: stableUuid({ kind: 'boundary-generation-profile-revision', projectId }),
+    credentialBindingId: stableUuid({ kind: 'boundary-generation-credential-binding', projectId }),
+    credentialBindingVersionId: stableUuid({ kind: 'boundary-generation-credential-version', projectId }),
+  };
+}
+
+function workflowBoundarySessionPath(workflowId: string, sessionId: string) {
+  return `/plan-item-workflows/${workflowId}/boundary-brainstorming-sessions/${sessionId}`;
+}
+
+function submitBoundarySummaryRevision(
+  server: ReturnType<INestApplication['getHttpServer']>,
+  workflowId: string,
+  revisionId: string,
+  actorId = 'actor-tech',
+) {
+  return request(server)
+    .post(`/plan-item-workflows/${workflowId}/boundary-summary-revisions/${revisionId}/submit`)
+    .send({ actor_id: actorId, reason: 'Submit proposed Boundary Summary for review.' });
+}
+
+function approveBoundarySummaryRevision(
+  server: ReturnType<INestApplication['getHttpServer']>,
+  workflowId: string,
+  revisionId: string,
+  actorId = 'actor-tech',
+  reason?: string,
+) {
+  const body: { actor_id: string; reason?: string } = { actor_id: actorId };
+  if (reason !== undefined) body.reason = reason;
+  return request(server)
+    .post(`/plan-item-workflows/${workflowId}/boundary-summary-revisions/${revisionId}/approve`)
+    .send(body);
+}
+
 describe('Boundary Brainstorming API', () => {
   let app: INestApplication;
 
@@ -47,19 +141,13 @@ describe('Boundary Brainstorming API', () => {
 
   it('starts with explicit Leader and delegates and stores the snapshot on the item and session', async () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
-    const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
-    const session = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
-        .send({
-          actor_id: 'actor-leader',
-          leader_actor_id: 'actor-leader',
-          leader_delegate_actor_ids: ['actor-delegate'],
-        })
-        .expect(201)
-    ).body;
+    const { session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+      leader_delegate_actor_ids: ['actor-delegate'],
+    });
 
     expect(session).toMatchObject({
       leader_actor_id: 'actor-leader',
@@ -98,15 +186,10 @@ describe('Boundary Brainstorming API', () => {
         .expect(201)
     ).body;
 
-    const session = (
-      await request(app.getHttpServer())
-        .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
-        .send({
-          actor_id: 'actor-leader',
-          leader_actor_id: 'actor-leader',
-        })
-        .expect(201)
-    ).body;
+    const { session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+    });
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const [round] = await repository.listBoundaryRounds(session.id);
 
@@ -118,10 +201,11 @@ describe('Boundary Brainstorming API', () => {
 
   it('rejects delegate self-escalation during boundary start', async () => {
     const first = await seedDevelopmentPlanItem(app);
+    const firstWorkflow = await startWorkflowForPlanItem(app, first.plan, first.item);
     const server = app.getHttpServer();
 
     await request(server)
-      .post(`/development-plans/${first.plan.id}/items/${first.item.id}/boundary-brainstorming`)
+      .post(`/plan-item-workflows/${firstWorkflow.id}/boundary-brainstorming`)
       .send({
         actor_id: 'actor-leader',
         leader_actor_id: 'actor-leader',
@@ -130,7 +214,7 @@ describe('Boundary Brainstorming API', () => {
       .expect(201);
 
     await request(server)
-      .post(`/development-plans/${first.plan.id}/items/${first.item.id}/boundary-brainstorming`)
+      .post(`/plan-item-workflows/${firstWorkflow.id}/boundary-brainstorming`)
       .send({
         actor_id: 'actor-random',
         leader_actor_id: 'actor-leader',
@@ -139,8 +223,9 @@ describe('Boundary Brainstorming API', () => {
       .expect(403);
 
     const second = await seedDevelopmentPlanItem(app);
+    const secondWorkflow = await startWorkflowForPlanItem(app, second.plan, second.item);
     await request(server)
-      .post(`/development-plans/${second.plan.id}/items/${second.item.id}/boundary-brainstorming`)
+      .post(`/plan-item-workflows/${secondWorkflow.id}/boundary-brainstorming`)
       .send({
         actor_id: 'actor-random',
         leader_actor_id: 'actor-leader',
@@ -154,15 +239,10 @@ describe('Boundary Brainstorming API', () => {
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
-    const session = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
-        .send({
-          actor_id: 'actor-leader',
-          leader_actor_id: 'actor-leader',
-        })
-        .expect(201)
-    ).body;
+    const { workflow, session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+    });
     const [round] = await repository.listBoundaryRounds(session.id);
     await terminalizeBoundaryRound(app, repository, round, {
       schema_version: 'boundary_round_result.v1',
@@ -176,24 +256,24 @@ describe('Boundary Brainstorming API', () => {
     const [question] = await repository.listBoundaryQuestions(session.id);
 
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/answers`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/answers`)
       .send({ question_id: question.id, text: 'Non-Leader answer.', actor_id: 'actor-random' })
       .expect(403);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/decisions`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/decisions`)
       .send({ text: 'Non-Leader decision.', actor_id: 'actor-random' })
       .expect(403);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/continue`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/continue`)
       .send({ actor_id: 'actor-random', leader_input_markdown: 'Continue anyway.' })
       .expect(403);
 
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/answers`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/answers`)
       .send({ question_id: question.id, text: 'Leader answer.', actor_id: 'actor-leader' })
       .expect(201);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/continue`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/continue`)
       .send({ actor_id: 'actor-leader', leader_input_markdown: 'Please propose a summary.' })
       .expect(201);
     const rounds = await repository.listBoundaryRounds(session.id);
@@ -210,13 +290,11 @@ describe('Boundary Brainstorming API', () => {
     const proposed = await latestBoundarySummaryRevision(repository, session.id);
 
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${proposed.id}/request-changes`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/summary-revisions/${proposed.id}/request-changes`)
       .send({ actor_id: 'actor-random', feedback_markdown: 'Non-Leader feedback.' })
       .expect(403);
-    await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${proposed.id}/approve`)
-      .send({ actor_id: 'actor-random' })
-      .expect(403);
+    await submitBoundarySummaryRevision(server, workflow.id, proposed.id, 'actor-leader').expect(201);
+    await approveBoundarySummaryRevision(server, workflow.id, proposed.id, 'actor-random').expect(403);
   });
 
   it('uses the session Leader snapshot after item Leader/delegate changes', async () => {
@@ -224,16 +302,11 @@ describe('Boundary Brainstorming API', () => {
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
-    const session = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
-        .send({
-          actor_id: 'actor-leader',
-          leader_actor_id: 'actor-leader',
-          leader_delegate_actor_ids: ['actor-delegate'],
-        })
-        .expect(201)
-    ).body;
+    const { workflow, session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+      leader_delegate_actor_ids: ['actor-delegate'],
+    });
     await repository.saveDevelopmentPlanItem({
       ...(await repository.getDevelopmentPlanItem(item.id))!,
       leader_actor_id: 'actor-new-leader',
@@ -252,11 +325,11 @@ describe('Boundary Brainstorming API', () => {
     const [question] = await repository.listBoundaryQuestions(session.id);
 
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/answers`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/answers`)
       .send({ question_id: question.id, text: 'Original delegate answer.', actor_id: 'actor-delegate' })
       .expect(201);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/decisions`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/decisions`)
       .send({ text: 'New item Leader should not affect this session.', actor_id: 'actor-new-leader' })
       .expect(403);
   });
@@ -265,12 +338,10 @@ describe('Boundary Brainstorming API', () => {
     const first = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const firstSession = (
-      await request(server)
-        .post(`/development-plans/${first.plan.id}/items/${first.item.id}/boundary-brainstorming`)
-        .send({ actor_id: 'actor-leader', leader_actor_id: 'actor-leader' })
-        .expect(201)
-    ).body;
+    const { workflow: firstWorkflow, session: firstSession } = await startWorkflowAndBoundaryBrainstorming(app, first.plan, first.item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+    });
     let rounds = await repository.listBoundaryRounds(firstSession.id);
     await terminalizeBoundaryRound(app, repository, rounds[0], {
       schema_version: 'boundary_round_result.v1',
@@ -284,21 +355,18 @@ describe('Boundary Brainstorming API', () => {
     });
     const noQuestionProposal = await latestBoundarySummaryRevision(repository, firstSession.id);
 
-    await request(server)
-      .post(`/boundary-brainstorming-sessions/${firstSession.id}/summary-revisions/${noQuestionProposal.id}/approve`)
-      .send({ actor_id: 'actor-leader' })
+    await submitBoundarySummaryRevision(server, firstWorkflow.id, noQuestionProposal.id, 'actor-leader').expect(201);
+    await approveBoundarySummaryRevision(server, firstWorkflow.id, noQuestionProposal.id, 'actor-leader')
       .expect(409)
       .expect(({ body }) => {
         expect(JSON.stringify(body)).toContain('question and decision evidence');
       });
 
     const second = await seedDevelopmentPlanItem(app);
-    const secondSession = (
-      await request(server)
-        .post(`/development-plans/${second.plan.id}/items/${second.item.id}/boundary-brainstorming`)
-        .send({ actor_id: 'actor-leader', leader_actor_id: 'actor-leader' })
-        .expect(201)
-    ).body;
+    const { workflow: secondWorkflow, session: secondSession } = await startWorkflowAndBoundaryBrainstorming(app, second.plan, second.item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+    });
     rounds = await repository.listBoundaryRounds(secondSession.id);
     await terminalizeBoundaryRound(app, repository, rounds[0], {
       schema_version: 'boundary_round_result.v1',
@@ -311,11 +379,11 @@ describe('Boundary Brainstorming API', () => {
     });
     const [question] = await repository.listBoundaryQuestions(secondSession.id);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${secondSession.id}/answers`)
+      .post(`${workflowBoundarySessionPath(secondWorkflow.id, secondSession.id)}/answers`)
       .send({ question_id: question.id, text: 'Only API tests are in scope.', actor_id: 'actor-leader' })
       .expect(201);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${secondSession.id}/continue`)
+      .post(`${workflowBoundarySessionPath(secondWorkflow.id, secondSession.id)}/continue`)
       .send({ actor_id: 'actor-leader', leader_input_markdown: 'Please propose the Boundary Summary.' })
       .expect(201);
     rounds = await repository.listBoundaryRounds(secondSession.id);
@@ -331,9 +399,8 @@ describe('Boundary Brainstorming API', () => {
     });
     const noDecisionProposal = await latestBoundarySummaryRevision(repository, secondSession.id);
 
-    await request(server)
-      .post(`/boundary-brainstorming-sessions/${secondSession.id}/summary-revisions/${noDecisionProposal.id}/approve`)
-      .send({ actor_id: 'actor-leader' })
+    await submitBoundarySummaryRevision(server, secondWorkflow.id, noDecisionProposal.id, 'actor-leader').expect(201);
+    await approveBoundarySummaryRevision(server, secondWorkflow.id, noDecisionProposal.id, 'actor-leader')
       .expect(409)
       .expect(({ body }) => {
         expect(JSON.stringify(body)).toContain('question and decision evidence');
@@ -345,15 +412,10 @@ describe('Boundary Brainstorming API', () => {
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
 
-    const session = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
-        .send({
-          actor_id: 'actor-leader',
-          leader_actor_id: 'actor-leader',
-        })
-        .expect(201)
-    ).body;
+    const { workflow, session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+    });
 
     expect(session).toMatchObject({
       status: 'ai_turn_running',
@@ -389,7 +451,7 @@ describe('Boundary Brainstorming API', () => {
     const [roundOneQuestion] = await repository.listBoundaryQuestions(session.id);
 
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/answers`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/answers`)
       .send({
         question_id: roundOneQuestion.id,
         text: 'Keep Task 3 scoped to the Brainstorming API; do not use auth.json or http://127.0.0.1:7897.',
@@ -397,7 +459,7 @@ describe('Boundary Brainstorming API', () => {
       })
       .expect(201);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/continue`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/continue`)
       .send({ actor_id: 'actor-leader', leader_input_markdown: 'Continue from ~/.codex/config.toml with a proposed summary.' })
       .expect(201);
     rounds = await repository.listBoundaryRounds(session.id);
@@ -440,7 +502,7 @@ describe('Boundary Brainstorming API', () => {
     expect(firstProposal).toMatchObject({ status: 'proposed', source_round_id: rounds[1].id });
 
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${firstProposal.id}/request-changes`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/summary-revisions/${firstProposal.id}/request-changes`)
       .send({ actor_id: 'actor-leader', feedback_markdown: 'Tighten the runtime scheduling language.' })
       .expect(201);
     await expect(repository.listBoundarySummaryRevisions(firstProposal.boundary_summary_id)).resolves.toEqual(
@@ -490,24 +552,31 @@ describe('Boundary Brainstorming API', () => {
     });
     const finalProposal = await latestBoundarySummaryRevision(repository, session.id);
 
-    await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${finalProposal.id}/approve`)
-      .send({ actor_id: 'actor-leader' })
-      .expect(409);
+    await submitBoundarySummaryRevision(server, workflow.id, finalProposal.id, 'actor-leader').expect(201);
+    await approveBoundarySummaryRevision(server, workflow.id, finalProposal.id, 'actor-leader').expect(409);
 
     const requiredQuestions = await repository.listBoundaryQuestions(session.id);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/decisions`)
+      .post(`/plan-item-workflows/${workflow.id}/request-boundary-changes`)
+      .send({
+        actor_id: 'actor-leader',
+        rejected_revision_id: finalProposal.id,
+        reason: 'Return to brainstorming so the Leader can waive the follow-up question.',
+      })
+      .expect(201);
+    await repository.updateBoundarySummaryRevision({ ...finalProposal, status: 'proposed' });
+    await request(server)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/decisions`)
       .send({
         text: 'Waive the follow-up question because the first answer already closes the runtime boundary.',
         actor_id: 'actor-leader',
         waived_question_id: requiredQuestions[1].id,
       })
       .expect(201);
-    await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${finalProposal.id}/approve`)
-      .send({ actor_id: 'actor-leader' })
-      .expect(201);
+    await submitBoundarySummaryRevision(server, workflow.id, finalProposal.id, 'actor-leader').expect(201);
+    await approveBoundarySummaryRevision(server, workflow.id, finalProposal.id, 'actor-leader', 'Approve proposed Boundary Summary revision.').expect(
+      201,
+    );
     await expect(repository.listBoundarySummaryRevisions(finalProposal.boundary_summary_id)).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -523,12 +592,10 @@ describe('Boundary Brainstorming API', () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const session = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
-        .send({ actor_id: 'actor-leader', leader_actor_id: 'actor-leader' })
-        .expect(201)
-    ).body;
+    const { workflow, session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+    });
 
     let rounds = await repository.listBoundaryRounds(session.id);
     await terminalizeBoundaryRound(app, repository, rounds[0], {
@@ -542,7 +609,7 @@ describe('Boundary Brainstorming API', () => {
     });
     const [question] = await repository.listBoundaryQuestions(session.id);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/decisions`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/decisions`)
       .send({
         text: 'Waive the required question because the approved PRD already fixes the implementation scope.',
         actor_id: 'actor-leader',
@@ -550,7 +617,7 @@ describe('Boundary Brainstorming API', () => {
       })
       .expect(201);
     await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/continue`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/continue`)
       .send({ actor_id: 'actor-leader', leader_input_markdown: 'Propose the Boundary Summary after the waiver.' })
       .expect(201);
     rounds = await repository.listBoundaryRounds(session.id);
@@ -566,10 +633,10 @@ describe('Boundary Brainstorming API', () => {
     });
     const proposal = await latestBoundarySummaryRevision(repository, session.id);
 
-    await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${proposal.id}/approve`)
-      .send({ actor_id: 'actor-leader' })
-      .expect(201);
+    await submitBoundarySummaryRevision(server, workflow.id, proposal.id, 'actor-leader').expect(201);
+    await approveBoundarySummaryRevision(server, workflow.id, proposal.id, 'actor-leader', 'Approve proposed Boundary Summary revision.').expect(
+      201,
+    );
   });
 
   it('applies boundary round terminal results only while the action-run precondition is still current', async () => {
@@ -579,15 +646,10 @@ describe('Boundary Brainstorming API', () => {
     const resultWriter = app.get(ProductGenerationResultService);
     const codexRuntimeService = app.get(CodexRuntimeService);
 
-    const session = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
-        .send({
-          actor_id: 'actor-leader',
-          leader_actor_id: 'actor-leader',
-        })
-        .expect(201)
-    ).body;
+    const { session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+    });
     const [round] = await repository.listBoundaryRounds(session.id);
     const { runtimeJobId: currentRuntimeJobId, actionRun } = await runtimeJobActionForRound(repository, round);
     const currentTerminalResult = generationTerminalResult('boundary_brainstorming_round', {
@@ -650,15 +712,10 @@ describe('Boundary Brainstorming API', () => {
     );
 
     const staleSeed = await seedDevelopmentPlanItem(app);
-    const staleSession = (
-      await request(server)
-        .post(`/development-plans/${staleSeed.plan.id}/items/${staleSeed.item.id}/boundary-brainstorming`)
-        .send({
-          actor_id: 'actor-leader',
-          leader_actor_id: 'actor-leader',
-        })
-        .expect(201)
-    ).body;
+    const { session: staleSession } = await startWorkflowAndBoundaryBrainstorming(app, staleSeed.plan, staleSeed.item, {
+      actor_id: 'actor-leader',
+      leader_actor_id: 'actor-leader',
+    });
     const [staleRound] = await repository.listBoundaryRounds(staleSession.id);
     const { runtimeJobId: staleRuntimeJobId, actionRun: staleActionRun } = await runtimeJobActionForRound(repository, staleRound);
     await repository.saveDevelopmentPlanItem({
@@ -692,66 +749,10 @@ describe('Boundary Brainstorming API', () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const session = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
-        .send({ actor_id: 'actor-tech' })
-        .expect(201)
-    ).body;
-
-    expect(session).toMatchObject({
-      development_plan_id: plan.id,
-      development_plan_item_id: item.id,
-      development_plan_item_revision_id: item.revision_id,
-      approval_state: 'questions_open',
+    const { session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-tech',
+      leader_actor_id: 'actor-tech',
     });
-    expect(session.questions.map((question: { text: string }) => question.text)).toEqual(expectedQuestions);
-
-    await request(server)
-      .post(`/brainstorming-sessions/${session.id}/approve-boundary`)
-      .send({
-        confirmed_scope: ['Web IA and Development Plan Item gate UX'],
-        confirmed_out_of_scope: ['Runtime scheduler changes'],
-        accepted_assumptions: ['Mock Codex question generation is sufficient for this slice'],
-        open_risks: ['Execution queue depends on existing runtime adapters'],
-        validation_expectations: ['Route tests and screenshot checks pass'],
-        actor_id: 'actor-tech',
-        final_decision: 'Approve the boundary.',
-      })
-      .expect(409);
-
-    for (const question of session.questions) {
-      await request(server)
-        .post(`/brainstorming-sessions/${session.id}/answers`)
-        .send({
-          question_id: question.id,
-          text: `Answered boundary question: ${question.text}`,
-          actor_id: 'actor-tech',
-        })
-        .expect(201);
-    }
-
-    await request(server)
-      .post(`/brainstorming-sessions/${session.id}/approve-boundary`)
-      .send({
-        confirmed_scope: ['Web IA and Development Plan Item gate UX'],
-        confirmed_out_of_scope: ['Runtime scheduler changes'],
-        accepted_assumptions: ['Mock Codex question generation is sufficient for this slice'],
-        open_risks: ['Execution queue depends on existing runtime adapters'],
-        validation_expectations: ['Route tests and screenshot checks pass'],
-        actor_id: 'actor-tech',
-        final_decision: 'Approve the boundary.',
-      })
-      .expect(409);
-
-    await request(server)
-      .post(`/brainstorming-sessions/${session.id}/decisions`)
-      .send({
-        text: 'Keep implementation scoped to Web IA and route tests.',
-        rationale: 'The item is a UI planning slice.',
-        actor_id: 'actor-tech',
-      })
-      .expect(201);
 
     const itemRevisionsBefore = await repository.listDevelopmentPlanItemRevisions(item.id);
     const planRevisionsBefore = await repository.listDevelopmentPlanRevisions(plan.id);
@@ -770,7 +771,7 @@ describe('Boundary Brainstorming API', () => {
       })
       .expect(409)
       .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('Legacy direct Boundary approval is disabled');
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
       });
 
     expect(saveBoundarySummarySpy).not.toHaveBeenCalled();
@@ -783,7 +784,7 @@ describe('Boundary Brainstorming API', () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const { session, question, approved } = await approveBoundaryThroughRounds(app, plan, item);
+    const { workflow, session, question, approved } = await approveBoundaryThroughRounds(app, plan, item);
     const approvedSession = await repository.getBrainstormingSession(session.id);
     expect(approvedSession).toMatchObject({
       approval_state: 'approved',
@@ -792,7 +793,7 @@ describe('Boundary Brainstorming API', () => {
     });
 
     await request(server)
-      .post(`/brainstorming-sessions/${session.id}/answers`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/answers`)
       .send({
         question_id: question.id,
         text: 'Late answer after approval.',
@@ -801,7 +802,7 @@ describe('Boundary Brainstorming API', () => {
       .expect(400);
 
     await request(server)
-      .post(`/brainstorming-sessions/${session.id}/decisions`)
+      .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/decisions`)
       .send({
         text: 'Late decision after approval.',
         rationale: 'This should not mutate an approved boundary.',
@@ -832,16 +833,13 @@ describe('Boundary Brainstorming API', () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const { session, proposal, approved } = await approveBoundaryThroughRounds(app, plan, item);
+    const { workflow, session, proposal, approved } = await approveBoundaryThroughRounds(app, plan, item);
     const approvedSession = await repository.getBrainstormingSession(session.id);
     const approvedBoundarySummary = await repository.getBoundarySummary(approved.boundary_summary_id);
     const itemRevisionsBefore = await repository.listDevelopmentPlanItemRevisions(item.id);
     const planRevisionsBefore = await repository.listDevelopmentPlanRevisions(plan.id);
 
-    await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${proposal.id}/approve`)
-      .send({ actor_id: 'actor-tech', final_decision: 'Attempt to approve twice.' })
-      .expect(400);
+    await approveBoundarySummaryRevision(server, workflow.id, proposal.id, 'actor-tech', 'Attempt to approve twice.').expect(400);
 
     const persistedSession = await repository.getBrainstormingSession(session.id);
     const persistedBoundarySummary = await repository.getBoundarySummary(approved.boundary_summary_id);
@@ -864,7 +862,10 @@ describe('Boundary Brainstorming API', () => {
     await request(server)
       .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
       .send({ actor_id: 'actor-tech' })
-      .expect(409);
+      .expect(409)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
+      });
 
     await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toEqual(approvedItem);
     await expect(repository.listDevelopmentPlanItemRevisions(item.id)).resolves.toHaveLength(itemRevisionsBefore.length);
@@ -875,14 +876,10 @@ describe('Boundary Brainstorming API', () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
     const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const secondSession = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
-        .send({ actor_id: 'actor-reviewer' })
-        .expect(201)
-    ).body;
-
-    await makeSessionReadyForApproval(server, secondSession, 'actor-reviewer');
+    const { session: secondSession } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-tech',
+      leader_actor_id: 'actor-tech',
+    });
     const itemBefore = await repository.getDevelopmentPlanItem(item.id);
     const itemRevisionsBefore = await repository.listDevelopmentPlanItemRevisions(item.id);
     const planRevisionsBefore = await repository.listDevelopmentPlanRevisions(plan.id);
@@ -899,13 +896,12 @@ describe('Boundary Brainstorming API', () => {
     await expect(repository.listDevelopmentPlanItemRevisions(item.id)).resolves.toHaveLength(itemRevisionsBefore.length);
     await expect(repository.listDevelopmentPlanRevisions(plan.id)).resolves.toHaveLength(planRevisionsBefore.length);
     const persistedSecondSession = await repository.getBrainstormingSession(secondSession.id);
-    expect(persistedSecondSession).toMatchObject({ approval_state: 'ready_for_approval' });
+    expect(persistedSecondSession).toMatchObject({ approval_state: 'draft' });
     expect(persistedSecondSession?.boundary_summary_id).toBeUndefined();
   });
 
-  it('starts brainstorming sessions under the Development Plan lock and transaction', async () => {
+  it('starts workflow-scoped brainstorming sessions under locks and transactions', async () => {
     const { plan, item } = await seedDevelopmentPlanItem(app);
-    const server = app.getHttpServer();
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const lockKeys: string[] = [];
     const transactionMarkers: string[] = [];
@@ -922,15 +918,13 @@ describe('Boundary Brainstorming API', () => {
       }),
     );
 
-    const session = (
-      await request(server)
-        .post(`/development-plans/${plan.id}/items/${item.id}/brainstorming-sessions`)
-        .send({ actor_id: 'actor-tech' })
-        .expect(201)
-    ).body;
+    const { workflow, session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+      actor_id: 'actor-tech',
+      leader_actor_id: 'actor-tech',
+    });
 
-    expect(lockKeys).toEqual([`development-plan:${plan.id}`]);
-    expect(transactionMarkers).toEqual(['started']);
+    expect(lockKeys).toEqual([`development-plan:${plan.id}`, `plan-item-workflow:${workflow.id}`, `development-plan:${plan.id}`]);
+    expect(transactionMarkers).toEqual(['started', 'started', 'started']);
     await expect(repository.getContextManifest(session.context_manifest_id)).resolves.toMatchObject({
       development_plan_id: plan.id,
       development_plan_item_id: item.id,
@@ -943,7 +937,7 @@ describe('Boundary Brainstorming API', () => {
       expect.arrayContaining([
         expect.objectContaining({
           event_type: 'brainstorming_session_started',
-          metadata: { brainstorming_session_id: session.id },
+          metadata: expect.objectContaining({ brainstorming_session_id: session.id }),
         }),
       ]),
     );
@@ -1007,12 +1001,10 @@ async function approveBoundaryThroughRounds(
 ) {
   const server = app.getHttpServer();
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-  const session = (
-    await request(server)
-      .post(`/development-plans/${plan.id}/items/${item.id}/boundary-brainstorming`)
-      .send({ actor_id: actorId, leader_actor_id: actorId })
-      .expect(201)
-  ).body;
+  const { workflow, session } = await startWorkflowAndBoundaryBrainstorming(app, plan, item, {
+    actor_id: actorId,
+    leader_actor_id: actorId,
+  });
   let rounds = await repository.listBoundaryRounds(session.id);
   await terminalizeBoundaryRound(app, repository, rounds[0], {
     schema_version: 'boundary_round_result.v1',
@@ -1025,7 +1017,7 @@ async function approveBoundaryThroughRounds(
   });
   const [question] = await repository.listBoundaryQuestions(session.id);
   await request(server)
-    .post(`/boundary-brainstorming-sessions/${session.id}/answers`)
+    .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/answers`)
     .send({
       question_id: question.id,
       text: 'Keep implementation scoped to Web IA and route tests.',
@@ -1033,7 +1025,7 @@ async function approveBoundaryThroughRounds(
     })
     .expect(201);
   await request(server)
-    .post(`/boundary-brainstorming-sessions/${session.id}/continue`)
+    .post(`${workflowBoundarySessionPath(workflow.id, session.id)}/continue`)
     .send({ actor_id: actorId, leader_input_markdown: 'Please propose the Boundary Summary.' })
     .expect(201);
   rounds = await repository.listBoundaryRounds(session.id);
@@ -1048,14 +1040,14 @@ async function approveBoundaryThroughRounds(
     public_summary: 'Boundary Summary proposed.',
   });
   const proposal = await latestBoundarySummaryRevision(repository, session.id);
-  const approved = (
-    await request(server)
-      .post(`/boundary-brainstorming-sessions/${session.id}/summary-revisions/${proposal.id}/approve`)
-      .send({ actor_id: actorId, final_decision: 'Approve proposed Boundary Summary revision.' })
-      .expect(201)
-  ).body;
+  await submitBoundarySummaryRevision(server, workflow.id, proposal.id, actorId).expect(201);
+  await approveBoundarySummaryRevision(server, workflow.id, proposal.id, actorId, 'Approve proposed Boundary Summary revision.').expect(201);
+  const approved = await repository.getBrainstormingSession(session.id);
+  if (approved?.revision_id === undefined || approved.boundary_summary_id === undefined) {
+    throw new Error(`Expected Boundary Brainstorming Session ${session.id} to be approved`);
+  }
 
-  return { session, question, proposal, approved };
+  return { workflow, session, question, proposal, approved };
 }
 
 async function makeSessionReadyForApproval(

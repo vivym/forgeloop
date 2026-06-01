@@ -230,6 +230,7 @@ import type {
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
   GetActiveCodexGenerationActionRunFenceInput,
+  GetAutomationActionRunByIdempotencyKeyInput,
   GetClaimedAutomationActionRunInput,
   GetCodexLaunchLeasePublicStatusInput,
   GetCodexLaunchLeaseStatusInput,
@@ -872,6 +873,9 @@ const runtimeJobFromDbRecord = (record: CodexRuntimeJobDbRecord): CodexRuntimeJo
   status: record.status,
   input_digest: record.input_digest,
   input_json: record.input_json,
+  ...(record.workflow_id === undefined ? {} : { workflow_id: record.workflow_id }),
+  ...(record.codex_session_id === undefined ? {} : { codex_session_id: record.codex_session_id }),
+  ...(record.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: record.codex_session_turn_id }),
   ...(record.workspace_acquisition_digest === undefined
     ? {}
     : { workspace_acquisition_digest: record.workspace_acquisition_digest }),
@@ -4839,6 +4843,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       record.launch_attempt === input.launch_attempt &&
       record.input_digest === input.input_digest &&
       valuesEqual(record.input_json, input.input_json) &&
+      record.workflow_id === input.workflow_id &&
+      record.codex_session_id === input.codex_session_id &&
+      record.codex_session_turn_id === input.codex_session_turn_id &&
       record.workspace_acquisition_digest === input.workspace_acquisition_digest &&
       valuesEqual(record.workspace_acquisition_json, input.workspace_acquisition_json) &&
       record.worker_id === input.worker_id &&
@@ -5079,6 +5086,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       status: 'queued',
       inputDigest: input.input_digest,
       inputJson: input.input_json,
+      workflowId: input.workflow_id ?? null,
+      codexSessionId: input.codex_session_id ?? null,
+      codexSessionTurnId: input.codex_session_turn_id ?? null,
       workspaceAcquisitionDigest: input.workspace_acquisition_digest ?? null,
       workspaceAcquisitionJson: input.workspace_acquisition_json ?? null,
       runtimeProfileRevisionId: input.runtime_profile_revision_id,
@@ -7540,6 +7550,25 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, id);
   }
 
+  async getAutomationActionRunByIdempotencyKey(input: GetAutomationActionRunByIdempotencyKeyInput): Promise<AutomationActionRun | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(automation_action_runs)
+      .where(
+        and(
+          eq(automation_action_runs.idempotencyKey, input.idempotency_key),
+          eq(automation_action_runs.actionType, input.action_type),
+          eq(automation_action_runs.targetObjectType, input.target_object_type),
+          eq(automation_action_runs.targetObjectId, input.target_object_id),
+          input.target_revision_id === undefined
+            ? isNull(automation_action_runs.targetRevisionId)
+            : eq(automation_action_runs.targetRevisionId, input.target_revision_id),
+        ),
+      )
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<AutomationActionRun>(row);
+  }
+
   async latestCompletedProjectionActionRun(
     input: LatestCompletedProjectionActionRunInput,
   ): Promise<AutomationActionRun | undefined> {
@@ -9189,6 +9218,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       capability_fingerprint: input.capability_fingerprint,
       precondition_fingerprint: input.precondition_fingerprint,
       action_input_json: input.action_input_json,
+      ...(input.workflow_id === undefined ? {} : { workflow_id: input.workflow_id }),
+      ...(input.codex_session_id === undefined ? {} : { codex_session_id: input.codex_session_id }),
+      ...(input.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: input.codex_session_turn_id }),
       status: 'pending',
       attempt: 0,
       ...(input.created_by === undefined ? {} : { created_by: input.created_by }),
@@ -9283,6 +9315,15 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       capability_fingerprint: input.capability_fingerprint,
       precondition_fingerprint: input.precondition_fingerprint,
       action_input_json: input.action_input_json,
+      ...(existing?.workflow_id === undefined && input.workflow_id === undefined
+        ? {}
+        : { workflow_id: existing?.workflow_id ?? input.workflow_id }),
+      ...(existing?.codex_session_id === undefined && input.codex_session_id === undefined
+        ? {}
+        : { codex_session_id: existing?.codex_session_id ?? input.codex_session_id }),
+      ...(existing?.codex_session_turn_id === undefined && input.codex_session_turn_id === undefined
+        ? {}
+        : { codex_session_turn_id: existing?.codex_session_turn_id ?? input.codex_session_turn_id }),
       status: 'running',
       claim_token: input.claim_token,
       attempt: (existing?.attempt ?? 0) + 1,
@@ -9325,6 +9366,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       capability_fingerprint: actionRun.capability_fingerprint,
       precondition_fingerprint: actionRun.precondition_fingerprint,
       action_input_json: actionRun.action_input_json,
+      ...(actionRun.workflow_id === undefined ? {} : { workflow_id: actionRun.workflow_id }),
+      ...(actionRun.codex_session_id === undefined ? {} : { codex_session_id: actionRun.codex_session_id }),
+      ...(actionRun.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: actionRun.codex_session_turn_id }),
       status: 'running',
       claim_token: input.claim_token,
       attempt: actionRun.attempt + 1,
@@ -9358,6 +9402,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private assertAutomationActionIdentityMatches(existing: AutomationActionRun, input: ClaimAutomationActionRunInput): void {
+    const existingWorkflowOwned = existing.workflow_id !== undefined || existing.codex_session_id !== undefined;
+    const inputWorkflowOwned = input.workflow_id !== undefined || input.codex_session_id !== undefined;
+    const workflowContextMismatched =
+      existingWorkflowOwned || inputWorkflowOwned
+        ? existing.workflow_id !== input.workflow_id || existing.codex_session_id !== input.codex_session_id
+        : existing.codex_session_turn_id !== input.codex_session_turn_id;
     const mismatched =
       existing.action_type !== input.action_type ||
       existing.target_object_type !== input.target_object_type ||
@@ -9369,6 +9419,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       existing.automation_settings_version !== input.automation_settings_version ||
       existing.capability_fingerprint !== input.capability_fingerprint ||
       existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      workflowContextMismatched ||
       !valuesEqual(existing.action_input_json, input.action_input_json);
     if (mismatched) {
       throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} identity changed`);
@@ -9402,6 +9453,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       return;
     }
 
+    const existingWorkflowOwned = existing.workflow_id !== undefined || existing.codex_session_id !== undefined;
+    const inputWorkflowOwned = input.workflow_id !== undefined || input.codex_session_id !== undefined;
+    const workflowContextMismatched =
+      existingWorkflowOwned || inputWorkflowOwned
+        ? existing.workflow_id !== input.workflow_id || existing.codex_session_id !== input.codex_session_id
+        : existing.codex_session_turn_id !== input.codex_session_turn_id;
     const mismatched =
       existing.action_type !== input.action_type ||
       existing.target_object_type !== input.target_object_type ||
@@ -9413,6 +9470,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       existing.automation_settings_version !== input.automation_settings_version ||
       existing.capability_fingerprint !== input.capability_fingerprint ||
       existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      workflowContextMismatched ||
       !valuesEqual(existing.action_input_json, input.action_input_json);
     if (mismatched) {
       throw new DomainError(

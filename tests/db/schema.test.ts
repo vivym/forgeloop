@@ -550,6 +550,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
 
   it('adds workflow references to child delivery records', () => {
     expect(columnType(brainstorming_sessions, 'workflow_id')).toBe('PgUUID');
+    expect(columnType(boundary_summary_revisions, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(execution_readiness_records, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(spec_revisions, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(execution_plan_revisions, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(automation_action_runs, 'workflow_id')).toBe('PgUUID');
@@ -850,6 +852,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(brainstorming_sessions, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
     expect(hasForeignKey(boundary_summaries, 'brainstorming_session_id', column(brainstorming_sessions, 'id'))).toBe(true);
     expect(hasForeignKey(boundary_summary_revisions, 'boundary_summary_id', column(boundary_summaries, 'id'))).toBe(true);
+    expect(hasForeignKey(boundary_summary_revisions, 'codex_session_turn_id', column(codex_session_turns, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_readiness_records, 'codex_session_turn_id', column(codex_session_turns, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plans, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plan_revisions, 'execution_plan_id', column(execution_plans, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plan_revisions, 'based_on_spec_revision_id', column(spec_revisions, 'id'))).toBe(true);

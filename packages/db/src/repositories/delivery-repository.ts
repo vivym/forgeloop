@@ -488,6 +488,9 @@ export interface CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput {
   run_session_status?: string;
   run_session_updated_at?: string;
   execution_package_version?: number;
+  workflow_id?: string;
+  codex_session_id?: string;
+  codex_session_turn_id?: string;
   expires_at: string;
   now: string;
 }
@@ -1034,12 +1037,23 @@ export interface CreateOrReplayAutomationActionRunInput
     | 'capability_fingerprint'
     | 'precondition_fingerprint'
     | 'action_input_json'
+    | 'workflow_id'
+    | 'codex_session_id'
+    | 'codex_session_turn_id'
   > {
   target_revision_id?: string;
   target_version?: number;
   created_by?: string;
   status?: Extract<AutomationActionRun['status'], 'pending'>;
   now: string;
+}
+
+export interface GetAutomationActionRunByIdempotencyKeyInput {
+  action_type: AutomationActionRun['action_type'];
+  target_object_type: AutomationActionRun['target_object_type'];
+  target_object_id: string;
+  target_revision_id?: string;
+  idempotency_key: string;
 }
 
 export interface ClaimNextAutomationActionRunInput {
@@ -1770,6 +1784,7 @@ export interface DeliveryRepository {
   createOrReplayAutomationActionRun(input: CreateOrReplayAutomationActionRunInput): Promise<AutomationActionRun>;
   claimNextAutomationActionRun(input: ClaimNextAutomationActionRunInput): Promise<AutomationActionRun | undefined>;
   getAutomationActionRun(id: string): Promise<AutomationActionRun | undefined>;
+  getAutomationActionRunByIdempotencyKey(input: GetAutomationActionRunByIdempotencyKeyInput): Promise<AutomationActionRun | undefined>;
   getClaimedAutomationActionRun(input: GetClaimedAutomationActionRunInput): Promise<AutomationActionRun>;
   latestCompletedProjectionActionRun(
     input: LatestCompletedProjectionActionRunInput,

@@ -54,6 +54,65 @@ export const manualDecisionBodySchema = z
   })
   .strict();
 
+export const workflowActorCommandSchema = z
+  .object({
+    actor_id: nonEmpty,
+  })
+  .strict();
+
+export const workflowBoundaryStartCommandSchema = workflowActorCommandSchema
+  .extend({
+    leader_actor_id: nonEmpty.optional(),
+    leader_delegate_actor_ids: z.array(nonEmpty).optional(),
+    initial_leader_context_markdown: nonEmpty.optional(),
+  })
+  .strict();
+
+export const workflowRevisionCommandSchema = workflowActorCommandSchema
+  .extend({
+    revision_id: nonEmpty,
+    reason: nonEmpty.optional(),
+  })
+  .strict();
+
+export const workflowRevisionBodySchema = workflowActorCommandSchema
+  .extend({
+    reason: nonEmpty.optional(),
+  })
+  .strict();
+
+export const workflowBoundaryAnswerBodySchema = z
+  .object({
+    question_id: nonEmpty,
+    text: nonEmpty,
+    actor_id: nonEmpty,
+  })
+  .strict();
+
+export const workflowBoundaryDecisionBodySchema = z
+  .object({
+    text: nonEmpty,
+    rationale: nonEmpty.optional(),
+    waived_question_id: nonEmpty.optional(),
+    actor_id: nonEmpty,
+  })
+  .strict();
+
+export const workflowBoundaryContinueBodySchema = z
+  .object({
+    actor_id: nonEmpty,
+    leader_input_markdown: nonEmpty.optional(),
+  })
+  .strict();
+
+export const workflowBoundarySummaryChangesBodySchema = z
+  .object({
+    actor_id: nonEmpty,
+    feedback_markdown: nonEmpty,
+    rationale: nonEmpty.optional(),
+  })
+  .strict();
+
 export const requestWorkflowChangesSchema = manualDecisionBodySchema
   .extend({
     rejected_revision_id: nonEmpty.optional(),
@@ -130,6 +189,14 @@ export const terminalizeCodexSessionTurnSchema = z
   });
 
 export type ManualDecisionBodyDto = z.infer<typeof manualDecisionBodySchema>;
+export type WorkflowActorCommandDto = z.infer<typeof workflowActorCommandSchema>;
+export type WorkflowBoundaryStartCommandDto = z.infer<typeof workflowBoundaryStartCommandSchema>;
+export type WorkflowRevisionCommandDto = z.infer<typeof workflowRevisionCommandSchema>;
+export type WorkflowRevisionBodyDto = z.infer<typeof workflowRevisionBodySchema>;
+export type WorkflowBoundaryAnswerBodyDto = z.infer<typeof workflowBoundaryAnswerBodySchema>;
+export type WorkflowBoundaryDecisionBodyDto = z.infer<typeof workflowBoundaryDecisionBodySchema>;
+export type WorkflowBoundaryContinueBodyDto = z.infer<typeof workflowBoundaryContinueBodySchema>;
+export type WorkflowBoundarySummaryChangesBodyDto = z.infer<typeof workflowBoundarySummaryChangesBodySchema>;
 export type RequestWorkflowChangesDto = z.infer<typeof requestWorkflowChangesSchema>;
 export type ApproveImplementationPlanAndMarkExecutionReadyDto = z.infer<
   typeof approveImplementationPlanAndMarkExecutionReadySchema

@@ -24,6 +24,7 @@ import {
   type DevelopmentPlanItem,
   type DevelopmentPlanItemRevision,
   type DevelopmentPlanRevision,
+  DomainError,
   type RevisionCompareQuery,
   type StructuredRevisionDiff,
   type WorkItem,
@@ -40,16 +41,24 @@ type StartSessionInput = {
   actor_id: string;
 };
 
+export interface WorkflowChildContext {
+  workflow_id: string;
+  codex_session_id: string;
+  codex_session_turn_id?: string;
+}
+
 type StartBoundaryBrainstormingInput = StartSessionInput & {
   leader_actor_id?: string | undefined;
   leader_delegate_actor_ids?: string[] | undefined;
   initial_leader_context_markdown?: string | undefined;
+  context?: WorkflowChildContext | undefined;
 };
 
 type AnswerQuestionInput = {
   question_id: string;
   text: string;
   actor_id: string;
+  context?: WorkflowChildContext | undefined;
 };
 
 type RecordDecisionInput = {
@@ -57,11 +66,13 @@ type RecordDecisionInput = {
   rationale?: string | undefined;
   waived_question_id?: string | undefined;
   actor_id: string;
+  context?: WorkflowChildContext | undefined;
 };
 
 type ContinueBoundaryBrainstormingInput = {
   actor_id: string;
   leader_input_markdown?: string | undefined;
+  context?: WorkflowChildContext | undefined;
 };
 
 type ApproveBoundarySummaryRevisionInput = {
@@ -73,6 +84,7 @@ type RequestBoundarySummaryChangesInput = {
   actor_id: string;
   feedback_markdown: string;
   rationale?: string | undefined;
+  context?: WorkflowChildContext | undefined;
 };
 
 type ApproveBoundaryInput = {
@@ -177,6 +189,7 @@ export class BrainstormingService {
       planLockedRepository.withDeliveryTransaction(async (repository) => {
         const plan = await this.requireDevelopmentPlan(input.development_plan_id, repository);
         const item = await this.requireDevelopmentPlanItem(input.development_plan_id, input.item_id, repository);
+        await this.assertLegacyItemMutationAllowed(repository, item.id, input.context);
         if (input.allowApprovedBoundaryRestart !== true) {
           this.assertItemBoundaryNotApproved(item);
         }
@@ -244,6 +257,7 @@ export class BrainstormingService {
           answers: [],
           decisions: [],
           approval_state: input.seedDefaultQuestions ? 'questions_open' : 'draft',
+          ...(input.context === undefined ? {} : { workflow_id: input.context.workflow_id, codex_session_id: input.context.codex_session_id }),
           created_at: at,
           updated_at: at,
         };
@@ -261,6 +275,7 @@ export class BrainstormingService {
                 operation: 'start',
                 requestedByActorId: input.actor_id,
                 leaderInputMarkdown: input.initial_leader_context_markdown,
+                context: input.context,
                 repository,
               })
             : session;
@@ -283,6 +298,7 @@ export class BrainstormingService {
     return this.repository.withObjectLock(`brainstorming-session:${sessionId}`, async (repository) =>
       repository.withDeliveryTransaction(async (transaction) => {
         const session = await this.requireBrainstormingSession(sessionId, transaction);
+        await this.assertSessionMutationAllowed(transaction, session, input.context);
         this.assertSessionMutable(session);
         const actorRole = this.boundaryActorRole(session, input.actor_id);
         const question = session.questions.find((candidate) => candidate.id === input.question_id);
@@ -333,6 +349,7 @@ export class BrainstormingService {
     return this.repository.withObjectLock(`brainstorming-session:${sessionId}`, async (repository) =>
       repository.withDeliveryTransaction(async (transaction) => {
         const session = await this.requireBrainstormingSession(sessionId, transaction);
+        await this.assertSessionMutationAllowed(transaction, session, input.context);
         this.assertSessionMutable(session);
         const actorRole = this.boundaryActorRole(session, input.actor_id);
         const decision = this.buildDecision({
@@ -382,7 +399,10 @@ export class BrainstormingService {
   }
 
   async approveBoundary(_sessionId: string, _input: ApproveBoundaryInput): Promise<Record<string, unknown>> {
-    throw new ConflictException('Legacy direct Boundary approval is disabled; approve a proposed Boundary Summary revision instead');
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      'workflow_legacy_entrypoint_disabled: Legacy direct Boundary approval is disabled; approve through PlanItemWorkflowService',
+    );
   }
 
   async continueBoundaryBrainstorming(
@@ -392,6 +412,7 @@ export class BrainstormingService {
     return this.repository.withObjectLock(`brainstorming-session:${sessionId}`, async (repository) =>
       repository.withDeliveryTransaction(async (transaction) => {
         const session = await this.requireBrainstormingSession(sessionId, transaction);
+        await this.assertSessionMutationAllowed(transaction, session, input.context);
         this.assertSessionMutable(session);
         this.boundaryActorRole(session, input.actor_id);
         if (session.status !== 'waiting_for_leader' && session.status !== 'changes_requested' && session.status !== 'summary_proposed') {
@@ -407,6 +428,7 @@ export class BrainstormingService {
           operation: 'continue',
           requestedByActorId: input.actor_id,
           leaderInputMarkdown: input.leader_input_markdown,
+          context: input.context,
           repository: transaction,
         });
       }),
@@ -447,6 +469,7 @@ export class BrainstormingService {
         }
         const plan = await this.requireDevelopmentPlan(session.development_plan_id, transaction);
         const item = await this.requireDevelopmentPlanItem(session.development_plan_id, session.development_plan_item_id, transaction);
+        await this.assertRuntimeWorkflowContextMatchesSession(transaction, session, input.actionRun);
         const workItem = await this.requireWorkItem(item.source_ref.id, transaction);
         const contextManifest = await transaction.getContextManifest(session.context_manifest_id);
         const stillCurrent =
@@ -594,6 +617,7 @@ export class BrainstormingService {
     return this.repository.withObjectLock(`brainstorming-session:${sessionId}`, async (repository) =>
       repository.withDeliveryTransaction(async (transaction) => {
         const session = await this.requireBrainstormingSession(sessionId, transaction);
+        await this.assertSessionMutationAllowed(transaction, session, input.context);
         this.assertSessionMutable(session);
         this.boundaryActorRole(session, input.actor_id);
         const revision = await this.requireBoundarySummaryRevisionForSession(session, revisionId, transaction);
@@ -637,6 +661,7 @@ export class BrainstormingService {
           operation: 'revise_summary',
           requestedByActorId: input.actor_id,
           leaderInputMarkdown: input.feedback_markdown,
+          context: input.context,
           repository: transaction,
         });
       }),
@@ -649,131 +674,150 @@ export class BrainstormingService {
     input: ApproveBoundarySummaryRevisionInput,
   ): Promise<Record<string, unknown>> {
     const sessionHint = await this.requireBrainstormingSession(sessionId);
+    await this.assertLegacySessionMutationAllowed(this.repository, sessionHint);
     return this.repository.withObjectLock(`development-plan:${sessionHint.development_plan_id}`, async (planLockedRepository) =>
       planLockedRepository.withObjectLock(`brainstorming-session:${sessionId}`, async (sessionLockedRepository) =>
-        sessionLockedRepository.withDeliveryTransaction(async (repository) => {
-          const session = await this.requireBrainstormingSession(sessionId, repository);
-          this.assertSessionMutable(session);
-          const actorRole = this.boundaryActorRole(session, input.actor_id);
-          const revision = await this.requireBoundarySummaryRevisionForSession(session, revisionId, repository);
-          if (this.boundarySummaryRevisionStatus(revision) !== 'proposed') {
-            throw new ConflictException('Only proposed Boundary Summary revisions can be approved');
-          }
-          const [questions, answers, decisions, rounds] = await Promise.all([
-            repository.listBoundaryQuestions(session.id),
-            repository.listBoundaryAnswers(session.id),
-            repository.listBoundaryDecisions(session.id),
-            repository.listBoundaryRounds(session.id),
-          ]);
-          if (!requiredBoundaryQuestionsClosed({ questions, answers, decisions })) {
-            throw new ConflictException('Boundary approval requires every required question to be answered or waived');
-          }
-
-          const plan = await this.requireDevelopmentPlan(session.development_plan_id, repository);
-          const item = await this.requireDevelopmentPlanItem(session.development_plan_id, session.development_plan_item_id, repository);
-          this.assertItemBoundaryNotApproved(item);
-          const approvedAt = this.runtime.now();
-          const approvalDecision =
-            input.final_decision === undefined
-              ? undefined
-              : this.buildDecision({
-                  text: input.final_decision,
-                  actor_id: input.actor_id,
-                  actorRole,
-                  source: actorRole,
-                  state: 'accepted',
-                });
-          if (approvalDecision !== undefined) {
-            await repository.saveBoundaryDecision({
-              ...approvalDecision,
-              session_id: session.id,
-              sequence: decisions.length + 1,
-            });
-          }
-          const decisionRows = approvalDecision === undefined ? decisions : [...decisions, { ...approvalDecision, session_id: session.id, sequence: decisions.length + 1 }];
-          const questionAnswerSnapshot = this.questionAnswerSnapshot(questions, answers);
-          const decisionSnapshot = this.decisionSnapshot(decisionRows);
-          this.assertBoundarySummaryApprovalEvidence({
-            session,
-            revision,
-            rounds,
-            questions,
-            questionAnswerSnapshot,
-            decisionSnapshot,
-          });
-          const summary = await this.requireBoundarySummary(revision.boundary_summary_id, repository);
-          const updatedItem: DevelopmentPlanItem = {
-            ...item,
-            revision_id: this.runtime.id('development-plan-item-revision'),
-            boundary_status: 'approved',
-            next_action: 'generate_spec',
-            updated_at: approvedAt,
-          };
-          await repository.saveDevelopmentPlanItem(updatedItem);
-          const itemRevision = await this.saveItemRevision(updatedItem, 'boundary_approved', input.actor_id, repository);
-          const approvedRevision = {
-            ...revision,
-            status: 'approved',
-            development_plan_item_revision_id: updatedItem.revision_id,
-            question_answer_snapshot: questionAnswerSnapshot,
-            decision_snapshot: decisionSnapshot,
-            approved_by_actor_id: input.actor_id,
-            approved_at: approvedAt,
-          } as BoundarySummaryRevision;
-          await repository.updateBoundarySummaryRevision(approvedRevision);
-          const approvedSessionRevisionId = this.runtime.id('brainstorming-session-revision');
-          await repository.saveBoundarySummary({
-            ...summary,
-            revision_id: revision.id,
-            brainstorming_session_revision_id: approvedSessionRevisionId,
-            development_plan_item_revision_id: updatedItem.revision_id,
-            summary: this.boundarySummaryRevisionMarkdown(revision),
-            approved_by_actor_id: input.actor_id,
-            approved_at: approvedAt,
-            updated_at: approvedAt,
-          });
-
-          const approvedSession: BrainstormingSession = {
-            ...session,
-            revision_id: approvedSessionRevisionId,
-            decisions: approvalDecision === undefined ? session.decisions : [...session.decisions, approvalDecision],
-            status: 'approved',
-            approval_state: 'approved',
-            boundary_summary_id: summary.id,
-            latest_summary_revision_id: revision.id,
-            approved_summary_revision_id: revision.id,
-            approver_actor_id: input.actor_id,
-            approved_at: approvedAt,
-            closed_at: approvedAt,
-            updated_at: approvedAt,
-          };
-          await repository.saveBrainstormingSession(approvedSession);
-          const updatedPlan: DevelopmentPlan = {
-            ...plan,
-            revision_id: this.runtime.id('development-plan-revision'),
-            updated_at: approvedAt,
-          };
-          await repository.saveDevelopmentPlan(updatedPlan);
-          await this.saveDevelopmentPlanRevision(
-            updatedPlan,
-            { changeReason: 'development_plan_item_boundary_approved', actorId: input.actor_id },
-            repository,
-          );
-          await this.appendItemEvent(item.id, 'boundary_summary_approved', input.actor_id, {
-            boundary_summary_id: summary.id,
-            boundary_summary_revision_id: revision.id,
-            development_plan_item_revision_id: itemRevision.id,
-          }, repository);
-
-          return {
-            ...approvedSession,
-            boundary_summary_id: summary.id,
-            boundary_summary_revision_id: revision.id,
-            development_plan_item_revision_id: updatedItem.revision_id,
-          };
-        }),
+        sessionLockedRepository.withDeliveryTransaction((repository) =>
+          this.approveBoundarySummaryRevisionWithRepository(repository, sessionId, revisionId, input),
+        ),
       ),
     );
+  }
+
+  async approveBoundarySummaryRevisionWithRepository(
+    repository: DeliveryRepository,
+    sessionId: string,
+    revisionId: string,
+    input: ApproveBoundarySummaryRevisionInput,
+  ): Promise<Record<string, unknown>> {
+    const session = await this.requireBrainstormingSession(sessionId, repository);
+    this.assertSessionMutable(session);
+    const actorRole = this.boundaryActorRole(session, input.actor_id);
+    const revision = await this.requireBoundarySummaryRevisionForSession(session, revisionId, repository);
+    if (this.boundarySummaryRevisionStatus(revision) !== 'proposed') {
+      throw new ConflictException('Only proposed Boundary Summary revisions can be approved');
+    }
+    const [questions, answers, decisions, rounds] = await Promise.all([
+      repository.listBoundaryQuestions(session.id),
+      repository.listBoundaryAnswers(session.id),
+      repository.listBoundaryDecisions(session.id),
+      repository.listBoundaryRounds(session.id),
+    ]);
+    if (!requiredBoundaryQuestionsClosed({ questions, answers, decisions })) {
+      throw new ConflictException('Boundary approval requires every required question to be answered or waived');
+    }
+
+    const plan = await this.requireDevelopmentPlan(session.development_plan_id, repository);
+    const item = await this.requireDevelopmentPlanItem(session.development_plan_id, session.development_plan_item_id, repository);
+    this.assertItemBoundaryNotApproved(item);
+    const approvedAt = this.runtime.now();
+    const approvalDecision =
+      input.final_decision === undefined
+        ? undefined
+        : this.buildDecision({
+            text: input.final_decision,
+            actor_id: input.actor_id,
+            actorRole,
+            source: actorRole,
+            state: 'accepted',
+          });
+    if (approvalDecision !== undefined) {
+      await repository.saveBoundaryDecision({
+        ...approvalDecision,
+        session_id: session.id,
+        sequence: decisions.length + 1,
+      });
+    }
+    const decisionRows =
+      approvalDecision === undefined
+        ? decisions
+        : [...decisions, { ...approvalDecision, session_id: session.id, sequence: decisions.length + 1 }];
+    const questionAnswerSnapshot = this.questionAnswerSnapshot(questions, answers);
+    const decisionSnapshot = this.decisionSnapshot(decisionRows);
+    this.assertBoundarySummaryApprovalEvidence({
+      session,
+      revision,
+      rounds,
+      questions,
+      questionAnswerSnapshot,
+      decisionSnapshot,
+    });
+    const summary = await this.requireBoundarySummary(revision.boundary_summary_id, repository);
+    const updatedItem: DevelopmentPlanItem = {
+      ...item,
+      revision_id: this.runtime.id('development-plan-item-revision'),
+      boundary_status: 'approved',
+      next_action: 'generate_spec',
+      updated_at: approvedAt,
+    };
+    await repository.saveDevelopmentPlanItem(updatedItem);
+    const itemRevision = await this.saveItemRevision(updatedItem, 'boundary_approved', input.actor_id, repository);
+    const approvedRevision = {
+      ...revision,
+      status: 'approved',
+      development_plan_item_revision_id: updatedItem.revision_id,
+      question_answer_snapshot: questionAnswerSnapshot,
+      decision_snapshot: decisionSnapshot,
+      approved_by_actor_id: input.actor_id,
+      approved_at: approvedAt,
+    } as BoundarySummaryRevision;
+    await repository.updateBoundarySummaryRevision(approvedRevision);
+    const approvedSessionRevisionId = this.runtime.id('brainstorming-session-revision');
+    await repository.saveBoundarySummary({
+      ...summary,
+      revision_id: revision.id,
+      brainstorming_session_revision_id: approvedSessionRevisionId,
+      development_plan_item_revision_id: updatedItem.revision_id,
+      summary: this.boundarySummaryRevisionMarkdown(revision),
+      approved_by_actor_id: input.actor_id,
+      approved_at: approvedAt,
+      updated_at: approvedAt,
+    });
+
+    const approvedSession: BrainstormingSession = {
+      ...session,
+      revision_id: approvedSessionRevisionId,
+      decisions: approvalDecision === undefined ? session.decisions : [...session.decisions, approvalDecision],
+      status: 'approved',
+      approval_state: 'approved',
+      boundary_summary_id: summary.id,
+      latest_summary_revision_id: revision.id,
+      approved_summary_revision_id: revision.id,
+      approver_actor_id: input.actor_id,
+      approved_at: approvedAt,
+      closed_at: approvedAt,
+      updated_at: approvedAt,
+    };
+    await repository.saveBrainstormingSession(approvedSession);
+    const updatedPlan: DevelopmentPlan = {
+      ...plan,
+      revision_id: this.runtime.id('development-plan-revision'),
+      updated_at: approvedAt,
+    };
+    await repository.saveDevelopmentPlan(updatedPlan);
+    await this.saveDevelopmentPlanRevision(
+      updatedPlan,
+      { changeReason: 'development_plan_item_boundary_approved', actorId: input.actor_id },
+      repository,
+    );
+    await this.appendItemEvent(
+      item.id,
+      'boundary_summary_approved',
+      input.actor_id,
+      {
+        boundary_summary_id: summary.id,
+        boundary_summary_revision_id: revision.id,
+        development_plan_item_revision_id: itemRevision.id,
+      },
+      repository,
+    );
+
+    return {
+      ...approvedSession,
+      boundary_summary_id: summary.id,
+      boundary_summary_revision_id: revision.id,
+      development_plan_item_revision_id: updatedItem.revision_id,
+    };
   }
 
   async listDevelopmentPlanItemRevisions(developmentPlanId: string, itemId: string): Promise<DevelopmentPlanItemRevision[]> {
@@ -999,6 +1043,7 @@ export class BrainstormingService {
     operation: 'start' | 'continue' | 'revise_summary';
     requestedByActorId: string;
     leaderInputMarkdown?: string | undefined;
+    context?: WorkflowChildContext | undefined;
     repository: DeliveryRepository;
   }): Promise<BrainstormingSession> {
     const now = this.runtime.now();
@@ -1009,6 +1054,7 @@ export class BrainstormingService {
       round_number: (await input.repository.listBoundaryRounds(input.session.id)).length + 1,
       trigger: input.trigger,
       ...(input.leaderInputMarkdown === undefined ? {} : { leader_input_markdown: input.leaderInputMarkdown }),
+      ...(input.context?.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: input.context.codex_session_turn_id }),
       status: 'queued',
       created_at: now,
       updated_at: now,
@@ -1024,6 +1070,7 @@ export class BrainstormingService {
       operation: input.operation,
       requestedByActorId: input.requestedByActorId,
       now,
+      context: input.context,
     });
     const contextManifest = await input.repository.getContextManifest(input.session.context_manifest_id);
     if (contextManifest === undefined) {
@@ -1063,6 +1110,7 @@ export class BrainstormingService {
       }),
       project_id: input.plan.project_id,
       repo_ids: [],
+      context: input.context,
     });
     await input.repository.saveBoundaryRound({
       ...round,
@@ -1091,7 +1139,9 @@ export class BrainstormingService {
     operation: 'start' | 'continue' | 'revise_summary';
     requestedByActorId: string;
     now: string;
+    context?: WorkflowChildContext | undefined;
   }): CreateOrReplayAutomationActionRunInput {
+    const context = input.context ?? this.contextFromSession(input.session);
     const preconditionFingerprintJson = {
       source_ref: input.item.source_ref,
       source_revision_id: input.workItem.updated_at,
@@ -1134,8 +1184,121 @@ export class BrainstormingService {
       capability_fingerprint: 'boundary-brainstorming-runtime:v1',
       precondition_fingerprint: codexCanonicalDigest(preconditionFingerprintJson),
       action_input_json: actionInputJson,
+      ...(context === undefined ? {} : { workflow_id: context.workflow_id, codex_session_id: context.codex_session_id }),
+      ...(context?.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: context.codex_session_turn_id }),
       now: input.now,
     };
+  }
+
+  private contextFromSession(session: BrainstormingSession): WorkflowChildContext | undefined {
+    if (session.workflow_id === undefined || session.codex_session_id === undefined) return undefined;
+    return { workflow_id: session.workflow_id, codex_session_id: session.codex_session_id };
+  }
+
+  private async assertLegacyItemMutationAllowed(
+    repository: DeliveryRepository,
+    itemId: string,
+    context?: WorkflowChildContext | undefined,
+  ): Promise<void> {
+    const activeWorkflow = await repository.getActivePlanItemWorkflowByItem(itemId);
+    if (activeWorkflow !== undefined && context !== undefined) {
+      await this.assertWorkflowContextAllowed(repository, itemId, context, activeWorkflow.id);
+      return;
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Development Plan Item ${itemId} must mutate Superpowers state through PlanItemWorkflowService`,
+    );
+  }
+
+  private async assertLegacySessionMutationAllowed(
+    _repository: DeliveryRepository,
+    session: BrainstormingSession,
+  ): Promise<void> {
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Brainstorming Session ${session.id} must mutate through PlanItemWorkflowService`,
+    );
+  }
+
+  private async assertSessionMutationAllowed(
+    repository: DeliveryRepository,
+    session: BrainstormingSession,
+    context?: WorkflowChildContext | undefined,
+  ): Promise<void> {
+    if (context === undefined) {
+      await this.assertLegacySessionMutationAllowed(repository, session);
+      return;
+    }
+    await this.assertWorkflowSessionContextAllowed(repository, session, context);
+  }
+
+  private async assertRuntimeWorkflowContextMatchesSession(
+    repository: DeliveryRepository,
+    session: BrainstormingSession,
+    actionRun: AutomationActionRun,
+  ): Promise<void> {
+    if (session.workflow_id === undefined) {
+      return;
+    }
+    if (
+      actionRun.workflow_id === session.workflow_id &&
+      actionRun.codex_session_id === session.codex_session_id &&
+      actionRun.codex_session_turn_id !== undefined
+    ) {
+      const turn = await repository.getCodexSessionTurn(actionRun.codex_session_turn_id);
+      if (turn?.workflow_id === session.workflow_id && turn.codex_session_id === session.codex_session_id) {
+        return;
+      }
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Runtime result for Brainstorming Session ${session.id} must carry matching PlanItemWorkflow turn context`,
+    );
+  }
+
+  private async assertWorkflowContextAllowed(
+    repository: DeliveryRepository,
+    itemId: string,
+    context: WorkflowChildContext,
+    expectedWorkflowId: string,
+  ): Promise<void> {
+    const activeWorkflow = await repository.getActivePlanItemWorkflowByItem(itemId);
+    if (
+      activeWorkflow !== undefined &&
+      activeWorkflow.id === expectedWorkflowId &&
+      activeWorkflow.id === context.workflow_id &&
+      activeWorkflow.active_codex_session_id === context.codex_session_id &&
+      context.codex_session_turn_id !== undefined
+    ) {
+      const turn = await repository.getCodexSessionTurn(context.codex_session_turn_id);
+      if (turn?.workflow_id === context.workflow_id && turn.codex_session_id === context.codex_session_id) {
+        return;
+      }
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Development Plan Item ${itemId} must carry matching PlanItemWorkflow turn context`,
+    );
+  }
+
+  private async assertWorkflowSessionContextAllowed(
+    repository: DeliveryRepository,
+    session: BrainstormingSession,
+    context: WorkflowChildContext,
+  ): Promise<void> {
+    if (
+      session.workflow_id === context.workflow_id &&
+      session.codex_session_id === context.codex_session_id &&
+      context.codex_session_turn_id !== undefined
+    ) {
+      await this.assertWorkflowContextAllowed(repository, session.development_plan_item_id, context, session.workflow_id);
+      return;
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: Brainstorming Session ${session.id} must carry matching PlanItemWorkflow turn context`,
+    );
   }
 
   private boundaryRoundSignedContext(input: {
@@ -1304,6 +1467,9 @@ export class BrainstormingService {
       decision_snapshot: this.decisionSnapshot(input.decisions),
       context_manifest_id: input.session.context_manifest_id,
       context_manifest_revision_id: input.session.context_manifest_revision_id,
+      ...(input.session.workflow_id === undefined ? {} : { workflow_id: input.session.workflow_id }),
+      ...(input.session.codex_session_id === undefined ? {} : { codex_session_id: input.session.codex_session_id }),
+      ...(input.round.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: input.round.codex_session_turn_id }),
       created_at: input.now,
     };
     await input.repository.saveBoundarySummaryRevision(revision);

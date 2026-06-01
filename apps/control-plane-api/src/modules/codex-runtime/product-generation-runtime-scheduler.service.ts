@@ -5,6 +5,7 @@ import {
   codexRuntimeJobInputDigest,
   codexRuntimeNetworkPolicyDigest,
   codexWorkspaceAcquisitionDigest,
+  DomainError,
   normalizeCodexRuntimeNetworkPolicy,
   type AutomationActionRun,
   type CodexGenerationTaskKind,
@@ -16,6 +17,7 @@ import type { CreateOrReplayAutomationActionRunInput, DeliveryRepository } from 
 
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
+import type { WorkflowChildContext } from '../brainstorming/brainstorming.service';
 
 const generationRuntimeProfileEnv = 'FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID';
 const generationCredentialBindingEnv = 'FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID';
@@ -79,8 +81,6 @@ export type PublicProductGenerationRuntimeJob = Pick<
   | 'target_kind'
   | 'project_id'
   | 'repo_id'
-  | 'worker_id'
-  | 'launch_lease_id'
   | 'launch_attempt'
   | 'status'
   | 'input_digest'
@@ -119,6 +119,7 @@ export class ProductGenerationRuntimeSchedulerService {
     project_id: string;
     repo_ids: string[];
     policy_digests?: Record<string, string> | undefined;
+    context?: WorkflowChildContext | undefined;
   }): Promise<ProductGenerationRuntimeScheduleResult> {
     const repository = input.repository ?? this.defaultRepository;
     const now = nowIso();
@@ -127,6 +128,7 @@ export class ProductGenerationRuntimeSchedulerService {
       ...input.action_run,
       now,
     });
+    this.assertWorkflowContextMatchesActionRun(input.context, actionRun);
     const claimToken = codexCanonicalDigest({
       kind: 'product_generation_action_claim',
       action_run_id: actionRun.id,
@@ -146,11 +148,15 @@ export class ProductGenerationRuntimeSchedulerService {
       capability_fingerprint: actionRun.capability_fingerprint,
       precondition_fingerprint: actionRun.precondition_fingerprint,
       action_input_json: actionRun.action_input_json,
+      ...(actionRun.workflow_id === undefined ? {} : { workflow_id: actionRun.workflow_id }),
+      ...(actionRun.codex_session_id === undefined ? {} : { codex_session_id: actionRun.codex_session_id }),
+      ...(actionRun.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: actionRun.codex_session_turn_id }),
       claim_token: claimToken,
       locked_until: isoAfter(now, claimTtlMs),
       now,
     });
-    const existingRuntimeJob = await this.findRuntimeJobForAction(repository, claimed, input.task_kind);
+    this.assertWorkflowContextMatchesActionRun(input.context, claimed);
+    const existingRuntimeJob = await this.runtimeJobForAction(repository, claimed, input.task_kind);
     if (claimed.claim_token === undefined) {
       if (existingRuntimeJob !== undefined) {
         return { action_run: this.redactActionClaim(claimed), runtime_job: this.publicRuntimeJob(existingRuntimeJob) };
@@ -168,6 +174,7 @@ export class ProductGenerationRuntimeSchedulerService {
       projectId: input.project_id,
       repoIds,
       policyDigests: input.policy_digests ?? {},
+      context: input.context,
       now,
     });
     return { action_run: this.redactActionClaim(claimed), runtime_job: this.publicRuntimeJob(runtimeJob) };
@@ -177,6 +184,7 @@ export class ProductGenerationRuntimeSchedulerService {
     repository?: DeliveryRepository;
     action_run_id: string;
     runtime_job_id: string;
+    context?: WorkflowChildContext;
   }): Promise<ProductGenerationRuntimeScheduleResult | undefined> {
     const repository = input.repository ?? this.defaultRepository;
     const [actionRun, runtimeJob] = await Promise.all([
@@ -192,6 +200,7 @@ export class ProductGenerationRuntimeSchedulerService {
     ) {
       return undefined;
     }
+    this.assertWorkflowContextMatchesActionRun(input.context, actionRun);
     return { action_run: this.redactActionClaim(actionRun), runtime_job: this.publicRuntimeJob(runtimeJob) };
   }
 
@@ -213,8 +222,6 @@ export class ProductGenerationRuntimeSchedulerService {
       target_kind: job.target_kind,
       project_id: job.project_id,
       ...(job.repo_id === undefined ? {} : { repo_id: job.repo_id }),
-      worker_id: job.worker_id,
-      launch_lease_id: job.launch_lease_id,
       launch_attempt: job.launch_attempt,
       status: job.status,
       input_digest: job.input_digest,
@@ -251,7 +258,7 @@ export class ProductGenerationRuntimeSchedulerService {
     });
   }
 
-  private findRuntimeJobForAction(
+  runtimeJobForAction(
     repository: DeliveryRepository,
     actionRun: AutomationActionRun,
     taskKind: CodexGenerationTaskKind,
@@ -270,6 +277,7 @@ export class ProductGenerationRuntimeSchedulerService {
     projectId: string;
     repoIds: string[];
     policyDigests: Record<string, string>;
+    context?: WorkflowChildContext | undefined;
     now: string;
   }): Promise<CodexRuntimeJob> {
     const repoIds = this.canonicalRepoIds(input.repoIds);
@@ -419,9 +427,46 @@ export class ProductGenerationRuntimeSchedulerService {
       action_attempt: input.actionRun.attempt,
       action_claim_token_hash: codexCredentialPayloadDigest(actionClaimToken),
       precondition_fingerprint: input.actionRun.precondition_fingerprint,
+      ...(input.actionRun.workflow_id === undefined
+        ? {}
+        : { workflow_id: input.actionRun.workflow_id, codex_session_id: input.actionRun.codex_session_id }),
+      ...(input.actionRun.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: input.actionRun.codex_session_turn_id }),
       expires_at: jobExpiresAt,
       now: input.now,
     });
     return result.runtime_job;
+  }
+
+  private assertWorkflowContextMatchesActionRun(
+    context: WorkflowChildContext | undefined,
+    actionRun: AutomationActionRun,
+  ): void {
+    const hasWorkflowRefs =
+      actionRun.workflow_id !== undefined ||
+      actionRun.codex_session_id !== undefined ||
+      actionRun.codex_session_turn_id !== undefined ||
+      context !== undefined;
+    if (!hasWorkflowRefs) {
+      return;
+    }
+    const refsComplete =
+      actionRun.workflow_id !== undefined &&
+      actionRun.codex_session_id !== undefined &&
+      actionRun.codex_session_turn_id !== undefined &&
+      context?.workflow_id !== undefined &&
+      context.codex_session_id !== undefined &&
+      context.codex_session_turn_id !== undefined;
+    if (
+      refsComplete &&
+      actionRun.workflow_id === context.workflow_id &&
+      actionRun.codex_session_id === context.codex_session_id &&
+      (actionRun.status === 'pending' ? actionRun.codex_session_turn_id === context.codex_session_turn_id : true)
+    ) {
+      return;
+    }
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      'workflow_legacy_entrypoint_disabled: Product generation runtime refs must match the claimed PlanItemWorkflow action run',
+    );
   }
 }

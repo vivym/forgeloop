@@ -86,6 +86,7 @@ export interface ExecutionReadinessRecord {
   development_plan_id: string;
   development_plan_item_id: string;
   codex_session_id: string;
+  codex_session_turn_id?: string;
   approved_boundary_summary_revision_id: string;
   approved_spec_revision_id: string;
   approved_implementation_plan_revision_id: string;

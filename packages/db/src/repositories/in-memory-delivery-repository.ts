@@ -150,6 +150,7 @@ import type {
   ExecutionPackageGenerationPackageRecord,
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
+  GetAutomationActionRunByIdempotencyKeyInput,
   GetClaimedAutomationActionRunInput,
   GetActiveCodexGenerationActionRunFenceInput,
   GetCodexLaunchLeasePublicStatusInput,
@@ -1475,6 +1476,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       status: 'queued',
       input_digest: input.input_digest,
       input_json: clone(input.input_json),
+      ...(input.workflow_id === undefined ? {} : { workflow_id: input.workflow_id }),
+      ...(input.codex_session_id === undefined ? {} : { codex_session_id: input.codex_session_id }),
+      ...(input.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: input.codex_session_turn_id }),
       ...(input.workspace_acquisition_digest === undefined
         ? {}
         : { workspace_acquisition_digest: input.workspace_acquisition_digest }),
@@ -6164,6 +6168,21 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return actionRun === undefined ? undefined : clone(actionRun);
   }
 
+  async getAutomationActionRunByIdempotencyKey(input: GetAutomationActionRunByIdempotencyKeyInput): Promise<AutomationActionRun | undefined> {
+    const actionRunId = this.automationActionRunIdempotency.get(input.idempotency_key);
+    const actionRun = actionRunId === undefined ? undefined : this.automationActionRuns.get(actionRunId);
+    if (
+      actionRun === undefined ||
+      actionRun.action_type !== input.action_type ||
+      actionRun.target_object_type !== input.target_object_type ||
+      actionRun.target_object_id !== input.target_object_id ||
+      actionRun.target_revision_id !== input.target_revision_id
+    ) {
+      return undefined;
+    }
+    return clone(actionRun);
+  }
+
   async latestCompletedProjectionActionRun(
     input: LatestCompletedProjectionActionRunInput,
   ): Promise<AutomationActionRun | undefined> {
@@ -6634,6 +6653,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       capability_fingerprint: input.capability_fingerprint,
       precondition_fingerprint: input.precondition_fingerprint,
       action_input_json: clone(input.action_input_json),
+      ...(input.workflow_id === undefined ? {} : { workflow_id: input.workflow_id }),
+      ...(input.codex_session_id === undefined ? {} : { codex_session_id: input.codex_session_id }),
+      ...(input.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: input.codex_session_turn_id }),
       status: 'pending',
       attempt: 0,
       ...(input.created_by === undefined ? {} : { created_by: input.created_by }),
@@ -6690,6 +6712,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       capability_fingerprint: input.capability_fingerprint,
       precondition_fingerprint: input.precondition_fingerprint,
       action_input_json: clone(input.action_input_json),
+      ...(existing?.workflow_id === undefined && input.workflow_id === undefined
+        ? {}
+        : { workflow_id: existing?.workflow_id ?? input.workflow_id }),
+      ...(existing?.codex_session_id === undefined && input.codex_session_id === undefined
+        ? {}
+        : { codex_session_id: existing?.codex_session_id ?? input.codex_session_id }),
+      ...(existing?.codex_session_turn_id === undefined && input.codex_session_turn_id === undefined
+        ? {}
+        : { codex_session_turn_id: existing?.codex_session_turn_id ?? input.codex_session_turn_id }),
       status: 'running',
       claim_token: input.claim_token,
       attempt: (existing?.attempt ?? 0) + 1,
@@ -6733,6 +6764,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       capability_fingerprint: actionRun.capability_fingerprint,
       precondition_fingerprint: actionRun.precondition_fingerprint,
       action_input_json: clone(actionRun.action_input_json),
+      ...(actionRun.workflow_id === undefined ? {} : { workflow_id: actionRun.workflow_id }),
+      ...(actionRun.codex_session_id === undefined ? {} : { codex_session_id: actionRun.codex_session_id }),
+      ...(actionRun.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: actionRun.codex_session_turn_id }),
       status: 'running',
       claim_token: input.claim_token,
       attempt: actionRun.attempt + 1,
@@ -6746,6 +6780,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   private assertAutomationActionIdentityMatches(existing: AutomationActionRun, input: ClaimAutomationActionRunInput): void {
+    const existingWorkflowOwned = existing.workflow_id !== undefined || existing.codex_session_id !== undefined;
+    const inputWorkflowOwned = input.workflow_id !== undefined || input.codex_session_id !== undefined;
+    const workflowContextMismatched =
+      existingWorkflowOwned || inputWorkflowOwned
+        ? existing.workflow_id !== input.workflow_id || existing.codex_session_id !== input.codex_session_id
+        : existing.codex_session_turn_id !== input.codex_session_turn_id;
     const mismatched =
       existing.action_type !== input.action_type ||
       existing.target_object_type !== input.target_object_type ||
@@ -6757,6 +6797,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       existing.automation_settings_version !== input.automation_settings_version ||
       existing.capability_fingerprint !== input.capability_fingerprint ||
       existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      workflowContextMismatched ||
       !valuesEqual(existing.action_input_json, input.action_input_json);
     if (mismatched) {
       throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} identity changed`);
@@ -6790,6 +6831,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       return;
     }
 
+    const existingWorkflowOwned = existing.workflow_id !== undefined || existing.codex_session_id !== undefined;
+    const inputWorkflowOwned = input.workflow_id !== undefined || input.codex_session_id !== undefined;
+    const workflowContextMismatched =
+      existingWorkflowOwned || inputWorkflowOwned
+        ? existing.workflow_id !== input.workflow_id || existing.codex_session_id !== input.codex_session_id
+        : existing.codex_session_turn_id !== input.codex_session_turn_id;
     const mismatched =
       existing.action_type !== input.action_type ||
       existing.target_object_type !== input.target_object_type ||
@@ -6801,6 +6848,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       existing.automation_settings_version !== input.automation_settings_version ||
       existing.capability_fingerprint !== input.capability_fingerprint ||
       existing.precondition_fingerprint !== input.precondition_fingerprint ||
+      workflowContextMismatched ||
       !valuesEqual(existing.action_input_json, input.action_input_json);
     if (mismatched) {
       throw new DomainError(
@@ -7547,6 +7595,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       record.job.launch_attempt === input.launch_attempt &&
       record.job.input_digest === input.input_digest &&
       valuesEqual(record.job.input_json, input.input_json) &&
+      record.job.workflow_id === input.workflow_id &&
+      record.job.codex_session_id === input.codex_session_id &&
+      record.job.codex_session_turn_id === input.codex_session_turn_id &&
       record.job.workspace_acquisition_digest === input.workspace_acquisition_digest &&
       valuesEqual(record.job.workspace_acquisition_json, input.workspace_acquisition_json) &&
       record.job.worker_id === input.worker_id &&
