@@ -32,6 +32,8 @@ import {
 
 const digest = (char: string) => `sha256:${char.repeat(64)}`;
 const rawDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+const codexThreadDigest = (threadId: string) =>
+  codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: threadId });
 const runtimeArtifactRef = (runtimeJobId: string, kind: unknown) =>
   `artifact://internal/codex_runtime_job_artifact/codex_runtime_job/${runtimeJobId}/${String(kind)}`;
 
@@ -642,7 +644,7 @@ describe('remote codex worker client', () => {
       continuation: {
         kind: 'resume_thread',
         codex_thread_id: 'thread-1',
-        codex_thread_id_digest: digest('c'),
+        codex_thread_id_digest: codexThreadDigest('thread-1'),
       },
     });
     const worker = createRemoteCodexWorkerClient({

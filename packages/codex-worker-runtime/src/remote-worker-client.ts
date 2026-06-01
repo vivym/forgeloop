@@ -1587,6 +1587,8 @@ const publicRuntimeWorkerErrorCodes = new Set([
   'codex_runtime_job_cancelled',
   'codex_runtime_job_success_terminal_unconfirmed',
   'codex_generation_workload_unsupported',
+  'codex_session_thread_binding_partial',
+  'codex_session_thread_digest_mismatch',
   'codex_runtime_job_expired',
   'codex_runtime_job_unavailable',
   'codex_workspace_bundle_invalid',
