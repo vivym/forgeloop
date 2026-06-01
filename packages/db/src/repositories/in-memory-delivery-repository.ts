@@ -394,12 +394,17 @@ const isCodexSessionResumeRuntimeJobInput = (inputJson: Record<string, unknown>)
 
 const codexSessionResumeRuntimeJobMatchesAttach = (
   job: CodexRuntimeJob,
+  session: CodexSession,
   input: AttachCodexSessionRunnerRuntimeJobInput,
 ): boolean => {
   try {
     const context = validateCodexSessionRuntimeContext(job.input_json.codex_session_runtime_context);
     return (
       context.continuation.kind === 'resume_thread' &&
+      session.codex_thread_id !== undefined &&
+      session.codex_thread_id_digest !== undefined &&
+      context.continuation.codex_thread_id === session.codex_thread_id &&
+      context.continuation.codex_thread_id_digest === session.codex_thread_id_digest &&
       context.codex_session_id === input.session_id &&
       context.codex_session_turn_id === job.codex_session_turn_id &&
       context.worker_id === input.worker_id &&
@@ -3846,13 +3851,30 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
     const existing = this.codexRuntimeJobs.get(input.attached_runtime_job_id);
     const leaseRecord = existing === undefined ? undefined : this.codexLaunchLeases.get(existing.job.launch_lease_id);
+    const runner = this.codexRuntimeJobs.get(input.runner_runtime_job_id);
+    const runnerLeaseRecord = this.codexLaunchLeases.get(input.runner_launch_lease_id);
     if (
       existing === undefined ||
       leaseRecord === undefined ||
+      runner === undefined ||
+      runnerLeaseRecord === undefined ||
+      runner.job.id !== input.runner_runtime_job_id ||
+      runner.job.launch_lease_id !== input.runner_launch_lease_id ||
+      runner.job.codex_session_id !== input.session_id ||
+      runner.job.worker_id !== input.worker_id ||
+      runner.job.status !== 'running' ||
+      runner.job.runtime_evidence_digest === undefined ||
+      runner.job.launch_materialization_digest === undefined ||
+      runner.job.started_at === undefined ||
+      runner.job.expires_at <= input.now ||
+      runnerLeaseRecord.lease.id !== input.runner_launch_lease_id ||
+      runnerLeaseRecord.lease.worker_id !== input.worker_id ||
+      runnerLeaseRecord.lease.status !== 'materialized' ||
+      runnerLeaseRecord.lease.expires_at <= input.now ||
       existing.job.launch_lease_id === input.runner_launch_lease_id ||
       existing.job.worker_id !== input.worker_id ||
       existing.job.codex_session_id !== input.session_id ||
-      !codexSessionResumeRuntimeJobMatchesAttach(existing.job, input) ||
+      !codexSessionResumeRuntimeJobMatchesAttach(existing.job, session, input) ||
       existing.job.status === 'terminal' ||
       existing.job.cancel_requested_at !== undefined ||
       existing.job.expires_at <= input.now
@@ -3860,6 +3882,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       throw new DomainError(
         'codex_runtime_job_unavailable',
         `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    if (!this.codexLaunchFenceIsActive(runnerLeaseRecord, undefined, input.now)) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} runner launch fence is unavailable`,
+      );
+    }
+    try {
+      this.codexRuntimeJobMaterialization(runner, runnerLeaseRecord, input.now);
+    } catch {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} runner launch dependencies are unavailable`,
       );
     }
     if (existing.job.status === 'running') {

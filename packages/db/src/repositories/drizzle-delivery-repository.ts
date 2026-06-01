@@ -466,12 +466,17 @@ const isCodexSessionResumeRuntimeJobInput = (inputJson: Record<string, unknown>)
 
 const codexSessionResumeRuntimeJobMatchesAttach = (
   job: CodexRuntimeJob,
+  session: CodexSession,
   input: AttachCodexSessionRunnerRuntimeJobInput,
 ): boolean => {
   try {
     const context = validateCodexSessionRuntimeContext(job.input_json.codex_session_runtime_context);
     return (
       context.continuation.kind === 'resume_thread' &&
+      session.codex_thread_id !== undefined &&
+      session.codex_thread_id_digest !== undefined &&
+      context.continuation.codex_thread_id === session.codex_thread_id &&
+      context.continuation.codex_thread_id_digest === session.codex_thread_id_digest &&
       context.codex_session_id === input.session_id &&
       context.codex_session_turn_id === job.codex_session_turn_id &&
       context.worker_id === input.worker_id &&
@@ -1462,10 +1467,15 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async attachCodexSessionRunnerRuntimeJob(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
-    return this.db.transaction(async (tx) => {
-      const repository = new DrizzleDeliveryRepository(tx as ForgeloopDrizzleDatabase);
-      return repository.attachCodexSessionRunnerRuntimeJobUnlocked(input);
-    });
+    return this.withAdvisoryLocks(
+      [
+        `codex-session:${input.session_id}`,
+        ...this.codexRuntimeJobStateLockKeys(input.runner_runtime_job_id, input.worker_id),
+        ...this.codexRuntimeJobStateLockKeys(input.attached_runtime_job_id, input.worker_id),
+        `codex-runtime-lease:${input.runner_launch_lease_id}`,
+      ],
+      async (repository) => (repository as DrizzleDeliveryRepository).attachCodexSessionRunnerRuntimeJobUnlocked(input),
+    );
   }
 
   private async attachCodexSessionRunnerRuntimeJobUnlocked(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
@@ -1505,11 +1515,39 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       );
     }
     const existing = runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(existingRow as Record<string, unknown>));
+    const [runnerRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.runner_runtime_job_id))
+      .limit(1);
+    const runner = runnerRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobDbRecord>(runnerRow as Record<string, unknown>);
+    const [runnerLeaseRow] = await this.db
+      .select()
+      .from(codex_launch_leases)
+      .where(eq(codex_launch_leases.id, input.runner_launch_lease_id))
+      .limit(1);
+    const runnerLease =
+      runnerLeaseRow === undefined ? undefined : fromDbRecord<CodexLaunchLeaseDbRecord>(runnerLeaseRow as Record<string, unknown>);
     if (
+      runner === undefined ||
+      runnerLease === undefined ||
+      runner.id !== input.runner_runtime_job_id ||
+      runner.launch_lease_id !== input.runner_launch_lease_id ||
+      runner.codex_session_id !== input.session_id ||
+      runner.worker_id !== input.worker_id ||
+      runner.status !== 'running' ||
+      runner.runtime_evidence_digest === undefined ||
+      runner.launch_materialization_digest === undefined ||
+      runner.started_at === undefined ||
+      runner.expires_at <= input.now ||
+      runnerLease.id !== input.runner_launch_lease_id ||
+      runnerLease.worker_id !== input.worker_id ||
+      runnerLease.status !== 'materialized' ||
+      runnerLease.expires_at <= input.now ||
       existing.launch_lease_id === input.runner_launch_lease_id ||
       existing.worker_id !== input.worker_id ||
       existing.codex_session_id !== input.session_id ||
-      !codexSessionResumeRuntimeJobMatchesAttach(existing, input) ||
+      !codexSessionResumeRuntimeJobMatchesAttach(existing, session, input) ||
       existing.status === 'terminal' ||
       existing.cancel_requested_at !== undefined ||
       existing.expires_at <= input.now
@@ -1517,6 +1555,20 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       throw new DomainError(
         'codex_runtime_job_unavailable',
         `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    if (!(await this.codexLaunchFenceIsActive(runnerLease, input.now))) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} runner launch fence is unavailable`,
+      );
+    }
+    try {
+      await this.assertCodexRuntimeJobMaterializationDependencies(runner, runnerLease);
+    } catch {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} runner launch dependencies are unavailable`,
       );
     }
     const [leaseRow] = await this.db
@@ -1582,12 +1634,67 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         startedAt: input.now,
         updatedAt: input.now,
       } as never)
-      .where(and(eq(codex_runtime_jobs.id, input.attached_runtime_job_id), eq(codex_runtime_jobs.status, 'accepted')))
+      .where(
+        and(
+          eq(codex_runtime_jobs.id, input.attached_runtime_job_id),
+          eq(codex_runtime_jobs.status, 'accepted'),
+          eq(codex_runtime_jobs.workerId, input.worker_id),
+          eq(codex_runtime_jobs.launchLeaseId, existing.launch_lease_id),
+          eq(codex_runtime_jobs.codexSessionId, input.session_id),
+          eq(codex_runtime_jobs.inputDigest, existing.input_digest),
+          existing.accepted_worker_session_digest === undefined
+            ? isNull(codex_runtime_jobs.acceptedWorkerSessionDigest)
+            : eq(codex_runtime_jobs.acceptedWorkerSessionDigest, existing.accepted_worker_session_digest),
+          existing.codex_session_turn_id === undefined
+            ? isNull(codex_runtime_jobs.codexSessionTurnId)
+            : eq(codex_runtime_jobs.codexSessionTurnId, existing.codex_session_turn_id),
+          gt(codex_runtime_jobs.expiresAt, input.now),
+          isNull(codex_runtime_jobs.cancelRequestedAt),
+        ),
+      )
       .returning();
     const [leaseUpdateRow] = await this.db
       .update(codex_launch_leases)
       .set({ status: 'materialized', materializationRequestHash: input.request_digest, materializedAt: input.now } as never)
-      .where(and(eq(codex_launch_leases.id, existing.launch_lease_id), eq(codex_launch_leases.status, 'active')))
+      .where(
+        and(
+          eq(codex_launch_leases.id, existing.launch_lease_id),
+          eq(codex_launch_leases.status, 'active'),
+          eq(codex_launch_leases.workerId, input.worker_id),
+          eq(codex_launch_leases.targetType, lease.target_type),
+          eq(codex_launch_leases.targetId, lease.target_id),
+          eq(codex_launch_leases.targetKind, lease.target_kind),
+          eq(codex_launch_leases.projectId, lease.project_id),
+          lease.repo_id === undefined ? isNull(codex_launch_leases.repoId) : eq(codex_launch_leases.repoId, lease.repo_id),
+          eq(codex_launch_leases.launchAttempt, lease.launch_attempt),
+          eq(codex_launch_leases.runtimeProfileRevisionId, lease.runtime_profile_revision_id),
+          eq(codex_launch_leases.runtimeProfileDigest, lease.runtime_profile_digest),
+          eq(codex_launch_leases.credentialBindingId, lease.credential_binding_id),
+          eq(codex_launch_leases.credentialBindingVersionId, lease.credential_binding_version_id),
+          eq(codex_launch_leases.credentialPayloadDigest, lease.credential_payload_digest),
+          eq(codex_launch_leases.dockerImageDigest, lease.docker_image_digest),
+          eq(codex_launch_leases.networkPolicyDigest, lease.network_policy_digest),
+          lease.network_provider_config_digest === undefined
+            ? isNull(codex_launch_leases.networkProviderConfigDigest)
+            : eq(codex_launch_leases.networkProviderConfigDigest, lease.network_provider_config_digest),
+          lease.run_worker_lease_id === undefined
+            ? isNull(codex_launch_leases.runWorkerLeaseId)
+            : eq(codex_launch_leases.runWorkerLeaseId, lease.run_worker_lease_id),
+          lease.run_worker_lease_token_hash === undefined
+            ? isNull(codex_launch_leases.runWorkerLeaseTokenHash)
+            : eq(codex_launch_leases.runWorkerLeaseTokenHash, lease.run_worker_lease_token_hash),
+          lease.run_session_status === undefined
+            ? isNull(codex_launch_leases.runSessionStatus)
+            : eq(codex_launch_leases.runSessionStatus, lease.run_session_status),
+          lease.run_session_updated_at === undefined
+            ? isNull(codex_launch_leases.runSessionUpdatedAt)
+            : eq(codex_launch_leases.runSessionUpdatedAt, lease.run_session_updated_at),
+          lease.execution_package_version === undefined
+            ? isNull(codex_launch_leases.executionPackageVersion)
+            : eq(codex_launch_leases.executionPackageVersion, lease.execution_package_version),
+          gt(codex_launch_leases.expiresAt, input.now),
+        ),
+      )
       .returning();
     if (jobRow === undefined || leaseUpdateRow === undefined) {
       throw new DomainError(

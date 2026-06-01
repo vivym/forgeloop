@@ -187,6 +187,10 @@ const readinessRecordInput = {
 
 const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
 const bytesDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+const testUuid = (seed: string): string => {
+  const hex = createHash('sha256').update(seed).digest('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
 
 const workspaceBundleArchiveFixture = (input: { bundle_id: string; created_at?: string; files?: Record<string, string> }) => {
   const files = Object.entries(input.files ?? { 'README.md': 'workspace bundle fixture\n' }).map(([path, content]) => {
@@ -576,38 +580,46 @@ const createAcceptedSessionRuntimeJob = async (
     version,
     secret_payload_json: secretPayload,
   });
-  const target =
-    overrides.target ??
-    runExecutionTarget({
-      target_id: 'runtime-run-session-1',
-    });
+  const runtimeJobId = overrides.runtime_job_id ?? 'attached-runtime-job-1';
+  const runSessionId = runtimeJobId === 'attached-runtime-job-1' ? 'runtime-run-session-1' : `runtime-run-session-${runtimeJobId}`;
+  const bundleId = runtimeJobId === 'attached-runtime-job-1' ? 'attached-pending-bundle-1' : `attached-pending-bundle-${runtimeJobId}`;
+  const bundleObjectId =
+    runtimeJobId === 'attached-runtime-job-1'
+      ? '22222222-2222-4222-8222-222222222223'
+      : testUuid(`artifact-object:${runtimeJobId}`);
+  const pendingBundleId =
+    runtimeJobId === 'attached-runtime-job-1'
+      ? '22222222-2222-4222-8222-222222222222'
+      : testUuid(`pending-bundle:${runtimeJobId}`);
+  const runWorkerLeaseToken = `run-worker-token-${runtimeJobId}`;
+  const target = overrides.target ?? runExecutionTarget({ target_id: runSessionId });
   const run = runSession({
     id: target.target_id,
-    execution_package_id: 'execution-package-1',
+    execution_package_id: overrides.execution_package_id ?? 'execution-package-1',
   });
   await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
   await repository.saveRunSession(run);
   const runWorkerLease = await repository.claimRunWorkerLease({
     run_session_id: run.id,
     worker_id: 'run-worker-1',
-    lease_token: 'run-worker-token-1',
+    lease_token: runWorkerLeaseToken,
     now,
     expires_at: runtimeExpiresAt,
   });
-  const archiveFixture = workspaceBundleArchiveFixture({ bundle_id: 'attached-pending-bundle-1' });
+  const archiveFixture = workspaceBundleArchiveFixture({ bundle_id: bundleId });
   const workspaceAcquisitionJson = {
     schema_version: 'workspace_bundle_acquisition.v1',
-    bundle_id: 'attached-pending-bundle-1',
-    archive_ref: 'artifact://internal/workspace_bundle/run_session/runtime-run-session-1/attached-pending-bundle-1',
+    bundle_id: bundleId,
+    archive_ref: `artifact://internal/workspace_bundle/run_session/${run.id}/${bundleId}`,
     archive_digest: archiveFixture.archive_digest,
     manifest_digest: archiveFixture.manifest_digest,
     size_bytes: archiveFixture.archive.byteLength,
     expires_at: runtimeExpiresAt,
   };
   const pendingBundle = {
-    bundle_id: 'attached-pending-bundle-1',
+    bundle_id: bundleId,
     pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
-    internal_artifact_object_id: '22222222-2222-4222-8222-222222222223',
+    internal_artifact_object_id: bundleObjectId,
     archive_digest: workspaceAcquisitionJson.archive_digest,
     manifest_digest: workspaceAcquisitionJson.manifest_digest,
     run_worker_lease_id: runWorkerLease.id,
@@ -633,21 +645,36 @@ const createAcceptedSessionRuntimeJob = async (
   });
   const pendingBundleRecord = {
     ...pendingBundle,
-    id: '22222222-2222-4222-8222-222222222222',
+    id: pendingBundleId,
     run_session_id: run.id,
     execution_package_id: run.execution_package_id,
-    request_digest: tokenHash('attached-pending-workspace-request-1'),
+    request_digest: tokenHash(`attached-pending-workspace-request-${runtimeJobId}`),
     created_at: now,
   };
   await repository.createPendingWorkspaceBundleArtifact(pendingBundleRecord);
-  const { worker, sessionToken } = await seedRuntimeWorker(repository, {
-    capabilities: [target.target_kind],
-    docker_image_digests: [revision.docker_image_digest],
-    network_policy_digests: [codexCanonicalDigest(revision.network_policy)],
-    network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
-  });
+  const reusableWorker = await repository.findAvailableCodexWorker({
+      project_id: target.project_id,
+      ...(target.repo_id === undefined ? {} : { repo_id: target.repo_id }),
+      target_kind: target.target_kind,
+      docker_image_digest: revision.docker_image_digest,
+      network_policy_digest: codexCanonicalDigest(revision.network_policy),
+      network_provider_config_digest: dockerProxyConfig().provider_config_digest,
+      now,
+    });
+  const worker =
+    reusableWorker?.id === 'worker-1'
+      ? reusableWorker
+      : (
+          await seedRuntimeWorker(repository, {
+            capabilities: [target.target_kind],
+            docker_image_digests: [revision.docker_image_digest],
+            network_policy_digests: [codexCanonicalDigest(revision.network_policy)],
+            network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
+          })
+        ).worker;
+  const sessionToken = 'session-token-1';
   const input = {
-    runtime_job_id: 'attached-runtime-job-1',
+    runtime_job_id: runtimeJobId,
     launch_lease_id: 'attached-launch-lease-1',
     envelope_id: 'attached-runtime-envelope-1',
     job_request_id: 'attached-runtime-job-request-1',
@@ -669,7 +696,7 @@ const createAcceptedSessionRuntimeJob = async (
     pending_workspace_bundle: pendingBundleRecord,
     execution_package_id: run.execution_package_id,
     run_worker_lease_id: runWorkerLease.id,
-    run_worker_lease_token_hash: tokenHash('run-worker-token-1'),
+    run_worker_lease_token_hash: tokenHash(runWorkerLeaseToken),
     run_session_status: 'running',
     run_session_updated_at: now,
     execution_package_version: 1,
@@ -727,12 +754,25 @@ const codexSessionRuntimeContextInput = (
   };
 };
 
-const resumeThreadRuntimeInput = (): Record<string, unknown> =>
-  codexSessionRuntimeContextInput({
-    kind: 'resume_thread',
-    codex_thread_id: 'thread-1',
-    codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
-  });
+const resumeThreadRuntimeInput = (contextOverrides: Record<string, unknown> = {}): Record<string, unknown> =>
+  codexSessionRuntimeContextInput(
+    {
+      kind: 'resume_thread',
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+    },
+    contextOverrides,
+  );
+
+const staleResumeThreadRuntimeInput = (contextOverrides: Record<string, unknown> = {}): Record<string, unknown> =>
+  codexSessionRuntimeContextInput(
+    {
+      kind: 'resume_thread',
+      codex_thread_id: 'thread-2',
+      codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-2' }),
+    },
+    contextOverrides,
+  );
 
 const startThreadRuntimeInput = (): Record<string, unknown> =>
   codexSessionRuntimeContextInput({
@@ -827,6 +867,48 @@ const startSessionRuntimeJob = (
     ),
     now: later,
   });
+
+const bindCodexSessionThread = async (repository: DeliveryRepository) => {
+  await repository.createCodexSessionTurn(turnInput);
+  const claimed = await repository.claimCodexSessionLease(leaseInput);
+  await repository.terminalizeCodexSessionTurn({
+    session_id: 'session-1',
+    turn_id: 'turn-1',
+    lease_id: claimed.lease.id,
+    lease_token_hash: claimed.lease.lease_token_hash,
+    lease_epoch: claimed.lease.lease_epoch,
+    worker_id: 'worker-1',
+    worker_session_digest: 'sha256:worker-session',
+    status: 'succeeded',
+    expected_previous_snapshot_digest: undefined,
+    codex_thread_id: 'thread-1',
+    codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+    now: '2026-05-31T00:02:00.000Z',
+  });
+  await repository.createCodexSessionTurn({
+    ...turnInput,
+    id: 'turn-2',
+    input_digest: 'sha256:turn-2',
+    created_at: '2026-05-31T00:03:00.000Z',
+    updated_at: '2026-05-31T00:03:00.000Z',
+  });
+};
+
+const startSessionRunnerRuntimeJob = async (repository: DeliveryRepository) => {
+  const { input } = await createAcceptedSessionRuntimeJob(repository, {
+    runtime_job_id: 'runtime-job-1',
+    launch_lease_id: 'launch-lease-1',
+    envelope_id: 'runtime-envelope-1',
+    job_request_id: 'runtime-job-request-1',
+    input_json: startThreadRuntimeInput(),
+    input_digest: tokenHash('runner-start-thread-input'),
+    execution_package_id: 'execution-package-runner-1',
+    codex_session_turn_id: 'turn-1',
+  });
+  await claimSessionRuntimeJobEnvelope(repository, input, 'claim-runner-runtime-nonce');
+  await materializeSessionRuntimeJob(repository, input, 'materialize-runner-runtime-nonce');
+  return startSessionRuntimeJob(repository, input, 'start-runner-runtime-nonce');
+};
 
 const createRunnerLaunchLease = async (
   repository: DeliveryRepository,
@@ -2231,13 +2313,15 @@ describe('Plan Item Workflow repository', () => {
   it('rejects attaching a missing later-turn runtime job to the persisted session runner owner', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
     await repository.markCodexSessionRunnerOwner({
       session_id: 'session-1',
       runner_worker_id: 'worker-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
       runner_expires_at: '2026-05-31T00:20:00.000Z',
-      now: '2026-05-31T00:00:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
     });
 
     await expectDomainErrorCode(
@@ -2263,21 +2347,63 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
-  it('attaches an accepted later-turn runtime job using the persisted session runner owner', async () => {
+  it('rejects attaching a later-turn runtime job when the persisted runner runtime job is missing', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await createRunnerLaunchLease(repository);
+    await bindCodexSessionThread(repository);
     await repository.markCodexSessionRunnerOwner({
       session_id: 'session-1',
       runner_worker_id: 'worker-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
       runner_expires_at: '2026-05-31T00:20:00.000Z',
-      now: '2026-05-31T00:00:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
     });
     await createAcceptedSessionRuntimeJob(repository, {
-      input_json: resumeThreadRuntimeInput(),
+      input_json: resumeThreadRuntimeInput({ codex_session_turn_id: 'turn-2' }),
+      codex_session_turn_id: 'turn-2',
+      input_digest: tokenHash('attached-runtime-resume-input'),
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.attachCodexSessionRunnerRuntimeJob({
+          session_id: 'session-1',
+          runner_launch_lease_id: 'launch-lease-1',
+          runner_runtime_job_id: 'runtime-job-1',
+          runner_expires_at: '2026-05-31T00:30:00.000Z',
+          attached_runtime_job_id: 'attached-runtime-job-1',
+          worker_id: 'worker-1',
+          runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
+          launch_materialization_digest: 'sha256:launch-materialization-live-runner',
+          idempotency_key: 'attach-runtime-job-1',
+          request_digest: 'sha256:attach-runtime-job-1',
+          now: '2026-05-31T00:06:00.000Z',
+        }),
+      'codex_runtime_job_unavailable',
+    );
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: 'attached-runtime-job-1' })).resolves.toMatchObject({
+      status: 'accepted',
+    });
+    await expect(publicLaunchLeaseStatus(repository, 'attached-launch-lease-1')).resolves.toMatchObject({ status: 'active' });
+  });
+
+  it('attaches an accepted later-turn runtime job using the persisted session runner owner', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
+    });
+    await createAcceptedSessionRuntimeJob(repository, {
+      input_json: resumeThreadRuntimeInput({ codex_session_turn_id: 'turn-2' }),
+      codex_session_turn_id: 'turn-2',
       input_digest: tokenHash('attached-runtime-resume-input'),
     });
 
@@ -2300,14 +2426,14 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       launch_lease_id: 'attached-launch-lease-1',
       codex_session_id: 'session-1',
-      codex_session_turn_id: 'turn-1',
+      codex_session_turn_id: 'turn-2',
       status: 'running',
       runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
       launch_materialization_digest: 'sha256:launch-materialization-live-runner',
       started_at: '2026-05-31T00:06:00.000Z',
     });
     await expect(publicLaunchLeaseStatus(repository, 'attached-launch-lease-1')).resolves.toMatchObject({ status: 'materialized' });
-    await expect(publicLaunchLeaseStatus(repository, 'launch-lease-1')).resolves.toMatchObject({ status: 'active' });
+    await expect(publicLaunchLeaseStatus(repository, 'launch-lease-1')).resolves.toMatchObject({ status: 'materialized' });
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
@@ -2339,12 +2465,55 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('rejects attaching a resume-thread runtime job for a different Codex thread binding', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
+    });
+    await createAcceptedSessionRuntimeJob(repository, {
+      input_json: staleResumeThreadRuntimeInput({ codex_session_turn_id: 'turn-2' }),
+      codex_session_turn_id: 'turn-2',
+      input_digest: tokenHash('attached-runtime-stale-thread-input'),
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.attachCodexSessionRunnerRuntimeJob({
+          session_id: 'session-1',
+          runner_launch_lease_id: 'launch-lease-1',
+          runner_runtime_job_id: 'runtime-job-1',
+          runner_expires_at: '2026-05-31T00:30:00.000Z',
+          attached_runtime_job_id: 'attached-runtime-job-1',
+          worker_id: 'worker-1',
+          runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
+          launch_materialization_digest: 'sha256:launch-materialization-live-runner',
+          idempotency_key: 'attach-runtime-job-1',
+          request_digest: 'sha256:attach-runtime-job-1',
+          now: '2026-05-31T00:06:00.000Z',
+        }),
+      'codex_runtime_job_unavailable',
+    );
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: 'attached-runtime-job-1' })).resolves.toMatchObject({
+      status: 'accepted',
+    });
+    await expect(publicLaunchLeaseStatus(repository, 'attached-launch-lease-1')).resolves.toMatchObject({ status: 'active' });
+  });
+
   it('rejects attaching a runtime job whose launch lease is the session runner launch lease', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
     await createAcceptedSessionRuntimeJob(repository, {
-      input_json: resumeThreadRuntimeInput(),
+      input_json: resumeThreadRuntimeInput({ codex_session_turn_id: 'turn-2' }),
+      codex_session_turn_id: 'turn-2',
       input_digest: tokenHash('attached-runtime-resume-input'),
     });
     await repository.markCodexSessionRunnerOwner({
@@ -2379,15 +2548,15 @@ describe('Plan Item Workflow repository', () => {
   it('rejects attaching a runtime job without a matching resume-thread context', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await createRunnerLaunchLease(repository);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
     await repository.markCodexSessionRunnerOwner({
       session_id: 'session-1',
       runner_worker_id: 'worker-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
       runner_expires_at: '2026-05-31T00:20:00.000Z',
-      now: '2026-05-31T00:00:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
     });
     await createAcceptedSessionRuntimeJob(repository);
 
@@ -2417,15 +2586,15 @@ describe('Plan Item Workflow repository', () => {
   it('rejects attaching a start-thread runtime job to a persisted session runner', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await createRunnerLaunchLease(repository);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
     await repository.markCodexSessionRunnerOwner({
       session_id: 'session-1',
       runner_worker_id: 'worker-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
       runner_expires_at: '2026-05-31T00:20:00.000Z',
-      now: '2026-05-31T00:00:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
     });
     await createAcceptedSessionRuntimeJob(repository, {
       input_json: startThreadRuntimeInput(),
@@ -2455,15 +2624,15 @@ describe('Plan Item Workflow repository', () => {
   it('rejects attaching a resume-thread runtime job with stale runner context', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await createRunnerLaunchLease(repository);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
     await repository.markCodexSessionRunnerOwner({
       session_id: 'session-1',
       runner_worker_id: 'worker-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
       runner_expires_at: '2026-05-31T00:20:00.000Z',
-      now: '2026-05-31T00:00:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
     });
     await createAcceptedSessionRuntimeJob(repository, {
       input_json: codexSessionRuntimeContextInput(
@@ -2472,8 +2641,9 @@ describe('Plan Item Workflow repository', () => {
           codex_thread_id: 'thread-1',
           codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
         },
-        { runner_launch_lease_id: 'launch-lease-stale' },
+        { codex_session_turn_id: 'turn-2', runner_launch_lease_id: 'launch-lease-stale' },
       ),
+      codex_session_turn_id: 'turn-2',
       input_digest: tokenHash('attached-runtime-stale-runner-input'),
     });
 
@@ -2500,18 +2670,19 @@ describe('Plan Item Workflow repository', () => {
   it('rejects attaching a resume-thread runtime job when the attached launch fence is stale', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await createRunnerLaunchLease(repository);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
     await repository.markCodexSessionRunnerOwner({
       session_id: 'session-1',
       runner_worker_id: 'worker-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
       runner_expires_at: '2026-05-31T00:20:00.000Z',
-      now: '2026-05-31T00:00:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
     });
     await createAcceptedSessionRuntimeJob(repository, {
-      input_json: resumeThreadRuntimeInput(),
+      input_json: resumeThreadRuntimeInput({ codex_session_turn_id: 'turn-2' }),
+      codex_session_turn_id: 'turn-2',
       input_digest: tokenHash('attached-runtime-resume-input'),
     });
     const run = await repository.getRunSession('runtime-run-session-1');
@@ -2569,15 +2740,15 @@ describe('Plan Item Workflow repository', () => {
   it('rejects generic start for attached resume-thread Codex Session runtime jobs', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await repository.createCodexSessionTurn(turnInput);
-    await createRunnerLaunchLease(repository);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
     await repository.markCodexSessionRunnerOwner({
       session_id: 'session-1',
       runner_worker_id: 'worker-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
       runner_expires_at: '2026-05-31T00:20:00.000Z',
-      now: '2026-05-31T00:00:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
     });
     const { input } = await createAcceptedSessionRuntimeJob(repository, {
       input_json: resumeThreadRuntimeInput(),
