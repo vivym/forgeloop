@@ -30,6 +30,36 @@ describe('internal artifact refs', () => {
   });
 
   it.each([
+    'codex_runtime_capsule',
+    'codex_thread_state_bundle',
+    'codex_memory_bundle',
+    'codex_memory_delta',
+    'codex_environment_manifest',
+    'codex_plugin_package',
+    'codex_skill_bundle',
+  ] as const)('builds codex capsule component ref for %s', (kind) => {
+    const ref = buildInternalArtifactRef({
+      kind,
+      owner_type: 'codex_session',
+      owner_id: 'session-1',
+      artifact_id: 'artifact-1',
+    });
+
+    expect(parseInternalArtifactRef(ref)).toEqual({
+      kind,
+      owner_type: 'codex_session',
+      owner_id: 'session-1',
+      artifact_id: 'artifact-1',
+    });
+  });
+
+  it('rejects legacy codex_session_snapshot refs', () => {
+    expect(() =>
+      parseInternalArtifactRef('artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1'),
+    ).toThrow(/kind is invalid/);
+  });
+
+  it.each([
     'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1',
     'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/../x',
     'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/%2F',
