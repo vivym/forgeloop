@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -132,6 +132,68 @@ describe('Codex runtime capsule memory state', () => {
     await expect(readFile(join(beforeRoot, 'memories/renamed.md'), 'utf8')).resolves.toBe('same note\n');
   });
 
+  it('rejects symlinks while building a memory bundle', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-'));
+    await writeMemoryFile(root, 'target.md', 'outside target\n');
+    await symlink(join(root, 'target.md'), join(root, 'linked.md'));
+
+    await expect(
+      buildCodexMemoryBundleFromRoot({
+        root,
+        codexSessionId: 'codex-session-1',
+        bundleId: 'materialized',
+        sourcePolicyDigest: materializedSourcePolicyDigest,
+      }),
+    ).rejects.toThrow(/symlink/i);
+  });
+
+  it('refuses to write modified memory through a symlink path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-'));
+    const outside = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-outside-'));
+    const afterRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-after-'));
+    await writeMemoryFile(root, 'memories/existing.md', 'before\n');
+    await writeMemoryFile(afterRoot, 'memories/existing.md', 'after\n');
+    await writeMemoryFile(outside, 'outside.md', 'before\n');
+    const before = await buildCodexMemoryBundleFromRoot({
+      root,
+      codexSessionId: 'codex-session-1',
+      bundleId: 'materialized',
+      sourcePolicyDigest: materializedSourcePolicyDigest,
+    });
+    await rm(join(root, 'memories/existing.md'));
+    await symlink(join(outside, 'outside.md'), join(root, 'memories/existing.md'));
+    const output = await buildCodexMemoryBundleFromRoot({
+      root: afterRoot,
+      codexSessionId: 'codex-session-1',
+      bundleId: 'materialized',
+      sourcePolicyDigest: materializedSourcePolicyDigest,
+    });
+    const delta: CodexMemoryDeltaManifest = {
+      schema_version: 'codex_memory_delta_manifest.v1',
+      codex_session_id: 'codex-session-1',
+      turn_id: 'turn-1',
+      input_bundle_digest: before.digest,
+      output_bundle_digest: output.digest,
+      operations: [{
+        op: 'modify',
+        relative_path: 'memories/existing.md',
+        before_digest: contentDigest('before\n'),
+        after_digest: contentDigest('after\n'),
+      }],
+    };
+
+    await expect(
+      replayCodexMemoryDelta({
+        root,
+        inputBundleDigest: before.digest,
+        delta,
+        bundleMetadata: { bundleId: 'materialized', sourcePolicyDigest: materializedSourcePolicyDigest },
+        contentReader: new MapMemoryContentReader(new Map([['memories/existing.md', new TextEncoder().encode('after\n')]])),
+      }),
+    ).rejects.toThrow(/symlink/i);
+    await expect(readFile(join(outside, 'outside.md'), 'utf8')).resolves.toBe('before\n');
+  });
+
   it('replays independently constructed add and modify operations with an explicit content reader', async () => {
     const beforeRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-before-'));
     const afterRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-after-'));
@@ -171,6 +233,7 @@ describe('Codex runtime capsule memory state', () => {
         root: beforeRoot,
         inputBundleDigest: before.digest,
         delta,
+        bundleMetadata: { bundleId: 'materialized', sourcePolicyDigest: materializedSourcePolicyDigest },
         contentReader: new MapMemoryContentReader(new Map([
           ['memories/existing.md', new TextEncoder().encode('after\n')],
           ['memories/new.md', new TextEncoder().encode('new\n')],
@@ -179,6 +242,46 @@ describe('Codex runtime capsule memory state', () => {
     ).resolves.toBe(delta.output_bundle_digest);
     await expect(readFile(join(beforeRoot, 'memories/existing.md'), 'utf8')).resolves.toBe('after\n');
     await expect(readFile(join(beforeRoot, 'memories/new.md'), 'utf8')).resolves.toBe('new\n');
+  });
+
+  it('diffs and replays with explicit bundle metadata without prior bundle metadata cache', async () => {
+    const beforeRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-before-'));
+    const afterRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-after-'));
+    await writeMemoryFile(beforeRoot, 'memories/existing.md', 'before\n');
+    await writeMemoryFile(afterRoot, 'memories/existing.md', 'after\n');
+    const before = await buildCodexMemoryBundleFromRoot({
+      root: beforeRoot,
+      codexSessionId: 'codex-session-1',
+      bundleId: 'explicit-bundle',
+      sourcePolicyDigest: digest({ policy: 'explicit' }),
+    });
+    const after = await buildCodexMemoryBundleFromRoot({
+      root: afterRoot,
+      codexSessionId: 'codex-session-1',
+      bundleId: 'explicit-bundle',
+      sourcePolicyDigest: digest({ policy: 'explicit' }),
+    });
+
+    const delta = await diffCodexMemoryBundles({
+      beforeRoot,
+      afterRoot,
+      inputBundleDigest: before.digest,
+      codexSessionId: 'codex-session-1',
+      turnId: 'turn-1',
+      bundleMetadata: { bundleId: 'explicit-bundle', sourcePolicyDigest: digest({ policy: 'explicit' }) },
+    });
+
+    expect(delta?.input_bundle_digest).toBe(before.digest);
+    expect(delta?.output_bundle_digest).toBe(after.digest);
+    await expect(
+      replayCodexMemoryDelta({
+        root: beforeRoot,
+        inputBundleDigest: before.digest,
+        delta: delta as CodexMemoryDeltaManifest,
+        bundleMetadata: { bundleId: 'explicit-bundle', sourcePolicyDigest: digest({ policy: 'explicit' }) },
+        contentReader: new MapMemoryContentReader(new Map([['memories/existing.md', new TextEncoder().encode('after\n')]])),
+      }),
+    ).resolves.toBe(after.digest);
   });
 
   it('rejects add and modify replay when content reader is missing', async () => {

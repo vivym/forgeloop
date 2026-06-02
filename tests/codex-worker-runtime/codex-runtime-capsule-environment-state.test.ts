@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -313,5 +313,20 @@ describe('Codex runtime capsule environment state', () => {
         artifactReader: reader(new Map([[ref('codex_plugin_package', 'plugin-a'), packageBytes]])),
       }),
     ).rejects.toThrow(/missing artifact/i);
+  });
+
+  it('does not leave partial plugin files when a later skill artifact is missing', async () => {
+    const targetCodexHomeRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-env-'));
+    const { environment_digest: _digest, ...manifest } = makeEnvironmentManifest();
+
+    await expect(
+      materializeCodexEnvironmentState({
+        targetCodexHomeRoot,
+        environmentManifest: manifest,
+        artifactReader: reader(new Map([[ref('codex_plugin_package', 'plugin-a'), packageBytes]])),
+      }),
+    ).rejects.toThrow(/missing artifact/i);
+    await expect(stat(join(targetCodexHomeRoot, 'plugins', 'plugin-a', 'package.bin'))).rejects.toThrow();
+    await expect(stat(join(targetCodexHomeRoot, 'skills', 'skill-a', 'bundle.bin'))).rejects.toThrow();
   });
 });

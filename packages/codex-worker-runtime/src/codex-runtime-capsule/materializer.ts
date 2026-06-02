@@ -7,6 +7,7 @@ import type { z } from 'zod';
 import { writeCodexHomeConfigAndAuth } from '../task-filesystem.js';
 import {
   materializeCodexEnvironmentState,
+  validateCodexEnvironmentState,
   type CapsuleComponentArtifactReader,
   type CodexEnvironmentManifest,
   type CodexEnvironmentMaterializationResult,
@@ -41,14 +42,15 @@ export class CodexRuntimeCapsuleMaterializer {
     if (input.environmentManifest === undefined) {
       throw new Error('capsule environment manifest is required before materialization');
     }
+    const environmentValidation = validateCodexEnvironmentState({ environmentManifest: input.environmentManifest });
+    if (environmentValidation.environmentManifestDigest !== capsuleManifest.environment_manifest.digest) {
+      throw new Error('capsule environment manifest digest mismatch');
+    }
     const environmentMaterialization = await materializeCodexEnvironmentState({
       targetCodexHomeRoot: input.codexHomeRoot,
       environmentManifest: input.environmentManifest as CodexEnvironmentManifest,
       artifactReader: this.dependencies.artifactReader,
     });
-    if (environmentMaterialization.environmentManifestDigest !== capsuleManifest.environment_manifest.digest) {
-      throw new Error('capsule environment manifest digest mismatch');
-    }
 
     await writeCodexHomeConfigAndAuth({
       codexHomeHostPath: input.codexHomeRoot,

@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import {
@@ -14,10 +14,13 @@ export type CodexMemoryBundleManifest = z.infer<typeof codexMemoryBundleManifest
 export type CodexMemoryDeltaManifest = z.infer<typeof codexMemoryDeltaManifestSchema>;
 
 type MemoryEntry = CodexMemoryBundleManifest['entries'][number];
-type BundleDigestMetadata = {
+export interface CodexMemoryBundleMetadata {
   bundleId: string;
-  codexSessionId: string;
   sourcePolicyDigest: string;
+}
+
+type BundleBuildMetadata = CodexMemoryBundleMetadata & {
+  codexSessionId: string;
 };
 
 export interface CodexMemoryBundleBuildResult {
@@ -27,7 +30,10 @@ export interface CodexMemoryBundleBuildResult {
 
 const bytesDigest = (bytes: Uint8Array): string => codexCanonicalDigest(Buffer.from(bytes).toString('utf8'));
 const materializedSourcePolicyDigest = 'sha256:0000000000000000000000000000000000000000000000000000000000000000';
-const bundleDigestMetadataByDigest = new Map<string, BundleDigestMetadata>();
+const defaultBundleMetadata: CodexMemoryBundleMetadata = {
+  bundleId: 'materialized',
+  sourcePolicyDigest: materializedSourcePolicyDigest,
+};
 
 export interface CodexMemoryDeltaContentReader {
   read(input: { deltaDigest: string; relativePath: string; expectedDigest: string }): Promise<Uint8Array>;
@@ -52,14 +58,85 @@ const validateMemoryRelativePath = (relativePath: string): string => {
 
 const memoryPath = (root: string, relativePath: string): string => join(root, validateMemoryRelativePath(relativePath));
 
+const assertSafeRoot = async (root: string): Promise<void> => {
+  const rootStat = await lstat(root);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error('unsafe memory root: root must be a real directory');
+  }
+};
+
+const assertExistingDirectoryNoSymlink = async (path: string, relativePath: string): Promise<void> => {
+  const pathStat = await lstat(path);
+  if (pathStat.isSymbolicLink()) {
+    throw new Error(`unsafe memory path entry: ${relativePath} contains a symlink`);
+  }
+  if (!pathStat.isDirectory()) {
+    throw new Error(`unsafe memory path entry: ${relativePath} parent is not a directory`);
+  }
+};
+
+const ensureSafeParentDirectory = async (root: string, relativePath: string): Promise<void> => {
+  const safeRelativePath = validateMemoryRelativePath(relativePath);
+  await assertSafeRoot(root);
+  const parentParts = safeRelativePath.split('/').slice(0, -1);
+  let currentRelativePath = '';
+  let currentPath = root;
+  for (const part of parentParts) {
+    currentRelativePath = currentRelativePath.length === 0 ? part : `${currentRelativePath}/${part}`;
+    currentPath = join(currentPath, part);
+    try {
+      await assertExistingDirectoryNoSymlink(currentPath, currentRelativePath);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        await mkdir(currentPath);
+        await assertExistingDirectoryNoSymlink(currentPath, currentRelativePath);
+        continue;
+      }
+      throw error;
+    }
+  }
+};
+
+const assertNoExistingTargetSymlink = async (root: string, relativePath: string): Promise<void> => {
+  const safeRelativePath = validateMemoryRelativePath(relativePath);
+  try {
+    const targetStat = await lstat(memoryPath(root, safeRelativePath));
+    if (targetStat.isSymbolicLink()) {
+      throw new Error(`unsafe memory path entry: ${safeRelativePath} is a symlink`);
+    }
+    throw new Error(`unsafe memory path entry: ${safeRelativePath} already exists`);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+};
+
+const assertRegularFileNoSymlink = async (root: string, relativePath: string): Promise<void> => {
+  const safeRelativePath = validateMemoryRelativePath(relativePath);
+  await ensureSafeParentDirectory(root, safeRelativePath);
+  const fileStat = await lstat(memoryPath(root, safeRelativePath));
+  if (fileStat.isSymbolicLink()) {
+    throw new Error(`unsafe memory path entry: ${safeRelativePath} is a symlink`);
+  }
+  if (!fileStat.isFile()) {
+    throw new Error(`unsafe memory path entry: ${safeRelativePath} is not a regular file`);
+  }
+};
+
 const listRegularFiles = async (root: string, prefix = ''): Promise<string[]> => {
+  await assertSafeRoot(root);
   const names = await readdir(join(root, prefix));
   const files: string[] = [];
   for (const name of names) {
     const relativePath = prefix.length === 0 ? name : `${prefix}/${name}`;
     validateMemoryRelativePath(relativePath);
     const path = join(root, relativePath);
-    const entryStat = await stat(path);
+    const entryStat = await lstat(path);
+    if (entryStat.isSymbolicLink()) {
+      throw new Error(`unsafe memory path entry: ${relativePath} is a symlink`);
+    }
     if (entryStat.isDirectory()) {
       files.push(...(await listRegularFiles(root, relativePath)));
     } else if (entryStat.isFile()) {
@@ -74,6 +151,7 @@ const listRegularFiles = async (root: string, prefix = ''): Promise<string[]> =>
 const buildEntriesFromRoot = async (root: string): Promise<MemoryEntry[]> => {
   const entries: MemoryEntry[] = [];
   for (const relativePath of await listRegularFiles(root)) {
+    await assertRegularFileNoSymlink(root, relativePath);
     const bytes = await readFile(memoryPath(root, relativePath));
     entries.push({
       relative_path: relativePath,
@@ -100,31 +178,19 @@ export const buildCodexMemoryBundleFromRoot = async (input: {
     entries: await buildEntriesFromRoot(input.root),
   });
   const digest = codexMemoryBundleDigest(manifest);
-  bundleDigestMetadataByDigest.set(digest, {
-    bundleId: input.bundleId,
-    codexSessionId: input.codexSessionId,
-    sourcePolicyDigest: input.sourcePolicyDigest,
-  });
   return {
     manifest,
     digest,
   };
 };
 
-const buildComparableBundle = async (root: string, input: BundleDigestMetadata): Promise<CodexMemoryBundleBuildResult> =>
+const buildComparableBundle = async (root: string, input: BundleBuildMetadata): Promise<CodexMemoryBundleBuildResult> =>
   buildCodexMemoryBundleFromRoot({
     root,
     codexSessionId: input.codexSessionId,
     bundleId: input.bundleId,
     sourcePolicyDigest: input.sourcePolicyDigest,
   });
-
-const metadataForDigest = (digest: string, codexSessionId: string): BundleDigestMetadata =>
-  bundleDigestMetadataByDigest.get(digest) ?? {
-    bundleId: 'materialized',
-    codexSessionId,
-    sourcePolicyDigest: materializedSourcePolicyDigest,
-  };
 
 const entriesByPath = (entries: readonly MemoryEntry[]): Map<string, MemoryEntry> =>
   new Map(entries.map((entry) => [entry.relative_path, entry]));
@@ -135,8 +201,12 @@ export const diffCodexMemoryBundles = async (input: {
   inputBundleDigest: string;
   codexSessionId: string;
   turnId: string;
+  bundleMetadata?: CodexMemoryBundleMetadata;
 }): Promise<CodexMemoryDeltaManifest | undefined> => {
-  const inputMetadata = metadataForDigest(input.inputBundleDigest, input.codexSessionId);
+  const inputMetadata = {
+    ...(input.bundleMetadata ?? defaultBundleMetadata),
+    codexSessionId: input.codexSessionId,
+  };
   const before = await buildComparableBundle(input.beforeRoot, inputMetadata);
   if (before.digest !== input.inputBundleDigest) {
     throw new Error('memory diff input bundle digest does not match before root');
@@ -211,6 +281,7 @@ export const diffCodexMemoryBundles = async (input: {
 };
 
 const assertFileDigest = async (root: string, relativePath: string, expectedDigest: string): Promise<void> => {
+  await assertRegularFileNoSymlink(root, relativePath);
   const bytes = await readFile(memoryPath(root, relativePath));
   if (bytesDigest(bytes) !== expectedDigest) {
     throw new Error(`memory replay digest mismatch for ${relativePath}`);
@@ -221,6 +292,7 @@ export const replayCodexMemoryDelta = async (input: {
   root: string;
   inputBundleDigest: string;
   delta: CodexMemoryDeltaManifest;
+  bundleMetadata?: CodexMemoryBundleMetadata;
   contentReader?: CodexMemoryDeltaContentReader;
 }): Promise<string> => {
   const delta = codexMemoryDeltaManifestSchema.parse(input.delta);
@@ -228,7 +300,10 @@ export const replayCodexMemoryDelta = async (input: {
   if (delta.input_bundle_digest !== input.inputBundleDigest) {
     throw new Error('memory replay input bundle digest does not match delta input bundle digest');
   }
-  const inputMetadata = metadataForDigest(delta.input_bundle_digest, delta.codex_session_id);
+  const inputMetadata = {
+    ...(input.bundleMetadata ?? defaultBundleMetadata),
+    codexSessionId: delta.codex_session_id,
+  };
   const current = await buildComparableBundle(input.root, inputMetadata);
   if (current.digest !== delta.input_bundle_digest) {
     throw new Error('memory replay input bundle digest does not match materialized root');
@@ -237,7 +312,8 @@ export const replayCodexMemoryDelta = async (input: {
   for (const operation of delta.operations) {
     if (operation.op === 'add') {
       const path = memoryPath(input.root, operation.relative_path);
-      await mkdir(dirname(path), { recursive: true });
+      await ensureSafeParentDirectory(input.root, operation.relative_path);
+      await assertNoExistingTargetSymlink(input.root, operation.relative_path);
       const contentBytes = await readDeltaContentBytes(input.contentReader, {
         deltaDigest,
         relativePath: operation.relative_path,
@@ -247,6 +323,7 @@ export const replayCodexMemoryDelta = async (input: {
       await assertFileDigest(input.root, operation.relative_path, operation.content_digest);
     } else if (operation.op === 'modify') {
       await assertFileDigest(input.root, operation.relative_path, operation.before_digest);
+      await ensureSafeParentDirectory(input.root, operation.relative_path);
       const contentBytes = await readDeltaContentBytes(input.contentReader, {
         deltaDigest,
         relativePath: operation.relative_path,
@@ -260,13 +337,14 @@ export const replayCodexMemoryDelta = async (input: {
     } else {
       await assertFileDigest(input.root, operation.from_relative_path, operation.before_digest);
       const toPath = memoryPath(input.root, operation.to_relative_path);
-      await mkdir(dirname(toPath), { recursive: true });
+      await ensureSafeParentDirectory(input.root, operation.to_relative_path);
+      await assertNoExistingTargetSymlink(input.root, operation.to_relative_path);
       await rename(memoryPath(input.root, operation.from_relative_path), toPath);
       await assertFileDigest(input.root, operation.to_relative_path, operation.after_digest);
     }
   }
 
-  const output = await buildComparableBundle(input.root, metadataForDigest(delta.output_bundle_digest, delta.codex_session_id));
+  const output = await buildComparableBundle(input.root, inputMetadata);
   if (output.digest !== delta.output_bundle_digest) {
     throw new Error('memory replay output bundle digest mismatch');
   }

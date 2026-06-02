@@ -29,6 +29,22 @@ export interface CodexEnvironmentMaterializationResult {
   materializedSkillBundles: readonly string[];
 }
 
+export interface CodexEnvironmentValidationResult {
+  manifest: CodexEnvironmentManifest;
+  environmentManifestDigest: string;
+}
+
+interface PreparedPluginPackage {
+  pluginId: string;
+  bytes: Uint8Array;
+}
+
+interface PreparedSkillBundle {
+  skillId: string;
+  entrypointRelativePath: string;
+  bytes: Uint8Array;
+}
+
 export const rawBytesSha256Digest = (bytes: Uint8Array): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const validateComponentId = (value: string, label: string): string => {
@@ -158,16 +174,24 @@ const assertEnvironmentManifestDigests = (manifest: CodexEnvironmentManifest): v
   );
 };
 
-export const materializeCodexEnvironmentState = async (input: {
-  targetCodexHomeRoot: string;
+export const validateCodexEnvironmentState = (input: {
   environmentManifest: unknown;
-  artifactReader: CapsuleComponentArtifactReader;
-}): Promise<CodexEnvironmentMaterializationResult> => {
+}): CodexEnvironmentValidationResult => {
   assertRawMcpEnvPayloadShape(input.environmentManifest);
   const manifest = codexEnvironmentManifestSchema.parse(input.environmentManifest);
   assertEnvironmentManifestDigests(manifest);
-  const materializedPluginPackages: string[] = [];
-  const materializedSkillBundles: string[] = [];
+  return {
+    manifest,
+    environmentManifestDigest: codexEnvironmentManifestDigest(manifest),
+  };
+};
+
+const prepareEnvironmentArtifacts = async (
+  manifest: CodexEnvironmentManifest,
+  artifactReader: CapsuleComponentArtifactReader,
+): Promise<{ pluginPackages: PreparedPluginPackage[]; skillBundles: PreparedSkillBundle[] }> => {
+  const pluginPackages: PreparedPluginPackage[] = [];
+  const skillBundles: PreparedSkillBundle[] = [];
 
   for (const plugin of manifest.plugin_manifest.plugins) {
     if (!plugin.enabled) {
@@ -178,13 +202,9 @@ export const materializeCodexEnvironmentState = async (input: {
       expectedKind: 'codex_plugin_package',
       codexSessionId: manifest.codex_session_id,
     });
-    const bytes = await input.artifactReader.read(plugin.package_ref, plugin.package_digest);
+    const bytes = await artifactReader.read(plugin.package_ref, plugin.package_digest);
     assertDigest(rawBytesSha256Digest(bytes), plugin.package_digest, 'plugin package digest');
-    const pluginDir = join(input.targetCodexHomeRoot, 'plugins', validateComponentId(plugin.plugin_id, 'plugin id'));
-    await mkdir(pluginDir, { recursive: true });
-    const packagePath = join(pluginDir, 'package.bin');
-    await writeFile(packagePath, bytes);
-    materializedPluginPackages.push(packagePath);
+    pluginPackages.push({ pluginId: validateComponentId(plugin.plugin_id, 'plugin id'), bytes });
   }
 
   for (const skill of manifest.skill_manifest.skills) {
@@ -196,19 +216,44 @@ export const materializeCodexEnvironmentState = async (input: {
       expectedKind: 'codex_skill_bundle',
       codexSessionId: manifest.codex_session_id,
     });
-    validateRelativePath(skill.entrypoint_relative_path, 'skill entrypoint relative path');
-    const bytes = await input.artifactReader.read(skill.bundle_ref, skill.bundle_digest);
+    const entrypointRelativePath = validateRelativePath(skill.entrypoint_relative_path, 'skill entrypoint relative path');
+    const bytes = await artifactReader.read(skill.bundle_ref, skill.bundle_digest);
     assertDigest(rawBytesSha256Digest(bytes), skill.bundle_digest, 'skill bundle digest');
-    const skillDir = join(input.targetCodexHomeRoot, 'skills', validateComponentId(skill.skill_id, 'skill id'));
+    skillBundles.push({ skillId: validateComponentId(skill.skill_id, 'skill id'), entrypointRelativePath, bytes });
+  }
+
+  return { pluginPackages, skillBundles };
+};
+
+export const materializeCodexEnvironmentState = async (input: {
+  targetCodexHomeRoot: string;
+  environmentManifest: unknown;
+  artifactReader: CapsuleComponentArtifactReader;
+}): Promise<CodexEnvironmentMaterializationResult> => {
+  const validation = validateCodexEnvironmentState({ environmentManifest: input.environmentManifest });
+  const prepared = await prepareEnvironmentArtifacts(validation.manifest, input.artifactReader);
+  const materializedPluginPackages: string[] = [];
+  const materializedSkillBundles: string[] = [];
+
+  for (const pluginPackage of prepared.pluginPackages) {
+    const pluginDir = join(input.targetCodexHomeRoot, 'plugins', pluginPackage.pluginId);
+    await mkdir(pluginDir, { recursive: true });
+    const packagePath = join(pluginDir, 'package.bin');
+    await writeFile(packagePath, pluginPackage.bytes);
+    materializedPluginPackages.push(packagePath);
+  }
+
+  for (const skillBundle of prepared.skillBundles) {
+    const skillDir = join(input.targetCodexHomeRoot, 'skills', skillBundle.skillId);
     await mkdir(skillDir, { recursive: true });
     const bundlePath = join(skillDir, 'bundle.bin');
-    await writeFile(bundlePath, bytes);
-    await writeFile(join(skillDir, 'entrypoint.txt'), `${skill.entrypoint_relative_path}\n`);
+    await writeFile(bundlePath, skillBundle.bytes);
+    await writeFile(join(skillDir, 'entrypoint.txt'), `${skillBundle.entrypointRelativePath}\n`);
     materializedSkillBundles.push(bundlePath);
   }
 
   return {
-    environmentManifestDigest: codexEnvironmentManifestDigest(manifest),
+    environmentManifestDigest: validation.environmentManifestDigest,
     materializedPluginPackages,
     materializedSkillBundles,
   };
