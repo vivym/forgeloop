@@ -14,6 +14,41 @@ const trustedActorId = 'automation-daemon';
 const daemonIdentity = 'codex-session-lease-worker';
 const wrongTokenHash = 'sha256:1fbdf98262d91a0eaaf09bd7c942c8c60aafec9895d13062d2bc76c9a4c4ef1f';
 
+const outputCapsuleBody = (input: {
+  id: string;
+  sequence: number;
+  artifact_ref: string;
+  digest: string;
+  manifest_digest: string;
+  thread_state_digest?: string;
+  memory_state_digest?: string;
+  environment_manifest_digest?: string;
+  codex_thread_id_digest?: string;
+  codex_cli_version?: string;
+  app_server_protocol_digest?: string;
+  runtime_profile_revision_id?: string;
+  trusted_runtime_manifest_digest?: string;
+  credential_binding_lineage_digest?: string;
+}) => ({
+  output_capsule_id: input.id,
+  output_capsule_sequence: input.sequence,
+  output_capsule_artifact_ref: input.artifact_ref,
+  output_capsule_digest: input.digest,
+  output_capsule_size_bytes: '1024',
+  output_capsule_manifest_digest: input.manifest_digest,
+  output_capsule_thread_state_digest: input.thread_state_digest ?? 'sha256:output-thread-state',
+  output_capsule_memory_state_digest: input.memory_state_digest ?? 'sha256:output-memory-state',
+  output_capsule_environment_manifest_digest: input.environment_manifest_digest ?? 'sha256:output-environment-manifest',
+  output_capsule_codex_thread_id_digest: input.codex_thread_id_digest ?? 'sha256:output-codex-thread-id',
+  output_capsule_codex_cli_version: input.codex_cli_version ?? '0.1.0-test',
+  output_capsule_app_server_protocol_digest: input.app_server_protocol_digest ?? 'sha256:output-app-server-protocol',
+  runtime_profile_revision_id: input.runtime_profile_revision_id ?? 'runtime-profile-revision-1',
+  output_capsule_trusted_runtime_manifest_digest:
+    input.trusted_runtime_manifest_digest ?? 'sha256:output-trusted-runtime-manifest',
+  output_capsule_credential_binding_lineage_digest:
+    input.credential_binding_lineage_digest ?? 'sha256:output-credential-binding-lineage',
+});
+
 const signedAutomationPost = (
   app: INestApplication,
   pathAndQuery: string,
@@ -221,6 +256,81 @@ describe('Codex Session lease API', () => {
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(sessionId)).resolves.toEqual([]);
   });
 
+  it('persists the full output capsule contract from terminalization input', async () => {
+    const { workflow } = await seedWorkflow(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const sessionId = workflow.active_codex_session_id;
+    const turnId = '11111111-1111-4111-8111-111111119007';
+    await repository.createCodexSessionTurn({
+      id: turnId,
+      codex_session_id: sessionId,
+      workflow_id: workflow.id,
+      intent: 'continue_brainstorming',
+      status: 'running',
+      input_digest: 'sha256:turn-input-full-capsule',
+      expected_input_capsule_digest: undefined,
+      created_by_actor_id: ids.actorTech,
+      created_at: '2026-05-31T00:00:00.000Z',
+      updated_at: '2026-05-31T00:00:00.000Z',
+    });
+    const claimed = await repository.claimCodexSessionLease({
+      session_id: sessionId,
+      workflow_id: workflow.id,
+      lease_id: 'lease-full-capsule',
+      lease_token_hash: 'sha256:e3e00b73fba1eee878bc3b0e6a6e2c20e0bd38898e7d2c6d8c8e96014df7d7c1',
+      worker_id: 'worker-full-capsule',
+      worker_session_digest: 'sha256:worker-full-capsule-session',
+      expected_input_capsule_digest: undefined,
+      now: '2026-05-31T00:00:00.000Z',
+      expires_at: '2026-05-31T00:05:00.000Z',
+    });
+
+    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${turnId}/terminalize`, {
+      lease_id: claimed.lease.id,
+      lease_token: 'lease-token-full-capsule',
+      lease_epoch: claimed.lease.lease_epoch,
+      worker_id: 'worker-full-capsule',
+      worker_session_digest: 'sha256:worker-full-capsule-session',
+      status: 'succeeded',
+      expected_input_capsule_digest: null,
+      ...outputCapsuleBody({
+        id: '11111111-1111-4111-8111-111111119107',
+        sequence: 1,
+        artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${sessionId}/11111111-1111-4111-8111-111111119107`,
+        digest: 'sha256:full-capsule-output',
+        manifest_digest: 'sha256:full-capsule-manifest',
+        thread_state_digest: 'sha256:full-capsule-thread-state',
+        memory_state_digest: 'sha256:full-capsule-memory-state',
+        environment_manifest_digest: 'sha256:full-capsule-environment-manifest',
+        codex_thread_id_digest: 'sha256:thread-full-capsule',
+        codex_cli_version: '0.2.0-real',
+        app_server_protocol_digest: 'sha256:full-capsule-app-server-protocol',
+        runtime_profile_revision_id: ids.runtimeProfileRevision,
+        trusted_runtime_manifest_digest: 'sha256:full-capsule-trusted-runtime-manifest',
+        credential_binding_lineage_digest: 'sha256:full-capsule-credential-binding-lineage',
+      }),
+      codex_thread_id: 'thread-full-capsule',
+      codex_thread_id_digest: 'sha256:thread-full-capsule',
+    }).expect(201);
+
+    await expect(repository.getCodexRuntimeCapsule('11111111-1111-4111-8111-111111119107')).resolves.toMatchObject({
+      id: '11111111-1111-4111-8111-111111119107',
+      codex_session_id: sessionId,
+      created_from_turn_id: turnId,
+      digest: 'sha256:full-capsule-output',
+      thread_state_digest: 'sha256:full-capsule-thread-state',
+      memory_state_digest: 'sha256:full-capsule-memory-state',
+      environment_manifest_digest: 'sha256:full-capsule-environment-manifest',
+      codex_thread_id_digest: 'sha256:thread-full-capsule',
+      codex_cli_version: '0.2.0-real',
+      app_server_protocol_digest: 'sha256:full-capsule-app-server-protocol',
+      runtime_profile_revision_id: ids.runtimeProfileRevision,
+      trusted_runtime_manifest_digest: 'sha256:full-capsule-trusted-runtime-manifest',
+      credential_binding_lineage_digest: 'sha256:full-capsule-credential-binding-lineage',
+      created_by_actor_id: trustedActorId,
+    });
+  });
+
   it('records stale terminalization with the attempted stale lease epoch', async () => {
     const { workflow } = await seedWorkflow(app);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -261,6 +371,27 @@ describe('Codex Session lease API', () => {
       worker_session_digest: firstClaim.lease.worker_session_digest,
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
+      output_capsule: {
+        id: '11111111-1111-4111-8111-111111119101',
+        codex_session_id: sessionId,
+        created_from_turn_id: firstTurnId,
+        sequence: 1,
+        artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${sessionId}/11111111-1111-4111-8111-111111119101`,
+        digest: 'sha256:first-turn-output-stale-epoch',
+        size_bytes: '1024',
+        manifest_digest: 'sha256:first-turn-manifest-stale-epoch',
+        thread_state_digest: 'sha256:first-turn-thread-state-stale-epoch',
+        memory_state_digest: 'sha256:first-turn-memory-state-stale-epoch',
+        environment_manifest_digest: 'sha256:first-turn-environment-manifest-stale-epoch',
+        codex_thread_id_digest: 'sha256:first-turn-codex-thread-stale-epoch',
+        codex_cli_version: '0.1.0-test',
+        app_server_protocol_digest: 'sha256:first-turn-app-server-protocol-stale-epoch',
+        runtime_profile_revision_id: ids.runtimeProfileRevision,
+        trusted_runtime_manifest_digest: 'sha256:first-turn-trusted-runtime-manifest-stale-epoch',
+        credential_binding_lineage_digest: 'sha256:first-turn-credential-binding-lineage-stale-epoch',
+        created_by_actor_id: ids.actorTech,
+        created_at: '2026-05-31T00:01:00.000Z',
+      },
       now: '2026-05-31T00:01:00.000Z',
     });
     await repository.createCodexSessionTurn({
@@ -270,7 +401,7 @@ describe('Codex Session lease API', () => {
       intent: 'continue_brainstorming',
       status: 'running',
       input_digest: 'sha256:second-turn-input-stale-epoch',
-      expected_input_capsule_digest: undefined,
+      expected_input_capsule_digest: 'sha256:first-turn-output-stale-epoch',
       created_by_actor_id: ids.actorTech,
       created_at: '2026-05-31T00:02:00.000Z',
       updated_at: '2026-05-31T00:02:00.000Z',
@@ -282,7 +413,7 @@ describe('Codex Session lease API', () => {
       lease_token_hash: 'sha256:42e9508ed339e0214a72717f29da8b99b6bcbb179641bb8ab6e1e5d69b6ad9a1',
       worker_id: 'worker-stale-epoch',
       worker_session_digest: 'sha256:worker-stale-epoch-session',
-      expected_input_capsule_digest: undefined,
+      expected_input_capsule_digest: 'sha256:first-turn-output-stale-epoch',
       now: '2026-05-31T00:03:00.000Z',
       expires_at: '2026-05-31T00:08:00.000Z',
     });
@@ -294,14 +425,16 @@ describe('Codex Session lease API', () => {
       worker_id: 'worker-stale-epoch',
       worker_session_digest: 'sha256:worker-stale-epoch-session',
       status: 'succeeded',
-      expected_input_capsule_digest: null,
-      output_capsule_id: '11111111-1111-4111-8111-111111119102',
-      output_capsule_sequence: 1,
-      output_capsule_artifact_ref: 's3://codex-home/stale-epoch.tar.zst',
-      output_capsule_digest: 'sha256:stale-epoch-output',
-      output_capsule_size_bytes: '1024',
-      output_capsule_manifest_digest: 'sha256:stale-epoch-manifest',
-      runtime_profile_revision_id: 'runtime-profile-revision-1',
+      expected_input_capsule_digest: 'sha256:first-turn-output-stale-epoch',
+      ...outputCapsuleBody({
+        id: '11111111-1111-4111-8111-111111119102',
+        sequence: 2,
+        artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${sessionId}/11111111-1111-4111-8111-111111119102`,
+        digest: 'sha256:stale-epoch-output',
+        manifest_digest: 'sha256:stale-epoch-manifest',
+        codex_thread_id_digest: 'sha256:thread-stale-epoch',
+        runtime_profile_revision_id: ids.runtimeProfileRevision,
+      }),
       codex_thread_id: 'thread-stale-epoch',
       codex_thread_id_digest: 'sha256:thread-stale-epoch',
     });
@@ -310,7 +443,7 @@ describe('Codex Session lease API', () => {
 
     const session = await repository.getCodexSession(sessionId);
     expect(session).toMatchObject({ status: 'running', active_lease_id: secondClaim.lease.id, lease_epoch: secondClaim.lease.lease_epoch });
-    expect(session?.latest_capsule_digest).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBe('sha256:first-turn-output-stale-epoch');
     expect(session?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.getCodexSessionTurn(secondTurnId)).resolves.toMatchObject({ status: 'stale' });
     const turn = await repository.getCodexSessionTurn(secondTurnId);
@@ -371,6 +504,15 @@ describe('Codex Session lease API', () => {
       worker_session_digest: 'sha256:worker-thread-binding-session',
       status: 'succeeded',
       expected_input_capsule_digest: null,
+      ...outputCapsuleBody({
+        id: '11111111-1111-4111-8111-111111119104',
+        sequence: 1,
+        artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${sessionId}/11111111-1111-4111-8111-111111119104`,
+        digest: 'sha256:first-turn-output-thread-binding',
+        manifest_digest: 'sha256:first-turn-manifest-thread-binding',
+        codex_thread_id_digest: 'sha256:thread-current',
+        runtime_profile_revision_id: ids.runtimeProfileRevision,
+      }),
       codex_thread_id: 'thread-current',
       codex_thread_id_digest: 'sha256:thread-current',
     }).expect(201);
@@ -382,7 +524,7 @@ describe('Codex Session lease API', () => {
       intent: 'continue_brainstorming',
       status: 'running',
       input_digest: 'sha256:second-turn-input-thread-binding',
-      expected_input_capsule_digest: undefined,
+      expected_input_capsule_digest: 'sha256:first-turn-output-thread-binding',
       created_by_actor_id: ids.actorTech,
       created_at: '2026-05-31T00:02:00.000Z',
       updated_at: '2026-05-31T00:02:00.000Z',
@@ -394,7 +536,7 @@ describe('Codex Session lease API', () => {
       lease_token_hash: 'sha256:f2363bdb4f60bd34d6144ea86ec1f5cfae6c274f2a65a6bc2a8a75dad869a18a',
       worker_id: 'worker-thread-binding',
       worker_session_digest: 'sha256:worker-thread-binding-session',
-      expected_input_capsule_digest: undefined,
+      expected_input_capsule_digest: 'sha256:first-turn-output-thread-binding',
       now: '2026-05-31T00:03:00.000Z',
       expires_at: '2026-05-31T00:08:00.000Z',
     });
@@ -406,7 +548,16 @@ describe('Codex Session lease API', () => {
       worker_id: 'worker-thread-binding',
       worker_session_digest: 'sha256:worker-thread-binding-session',
       status: 'succeeded',
-      expected_input_capsule_digest: null,
+      expected_input_capsule_digest: 'sha256:first-turn-output-thread-binding',
+      ...outputCapsuleBody({
+        id: '11111111-1111-4111-8111-111111119105',
+        sequence: 2,
+        artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${sessionId}/11111111-1111-4111-8111-111111119105`,
+        digest: 'sha256:second-turn-output-thread-binding',
+        manifest_digest: 'sha256:second-turn-manifest-thread-binding',
+        codex_thread_id_digest: 'sha256:thread-overwrite',
+        runtime_profile_revision_id: ids.runtimeProfileRevision,
+      }),
       codex_thread_id: 'thread-overwrite',
       codex_thread_id_digest: 'sha256:thread-overwrite',
     });

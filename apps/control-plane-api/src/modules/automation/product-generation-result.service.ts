@@ -33,7 +33,7 @@ const staleTerminalizationCodes = new Set([
   'codex_session_lease_conflict',
   'codex_session_lease_expired',
   'codex_session_stale_terminalization',
-  'codex_session_snapshot_stale',
+  'codex_runtime_capsule_stale',
   'codex_session_thread_binding_stale',
 ]);
 
@@ -280,9 +280,9 @@ export class ProductGenerationResultService {
         worker_id: runtimeContext.worker_id,
         worker_session_digest: runtimeContext.worker_session_digest,
         status: 'succeeded',
-        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+        ...(runtimeContext.expected_input_capsule_digest === undefined
           ? {}
-          : { expected_previous_snapshot_digest: runtimeContext.expected_previous_snapshot_digest }),
+          : { expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest }),
         app_server_thread_binding_required: true,
         codex_thread_id: threadEvidence.codex_thread_id,
         codex_thread_id_digest: threadEvidence.codex_thread_id_digest,
@@ -304,9 +304,9 @@ export class ProductGenerationResultService {
         leaseEpoch: runtimeContext.lease_epoch,
         workerId: runtimeContext.worker_id,
         workerSessionDigest: runtimeContext.worker_session_digest,
-        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+        ...(runtimeContext.expected_input_capsule_digest === undefined
           ? {}
-          : { expectedPreviousSnapshotDigest: runtimeContext.expected_previous_snapshot_digest }),
+          : { expectedInputCapsuleDigest: runtimeContext.expected_input_capsule_digest }),
         attemptedCodexThreadIdDigest: threadEvidence.codex_thread_id_digest,
         failureCode: error.code,
       });
@@ -332,9 +332,9 @@ export class ProductGenerationResultService {
         worker_id: runtimeContext.worker_id,
         worker_session_digest: runtimeContext.worker_session_digest,
         status: 'failed',
-        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+        ...(runtimeContext.expected_input_capsule_digest === undefined
           ? {}
-          : { expected_previous_snapshot_digest: runtimeContext.expected_previous_snapshot_digest }),
+          : { expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest }),
         failure_code: reasonCode,
         now: this.now(),
       });
@@ -354,9 +354,9 @@ export class ProductGenerationResultService {
         leaseEpoch: runtimeContext.lease_epoch,
         workerId: runtimeContext.worker_id,
         workerSessionDigest: runtimeContext.worker_session_digest,
-        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+        ...(runtimeContext.expected_input_capsule_digest === undefined
           ? {}
-          : { expectedPreviousSnapshotDigest: runtimeContext.expected_previous_snapshot_digest }),
+          : { expectedInputCapsuleDigest: runtimeContext.expected_input_capsule_digest }),
         failureCode: error.code,
       });
     }
@@ -471,7 +471,7 @@ export class ProductGenerationResultService {
     leaseEpoch: number;
     workerId: string;
     workerSessionDigest: string;
-    expectedPreviousSnapshotDigest?: string;
+    expectedInputCapsuleDigest?: string;
     attemptedCodexThreadIdDigest?: string;
     failureCode: string;
   }): Promise<void> {
@@ -488,9 +488,9 @@ export class ProductGenerationResultService {
           lease_epoch: input.leaseEpoch,
           worker_id: input.workerId,
           worker_session_digest: input.workerSessionDigest,
-          ...(input.expectedPreviousSnapshotDigest === undefined
+          ...(input.expectedInputCapsuleDigest === undefined
             ? {}
-            : { expected_previous_snapshot_digest: input.expectedPreviousSnapshotDigest }),
+            : { expected_input_capsule_digest: input.expectedInputCapsuleDigest }),
           ...(input.attemptedCodexThreadIdDigest === undefined
             ? {}
             : { attempted_codex_thread_id_digest: input.attemptedCodexThreadIdDigest }),

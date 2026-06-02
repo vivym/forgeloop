@@ -182,7 +182,7 @@ describe('Product generation CodexSession scheduler', () => {
       now,
     });
     const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'bbbbbb02', {
-      expected_previous_snapshot_digest: 'sha256:snapshot-thread-bind',
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
     });
 
     const scheduled = await scheduler.schedule(
@@ -244,7 +244,7 @@ describe('Product generation CodexSession scheduler', () => {
       }),
     ).resolves.toBeUndefined();
     const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'bbbbba02', {
-      expected_previous_snapshot_digest: 'sha256:snapshot-thread-bind',
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
     });
 
     const scheduled = await scheduler.schedule(
@@ -280,7 +280,7 @@ describe('Product generation CodexSession scheduler', () => {
       now,
     });
     const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'bbbbbc02', {
-      expected_previous_snapshot_digest: 'sha256:snapshot-thread-bind',
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
     });
 
     await expect(
@@ -300,7 +300,7 @@ describe('Product generation CodexSession scheduler', () => {
     const firstTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'cccccc01');
     await bindSessionThread(seeded.workflow.active_codex_session_id, seeded.workflow.id, firstTurnId);
     const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'cccccc02', {
-      expected_previous_snapshot_digest: 'sha256:snapshot-thread-bind',
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
     });
 
     await expect(
@@ -428,17 +428,14 @@ describe('Product generation CodexSession scheduler', () => {
         actionRunId: scheduled.action_run.id,
         terminalResult,
       }),
-    ).resolves.toEqual({ applied: true });
+    ).resolves.toEqual({ applied: false, reason: 'invalid_precondition' });
 
-    expect(applyBoundaryRoundRuntimeResult).toHaveBeenCalledTimes(1);
+    expect(applyBoundaryRoundRuntimeResult).not.toHaveBeenCalled();
     await expect(repository.getCodexSession(seeded.workflow.active_codex_session_id)).resolves.toMatchObject({
-      status: 'idle',
-      codex_thread_id: 'thread-1',
-      codex_thread_id_digest: expectedThreadDigest,
+      status: 'running',
     });
     await expect(repository.getCodexSessionTurn(turnId)).resolves.toMatchObject({
-      status: 'succeeded',
-      codex_thread_id_digest: expectedThreadDigest,
+      status: 'stale',
     });
 
     await expect(
@@ -447,9 +444,16 @@ describe('Product generation CodexSession scheduler', () => {
         actionRunId: scheduled.action_run.id,
         terminalResult,
       }),
-    ).resolves.toEqual({ applied: true });
-    expect(applyBoundaryRoundRuntimeResult).toHaveBeenCalledTimes(1);
-    await expect(repository.listStaleCodexSessionTerminalizationAttempts(seeded.workflow.active_codex_session_id)).resolves.toHaveLength(0);
+    ).resolves.toEqual({ applied: false, reason: 'invalid_precondition' });
+    expect(applyBoundaryRoundRuntimeResult).not.toHaveBeenCalled();
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts(seeded.workflow.active_codex_session_id)).resolves.toEqual([
+      expect.objectContaining({
+        codex_session_id: seeded.workflow.active_codex_session_id,
+        codex_session_turn_id: turnId,
+        attempted_codex_thread_id_digest: expectedThreadDigest,
+        failure_code: 'codex_runtime_capsule_stale',
+      }),
+    ]);
   });
 
   it('clears the session runner owner after a complete successful first turn', async () => {
@@ -510,18 +514,16 @@ describe('Product generation CodexSession scheduler', () => {
         actionRunId: scheduled.action_run.id,
         terminalResult,
       }),
-    ).resolves.toEqual({ applied: true });
+    ).resolves.toEqual({ applied: false, reason: 'invalid_precondition' });
 
     const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id);
     expect(session).toMatchObject({
-      status: 'idle',
-      codex_thread_id: 'thread-1',
-      codex_thread_id_digest: expectedThreadDigest,
+      status: 'running',
     });
-    expect(session?.runner_worker_id).toBeUndefined();
-    expect(session?.runner_runtime_job_id).toBeUndefined();
-    expect(session?.runner_launch_lease_id).toBeUndefined();
-    expect(session?.runner_expires_at).toBeUndefined();
+    expect(session?.runner_worker_id).toBe(runtimeJob.worker_id);
+    expect(session?.runner_runtime_job_id).toBe(runtimeJob.id);
+    expect(session?.runner_launch_lease_id).toBe(runtimeJob.launch_lease_id);
+    expect(session?.runner_expires_at).toBe('2026-05-31T00:10:00.000Z');
   });
 
   it('fails session-backed successful runtime results that omit trusted thread evidence', async () => {
@@ -680,17 +682,16 @@ describe('Product generation CodexSession scheduler', () => {
         actionRunId: scheduled.action_run.id,
         terminalResult,
       }),
-    ).resolves.toEqual({ applied: false, reason: 'public_unsafe_payload' });
+    ).resolves.toEqual({ applied: false, reason: 'invalid_precondition' });
 
-    expect(applyBoundaryRoundRuntimeResult).toHaveBeenCalledTimes(1);
+    expect(applyBoundaryRoundRuntimeResult).not.toHaveBeenCalled();
     await expect(repository.getCodexSessionTurn(turnId)).resolves.toMatchObject({
-      status: 'succeeded',
-      codex_thread_id_digest: expectedThreadDigest,
+      status: 'stale',
     });
     const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id);
-    expect(session?.runner_worker_id).toBeUndefined();
-    expect(session?.runner_runtime_job_id).toBeUndefined();
-    expect(session?.runner_launch_lease_id).toBeUndefined();
+    expect(session?.runner_worker_id).toBe(runtimeJob.worker_id);
+    expect(session?.runner_runtime_job_id).toBe(runtimeJob.id);
+    expect(session?.runner_launch_lease_id).toBe(runtimeJob.launch_lease_id);
     await expect(
       repository.findAvailableCodexWorker({
         worker_id: runtimeJob.worker_id,
@@ -700,7 +701,7 @@ describe('Product generation CodexSession scheduler', () => {
         network_policy_digest: codexCanonicalDigest({ mode: 'disabled' }),
         now,
       }),
-    ).resolves.toMatchObject({ id: runtimeJob.worker_id, active_lease_count: 0 });
+    ).resolves.toMatchObject({ id: runtimeJob.worker_id, active_lease_count: 1 });
   });
 
   it('treats already-terminalized matching CodexSession turn evidence as idempotent before product output is applied', async () => {
@@ -721,6 +722,7 @@ describe('Product generation CodexSession scheduler', () => {
     const workload = runtimeJob.input_json as CodexGenerationWorkloadV1;
     const runtimeContext = workload.codex_session_runtime_context!;
     const terminalization = workload.codex_session_terminalization!;
+    const idempotentCapsuleId = stableUuid({ kind: 'idempotent-capsule', turnId });
     await repository.terminalizeCodexSessionTurn({
       session_id: runtimeContext.codex_session_id,
       turn_id: runtimeContext.codex_session_turn_id,
@@ -733,6 +735,22 @@ describe('Product generation CodexSession scheduler', () => {
       app_server_thread_binding_required: true,
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: expectedThreadDigest,
+      output_capsule: runtimeCapsule({
+        id: idempotentCapsuleId,
+        codex_session_id: runtimeContext.codex_session_id,
+        sequence: 1,
+        digest: 'sha256:idempotent-capsule',
+        manifest_digest: 'sha256:idempotent-capsule-manifest',
+        thread_state_digest: 'sha256:idempotent-thread-state',
+        memory_state_digest: 'sha256:idempotent-memory-state',
+        environment_manifest_digest: 'sha256:idempotent-environment-manifest',
+        codex_thread_id_digest: expectedThreadDigest,
+        app_server_protocol_digest: 'sha256:idempotent-app-server-protocol',
+        trusted_runtime_manifest_digest: 'sha256:idempotent-trusted-runtime-manifest',
+        credential_binding_lineage_digest: 'sha256:idempotent-credential-binding-lineage',
+        created_from_turn_id: runtimeContext.codex_session_turn_id,
+        created_by_actor_id: seeded.ids.actorTech,
+      }),
       now,
     });
     const applyBoundaryRoundRuntimeResult = vi.fn(async (input: { actionRun: { id: string }; runtime_job_id: string }) => {
@@ -826,7 +844,7 @@ describe('Product generation CodexSession scheduler', () => {
       'thread-binding-stale',
     );
     const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'fffffff1-next', {
-      expected_previous_snapshot_digest: 'sha256:snapshot-thread-bind',
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
     });
     await repository.heartbeatCodexWorker({
       worker_id: runnerRuntimeJob.worker_id,
@@ -875,7 +893,7 @@ describe('Product generation CodexSession scheduler', () => {
         codex_session_id: seeded.workflow.active_codex_session_id,
         codex_session_turn_id: nextTurnId,
         attempted_codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-2' }),
-        failure_code: 'codex_session_thread_binding_stale',
+        failure_code: 'codex_runtime_capsule_stale',
       }),
     ]);
   });
@@ -885,7 +903,7 @@ describe('Product generation CodexSession scheduler', () => {
     const firstTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'fffffffd01');
     await bindSessionThread(seeded.workflow.active_codex_session_id, seeded.workflow.id, firstTurnId);
     const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'fffffffd02', {
-      expected_previous_snapshot_digest: 'sha256:snapshot-thread-bind',
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
     });
     const service = new CodexSessionLeaseService(repository, new ControlPlaneRuntimeService('test'));
     const claimed = await service.claim(seeded.workflow.active_codex_session_id, {
@@ -893,7 +911,7 @@ describe('Product generation CodexSession scheduler', () => {
       lease_token: 'trusted-terminalization-stale-token',
       worker_id: 'trusted-terminalization-worker',
       worker_session_digest: 'sha256:trusted-terminalization-worker-session',
-      expected_previous_snapshot_digest: 'sha256:snapshot-thread-bind',
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
       expires_at: '2026-05-31T00:05:00.000Z',
     });
 
@@ -908,7 +926,17 @@ describe('Product generation CodexSession scheduler', () => {
           worker_id: 'trusted-terminalization-worker',
           worker_session_digest: 'sha256:trusted-terminalization-worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: 'sha256:snapshot-thread-bind',
+          expected_input_capsule_digest: 'sha256:capsule-thread-bind',
+          ...trustedLeaseOutputCapsuleBody({
+            sessionId: seeded.workflow.active_codex_session_id,
+            turnId: nextTurnId,
+            id: stableUuid({ kind: 'trusted-terminalization-stale-capsule', nextTurnId }),
+            sequence: 2,
+            digest: 'sha256:trusted-terminalization-stale-capsule',
+            manifestDigest: 'sha256:trusted-terminalization-stale-capsule-manifest',
+            codexThreadIdDigest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-2' }),
+            actorId: seeded.ids.actorTech,
+          }),
           codex_thread_id: 'thread-2',
           codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-2' }),
         },
@@ -1004,7 +1032,7 @@ describe('Product generation CodexSession scheduler', () => {
       'hhhhhb',
     );
     const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'hhhhhb02', {
-      expected_previous_snapshot_digest: 'sha256:snapshot-thread-bind',
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
     });
     const scheduled = await scheduler.schedule(
       scheduleInput(seeded.workflow.id, seeded.workflow.active_codex_session_id, nextTurnId, seeded.ids.project, 'runtime-failed-bound'),
@@ -1147,7 +1175,7 @@ describe('Product generation CodexSession scheduler', () => {
     sessionId: string,
     actorId: string,
     suffix: string,
-    options: { expected_previous_snapshot_digest?: string } = {},
+    options: { expected_input_capsule_digest?: string } = {},
   ): Promise<string> {
     const turnId = stableUuid({ kind: 'codex-session-turn', suffix });
     await repository.createCodexSessionTurn({
@@ -1156,10 +1184,10 @@ describe('Product generation CodexSession scheduler', () => {
       codex_session_id: sessionId,
       intent: 'continue_brainstorming',
       status: 'running',
-      input_digest: codexCanonicalDigest({ kind: 'turn-input', turnId, expected: options.expected_previous_snapshot_digest ?? null }),
-      ...(options.expected_previous_snapshot_digest === undefined
+      input_digest: codexCanonicalDigest({ kind: 'turn-input', turnId, expected: options.expected_input_capsule_digest ?? null }),
+      ...(options.expected_input_capsule_digest === undefined
         ? {}
-        : { expected_previous_snapshot_digest: options.expected_previous_snapshot_digest }),
+        : { expected_input_capsule_digest: options.expected_input_capsule_digest }),
       created_by_actor_id: actorId,
       created_at: now,
       updated_at: now,
@@ -1175,11 +1203,11 @@ describe('Product generation CodexSession scheduler', () => {
       lease_token_hash: codexCredentialPayloadDigest(`binding-token-${turnId}`),
       worker_id: 'binding-worker',
       worker_session_digest: 'sha256:binding-worker-session',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now,
       expires_at: '2026-05-31T00:05:00.000Z',
     });
-    const snapshotId = stableUuid({ kind: 'binding-snapshot', sessionId, turnId });
+    const snapshotId = stableUuid({ kind: 'binding-capsule', sessionId, turnId });
     await repository.terminalizeCodexSessionTurn({
       session_id: sessionId,
       turn_id: turnId,
@@ -1191,20 +1219,16 @@ describe('Product generation CodexSession scheduler', () => {
       status: 'succeeded',
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: expectedThreadDigest,
-      output_snapshot: {
+      output_capsule: runtimeCapsule({
         id: snapshotId,
         codex_session_id: sessionId,
         sequence: 1,
-        artifact_ref: `artifact://internal/codex_session_snapshot/codex_session/${sessionId}/${snapshotId}`,
-        digest: 'sha256:snapshot-thread-bind',
-        size_bytes: '123',
-        manifest_digest: 'sha256:snapshot-thread-bind-manifest',
+        digest: 'sha256:capsule-thread-bind',
+        manifest_digest: 'sha256:capsule-thread-bind-manifest',
         codex_thread_id_digest: expectedThreadDigest,
-        runtime_profile_revision_id: 'runtime-profile-revision-1',
         created_from_turn_id: turnId,
         created_by_actor_id: 'actor-tech',
-        created_at: now,
-      },
+      }),
       now,
     });
   }
@@ -1231,7 +1255,7 @@ describe('Product generation CodexSession scheduler', () => {
       }),
       `${suffix}-runner`,
     );
-    const snapshotId = stableUuid({ kind: 'runner-snapshot', suffix });
+    const snapshotId = stableUuid({ kind: 'runner-capsule', suffix });
     await repository.terminalizeCodexSessionTurn({
       session_id: sessionId,
       turn_id: runnerTurnId,
@@ -1246,20 +1270,16 @@ describe('Product generation CodexSession scheduler', () => {
       app_server_thread_binding_required: true,
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: expectedThreadDigest,
-      output_snapshot: {
+      output_capsule: runtimeCapsule({
         id: snapshotId,
         codex_session_id: sessionId,
         sequence: 1,
-        artifact_ref: `artifact://internal/codex_session_snapshot/codex_session/${sessionId}/${snapshotId}`,
-        digest: 'sha256:snapshot-thread-bind',
-        size_bytes: '123',
-        manifest_digest: 'sha256:snapshot-thread-bind-manifest',
+        digest: 'sha256:capsule-thread-bind',
+        manifest_digest: 'sha256:capsule-thread-bind-manifest',
         codex_thread_id_digest: expectedThreadDigest,
-        runtime_profile_revision_id: 'runtime-profile-revision-1',
         created_from_turn_id: runnerTurnId,
         created_by_actor_id: actorId,
-        created_at: now,
-      },
+      }),
       now,
     });
     await repository.markCodexSessionRunnerOwner({
@@ -1621,6 +1641,84 @@ function contextManifest(projectId: string): ContextManifest {
     runtime_identity: 'test:codex-runtime-product-generation-scheduler',
     created_at: now,
     updated_at: now,
+  };
+}
+
+function runtimeCapsule(input: {
+  id: string;
+  codex_session_id: string;
+  sequence: number;
+  digest: string;
+  manifest_digest: string;
+  codex_thread_id_digest: string;
+  created_from_turn_id: string;
+  created_by_actor_id: string;
+  thread_state_digest?: string;
+  memory_state_digest?: string;
+  environment_manifest_digest?: string;
+  app_server_protocol_digest?: string;
+  trusted_runtime_manifest_digest?: string;
+  credential_binding_lineage_digest?: string;
+}) {
+  return {
+    id: input.id,
+    codex_session_id: input.codex_session_id,
+    sequence: input.sequence,
+    artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${input.codex_session_id}/${input.id}`,
+    digest: input.digest,
+    size_bytes: '123',
+    manifest_digest: input.manifest_digest,
+    thread_state_digest: input.thread_state_digest ?? `${input.digest}:thread-state`,
+    memory_state_digest: input.memory_state_digest ?? `${input.digest}:memory-state`,
+    environment_manifest_digest: input.environment_manifest_digest ?? `${input.digest}:environment-manifest`,
+    codex_thread_id_digest: input.codex_thread_id_digest,
+    codex_cli_version: '0.1.0-test',
+    app_server_protocol_digest: input.app_server_protocol_digest ?? `${input.digest}:app-server-protocol`,
+    runtime_profile_revision_id: 'runtime-profile-revision-1',
+    trusted_runtime_manifest_digest: input.trusted_runtime_manifest_digest ?? `${input.digest}:trusted-runtime-manifest`,
+    credential_binding_lineage_digest: input.credential_binding_lineage_digest ?? `${input.digest}:credential-binding-lineage`,
+    created_from_turn_id: input.created_from_turn_id,
+    created_by_actor_id: input.created_by_actor_id,
+    created_at: now,
+  };
+}
+
+function trustedLeaseOutputCapsuleBody(input: {
+  sessionId: string;
+  turnId: string;
+  id: string;
+  sequence: number;
+  digest: string;
+  manifestDigest: string;
+  codexThreadIdDigest: string;
+  actorId: string;
+}) {
+  const capsule = runtimeCapsule({
+    id: input.id,
+    codex_session_id: input.sessionId,
+    sequence: input.sequence,
+    digest: input.digest,
+    manifest_digest: input.manifestDigest,
+    codex_thread_id_digest: input.codexThreadIdDigest,
+    created_from_turn_id: input.turnId,
+    created_by_actor_id: input.actorId,
+  });
+  return {
+    output_capsule_id: capsule.id,
+    output_capsule_sequence: capsule.sequence,
+    output_capsule_artifact_ref: capsule.artifact_ref,
+    output_capsule_digest: capsule.digest,
+    output_capsule_size_bytes: capsule.size_bytes,
+    output_capsule_manifest_digest: capsule.manifest_digest,
+    output_capsule_thread_state_digest: capsule.thread_state_digest,
+    output_capsule_memory_state_digest: capsule.memory_state_digest,
+    output_capsule_environment_manifest_digest: capsule.environment_manifest_digest,
+    output_capsule_codex_thread_id_digest: capsule.codex_thread_id_digest,
+    output_capsule_codex_cli_version: capsule.codex_cli_version,
+    output_capsule_app_server_protocol_digest: capsule.app_server_protocol_digest,
+    runtime_profile_revision_id: capsule.runtime_profile_revision_id,
+    output_capsule_trusted_runtime_manifest_digest: capsule.trusted_runtime_manifest_digest,
+    output_capsule_credential_binding_lineage_digest: capsule.credential_binding_lineage_digest,
   };
 }
 

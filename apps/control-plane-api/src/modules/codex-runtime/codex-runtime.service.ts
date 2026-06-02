@@ -1461,9 +1461,9 @@ export class CodexRuntimeService {
         worker_id: runtimeContext.worker_id,
         worker_session_digest: runtimeContext.worker_session_digest,
         status: input.terminalStatus === 'cancelled' ? 'cancelled' : 'failed',
-        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+        ...(runtimeContext.expected_input_capsule_digest === undefined
           ? {}
-          : { expected_previous_snapshot_digest: runtimeContext.expected_previous_snapshot_digest }),
+          : { expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest }),
         failure_code: input.reasonCode,
         now: input.now,
       });

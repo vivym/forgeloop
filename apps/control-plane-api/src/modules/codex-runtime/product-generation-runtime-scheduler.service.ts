@@ -478,9 +478,9 @@ export class ProductGenerationRuntimeSchedulerService {
           actionRun: input.actionRun,
           sessionId: codexSessionScheduling.session.id,
           turnId: codexSessionScheduling.turn.id,
-          ...(codexSessionScheduling.turn.expected_previous_snapshot_digest === undefined
+          ...(codexSessionScheduling.turn.expected_input_capsule_digest === undefined
             ? {}
-            : { expectedPreviousSnapshotDigest: codexSessionScheduling.turn.expected_previous_snapshot_digest }),
+            : { expectedInputCapsuleDigest: codexSessionScheduling.turn.expected_input_capsule_digest }),
           workerId: codexSessionScheduling.required_worker_id ?? 'codex-session-worker-unavailable',
           now: input.now,
           reasonCode: 'codex_session_runner_unavailable',
@@ -617,9 +617,9 @@ export class ProductGenerationRuntimeSchedulerService {
         actionRun: input.actionRun,
         sessionId,
         turnId,
-        ...(turn.expected_previous_snapshot_digest === undefined
+        ...(turn.expected_input_capsule_digest === undefined
           ? {}
-          : { expectedPreviousSnapshotDigest: turn.expected_previous_snapshot_digest }),
+          : { expectedInputCapsuleDigest: turn.expected_input_capsule_digest }),
         workerId: session.runner_worker_id ?? 'codex-session-thread-binding-partial',
         now: input.now,
         reasonCode: 'codex_session_thread_binding_partial',
@@ -651,9 +651,9 @@ export class ProductGenerationRuntimeSchedulerService {
           actionRun: input.actionRun,
           sessionId,
           turnId,
-          ...(turn.expected_previous_snapshot_digest === undefined
+          ...(turn.expected_input_capsule_digest === undefined
             ? {}
-            : { expectedPreviousSnapshotDigest: turn.expected_previous_snapshot_digest }),
+            : { expectedInputCapsuleDigest: turn.expected_input_capsule_digest }),
           workerId: session.runner_worker_id ?? 'codex-session-runner-unavailable',
           now: input.now,
           reasonCode: 'codex_session_runner_unavailable',
@@ -718,9 +718,9 @@ export class ProductGenerationRuntimeSchedulerService {
         actionRun: input.actionRun,
         sessionId: session.id,
         turnId: turn.id,
-        ...(turn.expected_previous_snapshot_digest === undefined
+        ...(turn.expected_input_capsule_digest === undefined
           ? {}
-          : { expectedPreviousSnapshotDigest: turn.expected_previous_snapshot_digest }),
+          : { expectedInputCapsuleDigest: turn.expected_input_capsule_digest }),
         workerId: input.workerId,
         now: input.now,
         reasonCode: 'codex_session_runner_unavailable',
@@ -737,9 +737,9 @@ export class ProductGenerationRuntimeSchedulerService {
       lease_token_hash: codexCredentialPayloadDigest(leaseToken),
       worker_id: input.workerId,
       worker_session_digest: workerSessionDigest,
-      ...(turn.expected_previous_snapshot_digest === undefined
+      ...(turn.expected_input_capsule_digest === undefined
         ? {}
-        : { expected_previous_snapshot_digest: turn.expected_previous_snapshot_digest }),
+        : { expected_input_capsule_digest: turn.expected_input_capsule_digest }),
       now: input.now,
       expires_at: isoAfter(input.now, runtimeJobTtlMs),
     });
@@ -753,9 +753,9 @@ export class ProductGenerationRuntimeSchedulerService {
         lease_epoch: claimed.lease.lease_epoch,
         worker_id: input.workerId,
         worker_session_digest: claimed.lease.worker_session_digest,
-        ...(turn.expected_previous_snapshot_digest === undefined
+        ...(turn.expected_input_capsule_digest === undefined
           ? {}
-          : { expected_previous_snapshot_digest: turn.expected_previous_snapshot_digest }),
+          : { expected_input_capsule_digest: turn.expected_input_capsule_digest }),
         ...(input.scheduling.runner_runtime_job_id === undefined
           ? {}
           : { runner_runtime_job_id: input.scheduling.runner_runtime_job_id }),
@@ -768,9 +768,9 @@ export class ProductGenerationRuntimeSchedulerService {
       terminalization: {
         schema_version: 'codex_session_terminalization.v1',
         lease_token: leaseToken,
-        ...(turn.expected_previous_snapshot_digest === undefined
+        ...(turn.expected_input_capsule_digest === undefined
           ? {}
-          : { expected_previous_snapshot_digest: turn.expected_previous_snapshot_digest }),
+          : { expected_input_capsule_digest: turn.expected_input_capsule_digest }),
       },
     };
   }
@@ -780,7 +780,7 @@ export class ProductGenerationRuntimeSchedulerService {
     actionRun: AutomationActionRun;
     sessionId: string;
     turnId: string;
-    expectedPreviousSnapshotDigest?: string;
+    expectedInputCapsuleDigest?: string;
     workerId: string;
     now: string;
     reasonCode: string;
@@ -806,9 +806,9 @@ export class ProductGenerationRuntimeSchedulerService {
       lease_token_hash: codexCredentialPayloadDigest(leaseToken),
       worker_id: input.workerId,
       worker_session_digest: workerSessionDigest,
-      ...(input.expectedPreviousSnapshotDigest === undefined
+      ...(input.expectedInputCapsuleDigest === undefined
         ? {}
-        : { expected_previous_snapshot_digest: input.expectedPreviousSnapshotDigest }),
+        : { expected_input_capsule_digest: input.expectedInputCapsuleDigest }),
       now: input.now,
       expires_at: isoAfter(input.now, runtimeJobTtlMs),
     });
@@ -821,9 +821,9 @@ export class ProductGenerationRuntimeSchedulerService {
       worker_id: claimed.lease.worker_id,
       worker_session_digest: claimed.lease.worker_session_digest,
       status: 'failed',
-      ...(input.expectedPreviousSnapshotDigest === undefined
+      ...(input.expectedInputCapsuleDigest === undefined
         ? {}
-        : { expected_previous_snapshot_digest: input.expectedPreviousSnapshotDigest }),
+        : { expected_input_capsule_digest: input.expectedInputCapsuleDigest }),
       failure_code: input.reasonCode,
       now: input.now,
     });

@@ -47,7 +47,15 @@ const hasOutputCapsule = (
   output_capsule_digest: string;
   output_capsule_size_bytes: string;
   output_capsule_manifest_digest: string;
+  output_capsule_thread_state_digest: string;
+  output_capsule_memory_state_digest: string;
+  output_capsule_environment_manifest_digest: string;
+  output_capsule_codex_thread_id_digest: string;
+  output_capsule_codex_cli_version: string;
+  output_capsule_app_server_protocol_digest: string;
   runtime_profile_revision_id: string;
+  output_capsule_trusted_runtime_manifest_digest: string;
+  output_capsule_credential_binding_lineage_digest: string;
 } =>
   dto.output_capsule_id !== undefined &&
   dto.output_capsule_sequence !== undefined &&
@@ -55,7 +63,15 @@ const hasOutputCapsule = (
   dto.output_capsule_digest !== undefined &&
   dto.output_capsule_size_bytes !== undefined &&
   dto.output_capsule_manifest_digest !== undefined &&
-  dto.runtime_profile_revision_id !== undefined;
+  dto.output_capsule_thread_state_digest !== undefined &&
+  dto.output_capsule_memory_state_digest !== undefined &&
+  dto.output_capsule_environment_manifest_digest !== undefined &&
+  dto.output_capsule_codex_thread_id_digest !== undefined &&
+  dto.output_capsule_codex_cli_version !== undefined &&
+  dto.output_capsule_app_server_protocol_digest !== undefined &&
+  dto.runtime_profile_revision_id !== undefined &&
+  dto.output_capsule_trusted_runtime_manifest_digest !== undefined &&
+  dto.output_capsule_credential_binding_lineage_digest !== undefined;
 
 @Injectable()
 export class CodexSessionLeaseService {
@@ -107,15 +123,15 @@ export class CodexSessionLeaseService {
           digest: dto.output_capsule_digest,
           size_bytes: dto.output_capsule_size_bytes,
           manifest_digest: dto.output_capsule_manifest_digest,
-          thread_state_digest: dto.codex_thread_id_digest ?? dto.output_capsule_digest,
-          memory_state_digest: dto.output_capsule_manifest_digest,
-          environment_manifest_digest: dto.output_capsule_manifest_digest,
-          codex_thread_id_digest: dto.codex_thread_id_digest ?? dto.output_capsule_digest,
-          codex_cli_version: 'unknown',
-          app_server_protocol_digest: dto.output_capsule_manifest_digest,
+          thread_state_digest: dto.output_capsule_thread_state_digest,
+          memory_state_digest: dto.output_capsule_memory_state_digest,
+          environment_manifest_digest: dto.output_capsule_environment_manifest_digest,
+          codex_thread_id_digest: dto.output_capsule_codex_thread_id_digest,
+          codex_cli_version: dto.output_capsule_codex_cli_version,
+          app_server_protocol_digest: dto.output_capsule_app_server_protocol_digest,
           runtime_profile_revision_id: dto.runtime_profile_revision_id,
-          trusted_runtime_manifest_digest: dto.output_capsule_manifest_digest,
-          credential_binding_lineage_digest: dto.output_capsule_manifest_digest,
+          trusted_runtime_manifest_digest: dto.output_capsule_trusted_runtime_manifest_digest,
+          credential_binding_lineage_digest: dto.output_capsule_credential_binding_lineage_digest,
           created_from_turn_id: turnId,
           created_by_actor_id: trustedActorId,
           created_at: this.now(),

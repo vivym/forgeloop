@@ -4556,6 +4556,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (lease.expires_at <= input.now) {
       throw new DomainError('codex_session_lease_expired', `codex_session_lease_expired: Codex session lease ${input.lease_id} has expired`);
     }
+    if (input.status === 'succeeded' && input.output_capsule === undefined) {
+      throw new DomainError(
+        'codex_runtime_capsule_stale',
+        `codex_runtime_capsule_stale: Codex session ${input.session_id} successful terminalization requires an output capsule`,
+      );
+    }
     if (
       input.output_capsule !== undefined &&
       input.output_capsule.codex_session_id !== session.id

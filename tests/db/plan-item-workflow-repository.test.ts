@@ -915,6 +915,7 @@ const bindCodexSessionThread = async (repository: DeliveryRepository) => {
     worker_session_digest: 'sha256:worker-session',
     status: 'succeeded',
     expected_input_capsule_digest: undefined,
+    output_capsule: { ...runtimeCapsuleInput },
     codex_thread_id: 'thread-1',
     codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
     now: '2026-05-31T00:02:00.000Z',
@@ -923,6 +924,7 @@ const bindCodexSessionThread = async (repository: DeliveryRepository) => {
     ...turnInput,
     id: 'turn-2',
     input_digest: 'sha256:turn-2',
+    expected_input_capsule_digest: 'sha256:capsule-1',
     created_at: '2026-05-31T00:03:00.000Z',
     updated_at: '2026-05-31T00:03:00.000Z',
   });
@@ -1151,7 +1153,15 @@ const drizzleRuntimeCapsuleInput = {
   digest: 'sha256:drizzle-capsule-1',
   size_bytes: '123',
   manifest_digest: 'sha256:drizzle-manifest-1',
+  thread_state_digest: 'sha256:drizzle-thread-state-1',
+  memory_state_digest: 'sha256:drizzle-memory-state-1',
+  environment_manifest_digest: 'sha256:drizzle-environment-manifest-1',
+  codex_thread_id_digest: 'sha256:drizzle-thread-1',
+  codex_cli_version: '0.1.0-test',
+  app_server_protocol_digest: 'sha256:drizzle-app-server-protocol-1',
   runtime_profile_revision_id: uuidFixture.runtimeProfileRevisionId,
+  trusted_runtime_manifest_digest: 'sha256:drizzle-trusted-runtime-manifest-1',
+  credential_binding_lineage_digest: 'sha256:drizzle-credential-binding-lineage-1',
   created_from_turn_id: uuidFixture.turnId,
   created_by_actor_id: uuidFixture.actorTechId,
   created_at: '2026-05-31T00:02:00.000Z',
@@ -1392,7 +1402,15 @@ const runtimeCapsuleInput = {
   digest: 'sha256:capsule-1',
   size_bytes: '123',
   manifest_digest: 'sha256:manifest-1',
+  thread_state_digest: 'sha256:thread-state-1',
+  memory_state_digest: 'sha256:memory-state-1',
+  environment_manifest_digest: 'sha256:environment-manifest-1',
+  codex_thread_id_digest: 'sha256:thread-1',
+  codex_cli_version: '0.1.0-test',
+  app_server_protocol_digest: 'sha256:app-server-protocol-1',
   runtime_profile_revision_id: 'profile-revision-1',
+  trusted_runtime_manifest_digest: 'sha256:trusted-runtime-manifest-1',
+  credential_binding_lineage_digest: 'sha256:credential-binding-lineage-1',
   created_from_turn_id: 'turn-1',
   created_by_actor_id: 'actor-tech',
   created_at: '2026-05-31T00:02:00.000Z',
@@ -3397,6 +3415,7 @@ describe('Plan Item Workflow repository', () => {
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
+      output_capsule: { ...runtimeCapsuleInput },
       now: '2026-05-31T00:02:00.000Z',
     });
 
@@ -3914,6 +3933,46 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toMatchObject({ digest: 'sha256:capsule-1' });
   });
 
+  it('rejects successful terminalization without an output capsule before mutation', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'succeeded',
+          expected_input_capsule_digest: undefined,
+          codex_thread_id: 'thread-1',
+          codex_thread_id_digest: 'sha256:thread-1',
+          now: '2026-05-31T00:02:00.000Z',
+        }),
+      'codex_runtime_capsule_stale',
+    );
+
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: claimed.lease.id,
+    });
+    const session = await repository.getCodexSession('session-1');
+    expect(session?.latest_capsule_id).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBeUndefined();
+    expect(session?.codex_thread_id_digest).toBeUndefined();
+    await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
+    const turn = await repository.getCodexSessionTurn('turn-1');
+    expect(turn?.output_capsule_id).toBeUndefined();
+    expect(turn?.output_capsule_digest).toBeUndefined();
+    expect(turn?.codex_thread_id_digest).toBeUndefined();
+  });
+
   it('rejects terminalization with only a Codex thread id before mutation', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -4078,6 +4137,7 @@ describe('Plan Item Workflow repository', () => {
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
+      output_capsule: { ...runtimeCapsuleInput },
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4105,6 +4165,7 @@ describe('Plan Item Workflow repository', () => {
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
+      output_capsule: { ...runtimeCapsuleInput },
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4113,6 +4174,7 @@ describe('Plan Item Workflow repository', () => {
       ...turnInput,
       id: 'turn-2',
       input_digest: 'sha256:turn-2',
+      expected_input_capsule_digest: 'sha256:capsule-1',
       created_at: '2026-05-31T00:03:00.000Z',
       updated_at: '2026-05-31T00:03:00.000Z',
     });
@@ -4120,7 +4182,7 @@ describe('Plan Item Workflow repository', () => {
       ...leaseInput,
       lease_id: 'lease-2',
       lease_token_hash: 'sha256:lease-token-2',
-      expected_input_capsule_digest: undefined,
+      expected_input_capsule_digest: 'sha256:capsule-1',
       now: '2026-05-31T00:04:00.000Z',
       expires_at: '2026-05-31T00:09:00.000Z',
     });
@@ -4136,7 +4198,7 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_input_capsule_digest: undefined,
+          expected_input_capsule_digest: 'sha256:capsule-1',
           output_capsule: {
             ...runtimeCapsuleInput,
             id: 'capsule-2',
@@ -4189,6 +4251,7 @@ describe('Plan Item Workflow repository', () => {
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
+      output_capsule: { ...runtimeCapsuleInput },
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4197,6 +4260,7 @@ describe('Plan Item Workflow repository', () => {
       ...turnInput,
       id: 'turn-2',
       input_digest: 'sha256:turn-2',
+      expected_input_capsule_digest: 'sha256:capsule-1',
       created_at: '2026-05-31T00:03:00.000Z',
       updated_at: '2026-05-31T00:03:00.000Z',
     });
@@ -4204,7 +4268,7 @@ describe('Plan Item Workflow repository', () => {
       ...leaseInput,
       lease_id: 'lease-2',
       lease_token_hash: 'sha256:lease-token-2',
-      expected_input_capsule_digest: undefined,
+      expected_input_capsule_digest: 'sha256:capsule-1',
       now: '2026-05-31T00:04:00.000Z',
       expires_at: '2026-05-31T00:09:00.000Z',
     });
@@ -4218,7 +4282,22 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_input_capsule_digest: undefined,
+      expected_input_capsule_digest: 'sha256:capsule-1',
+      output_capsule: {
+        ...runtimeCapsuleInput,
+        id: 'capsule-2',
+        sequence: 2,
+        artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+        digest: 'sha256:capsule-2',
+        manifest_digest: 'sha256:manifest-2',
+        thread_state_digest: 'sha256:thread-state-2',
+        memory_state_digest: 'sha256:memory-state-2',
+        environment_manifest_digest: 'sha256:environment-manifest-2',
+        app_server_protocol_digest: 'sha256:app-server-protocol-2',
+        trusted_runtime_manifest_digest: 'sha256:trusted-runtime-manifest-2',
+        credential_binding_lineage_digest: 'sha256:credential-binding-lineage-2',
+        created_from_turn_id: 'turn-2',
+      },
       now: '2026-05-31T00:05:00.000Z',
     });
 
@@ -4243,6 +4322,7 @@ describe('Plan Item Workflow repository', () => {
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
+      output_capsule: { ...runtimeCapsuleInput },
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4251,6 +4331,7 @@ describe('Plan Item Workflow repository', () => {
       ...turnInput,
       id: 'turn-2',
       input_digest: 'sha256:turn-2',
+      expected_input_capsule_digest: 'sha256:capsule-1',
       created_at: '2026-05-31T00:03:00.000Z',
       updated_at: '2026-05-31T00:03:00.000Z',
     });
@@ -4258,7 +4339,7 @@ describe('Plan Item Workflow repository', () => {
       ...leaseInput,
       lease_id: 'lease-2',
       lease_token_hash: 'sha256:lease-token-2',
-      expected_input_capsule_digest: undefined,
+      expected_input_capsule_digest: 'sha256:capsule-1',
       now: '2026-05-31T00:04:00.000Z',
       expires_at: '2026-05-31T00:09:00.000Z',
     });
@@ -4272,7 +4353,22 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_input_capsule_digest: undefined,
+      expected_input_capsule_digest: 'sha256:capsule-1',
+      output_capsule: {
+        ...runtimeCapsuleInput,
+        id: 'capsule-2',
+        sequence: 2,
+        artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+        digest: 'sha256:capsule-2',
+        manifest_digest: 'sha256:manifest-2',
+        thread_state_digest: 'sha256:thread-state-2',
+        memory_state_digest: 'sha256:memory-state-2',
+        environment_manifest_digest: 'sha256:environment-manifest-2',
+        app_server_protocol_digest: 'sha256:app-server-protocol-2',
+        trusted_runtime_manifest_digest: 'sha256:trusted-runtime-manifest-2',
+        credential_binding_lineage_digest: 'sha256:credential-binding-lineage-2',
+        created_from_turn_id: 'turn-2',
+      },
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:05:00.000Z',
@@ -6348,6 +6444,7 @@ describe('Plan Item Workflow repository', () => {
       worker_session_digest: claimed.lease.worker_session_digest,
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
+      output_capsule: { ...runtimeCapsuleInput },
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
