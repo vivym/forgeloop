@@ -4562,6 +4562,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (lease.expires_at <= input.now) {
       throw new DomainError('codex_session_lease_expired', `codex_session_lease_expired: Codex session lease ${input.lease_id} has expired`);
     }
+    const hasOutputContinuation =
+      input.output_capsule !== undefined ||
+      input.output_memory_bundle_ref !== undefined ||
+      input.output_memory_bundle_digest !== undefined ||
+      input.memory_delta_artifact_ref !== undefined ||
+      input.memory_delta_digest !== undefined ||
+      input.output_environment_manifest_ref !== undefined ||
+      input.output_environment_manifest_digest !== undefined;
+    if (input.status !== 'succeeded' && hasOutputContinuation) {
+      throw new DomainError(
+        'codex_runtime_capsule_stale',
+        `codex_runtime_capsule_stale: Codex session ${input.session_id} non-success terminalization cannot provide output continuation refs`,
+      );
+    }
     if (input.status === 'succeeded' && input.output_capsule === undefined) {
       throw new DomainError(
         'codex_runtime_capsule_stale',

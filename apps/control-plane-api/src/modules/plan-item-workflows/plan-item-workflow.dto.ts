@@ -252,6 +252,14 @@ export const terminalizeCodexSessionTurnSchema = z
       'output_environment_manifest_digest',
     ] as const;
     const memoryDeltaFields = ['memory_delta_artifact_ref', 'memory_delta_digest'] as const;
+    if (body.status !== 'succeeded') {
+      for (const field of [...capsuleFields, ...continuationFields, ...memoryDeltaFields]) {
+        if (body[field] !== undefined) {
+          ctx.addIssue({ code: 'custom', path: [field], message: `${field} is only allowed for succeeded terminalization` });
+        }
+      }
+      return;
+    }
     if (!capsuleProvided) {
       for (const field of [...continuationFields, ...memoryDeltaFields]) {
         if (body[field] !== undefined) {

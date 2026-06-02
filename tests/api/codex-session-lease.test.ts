@@ -272,6 +272,61 @@ describe('Codex Session lease API', () => {
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(sessionId)).resolves.toEqual([]);
   });
 
+  it('rejects non-succeeded terminalization with output capsule fields before mutation', async () => {
+    const { workflow } = await seedWorkflow(app);
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const sessionId = workflow.active_codex_session_id;
+    const turnId = '11111111-1111-4111-8111-111111119107';
+    await repository.createCodexSessionTurn({
+      id: turnId,
+      codex_session_id: sessionId,
+      workflow_id: workflow.id,
+      intent: 'continue_brainstorming',
+      status: 'running',
+      input_digest: 'sha256:turn-input-failed-output-capsule',
+      expected_input_capsule_digest: undefined,
+      created_by_actor_id: ids.actorTech,
+      created_at: '2026-05-31T00:00:00.000Z',
+      updated_at: '2026-05-31T00:00:00.000Z',
+    });
+
+    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${turnId}/terminalize`, {
+      lease_id: 'lease-failed-output-capsule',
+      lease_token: 'lease-token-failed-output-capsule',
+      lease_epoch: 1,
+      worker_id: 'worker-failed-output-capsule',
+      worker_session_digest: 'sha256:worker-failed-output-capsule-session',
+      status: 'failed',
+      expected_input_capsule_digest: null,
+      failure_code: 'codex_runtime_capsule_missing',
+      ...outputCapsuleBody({
+        id: '11111111-1111-4111-8111-111111119108',
+        sequence: 1,
+        artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${sessionId}/failed-output-capsule`,
+        digest: 'sha256:failed-output-capsule',
+        manifest_digest: 'sha256:failed-output-capsule-manifest',
+      }),
+    }).expect(400);
+
+    const session = await repository.getCodexSession(sessionId);
+    expect(session).toMatchObject({ status: 'idle' });
+    expect(session?.latest_capsule_id).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBeUndefined();
+    expect(session?.latest_memory_bundle_ref).toBeUndefined();
+    expect(session?.latest_memory_bundle_digest).toBeUndefined();
+    expect(session?.latest_environment_manifest_ref).toBeUndefined();
+    expect(session?.latest_environment_manifest_digest).toBeUndefined();
+    const turn = await repository.getCodexSessionTurn(turnId);
+    expect(turn).toMatchObject({ status: 'running' });
+    expect(turn?.output_capsule_id).toBeUndefined();
+    expect(turn?.output_capsule_digest).toBeUndefined();
+    expect(turn?.output_memory_bundle_ref).toBeUndefined();
+    expect(turn?.output_memory_bundle_digest).toBeUndefined();
+    expect(turn?.output_environment_manifest_ref).toBeUndefined();
+    expect(turn?.output_environment_manifest_digest).toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('11111111-1111-4111-8111-111111119108')).resolves.toBeUndefined();
+  });
+
   it('persists the full output capsule contract from terminalization input', async () => {
     const { workflow } = await seedWorkflow(app);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;

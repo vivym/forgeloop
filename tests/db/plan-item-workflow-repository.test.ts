@@ -915,6 +915,7 @@ const bindCodexSessionThread = async (repository: DeliveryRepository) => {
     status: 'succeeded',
     expected_input_capsule_digest: undefined,
     output_capsule: { ...runtimeCapsuleInput },
+    ...outputContinuationInput({ turnId: 'turn-1' }),
     codex_thread_id: 'thread-1',
     codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
     now: '2026-05-31T00:02:00.000Z',
@@ -1389,6 +1390,7 @@ const seedWorkflowWithCapsule = async (repository: InMemoryDeliveryRepository) =
       ...runtimeCapsuleInput,
       created_from_turn_id: 'turn-seed',
     },
+    ...outputContinuationInput({ turnId: 'turn-seed' }),
     now: '2026-05-31T00:02:00.000Z',
   });
 };
@@ -1414,6 +1416,17 @@ const runtimeCapsuleInput = {
   created_by_actor_id: 'actor-tech',
   created_at: '2026-05-31T00:02:00.000Z',
 } as const;
+
+const outputContinuationInput = (input: { sessionId?: string; turnId: string; suffix?: string }) => {
+  const sessionId = input.sessionId ?? 'session-1';
+  const suffix = input.suffix ?? input.turnId;
+  return {
+    output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${sessionId}/memory-${suffix}`,
+    output_memory_bundle_digest: `sha256:memory-${suffix}`,
+    output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${sessionId}/environment-${suffix}`,
+    output_environment_manifest_digest: `sha256:environment-${suffix}`,
+  };
+};
 
 const terminalizeTurnWithCapsule = async (
   repository: InMemoryDeliveryRepository,
@@ -1473,6 +1486,7 @@ const terminalizeTurnWithCapsule = async (
       created_from_turn_id: turnId,
       created_at: terminalizeNow,
     },
+    ...outputContinuationInput({ turnId }),
     ...(options.codex_thread_id === undefined ? {} : { codex_thread_id: options.codex_thread_id }),
     ...(options.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: options.codex_thread_id_digest }),
     now: terminalizeNow,
@@ -2205,6 +2219,7 @@ describe('Plan Item Workflow repository', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: runtimeCapsuleInput,
+      ...outputContinuationInput({ turnId: 'turn-1' }),
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -3415,6 +3430,7 @@ describe('Plan Item Workflow repository', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: { ...runtimeCapsuleInput },
+      ...outputContinuationInput({ turnId: 'turn-1' }),
       now: '2026-05-31T00:02:00.000Z',
     });
 
@@ -3648,6 +3664,7 @@ describe('Plan Item Workflow repository', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: runtimeCapsuleInput,
+      ...outputContinuationInput({ turnId: 'turn-1' }),
       now: '2026-05-31T00:02:00.000Z',
     });
     const originalTurn = await repository.getCodexSessionTurn('turn-1');
@@ -3917,6 +3934,7 @@ describe('Plan Item Workflow repository', () => {
       output_capsule: {
         ...runtimeCapsuleInput,
       },
+      ...outputContinuationInput({ turnId: 'turn-1' }),
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -3972,6 +3990,54 @@ describe('Plan Item Workflow repository', () => {
     expect(turn?.codex_thread_id_digest).toBeUndefined();
   });
 
+  it('rejects failed terminalization with output continuation before mutation', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    const claimed = await repository.claimCodexSessionLease(leaseInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          lease_id: claimed.lease.id,
+          lease_token_hash: 'sha256:lease-token',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: 'sha256:worker-session',
+          status: 'failed',
+          expected_input_capsule_digest: undefined,
+          output_capsule: { ...runtimeCapsuleInput },
+          ...outputContinuationInput({ turnId: 'turn-1' }),
+          failure_code: 'codex_runtime_capsule_missing',
+          now: '2026-05-31T00:02:00.000Z',
+        }),
+      'codex_runtime_capsule_stale',
+    );
+
+    const session = await repository.getCodexSession('session-1');
+    expect(session).toMatchObject({
+      status: 'running',
+      active_lease_id: claimed.lease.id,
+    });
+    expect(session?.latest_capsule_id).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBeUndefined();
+    expect(session?.latest_memory_bundle_ref).toBeUndefined();
+    expect(session?.latest_memory_bundle_digest).toBeUndefined();
+    expect(session?.latest_environment_manifest_ref).toBeUndefined();
+    expect(session?.latest_environment_manifest_digest).toBeUndefined();
+    const turn = await repository.getCodexSessionTurn('turn-1');
+    expect(turn).toMatchObject({ status: 'running' });
+    expect(turn?.output_capsule_id).toBeUndefined();
+    expect(turn?.output_capsule_digest).toBeUndefined();
+    expect(turn?.output_memory_bundle_ref).toBeUndefined();
+    expect(turn?.output_memory_bundle_digest).toBeUndefined();
+    expect(turn?.output_environment_manifest_ref).toBeUndefined();
+    expect(turn?.output_environment_manifest_digest).toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
+  });
+
   it('rejects terminalization with only a Codex thread id before mutation', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -3991,6 +4057,7 @@ describe('Plan Item Workflow repository', () => {
           status: 'succeeded',
           expected_input_capsule_digest: undefined,
           output_capsule: { ...runtimeCapsuleInput },
+          ...outputContinuationInput({ turnId: 'turn-1' }),
           codex_thread_id: 'thread-1',
           now: '2026-05-31T00:02:00.000Z',
         }),
@@ -4027,6 +4094,7 @@ describe('Plan Item Workflow repository', () => {
           status: 'succeeded',
           expected_input_capsule_digest: undefined,
           output_capsule: { ...runtimeCapsuleInput },
+          ...outputContinuationInput({ turnId: 'turn-1' }),
           app_server_thread_binding_required: true,
           now: '2026-05-31T00:02:00.000Z',
         }),
@@ -4046,6 +4114,7 @@ describe('Plan Item Workflow repository', () => {
           status: 'succeeded',
           expected_input_capsule_digest: undefined,
           output_capsule: { ...runtimeCapsuleInput },
+          ...outputContinuationInput({ turnId: 'turn-1' }),
           app_server_thread_binding_required: true,
           codex_thread_id: 'thread-1',
           now: '2026-05-31T00:02:00.000Z',
@@ -4066,6 +4135,7 @@ describe('Plan Item Workflow repository', () => {
           status: 'succeeded',
           expected_input_capsule_digest: undefined,
           output_capsule: { ...runtimeCapsuleInput },
+          ...outputContinuationInput({ turnId: 'turn-1' }),
           app_server_thread_binding_required: true,
           codex_thread_id_digest: 'sha256:thread-1',
           now: '2026-05-31T00:02:00.000Z',
@@ -4103,6 +4173,7 @@ describe('Plan Item Workflow repository', () => {
           status: 'succeeded',
           expected_input_capsule_digest: undefined,
           output_capsule: { ...runtimeCapsuleInput },
+          ...outputContinuationInput({ turnId: 'turn-1' }),
           codex_thread_id_digest: 'sha256:thread-1',
           now: '2026-05-31T00:02:00.000Z',
         }),
@@ -4137,6 +4208,7 @@ describe('Plan Item Workflow repository', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: { ...runtimeCapsuleInput },
+      ...outputContinuationInput({ turnId: 'turn-1' }),
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4165,6 +4237,7 @@ describe('Plan Item Workflow repository', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: { ...runtimeCapsuleInput },
+      ...outputContinuationInput({ turnId: 'turn-1' }),
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4207,6 +4280,7 @@ describe('Plan Item Workflow repository', () => {
             manifest_digest: 'sha256:manifest-2',
             created_from_turn_id: 'turn-2',
           },
+          ...outputContinuationInput({ turnId: 'turn-2' }),
           codex_thread_id: 'thread-2',
           codex_thread_id_digest: 'sha256:thread-2',
           now: '2026-05-31T00:05:00.000Z',
@@ -4251,6 +4325,7 @@ describe('Plan Item Workflow repository', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: { ...runtimeCapsuleInput },
+      ...outputContinuationInput({ turnId: 'turn-1' }),
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4297,6 +4372,7 @@ describe('Plan Item Workflow repository', () => {
         credential_binding_lineage_digest: 'sha256:credential-binding-lineage-2',
         created_from_turn_id: 'turn-2',
       },
+      ...outputContinuationInput({ turnId: 'turn-2' }),
       now: '2026-05-31T00:05:00.000Z',
     });
 
@@ -4322,6 +4398,7 @@ describe('Plan Item Workflow repository', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: { ...runtimeCapsuleInput },
+      ...outputContinuationInput({ turnId: 'turn-1' }),
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4368,6 +4445,7 @@ describe('Plan Item Workflow repository', () => {
         credential_binding_lineage_digest: 'sha256:credential-binding-lineage-2',
         created_from_turn_id: 'turn-2',
       },
+      ...outputContinuationInput({ turnId: 'turn-2' }),
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:05:00.000Z',
@@ -4413,6 +4491,7 @@ describe('Plan Item Workflow repository', () => {
             created_by_actor_id: 'actor-tech',
             created_at: '2026-05-31T00:03:00.000Z',
           },
+          ...outputContinuationInput({ turnId: 'turn-1' }),
           now: '2026-05-31T00:03:00.000Z',
         }),
       'codex_runtime_capsule_stale',
@@ -4465,6 +4544,7 @@ describe('Plan Item Workflow repository', () => {
             manifest_digest: 'sha256:manifest-2',
             created_from_turn_id: 'turn-2',
           },
+          ...outputContinuationInput({ turnId: 'turn-1', suffix: 'wrong-turn' }),
           now: '2026-05-31T00:03:00.000Z',
         }),
       'codex_runtime_capsule_stale',
@@ -4695,6 +4775,7 @@ describe('Plan Item Workflow repository', () => {
             manifest_digest: 'sha256:manifest-2',
             created_at: '2026-05-31T00:03:00.000Z',
           },
+          ...outputContinuationInput({ turnId: 'turn-1', suffix: 'stale' }),
           codex_thread_id: 'thread-1',
           codex_thread_id_digest: 'sha256:thread-1',
           now: '2026-05-31T00:03:00.000Z',
@@ -6444,6 +6525,7 @@ describe('Plan Item Workflow repository', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: { ...runtimeCapsuleInput },
+      ...outputContinuationInput({ turnId: 'turn-1' }),
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -6813,6 +6895,7 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: drizzleRuntimeCapsuleInput,
+      ...outputContinuationInput({ sessionId: uuidFixture.sessionId, turnId: uuidFixture.turnId }),
       codex_thread_id: 'thread-drizzle',
       codex_thread_id_digest: 'sha256:thread-drizzle',
       now: '2026-05-31T00:02:00.000Z',
@@ -6927,6 +7010,53 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
     ]);
   });
 
+  drizzleTest('rejects failed terminalization with output continuation before mutation', async () => {
+    const repository = await createDrizzleWorkflowRepository();
+    await seedDrizzleWorkflow(repository);
+    const claimed = await repository.claimCodexSessionLease(drizzleLeaseInput);
+
+    await expectDomainErrorCode(
+      () =>
+        repository.terminalizeCodexSessionTurn({
+          session_id: uuidFixture.sessionId,
+          turn_id: uuidFixture.turnId,
+          lease_id: claimed.lease.id,
+          lease_token_hash: claimed.lease.lease_token_hash,
+          lease_epoch: claimed.lease.lease_epoch,
+          worker_id: 'worker-drizzle',
+          worker_session_digest: 'sha256:worker-session-drizzle',
+          status: 'failed',
+          expected_input_capsule_digest: undefined,
+          output_capsule: drizzleRuntimeCapsuleInput,
+          ...outputContinuationInput({ sessionId: uuidFixture.sessionId, turnId: uuidFixture.turnId }),
+          failure_code: 'codex_runtime_capsule_missing',
+          now: '2026-05-31T00:02:00.000Z',
+        }),
+      'codex_runtime_capsule_stale',
+    );
+
+    const session = await repository.getCodexSession(uuidFixture.sessionId);
+    expect(session).toMatchObject({
+      status: 'running',
+      active_lease_id: claimed.lease.id,
+    });
+    expect(session?.latest_capsule_id).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBeUndefined();
+    expect(session?.latest_memory_bundle_ref).toBeUndefined();
+    expect(session?.latest_memory_bundle_digest).toBeUndefined();
+    expect(session?.latest_environment_manifest_ref).toBeUndefined();
+    expect(session?.latest_environment_manifest_digest).toBeUndefined();
+    const turn = await repository.getCodexSessionTurn(uuidFixture.turnId);
+    expect(turn).toMatchObject({ status: 'running' });
+    expect(turn?.output_capsule_id).toBeUndefined();
+    expect(turn?.output_capsule_digest).toBeUndefined();
+    expect(turn?.output_memory_bundle_ref).toBeUndefined();
+    expect(turn?.output_memory_bundle_digest).toBeUndefined();
+    expect(turn?.output_environment_manifest_ref).toBeUndefined();
+    expect(turn?.output_environment_manifest_digest).toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule(uuidFixture.capsuleId)).resolves.toBeUndefined();
+  });
+
   drizzleTest('preserves a terminalized turn when stale marking races behind success', async () => {
     const repository = await createDrizzleWorkflowRepository();
     await seedDrizzleWorkflow(repository);
@@ -6991,6 +7121,7 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       status: 'succeeded',
       expected_input_capsule_digest: undefined,
       output_capsule: drizzleRuntimeCapsuleInput,
+      ...outputContinuationInput({ sessionId: uuidFixture.sessionId, turnId: uuidFixture.turnId }),
       now: '2026-05-31T00:02:00.000Z',
     });
 
