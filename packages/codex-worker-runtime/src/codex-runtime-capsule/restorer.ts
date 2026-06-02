@@ -15,6 +15,7 @@ import type { z } from 'zod';
 
 import {
   restoreCodexThreadStateBundle,
+  parseThreadStateBundle,
   type ThreadStateBundle,
 } from './thread-state.js';
 import {
@@ -133,8 +134,14 @@ export const restoreCodexRuntimeCapsule = async (input: {
     capsuleManifest.thread_state.artifact_ref,
     capsuleManifest.thread_state.digest,
     'thread state bundle',
-    (value) => value as ThreadStateBundle,
+    parseThreadStateBundle,
   );
+  if (threadStateBundle.codex_session_id !== input.codexSessionId) {
+    throw new Error('thread state bundle codex session mismatch');
+  }
+  if (threadStateBundle.locator_repair_manifest.codex_thread_id_digest !== capsuleManifest.codex_thread_id_digest) {
+    throw new Error('thread state bundle codex thread digest mismatch');
+  }
 
   for (const [ref, expectedDigest] of [
     [capsuleManifest.memory_state.base_bundle_ref, capsuleManifest.memory_state.base_bundle_digest],

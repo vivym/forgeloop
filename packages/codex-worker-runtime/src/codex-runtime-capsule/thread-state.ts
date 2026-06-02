@@ -7,12 +7,31 @@ import {
   codexThreadLocatorRepairManifestDigest,
   codexThreadLocatorRepairManifestSchema,
 } from '@forgeloop/domain';
+import { z } from 'zod';
 
 import {
   assertSafeCodexHomePathEntry,
   assertSafeCodexHomeRelativePath,
 } from './path-classifier.js';
 import type { CodexThreadLocatorRepairManifest } from './discovery.js';
+
+const sha256DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+
+const threadStateBundleEntrySchema = z.object({
+  relative_path: z.string().min(1),
+  content: z.string(),
+  digest: sha256DigestSchema,
+  size_bytes: z.string().regex(/^[0-9]+$/),
+}).strict();
+
+export const threadStateBundleSchema = z.object({
+  schema_version: z.literal('codex_thread_state_bundle.v1'),
+  bundle_id: z.string().min(1),
+  codex_session_id: z.string().min(1),
+  locator_repair_manifest: codexThreadLocatorRepairManifestSchema,
+  locator_repair_manifest_digest: sha256DigestSchema,
+  entries: z.array(threadStateBundleEntrySchema),
+}).strict();
 
 export interface ThreadStateBundleEntry {
   relative_path: string;
@@ -29,6 +48,9 @@ export interface ThreadStateBundle {
   locator_repair_manifest_digest: string;
   entries: ThreadStateBundleEntry[];
 }
+
+export const parseThreadStateBundle = (value: unknown): ThreadStateBundle =>
+  threadStateBundleSchema.parse(value) as ThreadStateBundle;
 
 export interface ThreadStateBundleBuildResult {
   bundle: ThreadStateBundle;
@@ -138,16 +160,17 @@ export const restoreCodexThreadStateBundle = async (input: {
   bundle: ThreadStateBundle;
   locatorRepair: CodexThreadLocatorRepairManifest;
 }): Promise<void> => {
+  const bundle = parseThreadStateBundle(input.bundle);
   const locatorRepair = parseLocatorRepair(input.locatorRepair);
   assertSupportedRepairStrategy(locatorRepair);
-  if (codexThreadLocatorRepairManifestDigest(locatorRepair) !== input.bundle.locator_repair_manifest_digest) {
+  if (codexThreadLocatorRepairManifestDigest(locatorRepair) !== bundle.locator_repair_manifest_digest) {
     throw new Error('thread state locator repair manifest digest mismatch');
   }
-  if (codexThreadLocatorRepairManifestDigest(input.bundle.locator_repair_manifest) !== input.bundle.locator_repair_manifest_digest) {
+  if (codexThreadLocatorRepairManifestDigest(bundle.locator_repair_manifest) !== bundle.locator_repair_manifest_digest) {
     throw new Error('thread state embedded locator repair manifest digest mismatch');
   }
-  const entries = input.bundle.entries.filter((entry) => entry.relative_path === locatorRepair.rollout_relative_path);
-  if (entries.length !== 1 || input.bundle.entries.length !== 1) {
+  const entries = bundle.entries.filter((entry) => entry.relative_path === locatorRepair.rollout_relative_path);
+  if (entries.length !== 1 || bundle.entries.length !== 1) {
     throw new Error('thread state bundle must contain exactly the bound rollout entry');
   }
   const entry = entries[0] as ThreadStateBundleEntry;

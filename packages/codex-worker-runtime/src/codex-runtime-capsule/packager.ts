@@ -78,7 +78,7 @@ export interface CodexRuntimeCapsulePackageResult {
 const jsonBytes = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value));
 
 const unknownPathError = (relativePath: string, reason: string): DomainError =>
-  new DomainError('codex_runtime_capsule_unknown_path' as never, 'Codex runtime capsule contains a path that cannot be packaged.', {
+  new DomainError('codex_runtime_capsule_unknown_path', 'Codex runtime capsule contains a path that cannot be packaged.', {
     relative_path: relativePath,
     reason,
   });
@@ -150,6 +150,9 @@ export const packageCodexRuntimeCapsule = async (
   input: CodexRuntimeCapsulePackageInput & { artifactWriter: CodexRuntimeCapsuleArtifactWriter },
 ): Promise<CodexRuntimeCapsulePackageResult> => {
   await assertNoForbiddenOrUnknownCodexHomeFiles(input.codexHomeRoot);
+  if (input.codexThreadIdDigest !== input.locatorRepair.codex_thread_id_digest) {
+    throw new Error('codex runtime capsule thread locator digest mismatch');
+  }
 
   const threadState = await packageCodexThreadStateBundle({
     codexHomeRoot: input.codexHomeRoot,

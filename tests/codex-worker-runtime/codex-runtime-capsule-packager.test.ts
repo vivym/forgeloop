@@ -239,4 +239,18 @@ describe('Codex runtime capsule packager', () => {
     ).rejects.toThrow(/digest mismatch/i);
     expect(writer.writes).toEqual([]);
   });
+
+  it('rejects locator repair bound to a different thread digest before upload', async () => {
+    const writer = new RecordingArtifactWriter();
+    const input = await makeInput();
+
+    await expect(
+      packageCodexRuntimeCapsule({
+        ...input,
+        locatorRepair: { ...input.locatorRepair, codex_thread_id_digest: digest({ thread: 'other-thread' }) },
+        artifactWriter: writer,
+      }),
+    ).rejects.toThrow(/thread locator digest mismatch/i);
+    expect(writer.writes).toEqual([]);
+  });
 });

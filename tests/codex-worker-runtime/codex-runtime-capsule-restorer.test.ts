@@ -174,6 +174,7 @@ const makeArtifacts = () => {
     capsuleDigest: codexRuntimeCapsuleManifestDigest(capsuleManifest),
     environmentManifest,
     baseMemoryBundle,
+    threadBundle,
   };
 };
 
@@ -247,6 +248,71 @@ describe('Codex runtime capsule restorer', () => {
         currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
       }),
     ).rejects.toThrow(/memory|digest mismatch/i);
+  });
+
+  it('rejects malformed thread state bundle components', async () => {
+    const setup = makeArtifacts();
+    setup.artifacts.set(setup.capsuleManifest.thread_state.artifact_ref, jsonBytes({ ...setup.threadBundle, schema_version: 'wrong' }));
+
+    await expect(
+      restoreCodexRuntimeCapsule({
+        codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
+        codexSessionId,
+        expectedCapsuleDigest: setup.capsuleDigest,
+        capsuleRef: setup.capsuleRef,
+        artifactReader: new MapArtifactReader(setup.artifacts),
+        currentCodexCliVersion: 'codex-cli 1.2.3',
+        currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('rejects thread state bundle for a different session', async () => {
+    const setup = makeArtifacts();
+    const threadBundle = { ...setup.threadBundle, codex_session_id: 'other-session' };
+    setup.artifacts.set(setup.capsuleManifest.thread_state.artifact_ref, jsonBytes(threadBundle));
+    setup.capsuleManifest.thread_state.digest = digest(threadBundle);
+    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+
+    await expect(
+      restoreCodexRuntimeCapsule({
+        codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
+        codexSessionId,
+        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        capsuleRef: setup.capsuleRef,
+        artifactReader: new MapArtifactReader(setup.artifacts),
+        currentCodexCliVersion: 'codex-cli 1.2.3',
+        currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
+      }),
+    ).rejects.toThrow(/session mismatch/i);
+  });
+
+  it('rejects thread state bundle for a different bound thread digest', async () => {
+    const setup = makeArtifacts();
+    const locatorRepairManifest = {
+      ...setup.threadBundle.locator_repair_manifest,
+      codex_thread_id_digest: digest({ thread: 'other-thread' }),
+    };
+    const threadBundle = {
+      ...setup.threadBundle,
+      locator_repair_manifest: locatorRepairManifest,
+      locator_repair_manifest_digest: codexThreadLocatorRepairManifestDigest(locatorRepairManifest),
+    };
+    setup.artifacts.set(setup.capsuleManifest.thread_state.artifact_ref, jsonBytes(threadBundle));
+    setup.capsuleManifest.thread_state.digest = digest(threadBundle);
+    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+
+    await expect(
+      restoreCodexRuntimeCapsule({
+        codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
+        codexSessionId,
+        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        capsuleRef: setup.capsuleRef,
+        artifactReader: new MapArtifactReader(setup.artifacts),
+        currentCodexCliVersion: 'codex-cli 1.2.3',
+        currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
+      }),
+    ).rejects.toThrow(/thread digest mismatch/i);
   });
 
   it('rejects environment manifest digest mismatch', async () => {
