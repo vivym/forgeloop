@@ -378,6 +378,54 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
     }
   });
 
+  it('scans active API domain db and worker tests for legacy snapshot vocabulary', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-active-tests-'));
+    const activeTestFixtures = [
+      {
+        file: 'tests/api/codex-session-lease.test.ts',
+        source: "await fetch('/internal/codex-sessions/session-1/snapshots');",
+      },
+      {
+        file: 'tests/domain/internal-artifacts.test.ts',
+        source: "const ref = 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1';",
+      },
+      {
+        file: 'tests/db/schema.test.ts',
+        source: "expect(columns).not.toContain('latestSnapshotId');",
+      },
+      {
+        file: 'tests/codex-worker-runtime/remote-worker-client.test.ts',
+        source: "const terminalization = { expected_previous_snapshot_digest: 'sha256:old' };",
+      },
+    ];
+    try {
+      for (const fixture of activeTestFixtures) {
+        const directory = join(tempRoot, ...fixture.file.split('/').slice(0, -1));
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(tempRoot, fixture.file), fixture.source);
+      }
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        allowlist: [],
+      });
+
+      expect(result.violations).toHaveLength(activeTestFixtures.length);
+      expect(result.violations).toEqual(
+        expect.arrayContaining(
+          activeTestFixtures.map((fixture) =>
+            expect.objectContaining({
+              file: fixture.file,
+              pattern: 'legacy_codex_session_snapshot',
+            }),
+          ),
+        ),
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('allows superseded snapshot vocabulary only in historical design specs', () => {
     const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-historical-snapshots-'));
     try {

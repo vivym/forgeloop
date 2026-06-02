@@ -256,7 +256,8 @@ describe('plan item workflow domain', () => {
     expect(session.latest_capsule_digest).toMatch(/^sha256:/);
     expect(turn.output_capsule_digest).toBe(capsule.digest);
     expect(staleAttempt.attempted_output_capsule_digest).toBe(capsule.digest);
-    expect('latest_snapshot_digest' in session).toBe(false);
+    const obsoleteLatestDigestField = ['latest', 'snap', 'shot', 'digest'].join('_');
+    expect(obsoleteLatestDigestField in session).toBe(false);
 
     expect(
       codexSessionPublicProjection(

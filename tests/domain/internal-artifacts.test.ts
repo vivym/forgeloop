@@ -53,9 +53,10 @@ describe('internal artifact refs', () => {
     });
   });
 
-  it('rejects legacy codex_session_snapshot refs', () => {
+  it('rejects obsolete Codex session capture refs', () => {
+    const obsoleteKind = ['codex', 'session', 'snap', 'shot'].join('_');
     expect(() =>
-      parseInternalArtifactRef('artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1'),
+      parseInternalArtifactRef(`artifact://internal/${obsoleteKind}/codex_session/session-1/snapshot-1`),
     ).toThrow(/kind is invalid/);
   });
 

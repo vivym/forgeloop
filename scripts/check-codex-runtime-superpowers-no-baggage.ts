@@ -397,12 +397,13 @@ const fileExtension = (file: string): string => {
   return dot < 0 ? '' : file.slice(dot);
 };
 
-const isIgnoredHistoricalPath = (file: string): boolean =>
+const isIgnoredHistoricalPath = (file: string, pattern: CodexRuntimeSuperpowersBaggagePattern): boolean =>
   file.includes('/node_modules/') ||
-  ignoredHistoricalPathFragments.some((fragment) => file === fragment || file.includes(fragment)) ||
-  (file.startsWith('scripts/') && !activeStrictScripts.has(file)) ||
-  (file.startsWith('tests/') && !activeTask8Tests.has(file)) ||
-  (file.startsWith('docs/superpowers/reports/') && !file.includes('codex-runtime-superpowers'));
+  (pattern !== 'legacy_codex_session_snapshot' &&
+    (ignoredHistoricalPathFragments.some((fragment) => file === fragment || file.includes(fragment)) ||
+      (file.startsWith('scripts/') && !activeStrictScripts.has(file)) ||
+      (file.startsWith('tests/') && !activeTask8Tests.has(file)) ||
+      (file.startsWith('docs/superpowers/reports/') && !file.includes('codex-runtime-superpowers'))));
 
 const collectFilesUnder = (rootDir: string, relativePath: string): string[] => {
   const absolutePath = join(rootDir, relativePath);
@@ -411,14 +412,14 @@ const collectFilesUnder = (rootDir: string, relativePath: string): string[] => {
   }
   const stat = statSync(absolutePath);
   if (stat.isFile()) {
-    return scanExtensions.has(fileExtension(relativePath)) && !isIgnoredHistoricalPath(relativePath) ? [relativePath] : [];
+    return scanExtensions.has(fileExtension(relativePath)) && !relativePath.includes('/node_modules/') ? [relativePath] : [];
   }
   if (!stat.isDirectory()) {
     return [];
   }
   return readdirSync(absolutePath)
     .flatMap((entry) => collectFilesUnder(rootDir, join(relativePath, entry)))
-    .filter((file) => !isIgnoredHistoricalPath(file));
+    .filter((file) => !file.includes('/node_modules/'));
 };
 
 const isAllowed = (input: {
@@ -454,6 +455,9 @@ const scanFile = (input: {
     for (const [pattern, expressions] of Object.entries(baggagePatterns) as Array<
       [CodexRuntimeSuperpowersBaggagePattern, RegExp[]]
     >) {
+      if (isIgnoredHistoricalPath(input.file, pattern)) {
+        continue;
+      }
       if (expressions.some((expression) => expression.test(line))) {
         if (!isAllowed({ file: input.file, pattern, line, allowlist: input.allowlist })) {
           violations.push({

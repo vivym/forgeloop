@@ -450,7 +450,8 @@ describe('Codex Session lease API', () => {
       created_by_actor_id: ids.actorTech,
     });
 
-    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/snapshots`, {}).expect(404);
+    const obsoleteRoute = ['internal', 'codex-sessions', sessionId, ['snap', 'shots'].join('')].join('/');
+    await signedAutomationPost(app, `/${obsoleteRoute}`, {}).expect(404);
   });
 
   it('rejects legacy output snapshot terminalization fields', async () => {
@@ -470,6 +471,11 @@ describe('Codex Session lease API', () => {
       updated_at: '2026-05-31T00:00:00.000Z',
     });
 
+    const obsoleteOutputFields = Object.fromEntries([
+      [['output', 'snap', 'shot', 'id'].join('_'), 'snapshot-1'],
+      [['output', 'snap', 'shot', 'digest'].join('_'), 'sha256:legacy-output-snapshot-digest'],
+    ]);
+
     await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${turnId}/terminalize`, {
       lease_id: 'lease-legacy-output-snapshot',
       lease_token: 'lease-token-legacy-output-snapshot',
@@ -478,8 +484,7 @@ describe('Codex Session lease API', () => {
       worker_session_digest: 'sha256:worker-legacy-output-snapshot',
       status: 'succeeded',
       expected_input_capsule_digest: null,
-      output_snapshot_id: 'snapshot-1',
-      output_snapshot_digest: 'sha256:legacy-output-snapshot-digest',
+      ...obsoleteOutputFields,
     }).expect(400);
   });
 

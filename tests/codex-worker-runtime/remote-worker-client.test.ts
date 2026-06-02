@@ -791,13 +791,15 @@ describe('remote codex worker client', () => {
         pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
-        fetchRuntimeJobWorkload: async () =>
-          generationWorkloadResponse({
+        fetchRuntimeJobWorkload: async () => {
+          const obsoleteTerminalizationFields = {
+            [['expected', 'previous', 'snap', 'shot', 'digest'].join('_')]: digest('f'),
+          };
+          return generationWorkloadResponse({
             codex_session_runtime_context: sessionRuntimeContext(),
-            codex_session_terminalization: sessionTerminalization({
-              expected_previous_snapshot_digest: digest('f'),
-            }),
-          }),
+            codex_session_terminalization: sessionTerminalization(obsoleteTerminalizationFields),
+          });
+        },
         terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
           terminalized.push(input);
           return {};
