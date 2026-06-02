@@ -5,9 +5,11 @@ import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import { CodexSessionLeaseService } from './codex-session-lease.service';
 import {
   claimCodexSessionLeaseSchema,
+  createCodexRuntimeCapsuleSchema,
   renewCodexSessionLeaseSchema,
   terminalizeCodexSessionTurnSchema,
   type ClaimCodexSessionLeaseDto,
+  type CreateCodexRuntimeCapsuleDto,
   type RenewCodexSessionLeaseDto,
   type TerminalizeCodexSessionTurnDto,
 } from './plan-item-workflow.dto';
@@ -36,6 +38,14 @@ export class InternalCodexSessionController {
     @Body(new ZodValidationPipe(renewCodexSessionLeaseSchema)) body: RenewCodexSessionLeaseDto,
   ) {
     return this.service.renew(sessionId, leaseId, body);
+  }
+
+  @Post(':sessionId/runtime-capsules')
+  createRuntimeCapsule(
+    @Param('sessionId') sessionId: string,
+    @Body(new ZodValidationPipe(createCodexRuntimeCapsuleSchema)) body: CreateCodexRuntimeCapsuleDto,
+  ) {
+    return this.service.createRuntimeCapsule(sessionId, body);
   }
 
   @Post(':sessionId/turns/:turnId/terminalize')

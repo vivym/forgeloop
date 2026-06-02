@@ -824,6 +824,8 @@ describe('remote codex worker client', () => {
     const terminalized: Record<string, unknown>[] = [];
     const inputCapsuleId = '22222222-2222-4222-8222-222222222222';
     const outputCapsuleId = '33333333-3333-4333-8333-333333333333';
+    const outputMemoryBundleRef = 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-2';
+    const outputEnvironmentManifestRef = 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-2';
     const outputCapsule = {
       id: outputCapsuleId,
       codex_session_id: 'session-1',
@@ -953,7 +955,15 @@ describe('remote codex worker client', () => {
       }),
       package: vi.fn(async () => {
         events.push('package');
-        return outputCapsule;
+        return {
+          capsule: outputCapsule,
+          outputMemoryBundleRef,
+          outputMemoryBundleDigest: digest('7'),
+          memoryDeltaArtifactRef: 'artifact://internal/codex_memory_delta/codex_session/session-1/memory-delta-2',
+          memoryDeltaDigest: digest('8'),
+          outputEnvironmentManifestRef,
+          outputEnvironmentManifestDigest: digest('9'),
+        };
       }),
     };
     const worker = createRemoteCodexWorkerClient({
@@ -988,7 +998,79 @@ describe('remote codex worker client', () => {
       terminal_status: 'succeeded',
       terminal_result_json: {
         output_capsule: outputCapsule,
+        output_memory_bundle_ref: outputMemoryBundleRef,
+        output_memory_bundle_digest: digest('7'),
+        memory_delta_artifact_ref: 'artifact://internal/codex_memory_delta/codex_session/session-1/memory-delta-2',
+        memory_delta_digest: digest('8'),
+        output_environment_manifest_ref: outputEnvironmentManifestRef,
+        output_environment_manifest_digest: digest('9'),
       },
+    });
+  });
+
+  it('defensively rejects resume turns that omit input capsule restore context', async () => {
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const terminalized: Record<string, unknown>[] = [];
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-')),
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+        },
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+        fetchRuntimeJobWorkload: async () =>
+          generationWorkloadResponse({
+            codex_session_runtime_context: sessionRuntimeContext({
+              continuation: {
+                kind: 'resume_thread',
+                codex_thread_id: 'thread-1',
+                codex_thread_id_digest: codexThreadDigest('thread-1'),
+              },
+            }),
+            codex_session_terminalization: sessionTerminalization(),
+          }),
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: { startFromMaterialization: vi.fn() },
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-missing-restore',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'failed',
+      reason_code: 'codex_runtime_capsule_missing',
     });
   });
 
@@ -1179,7 +1261,20 @@ describe('remote codex worker client', () => {
           codex_session_runtime_context: jobId === 'runtime-job-1' ? startContext : resumeContext,
           codex_session_terminalization: sessionTerminalization({
             lease_token: `token-${jobId}`,
-            ...(jobId === 'runtime-job-1' ? {} : { codex_session_turn_id: 'session-turn-2' }),
+            ...(jobId === 'runtime-job-1'
+              ? {}
+              : {
+                  codex_session_turn_id: 'session-turn-2',
+                  expected_input_capsule_digest: digest('1'),
+                  input_capsule_id: '11111111-1111-4111-8111-111111111111',
+                  input_capsule_digest: digest('1'),
+                  input_capsule_ref:
+                    'artifact://internal/codex_runtime_capsule/codex_session/session-1/11111111-1111-4111-8111-111111111111',
+                  input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
+                  input_memory_bundle_digest: digest('b'),
+                  input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+                  input_environment_manifest_digest: digest('d'),
+                }),
           }),
         });
       },
@@ -1266,7 +1361,7 @@ describe('remote codex worker client', () => {
           sequence === 1
             ? '11111111-1111-4111-8111-111111111111'
             : '22222222-2222-4222-8222-222222222222';
-        return {
+        const capsule = {
           id,
           codex_session_id: 'session-1',
           created_from_turn_id: input.codexSessionTurnId,
@@ -1286,6 +1381,13 @@ describe('remote codex worker client', () => {
           credential_binding_lineage_digest: digest('a'),
           created_by_actor_id: 'worker-1',
           created_at: '2026-05-23T00:00:00.000Z',
+        };
+        return {
+          capsule,
+          outputMemoryBundleRef: `artifact://internal/codex_memory_bundle/codex_session/session-1/memory-${sequence}`,
+          outputMemoryBundleDigest: digest(sequence === 1 ? 'b' : 'c'),
+          outputEnvironmentManifestRef: `artifact://internal/codex_environment_manifest/codex_session/session-1/env-${sequence}`,
+          outputEnvironmentManifestDigest: digest(sequence === 1 ? 'd' : 'e'),
         };
       }),
     };

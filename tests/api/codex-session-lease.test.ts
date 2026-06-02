@@ -29,6 +29,12 @@ const outputCapsuleBody = (input: {
   runtime_profile_revision_id?: string;
   trusted_runtime_manifest_digest?: string;
   credential_binding_lineage_digest?: string;
+  output_memory_bundle_ref?: string;
+  output_memory_bundle_digest?: string;
+  memory_delta_artifact_ref?: string;
+  memory_delta_digest?: string;
+  output_environment_manifest_ref?: string;
+  output_environment_manifest_digest?: string;
 }) => ({
   output_capsule_id: input.id,
   output_capsule_sequence: input.sequence,
@@ -47,6 +53,16 @@ const outputCapsuleBody = (input: {
     input.trusted_runtime_manifest_digest ?? 'sha256:output-trusted-runtime-manifest',
   output_capsule_credential_binding_lineage_digest:
     input.credential_binding_lineage_digest ?? 'sha256:output-credential-binding-lineage',
+  output_memory_bundle_ref:
+    input.output_memory_bundle_ref ??
+    input.artifact_ref.replace('/codex_runtime_capsule/', '/codex_memory_bundle/').replace(/\/[^/]+$/, `/memory-${input.sequence}`),
+  output_memory_bundle_digest: input.output_memory_bundle_digest ?? 'sha256:output-memory-bundle',
+  ...(input.memory_delta_artifact_ref === undefined ? {} : { memory_delta_artifact_ref: input.memory_delta_artifact_ref }),
+  ...(input.memory_delta_digest === undefined ? {} : { memory_delta_digest: input.memory_delta_digest }),
+  output_environment_manifest_ref:
+    input.output_environment_manifest_ref ??
+    input.artifact_ref.replace('/codex_runtime_capsule/', '/codex_environment_manifest/').replace(/\/[^/]+$/, `/environment-${input.sequence}`),
+  output_environment_manifest_digest: input.output_environment_manifest_digest ?? 'sha256:output-environment-bundle',
 });
 
 const signedAutomationPost = (
@@ -331,6 +347,57 @@ describe('Codex Session lease API', () => {
     });
   });
 
+  it('creates runtime capsules through the trusted capsule route and keeps snapshots absent', async () => {
+    const { workflow } = await seedWorkflow(app, { idPrefix: '55555555' });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const sessionId = workflow.active_codex_session_id;
+    const turnId = '55555555-1111-4111-8111-111111119001';
+    const capsuleId = '55555555-1111-4111-8111-111111119101';
+    await repository.createCodexSessionTurn({
+      id: turnId,
+      codex_session_id: sessionId,
+      workflow_id: workflow.id,
+      intent: 'continue_brainstorming',
+      status: 'running',
+      input_digest: 'sha256:trusted-route-turn-input',
+      created_by_actor_id: ids.actorTech,
+      created_at: '2026-05-31T00:00:00.000Z',
+      updated_at: '2026-05-31T00:00:00.000Z',
+    });
+
+    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/runtime-capsules`, {
+      capsule_id: capsuleId,
+      sequence: 1,
+      artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${sessionId}/${capsuleId}`,
+      digest: 'sha256:trusted-route-capsule',
+      size_bytes: '123',
+      manifest_digest: 'sha256:trusted-route-manifest',
+      thread_state_digest: 'sha256:trusted-route-thread-state',
+      memory_state_digest: 'sha256:trusted-route-memory-state',
+      environment_manifest_digest: 'sha256:trusted-route-environment-manifest',
+      codex_thread_id_digest: 'sha256:trusted-route-thread-id',
+      codex_cli_version: '0.133.0',
+      app_server_protocol_digest: 'sha256:trusted-route-app-server-protocol',
+      runtime_profile_revision_id: ids.runtimeProfileRevision,
+      trusted_runtime_manifest_digest: 'sha256:trusted-route-runtime-manifest',
+      credential_binding_lineage_digest: 'sha256:trusted-route-credential-lineage',
+      created_from_turn_id: turnId,
+      actor_id: ids.actorTech,
+    }).expect(201);
+
+    await expect(repository.getCodexRuntimeCapsule(capsuleId)).resolves.toMatchObject({
+      id: capsuleId,
+      codex_session_id: sessionId,
+      sequence: 1,
+      artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${sessionId}/${capsuleId}`,
+      digest: 'sha256:trusted-route-capsule',
+      created_from_turn_id: turnId,
+      created_by_actor_id: ids.actorTech,
+    });
+
+    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/snapshots`, {}).expect(404);
+  });
+
   it('rejects legacy output snapshot terminalization fields', async () => {
     const { workflow } = await seedWorkflow(app, { idPrefix: '44444444' });
     const sessionId = workflow.active_codex_session_id;
@@ -422,6 +489,10 @@ describe('Codex Session lease API', () => {
         created_by_actor_id: ids.actorTech,
         created_at: '2026-05-31T00:01:00.000Z',
       },
+      output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${sessionId}/memory-${firstTurnId}`,
+      output_memory_bundle_digest: 'sha256:first-turn-memory-bundle-stale-epoch',
+      output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${sessionId}/environment-${firstTurnId}`,
+      output_environment_manifest_digest: 'sha256:first-turn-environment-bundle-stale-epoch',
       now: '2026-05-31T00:01:00.000Z',
     });
     await repository.createCodexSessionTurn({

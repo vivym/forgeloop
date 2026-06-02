@@ -280,6 +280,27 @@ export class ProductGenerationResultService {
       });
       return false;
     }
+    if (terminalResult.output_memory_bundle_ref === undefined || terminalResult.output_memory_bundle_digest === undefined) {
+      await this.failCodexSessionTurnFromRuntimeResult({
+        runtimeJob,
+        runtimeContext,
+        terminalization,
+        reasonCode: 'codex_memory_bundle_missing',
+      });
+      return false;
+    }
+    if (
+      terminalResult.output_environment_manifest_ref === undefined ||
+      terminalResult.output_environment_manifest_digest === undefined
+    ) {
+      await this.failCodexSessionTurnFromRuntimeResult({
+        runtimeJob,
+        runtimeContext,
+        terminalization,
+        reasonCode: 'codex_environment_manifest_missing',
+      });
+      return false;
+    }
     try {
       await this.repository.terminalizeCodexSessionTurn({
         session_id: runtimeContext.codex_session_id,
@@ -297,6 +318,14 @@ export class ProductGenerationResultService {
         codex_thread_id: threadEvidence.codex_thread_id,
         codex_thread_id_digest: threadEvidence.codex_thread_id_digest,
         output_capsule: outputCapsule,
+        output_memory_bundle_ref: terminalResult.output_memory_bundle_ref,
+        output_memory_bundle_digest: terminalResult.output_memory_bundle_digest,
+        ...(terminalResult.memory_delta_artifact_ref === undefined
+          ? {}
+          : { memory_delta_artifact_ref: terminalResult.memory_delta_artifact_ref }),
+        ...(terminalResult.memory_delta_digest === undefined ? {} : { memory_delta_digest: terminalResult.memory_delta_digest }),
+        output_environment_manifest_ref: terminalResult.output_environment_manifest_ref,
+        output_environment_manifest_digest: terminalResult.output_environment_manifest_digest,
         now: this.now(),
       });
       await this.clearCodexSessionRunnerOwnerAfterSuccessfulCompleteTurn(runtimeJob, runtimeContext);

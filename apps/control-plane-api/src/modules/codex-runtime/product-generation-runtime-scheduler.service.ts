@@ -639,6 +639,32 @@ export class ProductGenerationRuntimeSchedulerService {
           }
         : { kind: 'start_thread' };
     if (continuation.kind === 'resume_thread') {
+      const missingContinuationReason =
+        session.latest_capsule_id === undefined || session.latest_capsule_digest === undefined
+          ? 'codex_runtime_capsule_missing'
+          : session.latest_memory_bundle_ref === undefined || session.latest_memory_bundle_digest === undefined
+            ? 'codex_memory_bundle_missing'
+            : session.latest_environment_manifest_ref === undefined || session.latest_environment_manifest_digest === undefined
+              ? 'codex_environment_manifest_missing'
+              : undefined;
+      if (missingContinuationReason !== undefined) {
+        await this.failCodexSessionProductGenerationBeforeRuntimeJob({
+          repository: input.repository,
+          actionRun: input.actionRun,
+          sessionId,
+          turnId,
+          ...(turn.expected_input_capsule_digest === undefined
+            ? {}
+            : { expectedInputCapsuleDigest: turn.expected_input_capsule_digest }),
+          workerId: session.runner_worker_id ?? 'codex-session-continuation-input-missing',
+          now: input.now,
+          reasonCode: missingContinuationReason,
+        });
+        throw new DomainError(
+          missingContinuationReason,
+          `${missingContinuationReason}: Codex session ${session.id} resume continuation inputs are unavailable`,
+        );
+      }
       if (
         session.runner_worker_id === undefined ||
         session.runner_runtime_job_id === undefined ||

@@ -337,10 +337,22 @@ const publicRuntimeJobTerminalResult = (
     return undefined;
   }
   const terminalResult = validateCodexRuntimeJobTerminalResult(result);
-  if ('codex_session_thread' in terminalResult || 'output_capsule' in terminalResult) {
+  if (
+    'codex_session_thread' in terminalResult ||
+    'output_capsule' in terminalResult ||
+    'output_memory_bundle_ref' in terminalResult ||
+    'memory_delta_artifact_ref' in terminalResult ||
+    'output_environment_manifest_ref' in terminalResult
+  ) {
     const {
       codex_session_thread: _trustedThreadEvidence,
       output_capsule: _trustedOutputCapsule,
+      output_memory_bundle_ref: _trustedOutputMemoryBundleRef,
+      output_memory_bundle_digest: _trustedOutputMemoryBundleDigest,
+      memory_delta_artifact_ref: _trustedMemoryDeltaArtifactRef,
+      memory_delta_digest: _trustedMemoryDeltaDigest,
+      output_environment_manifest_ref: _trustedOutputEnvironmentManifestRef,
+      output_environment_manifest_digest: _trustedOutputEnvironmentManifestDigest,
       ...publicResult
     } = terminalResult;
     return publicResult;

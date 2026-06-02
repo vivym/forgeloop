@@ -452,6 +452,12 @@ export interface CodexGenerationRuntimeJobResult {
     app_server_turn_id?: string;
   };
   output_capsule?: CodexRuntimeCapsule;
+  output_memory_bundle_ref?: string;
+  output_memory_bundle_digest?: string;
+  memory_delta_artifact_ref?: string;
+  memory_delta_digest?: string;
+  output_environment_manifest_ref?: string;
+  output_environment_manifest_digest?: string;
   runtime_evidence?: CodexDockerRuntimeEvidence;
   public_summary: string;
 }
@@ -1561,7 +1567,15 @@ const isCodexRuntimeChangedFilePath = (path: readonly string[]): boolean => {
 
 const isCodexRuntimeInternalArtifactRefPath = (path: readonly string[]): boolean => {
   const key = path[path.length - 1];
-  return key === 'artifact_ref' || key === 'internal_ref' || key === 'output_internal_ref' || key === 'archive_ref';
+  return (
+    key === 'artifact_ref' ||
+    key === 'internal_ref' ||
+    key === 'output_internal_ref' ||
+    key === 'archive_ref' ||
+    key === 'output_memory_bundle_ref' ||
+    key === 'memory_delta_artifact_ref' ||
+    key === 'output_environment_manifest_ref'
+  );
 };
 
 const assertCodexRuntimePublicSafeRecord = (
@@ -1776,6 +1790,12 @@ const codexGenerationRuntimeJobResultKeys = new Set([
   'generation_artifacts',
   'codex_session_thread',
   'output_capsule',
+  'output_memory_bundle_ref',
+  'output_memory_bundle_digest',
+  'memory_delta_artifact_ref',
+  'memory_delta_digest',
+  'output_environment_manifest_ref',
+  'output_environment_manifest_digest',
   'runtime_evidence',
   'public_summary',
 ]);
@@ -1893,6 +1913,23 @@ const requireCodexRuntimeInternalRef = (input: Record<string, unknown>, field: s
     throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${label} is invalid.`);
   }
   throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${label} must reference a runtime job artifact.`);
+};
+
+const requireCodexSessionArtifactRef = (
+  input: Record<string, unknown>,
+  field: string,
+  expectedKind: 'codex_memory_bundle' | 'codex_memory_delta' | 'codex_environment_manifest',
+): string => {
+  const internalRef = requireCodexRuntimeResultString(input, field);
+  try {
+    const parsed = parseInternalArtifactRef(internalRef);
+    if (parsed.kind === expectedKind && parsed.owner_type === 'codex_session') {
+      return internalRef;
+    }
+  } catch {
+    // Report all terminal internal ref failures with the runtime evidence safety code.
+  }
+  throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} is invalid.`);
 };
 
 const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<string, unknown> => {
@@ -2262,6 +2299,35 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   }
   if (input.output_capsule !== undefined) {
     requireCodexRuntimeCapsuleTerminalEvidence(input.output_capsule);
+    requireCodexSessionArtifactRef(input, 'output_memory_bundle_ref', 'codex_memory_bundle');
+    requireCodexRuntimeResultDigest(input, 'output_memory_bundle_digest');
+    requireCodexSessionArtifactRef(input, 'output_environment_manifest_ref', 'codex_environment_manifest');
+    requireCodexRuntimeResultDigest(input, 'output_environment_manifest_digest');
+    const hasMemoryDeltaRef = input.memory_delta_artifact_ref !== undefined;
+    const hasMemoryDeltaDigest = input.memory_delta_digest !== undefined;
+    if (hasMemoryDeltaRef !== hasMemoryDeltaDigest) {
+      throw unsafeCodexRuntimePublicValue(
+        'Codex runtime terminal result memory_delta_artifact_ref and memory_delta_digest must be provided together.',
+      );
+    }
+    if (hasMemoryDeltaRef) {
+      requireCodexSessionArtifactRef(input, 'memory_delta_artifact_ref', 'codex_memory_delta');
+      requireCodexRuntimeResultDigest(input, 'memory_delta_digest');
+    }
+  } else {
+    const continuationFields = [
+      'output_memory_bundle_ref',
+      'output_memory_bundle_digest',
+      'memory_delta_artifact_ref',
+      'memory_delta_digest',
+      'output_environment_manifest_ref',
+      'output_environment_manifest_digest',
+    ] as const;
+    for (const field of continuationFields) {
+      if (input[field] !== undefined) {
+        throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} requires output_capsule.`);
+      }
+    }
   }
   if (input.runtime_evidence !== undefined) {
     validateCodexDockerRuntimeEvidence(input.runtime_evidence);

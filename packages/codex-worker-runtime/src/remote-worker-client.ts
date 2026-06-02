@@ -31,6 +31,7 @@ import { decryptCodexLaunchTokenEnvelope, generateCodexWorkerSessionKeyPair, typ
 import { createMaterializedRunSessionCodexDriver } from './run-session-driver.js';
 import {
   generationRuntimeJobTerminalResult,
+  type GenerationOutputCapsulePackageResult,
   jsonRuntimeJobArtifactUpload,
   type RuntimeJobArtifactUploadInput,
 } from './runtime-job-artifacts.js';
@@ -112,7 +113,7 @@ export interface RemoteWorkerCapsulePackageInput {
 
 export interface RemoteWorkerCapsuleManager {
   restore(input: RemoteWorkerCapsuleRestoreInput): Promise<void>;
-  package(input: RemoteWorkerCapsulePackageInput): Promise<CodexRuntimeCapsule>;
+  package(input: RemoteWorkerCapsulePackageInput): Promise<GenerationOutputCapsulePackageResult>;
 }
 
 type RemoteLauncher = Pick<DockerizedCodexAppServerLauncher, 'startFromMaterialization'>;
@@ -593,7 +594,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     runner: GenerationRunner,
     workload: CodexGenerationWorkloadV1,
     generationResult: CodexGenerationResult<Record<string, unknown>>,
-  ): Promise<CodexRuntimeCapsule | undefined> => {
+  ): Promise<GenerationOutputCapsulePackageResult | undefined> => {
     const terminalization = parseCodexSessionTerminalization(workload.codex_session_terminalization);
     if (terminalization === undefined) {
       return undefined;
@@ -627,6 +628,10 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     const terminalization = parseCodexSessionTerminalization(workload.codex_session_terminalization);
     if (terminalization === undefined) {
       return {};
+    }
+    const context = validateCodexSessionRuntimeContext(workload.codex_session_runtime_context);
+    if (context.continuation.kind === 'resume_thread' && terminalization.input_capsule_id === undefined) {
+      throw new Error('codex_runtime_capsule_missing');
     }
     if (terminalization.input_capsule_id === undefined) {
       if (terminalization.base_memory_bundle_ref === undefined || terminalization.base_memory_bundle_digest === undefined) {
@@ -1604,9 +1609,16 @@ const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkloa
       if (terminalization?.input_capsule_id !== undefined && context.continuation.kind !== 'resume_thread') {
         throw new Error('codex_generation_workload_unsupported');
       }
+      if (context.continuation.kind === 'resume_thread' && terminalization?.input_capsule_id === undefined) {
+        throw new Error('codex_runtime_capsule_missing');
+      }
     } catch (error) {
       if (isRecord(error) && typeof error.code === 'string' && publicRuntimeWorkerErrorCodes.has(error.code)) {
         throw new Error(error.code);
+      }
+      const message = error instanceof Error ? error.message.split(':', 1)[0]?.trim() : undefined;
+      if (message !== undefined && publicRuntimeWorkerErrorCodes.has(message)) {
+        throw new Error(message);
       }
       throw new Error('codex_generation_workload_unsupported');
     }
@@ -1719,7 +1731,7 @@ const requiredCapsuleRestoreTerminalization = (
   input_environment_manifest_ref: string;
   input_environment_manifest_digest: string;
 } => {
-  if (value.input_capsule_digest === undefined || value.input_capsule_ref === undefined) {
+  if (value.input_capsule_id === undefined || value.input_capsule_digest === undefined || value.input_capsule_ref === undefined) {
     throw new Error('codex_runtime_capsule_missing');
   }
   if (value.input_memory_bundle_ref === undefined || value.input_memory_bundle_digest === undefined) {

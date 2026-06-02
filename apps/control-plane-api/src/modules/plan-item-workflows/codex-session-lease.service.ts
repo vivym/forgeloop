@@ -12,6 +12,7 @@ import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import type {
   ClaimCodexSessionLeaseDto,
+  CreateCodexRuntimeCapsuleDto,
   RenewCodexSessionLeaseDto,
   TerminalizeCodexSessionTurnDto,
 } from './plan-item-workflow.dto';
@@ -112,6 +113,32 @@ export class CodexSessionLeaseService {
     return this.toLeaseResponse(lease);
   }
 
+  async createRuntimeCapsule(sessionId: string, dto: CreateCodexRuntimeCapsuleDto) {
+    const capsule: CodexRuntimeCapsule = {
+      id: dto.capsule_id,
+      codex_session_id: sessionId,
+      sequence: dto.sequence,
+      artifact_ref: dto.artifact_ref,
+      digest: dto.digest,
+      size_bytes: dto.size_bytes,
+      manifest_digest: dto.manifest_digest,
+      thread_state_digest: dto.thread_state_digest,
+      memory_state_digest: dto.memory_state_digest,
+      environment_manifest_digest: dto.environment_manifest_digest,
+      codex_thread_id_digest: dto.codex_thread_id_digest,
+      codex_cli_version: dto.codex_cli_version,
+      app_server_protocol_digest: dto.app_server_protocol_digest,
+      runtime_profile_revision_id: dto.runtime_profile_revision_id,
+      trusted_runtime_manifest_digest: dto.trusted_runtime_manifest_digest,
+      credential_binding_lineage_digest: dto.credential_binding_lineage_digest,
+      created_from_turn_id: dto.created_from_turn_id,
+      created_by_actor_id: dto.actor_id,
+      created_at: this.now(),
+    };
+    await this.repository.createCodexRuntimeCapsule(capsule);
+    return { session_id: sessionId, capsule_id: capsule.id, status: 'created' };
+  }
+
   async terminalize(sessionId: string, turnId: string, dto: TerminalizeCodexSessionTurnDto, request: AutomationRequest) {
     const trustedActorId = this.requireTrustedActorId(request);
     const outputCapsule: CodexRuntimeCapsule | undefined = hasOutputCapsule(dto)
@@ -149,6 +176,16 @@ export class CodexSessionLeaseService {
         worker_session_digest: dto.worker_session_digest,
         status: dto.status,
         ...(outputCapsule === undefined ? {} : { output_capsule: outputCapsule }),
+        ...(dto.output_memory_bundle_ref === undefined ? {} : { output_memory_bundle_ref: dto.output_memory_bundle_ref }),
+        ...(dto.output_memory_bundle_digest === undefined ? {} : { output_memory_bundle_digest: dto.output_memory_bundle_digest }),
+        ...(dto.memory_delta_artifact_ref === undefined ? {} : { memory_delta_artifact_ref: dto.memory_delta_artifact_ref }),
+        ...(dto.memory_delta_digest === undefined ? {} : { memory_delta_digest: dto.memory_delta_digest }),
+        ...(dto.output_environment_manifest_ref === undefined
+          ? {}
+          : { output_environment_manifest_ref: dto.output_environment_manifest_ref }),
+        ...(dto.output_environment_manifest_digest === undefined
+          ? {}
+          : { output_environment_manifest_digest: dto.output_environment_manifest_digest }),
         ...(dto.codex_thread_id === undefined ? {} : { codex_thread_id: dto.codex_thread_id }),
         ...(dto.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: dto.codex_thread_id_digest }),
         ...(dto.failure_code === undefined ? {} : { failure_code: dto.failure_code }),

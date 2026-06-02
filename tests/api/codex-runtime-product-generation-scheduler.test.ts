@@ -402,6 +402,8 @@ describe('Product generation CodexSession scheduler', () => {
       scheduleInput(seeded.workflow.id, seeded.workflow.active_codex_session_id, turnId, seeded.ids.project, 'terminal-bridge'),
     );
     const runtimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: scheduled.runtime_job.id }))!;
+    const outputMemoryBundleRef = `artifact://internal/codex_memory_bundle/codex_session/${seeded.workflow.active_codex_session_id}/runtime-output-memory-${turnId}`;
+    const outputEnvironmentManifestRef = `artifact://internal/codex_environment_manifest/codex_session/${seeded.workflow.active_codex_session_id}/runtime-output-environment-${turnId}`;
     const terminalResult = generationTerminalResult({
       codex_session_thread: {
         codex_thread_id: 'thread-1',
@@ -424,6 +426,12 @@ describe('Product generation CodexSession scheduler', () => {
         created_from_turn_id: turnId,
         created_by_actor_id: seeded.ids.actorTech,
       }),
+      output_memory_bundle_ref: outputMemoryBundleRef,
+      output_memory_bundle_digest: capsuleDigest('runtime-result-output-memory'),
+      memory_delta_artifact_ref: `artifact://internal/codex_memory_delta/codex_session/${seeded.workflow.active_codex_session_id}/runtime-output-memory-delta-${turnId}`,
+      memory_delta_digest: capsuleDigest('runtime-result-memory-delta'),
+      output_environment_manifest_ref: outputEnvironmentManifestRef,
+      output_environment_manifest_digest: capsuleDigest('runtime-result-output-environment'),
     });
     expect(() => schedulerRuntimeResultValidation(terminalResult)).not.toThrow();
     await terminalizeRuntimeJob(repository, runtimeJob, terminalResult, 'terminal-bridge');
@@ -464,14 +472,112 @@ describe('Product generation CodexSession scheduler', () => {
       status: 'idle',
       latest_capsule_id: terminalResult.output_capsule.id,
       latest_capsule_digest: terminalResult.output_capsule.digest,
+      latest_memory_bundle_ref: outputMemoryBundleRef,
+      latest_memory_bundle_digest: capsuleDigest('runtime-result-output-memory'),
+      latest_environment_manifest_ref: outputEnvironmentManifestRef,
+      latest_environment_manifest_digest: capsuleDigest('runtime-result-output-environment'),
     });
     await expect(repository.getCodexSessionTurn(turnId)).resolves.toMatchObject({
       status: 'succeeded',
       output_capsule_id: terminalResult.output_capsule.id,
       output_capsule_digest: terminalResult.output_capsule.digest,
+      output_memory_bundle_ref: outputMemoryBundleRef,
+      output_memory_bundle_digest: capsuleDigest('runtime-result-output-memory'),
+      memory_delta_artifact_ref: `artifact://internal/codex_memory_delta/codex_session/${seeded.workflow.active_codex_session_id}/runtime-output-memory-delta-${turnId}`,
+      memory_delta_digest: capsuleDigest('runtime-result-memory-delta'),
+      output_environment_manifest_ref: outputEnvironmentManifestRef,
+      output_environment_manifest_digest: capsuleDigest('runtime-result-output-environment'),
       codex_thread_id_digest: expectedThreadDigest,
     });
     await expect(repository.getCodexRuntimeCapsule(terminalResult.output_capsule.id)).resolves.toEqual(terminalResult.output_capsule);
+  });
+
+  it('fails closed before scheduling a bound resume when latest capsule is missing', async () => {
+    const seeded = await seedSchedulerWorkflow('ccccccd0');
+    const firstTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'ccccd001');
+    await bindSessionThread(seeded.workflow.active_codex_session_id, seeded.workflow.id, firstTurnId);
+    const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id);
+    (repository as unknown as { codexSessions: Map<string, unknown> }).codexSessions.set(session!.id, {
+      ...session!,
+      latest_capsule_id: undefined,
+      latest_capsule_digest: undefined,
+    });
+    const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'ccccd002');
+
+    await expect(
+      scheduler.schedule(
+        scheduleInput(seeded.workflow.id, seeded.workflow.active_codex_session_id, nextTurnId, seeded.ids.project, 'bound-missing-capsule'),
+      ),
+    ).rejects.toMatchObject({ code: 'codex_runtime_capsule_missing' });
+
+    const actionRun = await repository.getAutomationActionRun(
+      stableUuid({ kind: 'action-run', scenario: 'bound-missing-capsule', turnId: nextTurnId }),
+    );
+    expect(actionRun).toMatchObject({
+      status: 'failed',
+      result_json: expect.objectContaining({ reason_code: 'codex_runtime_capsule_missing' }),
+    });
+    await expect(scheduler.runtimeJobForAction(repository, actionRun!, 'boundary_brainstorming_round')).resolves.toBeUndefined();
+  });
+
+  it('fails closed before scheduling a bound resume when latest memory bundle is missing', async () => {
+    const seeded = await seedSchedulerWorkflow('ccccccd1');
+    const firstTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'ccccd101');
+    await bindSessionThread(seeded.workflow.active_codex_session_id, seeded.workflow.id, firstTurnId);
+    const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id);
+    (repository as unknown as { codexSessions: Map<string, unknown> }).codexSessions.set(session!.id, {
+      ...session!,
+      latest_memory_bundle_ref: undefined,
+      latest_memory_bundle_digest: undefined,
+    });
+    const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'ccccd102', {
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
+    });
+
+    await expect(
+      scheduler.schedule(
+        scheduleInput(seeded.workflow.id, seeded.workflow.active_codex_session_id, nextTurnId, seeded.ids.project, 'bound-missing-memory'),
+      ),
+    ).rejects.toMatchObject({ code: 'codex_memory_bundle_missing' });
+
+    const actionRun = await repository.getAutomationActionRun(
+      stableUuid({ kind: 'action-run', scenario: 'bound-missing-memory', turnId: nextTurnId }),
+    );
+    expect(actionRun).toMatchObject({
+      status: 'failed',
+      result_json: expect.objectContaining({ reason_code: 'codex_memory_bundle_missing' }),
+    });
+    await expect(scheduler.runtimeJobForAction(repository, actionRun!, 'boundary_brainstorming_round')).resolves.toBeUndefined();
+  });
+
+  it('fails closed before scheduling a bound resume when latest environment manifest is missing', async () => {
+    const seeded = await seedSchedulerWorkflow('ccccccd2');
+    const firstTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'ccccd201');
+    await bindSessionThread(seeded.workflow.active_codex_session_id, seeded.workflow.id, firstTurnId);
+    const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id);
+    (repository as unknown as { codexSessions: Map<string, unknown> }).codexSessions.set(session!.id, {
+      ...session!,
+      latest_environment_manifest_ref: undefined,
+      latest_environment_manifest_digest: undefined,
+    });
+    const nextTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'ccccd202', {
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
+    });
+
+    await expect(
+      scheduler.schedule(
+        scheduleInput(seeded.workflow.id, seeded.workflow.active_codex_session_id, nextTurnId, seeded.ids.project, 'bound-missing-environment'),
+      ),
+    ).rejects.toMatchObject({ code: 'codex_environment_manifest_missing' });
+
+    const actionRun = await repository.getAutomationActionRun(
+      stableUuid({ kind: 'action-run', scenario: 'bound-missing-environment', turnId: nextTurnId }),
+    );
+    expect(actionRun).toMatchObject({
+      status: 'failed',
+      result_json: expect.objectContaining({ reason_code: 'codex_environment_manifest_missing' }),
+    });
+    await expect(scheduler.runtimeJobForAction(repository, actionRun!, 'boundary_brainstorming_round')).resolves.toBeUndefined();
   });
 
   it('clears the session runner owner after a complete successful first turn', async () => {
@@ -780,6 +886,10 @@ describe('Product generation CodexSession scheduler', () => {
         app_server_turn_id: 'app-server-turn-idempotent',
       },
       output_capsule: outputCapsule,
+      output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${runtimeContext.codex_session_id}/memory-${runtimeContext.codex_session_turn_id}`,
+      output_memory_bundle_digest: capsuleDigest(`memory-${runtimeContext.codex_session_turn_id}`),
+      output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${runtimeContext.codex_session_id}/environment-${runtimeContext.codex_session_turn_id}`,
+      output_environment_manifest_digest: capsuleDigest(`environment-${runtimeContext.codex_session_turn_id}`),
     });
     await terminalizeRuntimeJob(repository, runtimeJob, terminalResult, 'terminal-idempotent');
     await repository.terminalizeCodexSessionTurn({
@@ -795,6 +905,10 @@ describe('Product generation CodexSession scheduler', () => {
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: expectedThreadDigest,
       output_capsule: outputCapsule,
+      output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${runtimeContext.codex_session_id}/memory-${runtimeContext.codex_session_turn_id}`,
+      output_memory_bundle_digest: capsuleDigest(`memory-${runtimeContext.codex_session_turn_id}`),
+      output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${runtimeContext.codex_session_id}/environment-${runtimeContext.codex_session_turn_id}`,
+      output_environment_manifest_digest: capsuleDigest(`environment-${runtimeContext.codex_session_turn_id}`),
       now,
     });
     const applyBoundaryRoundRuntimeResult = vi.fn(async (input: { actionRun: { id: string }; runtime_job_id: string }) => {
@@ -998,7 +1112,7 @@ describe('Product generation CodexSession scheduler', () => {
             sequence: 2,
             digest: 'sha256:trusted-terminalization-stale-capsule',
             manifestDigest: 'sha256:trusted-terminalization-stale-capsule-manifest',
-            codexThreadIdDigest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-2' }),
+            codexThreadIdDigest: expectedThreadDigest,
             actorId: seeded.ids.actorTech,
           }),
           codex_thread_id: 'thread-2',
@@ -1360,6 +1474,10 @@ describe('Product generation CodexSession scheduler', () => {
         created_from_turn_id: runnerTurnId,
         created_by_actor_id: actorId,
       }),
+      output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${sessionId}/memory-${runnerTurnId}`,
+      output_memory_bundle_digest: capsuleDigest(`memory-${runnerTurnId}`),
+      output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${sessionId}/environment-${runnerTurnId}`,
+      output_environment_manifest_digest: capsuleDigest(`environment-${runnerTurnId}`),
       now,
     });
     await repository.markCodexSessionRunnerOwner({
@@ -1803,6 +1921,10 @@ function trustedLeaseOutputCapsuleBody(input: {
     runtime_profile_revision_id: capsule.runtime_profile_revision_id,
     output_capsule_trusted_runtime_manifest_digest: capsule.trusted_runtime_manifest_digest,
     output_capsule_credential_binding_lineage_digest: capsule.credential_binding_lineage_digest,
+    output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${input.sessionId}/memory-${input.turnId}`,
+    output_memory_bundle_digest: capsuleDigest(`memory-${input.turnId}`),
+    output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${input.sessionId}/environment-${input.turnId}`,
+    output_environment_manifest_digest: capsuleDigest(`environment-${input.turnId}`),
   };
 }
 
@@ -1825,6 +1947,21 @@ function generationTerminalResult(overrides: Partial<CodexGenerationRuntimeJobRe
     public_summary: 'No questions.',
     artifacts: [],
   };
+  const capsule = overrides.output_capsule;
+  const outputContinuation =
+    capsule === undefined
+      ? {}
+      : {
+          output_memory_bundle_ref:
+            overrides.output_memory_bundle_ref ??
+            `artifact://internal/codex_memory_bundle/codex_session/${capsule.codex_session_id}/memory-${capsule.created_from_turn_id}`,
+          output_memory_bundle_digest: overrides.output_memory_bundle_digest ?? capsuleDigest(`memory-${capsule.created_from_turn_id}`),
+          output_environment_manifest_ref:
+            overrides.output_environment_manifest_ref ??
+            `artifact://internal/codex_environment_manifest/codex_session/${capsule.codex_session_id}/environment-${capsule.created_from_turn_id}`,
+          output_environment_manifest_digest:
+            overrides.output_environment_manifest_digest ?? capsuleDigest(`environment-${capsule.created_from_turn_id}`),
+        };
   return {
     task_kind: 'boundary_brainstorming_round',
     prompt_version: 'boundary-brainstorming-round:v1',
@@ -1833,6 +1970,7 @@ function generationTerminalResult(overrides: Partial<CodexGenerationRuntimeJobRe
     generated_payload_digest: codexCanonicalDigest(generatedPayload),
     generation_artifacts: [],
     public_summary: 'Generated product artifact.',
+    ...outputContinuation,
     ...overrides,
   };
 }

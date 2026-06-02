@@ -4569,6 +4569,18 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       );
     }
     if (
+      input.status === 'succeeded' &&
+      (input.output_memory_bundle_ref === undefined ||
+        input.output_memory_bundle_digest === undefined ||
+        input.output_environment_manifest_ref === undefined ||
+        input.output_environment_manifest_digest === undefined)
+    ) {
+      throw new DomainError(
+        'codex_runtime_capsule_stale',
+        `codex_runtime_capsule_stale: Codex session ${input.session_id} successful terminalization requires output continuation refs`,
+      );
+    }
+    if (
       input.output_capsule !== undefined &&
       input.output_capsule.codex_session_id !== session.id
     ) {

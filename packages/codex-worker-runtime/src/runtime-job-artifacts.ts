@@ -24,6 +24,16 @@ export interface RuntimeJobArtifactUploadInput {
   metadata_json?: Record<string, unknown>;
 }
 
+export interface GenerationOutputCapsulePackageResult {
+  capsule: CodexRuntimeCapsule;
+  outputMemoryBundleRef: string;
+  outputMemoryBundleDigest: string;
+  memoryDeltaArtifactRef?: string;
+  memoryDeltaDigest?: string;
+  outputEnvironmentManifestRef: string;
+  outputEnvironmentManifestDigest: string;
+}
+
 export const jsonRuntimeJobArtifactUpload = (input: {
   kind: string;
   name: string;
@@ -62,7 +72,7 @@ export const generationRuntimeJobTerminalResult = (
     internal_ref?: string;
   }>,
   runtimeEvidence?: CodexDockerRuntimeEvidence,
-  outputCapsule?: CodexRuntimeCapsule,
+  outputCapsule?: GenerationOutputCapsulePackageResult,
 ): CodexGenerationRuntimeJobResult => {
   const generatedPayloadDigest = codexCanonicalDigest(result.generated);
   const generatedPayloadArtifact = uploadedArtifacts.find((artifact) => artifact.kind === 'generated_payload');
@@ -105,7 +115,19 @@ export const generationRuntimeJobTerminalResult = (
           },
     }),
     ...(runtimeEvidence === undefined ? {} : { runtime_evidence: runtimeEvidence }),
-    ...(outputCapsule === undefined ? {} : { output_capsule: outputCapsule }),
+    ...(outputCapsule === undefined
+      ? {}
+      : {
+          output_capsule: outputCapsule.capsule,
+          output_memory_bundle_ref: outputCapsule.outputMemoryBundleRef,
+          output_memory_bundle_digest: outputCapsule.outputMemoryBundleDigest,
+          ...(outputCapsule.memoryDeltaArtifactRef === undefined
+            ? {}
+            : { memory_delta_artifact_ref: outputCapsule.memoryDeltaArtifactRef }),
+          ...(outputCapsule.memoryDeltaDigest === undefined ? {} : { memory_delta_digest: outputCapsule.memoryDeltaDigest }),
+          output_environment_manifest_ref: outputCapsule.outputEnvironmentManifestRef,
+          output_environment_manifest_digest: outputCapsule.outputEnvironmentManifestDigest,
+        }),
     public_summary: result.publicSummary,
   };
   validateCodexRuntimeJobTerminalResult(terminalResult);
