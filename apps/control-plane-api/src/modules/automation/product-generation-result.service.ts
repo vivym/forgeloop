@@ -7,10 +7,12 @@ import {
 } from '@forgeloop/codex-runtime';
 import {
   codexCanonicalDigest,
+  codexCredentialPayloadDigest,
   DomainError,
   validateCodexRuntimeJobTerminalResult,
   type AutomationActionRun,
   type CodexGenerationRuntimeJobResult,
+  type CodexGenerationWorkloadV1,
   type CodexRuntimeJob,
   type InternalArtifactObject,
 } from '@forgeloop/domain';
@@ -18,10 +20,19 @@ import { LocalInternalArtifactStore, type DeliveryRepository } from '@forgeloop/
 
 import { BrainstormingService } from '../brainstorming/brainstorming.service';
 import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../core/control-plane-tokens';
+import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import { SpecPlanService } from '../spec-plan/spec-plan.service';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const staleTerminalizationCodes = new Set([
+  'codex_session_lease_conflict',
+  'codex_session_lease_expired',
+  'codex_session_stale_terminalization',
+  'codex_session_snapshot_stale',
+  'codex_session_thread_binding_stale',
+]);
 
 export type ProductGenerationResultApplyOutcome =
   | { applied: true }
@@ -44,6 +55,7 @@ export class ProductGenerationResultService {
     @Inject(INTERNAL_ARTIFACT_STORE_ROOT) internalArtifactStoreRoot: string,
     @Inject(BrainstormingService) private readonly brainstormingService: BrainstormingService,
     @Inject(SpecPlanService) private readonly specPlanService: SpecPlanService,
+    @Inject(ControlPlaneRuntimeService) private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
   ) {
     this.internalArtifacts = new LocalInternalArtifactStore({
       root: internalArtifactStoreRoot,
@@ -86,10 +98,27 @@ export class ProductGenerationResultService {
       return this.completeProductActionIfOwned(actionRun, { applied: false, reason: 'invalid_precondition' });
     }
 
+    const terminalizedSession = await this.terminalizeCodexSessionTurnFromRuntimeResult(activeFence.runtime_job, terminalResult);
+    if (!terminalizedSession) {
+      return this.completeProductActionIfOwned(actionRun, { applied: false, reason: 'invalid_precondition' });
+    }
+    const outcome = await this.applyProductGenerationResult(actionRun, input.runtimeJobId, terminalResult);
+    if (!outcome.applied) {
+      await this.clearCodexSessionRunnerOwnerAfterTerminalResultRejection(activeFence.runtime_job);
+      return this.completeProductActionIfOwned(actionRun, outcome);
+    }
+    return this.completeProductActionIfOwned(actionRun, outcome);
+  }
+
+  private async applyProductGenerationResult(
+    actionRun: AutomationActionRun,
+    runtimeJobId: string,
+    terminalResult: CodexGenerationRuntimeJobResult,
+  ): Promise<ProductGenerationResultApplyOutcome> {
     let outcome: ProductGenerationResultApplyOutcome;
     switch (terminalResult.task_kind) {
       case 'boundary_brainstorming_round': {
-        const generatedPayload = await this.resolveGeneratedPayload(input.runtimeJobId, terminalResult);
+        const generatedPayload = await this.resolveGeneratedPayload(runtimeJobId, terminalResult);
         if (generatedPayload === undefined) {
           outcome = { applied: false, reason: 'unsupported_generated_payload_ref' };
           break;
@@ -101,13 +130,13 @@ export class ProductGenerationResultService {
         }
         outcome = await this.brainstormingService.applyBoundaryRoundRuntimeResult({
           actionRun,
-          runtime_job_id: input.runtimeJobId,
+          runtime_job_id: runtimeJobId,
           generated,
         });
         break;
       }
       case 'development_plan_item_spec_revision': {
-        const generatedPayload = await this.resolveGeneratedPayload(input.runtimeJobId, terminalResult);
+        const generatedPayload = await this.resolveGeneratedPayload(runtimeJobId, terminalResult);
         if (generatedPayload === undefined) {
           outcome = { applied: false, reason: 'unsupported_generated_payload_ref' };
           break;
@@ -119,14 +148,14 @@ export class ProductGenerationResultService {
         }
         const result = await this.specPlanService.writeGeneratedItemSpecRevision({
           actionRun,
-          runtime_job_id: input.runtimeJobId,
+          runtime_job_id: runtimeJobId,
           generated,
         });
         outcome = result.applied ? { applied: true } : result;
         break;
       }
       case 'development_plan_item_execution_plan_revision': {
-        const generatedPayload = await this.resolveGeneratedPayload(input.runtimeJobId, terminalResult);
+        const generatedPayload = await this.resolveGeneratedPayload(runtimeJobId, terminalResult);
         if (generatedPayload === undefined) {
           outcome = { applied: false, reason: 'unsupported_generated_payload_ref' };
           break;
@@ -138,7 +167,7 @@ export class ProductGenerationResultService {
         }
         const result = await this.specPlanService.writeGeneratedItemImplementationPlanRevision({
           actionRun,
-          runtime_job_id: input.runtimeJobId,
+          runtime_job_id: runtimeJobId,
           generated,
         });
         outcome = result.applied ? { applied: true } : result;
@@ -147,7 +176,7 @@ export class ProductGenerationResultService {
       default:
         outcome = { applied: false, reason: 'legacy_generation_task_kind' };
     }
-    return this.completeProductActionIfOwned(actionRun, outcome);
+    return outcome;
   }
 
   private storedTerminalizedResult(
@@ -182,6 +211,246 @@ export class ProductGenerationResultService {
     } catch {
       return undefined;
     }
+  }
+
+  private async terminalizeCodexSessionTurnFromRuntimeResult(
+    runtimeJob: CodexRuntimeJob,
+    terminalResult: CodexGenerationRuntimeJobResult,
+  ): Promise<boolean> {
+    const workload = runtimeJob.input_json as Partial<CodexGenerationWorkloadV1>;
+    const runtimeContext = workload.codex_session_runtime_context;
+    const terminalization = workload.codex_session_terminalization;
+    if (runtimeContext === undefined && terminalization === undefined) {
+      return true;
+    }
+    if (
+      runtimeContext === undefined ||
+      terminalization === undefined ||
+      runtimeContext.codex_session_id !== runtimeJob.codex_session_id ||
+      runtimeContext.codex_session_turn_id !== runtimeJob.codex_session_turn_id ||
+      runtimeContext.lease_id === undefined ||
+      runtimeContext.lease_epoch === undefined
+    ) {
+      return false;
+    }
+    const threadEvidence = terminalResult.codex_session_thread;
+    if (threadEvidence === undefined) {
+      await this.failCodexSessionTurnFromRuntimeResult({
+        runtimeJob,
+        runtimeContext,
+        terminalization,
+        reasonCode: 'codex_app_server_thread_id_missing',
+      });
+      return false;
+    }
+    try {
+      await this.repository.terminalizeCodexSessionTurn({
+        session_id: runtimeContext.codex_session_id,
+        turn_id: runtimeContext.codex_session_turn_id,
+        lease_id: runtimeContext.lease_id,
+        lease_token_hash: codexCredentialPayloadDigest(terminalization.lease_token),
+        lease_epoch: runtimeContext.lease_epoch,
+        worker_id: runtimeContext.worker_id,
+        worker_session_digest: runtimeContext.worker_session_digest,
+        status: 'succeeded',
+        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+          ? {}
+          : { expected_previous_snapshot_digest: runtimeContext.expected_previous_snapshot_digest }),
+        app_server_thread_binding_required: true,
+        codex_thread_id: threadEvidence.codex_thread_id,
+        codex_thread_id_digest: threadEvidence.codex_thread_id_digest,
+        now: this.now(),
+      });
+      await this.clearCodexSessionRunnerOwnerAfterSuccessfulCompleteTurn(runtimeJob, runtimeContext);
+    } catch (error) {
+      if (!(error instanceof DomainError) || !staleTerminalizationCodes.has(error.code)) {
+        throw error;
+      }
+      if (await this.codexSessionTurnAlreadyTerminalizedByRuntimeResult(runtimeContext, threadEvidence)) {
+        await this.clearCodexSessionRunnerOwnerAfterSuccessfulCompleteTurn(runtimeJob, runtimeContext);
+        return true;
+      }
+      await this.recordStaleCodexSessionTerminalizationAttempt({
+        sessionId: runtimeContext.codex_session_id,
+        turnId: runtimeContext.codex_session_turn_id,
+        leaseId: runtimeContext.lease_id,
+        leaseEpoch: runtimeContext.lease_epoch,
+        workerId: runtimeContext.worker_id,
+        workerSessionDigest: runtimeContext.worker_session_digest,
+        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+          ? {}
+          : { expectedPreviousSnapshotDigest: runtimeContext.expected_previous_snapshot_digest }),
+        attemptedCodexThreadIdDigest: threadEvidence.codex_thread_id_digest,
+        failureCode: error.code,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  private async failCodexSessionTurnFromRuntimeResult(input: {
+    runtimeJob: CodexRuntimeJob;
+    runtimeContext: NonNullable<CodexGenerationWorkloadV1['codex_session_runtime_context']>;
+    terminalization: NonNullable<CodexGenerationWorkloadV1['codex_session_terminalization']>;
+    reasonCode: string;
+  }): Promise<void> {
+    const { runtimeJob, runtimeContext, terminalization, reasonCode } = input;
+    try {
+      await this.repository.terminalizeCodexSessionTurn({
+        session_id: runtimeContext.codex_session_id,
+        turn_id: runtimeContext.codex_session_turn_id,
+        lease_id: runtimeContext.lease_id,
+        lease_token_hash: codexCredentialPayloadDigest(terminalization.lease_token),
+        lease_epoch: runtimeContext.lease_epoch,
+        worker_id: runtimeContext.worker_id,
+        worker_session_digest: runtimeContext.worker_session_digest,
+        status: 'failed',
+        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+          ? {}
+          : { expected_previous_snapshot_digest: runtimeContext.expected_previous_snapshot_digest }),
+        failure_code: reasonCode,
+        now: this.now(),
+      });
+      await this.clearCodexSessionRunnerOwnerAfterTerminalTurn({
+        sessionId: runtimeContext.codex_session_id,
+        runnerLaunchLeaseId: runtimeContext.runner_launch_lease_id ?? runtimeJob.launch_lease_id,
+        reasonCode,
+      });
+    } catch (error) {
+      if (!(error instanceof DomainError) || !staleTerminalizationCodes.has(error.code)) {
+        throw error;
+      }
+      await this.recordStaleCodexSessionTerminalizationAttempt({
+        sessionId: runtimeContext.codex_session_id,
+        turnId: runtimeContext.codex_session_turn_id,
+        leaseId: runtimeContext.lease_id,
+        leaseEpoch: runtimeContext.lease_epoch,
+        workerId: runtimeContext.worker_id,
+        workerSessionDigest: runtimeContext.worker_session_digest,
+        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+          ? {}
+          : { expectedPreviousSnapshotDigest: runtimeContext.expected_previous_snapshot_digest }),
+        failureCode: error.code,
+      });
+    }
+  }
+
+  private async clearCodexSessionRunnerOwnerAfterSuccessfulCompleteTurn(
+    runtimeJob: CodexRuntimeJob,
+    runtimeContext: NonNullable<CodexGenerationWorkloadV1['codex_session_runtime_context']>,
+  ): Promise<void> {
+    if (runtimeContext.turn_group_status !== 'complete') {
+      return;
+    }
+    await this.clearCodexSessionRunnerOwnerAfterTerminalTurn({
+      sessionId: runtimeContext.codex_session_id,
+      runnerLaunchLeaseId: runtimeContext.runner_launch_lease_id ?? runtimeJob.launch_lease_id,
+      reasonCode: 'codex_runtime_job_succeeded',
+    });
+  }
+
+  private async clearCodexSessionRunnerOwnerAfterTerminalResultRejection(runtimeJob: CodexRuntimeJob): Promise<void> {
+    const workload = runtimeJob.input_json as Partial<CodexGenerationWorkloadV1>;
+    const runtimeContext = workload.codex_session_runtime_context;
+    if (runtimeContext === undefined) {
+      return;
+    }
+    await this.clearCodexSessionRunnerOwnerAfterTerminalTurn({
+      sessionId: runtimeContext.codex_session_id,
+      runnerLaunchLeaseId: runtimeContext.runner_launch_lease_id ?? runtimeJob.launch_lease_id,
+      reasonCode: 'codex_runtime_job_unavailable',
+    });
+  }
+
+  private async clearCodexSessionRunnerOwnerAfterTerminalTurn(input: {
+    sessionId: string;
+    runnerLaunchLeaseId?: string;
+    reasonCode: string;
+  }): Promise<void> {
+    if (input.runnerLaunchLeaseId === undefined) {
+      return;
+    }
+    try {
+      await this.repository.clearCodexSessionRunnerOwner({
+        session_id: input.sessionId,
+        runner_launch_lease_id: input.runnerLaunchLeaseId,
+        terminal_reason_code: input.reasonCode,
+        now: this.now(),
+      });
+    } catch (error) {
+      const session = await this.repository.getCodexSession(input.sessionId);
+      if (
+        error instanceof DomainError &&
+        error.code === 'codex_session_runner_unavailable' &&
+        session !== undefined &&
+        session.runner_launch_lease_id === undefined &&
+        session.runner_runtime_job_id === undefined &&
+        session.runner_worker_id === undefined
+      ) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async codexSessionTurnAlreadyTerminalizedByRuntimeResult(
+    runtimeContext: NonNullable<CodexGenerationWorkloadV1['codex_session_runtime_context']>,
+    threadEvidence: NonNullable<CodexGenerationRuntimeJobResult['codex_session_thread']>,
+  ): Promise<boolean> {
+    const [session, turn] = await Promise.all([
+      this.repository.getCodexSession(runtimeContext.codex_session_id),
+      this.repository.getCodexSessionTurn(runtimeContext.codex_session_turn_id),
+    ]);
+    return (
+      session?.id === runtimeContext.codex_session_id &&
+      session.codex_thread_id_digest === threadEvidence.codex_thread_id_digest &&
+      turn?.id === runtimeContext.codex_session_turn_id &&
+      turn.codex_session_id === runtimeContext.codex_session_id &&
+      turn.status === 'succeeded' &&
+      turn.lease_id === runtimeContext.lease_id &&
+      turn.lease_epoch === runtimeContext.lease_epoch &&
+      turn.codex_thread_id_digest === threadEvidence.codex_thread_id_digest
+    );
+  }
+
+  private async recordStaleCodexSessionTerminalizationAttempt(input: {
+    sessionId: string;
+    turnId: string;
+    leaseId: string;
+    leaseEpoch: number;
+    workerId: string;
+    workerSessionDigest: string;
+    expectedPreviousSnapshotDigest?: string;
+    attemptedCodexThreadIdDigest?: string;
+    failureCode: string;
+  }): Promise<void> {
+    await this.repository.withObjectLock(`codex-session:${input.sessionId}`, (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const now = this.now();
+        const turn = await repository.getCodexSessionTurn(input.turnId);
+        const safeTurn = turn !== undefined && turn.codex_session_id === input.sessionId ? turn : undefined;
+        await repository.saveStaleCodexSessionTerminalizationAttempt({
+          id: this.controlPlaneRuntime.id('codex-session-stale-terminalization'),
+          codex_session_id: input.sessionId,
+          ...(safeTurn === undefined ? {} : { codex_session_turn_id: safeTurn.id }),
+          lease_id: input.leaseId,
+          lease_epoch: input.leaseEpoch,
+          worker_id: input.workerId,
+          worker_session_digest: input.workerSessionDigest,
+          ...(input.expectedPreviousSnapshotDigest === undefined
+            ? {}
+            : { expected_previous_snapshot_digest: input.expectedPreviousSnapshotDigest }),
+          ...(input.attemptedCodexThreadIdDigest === undefined
+            ? {}
+            : { attempted_codex_thread_id_digest: input.attemptedCodexThreadIdDigest }),
+          failure_code: input.failureCode,
+          created_at: now,
+        });
+        if (safeTurn !== undefined) {
+          await repository.markCodexSessionTurnStale({ session_id: input.sessionId, turn_id: safeTurn.id, now });
+        }
+      }),
+    );
   }
 
   private generatedPayloadIsArtifactRef(payload: Record<string, unknown>): boolean {

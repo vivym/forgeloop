@@ -244,6 +244,20 @@ export class CodexRuntimeControlPlaneClient {
     );
   }
 
+  async markCodexSessionRunnerOwner(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/session-runner/owner`,
+      input,
+    );
+  }
+
+  async attachCodexSessionRunnerRuntimeJob(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
+    return this.#workerPost(
+      `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/session-runner/attach`,
+      input,
+    );
+  }
+
   async appendRuntimeJobEvent(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
     return this.#workerPost(
       `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/events`,

@@ -91,6 +91,17 @@ export const generationRuntimeJobTerminalResult = (
     generated_payload: generatedPayload,
     generated_payload_digest: generatedPayloadDigest,
     generation_artifacts: uploadedArtifacts,
+    ...(result.codexThread === undefined
+      ? {}
+      : {
+          codex_session_thread: {
+            codex_thread_id: result.codexThread.codex_thread_id,
+            codex_thread_id_digest: result.codexThread.codex_thread_id_digest,
+            ...(result.codexThread.app_server_turn_id === undefined
+              ? {}
+              : { app_server_turn_id: result.codexThread.app_server_turn_id }),
+          },
+        }),
     ...(runtimeEvidence === undefined ? {} : { runtime_evidence: runtimeEvidence }),
     public_summary: result.publicSummary,
   };

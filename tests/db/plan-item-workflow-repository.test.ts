@@ -779,6 +779,19 @@ const startThreadRuntimeInput = (): Record<string, unknown> =>
     kind: 'start_thread',
   });
 
+const validGenerationTerminalResult = (summary = 'completed') => {
+  const generatedPayload = { summary };
+  return {
+    task_kind: 'spec_draft' as const,
+    prompt_version: 'prompt-v1',
+    output_schema_version: 'spec-draft.v1',
+    generated_payload: generatedPayload,
+    generated_payload_digest: codexCanonicalDigest(generatedPayload),
+    generation_artifacts: [],
+    public_summary: summary,
+  };
+};
+
 const replayProtectionFor = (path: string, bodyDigest: string) => ({
   method: 'POST' as const,
   path,
@@ -2465,6 +2478,67 @@ describe('Plan Item Workflow repository', () => {
     });
   });
 
+  it('attaches a later turn after the intermediate start-thread runtime job terminalizes', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
+    });
+    await repository.terminalizeCodexRuntimeJob({
+      runtime_job_id: 'runtime-job-1',
+      launch_lease_id: 'launch-lease-1',
+      worker_id: 'worker-1',
+      worker_session_token: 'session-token-1',
+      nonce: 'terminalize-intermediate-runner-turn',
+      nonce_timestamp: '2026-05-31T00:04:00.000Z',
+      terminal_status: 'succeeded',
+      reason_code: 'completed',
+      terminal_result_json: validGenerationTerminalResult('intermediate turn completed'),
+      idempotency_key: 'terminalize-intermediate-runner-turn',
+      request_digest: 'sha256:terminalize-intermediate-runner-turn',
+      replay_protection: replayProtectionFor('/codex-runtime/jobs/runtime-job-1/terminal', 'sha256:terminalize-intermediate-runner-turn'),
+      now: '2026-05-31T00:04:00.000Z',
+    });
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: 'runtime-job-1' })).resolves.toMatchObject({
+      status: 'terminal',
+      terminal_status: 'succeeded',
+    });
+    await expect(publicLaunchLeaseStatus(repository, 'launch-lease-1')).resolves.toMatchObject({ status: 'materialized' });
+    await createAcceptedSessionRuntimeJob(repository, {
+      input_json: resumeThreadRuntimeInput({ codex_session_turn_id: 'turn-2' }),
+      codex_session_turn_id: 'turn-2',
+      input_digest: tokenHash('attached-runtime-resume-input'),
+    });
+
+    await expect(
+      repository.attachCodexSessionRunnerRuntimeJob({
+        session_id: 'session-1',
+        runner_launch_lease_id: 'launch-lease-1',
+        runner_runtime_job_id: 'runtime-job-1',
+        runner_expires_at: '2026-05-31T00:30:00.000Z',
+        attached_runtime_job_id: 'attached-runtime-job-1',
+        worker_id: 'worker-1',
+        runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
+        launch_materialization_digest: 'sha256:launch-materialization-live-runner',
+        idempotency_key: 'attach-runtime-job-1',
+        request_digest: 'sha256:attach-runtime-job-1',
+        now: '2026-05-31T00:06:00.000Z',
+      }),
+    ).resolves.toMatchObject({
+      id: 'attached-runtime-job-1',
+      status: 'running',
+    });
+    await expect(publicLaunchLeaseStatus(repository, 'launch-lease-1')).resolves.toMatchObject({ status: 'materialized' });
+    await expect(publicLaunchLeaseStatus(repository, 'attached-launch-lease-1')).resolves.toMatchObject({ status: 'materialized' });
+  });
+
   it('rejects attaching a resume-thread runtime job for a different Codex thread binding', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
@@ -3016,6 +3090,41 @@ describe('Plan Item Workflow repository', () => {
       now: '2026-05-31T00:02:30.000Z',
       expires_at: '2026-05-31T00:08:00.000Z',
     })).resolves.toMatchObject({ id: 'lease-2', status: 'active' });
+  });
+
+  it('recovers an expired active lease before creating the next turn', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await repository.createCodexSessionTurn(turnInput);
+    await repository.claimCodexSessionLease({
+      ...leaseInput,
+      expires_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    await repository.createCodexSessionTurn({
+      ...turnInput,
+      id: 'turn-2',
+      input_digest: 'sha256:turn-input-2',
+      created_at: '2026-05-31T00:02:00.000Z',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+
+    await expect(repository.renewCodexSessionLease({
+      session_id: 'session-1',
+      lease_id: 'lease-1',
+      lease_token_hash: 'sha256:lease-token',
+      worker_id: 'worker-1',
+      worker_session_digest: 'sha256:worker-session',
+      lease_epoch: 1,
+      now: '2026-05-31T00:02:30.000Z',
+      expires_at: '2026-05-31T00:08:00.000Z',
+    })).rejects.toThrow(/codex_session_lease_conflict/);
+    await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
+      status: 'recovering',
+      latest_turn_id: 'turn-2',
+      latest_turn_digest: 'sha256:turn-input-2',
+      lease_epoch: 1,
+    });
   });
 
   it('explicitly recovers an expired active lease before claiming a recovering session', async () => {
@@ -6536,6 +6645,44 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       created_at: '2026-05-31T00:03:00.000Z',
     });
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(uuidFixture.sessionId)).resolves.toHaveLength(1);
+  });
+
+  drizzleTest('recovers an expired active lease before creating the next turn', async () => {
+    const repository = await createDrizzleWorkflowRepository();
+    await seedDrizzleWorkflow(repository);
+    await repository.claimCodexSessionLease({
+      ...drizzleLeaseInput,
+      expires_at: '2026-05-31T00:01:00.000Z',
+    });
+
+    await repository.createCodexSessionTurn({
+      ...drizzleTurnInput,
+      id: '10000000-0000-4000-8000-000000000031',
+      input_digest: 'sha256:drizzle-turn-input-2',
+      created_at: '2026-05-31T00:02:00.000Z',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        repository.renewCodexSessionLease({
+          session_id: uuidFixture.sessionId,
+          lease_id: uuidFixture.leaseId,
+          lease_token_hash: 'sha256:drizzle-lease-token',
+          worker_id: 'worker-drizzle',
+          worker_session_digest: 'sha256:worker-session-drizzle',
+          lease_epoch: 1,
+          now: '2026-05-31T00:02:30.000Z',
+          expires_at: '2026-05-31T00:08:00.000Z',
+        }),
+      'codex_session_lease_conflict',
+    );
+    await expect(repository.getCodexSession(uuidFixture.sessionId)).resolves.toMatchObject({
+      status: 'recovering',
+      latest_turn_id: '10000000-0000-4000-8000-000000000031',
+      latest_turn_digest: 'sha256:drizzle-turn-input-2',
+      lease_epoch: 1,
+    });
   });
 
   drizzleTest('persists stale terminalization attempts with attempted lease epoch', async () => {

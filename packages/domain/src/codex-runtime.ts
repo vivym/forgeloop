@@ -419,6 +419,11 @@ export interface CodexGenerationRuntimeJobResult {
     digest?: string;
     internal_ref?: string;
   }>;
+  codex_session_thread?: {
+    codex_thread_id: string;
+    codex_thread_id_digest: string;
+    app_server_turn_id?: string;
+  };
   runtime_evidence?: CodexDockerRuntimeEvidence;
   public_summary: string;
 }
@@ -1606,7 +1611,11 @@ export const assertCodexRuntimePublicSafeValue = (input: unknown, label: string)
 };
 
 export const codexRuntimeJobInputDigest = (input: unknown): string => {
-  assertCodexRuntimePublicSafeValue(input, 'job input');
+  const trustedInput =
+    isPlainObject(input) && input.schema_version === 'codex_generation_workload.v1' && input.codex_session_terminalization !== undefined
+      ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'codex_session_terminalization'))
+      : input;
+  assertCodexRuntimePublicSafeValue(trustedInput, 'job input');
   return codexCanonicalDigest(input);
 };
 
@@ -1734,6 +1743,7 @@ const codexGenerationRuntimeJobResultKeys = new Set([
   'generated_payload',
   'generated_payload_digest',
   'generation_artifacts',
+  'codex_session_thread',
   'runtime_evidence',
   'public_summary',
 ]);
@@ -1814,6 +1824,7 @@ const codexRunExecutionRuntimeJobResultKeys = new Set([
   'runtime_evidence',
   'public_summary',
 ]);
+const codexSessionThreadTerminalEvidenceKeys = new Set(['codex_thread_id', 'codex_thread_id_digest', 'app_server_turn_id']);
 
 const requireCodexRuntimeInternalRef = (input: Record<string, unknown>, field: string, label: string): string => {
   const internalRef = requireCodexRuntimeResultString(input, field);
@@ -1847,6 +1858,22 @@ const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<stri
       throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} internal_ref requires digest.`);
     }
     requireCodexRuntimeInternalRef(input, 'internal_ref', `${field} internal_ref`);
+  }
+  return input;
+};
+
+const requireCodexSessionThreadTerminalEvidence = (input: unknown): Record<string, unknown> => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result field codex_session_thread must be an object.');
+  }
+  assertCodexRuntimeResultKeys(input, codexSessionThreadTerminalEvidenceKeys, 'codex_session_thread');
+  const codexThreadId = requireCodexRuntimeResultString(input, 'codex_thread_id');
+  const codexThreadIdDigest = requireCodexRuntimeResultString(input, 'codex_thread_id_digest');
+  if (codexThreadIdDigest !== codexSessionThreadIdDigest(codexThreadId)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result field codex_session_thread digest does not match thread id.');
+  }
+  if (input.app_server_turn_id !== undefined) {
+    requireCodexRuntimeResultString(input, 'app_server_turn_id');
   }
   return input;
 };
@@ -2131,6 +2158,9 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   requireCodexRuntimeResultArray(input, 'generation_artifacts').forEach((artifact) =>
     requireCodexRuntimeArtifact(artifact, 'generation_artifacts'),
   );
+  if (input.codex_session_thread !== undefined) {
+    requireCodexSessionThreadTerminalEvidence(input.codex_session_thread);
+  }
   if (input.runtime_evidence !== undefined) {
     validateCodexDockerRuntimeEvidence(input.runtime_evidence);
   }
@@ -2321,6 +2351,7 @@ export const validateCodexRuntimeJobTerminalResult = (
   const resultRecord = result as unknown as Record<string, unknown>;
   const omittedPublicSafeKeys = new Set<string>([
     ...(resultRecord.runtime_evidence !== undefined ? ['runtime_evidence'] : []),
+    ...(resultRecord.codex_session_thread !== undefined ? ['codex_session_thread'] : []),
     ...(productGenerationTaskKindSet.has(String(resultRecord.task_kind)) ? ['generated_payload'] : []),
   ]);
   const publicSafeInput =

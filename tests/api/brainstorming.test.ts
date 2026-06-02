@@ -664,6 +664,7 @@ describe('Boundary Brainstorming API', () => {
     });
 
     const currentRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: currentRuntimeJobId }))!;
+    const currentTerminalResultWithEvidence = withCodexThreadEvidence(currentRuntimeJob, currentTerminalResult);
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, currentRuntimeJob, 'boundary-current');
     await codexRuntimeService.terminalizeRuntimeJob(
       currentRuntimeJob.worker_id,
@@ -676,14 +677,14 @@ describe('Boundary Brainstorming API', () => {
         terminal_status: 'succeeded',
         reason_code: 'completed',
         terminal_idempotency_key: 'boundary-current-terminal',
-        terminal_result_json: currentTerminalResult,
+        terminal_result_json: currentTerminalResultWithEvidence,
       }),
     );
     await expect(
       resultWriter.handleGenerationRuntimeTerminal({
         runtimeJobId: currentRuntimeJobId,
         actionRunId: actionRun.id,
-        terminalResult: currentTerminalResult,
+        terminalResult: currentTerminalResultWithEvidence,
       }),
     ).resolves.toEqual({ applied: true });
     await expect(repository.listBoundaryQuestions(session.id)).resolves.toEqual(
@@ -694,7 +695,7 @@ describe('Boundary Brainstorming API', () => {
       resultWriter.handleGenerationRuntimeTerminal({
         runtimeJobId: currentRuntimeJobId,
         actionRunId: actionRun.id,
-        terminalResult: currentTerminalResult,
+        terminalResult: currentTerminalResultWithEvidence,
       }),
     ).resolves.toEqual({ applied: true });
     await expect(repository.listBoundaryQuestions(session.id)).resolves.toHaveLength(questionsAfterFirstApply.length);
@@ -734,12 +735,14 @@ describe('Boundary Brainstorming API', () => {
       public_summary: 'Stale boundary questions generated.',
       artifacts: [],
     });
-    await terminalizeGenerationRuntimeJob(repository, (await repository.getCodexRuntimeJob({ runtime_job_id: staleRuntimeJobId }))!, staleTerminalResult, 'boundary-stale');
+    const staleRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: staleRuntimeJobId }))!;
+    const staleTerminalResultWithEvidence = withCodexThreadEvidence(staleRuntimeJob, staleTerminalResult);
+    await terminalizeGenerationRuntimeJob(repository, staleRuntimeJob, staleTerminalResultWithEvidence, 'boundary-stale');
     await expect(
       resultWriter.handleGenerationRuntimeTerminal({
         runtimeJobId: staleRuntimeJobId,
         actionRunId: staleActionRun.id,
-        terminalResult: staleTerminalResult,
+        terminalResult: staleTerminalResultWithEvidence,
       }),
     ).resolves.toEqual({ applied: false, reason: 'stale_precondition_fingerprint' });
     await expect(repository.listBoundaryQuestions(staleSession.id)).resolves.toEqual([]);
@@ -1219,6 +1222,27 @@ function generationTerminalResult(
   };
 }
 
+function codexThreadEvidenceForRuntimeJob(runtimeJob: Pick<CodexRuntimeJob, 'codex_session_id' | 'codex_session_turn_id' | 'id'>) {
+  if (runtimeJob.codex_session_id === undefined || runtimeJob.codex_session_turn_id === undefined) {
+    return {};
+  }
+  const codexThreadId = `thread-${runtimeJob.codex_session_id}`;
+  return {
+    codex_session_thread: {
+      codex_thread_id: codexThreadId,
+      codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: codexThreadId }),
+      app_server_turn_id: `app-server-turn-${runtimeJob.codex_session_turn_id}`,
+    },
+  };
+}
+
+function withCodexThreadEvidence(
+  runtimeJob: CodexRuntimeJob,
+  terminalResult: CodexGenerationRuntimeJobResult,
+): CodexGenerationRuntimeJobResult {
+  return { ...terminalResult, ...codexThreadEvidenceForRuntimeJob(runtimeJob) };
+}
+
 async function runtimeJobActionForRound(repository: DeliveryRepository, round: { runtime_job_id?: string | undefined }) {
   expect(round.runtime_job_id).toBeDefined();
   const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: round.runtime_job_id! });
@@ -1237,7 +1261,10 @@ async function terminalizeBoundaryRound(
   expect(round.runtime_job_id).toBeDefined();
   const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: round.runtime_job_id! });
   expect(runtimeJob).toBeDefined();
-  const terminalResult = generationTerminalResult('boundary_brainstorming_round', { artifacts: [], ...generatedPayload });
+  const terminalResult = withCodexThreadEvidence(
+    runtimeJob!,
+    generationTerminalResult('boundary_brainstorming_round', { artifacts: [], ...generatedPayload }),
+  );
   const suffix = `boundary-${runtimeJob!.id}`;
   const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, runtimeJob!, suffix);
   const codexRuntimeService = app.get(CodexRuntimeService);
@@ -1294,6 +1321,35 @@ async function startGenerationRuntimeJob(
     replay_protection: replayProtection('accept'),
     now: terminalAt,
   });
+  const runtimeContext = runtimeJob.input_json.codex_session_runtime_context;
+  const continuation =
+    runtimeContext !== undefined &&
+    typeof runtimeContext === 'object' &&
+    runtimeContext !== null &&
+    'continuation' in runtimeContext &&
+    typeof runtimeContext.continuation === 'object' &&
+    runtimeContext.continuation !== null &&
+    'kind' in runtimeContext.continuation
+      ? runtimeContext.continuation.kind
+      : undefined;
+  if (continuation === 'resume_thread') {
+    const runnerRuntimeJobId = String((runtimeContext as { runner_runtime_job_id?: unknown }).runner_runtime_job_id);
+    const runnerLaunchLeaseId = String((runtimeContext as { runner_launch_lease_id?: unknown }).runner_launch_lease_id);
+    await repository.attachCodexSessionRunnerRuntimeJob({
+      session_id: runtimeJob.codex_session_id!,
+      runner_runtime_job_id: runnerRuntimeJobId,
+      runner_launch_lease_id: runnerLaunchLeaseId,
+      runner_expires_at: new Date(Date.parse(terminalAt) + 10 * 60 * 1000).toISOString(),
+      attached_runtime_job_id: runtimeJob.id,
+      worker_id: runtimeJob.worker_id,
+      runtime_evidence_digest: digest(`${suffix}:runtime-evidence`),
+      launch_materialization_digest: digest(`${suffix}:launch-materialization`),
+      idempotency_key: `${suffix}-start`,
+      request_digest: digest(`${suffix}:start`),
+      now: terminalAt,
+    });
+    return { sessionToken, terminalAt };
+  }
   await repository.claimCodexLaunchTokenEnvelope({
     runtime_job_id: runtimeJob.id,
     envelope_id: envelope!.id,
@@ -1338,6 +1394,16 @@ async function startGenerationRuntimeJob(
     replay_protection: replayProtection('start'),
     now: terminalAt,
   });
+  if (runtimeJob.codex_session_id !== undefined && runtimeJob.codex_session_turn_id !== undefined) {
+    await repository.markCodexSessionRunnerOwner({
+      session_id: runtimeJob.codex_session_id,
+      runner_worker_id: runtimeJob.worker_id,
+      runner_runtime_job_id: runtimeJob.id,
+      runner_launch_lease_id: runtimeJob.launch_lease_id,
+      runner_expires_at: new Date(Date.parse(terminalAt) + 10 * 60 * 1000).toISOString(),
+      now: terminalAt,
+    });
+  }
   return { sessionToken, terminalAt };
 }
 
@@ -1348,6 +1414,7 @@ async function terminalizeGenerationRuntimeJob(
   suffix: string,
 ) {
   const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, runtimeJob, suffix);
+  const terminalResultWithEvidence = withCodexThreadEvidence(runtimeJob, terminalResult);
   const replayProtection = (step: string) => ({
     method: 'POST' as const,
     path: `/test/boundary-generation-runtime/${runtimeJob.id}/${suffix}/${step}`,
@@ -1362,7 +1429,7 @@ async function terminalizeGenerationRuntimeJob(
     nonce_timestamp: terminalAt,
     terminal_status: 'succeeded',
     reason_code: 'completed',
-    terminal_result_json: terminalResult as unknown as Record<string, unknown>,
+    terminal_result_json: terminalResultWithEvidence as unknown as Record<string, unknown>,
     idempotency_key: `${suffix}-terminal`,
     request_digest: digest(`${suffix}:terminal`),
     replay_protection: replayProtection('terminal'),

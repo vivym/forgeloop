@@ -258,6 +258,7 @@ export interface HeartbeatCodexWorkerInput {
   control_channel_status: CodexWorkerRegistration['control_channel_status'];
   active_lease_count: number;
   capabilities: readonly CodexRuntimeTargetKind[];
+  codex_session_runners?: readonly Omit<RenewCodexSessionRunnerOwnerInput, 'runner_worker_id' | 'now'>[];
   now: string;
 }
 
@@ -268,6 +269,7 @@ export interface CodexWorkerReplayProtectionInput {
 }
 
 export interface FindAvailableCodexWorkerInput {
+  worker_id?: string;
   project_id: string;
   repo_id?: string;
   target_kind: CodexRuntimeTargetKind;
@@ -275,6 +277,10 @@ export interface FindAvailableCodexWorkerInput {
   network_policy_digest: string;
   network_provider_config_digest?: string;
   now: string;
+}
+
+export interface FindCodexWorkerForSessionRunnerInput extends FindAvailableCodexWorkerInput {
+  worker_id: string;
 }
 
 export interface CodexLaunchFenceSnapshot {
@@ -1563,6 +1569,8 @@ export interface DeliveryRepository {
   upsertCodexWorkerRegistration(input: UpsertCodexWorkerRegistrationInput): Promise<CodexWorkerRegistration>;
   heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration>;
   findAvailableCodexWorker(input: FindAvailableCodexWorkerInput): Promise<CodexWorkerRegistration | undefined>;
+  findCodexWorkerForSessionRunner(input: FindCodexWorkerForSessionRunnerInput): Promise<CodexWorkerRegistration | undefined>;
+  getCodexWorkerSessionDigest(workerId: string): Promise<string | undefined>;
   refreshCodexWorkerSession(input: RefreshCodexWorkerSessionInput): Promise<CodexWorkerRegistration>;
   createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(
     input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
