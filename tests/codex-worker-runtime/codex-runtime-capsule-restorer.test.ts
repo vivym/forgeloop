@@ -174,6 +174,8 @@ const makeArtifacts = () => {
     capsuleDigest: codexRuntimeCapsuleManifestDigest(capsuleManifest),
     environmentManifest,
     baseMemoryBundle,
+    inputMemoryBundle,
+    memoryDelta,
     threadBundle,
   };
 };
@@ -248,6 +250,74 @@ describe('Codex runtime capsule restorer', () => {
         currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
       }),
     ).rejects.toThrow(/memory|digest mismatch/i);
+  });
+
+  it('rejects memory bundle for a different session', async () => {
+    const setup = makeArtifacts();
+    setup.artifacts.set(
+      setup.capsuleManifest.memory_state.input_bundle_ref,
+      jsonBytes({ ...setup.inputMemoryBundle, codex_session_id: 'other-session' }),
+    );
+    setup.capsuleManifest.memory_state.input_bundle_digest = codexMemoryBundleDigest({
+      ...setup.inputMemoryBundle,
+      codex_session_id: 'other-session',
+    });
+    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+
+    await expect(
+      restoreCodexRuntimeCapsule({
+        codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
+        codexSessionId,
+        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        capsuleRef: setup.capsuleRef,
+        artifactReader: new MapArtifactReader(setup.artifacts),
+        currentCodexCliVersion: 'codex-cli 1.2.3',
+        currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
+      }),
+    ).rejects.toThrow(/memory bundle codex session mismatch/i);
+  });
+
+  it('rejects memory delta for a different session', async () => {
+    const setup = makeArtifacts();
+    const memoryDelta = { ...setup.memoryDelta, codex_session_id: 'other-session' };
+    setup.artifacts.set(setup.capsuleManifest.memory_state.delta_ref, jsonBytes(memoryDelta));
+    setup.capsuleManifest.memory_state.delta_digest = codexMemoryDeltaDigest(memoryDelta);
+    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+
+    await expect(
+      restoreCodexRuntimeCapsule({
+        codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
+        codexSessionId,
+        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        capsuleRef: setup.capsuleRef,
+        artifactReader: new MapArtifactReader(setup.artifacts),
+        currentCodexCliVersion: 'codex-cli 1.2.3',
+        currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
+      }),
+    ).rejects.toThrow(/memory delta codex session mismatch/i);
+  });
+
+  it.each([
+    ['input_bundle_digest', 'memory delta input bundle digest mismatch'],
+    ['output_bundle_digest', 'memory delta output bundle digest mismatch'],
+  ] as const)('rejects memory delta with mismatched %s', async (field, errorPattern) => {
+    const setup = makeArtifacts();
+    const memoryDelta = { ...setup.memoryDelta, [field]: digest({ tampered: field }) };
+    setup.artifacts.set(setup.capsuleManifest.memory_state.delta_ref, jsonBytes(memoryDelta));
+    setup.capsuleManifest.memory_state.delta_digest = codexMemoryDeltaDigest(memoryDelta);
+    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+
+    await expect(
+      restoreCodexRuntimeCapsule({
+        codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
+        codexSessionId,
+        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        capsuleRef: setup.capsuleRef,
+        artifactReader: new MapArtifactReader(setup.artifacts),
+        currentCodexCliVersion: 'codex-cli 1.2.3',
+        currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
+      }),
+    ).rejects.toThrow(errorPattern);
   });
 
   it('rejects malformed thread state bundle components', async () => {
