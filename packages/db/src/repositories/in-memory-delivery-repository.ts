@@ -3906,13 +3906,24 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async renewCodexSessionRunnerOwner(input: RenewCodexSessionRunnerOwnerInput): Promise<CodexSession> {
     const session = this.codexSessions.get(input.session_id);
+    const runner = this.codexRuntimeJobs.get(input.runner_runtime_job_id);
+    const runnerLeaseRecord = this.codexLaunchLeases.get(input.runner_launch_lease_id);
     if (
       session === undefined ||
       session.runner_worker_id !== input.runner_worker_id ||
       session.runner_launch_lease_id !== input.runner_launch_lease_id ||
       session.runner_runtime_job_id !== input.runner_runtime_job_id ||
       session.runner_expires_at === undefined ||
-      session.runner_expires_at <= input.now
+      session.runner_expires_at <= input.now ||
+      runner === undefined ||
+      runnerLeaseRecord === undefined ||
+      runner.job.worker_id !== input.runner_worker_id ||
+      runner.job.launch_lease_id !== input.runner_launch_lease_id ||
+      runner.job.codex_session_id !== input.session_id ||
+      runner.job.expires_at <= input.now ||
+      runnerLeaseRecord.lease.worker_id !== input.runner_worker_id ||
+      runnerLeaseRecord.lease.expires_at <= input.now ||
+      (runnerLeaseRecord.lease.status !== 'active' && runnerLeaseRecord.lease.status !== 'materialized')
     ) {
       throw new DomainError(
         'codex_session_runner_unavailable',
@@ -3924,11 +3935,36 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       runner_expires_at: input.runner_expires_at,
       updated_at: input.now,
     };
+    this.codexRuntimeJobs.set(input.runner_runtime_job_id, clone({
+      ...runner,
+      job: {
+        ...runner.job,
+        expires_at: input.runner_expires_at,
+        updated_at: input.now,
+      },
+    }));
+    this.codexLaunchLeases.set(input.runner_launch_lease_id, clone({
+      ...runnerLeaseRecord,
+      lease: {
+        ...runnerLeaseRecord.lease,
+        expires_at: input.runner_expires_at,
+        updated_at: input.now,
+      },
+    }));
     this.codexSessions.set(session.id, clone(updated));
     return clone(updated);
   }
 
   async attachCodexSessionRunnerRuntimeJob(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
+    this.assertWorkerSession(input.worker_id, input.worker_session_token, input.now, 'codex_runtime_job_unavailable');
+    this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+    );
     const session = this.codexSessions.get(input.session_id);
     if (
       session === undefined ||
@@ -3994,6 +4030,22 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
           updated_at: input.now,
         };
         this.codexSessions.set(input.session_id, clone(renewedSession));
+        this.codexRuntimeJobs.set(input.runner_runtime_job_id, clone({
+          ...runner,
+          job: {
+            ...runner.job,
+            expires_at: input.runner_expires_at,
+            updated_at: input.now,
+          },
+        }));
+        this.codexLaunchLeases.set(input.runner_launch_lease_id, clone({
+          ...runnerLeaseRecord,
+          lease: {
+            ...runnerLeaseRecord.lease,
+            expires_at: input.runner_expires_at,
+            updated_at: input.now,
+          },
+        }));
         return clone(existing.job);
       }
       throw new DomainError(
@@ -4045,6 +4097,22 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       runner_expires_at: input.runner_expires_at,
       updated_at: input.now,
     };
+    this.codexRuntimeJobs.set(input.runner_runtime_job_id, clone({
+      ...runner,
+      job: {
+        ...runner.job,
+        expires_at: input.runner_expires_at,
+        updated_at: input.now,
+      },
+    }));
+    this.codexLaunchLeases.set(input.runner_launch_lease_id, clone({
+      ...runnerLeaseRecord,
+      lease: {
+        ...runnerLeaseRecord.lease,
+        expires_at: input.runner_expires_at,
+        updated_at: input.now,
+      },
+    }));
     this.codexSessions.set(input.session_id, clone(renewedSession));
     this.codexRuntimeJobs.set(input.attached_runtime_job_id, clone(attached));
     this.codexLaunchLeases.set(existing.job.launch_lease_id, clone(materializedLease));

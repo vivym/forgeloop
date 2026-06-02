@@ -1342,10 +1342,14 @@ async function startGenerationRuntimeJob(
       runner_expires_at: new Date(Date.parse(terminalAt) + 10 * 60 * 1000).toISOString(),
       attached_runtime_job_id: runtimeJob.id,
       worker_id: runtimeJob.worker_id,
+      worker_session_token: sessionToken,
+      nonce: `${suffix}-attach`,
+      nonce_timestamp: terminalAt,
       runtime_evidence_digest: digest(`${suffix}:runtime-evidence`),
       launch_materialization_digest: digest(`${suffix}:launch-materialization`),
       idempotency_key: `${suffix}-start`,
       request_digest: digest(`${suffix}:start`),
+      replay_protection: replayProtection('attach'),
       now: terminalAt,
     });
     return { sessionToken, terminalAt };

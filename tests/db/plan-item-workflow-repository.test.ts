@@ -30,6 +30,7 @@ import {
   createDbClient,
   DrizzleDeliveryRepository,
   InMemoryDeliveryRepository,
+  type AttachCodexSessionRunnerRuntimeJobInput,
   type CodexLaunchLease,
   type DeliveryRepository,
   assertResettableDatabaseUrl,
@@ -797,6 +798,26 @@ const replayProtectionFor = (path: string, bodyDigest: string) => ({
   path,
   body_digest: bodyDigest,
 });
+
+const attachCodexSessionRunnerRuntimeJob = (
+  repository: DeliveryRepository,
+  input: Omit<AttachCodexSessionRunnerRuntimeJobInput, 'worker_session_token' | 'nonce' | 'nonce_timestamp' | 'replay_protection'> & {
+    nonce?: string;
+    worker_session_token?: string;
+  },
+) => {
+  const nonce = input.nonce ?? `attach-nonce-${input.attached_runtime_job_id}-${input.idempotency_key}`;
+  return repository.attachCodexSessionRunnerRuntimeJob({
+    ...input,
+    worker_session_token: input.worker_session_token ?? 'session-token-1',
+    nonce,
+    nonce_timestamp: input.now,
+    replay_protection: replayProtectionFor(
+      `/internal/codex-workers/${input.worker_id}/runtime-jobs/${input.attached_runtime_job_id}/session-runner/attach`,
+      input.request_digest,
+    ),
+  });
+};
 
 const claimSessionRuntimeJobEnvelope = (
   repository: DeliveryRepository,
@@ -2275,6 +2296,8 @@ describe('Plan Item Workflow repository', () => {
   it('fails closed when clearing or renewing a stale session runner owner', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
     await repository.markCodexSessionRunnerOwner({
       session_id: 'session-1',
       runner_worker_id: 'worker-1',
@@ -2339,7 +2362,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.attachCodexSessionRunnerRuntimeJob({
+        attachCodexSessionRunnerRuntimeJob(repository, {
           session_id: 'session-1',
           runner_launch_lease_id: 'launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
@@ -2380,7 +2403,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.attachCodexSessionRunnerRuntimeJob({
+        attachCodexSessionRunnerRuntimeJob(repository, {
           session_id: 'session-1',
           runner_launch_lease_id: 'launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
@@ -2420,7 +2443,7 @@ describe('Plan Item Workflow repository', () => {
       input_digest: tokenHash('attached-runtime-resume-input'),
     });
 
-    const attached = await repository.attachCodexSessionRunnerRuntimeJob({
+    const attached = await attachCodexSessionRunnerRuntimeJob(repository, {
       session_id: 'session-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
@@ -2454,13 +2477,14 @@ describe('Plan Item Workflow repository', () => {
     });
 
     await expect(
-      repository.attachCodexSessionRunnerRuntimeJob({
+      attachCodexSessionRunnerRuntimeJob(repository, {
         session_id: 'session-1',
         runner_launch_lease_id: 'launch-lease-1',
         runner_runtime_job_id: 'runtime-job-1',
         runner_expires_at: '2026-05-31T00:40:00.000Z',
         attached_runtime_job_id: 'attached-runtime-job-1',
         worker_id: 'worker-1',
+        nonce: 'attach-runtime-job-1-replay',
         runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
         launch_materialization_digest: 'sha256:launch-materialization-live-runner',
         idempotency_key: 'attach-runtime-job-1',
@@ -2475,6 +2499,100 @@ describe('Plan Item Workflow repository', () => {
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',
       runner_expires_at: '2026-05-31T00:40:00.000Z',
+    });
+  });
+
+  it('requires the runner worker session proof when attaching a later-turn runtime job', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
+    });
+    await createAcceptedSessionRuntimeJob(repository, {
+      input_json: resumeThreadRuntimeInput({ codex_session_turn_id: 'turn-2' }),
+      codex_session_turn_id: 'turn-2',
+      input_digest: tokenHash('attached-runtime-resume-input'),
+    });
+
+    await expectDomainErrorCode(
+      () =>
+        attachCodexSessionRunnerRuntimeJob(repository, {
+          session_id: 'session-1',
+          runner_launch_lease_id: 'launch-lease-1',
+          runner_runtime_job_id: 'runtime-job-1',
+          runner_expires_at: '2026-05-31T00:30:00.000Z',
+          attached_runtime_job_id: 'attached-runtime-job-1',
+          worker_id: 'worker-1',
+          worker_session_token: 'forged-session-token',
+          runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
+          launch_materialization_digest: 'sha256:launch-materialization-live-runner',
+          idempotency_key: 'attach-runtime-job-1',
+          request_digest: 'sha256:attach-runtime-job-1',
+          now: '2026-05-31T00:06:00.000Z',
+        }),
+      'codex_runtime_job_unavailable',
+    );
+
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: 'attached-runtime-job-1' })).resolves.toMatchObject({
+      status: 'accepted',
+    });
+    const rejectedJob = await repository.getCodexRuntimeJob({ runtime_job_id: 'attached-runtime-job-1' });
+    expect(rejectedJob?.runtime_evidence_digest).toBeUndefined();
+    expect(rejectedJob?.launch_materialization_digest).toBeUndefined();
+  });
+
+  it('renews the runner runtime job expiry while the runner owner is heartbeating', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+    await bindCodexSessionThread(repository);
+    await startSessionRunnerRuntimeJob(repository);
+    await repository.markCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:20:00.000Z',
+      now: '2026-05-31T00:02:30.000Z',
+    });
+
+    await repository.renewCodexSessionRunnerOwner({
+      session_id: 'session-1',
+      runner_worker_id: 'worker-1',
+      runner_launch_lease_id: 'launch-lease-1',
+      runner_runtime_job_id: 'runtime-job-1',
+      runner_expires_at: '2026-05-31T00:30:00.000Z',
+      now: '2026-05-31T00:10:00.000Z',
+    });
+    await createAcceptedSessionRuntimeJob(repository, {
+      input_json: resumeThreadRuntimeInput({ codex_session_turn_id: 'turn-2' }),
+      codex_session_turn_id: 'turn-2',
+      input_digest: tokenHash('attached-runtime-resume-input'),
+    });
+
+    await expect(
+      attachCodexSessionRunnerRuntimeJob(repository, {
+        session_id: 'session-1',
+        runner_launch_lease_id: 'launch-lease-1',
+        runner_runtime_job_id: 'runtime-job-1',
+        runner_expires_at: '2026-05-31T00:30:00.000Z',
+        attached_runtime_job_id: 'attached-runtime-job-1',
+        worker_id: 'worker-1',
+        runtime_evidence_digest: 'sha256:runtime-evidence-live-runner',
+        launch_materialization_digest: 'sha256:launch-materialization-live-runner',
+        idempotency_key: 'attach-runtime-job-1',
+        request_digest: 'sha256:attach-runtime-job-1',
+        now: '2026-05-31T00:19:00.000Z',
+      }),
+    ).resolves.toMatchObject({
+      id: 'attached-runtime-job-1',
+      status: 'running',
     });
   });
 
@@ -2518,7 +2636,7 @@ describe('Plan Item Workflow repository', () => {
     });
 
     await expect(
-      repository.attachCodexSessionRunnerRuntimeJob({
+      attachCodexSessionRunnerRuntimeJob(repository, {
         session_id: 'session-1',
         runner_launch_lease_id: 'launch-lease-1',
         runner_runtime_job_id: 'runtime-job-1',
@@ -2560,7 +2678,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.attachCodexSessionRunnerRuntimeJob({
+        attachCodexSessionRunnerRuntimeJob(repository, {
           session_id: 'session-1',
           runner_launch_lease_id: 'launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
@@ -2601,7 +2719,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.attachCodexSessionRunnerRuntimeJob({
+        attachCodexSessionRunnerRuntimeJob(repository, {
           session_id: 'session-1',
           runner_launch_lease_id: 'attached-launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
@@ -2636,7 +2754,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.attachCodexSessionRunnerRuntimeJob({
+        attachCodexSessionRunnerRuntimeJob(repository, {
           session_id: 'session-1',
           runner_launch_lease_id: 'launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
@@ -2677,7 +2795,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.attachCodexSessionRunnerRuntimeJob({
+        attachCodexSessionRunnerRuntimeJob(repository, {
           session_id: 'session-1',
           runner_launch_lease_id: 'launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
@@ -2723,7 +2841,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.attachCodexSessionRunnerRuntimeJob({
+        attachCodexSessionRunnerRuntimeJob(repository, {
           session_id: 'session-1',
           runner_launch_lease_id: 'launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
@@ -2769,7 +2887,7 @@ describe('Plan Item Workflow repository', () => {
 
     await expectDomainErrorCode(
       () =>
-        repository.attachCodexSessionRunnerRuntimeJob({
+        attachCodexSessionRunnerRuntimeJob(repository, {
           session_id: 'session-1',
           runner_launch_lease_id: 'launch-lease-1',
           runner_runtime_job_id: 'runtime-job-1',
@@ -2828,7 +2946,7 @@ describe('Plan Item Workflow repository', () => {
       input_json: resumeThreadRuntimeInput(),
       input_digest: tokenHash('attached-runtime-resume-input'),
     });
-    const attached = await repository.attachCodexSessionRunnerRuntimeJob({
+    const attached = await attachCodexSessionRunnerRuntimeJob(repository, {
       session_id: 'session-1',
       runner_launch_lease_id: 'launch-lease-1',
       runner_runtime_job_id: 'runtime-job-1',

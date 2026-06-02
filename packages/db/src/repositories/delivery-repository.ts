@@ -386,10 +386,14 @@ export interface AttachCodexSessionRunnerRuntimeJobInput {
   runner_expires_at: string;
   attached_runtime_job_id: string;
   worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
   runtime_evidence_digest: string;
   launch_materialization_digest: string;
   idempotency_key: string;
   request_digest: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
   now: string;
 }
 

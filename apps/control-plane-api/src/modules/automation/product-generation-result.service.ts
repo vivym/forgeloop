@@ -2,8 +2,11 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Buffer } from 'node:buffer';
 import {
   validateBoundaryRoundRuntimeResult,
+  type BoundaryRoundRuntimeResultV1,
   validateGeneratedExecutionPlanRevision,
   validateGeneratedSpecRevision,
+  type GeneratedExecutionPlanRevisionV1,
+  type GeneratedSpecRevisionV1,
 } from '@forgeloop/codex-runtime';
 import {
   codexCanonicalDigest,
@@ -42,6 +45,18 @@ export type ProductGenerationResultApplyOutcome =
         | 'legacy_generation_task_kind'
         | 'invalid_precondition'
         | 'stale_precondition_fingerprint'
+        | 'public_unsafe_payload'
+        | 'unsupported_generated_payload_ref';
+    };
+
+type PreparedProductGenerationResult =
+  | { prepared: true; task_kind: 'boundary_brainstorming_round'; generated: BoundaryRoundRuntimeResultV1 }
+  | { prepared: true; task_kind: 'development_plan_item_spec_revision'; generated: GeneratedSpecRevisionV1 }
+  | { prepared: true; task_kind: 'development_plan_item_execution_plan_revision'; generated: GeneratedExecutionPlanRevisionV1 }
+  | {
+      prepared: false;
+      reason:
+        | 'legacy_generation_task_kind'
         | 'public_unsafe_payload'
         | 'unsupported_generated_payload_ref';
     };
@@ -98,85 +113,97 @@ export class ProductGenerationResultService {
       return this.completeProductActionIfOwned(actionRun, { applied: false, reason: 'invalid_precondition' });
     }
 
+    const prepared = await this.prepareProductGenerationResult(input.runtimeJobId, terminalResult);
+    if (!prepared.prepared) {
+      const outcome = { applied: false as const, reason: prepared.reason };
+      await this.failCodexSessionTurnForRejectedRuntimeResult(activeFence.runtime_job, outcome.reason);
+      return this.completeProductActionIfOwned(actionRun, outcome);
+    }
     const terminalizedSession = await this.terminalizeCodexSessionTurnFromRuntimeResult(activeFence.runtime_job, terminalResult);
     if (!terminalizedSession) {
       return this.completeProductActionIfOwned(actionRun, { applied: false, reason: 'invalid_precondition' });
     }
-    const outcome = await this.applyProductGenerationResult(actionRun, input.runtimeJobId, terminalResult);
+    const outcome = await this.applyPreparedProductGenerationResult(actionRun, input.runtimeJobId, prepared);
     if (!outcome.applied) {
+      await this.failCodexSessionTurnForRejectedRuntimeResult(activeFence.runtime_job, outcome.reason);
       await this.clearCodexSessionRunnerOwnerAfterTerminalResultRejection(activeFence.runtime_job);
       return this.completeProductActionIfOwned(actionRun, outcome);
     }
     return this.completeProductActionIfOwned(actionRun, outcome);
   }
 
-  private async applyProductGenerationResult(
-    actionRun: AutomationActionRun,
+  private async prepareProductGenerationResult(
     runtimeJobId: string,
     terminalResult: CodexGenerationRuntimeJobResult,
-  ): Promise<ProductGenerationResultApplyOutcome> {
-    let outcome: ProductGenerationResultApplyOutcome;
+  ): Promise<PreparedProductGenerationResult> {
     switch (terminalResult.task_kind) {
       case 'boundary_brainstorming_round': {
         const generatedPayload = await this.resolveGeneratedPayload(runtimeJobId, terminalResult);
         if (generatedPayload === undefined) {
-          outcome = { applied: false, reason: 'unsupported_generated_payload_ref' };
-          break;
+          return { prepared: false, reason: 'unsupported_generated_payload_ref' };
         }
         const generated = this.validatePayload(() => validateBoundaryRoundRuntimeResult(generatedPayload));
         if (generated === undefined) {
-          outcome = { applied: false, reason: 'public_unsafe_payload' };
-          break;
+          return { prepared: false, reason: 'public_unsafe_payload' };
         }
-        outcome = await this.brainstormingService.applyBoundaryRoundRuntimeResult({
-          actionRun,
-          runtime_job_id: runtimeJobId,
-          generated,
-        });
-        break;
+        return { prepared: true, task_kind: terminalResult.task_kind, generated };
       }
       case 'development_plan_item_spec_revision': {
         const generatedPayload = await this.resolveGeneratedPayload(runtimeJobId, terminalResult);
         if (generatedPayload === undefined) {
-          outcome = { applied: false, reason: 'unsupported_generated_payload_ref' };
-          break;
+          return { prepared: false, reason: 'unsupported_generated_payload_ref' };
         }
         const generated = this.validatePayload(() => validateGeneratedSpecRevision(generatedPayload));
         if (generated === undefined) {
-          outcome = { applied: false, reason: 'public_unsafe_payload' };
-          break;
+          return { prepared: false, reason: 'public_unsafe_payload' };
         }
-        const result = await this.specPlanService.writeGeneratedItemSpecRevision({
-          actionRun,
-          runtime_job_id: runtimeJobId,
-          generated,
-        });
-        outcome = result.applied ? { applied: true } : result;
-        break;
+        return { prepared: true, task_kind: terminalResult.task_kind, generated };
       }
       case 'development_plan_item_execution_plan_revision': {
         const generatedPayload = await this.resolveGeneratedPayload(runtimeJobId, terminalResult);
         if (generatedPayload === undefined) {
-          outcome = { applied: false, reason: 'unsupported_generated_payload_ref' };
-          break;
+          return { prepared: false, reason: 'unsupported_generated_payload_ref' };
         }
         const generated = this.validatePayload(() => validateGeneratedExecutionPlanRevision(generatedPayload));
         if (generated === undefined) {
-          outcome = { applied: false, reason: 'public_unsafe_payload' };
-          break;
+          return { prepared: false, reason: 'public_unsafe_payload' };
         }
+        return { prepared: true, task_kind: terminalResult.task_kind, generated };
+      }
+      default:
+        return { prepared: false, reason: 'legacy_generation_task_kind' };
+    }
+  }
+
+  private async applyPreparedProductGenerationResult(
+    actionRun: AutomationActionRun,
+    runtimeJobId: string,
+    prepared: Extract<PreparedProductGenerationResult, { prepared: true }>,
+  ): Promise<ProductGenerationResultApplyOutcome> {
+    switch (prepared.task_kind) {
+      case 'boundary_brainstorming_round':
+        return this.brainstormingService.applyBoundaryRoundRuntimeResult({
+          actionRun,
+          runtime_job_id: runtimeJobId,
+          generated: prepared.generated,
+        });
+      case 'development_plan_item_spec_revision': {
+        const result = await this.specPlanService.writeGeneratedItemSpecRevision({
+          actionRun,
+          runtime_job_id: runtimeJobId,
+          generated: prepared.generated,
+        });
+        return result.applied ? { applied: true } : result;
+      }
+      case 'development_plan_item_execution_plan_revision': {
         const result = await this.specPlanService.writeGeneratedItemImplementationPlanRevision({
           actionRun,
           runtime_job_id: runtimeJobId,
-          generated,
+          generated: prepared.generated,
         });
-        outcome = result.applied ? { applied: true } : result;
-        break;
+        return result.applied ? { applied: true } : result;
       }
-      default:
-        outcome = { applied: false, reason: 'legacy_generation_task_kind' };
     }
-    return outcome;
   }
 
   private storedTerminalizedResult(
@@ -333,6 +360,30 @@ export class ProductGenerationResultService {
         failureCode: error.code,
       });
     }
+  }
+
+  private async failCodexSessionTurnForRejectedRuntimeResult(runtimeJob: CodexRuntimeJob, reasonCode: string): Promise<void> {
+    const workload = runtimeJob.input_json as Partial<CodexGenerationWorkloadV1>;
+    const runtimeContext = workload.codex_session_runtime_context;
+    const terminalization = workload.codex_session_terminalization;
+    if (runtimeContext === undefined && terminalization === undefined) {
+      return;
+    }
+    if (
+      runtimeContext === undefined ||
+      terminalization === undefined ||
+      runtimeContext.codex_session_id !== runtimeJob.codex_session_id ||
+      runtimeContext.codex_session_turn_id !== runtimeJob.codex_session_turn_id
+    ) {
+      await this.clearCodexSessionRunnerOwnerAfterTerminalResultRejection(runtimeJob);
+      return;
+    }
+    await this.failCodexSessionTurnFromRuntimeResult({
+      runtimeJob,
+      runtimeContext,
+      terminalization,
+      reasonCode,
+    });
   }
 
   private async clearCodexSessionRunnerOwnerAfterSuccessfulCompleteTurn(

@@ -564,6 +564,84 @@ describe('Product generation CodexSession scheduler', () => {
     });
   });
 
+  it('fails the CodexSession turn when trusted product output is schema-invalid', async () => {
+    const seeded = await seedSchedulerWorkflow('fffffff1');
+    const turnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'fffff100');
+    const scheduled = await scheduler.schedule(
+      scheduleInput(seeded.workflow.id, seeded.workflow.active_codex_session_id, turnId, seeded.ids.project, 'terminal-product-schema-invalid'),
+    );
+    const runtimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: scheduled.runtime_job.id }))!;
+    await repository.markCodexSessionRunnerOwner({
+      session_id: seeded.workflow.active_codex_session_id,
+      runner_worker_id: runtimeJob.worker_id,
+      runner_runtime_job_id: runtimeJob.id,
+      runner_launch_lease_id: runtimeJob.launch_lease_id,
+      runner_expires_at: '2026-05-31T00:10:00.000Z',
+      now,
+    });
+    const invalidGeneratedPayload = {
+      schema_version: 'boundary_round_result.v1',
+      session_id: '   ',
+      round_id: 'boundary-round-1',
+      questions: [],
+      proposed_decisions: [],
+      needs_leader_input: false,
+      public_summary: 'No questions.',
+      artifacts: [],
+    };
+    const terminalResult = generationTerminalResult({
+      generated_payload: invalidGeneratedPayload,
+      generated_payload_digest: codexCanonicalDigest(invalidGeneratedPayload),
+      codex_session_thread: {
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: expectedThreadDigest,
+        app_server_turn_id: 'app-server-turn-product-schema-invalid',
+      },
+    });
+    await terminalizeRuntimeJob(repository, runtimeJob, terminalResult, 'terminal-product-schema-invalid');
+    const applyBoundaryRoundRuntimeResult = vi.fn(async () => ({ applied: true as const }));
+    const resultWriter = new ProductGenerationResultService(
+      repository,
+      '/tmp/forgeloop-test-artifacts',
+      { applyBoundaryRoundRuntimeResult } as never,
+      {} as never,
+      new ControlPlaneRuntimeService('test'),
+    );
+
+    await expect(
+      resultWriter.handleGenerationRuntimeTerminal({
+        runtimeJobId: runtimeJob.id,
+        actionRunId: scheduled.action_run.id,
+        terminalResult,
+      }),
+    ).resolves.toEqual({ applied: false, reason: 'public_unsafe_payload' });
+
+    expect(applyBoundaryRoundRuntimeResult).not.toHaveBeenCalled();
+    await expect(repository.getCodexSessionTurn(turnId)).resolves.toMatchObject({
+      status: 'failed',
+    });
+    expect((await repository.getCodexSessionTurn(turnId))?.codex_thread_id_digest).toBeUndefined();
+    await expect(repository.getAutomationActionRun(scheduled.action_run.id)).resolves.toMatchObject({
+      status: 'failed',
+      result_json: expect.objectContaining({ product_generation_result: 'public_unsafe_payload' }),
+      retryable: false,
+    });
+    const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id);
+    expect(session?.runner_worker_id).toBeUndefined();
+    expect(session?.runner_runtime_job_id).toBeUndefined();
+    expect(session?.runner_launch_lease_id).toBeUndefined();
+    await expect(
+      repository.findAvailableCodexWorker({
+        worker_id: runtimeJob.worker_id,
+        project_id: seeded.ids.project,
+        target_kind: 'generation',
+        docker_image_digest: codexCanonicalDigest({ label: 'plan-item-workflow-generation-docker-image' }),
+        network_policy_digest: codexCanonicalDigest({ mode: 'disabled' }),
+        now,
+      }),
+    ).resolves.toMatchObject({ id: runtimeJob.worker_id, active_lease_count: 0 });
+  });
+
   it('clears the live runner when product output is rejected after trusted session terminalization', async () => {
     const seeded = await seedSchedulerWorkflow('fffffff1');
     const turnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'fffff101');
@@ -912,6 +990,7 @@ describe('Product generation CodexSession scheduler', () => {
         terminal_status: 'failed',
         reason_code: 'codex_app_server_resume_failed',
       }),
+      retryable: false,
     });
   });
 
@@ -1017,6 +1096,9 @@ describe('Product generation CodexSession scheduler', () => {
     expect(session?.runner_runtime_job_id).toBe(runtimeJob.id);
     expect(session?.runner_launch_lease_id).toBe(runtimeJob.launch_lease_id);
     expect(session?.runner_expires_at).toBe(renewedExpiresAt);
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: runtimeJob.id })).resolves.toMatchObject({
+      expires_at: renewedExpiresAt,
+    });
   });
 
   function schedulerRuntimeResultValidation(result: CodexGenerationRuntimeJobResult) {
@@ -1322,10 +1404,14 @@ describe('Product generation CodexSession scheduler', () => {
       runner_expires_at: new Date(Date.parse(terminalAt) + 10 * 60 * 1000).toISOString(),
       attached_runtime_job_id: runtimeJob.id,
       worker_id: runtimeJob.worker_id,
+      worker_session_token: sessionToken,
+      nonce: `${suffix}-attach`,
+      nonce_timestamp: terminalAt,
       runtime_evidence_digest: codexCanonicalDigest({ suffix, step: 'runtime-evidence' }),
       launch_materialization_digest: codexCanonicalDigest({ suffix, step: 'launch-materialization' }),
       idempotency_key: `${suffix}-attach`,
       request_digest: codexCanonicalDigest({ suffix, step: 'attach' }),
+      replay_protection: replayProtection('attach'),
       now: terminalAt,
     });
     await repository.terminalizeCodexRuntimeJob({
@@ -1389,10 +1475,14 @@ describe('Product generation CodexSession scheduler', () => {
         runner_expires_at: new Date(Date.parse(terminalAt) + 10 * 60 * 1000).toISOString(),
         attached_runtime_job_id: runtimeJob.id,
         worker_id: runtimeJob.worker_id,
+        worker_session_token: sessionToken,
+        nonce: `${suffix}-attach`,
+        nonce_timestamp: terminalAt,
         runtime_evidence_digest: codexCanonicalDigest({ suffix, step: 'runtime-evidence' }),
         launch_materialization_digest: codexCanonicalDigest({ suffix, step: 'launch-materialization' }),
         idempotency_key: `${suffix}-start`,
         request_digest: codexCanonicalDigest({ suffix, step: 'start' }),
+        replay_protection: replayProtection('attach', digest('start')),
         now: terminalAt,
       });
     } else {

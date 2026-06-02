@@ -1133,10 +1133,18 @@ export class CodexRuntimeService {
       runner_expires_at: input.runner_expires_at,
       attached_runtime_job_id: jobId,
       worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
       runtime_evidence_digest: input.runtime_evidence_digest,
       launch_materialization_digest: input.launch_materialization_digest,
       idempotency_key: input.attach_idempotency_key,
       request_digest: input.body_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/session-runner/attach`,
+        input.body_digest,
+      ),
       now,
     });
     return { runtime_job: publicRuntimeJob(runtimeJob) };
@@ -1404,7 +1412,7 @@ export class CodexRuntimeService {
           reason_code: input.reasonCode,
           terminal_status: input.terminalStatus,
         },
-        retryable: input.terminalStatus !== 'cancelled',
+        retryable: input.terminalStatus !== 'cancelled' && !this.isCodexSessionRuntimeJob(input.runtimeJob),
         finished_at: input.now,
       });
     } catch (error) {
@@ -1474,6 +1482,11 @@ export class CodexRuntimeService {
       }
       throw error;
     }
+  }
+
+  private isCodexSessionRuntimeJob(runtimeJob: CodexRuntimeJob): boolean {
+    const workload = runtimeJob.input_json as Partial<CodexGenerationWorkloadV1>;
+    return workload.codex_session_runtime_context !== undefined || workload.codex_session_terminalization !== undefined;
   }
 
   private async clearCodexSessionRunnerOwnerForTerminalRuntimeJob(input: {
