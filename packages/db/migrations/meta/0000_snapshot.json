@@ -1,5 +1,5 @@
 {
-  "id": "261acb7a-e3f4-4ed3-922f-507ce8e19837",
+  "id": "aca7561f-2583-44d7-9b89-ec69c537ab22",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -2033,6 +2033,247 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.codex_runtime_capsules": {
+      "name": "codex_runtime_capsules",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "codex_session_id": {
+          "name": "codex_session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_from_turn_id": {
+          "name": "created_from_turn_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_ref": {
+          "name": "artifact_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "digest": {
+          "name": "digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "size_bytes": {
+          "name": "size_bytes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "manifest_digest": {
+          "name": "manifest_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "thread_state_digest": {
+          "name": "thread_state_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "memory_state_digest": {
+          "name": "memory_state_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment_manifest_digest": {
+          "name": "environment_manifest_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "codex_thread_id_digest": {
+          "name": "codex_thread_id_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "codex_cli_version": {
+          "name": "codex_cli_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "app_server_protocol_digest": {
+          "name": "app_server_protocol_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "runtime_profile_revision_id": {
+          "name": "runtime_profile_revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trusted_runtime_manifest_digest": {
+          "name": "trusted_runtime_manifest_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "credential_binding_lineage_digest": {
+          "name": "credential_binding_lineage_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by_actor_id": {
+          "name": "created_by_actor_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "codex_runtime_capsules_session_sequence_unique": {
+          "name": "codex_runtime_capsules_session_sequence_unique",
+          "columns": [
+            {
+              "expression": "codex_session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sequence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "codex_runtime_capsules_artifact_ref_unique": {
+          "name": "codex_runtime_capsules_artifact_ref_unique",
+          "columns": [
+            {
+              "expression": "artifact_ref",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "codex_runtime_capsules_session_created_idx": {
+          "name": "codex_runtime_capsules_session_created_idx",
+          "columns": [
+            {
+              "expression": "codex_session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "codex_runtime_capsules_turn_idx": {
+          "name": "codex_runtime_capsules_turn_idx",
+          "columns": [
+            {
+              "expression": "created_from_turn_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "codex_runtime_capsules_codex_session_id_codex_sessions_id_fk": {
+          "name": "codex_runtime_capsules_codex_session_id_codex_sessions_id_fk",
+          "tableFrom": "codex_runtime_capsules",
+          "tableTo": "codex_sessions",
+          "columnsFrom": [
+            "codex_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "codex_runtime_capsules_created_from_turn_id_codex_session_turns_id_fk": {
+          "name": "codex_runtime_capsules_created_from_turn_id_codex_session_turns_id_fk",
+          "tableFrom": "codex_runtime_capsules",
+          "tableTo": "codex_session_turns",
+          "columnsFrom": [
+            "created_from_turn_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "codex_runtime_capsules_created_by_actor_id_actors_id_fk": {
+          "name": "codex_runtime_capsules_created_by_actor_id_actors_id_fk",
+          "tableFrom": "codex_runtime_capsules",
+          "tableTo": "actors",
+          "columnsFrom": [
+            "created_by_actor_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.codex_session_leases": {
       "name": "codex_session_leases",
       "schema": "",
@@ -2219,177 +2460,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.codex_session_snapshots": {
-      "name": "codex_session_snapshots",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "codex_session_id": {
-          "name": "codex_session_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sequence": {
-          "name": "sequence",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "artifact_ref": {
-          "name": "artifact_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "digest": {
-          "name": "digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "size_bytes": {
-          "name": "size_bytes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "manifest_digest": {
-          "name": "manifest_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "codex_thread_id_digest": {
-          "name": "codex_thread_id_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "runtime_profile_revision_id": {
-          "name": "runtime_profile_revision_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_from_turn_id": {
-          "name": "created_from_turn_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by_actor_id": {
-          "name": "created_by_actor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "codex_session_snapshots_session_sequence_unique": {
-          "name": "codex_session_snapshots_session_sequence_unique",
-          "columns": [
-            {
-              "expression": "codex_session_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "sequence",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "codex_session_snapshots_artifact_ref_unique": {
-          "name": "codex_session_snapshots_artifact_ref_unique",
-          "columns": [
-            {
-              "expression": "artifact_ref",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "codex_session_snapshots_session_created_idx": {
-          "name": "codex_session_snapshots_session_created_idx",
-          "columns": [
-            {
-              "expression": "codex_session_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "codex_session_snapshots_codex_session_id_codex_sessions_id_fk": {
-          "name": "codex_session_snapshots_codex_session_id_codex_sessions_id_fk",
-          "tableFrom": "codex_session_snapshots",
-          "tableTo": "codex_sessions",
-          "columnsFrom": [
-            "codex_session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "codex_session_snapshots_created_by_actor_id_actors_id_fk": {
-          "name": "codex_session_snapshots_created_by_actor_id_actors_id_fk",
-          "tableFrom": "codex_session_snapshots",
-          "tableTo": "actors",
-          "columnsFrom": [
-            "created_by_actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.codex_session_stale_terminalization_attempts": {
       "name": "codex_session_stale_terminalization_attempts",
       "schema": "",
@@ -2437,14 +2507,14 @@
           "primaryKey": false,
           "notNull": true
         },
-        "expected_previous_snapshot_digest": {
-          "name": "expected_previous_snapshot_digest",
+        "expected_input_capsule_digest": {
+          "name": "expected_input_capsule_digest",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "attempted_output_snapshot_digest": {
-          "name": "attempted_output_snapshot_digest",
+        "attempted_output_capsule_digest": {
+          "name": "attempted_output_capsule_digest",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -2581,20 +2651,104 @@
           "primaryKey": false,
           "notNull": true
         },
-        "expected_previous_snapshot_digest": {
-          "name": "expected_previous_snapshot_digest",
+        "expected_input_capsule_digest": {
+          "name": "expected_input_capsule_digest",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "output_snapshot_id": {
-          "name": "output_snapshot_id",
+        "input_capsule_id": {
+          "name": "input_capsule_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
-        "output_snapshot_digest": {
-          "name": "output_snapshot_digest",
+        "input_capsule_digest": {
+          "name": "input_capsule_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_capsule_id": {
+          "name": "output_capsule_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_capsule_digest": {
+          "name": "output_capsule_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_memory_bundle_ref": {
+          "name": "base_memory_bundle_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_memory_bundle_digest": {
+          "name": "base_memory_bundle_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "input_memory_bundle_ref": {
+          "name": "input_memory_bundle_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "input_memory_bundle_digest": {
+          "name": "input_memory_bundle_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_memory_bundle_ref": {
+          "name": "output_memory_bundle_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_memory_bundle_digest": {
+          "name": "output_memory_bundle_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "memory_delta_artifact_ref": {
+          "name": "memory_delta_artifact_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "memory_delta_digest": {
+          "name": "memory_delta_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "input_environment_manifest_ref": {
+          "name": "input_environment_manifest_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "input_environment_manifest_digest": {
+          "name": "input_environment_manifest_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_environment_manifest_ref": {
+          "name": "output_environment_manifest_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_environment_manifest_digest": {
+          "name": "output_environment_manifest_digest",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -2828,14 +2982,50 @@
           "primaryKey": false,
           "notNull": false
         },
-        "latest_snapshot_id": {
-          "name": "latest_snapshot_id",
+        "latest_capsule_id": {
+          "name": "latest_capsule_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
-        "latest_snapshot_digest": {
-          "name": "latest_snapshot_digest",
+        "latest_capsule_digest": {
+          "name": "latest_capsule_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_memory_bundle_ref": {
+          "name": "base_memory_bundle_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_memory_bundle_digest": {
+          "name": "base_memory_bundle_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "latest_memory_bundle_ref": {
+          "name": "latest_memory_bundle_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "latest_memory_bundle_digest": {
+          "name": "latest_memory_bundle_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "latest_environment_manifest_ref": {
+          "name": "latest_environment_manifest_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "latest_environment_manifest_digest": {
+          "name": "latest_environment_manifest_digest",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -2889,6 +3079,30 @@
           "notNull": true,
           "default": 0
         },
+        "runner_worker_id": {
+          "name": "runner_worker_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runner_launch_lease_id": {
+          "name": "runner_launch_lease_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runner_runtime_job_id": {
+          "name": "runner_runtime_job_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runner_expires_at": {
+          "name": "runner_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "forked_from_session_id": {
           "name": "forked_from_session_id",
           "type": "uuid",
@@ -2901,8 +3115,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "forked_from_snapshot_id": {
-          "name": "forked_from_snapshot_id",
+        "forked_from_capsule_id": {
+          "name": "forked_from_capsule_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -2996,11 +3210,11 @@
           "method": "btree",
           "with": {}
         },
-        "codex_sessions_latest_snapshot_idx": {
-          "name": "codex_sessions_latest_snapshot_idx",
+        "codex_sessions_latest_capsule_idx": {
+          "name": "codex_sessions_latest_capsule_idx",
           "columns": [
             {
-              "expression": "latest_snapshot_id",
+              "expression": "latest_capsule_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -3016,6 +3230,36 @@
           "columns": [
             {
               "expression": "active_lease_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "codex_sessions_runner_worker_idx": {
+          "name": "codex_sessions_runner_worker_idx",
+          "columns": [
+            {
+              "expression": "runner_worker_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "codex_sessions_runner_launch_lease_idx": {
+          "name": "codex_sessions_runner_launch_lease_idx",
+          "columns": [
+            {
+              "expression": "runner_launch_lease_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

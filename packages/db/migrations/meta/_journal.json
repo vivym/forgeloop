@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1780222492836,
-      "tag": "0000_worried_marvel_apes",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1780308000000,
-      "tag": "0001_persist_codex_session_runner_owner",
+      "when": 1780434819999,
+      "tag": "0000_clean_capsule_runtime_foundation",
       "breakpoints": true
     }
   ]

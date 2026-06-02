@@ -309,6 +309,28 @@ CREATE TABLE "development_plans" (
 	"updated_at" timestamp with time zone NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "codex_runtime_capsules" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"codex_session_id" uuid NOT NULL,
+	"created_from_turn_id" uuid NOT NULL,
+	"sequence" integer NOT NULL,
+	"artifact_ref" text NOT NULL,
+	"digest" text NOT NULL,
+	"size_bytes" text NOT NULL,
+	"manifest_digest" text NOT NULL,
+	"thread_state_digest" text NOT NULL,
+	"memory_state_digest" text NOT NULL,
+	"environment_manifest_digest" text NOT NULL,
+	"codex_thread_id_digest" text NOT NULL,
+	"codex_cli_version" text NOT NULL,
+	"app_server_protocol_digest" text NOT NULL,
+	"runtime_profile_revision_id" uuid NOT NULL,
+	"trusted_runtime_manifest_digest" text NOT NULL,
+	"credential_binding_lineage_digest" text NOT NULL,
+	"created_by_actor_id" uuid NOT NULL,
+	"created_at" timestamp with time zone NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "codex_session_leases" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"codex_session_id" uuid NOT NULL,
@@ -326,21 +348,6 @@ CREATE TABLE "codex_session_leases" (
 	"updated_at" timestamp with time zone NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "codex_session_snapshots" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"codex_session_id" uuid NOT NULL,
-	"sequence" integer NOT NULL,
-	"artifact_ref" text NOT NULL,
-	"digest" text NOT NULL,
-	"size_bytes" text NOT NULL,
-	"manifest_digest" text NOT NULL,
-	"codex_thread_id_digest" text,
-	"runtime_profile_revision_id" uuid NOT NULL,
-	"created_from_turn_id" uuid,
-	"created_by_actor_id" uuid NOT NULL,
-	"created_at" timestamp with time zone NOT NULL
-);
---> statement-breakpoint
 CREATE TABLE "codex_session_stale_terminalization_attempts" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"codex_session_id" uuid NOT NULL,
@@ -349,8 +356,8 @@ CREATE TABLE "codex_session_stale_terminalization_attempts" (
 	"lease_epoch" integer,
 	"worker_id" text NOT NULL,
 	"worker_session_digest" text NOT NULL,
-	"expected_previous_snapshot_digest" text,
-	"attempted_output_snapshot_digest" text,
+	"expected_input_capsule_digest" text,
+	"attempted_output_capsule_digest" text,
 	"attempted_codex_thread_id_digest" text,
 	"failure_code" text NOT NULL,
 	"created_at" timestamp with time zone NOT NULL
@@ -363,9 +370,23 @@ CREATE TABLE "codex_session_turns" (
 	"intent" text NOT NULL,
 	"status" text NOT NULL,
 	"input_digest" text NOT NULL,
-	"expected_previous_snapshot_digest" text,
-	"output_snapshot_id" uuid,
-	"output_snapshot_digest" text,
+	"expected_input_capsule_digest" text,
+	"input_capsule_id" uuid,
+	"input_capsule_digest" text,
+	"output_capsule_id" uuid,
+	"output_capsule_digest" text,
+	"base_memory_bundle_ref" text,
+	"base_memory_bundle_digest" text,
+	"input_memory_bundle_ref" text,
+	"input_memory_bundle_digest" text,
+	"output_memory_bundle_ref" text,
+	"output_memory_bundle_digest" text,
+	"memory_delta_artifact_ref" text,
+	"memory_delta_digest" text,
+	"input_environment_manifest_ref" text,
+	"input_environment_manifest_digest" text,
+	"output_environment_manifest_ref" text,
+	"output_environment_manifest_digest" text,
 	"output_object_type" text,
 	"output_object_id" text,
 	"codex_thread_id_digest" text,
@@ -386,8 +407,14 @@ CREATE TABLE "codex_sessions" (
 	"role" text NOT NULL,
 	"codex_thread_id" text,
 	"codex_thread_id_digest" text,
-	"latest_snapshot_id" uuid,
-	"latest_snapshot_digest" text,
+	"latest_capsule_id" uuid,
+	"latest_capsule_digest" text,
+	"base_memory_bundle_ref" text,
+	"base_memory_bundle_digest" text,
+	"latest_memory_bundle_ref" text,
+	"latest_memory_bundle_digest" text,
+	"latest_environment_manifest_ref" text,
+	"latest_environment_manifest_digest" text,
 	"latest_turn_id" uuid,
 	"latest_turn_digest" text,
 	"runtime_profile_id" uuid NOT NULL,
@@ -396,9 +423,13 @@ CREATE TABLE "codex_sessions" (
 	"credential_binding_version_id" uuid NOT NULL,
 	"active_lease_id" uuid,
 	"lease_epoch" integer DEFAULT 0 NOT NULL,
+	"runner_worker_id" uuid,
+	"runner_launch_lease_id" uuid,
+	"runner_runtime_job_id" uuid,
+	"runner_expires_at" timestamp with time zone,
 	"forked_from_session_id" uuid,
 	"forked_from_turn_id" uuid,
-	"forked_from_snapshot_id" uuid,
+	"forked_from_capsule_id" uuid,
 	"fork_reason" text,
 	"created_by_actor_id" uuid NOT NULL,
 	"created_at" timestamp with time zone NOT NULL,
@@ -1502,9 +1533,10 @@ ALTER TABLE "development_plan_revisions" ADD CONSTRAINT "development_plan_revisi
 ALTER TABLE "development_plan_source_links" ADD CONSTRAINT "development_plan_source_links_development_plan_id_development_plans_id_fk" FOREIGN KEY ("development_plan_id") REFERENCES "public"."development_plans"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "development_plan_source_links" ADD CONSTRAINT "development_plan_source_links_created_by_actor_id_actors_id_fk" FOREIGN KEY ("created_by_actor_id") REFERENCES "public"."actors"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "development_plans" ADD CONSTRAINT "development_plans_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "codex_runtime_capsules" ADD CONSTRAINT "codex_runtime_capsules_codex_session_id_codex_sessions_id_fk" FOREIGN KEY ("codex_session_id") REFERENCES "public"."codex_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "codex_runtime_capsules" ADD CONSTRAINT "codex_runtime_capsules_created_from_turn_id_codex_session_turns_id_fk" FOREIGN KEY ("created_from_turn_id") REFERENCES "public"."codex_session_turns"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "codex_runtime_capsules" ADD CONSTRAINT "codex_runtime_capsules_created_by_actor_id_actors_id_fk" FOREIGN KEY ("created_by_actor_id") REFERENCES "public"."actors"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "codex_session_leases" ADD CONSTRAINT "codex_session_leases_codex_session_id_codex_sessions_id_fk" FOREIGN KEY ("codex_session_id") REFERENCES "public"."codex_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "codex_session_snapshots" ADD CONSTRAINT "codex_session_snapshots_codex_session_id_codex_sessions_id_fk" FOREIGN KEY ("codex_session_id") REFERENCES "public"."codex_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "codex_session_snapshots" ADD CONSTRAINT "codex_session_snapshots_created_by_actor_id_actors_id_fk" FOREIGN KEY ("created_by_actor_id") REFERENCES "public"."actors"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "codex_session_stale_terminalization_attempts" ADD CONSTRAINT "codex_session_stale_terminalization_attempts_codex_session_id_codex_sessions_id_fk" FOREIGN KEY ("codex_session_id") REFERENCES "public"."codex_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "codex_session_stale_terminalization_attempts" ADD CONSTRAINT "codex_session_stale_terminalization_attempts_codex_session_turn_id_codex_session_turns_id_fk" FOREIGN KEY ("codex_session_turn_id") REFERENCES "public"."codex_session_turns"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "codex_session_turns" ADD CONSTRAINT "codex_session_turns_codex_session_id_codex_sessions_id_fk" FOREIGN KEY ("codex_session_id") REFERENCES "public"."codex_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -1639,13 +1671,14 @@ ALTER TABLE "codex_runtime_profile_revisions" ADD CONSTRAINT "codex_runtime_prof
 ALTER TABLE "codex_worker_session_nonces" ADD CONSTRAINT "codex_worker_session_nonces_worker_id_codex_worker_registrations_id_fk" FOREIGN KEY ("worker_id") REFERENCES "public"."codex_worker_registrations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "dpi_revisions_item_revision_unique" ON "development_plan_item_revisions" USING btree ("development_plan_item_id","revision_number");--> statement-breakpoint
 CREATE UNIQUE INDEX "development_plan_revisions_plan_revision_unique" ON "development_plan_revisions" USING btree ("development_plan_id","revision_number");--> statement-breakpoint
+CREATE UNIQUE INDEX "codex_runtime_capsules_session_sequence_unique" ON "codex_runtime_capsules" USING btree ("codex_session_id","sequence");--> statement-breakpoint
+CREATE UNIQUE INDEX "codex_runtime_capsules_artifact_ref_unique" ON "codex_runtime_capsules" USING btree ("artifact_ref");--> statement-breakpoint
+CREATE INDEX "codex_runtime_capsules_session_created_idx" ON "codex_runtime_capsules" USING btree ("codex_session_id","created_at");--> statement-breakpoint
+CREATE INDEX "codex_runtime_capsules_turn_idx" ON "codex_runtime_capsules" USING btree ("created_from_turn_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "codex_session_leases_one_active_per_session_idx" ON "codex_session_leases" USING btree ("codex_session_id") WHERE "codex_session_leases"."status" = 'active';--> statement-breakpoint
 CREATE INDEX "codex_session_leases_session_epoch_idx" ON "codex_session_leases" USING btree ("codex_session_id","lease_epoch");--> statement-breakpoint
 CREATE INDEX "codex_session_leases_worker_status_idx" ON "codex_session_leases" USING btree ("worker_id","status");--> statement-breakpoint
 CREATE INDEX "codex_session_leases_expires_at_idx" ON "codex_session_leases" USING btree ("expires_at");--> statement-breakpoint
-CREATE UNIQUE INDEX "codex_session_snapshots_session_sequence_unique" ON "codex_session_snapshots" USING btree ("codex_session_id","sequence");--> statement-breakpoint
-CREATE UNIQUE INDEX "codex_session_snapshots_artifact_ref_unique" ON "codex_session_snapshots" USING btree ("artifact_ref");--> statement-breakpoint
-CREATE INDEX "codex_session_snapshots_session_created_idx" ON "codex_session_snapshots" USING btree ("codex_session_id","created_at");--> statement-breakpoint
 CREATE INDEX "codex_session_stale_terminalization_attempts_session_idx" ON "codex_session_stale_terminalization_attempts" USING btree ("codex_session_id","created_at");--> statement-breakpoint
 CREATE INDEX "codex_session_stale_terminalization_attempts_turn_idx" ON "codex_session_stale_terminalization_attempts" USING btree ("codex_session_turn_id");--> statement-breakpoint
 CREATE INDEX "codex_session_turns_session_created_idx" ON "codex_session_turns" USING btree ("codex_session_id","created_at");--> statement-breakpoint
@@ -1655,8 +1688,10 @@ CREATE INDEX "codex_session_turns_action_run_idx" ON "codex_session_turns" USING
 CREATE INDEX "codex_sessions_owner_idx" ON "codex_sessions" USING btree ("owner_type","owner_id");--> statement-breakpoint
 CREATE INDEX "codex_sessions_owner_role_idx" ON "codex_sessions" USING btree ("owner_id","role");--> statement-breakpoint
 CREATE INDEX "codex_sessions_thread_digest_idx" ON "codex_sessions" USING btree ("codex_thread_id_digest");--> statement-breakpoint
-CREATE INDEX "codex_sessions_latest_snapshot_idx" ON "codex_sessions" USING btree ("latest_snapshot_id");--> statement-breakpoint
+CREATE INDEX "codex_sessions_latest_capsule_idx" ON "codex_sessions" USING btree ("latest_capsule_id");--> statement-breakpoint
 CREATE INDEX "codex_sessions_active_lease_idx" ON "codex_sessions" USING btree ("active_lease_id");--> statement-breakpoint
+CREATE INDEX "codex_sessions_runner_worker_idx" ON "codex_sessions" USING btree ("runner_worker_id");--> statement-breakpoint
+CREATE INDEX "codex_sessions_runner_launch_lease_idx" ON "codex_sessions" USING btree ("runner_launch_lease_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "codex_sessions_one_active_per_workflow_idx" ON "codex_sessions" USING btree ("owner_id") WHERE "codex_sessions"."role" = 'active' and "codex_sessions"."status" <> 'archived';--> statement-breakpoint
 CREATE INDEX "execution_readiness_records_workflow_idx" ON "execution_readiness_records" USING btree ("workflow_id");--> statement-breakpoint
 CREATE INDEX "execution_readiness_records_item_idx" ON "execution_readiness_records" USING btree ("development_plan_item_id");--> statement-breakpoint
