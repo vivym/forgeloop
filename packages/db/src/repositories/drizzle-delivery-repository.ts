@@ -837,15 +837,19 @@ const codexRuntimeCapsuleDurableIdentityMatches = (
   existing.created_from_turn_id === candidate.created_from_turn_id;
 
 const codexRuntimeContinuationFromSession = (session: CodexSession) => ({
-  expected_input_capsule_digest: session.latest_capsule_digest,
-  input_capsule_id: session.latest_capsule_id,
-  input_capsule_digest: session.latest_capsule_digest,
-  base_memory_bundle_ref: session.base_memory_bundle_ref,
-  base_memory_bundle_digest: session.base_memory_bundle_digest,
-  input_memory_bundle_ref: session.latest_memory_bundle_ref,
-  input_memory_bundle_digest: session.latest_memory_bundle_digest,
-  input_environment_manifest_ref: session.latest_environment_manifest_ref,
-  input_environment_manifest_digest: session.latest_environment_manifest_digest,
+  ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+  ...(session.latest_capsule_id === undefined ? {} : { input_capsule_id: session.latest_capsule_id }),
+  ...(session.latest_capsule_digest === undefined ? {} : { input_capsule_digest: session.latest_capsule_digest }),
+  ...(session.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: session.base_memory_bundle_ref }),
+  ...(session.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: session.base_memory_bundle_digest }),
+  ...(session.latest_memory_bundle_ref === undefined ? {} : { input_memory_bundle_ref: session.latest_memory_bundle_ref }),
+  ...(session.latest_memory_bundle_digest === undefined ? {} : { input_memory_bundle_digest: session.latest_memory_bundle_digest }),
+  ...(session.latest_environment_manifest_ref === undefined
+    ? {}
+    : { input_environment_manifest_ref: session.latest_environment_manifest_ref }),
+  ...(session.latest_environment_manifest_digest === undefined
+    ? {}
+    : { input_environment_manifest_digest: session.latest_environment_manifest_digest }),
 });
 
 const codexRuntimeTurnContinuationFromInput = (input: {
@@ -1478,7 +1482,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const turnWithContinuation: CodexSessionTurn = {
       ...turn,
       ...codexRuntimeContinuationFromSession(activeSession),
-      expected_input_capsule_digest: turn.expected_input_capsule_digest,
+      ...(turn.expected_input_capsule_digest === undefined
+        ? {}
+        : { expected_input_capsule_digest: turn.expected_input_capsule_digest }),
     };
     const updatedSession: CodexSession = { ...activeSession, latest_turn_id: turn.id, latest_turn_digest: turn.input_digest, updated_at: turn.updated_at };
     await this.db.insert(codex_session_turns).values(toDbRecord(turnWithContinuation, codex_session_turns) as never);
