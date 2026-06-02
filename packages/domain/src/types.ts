@@ -67,6 +67,8 @@ export type DomainErrorCode =
   | 'codex_session_lease_expired'
   | 'codex_session_stale_terminalization'
   | 'codex_runtime_capsule_stale'
+  | 'codex_runtime_capsule_component_ref_invalid'
+  | 'codex_runtime_capsule_public_report_unsafe'
   | 'codex_session_thread_binding_conflict'
   | 'codex_session_thread_binding_partial'
   | 'codex_session_thread_digest_mismatch'
