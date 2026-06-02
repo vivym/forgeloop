@@ -52,7 +52,6 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
       const configRead = await readJson(join(schemaDir, 'v2', 'ConfigReadParams.json'));
       const threadStartSource = await readFile(join(tsDir, 'v2', 'ThreadStartParams.ts'), 'utf8');
       const threadResumeSource = await readFile(join(tsDir, 'v2', 'ThreadResumeParams.ts'), 'utf8');
-      const threadSource = await readFile(join(tsDir, 'v2', 'Thread.ts'), 'utf8');
       const turnStartResponseSource = await readFile(join(tsDir, 'v2', 'TurnStartResponse.ts'), 'utf8');
       const turnCompletedSource = await readFile(join(tsDir, 'v2', 'TurnCompletedNotification.ts'), 'utf8');
       const threadItemSource = await readFile(join(tsDir, 'v2', 'ThreadItem.ts'), 'utf8');
@@ -61,9 +60,11 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
       expect(Object.keys((threadStart.properties as Record<string, unknown>) ?? {})).not.toContain('sandboxPolicy');
       expect(threadStart.required).toEqual(expect.arrayContaining(['experimentalRawEvents', 'persistExtendedHistory']));
       expect(threadResume.required).toEqual(expect.arrayContaining(['threadId', 'persistExtendedHistory']));
-      expect(Object.keys((threadResume.properties as Record<string, unknown>) ?? {})).toEqual(
-        expect.arrayContaining(['threadId', 'excludeTurns', 'history', 'path', 'persistExtendedHistory']),
-      );
+      const threadResumePropertyKeys = Object.keys((threadResume.properties as Record<string, unknown>) ?? {});
+      expect(threadResumePropertyKeys).toEqual(expect.arrayContaining(['threadId', 'excludeTurns', 'persistExtendedHistory']));
+      expect(threadResumePropertyKeys).not.toEqual(expect.arrayContaining(['history']));
+      expect(threadResumePropertyKeys).not.toEqual(expect.arrayContaining(['path']));
+      expect(threadResumePropertyKeys).not.toEqual(expect.arrayContaining(['sessionId']));
       expect(Object.keys((turnStart.properties as Record<string, unknown>) ?? {})).toContain('sandboxPolicy');
       expect(Object.keys((turnStart.properties as Record<string, unknown>) ?? {})).toContain('outputSchema');
       expect(turnStart.required).toEqual(['input', 'threadId']);
@@ -82,11 +83,7 @@ describe.skipIf(!runSchemaSmoke)('real Codex app-server generated schema smoke',
       expect(threadStartSource).toContain('persistExtendedHistory: boolean');
       expect(threadResumeSource).toContain('threadId: string');
       expect(threadResumeSource).toContain('excludeTurns?: boolean');
-      expect(threadResumeSource).toContain('history?: Array<ResponseItem> | null');
-      expect(threadResumeSource).toContain('path?: string | null');
       expect(threadResumeSource).toContain('persistExtendedHistory: boolean');
-      expect(threadSource).toContain('id: string');
-      expect(threadSource).toContain('sessionId: string');
       expect(serverNotificationSource).toContain('"method": "item/agentMessage/delta"');
       expect(serverNotificationSource).toContain('"method": "item/completed"');
       expect(serverNotificationSource).toContain('"method": "rawResponseItem/completed"');
@@ -171,9 +168,7 @@ const threadStart = {
 const actualThreadStart = ${JSON.stringify(capturedRequests[0]?.params, null, 2)} satisfies ThreadStartParams;
 const threadResume = {
   threadId: 'thread-1',
-  excludeTurns: false,
-  history: null,
-  path: null,
+  excludeTurns: true,
   persistExtendedHistory: false,
 } satisfies ThreadResumeParams;
 const turnStart = {

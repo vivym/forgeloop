@@ -327,7 +327,7 @@ describe('codex runtime domain contracts', () => {
       lease_epoch: 1,
       worker_id: 'worker-1',
       worker_session_digest: digestA,
-      expected_previous_snapshot_digest: digestB,
+      expected_input_capsule_digest: digestB,
       runner_runtime_job_id: 'runtime-job-previous',
       runner_launch_lease_id: 'launch-lease-previous',
       turn_group_status: 'intermediate',
@@ -340,6 +340,7 @@ describe('codex runtime domain contracts', () => {
 
     expect(context).toMatchObject({
       schema_version: 'codex_session_runtime_context.v1',
+      expected_input_capsule_digest: digestB,
       lease_epoch: 1,
       turn_group_status: 'intermediate',
       continuation: {
@@ -371,6 +372,34 @@ describe('codex runtime domain contracts', () => {
           },
         }),
       'codex_session_thread_digest_mismatch',
+    );
+  });
+
+  it('rejects legacy snapshot digest fields in trusted Codex session runtime context', () => {
+    expectDomainErrorCode(
+      () =>
+        validateCodexSessionRuntimeContext({
+          schema_version: 'codex_session_runtime_context.v1',
+          codex_session_id: 'session-1',
+          codex_session_turn_id: 'turn-1',
+          lease_id: 'lease-1',
+          lease_epoch: 1,
+          worker_id: 'worker-1',
+          worker_session_digest: digestA,
+          expected_previous_snapshot_digest: digestB,
+          runner_runtime_job_id: 'runtime-job-previous',
+          runner_launch_lease_id: 'launch-lease-previous',
+          turn_group_status: 'intermediate',
+          continuation: {
+            kind: 'resume_thread',
+            codex_thread_id: 'thread-1',
+            codex_thread_id_digest: codexCanonicalDigest({
+              kind: 'codex_app_server_thread_id',
+              thread_id: 'thread-1',
+            }),
+          },
+        }),
+      'codex_generation_workload_unsupported',
     );
   });
 

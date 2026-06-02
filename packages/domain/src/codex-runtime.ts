@@ -374,7 +374,7 @@ export interface CodexSessionRuntimeContextV1 {
   lease_epoch: number;
   worker_id: string;
   worker_session_digest: string;
-  expected_previous_snapshot_digest?: string;
+  expected_input_capsule_digest?: string;
   runner_runtime_job_id?: string;
   runner_launch_lease_id?: string;
   turn_group_status: 'intermediate' | 'complete';
@@ -384,7 +384,7 @@ export interface CodexSessionRuntimeContextV1 {
 export interface CodexSessionTerminalizationV1 {
   schema_version: 'codex_session_terminalization.v1';
   lease_token: string;
-  expected_previous_snapshot_digest?: string;
+  expected_input_capsule_digest?: string;
 }
 
 export interface CodexRunExecutionWorkloadV1 {
@@ -725,7 +725,10 @@ export const validateCodexSessionRuntimeContext = (value: unknown): CodexSession
 
   const runnerRuntimeJobId = optionalRuntimeContextString(value, 'runner_runtime_job_id');
   const runnerLaunchLeaseId = optionalRuntimeContextString(value, 'runner_launch_lease_id');
-  const expectedPreviousSnapshotDigest = optionalRuntimeContextString(value, 'expected_previous_snapshot_digest');
+  if ('expected_previous_snapshot_digest' in value) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: expected_previous_snapshot_digest is unsupported.');
+  }
+  const expectedInputCapsuleDigest = optionalRuntimeContextString(value, 'expected_input_capsule_digest');
   if ((runnerRuntimeJobId === undefined) !== (runnerLaunchLeaseId === undefined)) {
     throw new DomainError(
       'codex_session_thread_binding_partial',
@@ -790,9 +793,9 @@ export const validateCodexSessionRuntimeContext = (value: unknown): CodexSession
     lease_epoch: Number(value.lease_epoch),
     worker_id: requireRuntimeContextString(value, 'worker_id'),
     worker_session_digest: requireRuntimeContextString(value, 'worker_session_digest'),
-    ...(expectedPreviousSnapshotDigest === undefined
+    ...(expectedInputCapsuleDigest === undefined
       ? {}
-      : { expected_previous_snapshot_digest: expectedPreviousSnapshotDigest }),
+      : { expected_input_capsule_digest: expectedInputCapsuleDigest }),
     ...(runnerRuntimeJobId === undefined ? {} : { runner_runtime_job_id: runnerRuntimeJobId }),
     ...(runnerLaunchLeaseId === undefined ? {} : { runner_launch_lease_id: runnerLaunchLeaseId }),
     turn_group_status: value.turn_group_status,

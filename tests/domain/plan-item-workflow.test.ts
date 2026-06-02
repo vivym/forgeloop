@@ -4,7 +4,10 @@ import {
   assertWorkflowManualDecisionAllowedForTransition,
   codexSessionPublicProjection,
   planItemWorkflowStatusValues,
+  type CodexRuntimeCapsule,
   type CodexSession,
+  type CodexSessionStaleTerminalizationAttempt,
+  type CodexSessionTurn,
   type PlanItemWorkflowStatus,
   type WorkflowManualDecision,
 } from '@forgeloop/domain';
@@ -170,14 +173,97 @@ describe('plan item workflow domain', () => {
   });
 
   it('does not project raw runtime internals into public session DTOs', () => {
+    const session = {
+      id: 'session-1',
+      owner_type: 'plan_item_workflow',
+      owner_id: 'workflow-1',
+      status: 'idle',
+      role: 'active',
+      codex_thread_id_digest: `sha256:${'a'.repeat(64)}`,
+      latest_capsule_id: 'capsule-1',
+      latest_capsule_digest: `sha256:${'b'.repeat(64)}`,
+      base_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-base',
+      base_memory_bundle_digest: `sha256:${'c'.repeat(64)}`,
+      latest_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
+      latest_memory_bundle_digest: `sha256:${'d'.repeat(64)}`,
+      latest_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+      latest_environment_manifest_digest: `sha256:${'e'.repeat(64)}`,
+      latest_turn_id: 'turn-1',
+      latest_turn_digest: `sha256:${'f'.repeat(64)}`,
+      runtime_profile_id: 'profile-1',
+      runtime_profile_revision_id: 'profile-revision-1',
+      credential_binding_id: 'credential-1',
+      credential_binding_version_id: 'credential-version-1',
+      lease_epoch: 0,
+      created_by_actor_id: 'actor-1',
+      created_at: '2026-06-02T00:00:00.000Z',
+      updated_at: '2026-06-02T00:00:00.000Z',
+    } satisfies CodexSession;
+    const turn = {
+      id: 'turn-1',
+      codex_session_id: 'session-1',
+      workflow_id: 'workflow-1',
+      intent: 'draft_spec_doc',
+      status: 'succeeded',
+      input_digest: `sha256:${'0'.repeat(64)}`,
+      expected_input_capsule_digest: `sha256:${'b'.repeat(64)}`,
+      input_capsule_id: 'capsule-1',
+      input_capsule_digest: `sha256:${'b'.repeat(64)}`,
+      output_capsule_id: 'capsule-2',
+      output_capsule_digest: `sha256:${'9'.repeat(64)}`,
+      input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
+      output_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-2',
+      input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+      output_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-2',
+      created_by_actor_id: 'actor-1',
+      created_at: '2026-06-02T00:00:00.000Z',
+      updated_at: '2026-06-02T00:00:00.000Z',
+    } satisfies CodexSessionTurn;
+    const capsule = {
+      id: 'capsule-2',
+      codex_session_id: 'session-1',
+      created_from_turn_id: 'turn-1',
+      sequence: 2,
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+      digest: `sha256:${'9'.repeat(64)}`,
+      size_bytes: '1024',
+      manifest_digest: `sha256:${'1'.repeat(64)}`,
+      thread_state_digest: `sha256:${'2'.repeat(64)}`,
+      memory_state_digest: `sha256:${'3'.repeat(64)}`,
+      environment_manifest_digest: `sha256:${'4'.repeat(64)}`,
+      codex_thread_id_digest: `sha256:${'a'.repeat(64)}`,
+      codex_cli_version: 'codex-cli 0.132.0',
+      app_server_protocol_digest: `sha256:${'5'.repeat(64)}`,
+      runtime_profile_revision_id: 'profile-revision-1',
+      trusted_runtime_manifest_digest: `sha256:${'6'.repeat(64)}`,
+      credential_binding_lineage_digest: `sha256:${'7'.repeat(64)}`,
+      created_by_actor_id: 'actor-1',
+      created_at: '2026-06-02T00:00:00.000Z',
+    } satisfies CodexRuntimeCapsule;
+    const staleAttempt = {
+      id: 'stale-attempt-1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+      worker_id: 'worker-1',
+      worker_session_digest: `sha256:${'8'.repeat(64)}`,
+      expected_input_capsule_digest: `sha256:${'b'.repeat(64)}`,
+      attempted_output_capsule_digest: `sha256:${'9'.repeat(64)}`,
+      attempted_codex_thread_id_digest: `sha256:${'a'.repeat(64)}`,
+      failure_code: 'stale_capsule',
+      created_at: '2026-06-02T00:00:00.000Z',
+    } satisfies CodexSessionStaleTerminalizationAttempt;
+
+    expect(session.latest_capsule_digest).toMatch(/^sha256:/);
+    expect(turn.output_capsule_digest).toBe(capsule.digest);
+    expect(staleAttempt.attempted_output_capsule_digest).toBe(capsule.digest);
+    expect('latest_snapshot_digest' in session).toBe(false);
+
     expect(
       codexSessionPublicProjection(
-        baseSession({
+        {
+          ...session,
           codex_thread_id: 'raw-thread',
-          codex_thread_id_digest: 'sha256:abc',
-          latest_snapshot_id: 'snapshot-1',
-          latest_snapshot_digest: 'sha256:def',
-        }),
+        },
       ),
     ).toEqual({
       id: 'session-1',
@@ -185,6 +271,7 @@ describe('plan item workflow domain', () => {
       role: 'active',
       continuity_state: 'ready',
       can_continue: true,
+      last_turn_at: '2026-06-02T00:00:00.000Z',
     });
   });
 
