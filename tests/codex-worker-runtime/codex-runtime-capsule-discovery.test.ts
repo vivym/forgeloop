@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { codexCanonicalDigest, DomainError } from '../../packages/domain/src/index';
+import { codexCanonicalDigest, codexThreadLocatorRepairThreadsColumns, DomainError } from '../../packages/domain/src/index';
 import {
   runCodexRuntimeCapsuleDiscovery,
   type CodexRuntimeCapsuleDiscoveryProbe,
@@ -17,8 +17,8 @@ const locatorRepairManifest = {
   repair_strategy: 'minimal_state_index_upsert',
   required_state_tables: [
     {
-      table_name: 'sessions',
-      allowed_columns: ['id', 'path'],
+      table_name: 'threads',
+      allowed_columns: [...codexThreadLocatorRepairThreadsColumns],
       row_digest: digest({ row: 'abc' }),
     },
   ],
@@ -84,13 +84,26 @@ describe('Codex runtime capsule discovery gate', () => {
     );
   });
 
-  it('blocks when a forbidden raw Codex home path is observed', async () => {
-    await expectDiscoveryBlockers(
-      observedState({
-        observed_path_mutations: [{ relative_path: 'plugins/plugin-a/plugin.json', mutation_kind: 'created', entry_kind: 'regular_file' }],
-      }),
-      ['codex_runtime_capsule_discovery_forbidden_path'],
-    );
+  it('counts forbidden app-server files without accepting them as required restore inputs', async () => {
+    const report = await runCodexRuntimeCapsuleDiscovery({
+      codexHomeRoot: '/tmp/codex-home',
+      probe: probe(
+        observedState({
+          observed_path_mutations: [
+            { relative_path: 'sessions/2026/06/02/rollout-abc.jsonl', mutation_kind: 'created', entry_kind: 'regular_file', required_for_restore: true },
+            { relative_path: 'state_5.sqlite', mutation_kind: 'created', entry_kind: 'regular_file' },
+            { relative_path: 'logs_1.sqlite', mutation_kind: 'created', entry_kind: 'regular_file' },
+            { relative_path: 'plugins/plugin-a/plugin.json', mutation_kind: 'created', entry_kind: 'regular_file' },
+          ],
+        }),
+      ),
+    });
+
+    expect(report.status).toBe('passed');
+    expect(report.path_mutation_counts.thread_state_allowed).toBe(1);
+    expect(report.path_mutation_counts.forbidden).toBe(2);
+    expect(report.path_mutation_counts.forbidden_whole_db).toBe(1);
+    expect(report.blocker_codes).toEqual([]);
   });
 
   it('blocks when locator repair asks to copy a whole SQLite DB', async () => {

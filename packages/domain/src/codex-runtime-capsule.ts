@@ -314,12 +314,41 @@ export const codexRuntimeCapsuleManifestSchema = withSessionRefValidation(
   ],
 );
 
+export const codexThreadLocatorRepairThreadsColumns = [
+  'id',
+  'rollout_path',
+  'created_at',
+  'updated_at',
+  'source',
+  'model_provider',
+  'cwd',
+  'title',
+  'sandbox_policy',
+  'approval_mode',
+  'tokens_used',
+  'has_user_event',
+  'archived',
+  'cli_version',
+  'first_user_message',
+  'memory_mode',
+  'preview',
+] as const;
+
+const sortedThreadLocatorRepairColumns = [...codexThreadLocatorRepairThreadsColumns].sort((left, right) =>
+  left.localeCompare(right),
+);
+
+const hasExactThreadLocatorRepairColumns = (columns: readonly string[]): boolean => {
+  const sorted = [...columns].sort((left, right) => left.localeCompare(right));
+  return sorted.length === sortedThreadLocatorRepairColumns.length && sorted.every((column, index) => column === sortedThreadLocatorRepairColumns[index]);
+};
+
 export const codexThreadLocatorRepairManifestSchema = z.object({
   schema_version: z.literal('codex_thread_locator_repair_manifest.v1'),
   codex_thread_id_digest: sha256DigestSchema,
   rollout_relative_path: nonEmptyStringSchema,
   rollout_digest: sha256DigestSchema,
-  repair_strategy: z.enum(['app_server_scan', 'minimal_state_index_upsert']),
+  repair_strategy: z.literal('minimal_state_index_upsert'),
   required_state_tables: z.array(
     z.object({
       table_name: nonEmptyStringSchema,
@@ -344,14 +373,27 @@ export const codexThreadLocatorRepairManifestSchema = z.object({
       message: 'rollout_relative_path must be a safe Codex home rollout relative path.',
     });
   }
-  if (
-    manifest.repair_strategy === 'minimal_state_index_upsert' &&
-    (manifest.required_state_tables === undefined || manifest.required_state_tables.length === 0)
-  ) {
+  if (manifest.required_state_tables === undefined || manifest.required_state_tables.length !== 1) {
     ctx.addIssue({
       code: 'custom',
       path: ['required_state_tables'],
-      message: 'minimal_state_index_upsert requires non-empty required_state_tables.',
+      message: 'minimal_state_index_upsert requires exactly one required_state_tables entry.',
+    });
+    return;
+  }
+  const [table] = manifest.required_state_tables;
+  if (table?.table_name !== 'threads') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['required_state_tables', 0, 'table_name'],
+      message: 'minimal_state_index_upsert supports only the Codex threads table.',
+    });
+  }
+  if (table !== undefined && !hasExactThreadLocatorRepairColumns(table.allowed_columns)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['required_state_tables', 0, 'allowed_columns'],
+      message: 'minimal_state_index_upsert requires the exact allowed Codex threads table columns.',
     });
   }
 });
@@ -360,8 +402,9 @@ export const codexRuntimeCapsuleDiscoveryReportSchema = z.record(z.string(), jso
   assertCodexRuntimeCapsulePublicReportSafe(value);
 });
 
-const unsafeReportKeyPattern = /(?:^|_)(?:codex_thread_id|memory_content)(?:_|$)/;
+const unsafeReportKeyPattern = /(?:^|_)(?:codex_thread_id|memory_content|rollout_(?:relative_)?path|rollout_ref)(?:_|$)/;
 const absoluteHostPathPattern = /(?:^|[\s"'=])(?:\/(?!\/)[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+|[A-Za-z]:[\\/])/;
+const rolloutJsonlRefPattern = /(?:^|[\s"'=])(?:sessions\/\d{4}\/\d{2}\/\d{2}\/)?rollout-[A-Za-z0-9._-]+\.jsonl(?:$|[\s"',.;:)}\]])/;
 
 const assertPublicReportSafeRecord = (value: unknown, path: readonly string[]): void => {
   if (
@@ -381,7 +424,8 @@ const assertPublicReportSafeRecord = (value: unknown, path: readonly string[]): 
         value.includes('auth.json') ||
         value.includes('config.toml') ||
         /\bmemory content\b/i.test(value) ||
-        absoluteHostPathPattern.test(value)
+        absoluteHostPathPattern.test(value) ||
+        rolloutJsonlRefPattern.test(value)
       ) {
         throw capsulePublicReportUnsafe('Codex runtime capsule public report contains private runtime material.', {
           field: path.join('.'),

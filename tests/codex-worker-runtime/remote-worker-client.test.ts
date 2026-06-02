@@ -916,17 +916,24 @@ describe('remote codex worker client', () => {
         expect(input).toMatchObject({ writeConfigAndAuth: false });
         await mkdir(join(workerTempRoot, 'codex-home'), { recursive: true });
         await mkdir(join(workerTempRoot, 'artifacts'), { recursive: true });
-        await (input?.beforeAppServerStart as (paths: { codexHomeHostPath: string; artifactHostPath: string }) => Promise<void>)({
+        await (input?.beforeAppServerStart as (paths: { codexHomeHostPath: string; codexHomeContainerPath: string; artifactHostPath: string }) => Promise<void>)({
           codexHomeHostPath: join(workerTempRoot, 'codex-home'),
+          codexHomeContainerPath: '/codex-home',
           artifactHostPath: join(workerTempRoot, 'artifacts'),
         });
         events.push('app-server-start');
+        await (input?.afterAppServerStart as (paths: { codexHomeHostPath: string; codexHomeContainerPath: string; artifactHostPath: string }) => Promise<void>)?.({
+          codexHomeHostPath: join(workerTempRoot, 'codex-home'),
+          codexHomeContainerPath: '/codex-home',
+          artifactHostPath: join(workerTempRoot, 'artifacts'),
+        });
         return {
           endpoint: 'docker-exec:' + digest('8'),
           createTransport: () => recordingAppServerTransport(generatedSpec(), events),
           containerWorkspacePath: '/workspace' as const,
           capsuleHookInput: {
             codexHomeHostPath: join(workerTempRoot, 'codex-home'),
+            codexHomeContainerPath: '/codex-home',
             artifactHostPath: join(workerTempRoot, 'artifacts'),
           },
           publicEvidence: {
@@ -952,6 +959,9 @@ describe('remote codex worker client', () => {
     const capsuleManager = {
       restore: vi.fn(async (input: { inputCapsuleId: string }) => {
         events.push(`restore:${input.inputCapsuleId}`);
+      }),
+      repairLocator: vi.fn(async (input: { codexThreadIdDigest: string }) => {
+        events.push(`repair:${input.codexThreadIdDigest}`);
       }),
       package: vi.fn(async () => {
         events.push('package');
@@ -991,8 +1001,11 @@ describe('remote codex worker client', () => {
     await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
 
     expect(events.indexOf(`restore:${inputCapsuleId}`)).toBeLessThan(events.indexOf('app-server-start'));
+    expect(events.indexOf(`repair:${codexThreadDigest('thread-1')}`)).toBeGreaterThan(events.indexOf('app-server-start'));
+    expect(events.indexOf(`repair:${codexThreadDigest('thread-1')}`)).toBeLessThan(events.indexOf('thread/resume'));
     expect(events).not.toContain('thread/start');
     expect(events).toContain('thread/resume');
+    expect(capsuleManager.repairLocator).toHaveBeenCalledWith(expect.objectContaining({ codexHomeContainerPath: '/codex-home' }));
     expect(events.indexOf('package')).toBeLessThan(events.indexOf('terminalize'));
     expect(terminalized[0]).toMatchObject({
       terminal_status: 'succeeded',
@@ -1144,6 +1157,7 @@ describe('remote codex worker client', () => {
           containerWorkspacePath: '/workspace' as const,
           capsuleHookInput: {
             codexHomeHostPath: '/tmp/codex-home-redacted',
+            codexHomeContainerPath: '/codex-home',
             artifactHostPath: '/tmp/artifacts-redacted',
           },
           publicEvidence: {
@@ -1331,6 +1345,7 @@ describe('remote codex worker client', () => {
         containerWorkspacePath: '/workspace' as const,
         capsuleHookInput: {
           codexHomeHostPath: join(workerTempRoot, 'codex-home'),
+          codexHomeContainerPath: '/codex-home',
           artifactHostPath: join(workerTempRoot, 'artifacts'),
         },
         publicEvidence: {

@@ -68,9 +68,6 @@ const bindMount = (hostPath: string, containerPath: string, mode: 'ro' | 'rw'): 
 
 const label = (key: string, value: string): string => `forgeloop.${key}=${value}`;
 
-const copyCodexSeedScript =
-  'cp /codex-seed/config.toml /codex-home/config.toml && cp /codex-seed/auth.json /codex-home/auth.json && chmod 600 /codex-home/config.toml /codex-home/auth.json && exec "$@"';
-
 export const buildCodexAppServerDockerCommand = (input: DockerCommandInput): DockerCommand => {
   assertPinnedDigest(input.imageDigest, 'Docker image digest');
   const networkPolicy = validateMaterializedNetworkPolicy(input.networkPolicy, { strictRealDogfood: input.networkPolicy.mode !== 'disabled' });
@@ -137,13 +134,11 @@ export const buildCodexAppServerDockerCommand = (input: DockerCommandInput): Doc
     'CODEX_HOME=/codex-home',
     '--env',
     'HOME=/codex-home',
-    '--tmpfs',
-    `/codex-home:rw,noexec,nosuid,nodev,uid=${input.hostUid},gid=${input.hostGid},mode=700`,
     ...(input.workspaceHostPath === undefined ? [] : ['--volume', bindMount(input.workspaceHostPath, input.workspaceContainerPath, 'rw')]),
     '--volume',
     bindMount(input.artifactHostPath, '/artifacts', 'rw'),
     '--volume',
-    bindMount(input.codexHomeHostPath, '/codex-seed', 'ro'),
+    bindMount(input.codexHomeHostPath, '/codex-home', 'rw'),
     ...(appServerTransport === 'docker_exec'
       ? [
           '--tmpfs',
@@ -153,9 +148,6 @@ export const buildCodexAppServerDockerCommand = (input: DockerCommandInput): Doc
         ]
       : ['--volume', bindMount(input.socketHostDir, '/run/forgeloop', 'rw')]),
     `${input.image}@${input.imageDigest}`,
-    'sh',
-    '-ceu',
-    copyCodexSeedScript,
     'forgeloop-codex-entrypoint',
     'codex',
     'app-server',

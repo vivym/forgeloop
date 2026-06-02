@@ -161,6 +161,13 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     excerpt: 'CODEX_HOME=/codex-home',
   },
   {
+    file: 'packages/codex-worker-runtime/src/codex-runtime-capsule/app-server-stdio.ts',
+    pattern: 'host_codex_home',
+    owner: 'internal-runtime-storage',
+    reason: 'Stdio probe sets an isolated child-process CODEX_HOME, not host Codex state.',
+    excerpt: 'CODEX_HOME: options.codexHomeRoot',
+  },
+  {
     file: 'packages/codex-runtime/src/runtime.ts',
     pattern: 'legacy_plan_draft_generator',
     owner: 'legacy-local-executor',

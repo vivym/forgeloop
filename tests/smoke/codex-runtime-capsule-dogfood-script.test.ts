@@ -124,6 +124,71 @@ describe('Codex runtime capsule discovery dogfood script', () => {
       await rm(tempDir, { force: true, recursive: true });
     }
   });
+
+  it('runs the installed Codex controlled discovery scenario without raw runtime state', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'forgeloop-fake-codex-'));
+    const fakeCodexBin = join(tempDir, 'codex');
+    try {
+      await writeFile(
+        fakeCodexBin,
+        [
+          '#!/usr/bin/env node',
+          'const fs = require("node:fs");',
+          'const path = require("node:path");',
+          'const cp = require("node:child_process");',
+          'if (process.argv.includes("--version")) { console.log("fake-codex 1.0.0"); process.exit(0); }',
+          'const outIndex = process.argv.indexOf("--out");',
+          'if (process.argv[2] === "app-server" && outIndex !== -1) {',
+          '  const out = process.argv[outIndex + 1];',
+          '  fs.mkdirSync(out, { recursive: true });',
+          '  fs.writeFileSync(path.join(out, "schema.json"), JSON.stringify({ marker: "schema-visible" }));',
+          '  console.log("ok");',
+          '  process.exit(0);',
+          '}',
+          'if (process.argv[2] === "app-server" && process.argv.includes("--listen")) {',
+          '  const home = process.env.CODEX_HOME;',
+          '  const threadId = "019e0000-0000-7000-8000-000000000001";',
+          '  const rollout = path.join(home, "sessions/2026/06/02/rollout-019e0000-0000-7000-8000-000000000001.jsonl");',
+          '  fs.mkdirSync(path.dirname(rollout), { recursive: true });',
+          '  fs.writeFileSync(rollout, JSON.stringify({ type: "turn_context" }) + "\\n");',
+          '  const db = path.join(home, "state_5.sqlite");',
+          '  cp.execFileSync("/usr/bin/sqlite3", [db, "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, source TEXT NOT NULL, model_provider TEXT NOT NULL, cwd TEXT NOT NULL, title TEXT NOT NULL, sandbox_policy TEXT NOT NULL, approval_mode TEXT NOT NULL, tokens_used INTEGER NOT NULL DEFAULT 0, has_user_event INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0, cli_version TEXT NOT NULL DEFAULT \'\', first_user_message TEXT NOT NULL DEFAULT \'\', memory_mode TEXT NOT NULL DEFAULT \'enabled\', preview TEXT NOT NULL DEFAULT \'\'); INSERT INTO threads (id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used, has_user_event, archived, cli_version, first_user_message, memory_mode, preview) VALUES (\'" + threadId + "\', \'" + rollout.replaceAll("\'", "\'\'") + "\', 1, 1, \'vscode\', \'openai\', \'\', \'\', \'read-only\', \'never\', 0, 1, 0, \'fake\', \'\', \'enabled\', \'\');"]);',
+          '  const rl = require("node:readline").createInterface({ input: process.stdin });',
+          '  rl.on("line", line => {',
+          '    const msg = JSON.parse(line);',
+          '    if (msg.id && msg.method === "initialize") console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { ok: true } }));',
+          '    if (msg.id && msg.method === "thread/start") console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: threadId, path: rollout } } }));',
+          '    if (msg.id && msg.method === "turn/start") console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: "turn-1" } } }));',
+          '    if (msg.id && msg.method === "turn/interrupt") console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { ok: true } }));',
+          '  });',
+          '  return;',
+          '}',
+          'process.exit(2);',
+        ].join('\n'),
+        'utf8',
+      );
+      await chmod(fakeCodexBin, 0o755);
+
+      const result = await runCodexRuntimeCapsuleDiscoveryDogfood({ FORGELOOP_CODEX_BIN: fakeCodexBin });
+      const summary = renderCodexRuntimeCapsuleDiscoverySummary(result);
+      const serialized = JSON.stringify(result);
+
+      expect(result.status).toBe('passed');
+      expect(result.observed_mutation_count).toBeGreaterThanOrEqual(2);
+      expect(result.path_mutation_counts.thread_state_allowed).toBe(1);
+      expect(result.path_mutation_counts.forbidden_whole_db).toBeGreaterThanOrEqual(1);
+      expect(result.locator_repair_manifest_digest).toMatch(/^sha256:/);
+      expect(result.public_observations_digest).toMatch(/^sha256:/);
+      expect(result.blocker_codes).toEqual([]);
+      expect(summary).toContain('Status: passed');
+      expect(serialized).not.toContain('controlled-discovery-thread');
+      expect(serialized).not.toContain('sessions/2026/06/02/rollout-controlled-discovery.jsonl');
+      expect(serialized).not.toContain('auth.json');
+      expect(serialized).not.toContain('config.toml');
+    } finally {
+      await rm(tempDir, { force: true, recursive: true });
+    }
+  });
 });
 
 describe('Codex runtime capsule restore dogfood script', () => {
@@ -216,6 +281,48 @@ describe('Codex runtime capsule restore dogfood script', () => {
     } finally {
       await rm(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it('uses a real restore scenario hook in real mode instead of returning an unavailable blocker', async () => {
+    const restoreReport = await runCodexRuntimeCapsuleRestoreDogfood({
+      mode: 'real',
+      credentialsAvailable: async () => true,
+      discoveryReport: async () => ({
+        ...reportFixture(),
+        status: 'passed',
+        blocker_codes: [],
+      }),
+      executeRestoreScenario: async ({ discoveryReport }) => ({
+        scenario_kind: 'real_cross_worker_restore',
+        discovery_report_digest: `sha256:${'1'.repeat(64)}`,
+        codex_cli_version_digest: discoveryReport.codex_cli_version_digest,
+        app_server_protocol_digest: discoveryReport.app_server_protocol_digest,
+        worker_root_count: 2,
+        restore_checks: {
+          thread_locator_digest_continuity: 'passed',
+          memory_output_input_digest_continuity: 'passed',
+          memory_delta_replay: 'passed',
+          environment_manifest_digest_continuity: 'passed',
+          second_capsule_packaged: 'passed',
+        },
+        memory_delta_operation_counts: { add: 1, modify: 0, delete: 1, rename: 1 },
+        memory_input_digest: `sha256:${'2'.repeat(64)}`,
+        memory_output_digest: `sha256:${'3'.repeat(64)}`,
+        resumed_memory_input_digest: `sha256:${'3'.repeat(64)}`,
+        environment_manifest_digest: `sha256:${'4'.repeat(64)}`,
+        first_capsule_digest: `sha256:${'5'.repeat(64)}`,
+        second_capsule_digest: `sha256:${'6'.repeat(64)}`,
+        package_sequence_count: 2,
+        public_safety: {
+          raw_runtime_material: 'excluded',
+          report_value_policy: 'digests_status_codes_only',
+        },
+      }),
+    });
+
+    expect(restoreReport.status).toBe('passed');
+    expect(restoreReport.scenario_kind).toBe('real_cross_worker_restore');
+    expect(JSON.stringify(restoreReport)).not.toContain('codex_runtime_capsule_restore_real_probe_unavailable');
   });
 });
 

@@ -17,6 +17,7 @@ import {
   restoreCodexThreadStateBundle,
   parseThreadStateBundle,
   type ThreadStateBundle,
+  type CodexThreadLocatorRepairExecutor,
 } from './thread-state.js';
 import {
   validateCodexEnvironmentState,
@@ -104,6 +105,9 @@ export const restoreCodexRuntimeCapsule = async (input: {
   artifactReader: CapsuleComponentArtifactReader;
   currentCodexCliVersion: string;
   currentAppServerProtocolDigest: string;
+  codexThreadId?: string;
+  locatorRepairExecutor?: CodexThreadLocatorRepairExecutor;
+  deferLocatorRepair?: boolean;
 }): Promise<RestoredCodexRuntimeCapsule> => {
   await assertFreshIsolatedRoot(input.codexHomeRoot);
   assertCodexSessionArtifactRef({
@@ -205,6 +209,9 @@ export const restoreCodexRuntimeCapsule = async (input: {
     codexHomeRoot: input.codexHomeRoot,
     bundle: threadStateBundle,
     locatorRepair: threadStateBundle.locator_repair_manifest,
+    ...(input.codexThreadId === undefined ? {} : { codexThreadId: input.codexThreadId }),
+    ...(input.locatorRepairExecutor === undefined ? {} : { repairExecutor: input.locatorRepairExecutor }),
+    ...(input.deferLocatorRepair === undefined ? {} : { deferLocatorRepair: input.deferLocatorRepair }),
   });
 
   return {

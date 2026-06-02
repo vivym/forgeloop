@@ -20,7 +20,9 @@ describe('Codex runtime capsule path classifier', () => {
     expect(classifyCodexHomePath('state_5.sqlite-journal').classification).toBe('forbidden_whole_db');
     expect(classifyCodexHomePath('plugins/plugin-a/plugin.json').classification).toBe('forbidden');
     expect(classifyCodexHomePath('cache/plugin-a/tool.bin').classification).toBe('forbidden');
-    expect(classifyCodexHomePath('tmp/socket-placeholder').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('tmp/socket-placeholder').classification).toBe('generated_environment');
+    expect(classifyCodexHomePath('installation_id').classification).toBe('generated_environment');
+    expect(classifyCodexHomePath('.personality_migration').classification).toBe('generated_environment');
     expect(classifyCodexHomePath('skills/.system/SKILL.md').classification).toBe('forbidden');
     expect(classifyCodexHomePath('skills/.system/tools/SKILL.md').classification).toBe('forbidden');
     expect(classifyCodexHomePath('skills/project/SKILL.md').classification).toBe('environment_component');

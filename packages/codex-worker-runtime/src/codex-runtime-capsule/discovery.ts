@@ -29,7 +29,7 @@ export interface CodexThreadLocatorRepairManifest {
   codex_thread_id_digest: string;
   rollout_relative_path: string;
   rollout_digest: string;
-  repair_strategy: 'app_server_scan' | 'minimal_state_index_upsert';
+  repair_strategy: 'minimal_state_index_upsert';
   required_state_tables?: Array<{
     table_name: string;
     allowed_columns: string[];
@@ -38,7 +38,7 @@ export interface CodexThreadLocatorRepairManifest {
 }
 
 export type CodexThreadLocatorRepairStrategy =
-  | { kind: 'manifest_repair'; strategy_digest?: string }
+  | { kind: 'minimal_state_index_upsert'; strategy_digest?: string }
   | { kind: 'copy_whole_sqlite_db'; relative_path: string };
 
 export interface ObservedCodexHomeState {
@@ -101,11 +101,9 @@ const pushBlocker = (blockers: string[], code: string): void => {
 export const runCodexRuntimeCapsuleDiscovery = async (
   input: CodexRuntimeCapsuleDiscoveryInput,
 ): Promise<CodexRuntimeCapsuleDiscoveryReport> => {
-  const [codexVersion, protocolDigest, observed] = await Promise.all([
-    input.probe.codexVersion(),
-    input.probe.appServerProtocolDigest(),
-    input.probe.runControlledScenario({ codexHomeRoot: input.codexHomeRoot }),
-  ]);
+  const codexVersion = await input.probe.codexVersion();
+  const protocolDigest = await input.probe.appServerProtocolDigest();
+  const observed = await input.probe.runControlledScenario({ codexHomeRoot: input.codexHomeRoot });
   const blockerCodes: string[] = [];
   const counts = emptyPathMutationCounts();
   for (const blockerCode of observed.blocker_codes ?? []) {
@@ -115,10 +113,29 @@ export const runCodexRuntimeCapsuleDiscovery = async (
   for (const mutation of observed.observed_path_mutations) {
     let classification: CodexHomePathClassification;
     try {
-      classification = assertSafeCodexHomePathEntry({
-        relativePath: mutation.relative_path,
-        entryKind: mutation.entry_kind,
-      }).classification;
+      classification = classifyCodexHomePath(mutation.relative_path).classification;
+      if (
+        mutation.entry_kind !== 'regular_file' ||
+        (mutation.required_for_restore === true &&
+          classification !== 'thread_state_allowed' &&
+          classification !== 'memory_state_allowed' &&
+          classification !== 'environment_component' &&
+          classification !== 'generated_environment')
+      ) {
+        throw new Error('unsafe Codex home path entry');
+      }
+      if (
+        mutation.required_for_restore === true ||
+        classification === 'thread_state_allowed' ||
+        classification === 'memory_state_allowed' ||
+        classification === 'environment_component' ||
+        classification === 'generated_environment'
+      ) {
+        assertSafeCodexHomePathEntry({
+          relativePath: mutation.relative_path,
+          entryKind: mutation.entry_kind,
+        });
+      }
     } catch {
       const pathClassification = safeClassifyCodexHomePath(mutation.relative_path);
       classification = pathClassification;
@@ -131,9 +148,6 @@ export const runCodexRuntimeCapsuleDiscovery = async (
     counts[classification] += 1;
     if (classification === 'unknown') {
       pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_unknown_path');
-    }
-    if (classification === 'forbidden' || classification === 'forbidden_whole_db') {
-      pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_forbidden_path');
     }
     if ((classification === 'forbidden' || classification === 'forbidden_whole_db') && mutation.required_for_restore === true) {
       pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_forbidden_required_path');

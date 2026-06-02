@@ -97,6 +97,18 @@ export interface RemoteWorkerCapsuleRestoreInput {
   inputEnvironmentManifestRef: string;
   inputEnvironmentManifestDigest: string;
   materialization: CodexLaunchMaterialization;
+  deferLocatorRepair?: boolean;
+}
+
+export interface RemoteWorkerCapsuleLocatorRepairInput {
+  codexHomeHostPath: string;
+  codexHomeContainerPath: string;
+  codexSessionId: string;
+  codexSessionTurnId: string;
+  codexThreadId: string;
+  codexThreadIdDigest: string;
+  inputCapsuleId: string;
+  inputCapsuleDigest: string;
 }
 
 export interface RemoteWorkerCapsulePackageInput {
@@ -113,6 +125,7 @@ export interface RemoteWorkerCapsulePackageInput {
 
 export interface RemoteWorkerCapsuleManager {
   restore(input: RemoteWorkerCapsuleRestoreInput): Promise<void>;
+  repairLocator(input: RemoteWorkerCapsuleLocatorRepairInput): Promise<void>;
   package(input: RemoteWorkerCapsulePackageInput): Promise<GenerationOutputCapsulePackageResult>;
 }
 
@@ -658,6 +671,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
           inputEnvironmentManifestRef: required.input_environment_manifest_ref,
           inputEnvironmentManifestDigest: required.input_environment_manifest_digest,
           materialization,
+          deferLocatorRepair: true,
         });
         await writeCodexHomeConfigAndAuth({
           codexHomeHostPath,
@@ -665,6 +679,22 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
           authJson: materialization.resolved_credentials[0]?.payload ?? {},
         });
         void artifactHostPath;
+      },
+      afterAppServerStart: async ({ codexHomeHostPath, codexHomeContainerPath }) => {
+        const continuation = context.continuation;
+        if (continuation.kind !== 'resume_thread') {
+          throw new Error('codex_runtime_capsule_missing');
+        }
+        await options.capsuleManager!.repairLocator({
+          codexHomeHostPath,
+          codexHomeContainerPath,
+          codexSessionId: required.codex_session_id,
+          codexSessionTurnId: required.codex_session_turn_id,
+          codexThreadId: continuation.codex_thread_id,
+          codexThreadIdDigest: continuation.codex_thread_id_digest,
+          inputCapsuleId: required.input_capsule_id,
+          inputCapsuleDigest: required.input_capsule_digest,
+        });
       },
     };
   };

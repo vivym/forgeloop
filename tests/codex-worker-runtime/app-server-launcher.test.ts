@@ -196,10 +196,16 @@ describe('DockerizedCodexAppServerLauncher', () => {
       restoreCodexHome: async (codexHomeHostPath) => {
         events.push(`restore:${await readFile(join(codexHomeHostPath, 'config.toml'), 'utf8').catch(() => 'no-config')}`);
       },
-      beforeAppServerStart: async ({ codexHomeHostPath }) => {
+      beforeAppServerStart: async ({ codexHomeHostPath, codexHomeContainerPath }) => {
+        expect(codexHomeContainerPath).toBe('/codex-home');
         events.push(`before-start:${await readFile(join(codexHomeHostPath, 'config.toml'), 'utf8')}`);
       },
-      beforeRuntimeCleanup: async ({ codexHomeHostPath, status }) => {
+      afterAppServerStart: async ({ codexHomeHostPath, codexHomeContainerPath }) => {
+        expect(codexHomeContainerPath).toBe('/codex-home');
+        events.push(`after-start:${await readFile(join(codexHomeHostPath, 'config.toml'), 'utf8')}`);
+      },
+      beforeRuntimeCleanup: async ({ codexHomeHostPath, codexHomeContainerPath, status }) => {
+        expect(codexHomeContainerPath).toBe('/codex-home');
         await stat(codexHomeHostPath);
         events.push(`before-cleanup:${status}`);
       },
@@ -211,6 +217,7 @@ describe('DockerizedCodexAppServerLauncher', () => {
       'restore:no-config',
       'before-start:approval_policy = "never"',
       'docker-start',
+      'after-start:approval_policy = "never"',
       'before-cleanup:succeeded',
     ]);
     await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();

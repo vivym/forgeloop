@@ -108,7 +108,7 @@ export class CodexAppServerDockerExecTransport implements CodexAppServerTranspor
 
     await this.#client.request('initialize', {
       clientInfo: { name: 'forgeloop', title: 'Forgeloop', version: '0.0.0' },
-      capabilities: null,
+      capabilities: { experimentalApi: true },
     });
     await this.#client.sendNotification('initialized');
   }

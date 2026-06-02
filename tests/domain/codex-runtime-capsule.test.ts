@@ -24,6 +24,7 @@ import {
   codexRuntimeCapsuleManifestSchema,
   codexSkillManifestDigest,
   codexSkillManifestSchema,
+  codexThreadLocatorRepairThreadsColumns,
   codexThreadLocatorRepairManifestDigest,
   codexThreadLocatorRepairManifestSchema,
   codexToolSchemaManifestDigest,
@@ -440,8 +441,8 @@ describe('codex runtime capsule schemas and digests', () => {
       repair_strategy: 'minimal_state_index_upsert',
       required_state_tables: [
         {
-          table_name: 'sessions',
-          allowed_columns: ['id', 'path', 'updated_at'],
+          table_name: 'threads',
+          allowed_columns: [...codexThreadLocatorRepairThreadsColumns],
           row_digest: digestC,
         },
       ],
@@ -470,17 +471,16 @@ describe('codex runtime capsule schemas and digests', () => {
     expect(() =>
       codexThreadLocatorRepairManifestSchema.parse({
         ...manifest,
-        required_state_tables: [{ table_name: 'sessions', allowed_columns: [], row_digest: digestC }],
+        required_state_tables: [{ table_name: 'sessions', allowed_columns: [...codexThreadLocatorRepairThreadsColumns], row_digest: digestC }],
       }),
     ).toThrow();
-    const appServerScanManifest = {
-      schema_version: 'codex_thread_locator_repair_manifest.v1',
-      codex_thread_id_digest: digestA,
-      rollout_relative_path: 'sessions/2026/06/02/rollout-abc.jsonl',
-      rollout_digest: digestB,
-      repair_strategy: 'app_server_scan',
-    };
-    expect(codexThreadLocatorRepairManifestSchema.parse(appServerScanManifest)).toEqual(appServerScanManifest);
+    expect(() =>
+      codexThreadLocatorRepairManifestSchema.parse({
+        ...manifest,
+        required_state_tables: [{ table_name: 'threads', allowed_columns: ['id', 'rollout_path'], row_digest: digestC }],
+      }),
+    ).toThrow();
+    expect(() => codexThreadLocatorRepairManifestSchema.parse({ ...manifest, repair_strategy: 'app_server_scan' })).toThrow();
   });
 
   it('rejects product-safe reports containing private runtime material', () => {
@@ -495,8 +495,12 @@ describe('codex runtime capsule schemas and digests', () => {
       { file: 'config.toml' },
       { memory_content: 'raw memory text' },
       { path: '/Users/viv/.codex/config.toml' },
+      { rollout_relative_path: 'sessions/2026/06/02/rollout-abc.jsonl' },
+      { summary: 'Resumed from rollout-abc.jsonl' },
+      { summary: 'Resumed from sessions/2026/06/02/rollout-abc.jsonl' },
     ]) {
       expectDomainErrorCode(() => assertCodexRuntimeCapsulePublicReportSafe(unsafe), 'codex_runtime_capsule_public_report_unsafe');
+      expect(() => codexRuntimeCapsuleDiscoveryReportSchema.parse({ schema_version: 'codex_runtime_capsule_discovery_report.v1', ...unsafe })).toThrow();
     }
   });
 

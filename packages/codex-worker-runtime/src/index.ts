@@ -2,6 +2,8 @@ export * from './app-server-launcher.js';
 export * from './control-plane-client.js';
 export * from './codex-runtime-capsule/discovery.js';
 export * from './codex-runtime-capsule/environment-state.js';
+export * from './codex-runtime-capsule/app-server-stdio.js';
+export * from './codex-runtime-capsule/locator-repair.js';
 export * from './codex-runtime-capsule/materializer.js';
 export * from './codex-runtime-capsule/memory-state.js';
 export * from './codex-runtime-capsule/packager.js';

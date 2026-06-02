@@ -15,6 +15,7 @@ import {
   codexRuntimeCapsuleManifestDigest,
   codexSkillManifestDigest,
   codexThreadLocatorRepairManifestDigest,
+  codexThreadLocatorRepairThreadsColumns,
   codexToolSchemaManifestDigest,
   codexTrustedRuntimeManifestDigest,
   type InternalArtifactKind,
@@ -105,7 +106,14 @@ const makeArtifacts = () => {
     codex_thread_id_digest: digest({ thread: 'thread-a' }),
     rollout_relative_path: rolloutRelativePath,
     rollout_digest: digest(rolloutContent),
-    repair_strategy: 'app_server_scan',
+    repair_strategy: 'minimal_state_index_upsert',
+    required_state_tables: [
+      {
+        table_name: 'threads',
+        allowed_columns: [...codexThreadLocatorRepairThreadsColumns],
+        row_digest: digest({ row: 'thread-a' }),
+      },
+    ],
   };
   const threadBundle = {
     schema_version: 'codex_thread_state_bundle.v1',
@@ -193,6 +201,7 @@ describe('Codex runtime capsule restorer', () => {
       artifactReader: new MapArtifactReader(setup.artifacts),
       currentCodexCliVersion: 'codex-cli 1.2.3',
       currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
+      deferLocatorRepair: true,
     });
 
     expect(result.capsuleManifestDigest).toBe(setup.capsuleDigest);
@@ -435,6 +444,7 @@ describe('Codex runtime capsule restorer', () => {
       artifactReader: new MapArtifactReader(setup.artifacts),
       currentCodexCliVersion: 'codex-cli 1.2.3',
       currentAppServerProtocolDigest: digest({ protocol: 'app-server-v1' }),
+      deferLocatorRepair: true,
     });
 
     await expect(stat(join(codexHomeRoot, 'auth.json'))).rejects.toThrow();

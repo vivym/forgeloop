@@ -1,7 +1,10 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 import {
   assertCodexRuntimeCapsulePublicReportSafe,
@@ -18,7 +21,11 @@ import {
   type InternalArtifactKind,
 } from '../packages/domain/src/index';
 import {
+  buildCodexThreadLocatorRepairRowDigest,
   buildCodexMemoryBundleFromRoot,
+  codexStateIndexThreadsColumns,
+  CodexAppServerStdioTransport,
+  createSqliteCodexThreadLocatorRepairExecutor,
   diffCodexMemoryBundles,
   packageCodexRuntimeCapsule,
   replayCodexMemoryDelta,
@@ -40,8 +47,10 @@ type RestoreDogfoodMode = 'real' | 'fake';
 type RestoreCheckStatus = 'passed';
 type RestoreReasonCode = 'codex_runtime_capsule_restore_credentials_unavailable';
 
+const execFile = promisify(execFileCallback);
+
 interface PassedRestoreScenarioResult {
-  scenario_kind: 'fake_cross_worker_restore';
+  scenario_kind: 'fake_cross_worker_restore' | 'real_cross_worker_restore';
   discovery_report_digest: string;
   codex_cli_version_digest: string;
   app_server_protocol_digest: string;
@@ -141,6 +150,18 @@ const optionalEnv = (env: EnvLike, key: string): string | undefined => {
   return value === undefined || value.length === 0 ? undefined : value;
 };
 
+const codexBin = (env: EnvLike): string => optionalEnv(env, 'FORGELOOP_CODEX_BIN') ?? 'codex';
+
+const execCodex = async (env: EnvLike, args: readonly string[], options?: { cwd?: string }): Promise<string> => {
+  const { stdout } = await execFile(codexBin(env), [...args], {
+    cwd: options?.cwd,
+    env: { ...process.env, ...env },
+    maxBuffer: 1024 * 1024 * 10,
+    timeout: 30_000,
+  });
+  return stdout.trim();
+};
+
 const modeFromEnv = (env: EnvLike): RestoreDogfoodMode =>
   optionalEnv(env, 'FORGELOOP_CODEX_RUNTIME_CAPSULE_RESTORE_MODE') === 'fake' ? 'fake' : 'real';
 
@@ -171,6 +192,87 @@ const fakeDiscoveryReport = (): CodexRuntimeCapsuleDiscoveryReport => ({
 });
 
 const digest = (value: unknown): string => codexCanonicalDigest(value);
+
+const codexThreadIdDigest = (threadId: string): string =>
+  codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: threadId });
+
+const collectRegularFiles = async (root: string, relativePrefix = ''): Promise<{ relativePath: string; content: string }[]> => {
+  const entries = await readdir(join(root, relativePrefix), { withFileTypes: true });
+  const files = await Promise.all(
+    entries
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(async (entry) => {
+        const relativePath = relativePrefix.length === 0 ? entry.name : `${relativePrefix}/${entry.name}`;
+        if (entry.isDirectory()) {
+          return collectRegularFiles(root, relativePath);
+        }
+        if (!entry.isFile()) {
+          return [];
+        }
+        return [{ relativePath, content: await readFile(join(root, relativePath), 'utf8') }];
+      }),
+  );
+  return files.flat();
+};
+
+const appServerProtocolDigest = async (env: EnvLike): Promise<string> => {
+  const schemaRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-schema-'));
+  try {
+    await execCodex(env, ['app-server', 'generate-json-schema', '--out', schemaRoot]);
+    const files = await collectRegularFiles(schemaRoot);
+    return digest({
+      generated_json_schema_files: files.map((file) => ({
+        relative_path: file.relativePath,
+        content_digest: digest(file.content),
+      })),
+    });
+  } finally {
+    await rm(schemaRoot, { force: true, recursive: true });
+  }
+};
+
+const relativeCodexHomePath = async (codexHomeRoot: string, absolutePath: string): Promise<string> => {
+  const [realRoot, realAbsolutePath] = await Promise.all([realpath(codexHomeRoot), realpath(absolutePath)]);
+  const relativePath = relative(realRoot, realAbsolutePath).replaceAll('\\', '/');
+  if (relativePath.startsWith('../') || relativePath === '..' || relativePath.startsWith('/')) {
+    throw new Error('codex_runtime_capsule_restore_rollout_path_outside_home');
+  }
+  return relativePath;
+};
+
+const waitForFile = async (path: string): Promise<void> => {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      await readFile(path);
+      return;
+    } catch {
+      await delay(100);
+    }
+  }
+  throw new Error('codex_runtime_capsule_restore_rollout_unavailable');
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const threadFromStartResponse = (response: unknown): { id: string; path: string } => {
+  const thread = isRecord(response) && isRecord(response.thread) ? response.thread : undefined;
+  if (thread === undefined || typeof thread.id !== 'string' || typeof thread.path !== 'string') {
+    throw new Error('codex_runtime_capsule_restore_thread_start_unavailable');
+  }
+  return { id: thread.id, path: thread.path };
+};
+
+const threadIdFromResumeResponse = (response: unknown): string => {
+  if (isRecord(response) && typeof response.threadId === 'string') {
+    return response.threadId;
+  }
+  const thread = isRecord(response) && isRecord(response.thread) ? response.thread : undefined;
+  if (thread !== undefined && typeof thread.id === 'string') {
+    return thread.id;
+  }
+  throw new Error('codex_runtime_capsule_restore_resume_unavailable');
+};
 
 const writeRelativeFile = async (root: string, relativePath: string, content: string): Promise<void> => {
   const path = join(root, relativePath);
@@ -320,7 +422,22 @@ const runFakeCrossWorkerRestoreScenario = async (input: {
       codex_thread_id_digest: codexThreadLocatorDigest,
       rollout_relative_path: rolloutRelativePath,
       rollout_digest: digest(rolloutContent),
-      repair_strategy: 'app_server_scan' as const,
+      repair_strategy: 'minimal_state_index_upsert' as const,
+      required_state_tables: [
+        {
+          table_name: 'threads',
+          allowed_columns: [...codexStateIndexThreadsColumns],
+          row_digest: buildCodexThreadLocatorRepairRowDigest({
+            codexThreadIdDigest: codexThreadLocatorDigest,
+            rolloutDigest: digest(rolloutContent),
+            source: 'vscode',
+            modelProvider: 'openai',
+            sandboxPolicy: 'read-only',
+            approvalMode: 'never',
+            memoryMode: 'enabled',
+          }),
+        },
+      ],
     };
     const artifactStore = new InMemoryCapsuleArtifactStore();
     const packageA = await packageCodexRuntimeCapsule({
@@ -356,6 +473,7 @@ const runFakeCrossWorkerRestoreScenario = async (input: {
       artifactReader: artifactStore,
       currentCodexCliVersion: codexCliVersion,
       currentAppServerProtocolDigest: appServerProtocolDigest,
+      deferLocatorRepair: true,
     });
 
     if (restored.capsuleManifest.codex_thread_id_digest !== codexThreadLocatorDigest) {
@@ -467,6 +585,284 @@ const runFakeCrossWorkerRestoreScenario = async (input: {
   }
 };
 
+const runRealCrossWorkerRestoreScenario = async (input: {
+  discoveryReport: CodexRuntimeCapsuleDiscoveryReport;
+  env: EnvLike;
+}): Promise<PassedRestoreScenarioResult> => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-capsule-restore-real-'));
+  let transportA: CodexAppServerStdioTransport | undefined;
+  let transportB: CodexAppServerStdioTransport | undefined;
+  try {
+    const codexSessionId = 'codex-session-restore-real';
+    const turnA = 'turn-real-a';
+    const turnB = 'turn-real-b';
+    const codexHomeA = join(tempRoot, 'worker-a-home');
+    const codexHomeB = join(tempRoot, 'worker-b-home');
+    const stagingHomeA = join(tempRoot, 'worker-a-staging-home');
+    const stagingHomeB = join(tempRoot, 'worker-b-staging-home');
+    const beforeMemoryRoot = join(tempRoot, 'memory-before-a');
+    const memoryRootA = join(tempRoot, 'memory-after-a');
+    const memoryRootB = join(tempRoot, 'memory-after-b');
+    const beforeMemoryRootB = join(tempRoot, 'memory-before-b');
+    await mkdir(codexHomeA, { recursive: true });
+    await mkdir(codexHomeB, { recursive: true });
+    await mkdir(stagingHomeA, { recursive: true });
+    await mkdir(stagingHomeB, { recursive: true });
+
+    const codexCliVersion = await execCodex(input.env, ['--version']);
+    const protocolDigest = await appServerProtocolDigest(input.env);
+    transportA = new CodexAppServerStdioTransport({
+      codexBin: codexBin(input.env),
+      codexHomeRoot: codexHomeA,
+      cwd: process.cwd(),
+      env: input.env,
+    });
+    await transportA.initialize();
+    const thread = threadFromStartResponse(
+      await transportA.request('thread/start', {
+        cwd: process.cwd(),
+        initialUserMessage: 'ForgeLoop real runtime capsule restore dogfood thread.',
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'readOnly' },
+      }),
+    );
+    const turnResponse = await transportA.request('turn/start', {
+      threadId: thread.id,
+      input: [{ type: 'text', text: 'Reply OK for ForgeLoop runtime capsule restore dogfood.', text_elements: [] }],
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+    });
+    await waitForFile(thread.path);
+    const turn = isRecord(turnResponse) && isRecord(turnResponse.turn) ? turnResponse.turn : undefined;
+    const turnId = typeof turn?.id === 'string' ? turn.id : undefined;
+    if (turnId !== undefined) {
+      await transportA.request('turn/interrupt', { threadId: thread.id, turnId }).catch(() => undefined);
+    }
+    const codexThreadLocatorDigest = codexThreadIdDigest(thread.id);
+    const rolloutRelativePath = await relativeCodexHomePath(codexHomeA, thread.path);
+    const rolloutContent = await readFile(thread.path, 'utf8');
+    await writeRelativeFile(stagingHomeA, rolloutRelativePath, rolloutContent);
+
+    await writeRelativeFile(beforeMemoryRoot, 'stable.md', 'stable digest input\n');
+    await writeRelativeFile(beforeMemoryRoot, 'delete-me.md', 'delete digest input\n');
+    await writeRelativeFile(beforeMemoryRoot, 'rename-source.md', 'rename digest input\n');
+    await copyRegularFiles(beforeMemoryRoot, memoryRootA);
+    await rm(join(memoryRootA, 'delete-me.md'));
+    await rename(join(memoryRootA, 'rename-source.md'), join(memoryRootA, 'rename-target.md'));
+
+    const memoryBundleMetadata: CodexMemoryBundleMetadata = {
+      bundleId: 'restore-real-memory',
+      sourcePolicyDigest: digest({ source_policy: 'real-restore-memory' }),
+    };
+    const inputMemoryBundle = await buildCodexMemoryBundleFromRoot({
+      root: beforeMemoryRoot,
+      codexSessionId,
+      bundleId: memoryBundleMetadata.bundleId,
+      sourcePolicyDigest: memoryBundleMetadata.sourcePolicyDigest,
+    });
+    const outputMemoryBundle = await buildCodexMemoryBundleFromRoot({
+      root: memoryRootA,
+      codexSessionId,
+      bundleId: memoryBundleMetadata.bundleId,
+      sourcePolicyDigest: memoryBundleMetadata.sourcePolicyDigest,
+    });
+    const memoryDelta = await diffCodexMemoryBundles({
+      beforeRoot: beforeMemoryRoot,
+      afterRoot: memoryRootA,
+      inputBundleDigest: inputMemoryBundle.digest,
+      codexSessionId,
+      turnId: turnA,
+      bundleMetadata: memoryBundleMetadata,
+    });
+    if (memoryDelta === undefined) {
+      throw new Error('codex runtime capsule restore real memory delta missing');
+    }
+
+    const environmentManifest = fakeEnvironmentManifest({ codexSessionId, codexCliVersion, appServerProtocolDigest: protocolDigest });
+    const environmentManifestDigest = codexEnvironmentManifestDigest(environmentManifest);
+    const locatorRepair = {
+      schema_version: 'codex_thread_locator_repair_manifest.v1' as const,
+      codex_thread_id_digest: codexThreadLocatorDigest,
+      rollout_relative_path: rolloutRelativePath,
+      rollout_digest: digest(rolloutContent),
+      repair_strategy: 'minimal_state_index_upsert' as const,
+      required_state_tables: [
+        {
+          table_name: 'threads',
+          allowed_columns: [...codexStateIndexThreadsColumns],
+          row_digest: buildCodexThreadLocatorRepairRowDigest({
+            codexThreadIdDigest: codexThreadLocatorDigest,
+            rolloutDigest: digest(rolloutContent),
+            source: 'vscode',
+            modelProvider: 'openai',
+            sandboxPolicy: 'read-only',
+            approvalMode: 'never',
+            memoryMode: 'enabled',
+          }),
+        },
+      ],
+    };
+    const artifactStore = new InMemoryCapsuleArtifactStore();
+    const packageA = await packageCodexRuntimeCapsule({
+      codexHomeRoot: stagingHomeA,
+      codexSessionId,
+      capsuleId: 'capsule-real-a',
+      createdFromTurnId: turnA,
+      sequence: 1,
+      codexThreadIdDigest: codexThreadLocatorDigest,
+      codexCliVersion,
+      appServerProtocolDigest: protocolDigest,
+      locatorRepair,
+      memoryState: {
+        baseBundle: inputMemoryBundle.manifest,
+        baseBundleDigest: inputMemoryBundle.digest,
+        inputBundle: inputMemoryBundle.manifest,
+        inputBundleDigest: inputMemoryBundle.digest,
+        outputBundle: outputMemoryBundle.manifest,
+        outputBundleDigest: outputMemoryBundle.digest,
+        delta: memoryDelta,
+        deltaDigest: digest(memoryDelta),
+      },
+      environmentManifest,
+      environmentManifestDigest,
+      artifactWriter: artifactStore,
+    });
+
+    await restoreCodexRuntimeCapsule({
+      codexHomeRoot: codexHomeB,
+      codexSessionId,
+      expectedCapsuleDigest: packageA.digest,
+      capsuleRef: packageA.artifactRef,
+      artifactReader: artifactStore,
+      currentCodexCliVersion: codexCliVersion,
+      currentAppServerProtocolDigest: protocolDigest,
+      deferLocatorRepair: true,
+    });
+    transportB = new CodexAppServerStdioTransport({
+      codexBin: codexBin(input.env),
+      codexHomeRoot: codexHomeB,
+      cwd: process.cwd(),
+      env: input.env,
+    });
+    await transportB.initialize();
+    await createSqliteCodexThreadLocatorRepairExecutor({
+      codexHomePathForSqlite: '/codex-home',
+      cwd: process.cwd(),
+      cliVersion: codexCliVersion.replace(/^codex-cli\s+/, ''),
+    })({
+      codexHomeRoot: codexHomeB,
+      locatorRepair,
+      codexThreadId: thread.id,
+    });
+    const resumedThreadId = threadIdFromResumeResponse(
+      await transportB.request('thread/resume', {
+        threadId: thread.id,
+        excludeTurns: true,
+        persistExtendedHistory: false,
+      }),
+    );
+    if (resumedThreadId !== thread.id || codexThreadIdDigest(resumedThreadId) !== codexThreadLocatorDigest) {
+      throw new Error('codex runtime capsule restore real thread locator digest mismatch');
+    }
+    await writeRelativeFile(stagingHomeB, rolloutRelativePath, await readFile(join(codexHomeB, rolloutRelativePath), 'utf8'));
+
+    await copyRegularFiles(beforeMemoryRoot, memoryRootB);
+    const replayedDigest = await replayCodexMemoryDelta({
+      root: memoryRootB,
+      inputBundleDigest: inputMemoryBundle.digest,
+      delta: memoryDelta,
+      bundleMetadata: memoryBundleMetadata,
+    });
+    if (replayedDigest !== outputMemoryBundle.digest) {
+      throw new Error('codex runtime capsule restore real replay digest mismatch');
+    }
+    const resumedMemoryInputBundle = await buildCodexMemoryBundleFromRoot({
+      root: memoryRootB,
+      codexSessionId,
+      bundleId: memoryBundleMetadata.bundleId,
+      sourcePolicyDigest: memoryBundleMetadata.sourcePolicyDigest,
+    });
+    if (resumedMemoryInputBundle.digest !== outputMemoryBundle.digest) {
+      throw new Error('codex runtime capsule restore real memory continuity mismatch');
+    }
+
+    await copyRegularFiles(memoryRootB, beforeMemoryRootB);
+    await writeRelativeFile(memoryRootB, 'second-turn.md', 'second real capsule digest input\n');
+    const outputMemoryBundleB = await buildCodexMemoryBundleFromRoot({
+      root: memoryRootB,
+      codexSessionId,
+      bundleId: memoryBundleMetadata.bundleId,
+      sourcePolicyDigest: memoryBundleMetadata.sourcePolicyDigest,
+    });
+    const memoryDeltaB = await diffCodexMemoryBundles({
+      beforeRoot: beforeMemoryRootB,
+      afterRoot: memoryRootB,
+      inputBundleDigest: resumedMemoryInputBundle.digest,
+      codexSessionId,
+      turnId: turnB,
+      bundleMetadata: memoryBundleMetadata,
+    });
+    if (memoryDeltaB === undefined) {
+      throw new Error('codex runtime capsule restore real second memory delta missing');
+    }
+    const packageB = await packageCodexRuntimeCapsule({
+      codexHomeRoot: stagingHomeB,
+      codexSessionId,
+      capsuleId: 'capsule-real-b',
+      createdFromTurnId: turnB,
+      sequence: 2,
+      codexThreadIdDigest: codexThreadLocatorDigest,
+      codexCliVersion,
+      appServerProtocolDigest: protocolDigest,
+      locatorRepair,
+      memoryState: {
+        baseBundle: resumedMemoryInputBundle.manifest,
+        baseBundleDigest: resumedMemoryInputBundle.digest,
+        inputBundle: resumedMemoryInputBundle.manifest,
+        inputBundleDigest: resumedMemoryInputBundle.digest,
+        outputBundle: outputMemoryBundleB.manifest,
+        outputBundleDigest: outputMemoryBundleB.digest,
+        delta: memoryDeltaB,
+        deltaDigest: digest(memoryDeltaB),
+      },
+      environmentManifest,
+      environmentManifestDigest,
+      artifactWriter: artifactStore,
+    });
+    const counts = operationCounts(memoryDelta.operations);
+    return {
+      scenario_kind: 'real_cross_worker_restore',
+      discovery_report_digest: digest(input.discoveryReport),
+      codex_cli_version_digest: input.discoveryReport.codex_cli_version_digest,
+      app_server_protocol_digest: protocolDigest,
+      worker_root_count: 2,
+      restore_checks: {
+        thread_locator_digest_continuity: 'passed',
+        memory_output_input_digest_continuity: 'passed',
+        memory_delta_replay: 'passed',
+        environment_manifest_digest_continuity: 'passed',
+        second_capsule_packaged: 'passed',
+      },
+      memory_delta_operation_counts: counts,
+      memory_input_digest: inputMemoryBundle.digest,
+      memory_output_digest: outputMemoryBundle.digest,
+      resumed_memory_input_digest: resumedMemoryInputBundle.digest,
+      environment_manifest_digest: environmentManifestDigest,
+      first_capsule_digest: packageA.digest,
+      second_capsule_digest: packageB.digest,
+      package_sequence_count: 2,
+      public_safety: {
+        raw_runtime_material: 'excluded',
+        report_value_policy: 'digests_status_codes_only',
+      },
+    };
+  } finally {
+    await transportA?.close().catch(() => undefined);
+    await transportB?.close().catch(() => undefined);
+    await rm(tempRoot, { force: true, recursive: true });
+  }
+};
+
 const publicSafeReport = <T extends CodexRuntimeCapsuleRestoreReport>(report: T): T => {
   assertCodexRuntimeCapsulePublicReportSafe(report);
   return report;
@@ -504,7 +900,7 @@ export const runCodexRuntimeCapsuleRestoreDogfood = async (
     dependencies.executeRestoreScenario === undefined
       ? mode === 'fake'
         ? await runFakeCrossWorkerRestoreScenario({ discoveryReport })
-        : undefined
+        : await runRealCrossWorkerRestoreScenario({ discoveryReport, env })
       : await dependencies.executeRestoreScenario({ discoveryReport });
   if (scenarioResult === undefined) {
     return publicSafeReport({

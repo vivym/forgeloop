@@ -62,6 +62,7 @@ export interface DockerizedCodexAppServerLauncherOptions {
 
 export type DockerizedCodexAppServerLauncherHookInput = {
   codexHomeHostPath: string;
+  codexHomeContainerPath: '/codex-home';
   artifactHostPath: string;
 };
 
@@ -93,6 +94,7 @@ export class DockerizedCodexAppServerLauncher {
       restoreCodexHome?: (codexHomeHostPath: string) => Promise<void>;
       writeConfigAndAuth?: boolean;
       beforeAppServerStart?: (input: DockerizedCodexAppServerLauncherHookInput) => Promise<void>;
+      afterAppServerStart?: (input: DockerizedCodexAppServerLauncherHookInput) => Promise<void>;
       beforeRuntimeCleanup?: (
         input: DockerizedCodexAppServerLauncherHookInput & { status: 'succeeded' | 'failed' | 'cancelled' },
       ) => Promise<void>;
@@ -124,6 +126,7 @@ export class DockerizedCodexAppServerLauncher {
       });
       await input.beforeAppServerStart?.({
         codexHomeHostPath: filesystem.codexHomeHostPath,
+        codexHomeContainerPath: '/codex-home',
         artifactHostPath: filesystem.artifactHostPath,
       });
       workspace = await prepareContainerWorkspace({
@@ -197,6 +200,11 @@ export class DockerizedCodexAppServerLauncher {
       if (appServerTransport === 'unix') {
         await waitForUnixSocketInside(container.socketHostPath, filesystem.socketHostDir);
       }
+      await input.afterAppServerStart?.({
+        codexHomeHostPath: filesystem.codexHomeHostPath,
+        codexHomeContainerPath: '/codex-home',
+        artifactHostPath: filesystem.artifactHostPath,
+      });
 
       const probedEffectiveConfig = await this.#waitForEffectiveConfig(endpoint, endpointAuth, createTransport);
       if (probedEffectiveConfig === undefined) {
@@ -247,6 +255,7 @@ export class DockerizedCodexAppServerLauncher {
         ...(workspace.hostWorkspacePath === undefined ? {} : { hostWorkspacePathDigest: codexCanonicalDigest(workspace.hostWorkspacePath) }),
         capsuleHookInput: {
           codexHomeHostPath: filesystem.codexHomeHostPath,
+          codexHomeContainerPath: '/codex-home',
           artifactHostPath: filesystem.artifactHostPath,
         },
         publicEvidence,
@@ -278,6 +287,7 @@ export class DockerizedCodexAppServerLauncher {
                 try {
                   await input.beforeRuntimeCleanup?.({
                     codexHomeHostPath: filesystem.codexHomeHostPath,
+                    codexHomeContainerPath: '/codex-home',
                     artifactHostPath: filesystem.artifactHostPath,
                     status,
                   });

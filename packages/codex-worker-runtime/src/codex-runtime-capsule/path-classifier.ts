@@ -20,8 +20,10 @@ export interface CodexHomePathEntrySafetyInput {
 }
 
 const forbiddenExactPaths = new Set(['auth.json', 'config.toml', 'codex-dev.db']);
-const forbiddenRawDirectoryPattern = /^(?:plugins|cache|tmp)\/.+/;
+const generatedExactPaths = new Set(['.personality_migration', 'installation_id']);
+const forbiddenRawDirectoryPattern = /^(?:plugins|cache)\/.+/;
 const forbiddenSystemSkillPattern = /^skills\/\.system\/.+/;
+const generatedTmpPattern = /^tmp\/.+/;
 const sqliteSuffixPattern = /\.sqlite.*$/;
 const forbiddenWholeDbPattern = /^state_[0-9]+\.sqlite.*$/;
 const forbiddenDbPattern = /^(?:logs_[0-9]+|goals_[0-9]+|memories_[0-9]+|mcp|history)\.sqlite.*$/;
@@ -74,6 +76,9 @@ const classifySafeCodexHomePath = (relativePath: string): CodexHomePathClassific
   }
   if (sqliteSuffixPattern.test(relativePath)) {
     return 'unknown';
+  }
+  if (generatedExactPaths.has(relativePath) || generatedTmpPattern.test(relativePath)) {
+    return 'generated_environment';
   }
   if (/^sessions\/[0-9]{4}\/[0-9]{2}\/[0-9]{2}\/rollout-[A-Za-z0-9._-]+\.jsonl$/.test(relativePath)) {
     return 'thread_state_allowed';

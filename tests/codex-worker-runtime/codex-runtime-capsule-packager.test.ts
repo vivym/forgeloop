@@ -14,6 +14,7 @@ import {
   codexPluginManifestDigest,
   codexRuntimeCapsuleManifestDigest,
   codexSkillManifestDigest,
+  codexThreadLocatorRepairThreadsColumns,
   codexToolSchemaManifestDigest,
   codexTrustedRuntimeManifestDigest,
   parseInternalArtifactRef,
@@ -148,7 +149,14 @@ const makeInput = async (codexHomeRoot?: string): Promise<CodexRuntimeCapsulePac
       codex_thread_id_digest: digest({ thread: 'thread-a' }),
       rollout_relative_path: rolloutRelativePath,
       rollout_digest: digest(rolloutContent),
-      repair_strategy: 'app_server_scan',
+      repair_strategy: 'minimal_state_index_upsert',
+      required_state_tables: [
+        {
+          table_name: 'threads',
+          allowed_columns: [...codexThreadLocatorRepairThreadsColumns],
+          row_digest: digest({ row: 'thread-a' }),
+        },
+      ],
     },
     memoryState: {
       baseBundle: baseMemoryBundle,
