@@ -12,6 +12,7 @@ import {
   codexEnvironmentManifestDigest,
   codexEnvironmentManifestSchema,
   codexMcpManifestDigest,
+  codexMcpManifestSchema,
   codexMemoryBundleDigest,
   codexMemoryBundleManifestSchema,
   codexMemoryDeltaDigest,
@@ -378,6 +379,49 @@ describe('codex runtime capsule schemas and digests', () => {
       policy_kind: 'exact',
       allowed_scopes: ['tools:read', 'files:write'],
     });
+  });
+
+  it('enforces MCP env payload materialization rules', () => {
+    const server = mcpServerManifest.servers[0];
+    expect(() =>
+      codexMcpManifestSchema.parse({
+        ...mcpServerManifest,
+        servers: [
+          {
+            ...server,
+            env_allowlist_payload: [
+              {
+                name: 'FEATURE_FLAG',
+                source: 'literal_non_secret',
+                value_digest: digestC,
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow();
+    for (const source of ['runtime_profile', 'credential_binding'] as const) {
+      expect(() =>
+        codexMcpManifestSchema.parse({
+          ...mcpServerManifest,
+          servers: [
+            {
+              ...server,
+              env_allowlist_payload: [
+                {
+                  name: 'SECRET_TOKEN',
+                  source,
+                  value_payload: {
+                    value: 'must-not-be-embedded',
+                  },
+                  value_digest: digestC,
+                },
+              ],
+            },
+          ],
+        }),
+      ).toThrow();
+    }
   });
 
   it('computes credential binding lineage and trusted runtime manifest digests', () => {

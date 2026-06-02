@@ -149,6 +149,20 @@ const scopePayloadSchema = z.object({
   scope_policy_digest: sha256DigestSchema,
 }).strict();
 
+const mcpEnvAllowlistEntrySchema = z.discriminatedUnion('source', [
+  z.object({
+    name: nonEmptyStringSchema,
+    source: z.literal('literal_non_secret'),
+    value_payload: jsonValueSchema,
+    value_digest: sha256DigestSchema,
+  }).strict(),
+  z.object({
+    name: nonEmptyStringSchema,
+    source: z.enum(['runtime_profile', 'credential_binding']),
+    value_digest: sha256DigestSchema.optional(),
+  }).strict(),
+]);
+
 export const codexMcpManifestSchema = z.object({
   schema_version: z.literal('codex_mcp_server_manifest.v1'),
   servers: z.array(
@@ -161,14 +175,7 @@ export const codexMcpManifestSchema = z.object({
         cwd_policy_digest: sha256DigestSchema.optional(),
       }).strict(),
       command_digest: sha256DigestSchema,
-      env_allowlist_payload: z.array(
-        z.object({
-          name: nonEmptyStringSchema,
-          value_payload: jsonValueSchema.optional(),
-          value_digest: sha256DigestSchema.optional(),
-          source: z.enum(['runtime_profile', 'credential_binding', 'literal_non_secret']),
-        }).strict(),
-      ),
+      env_allowlist_payload: z.array(mcpEnvAllowlistEntrySchema),
       env_allowlist_digest: sha256DigestSchema,
       scope_payload: scopePayloadSchema,
       scope_digest: sha256DigestSchema,
