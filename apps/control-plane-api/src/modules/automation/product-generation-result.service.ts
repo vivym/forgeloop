@@ -261,12 +261,22 @@ export class ProductGenerationResultService {
       return false;
     }
     const threadEvidence = terminalResult.codex_session_thread;
+    const outputCapsule = terminalResult.output_capsule;
     if (threadEvidence === undefined) {
       await this.failCodexSessionTurnFromRuntimeResult({
         runtimeJob,
         runtimeContext,
         terminalization,
         reasonCode: 'codex_app_server_thread_id_missing',
+      });
+      return false;
+    }
+    if (outputCapsule === undefined) {
+      await this.failCodexSessionTurnFromRuntimeResult({
+        runtimeJob,
+        runtimeContext,
+        terminalization,
+        reasonCode: 'codex_runtime_capsule_missing',
       });
       return false;
     }
@@ -286,6 +296,7 @@ export class ProductGenerationResultService {
         app_server_thread_binding_required: true,
         codex_thread_id: threadEvidence.codex_thread_id,
         codex_thread_id_digest: threadEvidence.codex_thread_id_digest,
+        output_capsule: outputCapsule,
         now: this.now(),
       });
       await this.clearCodexSessionRunnerOwnerAfterSuccessfulCompleteTurn(runtimeJob, runtimeContext);

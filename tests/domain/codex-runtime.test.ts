@@ -375,7 +375,7 @@ describe('codex runtime domain contracts', () => {
     );
   });
 
-  it('rejects legacy snapshot digest fields in trusted Codex session runtime context', () => {
+  it('rejects unknown fields in trusted Codex session runtime context', () => {
     expectDomainErrorCode(
       () =>
         validateCodexSessionRuntimeContext({
@@ -386,7 +386,7 @@ describe('codex runtime domain contracts', () => {
           lease_epoch: 1,
           worker_id: 'worker-1',
           worker_session_digest: digestA,
-          expected_previous_snapshot_digest: digestB,
+          unsupported_runtime_context_field: digestB,
           runner_runtime_job_id: 'runtime-job-previous',
           runner_launch_lease_id: 'launch-lease-previous',
           turn_group_status: 'intermediate',

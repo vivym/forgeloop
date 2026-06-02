@@ -337,8 +337,12 @@ const publicRuntimeJobTerminalResult = (
     return undefined;
   }
   const terminalResult = validateCodexRuntimeJobTerminalResult(result);
-  if ('codex_session_thread' in terminalResult) {
-    const { codex_session_thread: _trustedThreadEvidence, ...publicResult } = terminalResult;
+  if ('codex_session_thread' in terminalResult || 'output_capsule' in terminalResult) {
+    const {
+      codex_session_thread: _trustedThreadEvidence,
+      output_capsule: _trustedOutputCapsule,
+      ...publicResult
+    } = terminalResult;
     return publicResult;
   }
   return terminalResult;

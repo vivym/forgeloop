@@ -4,6 +4,7 @@ import { isIP } from 'node:net';
 import { artifactRefSchema } from '@forgeloop/contracts';
 
 import { isInternalArtifactRefString, parseInternalArtifactRef } from './internal-artifacts.js';
+import type { CodexRuntimeCapsule } from './plan-item-workflow.js';
 import { DomainError, type IsoDateTime, type RunDriverKind, type WorkflowPersistenceRefs } from './types.js';
 
 export type CodexRuntimeEnvironment = 'local_dogfood' | 'test';
@@ -381,6 +382,21 @@ export interface CodexSessionRuntimeContextV1 {
   continuation: CodexThreadContinuationV1;
 }
 
+const codexSessionRuntimeContextKeys = new Set([
+  'schema_version',
+  'codex_session_id',
+  'codex_session_turn_id',
+  'lease_id',
+  'lease_epoch',
+  'worker_id',
+  'worker_session_digest',
+  'expected_input_capsule_digest',
+  'runner_runtime_job_id',
+  'runner_launch_lease_id',
+  'turn_group_status',
+  'continuation',
+]);
+
 export interface CodexSessionTerminalizationV1 {
   schema_version: 'codex_session_terminalization.v1';
   lease_token: string;
@@ -424,6 +440,7 @@ export interface CodexGenerationRuntimeJobResult {
     codex_thread_id_digest: string;
     app_server_turn_id?: string;
   };
+  output_capsule?: CodexRuntimeCapsule;
   runtime_evidence?: CodexDockerRuntimeEvidence;
   public_summary: string;
 }
@@ -714,6 +731,11 @@ export const validateCodexSessionRuntimeContext = (value: unknown): CodexSession
   if (!isPlainObject(value) || value.schema_version !== 'codex_session_runtime_context.v1') {
     throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: session runtime context is unsupported.');
   }
+  for (const key of Object.keys(value)) {
+    if (!codexSessionRuntimeContextKeys.has(key)) {
+      throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${key} is unsupported.`);
+    }
+  }
 
   const continuation = value.continuation;
   if (!isPlainObject(continuation)) {
@@ -725,9 +747,6 @@ export const validateCodexSessionRuntimeContext = (value: unknown): CodexSession
 
   const runnerRuntimeJobId = optionalRuntimeContextString(value, 'runner_runtime_job_id');
   const runnerLaunchLeaseId = optionalRuntimeContextString(value, 'runner_launch_lease_id');
-  if ('expected_previous_snapshot_digest' in value) {
-    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: expected_previous_snapshot_digest is unsupported.');
-  }
   const expectedInputCapsuleDigest = optionalRuntimeContextString(value, 'expected_input_capsule_digest');
   if ((runnerRuntimeJobId === undefined) !== (runnerLaunchLeaseId === undefined)) {
     throw new DomainError(
@@ -1747,6 +1766,7 @@ const codexGenerationRuntimeJobResultKeys = new Set([
   'generated_payload_digest',
   'generation_artifacts',
   'codex_session_thread',
+  'output_capsule',
   'runtime_evidence',
   'public_summary',
 ]);
@@ -1828,6 +1848,27 @@ const codexRunExecutionRuntimeJobResultKeys = new Set([
   'public_summary',
 ]);
 const codexSessionThreadTerminalEvidenceKeys = new Set(['codex_thread_id', 'codex_thread_id_digest', 'app_server_turn_id']);
+const codexRuntimeCapsuleTerminalEvidenceKeys = new Set([
+  'id',
+  'codex_session_id',
+  'created_from_turn_id',
+  'sequence',
+  'artifact_ref',
+  'digest',
+  'size_bytes',
+  'manifest_digest',
+  'thread_state_digest',
+  'memory_state_digest',
+  'environment_manifest_digest',
+  'codex_thread_id_digest',
+  'codex_cli_version',
+  'app_server_protocol_digest',
+  'runtime_profile_revision_id',
+  'trusted_runtime_manifest_digest',
+  'credential_binding_lineage_digest',
+  'created_by_actor_id',
+  'created_at',
+]);
 
 const requireCodexRuntimeInternalRef = (input: Record<string, unknown>, field: string, label: string): string => {
   const internalRef = requireCodexRuntimeResultString(input, field);
@@ -1879,6 +1920,52 @@ const requireCodexSessionThreadTerminalEvidence = (input: unknown): Record<strin
     requireCodexRuntimeResultString(input, 'app_server_turn_id');
   }
   return input;
+};
+
+const requireCodexRuntimeCapsuleTerminalEvidence = (input: unknown): CodexRuntimeCapsule => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result field output_capsule must be an object.');
+  }
+  assertCodexRuntimeResultKeys(input, codexRuntimeCapsuleTerminalEvidenceKeys, 'output_capsule');
+  requireCodexRuntimeResultString(input, 'id');
+  requireCodexRuntimeResultString(input, 'codex_session_id');
+  requireCodexRuntimeResultString(input, 'created_from_turn_id');
+  requireCodexRuntimeResultInteger(input, 'sequence');
+  const artifactRef = requireCodexRuntimeResultString(input, 'artifact_ref');
+  try {
+    const parsed = parseInternalArtifactRef(artifactRef);
+    if (
+      parsed.kind !== 'codex_runtime_capsule' ||
+      parsed.owner_type !== 'codex_session' ||
+      parsed.owner_id !== input.codex_session_id ||
+      parsed.artifact_id !== input.id
+    ) {
+      throw unsafeCodexRuntimePublicValue('Codex runtime terminal result field output_capsule artifact_ref does not match capsule identity.');
+    }
+  } catch (error) {
+    if (error instanceof DomainError && error.code === 'codex_docker_runtime_evidence_unsafe') {
+      throw error;
+    }
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result field output_capsule artifact_ref is invalid.');
+  }
+  requireCodexRuntimeResultDigest(input, 'digest');
+  requireCodexRuntimeResultString(input, 'size_bytes');
+  requireCodexRuntimeResultDigest(input, 'manifest_digest');
+  requireCodexRuntimeResultDigest(input, 'thread_state_digest');
+  requireCodexRuntimeResultDigest(input, 'memory_state_digest');
+  requireCodexRuntimeResultDigest(input, 'environment_manifest_digest');
+  requireCodexRuntimeResultDigest(input, 'codex_thread_id_digest');
+  requireCodexRuntimeResultString(input, 'codex_cli_version');
+  requireCodexRuntimeResultDigest(input, 'app_server_protocol_digest');
+  requireCodexRuntimeResultString(input, 'runtime_profile_revision_id');
+  requireCodexRuntimeResultDigest(input, 'trusted_runtime_manifest_digest');
+  requireCodexRuntimeResultDigest(input, 'credential_binding_lineage_digest');
+  requireCodexRuntimeResultString(input, 'created_by_actor_id');
+  const createdAt = requireCodexRuntimeResultString(input, 'created_at');
+  if (!isCodexRuntimeIsoDateTimeString(createdAt)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result field output_capsule created_at must be an ISO datetime string.');
+  }
+  return input as unknown as CodexRuntimeCapsule;
 };
 
 const runtimePayloadRawMaterialPattern =
@@ -2164,6 +2251,9 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   if (input.codex_session_thread !== undefined) {
     requireCodexSessionThreadTerminalEvidence(input.codex_session_thread);
   }
+  if (input.output_capsule !== undefined) {
+    requireCodexRuntimeCapsuleTerminalEvidence(input.output_capsule);
+  }
   if (input.runtime_evidence !== undefined) {
     validateCodexDockerRuntimeEvidence(input.runtime_evidence);
   }
@@ -2355,6 +2445,7 @@ export const validateCodexRuntimeJobTerminalResult = (
   const omittedPublicSafeKeys = new Set<string>([
     ...(resultRecord.runtime_evidence !== undefined ? ['runtime_evidence'] : []),
     ...(resultRecord.codex_session_thread !== undefined ? ['codex_session_thread'] : []),
+    ...(resultRecord.output_capsule !== undefined ? ['output_capsule'] : []),
     ...(productGenerationTaskKindSet.has(String(resultRecord.task_kind)) ? ['generated_payload'] : []),
   ]);
   const publicSafeInput =

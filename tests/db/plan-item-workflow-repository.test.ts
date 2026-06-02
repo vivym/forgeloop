@@ -742,7 +742,6 @@ const codexSessionRuntimeContextInput = (
       ? {
           runner_runtime_job_id: 'runtime-job-1',
           runner_launch_lease_id: 'launch-lease-1',
-          runner_launch_lease_id_digest: codexCanonicalDigest({ kind: 'codex_launch_lease_id', launch_lease_id: 'launch-lease-1' }),
         }
       : {}),
     turn_group_status: 'intermediate',
