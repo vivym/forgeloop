@@ -128,7 +128,7 @@ const turnInput = {
   intent: 'continue_execution',
   status: 'running',
   input_digest: 'sha256:turn-input',
-  expected_previous_snapshot_digest: undefined,
+  expected_input_capsule_digest: undefined,
   created_by_actor_id: 'actor-tech',
   created_at: now,
   updated_at: now,
@@ -141,7 +141,7 @@ const leaseInput = {
   lease_token_hash: 'sha256:lease-token',
   worker_id: 'worker-1',
   worker_session_digest: 'sha256:worker-session',
-  expected_previous_snapshot_digest: undefined,
+  expected_input_capsule_digest: undefined,
   now,
   expires_at: '2026-05-31T00:05:00.000Z',
 };
@@ -914,7 +914,7 @@ const bindCodexSessionThread = async (repository: DeliveryRepository) => {
     worker_id: 'worker-1',
     worker_session_digest: 'sha256:worker-session',
     status: 'succeeded',
-    expected_previous_snapshot_digest: undefined,
+    expected_input_capsule_digest: undefined,
     codex_thread_id: 'thread-1',
     codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
     now: '2026-05-31T00:02:00.000Z',
@@ -1089,7 +1089,7 @@ const uuidFixture = {
   runtimeProfileRevisionId: '10000000-0000-4000-8000-000000000013',
   turnId: '10000000-0000-4000-8000-000000000014',
   leaseId: '10000000-0000-4000-8000-000000000015',
-  snapshotId: '10000000-0000-4000-8000-000000000016',
+  capsuleId: '10000000-0000-4000-8000-000000000016',
   decisionId: '10000000-0000-4000-8000-000000000017',
   transitionId: '10000000-0000-4000-8000-000000000018',
   forkSessionId: '10000000-0000-4000-8000-000000000019',
@@ -1125,7 +1125,7 @@ const drizzleTurnInput = {
   intent: 'continue_execution',
   status: 'running',
   input_digest: 'sha256:drizzle-turn-input',
-  expected_previous_snapshot_digest: undefined,
+  expected_input_capsule_digest: undefined,
   created_by_actor_id: uuidFixture.actorTechId,
   created_at: now,
   updated_at: now,
@@ -1138,17 +1138,17 @@ const drizzleLeaseInput = {
   lease_token_hash: 'sha256:drizzle-lease-token',
   worker_id: 'worker-drizzle',
   worker_session_digest: 'sha256:worker-session-drizzle',
-  expected_previous_snapshot_digest: undefined,
+  expected_input_capsule_digest: undefined,
   now,
   expires_at: '2026-05-31T00:05:00.000Z',
 };
 
-const drizzleSnapshotInput = {
-  id: uuidFixture.snapshotId,
+const drizzleRuntimeCapsuleInput = {
+  id: uuidFixture.capsuleId,
   codex_session_id: uuidFixture.sessionId,
   sequence: 1,
-  artifact_ref: `artifact://internal/codex_session_snapshot/codex_session/${uuidFixture.sessionId}/${uuidFixture.snapshotId}`,
-  digest: 'sha256:drizzle-snapshot-1',
+  artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${uuidFixture.sessionId}/${uuidFixture.capsuleId}`,
+  digest: 'sha256:drizzle-capsule-1',
   size_bytes: '123',
   manifest_digest: 'sha256:drizzle-manifest-1',
   runtime_profile_revision_id: uuidFixture.runtimeProfileRevisionId,
@@ -1354,7 +1354,7 @@ const seedWorkflowRepositoryEvidence = async (repository: InMemoryDeliveryReposi
   });
 };
 
-const seedWorkflowWithSnapshot = async (repository: InMemoryDeliveryRepository) => {
+const seedWorkflowWithCapsule = async (repository: InMemoryDeliveryRepository) => {
   await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
   await repository.createCodexSessionTurn({
     ...turnInput,
@@ -1375,21 +1375,21 @@ const seedWorkflowWithSnapshot = async (repository: InMemoryDeliveryRepository) 
     worker_id: 'worker-1',
     worker_session_digest: 'sha256:worker-session',
     status: 'succeeded',
-    expected_previous_snapshot_digest: undefined,
-    output_snapshot: {
-      ...snapshotInput,
+    expected_input_capsule_digest: undefined,
+    output_capsule: {
+      ...runtimeCapsuleInput,
       created_from_turn_id: 'turn-seed',
     },
     now: '2026-05-31T00:02:00.000Z',
   });
 };
 
-const snapshotInput = {
-  id: 'snapshot-1',
+const runtimeCapsuleInput = {
+  id: 'capsule-1',
   codex_session_id: 'session-1',
   sequence: 1,
-  artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1',
-  digest: 'sha256:snapshot-1',
+  artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
+  digest: 'sha256:capsule-1',
   size_bytes: '123',
   manifest_digest: 'sha256:manifest-1',
   runtime_profile_revision_id: 'profile-revision-1',
@@ -1398,15 +1398,15 @@ const snapshotInput = {
   created_at: '2026-05-31T00:02:00.000Z',
 } as const;
 
-const terminalizeTurnWithSnapshot = async (
+const terminalizeTurnWithCapsule = async (
   repository: InMemoryDeliveryRepository,
   options: {
     turn_id?: string;
     turn_input_digest?: string;
-    previous_snapshot_digest?: string;
-    snapshot_id?: string;
-    snapshot_sequence?: number;
-    snapshot_digest?: string;
+    previous_capsule_digest?: string;
+    capsule_id?: string;
+    capsule_sequence?: number;
+    capsule_digest?: string;
     manifest_digest?: string;
     lease_id?: string;
     lease_token_hash?: string;
@@ -1417,15 +1417,15 @@ const terminalizeTurnWithSnapshot = async (
   } = {},
 ) => {
   const turnId = options.turn_id ?? 'turn-1';
-  const snapshotId = options.snapshot_id ?? 'snapshot-1';
-  const snapshotDigest = options.snapshot_digest ?? `sha256:${snapshotId}`;
+  const capsuleId = options.capsule_id ?? 'capsule-1';
+  const capsuleDigest = options.capsule_digest ?? `sha256:${capsuleId}`;
   const claimNow = options.claim_now ?? '2026-05-31T00:01:00.000Z';
   const terminalizeNow = options.terminalize_now ?? '2026-05-31T00:02:00.000Z';
   await repository.createCodexSessionTurn({
     ...turnInput,
     id: turnId,
     input_digest: options.turn_input_digest ?? `sha256:${turnId}`,
-    expected_previous_snapshot_digest: options.previous_snapshot_digest,
+    expected_input_capsule_digest: options.previous_capsule_digest,
     created_at: claimNow,
     updated_at: claimNow,
   });
@@ -1433,7 +1433,7 @@ const terminalizeTurnWithSnapshot = async (
     ...leaseInput,
     lease_id: options.lease_id ?? `lease-${turnId}`,
     lease_token_hash: options.lease_token_hash ?? `sha256:lease-${turnId}`,
-    expected_previous_snapshot_digest: options.previous_snapshot_digest,
+    expected_input_capsule_digest: options.previous_capsule_digest,
     now: claimNow,
   });
   await repository.terminalizeCodexSessionTurn({
@@ -1445,14 +1445,14 @@ const terminalizeTurnWithSnapshot = async (
     worker_id: 'worker-1',
     worker_session_digest: 'sha256:worker-session',
     status: 'succeeded',
-    expected_previous_snapshot_digest: options.previous_snapshot_digest,
-    output_snapshot: {
-      ...snapshotInput,
-      id: snapshotId,
-      sequence: options.snapshot_sequence ?? 1,
-      artifact_ref: `artifact://internal/codex_session_snapshot/codex_session/session-1/${snapshotId}`,
-      digest: snapshotDigest,
-      manifest_digest: options.manifest_digest ?? `sha256:manifest-${snapshotId}`,
+    expected_input_capsule_digest: options.previous_capsule_digest,
+    output_capsule: {
+      ...runtimeCapsuleInput,
+      id: capsuleId,
+      sequence: options.capsule_sequence ?? 1,
+      artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/session-1/${capsuleId}`,
+      digest: capsuleDigest,
+      manifest_digest: options.manifest_digest ?? `sha256:manifest-${capsuleId}`,
       created_from_turn_id: turnId,
       created_at: terminalizeNow,
     },
@@ -2146,8 +2146,8 @@ describe('Plan Item Workflow repository', () => {
           status: 'running',
           role: 'inactive_fork',
           active_lease_id: 'lease-1',
-          latest_snapshot_id: 'snapshot-1',
-          latest_snapshot_digest: 'sha256:snapshot-1',
+          latest_capsule_id: 'capsule-1',
+          latest_capsule_digest: 'sha256:capsule-1',
           latest_turn_id: 'turn-1',
           latest_turn_digest: 'sha256:turn-1',
           codex_thread_id: 'thread-1',
@@ -2186,8 +2186,8 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
-      output_snapshot: snapshotInput,
+      expected_input_capsule_digest: undefined,
+      output_capsule: runtimeCapsuleInput,
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -2199,8 +2199,8 @@ describe('Plan Item Workflow repository', () => {
       () =>
         repository.saveCodexSession({
           ...session,
-          latest_snapshot_id: 'snapshot-drifted',
-          latest_snapshot_digest: 'sha256:snapshot-drifted',
+          latest_capsule_id: 'capsule-drifted',
+          latest_capsule_digest: 'sha256:capsule-drifted',
           latest_turn_id: 'turn-drifted',
           latest_turn_digest: 'sha256:turn-drifted',
           codex_thread_id: 'thread-drifted',
@@ -3156,7 +3156,7 @@ describe('Plan Item Workflow repository', () => {
           lease_token_hash: 'sha256:other',
           worker_id: 'worker-2',
           worker_session_digest: 'sha256:worker-session-2',
-          expected_previous_snapshot_digest: undefined,
+          expected_input_capsule_digest: undefined,
           now,
           expires_at: '2026-05-31T00:05:00.000Z',
         }),
@@ -3261,7 +3261,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       lease_epoch: 1,
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:02:00.000Z',
     });
 
@@ -3341,12 +3341,12 @@ describe('Plan Item Workflow repository', () => {
     })).resolves.toMatchObject({ id: 'lease-1', status: 'active' });
   });
 
-  it('does not recover an expired active lease before rejecting a strict claim with a stale snapshot expectation', async () => {
+  it('does not recover an expired active lease before rejecting a strict claim with a stale capsule expectation', async () => {
     const repository = new InMemoryDeliveryRepository();
-    await seedWorkflowWithSnapshot(repository);
+    await seedWorkflowWithCapsule(repository);
     await repository.claimCodexSessionLease({
       ...leaseInput,
-      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+      expected_input_capsule_digest: 'sha256:capsule-1',
       expires_at: '2026-05-31T00:01:00.000Z',
     });
 
@@ -3358,7 +3358,7 @@ describe('Plan Item Workflow repository', () => {
           lease_token_hash: 'sha256:lease-token-2',
           worker_id: 'worker-2',
           worker_session_digest: 'sha256:worker-session-2',
-          expected_previous_snapshot_digest: 'sha256:stale',
+          expected_input_capsule_digest: 'sha256:stale',
           now: '2026-05-31T00:02:00.000Z',
           expires_at: '2026-05-31T00:07:00.000Z',
         }),
@@ -3368,7 +3368,7 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       status: 'running',
       active_lease_id: 'lease-1',
-      latest_snapshot_digest: 'sha256:snapshot-1',
+      latest_capsule_digest: 'sha256:capsule-1',
     });
     await expect(repository.renewCodexSessionLease({
       session_id: 'session-1',
@@ -3396,7 +3396,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:02:00.000Z',
     });
 
@@ -3496,24 +3496,24 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'failed',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:02:00.000Z',
     });
 
     await expectDomainErrorCode(() => repository.claimCodexSessionLease(leaseInput), 'codex_session_lease_conflict');
   });
 
-  it('rejects lease claim when expected snapshot digest is stale', async () => {
+  it('rejects lease claim when expected capsule digest is stale', async () => {
     const repository = new InMemoryDeliveryRepository();
-    await seedWorkflowWithSnapshot(repository);
+    await seedWorkflowWithCapsule(repository);
 
     await expectDomainErrorCode(
       () =>
         repository.claimCodexSessionLease({
           ...leaseInput,
-          expected_previous_snapshot_digest: 'sha256:stale',
+          expected_input_capsule_digest: 'sha256:stale',
         }),
-      'codex_session_snapshot_stale',
+      'codex_runtime_capsule_stale',
     );
   });
 
@@ -3537,24 +3537,24 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
-  it('rejects creating a turn when expected snapshot digest is stale', async () => {
+  it('rejects creating a turn when expected capsule digest is stale', async () => {
     const repository = new InMemoryDeliveryRepository();
-    await seedWorkflowWithSnapshot(repository);
+    await seedWorkflowWithCapsule(repository);
 
     await expectDomainErrorCode(
       () =>
         repository.createCodexSessionTurn({
           ...turnInput,
-          expected_previous_snapshot_digest: 'sha256:stale',
+          expected_input_capsule_digest: 'sha256:stale',
         }),
-      'codex_session_snapshot_stale',
+      'codex_runtime_capsule_stale',
     );
   });
 
   it.each([
     { label: 'terminal status', serviceOwnedFields: { status: 'succeeded' } },
-    { label: 'output snapshot id', serviceOwnedFields: { output_snapshot_id: 'snapshot-1' } },
-    { label: 'output snapshot digest', serviceOwnedFields: { output_snapshot_digest: 'sha256:snapshot-1' } },
+    { label: 'output capsule id', serviceOwnedFields: { output_capsule_id: 'capsule-1' } },
+    { label: 'output capsule digest', serviceOwnedFields: { output_capsule_digest: 'sha256:capsule-1' } },
     { label: 'output object type', serviceOwnedFields: { output_object_type: 'artifact' } },
     { label: 'output object id', serviceOwnedFields: { output_object_id: 'artifact-1' } },
     { label: 'thread digest', serviceOwnedFields: { codex_thread_id_digest: 'sha256:thread-1' } },
@@ -3599,8 +3599,8 @@ describe('Plan Item Workflow repository', () => {
           created_by_actor_id: 'actor-other',
           created_at: '2026-05-31T00:01:00.000Z',
           status: 'succeeded',
-          output_snapshot_id: 'snapshot-1',
-          output_snapshot_digest: 'sha256:snapshot-1',
+          output_capsule_id: 'capsule-1',
+          output_capsule_digest: 'sha256:capsule-1',
           updated_at: '2026-05-31T00:02:00.000Z',
         }),
       'workflow_invalid_transition',
@@ -3628,8 +3628,8 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
-      output_snapshot: snapshotInput,
+      expected_input_capsule_digest: undefined,
+      output_capsule: runtimeCapsuleInput,
       now: '2026-05-31T00:02:00.000Z',
     });
     const originalTurn = await repository.getCodexSessionTurn('turn-1');
@@ -3641,16 +3641,16 @@ describe('Plan Item Workflow repository', () => {
           ...originalTurn,
           intent: 'address_review_feedback',
           input_digest: 'sha256:drifted-input',
-          expected_previous_snapshot_digest: 'sha256:drifted-previous',
-          output_snapshot_id: 'snapshot-drifted',
-          output_snapshot_digest: 'sha256:snapshot-drifted',
+          expected_input_capsule_digest: 'sha256:drifted-previous',
+          output_capsule_id: 'capsule-drifted',
+          output_capsule_digest: 'sha256:capsule-drifted',
           lease_id: 'lease-drifted',
           lease_epoch: 99,
           created_at: '2026-05-31T00:01:00.000Z',
           created_by_actor_id: 'actor-drifted',
           status: 'failed',
           output_object_type: 'internal_artifact',
-          output_object_id: 'snapshot-drifted',
+          output_object_id: 'capsule-drifted',
           codex_thread_id_digest: 'sha256:thread-drifted',
           automation_action_run_id: 'automation-run-1',
           runtime_job_id: 'runtime-job-1',
@@ -3787,7 +3787,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'failed',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:02:00.000Z',
     });
 
@@ -3859,7 +3859,7 @@ describe('Plan Item Workflow repository', () => {
           lease_token_hash: 'sha256:fork',
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
-          expected_previous_snapshot_digest: undefined,
+          expected_input_capsule_digest: undefined,
           now,
           expires_at: '2026-05-31T00:05:00.000Z',
         }),
@@ -3895,9 +3895,9 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
-      output_snapshot: {
-        ...snapshotInput,
+      expected_input_capsule_digest: undefined,
+      output_capsule: {
+        ...runtimeCapsuleInput,
       },
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
@@ -3906,12 +3906,12 @@ describe('Plan Item Workflow repository', () => {
 
     expect(terminalized.session).toMatchObject({
       status: 'idle',
-      latest_snapshot_id: 'snapshot-1',
-      latest_snapshot_digest: 'sha256:snapshot-1',
+      latest_capsule_id: 'capsule-1',
+      latest_capsule_digest: 'sha256:capsule-1',
       codex_thread_id_digest: 'sha256:thread-1',
     });
     expect(terminalized.session).not.toHaveProperty('active_lease_id');
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toMatchObject({ digest: 'sha256:snapshot-1' });
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toMatchObject({ digest: 'sha256:capsule-1' });
   });
 
   it('rejects terminalization with only a Codex thread id before mutation', async () => {
@@ -3931,8 +3931,8 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
-          output_snapshot: { ...snapshotInput },
+          expected_input_capsule_digest: undefined,
+          output_capsule: { ...runtimeCapsuleInput },
           codex_thread_id: 'thread-1',
           now: '2026-05-31T00:02:00.000Z',
         }),
@@ -3947,7 +3947,7 @@ describe('Plan Item Workflow repository', () => {
     expect(session?.codex_thread_id).toBeUndefined();
     expect(session?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
   });
 
   it('requires Codex thread id and digest for app-server-backed terminalization before mutation', async () => {
@@ -3967,8 +3967,8 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
-          output_snapshot: { ...snapshotInput },
+          expected_input_capsule_digest: undefined,
+          output_capsule: { ...runtimeCapsuleInput },
           app_server_thread_binding_required: true,
           now: '2026-05-31T00:02:00.000Z',
         }),
@@ -3986,8 +3986,8 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
-          output_snapshot: { ...snapshotInput },
+          expected_input_capsule_digest: undefined,
+          output_capsule: { ...runtimeCapsuleInput },
           app_server_thread_binding_required: true,
           codex_thread_id: 'thread-1',
           now: '2026-05-31T00:02:00.000Z',
@@ -4006,8 +4006,8 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
-          output_snapshot: { ...snapshotInput },
+          expected_input_capsule_digest: undefined,
+          output_capsule: { ...runtimeCapsuleInput },
           app_server_thread_binding_required: true,
           codex_thread_id_digest: 'sha256:thread-1',
           now: '2026-05-31T00:02:00.000Z',
@@ -4023,7 +4023,7 @@ describe('Plan Item Workflow repository', () => {
     expect(session?.codex_thread_id).toBeUndefined();
     expect(session?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
   });
 
   it('rejects terminalization with only a Codex thread digest before mutation', async () => {
@@ -4043,8 +4043,8 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
-          output_snapshot: { ...snapshotInput },
+          expected_input_capsule_digest: undefined,
+          output_capsule: { ...runtimeCapsuleInput },
           codex_thread_id_digest: 'sha256:thread-1',
           now: '2026-05-31T00:02:00.000Z',
         }),
@@ -4059,7 +4059,7 @@ describe('Plan Item Workflow repository', () => {
     expect(session?.codex_thread_id).toBeUndefined();
     expect(session?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
   });
 
   it('allows first terminalization to bind a Codex thread id and digest', async () => {
@@ -4077,7 +4077,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4104,7 +4104,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4120,7 +4120,7 @@ describe('Plan Item Workflow repository', () => {
       ...leaseInput,
       lease_id: 'lease-2',
       lease_token_hash: 'sha256:lease-token-2',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:04:00.000Z',
       expires_at: '2026-05-31T00:09:00.000Z',
     });
@@ -4136,13 +4136,13 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
-          output_snapshot: {
-            ...snapshotInput,
-            id: 'snapshot-2',
+          expected_input_capsule_digest: undefined,
+          output_capsule: {
+            ...runtimeCapsuleInput,
+            id: 'capsule-2',
             sequence: 2,
-            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-            digest: 'sha256:snapshot-2',
+            artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+            digest: 'sha256:capsule-2',
             manifest_digest: 'sha256:manifest-2',
             created_from_turn_id: 'turn-2',
           },
@@ -4161,7 +4161,7 @@ describe('Plan Item Workflow repository', () => {
       codex_thread_id_digest: 'sha256:thread-1',
     });
     await expect(repository.getCodexSessionTurn('turn-2')).resolves.toMatchObject({ status: 'running' });
-    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-2')).resolves.toBeUndefined();
     await expect(repository.renewCodexSessionLease({
       session_id: 'session-1',
       lease_id: 'lease-2',
@@ -4188,7 +4188,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4204,7 +4204,7 @@ describe('Plan Item Workflow repository', () => {
       ...leaseInput,
       lease_id: 'lease-2',
       lease_token_hash: 'sha256:lease-token-2',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:04:00.000Z',
       expires_at: '2026-05-31T00:09:00.000Z',
     });
@@ -4218,7 +4218,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:05:00.000Z',
     });
 
@@ -4242,7 +4242,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -4258,7 +4258,7 @@ describe('Plan Item Workflow repository', () => {
       ...leaseInput,
       lease_id: 'lease-2',
       lease_token_hash: 'sha256:lease-token-2',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:04:00.000Z',
       expires_at: '2026-05-31T00:09:00.000Z',
     });
@@ -4272,7 +4272,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:05:00.000Z',
@@ -4286,11 +4286,11 @@ describe('Plan Item Workflow repository', () => {
     expect(terminalized.turn).toMatchObject({ codex_thread_id_digest: 'sha256:thread-1' });
   });
 
-  it('rejects terminalization when a reused output snapshot id has drifted durable identity', async () => {
+  it('rejects terminalization when a reused output capsule id has drifted durable identity', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
-    await repository.createCodexSessionSnapshot(snapshotInput);
+    await repository.createCodexRuntimeCapsule(runtimeCapsuleInput);
     const claimed = await repository.claimCodexSessionLease(leaseInput);
 
     await expectDomainErrorCode(
@@ -4304,13 +4304,13 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
-          output_snapshot: {
-            id: 'snapshot-1',
+          expected_input_capsule_digest: undefined,
+          output_capsule: {
+            id: 'capsule-1',
             codex_session_id: 'session-1',
             sequence: 1,
-            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-drifted',
-            digest: 'sha256:snapshot-drifted',
+            artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-drifted',
+            digest: 'sha256:capsule-drifted',
             size_bytes: '123',
             manifest_digest: 'sha256:manifest-1',
             runtime_profile_revision_id: 'profile-revision-1',
@@ -4320,7 +4320,7 @@ describe('Plan Item Workflow repository', () => {
           },
           now: '2026-05-31T00:03:00.000Z',
         }),
-      'codex_session_snapshot_stale',
+      'codex_runtime_capsule_stale',
     );
 
     const session = await repository.getCodexSession('session-1');
@@ -4328,22 +4328,22 @@ describe('Plan Item Workflow repository', () => {
       status: 'running',
       active_lease_id: claimed.lease.id,
     });
-    expect(session?.latest_snapshot_id).toBeUndefined();
-    expect(session?.latest_snapshot_digest).toBeUndefined();
+    expect(session?.latest_capsule_id).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBeUndefined();
 
     const turn = await repository.getCodexSessionTurn('turn-1');
     expect(turn).toMatchObject({
       status: 'running',
     });
-    expect(turn?.output_snapshot_id).toBeUndefined();
-    expect(turn?.output_snapshot_digest).toBeUndefined();
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toMatchObject({
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1',
-      digest: 'sha256:snapshot-1',
+    expect(turn?.output_capsule_id).toBeUndefined();
+    expect(turn?.output_capsule_digest).toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toMatchObject({
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
+      digest: 'sha256:capsule-1',
     });
   });
 
-  it('rejects terminalization when output snapshot provenance points at a different turn', async () => {
+  it('rejects terminalization when output capsule provenance points at a different turn', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
@@ -4360,19 +4360,19 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
-          output_snapshot: {
-            ...snapshotInput,
-            id: 'snapshot-2',
+          expected_input_capsule_digest: undefined,
+          output_capsule: {
+            ...runtimeCapsuleInput,
+            id: 'capsule-2',
             sequence: 2,
-            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-            digest: 'sha256:snapshot-2',
+            artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+            digest: 'sha256:capsule-2',
             manifest_digest: 'sha256:manifest-2',
             created_from_turn_id: 'turn-2',
           },
           now: '2026-05-31T00:03:00.000Z',
         }),
-      'codex_session_snapshot_stale',
+      'codex_runtime_capsule_stale',
     );
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
@@ -4380,70 +4380,70 @@ describe('Plan Item Workflow repository', () => {
       active_lease_id: claimed.lease.id,
     });
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
-    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-2')).resolves.toBeUndefined();
   });
 
-  it('rejects snapshots with non-internal artifact refs before saving them', async () => {
+  it('rejects capsules with non-internal artifact refs before saving them', async () => {
     const repository = new InMemoryDeliveryRepository();
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionSnapshot({
-          ...snapshotInput,
-          artifact_ref: 'artifact://snapshot-unsafe',
+        repository.createCodexRuntimeCapsule({
+          ...runtimeCapsuleInput,
+          artifact_ref: 'artifact://capsule-unsafe',
         }),
       'workflow_invalid_transition',
     );
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
   });
 
   it.each([
     {
       label: 'wrong kind',
-      artifact_ref: 'artifact://internal/execution_summary/codex_session/session-1/snapshot-1',
+      artifact_ref: 'artifact://internal/execution_summary/codex_session/session-1/capsule-1',
     },
     {
       label: 'wrong owner_type',
-      artifact_ref: 'artifact://internal/codex_session_snapshot/run_session/session-1/snapshot-1',
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/run_session/session-1/capsule-1',
     },
     {
       label: 'wrong owner_id',
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-other/snapshot-1',
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-other/capsule-1',
     },
     {
       label: 'wrong artifact_id',
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-other',
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-other',
     },
-  ])('rejects snapshots with $label in artifact refs before saving them', async ({ artifact_ref }) => {
+  ])('rejects capsules with $label in artifact refs before saving them', async ({ artifact_ref }) => {
     const repository = new InMemoryDeliveryRepository();
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionSnapshot({
-          ...snapshotInput,
+        repository.createCodexRuntimeCapsule({
+          ...runtimeCapsuleInput,
           artifact_ref,
         }),
       'workflow_invalid_transition',
     );
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
   });
 
-  it('rejects creating a snapshot for a missing Codex session before saving it', async () => {
+  it('rejects creating a capsule for a missing Codex session before saving it', async () => {
     const repository = new InMemoryDeliveryRepository();
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionSnapshot({
-          ...snapshotInput,
+        repository.createCodexRuntimeCapsule({
+          ...runtimeCapsuleInput,
           codex_session_id: 'session-missing',
-          artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-missing/snapshot-1',
+          artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-missing/capsule-1',
         }),
       'workflow_invalid_transition',
     );
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
   });
 
-  it('rejects creating a snapshot when created_from_turn_id is missing or belongs to another session before saving it', async () => {
+  it('rejects creating a capsule when created_from_turn_id is missing or belongs to another session before saving it', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createPlanItemWorkflowWithInitialSession({
@@ -4460,72 +4460,72 @@ describe('Plan Item Workflow repository', () => {
       input_digest: 'sha256:turn-other',
     });
 
-    const { created_from_turn_id: _createdFromTurnId, ...snapshotWithoutTurnProvenance } = snapshotInput;
+    const { created_from_turn_id: _createdFromTurnId, ...capsuleWithoutTurnProvenance } = runtimeCapsuleInput;
     await expectDomainErrorCode(
-      () => repository.createCodexSessionSnapshot(snapshotWithoutTurnProvenance),
-      'codex_session_snapshot_stale',
+      () => repository.createCodexRuntimeCapsule(capsuleWithoutTurnProvenance),
+      'codex_runtime_capsule_stale',
     );
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionSnapshot({
-          ...snapshotInput,
+        repository.createCodexRuntimeCapsule({
+          ...runtimeCapsuleInput,
           created_from_turn_id: 'turn-missing',
         }),
-      'codex_session_snapshot_stale',
+      'codex_runtime_capsule_stale',
     );
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionSnapshot({
-          ...snapshotInput,
-          id: 'snapshot-2',
-          artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-          digest: 'sha256:snapshot-2',
+        repository.createCodexRuntimeCapsule({
+          ...runtimeCapsuleInput,
+          id: 'capsule-2',
+          artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+          digest: 'sha256:capsule-2',
           manifest_digest: 'sha256:manifest-2',
           created_from_turn_id: 'turn-other',
         }),
-      'codex_session_snapshot_stale',
+      'codex_runtime_capsule_stale',
     );
-    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-2')).resolves.toBeUndefined();
   });
 
-  it('rejects snapshots whose sequence is not greater than the current session maximum', async () => {
+  it('rejects capsules whose sequence is not greater than the current session maximum', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
-    await repository.createCodexSessionSnapshot({
-      ...snapshotInput,
-      id: 'snapshot-2',
+    await repository.createCodexRuntimeCapsule({
+      ...runtimeCapsuleInput,
+      id: 'capsule-2',
       sequence: 2,
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-      digest: 'sha256:snapshot-2',
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+      digest: 'sha256:capsule-2',
       manifest_digest: 'sha256:manifest-2',
     });
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionSnapshot({
-          ...snapshotInput,
-          id: 'snapshot-1',
+        repository.createCodexRuntimeCapsule({
+          ...runtimeCapsuleInput,
+          id: 'capsule-1',
           sequence: 1,
-          artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1',
-          digest: 'sha256:snapshot-1',
+          artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
+          digest: 'sha256:capsule-1',
           manifest_digest: 'sha256:manifest-1',
         }),
       'workflow_invalid_transition',
     );
 
-    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toMatchObject({
+    await expect(repository.getCodexRuntimeCapsule('capsule-2')).resolves.toMatchObject({
       sequence: 2,
-      digest: 'sha256:snapshot-2',
+      digest: 'sha256:capsule-2',
     });
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toBeUndefined();
     const session = await repository.getCodexSession('session-1');
-    expect(session?.latest_snapshot_id).toBeUndefined();
-    expect(session?.latest_snapshot_digest).toBeUndefined();
+    expect(session?.latest_capsule_id).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBeUndefined();
   });
 
   it('rejects terminalizing an older non-latest running turn without moving the session backward', async () => {
@@ -4552,7 +4552,7 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
+          expected_input_capsule_digest: undefined,
           now: '2026-05-31T00:02:00.000Z',
         }),
       'codex_session_stale_terminalization',
@@ -4567,16 +4567,16 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
   });
 
-  it('rejects stale terminalization without updating latest snapshot fields or turn status', async () => {
+  it('rejects stale terminalization without updating latest capsule fields or turn status', async () => {
     const repository = new InMemoryDeliveryRepository();
-    await seedWorkflowWithSnapshot(repository);
+    await seedWorkflowWithCapsule(repository);
     await repository.createCodexSessionTurn({
       ...turnInput,
-      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+      expected_input_capsule_digest: 'sha256:capsule-1',
     });
     const claimed = await repository.claimCodexSessionLease({
       ...leaseInput,
-      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+      expected_input_capsule_digest: 'sha256:capsule-1',
     });
 
     await expectDomainErrorCode(
@@ -4590,13 +4590,13 @@ describe('Plan Item Workflow repository', () => {
           worker_id: 'worker-1',
           worker_session_digest: 'sha256:worker-session',
           status: 'succeeded',
-          expected_previous_snapshot_digest: 'sha256:stale',
-          output_snapshot: {
-            ...snapshotInput,
-            id: 'snapshot-2',
+          expected_input_capsule_digest: 'sha256:stale',
+          output_capsule: {
+            ...runtimeCapsuleInput,
+            id: 'capsule-2',
             sequence: 2,
-            artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-2',
-            digest: 'sha256:snapshot-2',
+            artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+            digest: 'sha256:capsule-2',
             manifest_digest: 'sha256:manifest-2',
             created_at: '2026-05-31T00:03:00.000Z',
           },
@@ -4609,8 +4609,8 @@ describe('Plan Item Workflow repository', () => {
 
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({
       status: 'running',
-      latest_snapshot_id: 'snapshot-1',
-      latest_snapshot_digest: 'sha256:snapshot-1',
+      latest_capsule_id: 'capsule-1',
+      latest_capsule_digest: 'sha256:capsule-1',
       active_lease_id: claimed.lease.id,
     });
     const session = await repository.getCodexSession('session-1');
@@ -4618,23 +4618,23 @@ describe('Plan Item Workflow repository', () => {
     expect(session?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({
       status: 'running',
-      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+      expected_input_capsule_digest: 'sha256:capsule-1',
     });
     const turn = await repository.getCodexSessionTurn('turn-1');
-    expect(turn?.output_snapshot_id).toBeUndefined();
-    expect(turn?.output_snapshot_digest).toBeUndefined();
-    await expect(repository.getCodexSessionSnapshot('snapshot-2')).resolves.toBeUndefined();
+    expect(turn?.output_capsule_id).toBeUndefined();
+    expect(turn?.output_capsule_digest).toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule('capsule-2')).resolves.toBeUndefined();
   });
 
-  it('forks from the requested persisted snapshot instead of parent latest', async () => {
+  it('forks from the requested persisted capsule instead of parent latest', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
-    await terminalizeTurnWithSnapshot(repository, {
+    await terminalizeTurnWithCapsule(repository, { turn_id: 'turn-1', capsule_id: 'capsule-1' });
+    await terminalizeTurnWithCapsule(repository, {
       turn_id: 'turn-2',
-      snapshot_id: 'snapshot-2',
-      snapshot_sequence: 2,
-      previous_snapshot_digest: 'sha256:snapshot-1',
+      capsule_id: 'capsule-2',
+      capsule_sequence: 2,
+      previous_capsule_digest: 'sha256:capsule-1',
       claim_now: '2026-05-31T00:03:00.000Z',
       terminalize_now: '2026-05-31T00:04:00.000Z',
     });
@@ -4643,7 +4643,7 @@ describe('Plan Item Workflow repository', () => {
       id: 'session-fork',
       workflow_id: 'workflow-1',
       parent_session_id: 'session-1',
-      forked_from_snapshot_id: 'snapshot-1',
+      forked_from_capsule_id: 'capsule-1',
       fork_reason: 'Try the older checkpoint.',
       created_by_actor_id: 'actor-tech',
       now: '2026-05-31T00:05:00.000Z',
@@ -4651,18 +4651,18 @@ describe('Plan Item Workflow repository', () => {
 
     expect(fork).toMatchObject({
       id: 'session-fork',
-      latest_snapshot_id: 'snapshot-1',
-      latest_snapshot_digest: 'sha256:snapshot-1',
-      forked_from_snapshot_id: 'snapshot-1',
+      latest_capsule_id: 'capsule-1',
+      latest_capsule_digest: 'sha256:capsule-1',
+      forked_from_capsule_id: 'capsule-1',
     });
   });
 
-  it('does not inherit parent Codex thread identity when forking from a historical snapshot', async () => {
+  it('does not inherit parent Codex thread identity when forking from a historical capsule', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await terminalizeTurnWithSnapshot(repository, {
+    await terminalizeTurnWithCapsule(repository, {
       turn_id: 'turn-1',
-      snapshot_id: 'snapshot-1',
+      capsule_id: 'capsule-1',
       codex_thread_id: 'thread-parent-current',
       codex_thread_id_digest: 'sha256:thread-parent-current',
     });
@@ -4671,7 +4671,7 @@ describe('Plan Item Workflow repository', () => {
       id: 'session-fork',
       workflow_id: 'workflow-1',
       parent_session_id: 'session-1',
-      forked_from_snapshot_id: 'snapshot-1',
+      forked_from_capsule_id: 'capsule-1',
       fork_reason: 'Try the older checkpoint without current thread baggage.',
       created_by_actor_id: 'actor-tech',
       now: '2026-05-31T00:04:00.000Z',
@@ -4679,23 +4679,23 @@ describe('Plan Item Workflow repository', () => {
 
     expect(fork).toMatchObject({
       id: 'session-fork',
-      latest_snapshot_id: 'snapshot-1',
-      latest_snapshot_digest: 'sha256:snapshot-1',
-      forked_from_snapshot_id: 'snapshot-1',
+      latest_capsule_id: 'capsule-1',
+      latest_capsule_digest: 'sha256:capsule-1',
+      forked_from_capsule_id: 'capsule-1',
     });
     expect(fork.codex_thread_id).toBeUndefined();
     expect(fork.codex_thread_id_digest).toBeUndefined();
   });
 
-  it('forks from a turn output snapshot instead of a newer parent latest snapshot', async () => {
+  it('forks from a turn output capsule instead of a newer parent latest capsule', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
-    await terminalizeTurnWithSnapshot(repository, {
+    await terminalizeTurnWithCapsule(repository, { turn_id: 'turn-1', capsule_id: 'capsule-1' });
+    await terminalizeTurnWithCapsule(repository, {
       turn_id: 'turn-2',
-      snapshot_id: 'snapshot-2',
-      snapshot_sequence: 2,
-      previous_snapshot_digest: 'sha256:snapshot-1',
+      capsule_id: 'capsule-2',
+      capsule_sequence: 2,
+      previous_capsule_digest: 'sha256:capsule-1',
       claim_now: '2026-05-31T00:03:00.000Z',
       terminalize_now: '2026-05-31T00:04:00.000Z',
     });
@@ -4712,14 +4712,14 @@ describe('Plan Item Workflow repository', () => {
 
     expect(fork).toMatchObject({
       id: 'session-fork',
-      latest_snapshot_id: 'snapshot-1',
-      latest_snapshot_digest: 'sha256:snapshot-1',
+      latest_capsule_id: 'capsule-1',
+      latest_capsule_digest: 'sha256:capsule-1',
       forked_from_turn_id: 'turn-1',
     });
-    expect(fork.forked_from_snapshot_id).toBeUndefined();
+    expect(fork.forked_from_capsule_id).toBeUndefined();
   });
 
-  it('rejects turn-based fork when the turn output snapshot is missing', async () => {
+  it('rejects turn-based fork when the turn output capsule is missing', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
@@ -4729,15 +4729,15 @@ describe('Plan Item Workflow repository', () => {
         repository.saveCodexSessionTurn({
           ...turnInput,
           status: 'succeeded',
-          output_snapshot_id: 'snapshot-missing',
-          output_snapshot_digest: 'sha256:snapshot-missing',
+          output_capsule_id: 'capsule-missing',
+          output_capsule_digest: 'sha256:capsule-missing',
           updated_at: '2026-05-31T00:02:00.000Z',
         }),
       'workflow_invalid_transition',
     );
   });
 
-  it('rejects turn-based fork when the turn output snapshot belongs to another session', async () => {
+  it('rejects turn-based fork when the turn output capsule belongs to another session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createPlanItemWorkflowWithInitialSession({
@@ -4754,12 +4754,12 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-other',
       input_digest: 'sha256:turn-other',
     });
-    await repository.createCodexSessionSnapshot({
-      ...snapshotInput,
-      id: 'snapshot-other',
+    await repository.createCodexRuntimeCapsule({
+      ...runtimeCapsuleInput,
+      id: 'capsule-other',
       codex_session_id: 'session-other',
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-other/snapshot-other',
-      digest: 'sha256:snapshot-other',
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-other/capsule-other',
+      digest: 'sha256:capsule-other',
       created_from_turn_id: 'turn-other',
     });
 
@@ -4768,18 +4768,18 @@ describe('Plan Item Workflow repository', () => {
         repository.saveCodexSessionTurn({
           ...turnInput,
           status: 'succeeded',
-          output_snapshot_id: 'snapshot-other',
-          output_snapshot_digest: 'sha256:snapshot-other',
+          output_capsule_id: 'capsule-other',
+          output_capsule_digest: 'sha256:capsule-other',
           updated_at: '2026-05-31T00:02:00.000Z',
         }),
       'workflow_invalid_transition',
     );
   });
 
-  it('rejects turn-based fork when the turn output snapshot digest differs from persisted snapshot', async () => {
+  it('rejects turn-based fork when the turn output capsule digest differs from persisted capsule', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
+    await terminalizeTurnWithCapsule(repository, { turn_id: 'turn-1', capsule_id: 'capsule-1' });
 
     const terminalizedTurn = await repository.getCodexSessionTurn('turn-1');
     if (terminalizedTurn === undefined) throw new Error('Expected terminalized turn');
@@ -4787,33 +4787,33 @@ describe('Plan Item Workflow repository', () => {
       () =>
         repository.saveCodexSessionTurn({
           ...terminalizedTurn,
-          output_snapshot_digest: 'sha256:stale-snapshot-1',
+          output_capsule_digest: 'sha256:stale-capsule-1',
         }),
       'workflow_invalid_transition',
     );
   });
 
-  it('rejects turn-based fork when the persisted output snapshot came from a different turn', async () => {
+  it('rejects turn-based fork when the persisted output capsule came from a different turn', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
 
     await expectDomainErrorCode(
       () =>
-        repository.createCodexSessionSnapshot({
-          ...snapshotInput,
+        repository.createCodexRuntimeCapsule({
+          ...runtimeCapsuleInput,
           created_from_turn_id: 'turn-other',
         }),
-      'codex_session_snapshot_stale',
+      'codex_runtime_capsule_stale',
     );
   });
 
-  it('does not inherit parent latest snapshot when forking from a turn without output snapshot', async () => {
+  it('does not inherit parent latest capsule when forking from a turn without output capsule', async () => {
     const repository = new InMemoryDeliveryRepository();
-    await seedWorkflowWithSnapshot(repository);
+    await seedWorkflowWithCapsule(repository);
     await repository.createCodexSessionTurn({
       ...turnInput,
-      expected_previous_snapshot_digest: 'sha256:snapshot-1',
+      expected_input_capsule_digest: 'sha256:capsule-1',
     });
 
     const fork = await repository.createCodexSessionFork({
@@ -4830,20 +4830,20 @@ describe('Plan Item Workflow repository', () => {
       id: 'session-fork',
       forked_from_turn_id: 'turn-1',
     });
-    expect(fork.latest_snapshot_id).toBeUndefined();
-    expect(fork.latest_snapshot_digest).toBeUndefined();
-    expect(fork.forked_from_snapshot_id).toBeUndefined();
+    expect(fork.latest_capsule_id).toBeUndefined();
+    expect(fork.latest_capsule_digest).toBeUndefined();
+    expect(fork.forked_from_capsule_id).toBeUndefined();
   });
 
-  it('rejects fork creation when requested turn and snapshot fork points do not match', async () => {
+  it('rejects fork creation when requested turn and capsule fork points do not match', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
-    await terminalizeTurnWithSnapshot(repository, {
+    await terminalizeTurnWithCapsule(repository, { turn_id: 'turn-1', capsule_id: 'capsule-1' });
+    await terminalizeTurnWithCapsule(repository, {
       turn_id: 'turn-2',
-      snapshot_id: 'snapshot-2',
-      snapshot_sequence: 2,
-      previous_snapshot_digest: 'sha256:snapshot-1',
+      capsule_id: 'capsule-2',
+      capsule_sequence: 2,
+      previous_capsule_digest: 'sha256:capsule-1',
       claim_now: '2026-05-31T00:03:00.000Z',
       terminalize_now: '2026-05-31T00:04:00.000Z',
     });
@@ -4855,7 +4855,7 @@ describe('Plan Item Workflow repository', () => {
           workflow_id: 'workflow-1',
           parent_session_id: 'session-1',
           forked_from_turn_id: 'turn-1',
-          forked_from_snapshot_id: 'snapshot-2',
+          forked_from_capsule_id: 'capsule-2',
           fork_reason: 'Try mismatched provenance.',
           created_by_actor_id: 'actor-tech',
           now: '2026-05-31T00:05:00.000Z',
@@ -4864,7 +4864,7 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
-  it('rejects fork creation without an explicit turn or snapshot fork point', async () => {
+  it('rejects fork creation without an explicit turn or capsule fork point', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
 
@@ -4927,7 +4927,7 @@ describe('Plan Item Workflow repository', () => {
     );
   });
 
-  it('forks from a requested parent-session turn without requiring a snapshot', async () => {
+  it('forks from a requested parent-session turn without requiring a capsule', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createCodexSessionTurn(turnInput);
@@ -4948,19 +4948,19 @@ describe('Plan Item Workflow repository', () => {
       forked_from_session_id: 'session-1',
       forked_from_turn_id: 'turn-1',
     });
-    expect(fork.forked_from_snapshot_id).toBeUndefined();
+    expect(fork.forked_from_capsule_id).toBeUndefined();
   });
 
   it('rejects saving a fork when immutable provenance fields change', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
-    await terminalizeTurnWithSnapshot(repository, { turn_id: 'turn-1', snapshot_id: 'snapshot-1' });
+    await terminalizeTurnWithCapsule(repository, { turn_id: 'turn-1', capsule_id: 'capsule-1' });
     const fork = await repository.createCodexSessionFork({
       id: 'session-fork',
       workflow_id: 'workflow-1',
       parent_session_id: 'session-1',
       forked_from_turn_id: 'turn-1',
-      forked_from_snapshot_id: 'snapshot-1',
+      forked_from_capsule_id: 'capsule-1',
       fork_reason: 'Try another approach.',
       created_by_actor_id: 'actor-tech',
       now: '2026-05-31T00:04:00.000Z',
@@ -4969,7 +4969,7 @@ describe('Plan Item Workflow repository', () => {
     const provenanceDrifts = [
       { forked_from_session_id: 'session-drifted' },
       { forked_from_turn_id: 'turn-drifted' },
-      { forked_from_snapshot_id: 'snapshot-drifted' },
+      { forked_from_capsule_id: 'capsule-drifted' },
       { fork_reason: 'Rewrite the fork reason.' },
     ];
 
@@ -4994,13 +4994,13 @@ describe('Plan Item Workflow repository', () => {
       status: 'idle',
       forked_from_session_id: 'session-1',
       forked_from_turn_id: 'turn-1',
-      forked_from_snapshot_id: 'snapshot-1',
+      forked_from_capsule_id: 'capsule-1',
       fork_reason: 'Try another approach.',
       updated_at: '2026-05-31T00:05:00.000Z',
     });
   });
 
-  it('rejects fork creation when requested snapshot is missing or belongs to another session', async () => {
+  it('rejects fork creation when requested capsule is missing or belongs to another session', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
     await repository.createPlanItemWorkflowWithInitialSession({
@@ -5016,12 +5016,12 @@ describe('Plan Item Workflow repository', () => {
       workflow_id: 'workflow-other',
       input_digest: 'sha256:turn-other',
     });
-    await repository.createCodexSessionSnapshot({
-      ...snapshotInput,
-      id: 'snapshot-other',
+    await repository.createCodexRuntimeCapsule({
+      ...runtimeCapsuleInput,
+      id: 'capsule-other',
       codex_session_id: 'session-other',
-      artifact_ref: 'artifact://internal/codex_session_snapshot/codex_session/session-other/snapshot-other',
-      digest: 'sha256:snapshot-other',
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-other/capsule-other',
+      digest: 'sha256:capsule-other',
       created_from_turn_id: 'turn-other',
     });
 
@@ -5031,7 +5031,7 @@ describe('Plan Item Workflow repository', () => {
           id: 'session-fork-missing',
           workflow_id: 'workflow-1',
           parent_session_id: 'session-1',
-          forked_from_snapshot_id: 'snapshot-missing',
+          forked_from_capsule_id: 'capsule-missing',
           fork_reason: 'Missing checkpoint.',
           created_by_actor_id: 'actor-tech',
           now: '2026-05-31T00:04:00.000Z',
@@ -5044,7 +5044,7 @@ describe('Plan Item Workflow repository', () => {
           id: 'session-fork-foreign',
           workflow_id: 'workflow-1',
           parent_session_id: 'session-1',
-          forked_from_snapshot_id: 'snapshot-other',
+          forked_from_capsule_id: 'capsule-other',
           fork_reason: 'Foreign checkpoint.',
           created_by_actor_id: 'actor-tech',
           now: '2026-05-31T00:04:00.000Z',
@@ -6112,7 +6112,7 @@ describe('Plan Item Workflow repository', () => {
     await repository.withDeliveryTransaction(async (transaction) => {
       await transaction.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
       await transaction.createCodexSessionTurn(turnInput);
-      await transaction.createCodexSessionSnapshot(snapshotInput);
+      await transaction.createCodexRuntimeCapsule(runtimeCapsuleInput);
       await transaction.claimCodexSessionLease(leaseInput);
       await transaction.saveStaleCodexSessionTerminalizationAttempt({
         id: 'stale-1',
@@ -6139,7 +6139,7 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({ active_codex_session_id: 'session-1' });
     await expect(repository.getCodexSession('session-1')).resolves.toMatchObject({ active_lease_id: 'lease-1' });
     await expect(repository.getCodexSessionTurn('turn-1')).resolves.toMatchObject({ status: 'running' });
-    await expect(repository.getCodexSessionSnapshot('snapshot-1')).resolves.toMatchObject({ digest: 'sha256:snapshot-1' });
+    await expect(repository.getCodexRuntimeCapsule('capsule-1')).resolves.toMatchObject({ digest: 'sha256:capsule-1' });
     await expect(repository.renewCodexSessionLease({
       session_id: 'session-1',
       lease_id: 'lease-1',
@@ -6318,7 +6318,7 @@ describe('Plan Item Workflow repository', () => {
       lease_epoch: 2,
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
-      attempted_output_snapshot_digest: 'sha256:attempted-output',
+      attempted_output_capsule_digest: 'sha256:attempted-output',
       failure_code: 'codex_session_stale_terminalization',
       created_at: now,
     });
@@ -6328,7 +6328,7 @@ describe('Plan Item Workflow repository', () => {
         id: 'stale-lease-epoch-mismatch',
         lease_id: 'lease-1',
         lease_epoch: 2,
-        attempted_output_snapshot_digest: 'sha256:attempted-output',
+        attempted_output_capsule_digest: 'sha256:attempted-output',
       }),
     ]);
   });
@@ -6347,7 +6347,7 @@ describe('Plan Item Workflow repository', () => {
       worker_id: claimed.lease.worker_id,
       worker_session_digest: claimed.lease.worker_session_digest,
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       codex_thread_id: 'thread-1',
       codex_thread_id_digest: 'sha256:thread-1',
       now: '2026-05-31T00:02:00.000Z',
@@ -6715,21 +6715,21 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       worker_id: 'worker-drizzle',
       worker_session_digest: 'sha256:worker-session-drizzle',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
-      output_snapshot: drizzleSnapshotInput,
+      expected_input_capsule_digest: undefined,
+      output_capsule: drizzleRuntimeCapsuleInput,
       codex_thread_id: 'thread-drizzle',
       codex_thread_id_digest: 'sha256:thread-drizzle',
       now: '2026-05-31T00:02:00.000Z',
     });
     expect(terminalized.session).toMatchObject({
       status: 'idle',
-      latest_snapshot_id: uuidFixture.snapshotId,
-      latest_snapshot_digest: 'sha256:drizzle-snapshot-1',
+      latest_capsule_id: uuidFixture.capsuleId,
+      latest_capsule_digest: 'sha256:drizzle-capsule-1',
       codex_thread_id_digest: 'sha256:thread-drizzle',
     });
     expect(terminalized.session).not.toHaveProperty('active_lease_id');
-    await expect(repository.getCodexSessionSnapshot(uuidFixture.snapshotId)).resolves.toMatchObject({
-      id: uuidFixture.snapshotId,
+    await expect(repository.getCodexRuntimeCapsule(uuidFixture.capsuleId)).resolves.toMatchObject({
+      id: uuidFixture.capsuleId,
       sequence: 1,
       created_from_turn_id: uuidFixture.turnId,
     });
@@ -6745,7 +6745,7 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
           worker_id: 'worker-drizzle',
           worker_session_digest: 'sha256:worker-session-drizzle',
           status: 'succeeded',
-          expected_previous_snapshot_digest: undefined,
+          expected_input_capsule_digest: undefined,
           now: '2026-05-31T00:03:00.000Z',
         }),
       'codex_session_stale_terminalization',
@@ -6758,7 +6758,7 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       lease_epoch: 1,
       worker_id: 'worker-drizzle',
       worker_session_digest: 'sha256:worker-session-drizzle',
-      attempted_output_snapshot_digest: 'sha256:ignored',
+      attempted_output_capsule_digest: 'sha256:ignored',
       failure_code: 'codex_session_stale_terminalization',
       created_at: '2026-05-31T00:03:00.000Z',
     });
@@ -6816,7 +6816,7 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       lease_epoch: 2,
       worker_id: 'worker-drizzle',
       worker_session_digest: 'sha256:worker-session-drizzle',
-      attempted_output_snapshot_digest: 'sha256:attempted-drizzle-output',
+      attempted_output_capsule_digest: 'sha256:attempted-drizzle-output',
       failure_code: 'codex_session_stale_terminalization',
       created_at: '2026-05-31T00:03:00.000Z',
     });
@@ -6826,7 +6826,7 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
         id: uuidFixture.staleAttemptId,
         lease_id: uuidFixture.leaseId,
         lease_epoch: 2,
-        attempted_output_snapshot_digest: 'sha256:attempted-drizzle-output',
+        attempted_output_capsule_digest: 'sha256:attempted-drizzle-output',
       }),
     ]);
   });
@@ -6844,7 +6844,7 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       worker_id: 'worker-drizzle',
       worker_session_digest: 'sha256:worker-session-drizzle',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       codex_thread_id: 'thread-drizzle',
       codex_thread_id_digest: 'sha256:thread-drizzle',
       now: '2026-05-31T00:02:00.000Z',
@@ -6893,8 +6893,8 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       worker_id: 'worker-drizzle',
       worker_session_digest: 'sha256:worker-session-drizzle',
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
-      output_snapshot: drizzleSnapshotInput,
+      expected_input_capsule_digest: undefined,
+      output_capsule: drizzleRuntimeCapsuleInput,
       now: '2026-05-31T00:02:00.000Z',
     });
 
@@ -6910,8 +6910,8 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
     expect(fork).toMatchObject({
       id: uuidFixture.forkSessionId,
       role: 'candidate_fork',
-      latest_snapshot_id: uuidFixture.snapshotId,
-      latest_snapshot_digest: 'sha256:drizzle-snapshot-1',
+      latest_capsule_id: uuidFixture.capsuleId,
+      latest_capsule_digest: 'sha256:drizzle-capsule-1',
     });
     await expectDomainErrorCode(
       () =>

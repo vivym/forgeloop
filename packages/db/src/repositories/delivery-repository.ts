@@ -21,9 +21,9 @@ import type {
   CodexLaunchMaterialization,
   CodexLaunchTokenEnvelope,
   CodexLaunchTarget,
+  CodexRuntimeCapsule,
   CodexSession,
   CodexSessionLease,
-  CodexSessionSnapshot,
   CodexSessionStaleTerminalizationAttempt,
   CodexSessionTurn,
   CodexRuntimeJob,
@@ -313,7 +313,15 @@ export interface ClaimCodexSessionLeaseInput {
   lease_token_hash: string;
   worker_id: string;
   worker_session_digest: string;
-  expected_previous_snapshot_digest?: string;
+  expected_input_capsule_digest?: string;
+  input_capsule_id?: string;
+  input_capsule_digest?: string;
+  base_memory_bundle_ref?: string;
+  base_memory_bundle_digest?: string;
+  input_memory_bundle_ref?: string;
+  input_memory_bundle_digest?: string;
+  input_environment_manifest_ref?: string;
+  input_environment_manifest_digest?: string;
   now: string;
   expires_at: string;
 }
@@ -337,7 +345,15 @@ export interface RecoverCodexSessionLeaseForClaimInput {
   worker_id: string;
   worker_session_digest: string;
   lease_epoch: number;
-  expected_previous_snapshot_digest?: string;
+  expected_input_capsule_digest?: string;
+  input_capsule_id?: string;
+  input_capsule_digest?: string;
+  base_memory_bundle_ref?: string;
+  base_memory_bundle_digest?: string;
+  input_memory_bundle_ref?: string;
+  input_memory_bundle_digest?: string;
+  input_environment_manifest_ref?: string;
+  input_environment_manifest_digest?: string;
   now: string;
 }
 
@@ -350,8 +366,22 @@ export interface TerminalizeCodexSessionTurnInput {
   worker_id: string;
   worker_session_digest: string;
   status: 'succeeded' | 'failed' | 'cancelled';
-  expected_previous_snapshot_digest?: string;
-  output_snapshot?: CodexSessionSnapshot;
+  expected_input_capsule_digest?: string;
+  input_capsule_id?: string;
+  input_capsule_digest?: string;
+  output_capsule?: CodexRuntimeCapsule;
+  base_memory_bundle_ref?: string;
+  base_memory_bundle_digest?: string;
+  input_memory_bundle_ref?: string;
+  input_memory_bundle_digest?: string;
+  output_memory_bundle_ref?: string;
+  output_memory_bundle_digest?: string;
+  memory_delta_artifact_ref?: string;
+  memory_delta_digest?: string;
+  input_environment_manifest_ref?: string;
+  input_environment_manifest_digest?: string;
+  output_environment_manifest_ref?: string;
+  output_environment_manifest_digest?: string;
   output_object_type?: WorkflowTransitionEvidenceObjectType;
   output_object_id?: string;
   app_server_thread_binding_required?: boolean;
@@ -420,7 +450,7 @@ export interface CreateCodexSessionForkInput {
   workflow_id: string;
   parent_session_id: string;
   forked_from_turn_id?: string;
-  forked_from_snapshot_id?: string;
+  forked_from_capsule_id?: string;
   fork_reason: string;
   created_by_actor_id: string;
   now: string;
@@ -1529,8 +1559,8 @@ export interface DeliveryRepository {
   getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined>;
   saveCodexSessionTurn(turn: CodexSessionTurn): Promise<void>;
   markCodexSessionTurnStale(input: { session_id: string; turn_id: string; now: string }): Promise<void>;
-  createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void>;
-  getCodexSessionSnapshot(id: string): Promise<CodexSessionSnapshot | undefined>;
+  createCodexRuntimeCapsule(capsule: CodexRuntimeCapsule): Promise<void>;
+  getCodexRuntimeCapsule(id: string): Promise<CodexRuntimeCapsule | undefined>;
   saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void>;
   listStaleCodexSessionTerminalizationAttempts(sessionId: string): Promise<CodexSessionStaleTerminalizationAttempt[]>;
   claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }>;

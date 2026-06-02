@@ -21,7 +21,7 @@ import type {
   CodexLaunchMaterialization,
   CodexSession,
   CodexSessionLease,
-  CodexSessionSnapshot,
+  CodexRuntimeCapsule,
   CodexSessionStaleTerminalizationAttempt,
   CodexSessionTurn,
   CodexRuntimeJob,
@@ -134,7 +134,7 @@ import {
   codex_runtime_profiles,
   codex_runtime_profile_revisions,
   codex_session_leases,
-  codex_session_snapshots,
+  codex_runtime_capsules,
   codex_session_stale_terminalization_attempts,
   codex_session_turns,
   codex_sessions,
@@ -825,9 +825,9 @@ interface DrizzleDeliveryRepositoryOptions {
 const codexDenied = (code: DomainErrorType['code'], message: string, details?: Record<string, unknown>): DomainErrorType =>
   new DomainError(code, message, details);
 
-const codexSessionSnapshotDurableIdentityMatches = (
-  existing: CodexSessionSnapshot,
-  candidate: CodexSessionSnapshot,
+const codexRuntimeCapsuleDurableIdentityMatches = (
+  existing: CodexRuntimeCapsule,
+  candidate: CodexRuntimeCapsule,
 ): boolean =>
   existing.codex_session_id === candidate.codex_session_id &&
   existing.digest === candidate.digest &&
@@ -835,6 +835,62 @@ const codexSessionSnapshotDurableIdentityMatches = (
   existing.manifest_digest === candidate.manifest_digest &&
   existing.sequence === candidate.sequence &&
   existing.created_from_turn_id === candidate.created_from_turn_id;
+
+const codexRuntimeContinuationFromSession = (session: CodexSession) => ({
+  expected_input_capsule_digest: session.latest_capsule_digest,
+  input_capsule_id: session.latest_capsule_id,
+  input_capsule_digest: session.latest_capsule_digest,
+  base_memory_bundle_ref: session.base_memory_bundle_ref,
+  base_memory_bundle_digest: session.base_memory_bundle_digest,
+  input_memory_bundle_ref: session.latest_memory_bundle_ref,
+  input_memory_bundle_digest: session.latest_memory_bundle_digest,
+  input_environment_manifest_ref: session.latest_environment_manifest_ref,
+  input_environment_manifest_digest: session.latest_environment_manifest_digest,
+});
+
+const codexRuntimeTurnContinuationFromInput = (input: {
+  input_capsule_id?: string;
+  input_capsule_digest?: string;
+  base_memory_bundle_ref?: string;
+  base_memory_bundle_digest?: string;
+  input_memory_bundle_ref?: string;
+  input_memory_bundle_digest?: string;
+  input_environment_manifest_ref?: string;
+  input_environment_manifest_digest?: string;
+}) => ({
+  ...(input.input_capsule_id === undefined ? {} : { input_capsule_id: input.input_capsule_id }),
+  ...(input.input_capsule_digest === undefined ? {} : { input_capsule_digest: input.input_capsule_digest }),
+  ...(input.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: input.base_memory_bundle_ref }),
+  ...(input.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: input.base_memory_bundle_digest }),
+  ...(input.input_memory_bundle_ref === undefined ? {} : { input_memory_bundle_ref: input.input_memory_bundle_ref }),
+  ...(input.input_memory_bundle_digest === undefined ? {} : { input_memory_bundle_digest: input.input_memory_bundle_digest }),
+  ...(input.input_environment_manifest_ref === undefined
+    ? {}
+    : { input_environment_manifest_ref: input.input_environment_manifest_ref }),
+  ...(input.input_environment_manifest_digest === undefined
+    ? {}
+    : { input_environment_manifest_digest: input.input_environment_manifest_digest }),
+});
+
+const codexRuntimeTerminalContinuationFromInput = (input: {
+  output_memory_bundle_ref?: string;
+  output_memory_bundle_digest?: string;
+  memory_delta_artifact_ref?: string;
+  memory_delta_digest?: string;
+  output_environment_manifest_ref?: string;
+  output_environment_manifest_digest?: string;
+}) => ({
+  ...(input.output_memory_bundle_ref === undefined ? {} : { output_memory_bundle_ref: input.output_memory_bundle_ref }),
+  ...(input.output_memory_bundle_digest === undefined ? {} : { output_memory_bundle_digest: input.output_memory_bundle_digest }),
+  ...(input.memory_delta_artifact_ref === undefined ? {} : { memory_delta_artifact_ref: input.memory_delta_artifact_ref }),
+  ...(input.memory_delta_digest === undefined ? {} : { memory_delta_digest: input.memory_delta_digest }),
+  ...(input.output_environment_manifest_ref === undefined
+    ? {}
+    : { output_environment_manifest_ref: input.output_environment_manifest_ref }),
+  ...(input.output_environment_manifest_digest === undefined
+    ? {}
+    : { output_environment_manifest_digest: input.output_environment_manifest_digest }),
+});
 
 const capabilityList = (capabilities: Record<string, unknown>, key: string): readonly string[] => {
   const value = capabilities[key];
@@ -1332,7 +1388,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (
       existingSession.forked_from_session_id !== session.forked_from_session_id ||
       existingSession.forked_from_turn_id !== session.forked_from_turn_id ||
-      existingSession.forked_from_snapshot_id !== session.forked_from_snapshot_id ||
+      existingSession.forked_from_capsule_id !== session.forked_from_capsule_id ||
       existingSession.fork_reason !== session.fork_reason
     ) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${session.id} fork provenance fields cannot change`);
@@ -1340,8 +1396,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (
       existingSession.latest_turn_id !== session.latest_turn_id ||
       existingSession.latest_turn_digest !== session.latest_turn_digest ||
-      existingSession.latest_snapshot_id !== session.latest_snapshot_id ||
-      existingSession.latest_snapshot_digest !== session.latest_snapshot_digest ||
+      existingSession.latest_capsule_id !== session.latest_capsule_id ||
+      existingSession.latest_capsule_digest !== session.latest_capsule_digest ||
+      existingSession.base_memory_bundle_ref !== session.base_memory_bundle_ref ||
+      existingSession.base_memory_bundle_digest !== session.base_memory_bundle_digest ||
+      existingSession.latest_memory_bundle_ref !== session.latest_memory_bundle_ref ||
+      existingSession.latest_memory_bundle_digest !== session.latest_memory_bundle_digest ||
+      existingSession.latest_environment_manifest_ref !== session.latest_environment_manifest_ref ||
+      existingSession.latest_environment_manifest_digest !== session.latest_environment_manifest_digest ||
       existingSession.codex_thread_id !== session.codex_thread_id ||
       existingSession.codex_thread_id_digest !== session.codex_thread_id_digest ||
       existingSession.active_lease_id !== session.active_lease_id ||
@@ -1376,8 +1438,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
     if (
       turn.status !== 'running' ||
-      turn.output_snapshot_id !== undefined ||
-      turn.output_snapshot_digest !== undefined ||
+      turn.output_capsule_id !== undefined ||
+      turn.output_capsule_digest !== undefined ||
       turn.output_object_type !== undefined ||
       turn.output_object_id !== undefined ||
       turn.codex_thread_id_digest !== undefined ||
@@ -1410,11 +1472,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       throw new DomainError('workflow_active_session_missing', `workflow_active_session_missing: Codex session ${turn.codex_session_id} is not active for workflow ${turn.workflow_id}`);
     }
     const activeSession = session;
-    if (activeSession.latest_snapshot_digest !== turn.expected_previous_snapshot_digest) {
-      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${turn.codex_session_id} snapshot is stale`);
+    if ((activeSession.latest_capsule_digest ?? null) !== (turn.expected_input_capsule_digest ?? null)) {
+      throw new DomainError('codex_runtime_capsule_stale', `codex_runtime_capsule_stale: Codex session ${turn.codex_session_id} capsule is stale`);
     }
+    const turnWithContinuation: CodexSessionTurn = {
+      ...turn,
+      ...codexRuntimeContinuationFromSession(activeSession),
+      expected_input_capsule_digest: turn.expected_input_capsule_digest,
+    };
     const updatedSession: CodexSession = { ...activeSession, latest_turn_id: turn.id, latest_turn_digest: turn.input_digest, updated_at: turn.updated_at };
-    await this.db.insert(codex_session_turns).values(toDbRecord(turn, codex_session_turns) as never);
+    await this.db.insert(codex_session_turns).values(toDbRecord(turnWithContinuation, codex_session_turns) as never);
     await this.db.update(codex_sessions).set(toDbRecord(updatedSession, codex_sessions) as never).where(eq(codex_sessions.id, activeSession.id));
   }
 
@@ -1889,9 +1956,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       existingTurn.workflow_id !== turn.workflow_id ||
       existingTurn.intent !== turn.intent ||
       existingTurn.input_digest !== turn.input_digest ||
-      existingTurn.expected_previous_snapshot_digest !== turn.expected_previous_snapshot_digest ||
-      existingTurn.output_snapshot_id !== turn.output_snapshot_id ||
-      existingTurn.output_snapshot_digest !== turn.output_snapshot_digest ||
+      existingTurn.expected_input_capsule_digest !== turn.expected_input_capsule_digest ||
+      existingTurn.output_capsule_id !== turn.output_capsule_id ||
+      existingTurn.output_capsule_digest !== turn.output_capsule_digest ||
       existingTurn.lease_id !== turn.lease_id ||
       existingTurn.lease_epoch !== turn.lease_epoch ||
       existingTurn.created_at !== turn.created_at ||
@@ -1923,8 +1990,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .update(codex_session_turns)
       .set({
         status: 'stale',
-        outputSnapshotId: null,
-        outputSnapshotDigest: null,
+        outputCapsuleId: null,
+        outputCapsuleDigest: null,
         codexThreadIdDigest: null,
         updatedAt: input.now,
       } as never)
@@ -1937,53 +2004,53 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       );
   }
 
-  async createCodexSessionSnapshot(snapshot: CodexSessionSnapshot): Promise<void> {
-    if ((await this.getCodexSession(snapshot.codex_session_id)) === undefined) {
-      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} session ${snapshot.codex_session_id} does not exist`);
+  async createCodexRuntimeCapsule(capsule: CodexRuntimeCapsule): Promise<void> {
+    if ((await this.getCodexSession(capsule.codex_session_id)) === undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex runtime capsule ${capsule.id} session ${capsule.codex_session_id} does not exist`);
     }
-    const sourceTurn = snapshot.created_from_turn_id === undefined ? undefined : await this.getCodexSessionTurn(snapshot.created_from_turn_id);
-    if (sourceTurn === undefined || sourceTurn.codex_session_id !== snapshot.codex_session_id) {
-      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session snapshot ${snapshot.id} source turn is stale`);
+    const sourceTurn = await this.getCodexSessionTurn(capsule.created_from_turn_id);
+    if (sourceTurn === undefined || sourceTurn.codex_session_id !== capsule.codex_session_id) {
+      throw new DomainError('codex_runtime_capsule_stale', `codex_runtime_capsule_stale: Codex runtime capsule ${capsule.id} source turn is stale`);
     }
     let parsedArtifactRef: ReturnType<typeof parseInternalArtifactRef>;
     try {
-      parsedArtifactRef = parseInternalArtifactRef(snapshot.artifact_ref);
+      parsedArtifactRef = parseInternalArtifactRef(capsule.artifact_ref);
     } catch {
-      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} artifact_ref is not an internal artifact ref`);
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex runtime capsule ${capsule.id} artifact_ref is not an internal artifact ref`);
     }
     if (
-      parsedArtifactRef.kind !== 'codex_session_snapshot' ||
+      parsedArtifactRef.kind !== 'codex_runtime_capsule' ||
       parsedArtifactRef.owner_type !== 'codex_session' ||
-      parsedArtifactRef.owner_id !== snapshot.codex_session_id ||
-      parsedArtifactRef.artifact_id !== snapshot.id
+      parsedArtifactRef.owner_id !== capsule.codex_session_id ||
+      parsedArtifactRef.artifact_id !== capsule.id
     ) {
-      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} artifact_ref does not match the snapshot identity`);
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex runtime capsule ${capsule.id} artifact_ref does not match the capsule identity`);
     }
     const [existingForSequence] = await this.db
       .select()
-      .from(codex_session_snapshots)
-      .where(and(eq(codex_session_snapshots.codexSessionId, snapshot.codex_session_id), eq(codex_session_snapshots.sequence, snapshot.sequence)))
+      .from(codex_runtime_capsules)
+      .where(and(eq(codex_runtime_capsules.codexSessionId, capsule.codex_session_id), eq(codex_runtime_capsules.sequence, capsule.sequence)))
       .limit(1);
     const [existingForArtifact] = await this.db
       .select()
-      .from(codex_session_snapshots)
-      .where(eq(codex_session_snapshots.artifactRef, snapshot.artifact_ref))
+      .from(codex_runtime_capsules)
+      .where(eq(codex_runtime_capsules.artifactRef, capsule.artifact_ref))
       .limit(1);
     const maxSequenceResult = await this.db.execute(sql<{ max_sequence: number | null }>`
-      select max(sequence) as max_sequence from codex_session_snapshots where codex_session_id = ${snapshot.codex_session_id}
+      select max(sequence) as max_sequence from codex_runtime_capsules where codex_session_id = ${capsule.codex_session_id}
     `);
     const maxExistingSequence = Number(maxSequenceResult.rows[0]?.max_sequence ?? 0);
-    if ((await this.getCodexSessionSnapshot(snapshot.id)) !== undefined || existingForSequence !== undefined || existingForArtifact !== undefined) {
-      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} is not unique`);
+    if ((await this.getCodexRuntimeCapsule(capsule.id)) !== undefined || existingForSequence !== undefined || existingForArtifact !== undefined) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex runtime capsule ${capsule.id} is not unique`);
     }
-    if (snapshot.sequence <= maxExistingSequence) {
-      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session snapshot ${snapshot.id} sequence is stale`);
+    if (capsule.sequence <= maxExistingSequence) {
+      throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex runtime capsule ${capsule.id} sequence is stale`);
     }
-    await this.db.insert(codex_session_snapshots).values(toDbRecord(snapshot, codex_session_snapshots) as never);
+    await this.db.insert(codex_runtime_capsules).values(toDbRecord(capsule, codex_runtime_capsules) as never);
   }
 
-  async getCodexSessionSnapshot(id: string): Promise<CodexSessionSnapshot | undefined> {
-    return this.getById(codex_session_snapshots, codex_session_snapshots.id, id);
+  async getCodexRuntimeCapsule(id: string): Promise<CodexRuntimeCapsule | undefined> {
+    return this.getById(codex_runtime_capsules, codex_runtime_capsules.id, id);
   }
 
   async saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void> {
@@ -2046,11 +2113,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
     }
     const activeLease = await this.findActiveCodexSessionLease(session.id);
-    if (session.latest_snapshot_digest !== input.expected_previous_snapshot_digest) {
+    if ((session.latest_capsule_digest ?? null) !== (input.expected_input_capsule_digest ?? null)) {
       if (activeLease !== undefined || session.active_lease_id !== undefined) {
         throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session ${input.session_id} cannot be claimed`);
       }
-      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${input.session_id} snapshot is stale`);
+      throw new DomainError('codex_runtime_capsule_stale', `codex_runtime_capsule_stale: Codex session ${input.session_id} capsule is stale`);
     }
     const recovered = await this.recoverExpiredActiveCodexSessionLeaseForClaimUnlocked(session, activeLease, input.now);
     session = recovered.session;
@@ -2121,8 +2188,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     ) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} cannot be recovered`);
     }
-    if (session.latest_snapshot_digest !== input.expected_previous_snapshot_digest) {
-      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${input.session_id} snapshot is stale`);
+    if ((session.latest_capsule_digest ?? null) !== (input.expected_input_capsule_digest ?? null)) {
+      throw new DomainError('codex_runtime_capsule_stale', `codex_runtime_capsule_stale: Codex session ${input.session_id} capsule is stale`);
     }
     if (lease.expires_at > input.now) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not stale`);
@@ -2237,30 +2304,30 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       lease.worker_session_digest !== input.worker_session_digest ||
       lease.lease_epoch !== input.lease_epoch ||
       session.lease_epoch !== input.lease_epoch ||
-      session.latest_snapshot_digest !== input.expected_previous_snapshot_digest ||
-      turn.expected_previous_snapshot_digest !== input.expected_previous_snapshot_digest
+      (session.latest_capsule_digest ?? null) !== (input.expected_input_capsule_digest ?? null) ||
+      (turn.expected_input_capsule_digest ?? null) !== (input.expected_input_capsule_digest ?? null)
     ) {
       throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} terminalization is stale`);
     }
     if (lease.expires_at <= input.now) {
       throw new DomainError('codex_session_lease_expired', `codex_session_lease_expired: Codex session lease ${input.lease_id} has expired`);
     }
-    if (input.output_snapshot !== undefined && input.output_snapshot.codex_session_id !== session.id) {
-      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot does not belong to session ${session.id}`);
+    if (input.output_capsule !== undefined && input.output_capsule.codex_session_id !== session.id) {
+      throw new DomainError('codex_runtime_capsule_stale', `codex_runtime_capsule_stale: Output capsule does not belong to session ${session.id}`);
     }
-    if (input.output_snapshot !== undefined && input.output_snapshot.created_from_turn_id !== input.turn_id) {
-      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot ${input.output_snapshot.id} does not belong to turn ${input.turn_id}`);
+    if (input.output_capsule !== undefined && input.output_capsule.created_from_turn_id !== input.turn_id) {
+      throw new DomainError('codex_runtime_capsule_stale', `codex_runtime_capsule_stale: Output capsule ${input.output_capsule.id} does not belong to turn ${input.turn_id}`);
     }
-    const existingOutputSnapshot = input.output_snapshot === undefined ? undefined : await this.getCodexSessionSnapshot(input.output_snapshot.id);
-    if (existingOutputSnapshot !== undefined && existingOutputSnapshot.created_from_turn_id !== input.turn_id) {
-      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot ${existingOutputSnapshot.id} does not belong to turn ${input.turn_id}`);
+    const existingOutputCapsule = input.output_capsule === undefined ? undefined : await this.getCodexRuntimeCapsule(input.output_capsule.id);
+    if (existingOutputCapsule !== undefined && existingOutputCapsule.created_from_turn_id !== input.turn_id) {
+      throw new DomainError('codex_runtime_capsule_stale', `codex_runtime_capsule_stale: Output capsule ${existingOutputCapsule.id} does not belong to turn ${input.turn_id}`);
     }
     if (
-      input.output_snapshot !== undefined &&
-      existingOutputSnapshot !== undefined &&
-      !codexSessionSnapshotDurableIdentityMatches(existingOutputSnapshot, input.output_snapshot)
+      input.output_capsule !== undefined &&
+      existingOutputCapsule !== undefined &&
+      !codexRuntimeCapsuleDurableIdentityMatches(existingOutputCapsule, input.output_capsule)
     ) {
-      throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Output snapshot ${input.output_snapshot.id} durable identity is stale`);
+      throw new DomainError('codex_runtime_capsule_stale', `codex_runtime_capsule_stale: Output capsule ${input.output_capsule.id} durable identity is stale`);
     }
     const hasThreadIdInput = input.codex_thread_id !== undefined;
     const hasThreadDigestInput = input.codex_thread_id_digest !== undefined;
@@ -2291,12 +2358,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         throw new DomainError('codex_session_thread_binding_stale', `codex_session_thread_binding_stale: Codex session ${input.session_id} thread binding is stale`);
       }
     }
-    const outputSnapshot = existingOutputSnapshot ?? input.output_snapshot;
+    const outputCapsule = existingOutputCapsule ?? input.output_capsule;
     const releasedLease: CodexSessionLease = { ...lease, status: 'released', released_at: input.now, updated_at: input.now };
     const updatedTurn: CodexSessionTurn = {
       ...turn,
       status: input.status,
-      ...(outputSnapshot === undefined ? {} : { output_snapshot_id: outputSnapshot.id, output_snapshot_digest: outputSnapshot.digest }),
+      ...codexRuntimeTurnContinuationFromInput(input),
+      ...(outputCapsule === undefined ? {} : { output_capsule_id: outputCapsule.id, output_capsule_digest: outputCapsule.digest }),
+      ...codexRuntimeTerminalContinuationFromInput(input),
       ...(input.output_object_type === undefined ? {} : { output_object_type: input.output_object_type }),
       ...(input.output_object_id === undefined ? {} : { output_object_id: input.output_object_id }),
       ...(input.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: input.codex_thread_id_digest }),
@@ -2309,14 +2378,22 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       ...sessionWithoutActiveLease,
       status: input.status === 'succeeded' ? 'idle' : 'blocked',
       latest_turn_id: updatedTurn.id,
-      latest_turn_digest: updatedTurn.output_snapshot_digest ?? updatedTurn.input_digest,
-      ...(outputSnapshot === undefined ? {} : { latest_snapshot_id: outputSnapshot.id, latest_snapshot_digest: outputSnapshot.digest }),
+      latest_turn_digest: updatedTurn.output_capsule_digest ?? updatedTurn.input_digest,
+      ...(outputCapsule === undefined ? {} : { latest_capsule_id: outputCapsule.id, latest_capsule_digest: outputCapsule.digest }),
+      ...(input.output_memory_bundle_ref === undefined ? {} : { latest_memory_bundle_ref: input.output_memory_bundle_ref }),
+      ...(input.output_memory_bundle_digest === undefined ? {} : { latest_memory_bundle_digest: input.output_memory_bundle_digest }),
+      ...(input.output_environment_manifest_ref === undefined
+        ? {}
+        : { latest_environment_manifest_ref: input.output_environment_manifest_ref }),
+      ...(input.output_environment_manifest_digest === undefined
+        ? {}
+        : { latest_environment_manifest_digest: input.output_environment_manifest_digest }),
       ...(input.codex_thread_id === undefined ? {} : { codex_thread_id: input.codex_thread_id }),
       ...(input.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: input.codex_thread_id_digest }),
       updated_at: input.now,
     };
-    if (input.output_snapshot !== undefined && existingOutputSnapshot === undefined) {
-      await this.createCodexSessionSnapshot(input.output_snapshot);
+    if (input.output_capsule !== undefined && existingOutputCapsule === undefined) {
+      await this.createCodexRuntimeCapsule(input.output_capsule);
     }
     await this.db.update(codex_session_leases).set(toDbRecord(releasedLease, codex_session_leases) as never).where(eq(codex_session_leases.id, releasedLease.id));
     await this.db.update(codex_session_turns).set(toDbRecord(updatedTurn, codex_session_turns) as never).where(eq(codex_session_turns.id, updatedTurn.id));
@@ -2334,53 +2411,53 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const workflow = await this.getPlanItemWorkflow(input.workflow_id);
     const parent = await this.getCodexSession(input.parent_session_id);
     const forkTurn = input.forked_from_turn_id === undefined ? undefined : await this.getCodexSessionTurn(input.forked_from_turn_id);
-    const forkSnapshot = input.forked_from_snapshot_id === undefined ? undefined : await this.getCodexSessionSnapshot(input.forked_from_snapshot_id);
+    const forkCapsule = input.forked_from_capsule_id === undefined ? undefined : await this.getCodexRuntimeCapsule(input.forked_from_capsule_id);
     if (
       workflow === undefined ||
       parent === undefined ||
       parent.owner_id !== workflow.id ||
       parent.status === 'archived' ||
       (await this.getCodexSession(input.id)) !== undefined ||
-      (input.forked_from_turn_id === undefined && input.forked_from_snapshot_id === undefined) ||
+      (input.forked_from_turn_id === undefined && input.forked_from_capsule_id === undefined) ||
       (input.forked_from_turn_id !== undefined && (forkTurn === undefined || forkTurn.codex_session_id !== parent.id)) ||
-      (input.forked_from_snapshot_id !== undefined && (forkSnapshot === undefined || forkSnapshot.codex_session_id !== parent.id)) ||
+      (input.forked_from_capsule_id !== undefined && (forkCapsule === undefined || forkCapsule.codex_session_id !== parent.id)) ||
       (forkTurn !== undefined &&
-        forkSnapshot !== undefined &&
-        (forkTurn.output_snapshot_id !== forkSnapshot.id || forkTurn.output_snapshot_digest !== forkSnapshot.digest))
+        forkCapsule !== undefined &&
+        (forkTurn.output_capsule_id !== forkCapsule.id || forkTurn.output_capsule_digest !== forkCapsule.digest))
     ) {
       throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);
     }
-    const forkTurnOutputSnapshot =
-      forkTurn?.output_snapshot_id === undefined ? undefined : await this.getCodexSessionSnapshot(forkTurn.output_snapshot_id);
+    const forkTurnOutputCapsule =
+      forkTurn?.output_capsule_id === undefined ? undefined : await this.getCodexRuntimeCapsule(forkTurn.output_capsule_id);
     if (
       forkTurn !== undefined &&
-      (forkTurn.output_snapshot_id !== undefined || forkTurn.output_snapshot_digest !== undefined) &&
-      (forkTurn.output_snapshot_id === undefined ||
-        forkTurn.output_snapshot_digest === undefined ||
-        forkTurnOutputSnapshot === undefined ||
-        forkTurnOutputSnapshot.codex_session_id !== parent.id ||
-        forkTurnOutputSnapshot.digest !== forkTurn.output_snapshot_digest ||
-        forkTurnOutputSnapshot.created_from_turn_id !== forkTurn.id)
+      (forkTurn.output_capsule_id !== undefined || forkTurn.output_capsule_digest !== undefined) &&
+      (forkTurn.output_capsule_id === undefined ||
+        forkTurn.output_capsule_digest === undefined ||
+        forkTurnOutputCapsule === undefined ||
+        forkTurnOutputCapsule.codex_session_id !== parent.id ||
+        forkTurnOutputCapsule.digest !== forkTurn.output_capsule_digest ||
+        forkTurnOutputCapsule.created_from_turn_id !== forkTurn.id)
     ) {
       throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${input.parent_session_id}`);
     }
-    const forkOutputSnapshot =
-      forkSnapshot ??
-      (forkTurn?.output_snapshot_id === undefined || forkTurn.output_snapshot_digest === undefined ? undefined : forkTurnOutputSnapshot);
-    const forkLatestSnapshot =
-      forkOutputSnapshot !== undefined &&
-      forkOutputSnapshot.codex_session_id === parent.id &&
-      forkOutputSnapshot.digest === (forkSnapshot?.digest ?? forkTurn?.output_snapshot_digest)
-        ? forkOutputSnapshot
+    const forkOutputCapsule =
+      forkCapsule ??
+      (forkTurn?.output_capsule_id === undefined || forkTurn.output_capsule_digest === undefined ? undefined : forkTurnOutputCapsule);
+    const forkLatestCapsule =
+      forkOutputCapsule !== undefined &&
+      forkOutputCapsule.codex_session_id === parent.id &&
+      forkOutputCapsule.digest === (forkCapsule?.digest ?? forkTurn?.output_capsule_digest)
+        ? forkOutputCapsule
         : undefined;
     const {
       active_lease_id: _forkActiveLeaseId,
       latest_turn_id: _forkLatestTurnId,
       latest_turn_digest: _forkLatestTurnDigest,
-      latest_snapshot_id: _forkLatestSnapshotId,
-      latest_snapshot_digest: _forkLatestSnapshotDigest,
+      latest_capsule_id: _forkLatestCapsuleId,
+      latest_capsule_digest: _forkLatestCapsuleDigest,
       forked_from_turn_id: _parentForkedFromTurnId,
-      forked_from_snapshot_id: _parentForkedFromSnapshotId,
+      forked_from_capsule_id: _parentForkedFromCapsuleId,
       codex_thread_id: _parentCodexThreadId,
       codex_thread_id_digest: _parentCodexThreadIdDigest,
       archived_at: _forkArchivedAt,
@@ -2394,8 +2471,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       lease_epoch: 0,
       forked_from_session_id: parent.id,
       ...(input.forked_from_turn_id === undefined ? {} : { forked_from_turn_id: input.forked_from_turn_id }),
-      ...(input.forked_from_snapshot_id === undefined ? {} : { forked_from_snapshot_id: input.forked_from_snapshot_id }),
-      ...(forkLatestSnapshot === undefined ? {} : { latest_snapshot_id: forkLatestSnapshot.id, latest_snapshot_digest: forkLatestSnapshot.digest }),
+      ...(input.forked_from_capsule_id === undefined ? {} : { forked_from_capsule_id: input.forked_from_capsule_id }),
+      ...(forkLatestCapsule === undefined ? {} : { latest_capsule_id: forkLatestCapsule.id, latest_capsule_digest: forkLatestCapsule.digest }),
+      ...(forkTurn === undefined || forkLatestCapsule === undefined
+        ? {}
+        : {
+            latest_memory_bundle_ref: forkTurn.output_memory_bundle_ref,
+            latest_memory_bundle_digest: forkTurn.output_memory_bundle_digest,
+            latest_environment_manifest_ref: forkTurn.output_environment_manifest_ref,
+            latest_environment_manifest_digest: forkTurn.output_environment_manifest_digest,
+          }),
       fork_reason: input.fork_reason,
       created_by_actor_id: input.created_by_actor_id,
       created_at: input.now,

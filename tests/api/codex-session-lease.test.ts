@@ -58,7 +58,7 @@ describe('Codex Session lease API', () => {
         lease_token: 'lease-token-1',
         worker_id: 'worker-1',
         worker_session_digest: 'sha256:worker-session',
-        expected_previous_snapshot_digest: null,
+        expected_input_capsule_digest: null,
         expires_at: '2026-05-31T00:05:00.000Z',
       }).expect(201)
     ).body;
@@ -90,7 +90,7 @@ describe('Codex Session lease API', () => {
         lease_token: 'lease-token-1',
         worker_id: 'worker-1',
         worker_session_digest: 'sha256:worker-session',
-        expected_previous_snapshot_digest: null,
+        expected_input_capsule_digest: null,
         expires_at: '2026-05-31T00:05:00.000Z',
       })
       .expect(401);
@@ -103,14 +103,14 @@ describe('Codex Session lease API', () => {
         lease_token: 'lease-token-1',
         worker_id: 'worker-1',
         worker_session_digest: 'sha256:worker-session',
-        expected_previous_snapshot_digest: null,
+        expected_input_capsule_digest: null,
         expires_at: '2026-05-31T00:05:00.000Z',
       },
       'human_admin',
     ).expect(403);
   });
 
-  it('marks stale terminalization without updating latest snapshot', async () => {
+  it('marks stale terminalization without updating latest capsule', async () => {
     const { workflow } = await seedWorkflow(app);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const sessionId = workflow.active_codex_session_id;
@@ -122,7 +122,7 @@ describe('Codex Session lease API', () => {
       intent: 'continue_brainstorming',
       status: 'running',
       input_digest: 'sha256:turn-input',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       created_by_actor_id: ids.actorTech,
       created_at: '2026-05-31T00:00:00.000Z',
       updated_at: '2026-05-31T00:00:00.000Z',
@@ -135,7 +135,7 @@ describe('Codex Session lease API', () => {
       lease_token_hash: wrongTokenHash,
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:00:00.000Z',
       expires_at: '2026-05-31T00:05:00.000Z',
     });
@@ -147,7 +147,7 @@ describe('Codex Session lease API', () => {
       worker_id: 'worker-1',
       worker_session_digest: 'sha256:worker-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: null,
+      expected_input_capsule_digest: null,
       codex_thread_id: 'thread-output',
       codex_thread_id_digest: 'sha256:thread-output',
     }).expect(409);
@@ -157,12 +157,12 @@ describe('Codex Session lease API', () => {
       role: 'active',
     });
     const session = await repository.getCodexSession(sessionId);
-    expect(session?.latest_snapshot_digest).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBeUndefined();
     expect(session?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.getCodexSessionTurn(turnId)).resolves.toMatchObject({ status: 'stale' });
     const turn = await repository.getCodexSessionTurn(turnId);
-    expect(turn?.output_snapshot_id).toBeUndefined();
-    expect(turn?.output_snapshot_digest).toBeUndefined();
+    expect(turn?.output_capsule_id).toBeUndefined();
+    expect(turn?.output_capsule_digest).toBeUndefined();
     expect(turn?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.listPlanItemWorkflowTransitions(workflow.id)).resolves.toHaveLength(1);
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(sessionId)).resolves.toEqual(
@@ -189,7 +189,7 @@ describe('Codex Session lease API', () => {
       intent: 'continue_brainstorming',
       status: 'running',
       input_digest: 'sha256:turn-input-dto-validation',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       created_by_actor_id: ids.actorTech,
       created_at: '2026-05-31T00:00:00.000Z',
       updated_at: '2026-05-31T00:00:00.000Z',
@@ -202,7 +202,7 @@ describe('Codex Session lease API', () => {
       worker_id: 'worker-dto-validation',
       worker_session_digest: 'sha256:worker-dto-validation-session',
       status: 'failed',
-      expected_previous_snapshot_digest: null,
+      expected_input_capsule_digest: null,
       codex_thread_id: 'thread-dto-validation',
     }).expect(400);
 
@@ -213,7 +213,7 @@ describe('Codex Session lease API', () => {
       worker_id: 'worker-dto-validation',
       worker_session_digest: 'sha256:worker-dto-validation-session',
       status: 'failed',
-      expected_previous_snapshot_digest: null,
+      expected_input_capsule_digest: null,
       failure_code: 'internal_not_public',
     }).expect(400);
 
@@ -234,7 +234,7 @@ describe('Codex Session lease API', () => {
       intent: 'continue_brainstorming',
       status: 'running',
       input_digest: 'sha256:first-turn-input-stale-epoch',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       created_by_actor_id: ids.actorTech,
       created_at: '2026-05-31T00:00:00.000Z',
       updated_at: '2026-05-31T00:00:00.000Z',
@@ -247,7 +247,7 @@ describe('Codex Session lease API', () => {
       lease_token_hash: 'sha256:first-lease-token-stale-epoch',
       worker_id: 'worker-stale-epoch',
       worker_session_digest: 'sha256:worker-stale-epoch-session',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:00:00.000Z',
       expires_at: '2026-05-31T00:05:00.000Z',
     });
@@ -260,7 +260,7 @@ describe('Codex Session lease API', () => {
       worker_id: firstClaim.lease.worker_id,
       worker_session_digest: firstClaim.lease.worker_session_digest,
       status: 'succeeded',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:01:00.000Z',
     });
     await repository.createCodexSessionTurn({
@@ -270,7 +270,7 @@ describe('Codex Session lease API', () => {
       intent: 'continue_brainstorming',
       status: 'running',
       input_digest: 'sha256:second-turn-input-stale-epoch',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       created_by_actor_id: ids.actorTech,
       created_at: '2026-05-31T00:02:00.000Z',
       updated_at: '2026-05-31T00:02:00.000Z',
@@ -282,7 +282,7 @@ describe('Codex Session lease API', () => {
       lease_token_hash: 'sha256:42e9508ed339e0214a72717f29da8b99b6bcbb179641bb8ab6e1e5d69b6ad9a1',
       worker_id: 'worker-stale-epoch',
       worker_session_digest: 'sha256:worker-stale-epoch-session',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:03:00.000Z',
       expires_at: '2026-05-31T00:08:00.000Z',
     });
@@ -294,13 +294,13 @@ describe('Codex Session lease API', () => {
       worker_id: 'worker-stale-epoch',
       worker_session_digest: 'sha256:worker-stale-epoch-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: null,
-      output_snapshot_id: '11111111-1111-4111-8111-111111119102',
-      output_snapshot_sequence: 1,
-      output_snapshot_artifact_ref: 's3://codex-home/stale-epoch.tar.zst',
-      output_snapshot_digest: 'sha256:stale-epoch-output',
-      output_snapshot_size_bytes: '1024',
-      output_snapshot_manifest_digest: 'sha256:stale-epoch-manifest',
+      expected_input_capsule_digest: null,
+      output_capsule_id: '11111111-1111-4111-8111-111111119102',
+      output_capsule_sequence: 1,
+      output_capsule_artifact_ref: 's3://codex-home/stale-epoch.tar.zst',
+      output_capsule_digest: 'sha256:stale-epoch-output',
+      output_capsule_size_bytes: '1024',
+      output_capsule_manifest_digest: 'sha256:stale-epoch-manifest',
       runtime_profile_revision_id: 'runtime-profile-revision-1',
       codex_thread_id: 'thread-stale-epoch',
       codex_thread_id_digest: 'sha256:thread-stale-epoch',
@@ -310,12 +310,12 @@ describe('Codex Session lease API', () => {
 
     const session = await repository.getCodexSession(sessionId);
     expect(session).toMatchObject({ status: 'running', active_lease_id: secondClaim.lease.id, lease_epoch: secondClaim.lease.lease_epoch });
-    expect(session?.latest_snapshot_digest).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBeUndefined();
     expect(session?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.getCodexSessionTurn(secondTurnId)).resolves.toMatchObject({ status: 'stale' });
     const turn = await repository.getCodexSessionTurn(secondTurnId);
-    expect(turn?.output_snapshot_id).toBeUndefined();
-    expect(turn?.output_snapshot_digest).toBeUndefined();
+    expect(turn?.output_capsule_id).toBeUndefined();
+    expect(turn?.output_capsule_digest).toBeUndefined();
     expect(turn?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.listPlanItemWorkflowTransitions(workflow.id)).resolves.toHaveLength(1);
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(sessionId)).resolves.toEqual(
@@ -325,7 +325,7 @@ describe('Codex Session lease API', () => {
           codex_session_turn_id: secondTurnId,
           lease_id: secondClaim.lease.id,
           lease_epoch: firstClaim.lease.lease_epoch,
-          attempted_output_snapshot_digest: 'sha256:stale-epoch-output',
+          attempted_output_capsule_digest: 'sha256:stale-epoch-output',
           attempted_codex_thread_id_digest: 'sha256:thread-stale-epoch',
           failure_code: 'codex_session_stale_terminalization',
         }),
@@ -346,7 +346,7 @@ describe('Codex Session lease API', () => {
       intent: 'continue_brainstorming',
       status: 'running',
       input_digest: 'sha256:first-turn-input-thread-binding',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       created_by_actor_id: ids.actorTech,
       created_at: '2026-05-31T00:00:00.000Z',
       updated_at: '2026-05-31T00:00:00.000Z',
@@ -359,7 +359,7 @@ describe('Codex Session lease API', () => {
       lease_token_hash: 'sha256:38cfadc7174933eff930e5aa83e3dadb1eed51b79cff52dab29546a7b28cc8fa',
       worker_id: 'worker-thread-binding',
       worker_session_digest: 'sha256:worker-thread-binding-session',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:00:00.000Z',
       expires_at: '2026-05-31T00:05:00.000Z',
     });
@@ -370,7 +370,7 @@ describe('Codex Session lease API', () => {
       worker_id: 'worker-thread-binding',
       worker_session_digest: 'sha256:worker-thread-binding-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: null,
+      expected_input_capsule_digest: null,
       codex_thread_id: 'thread-current',
       codex_thread_id_digest: 'sha256:thread-current',
     }).expect(201);
@@ -382,7 +382,7 @@ describe('Codex Session lease API', () => {
       intent: 'continue_brainstorming',
       status: 'running',
       input_digest: 'sha256:second-turn-input-thread-binding',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       created_by_actor_id: ids.actorTech,
       created_at: '2026-05-31T00:02:00.000Z',
       updated_at: '2026-05-31T00:02:00.000Z',
@@ -394,7 +394,7 @@ describe('Codex Session lease API', () => {
       lease_token_hash: 'sha256:f2363bdb4f60bd34d6144ea86ec1f5cfae6c274f2a65a6bc2a8a75dad869a18a',
       worker_id: 'worker-thread-binding',
       worker_session_digest: 'sha256:worker-thread-binding-session',
-      expected_previous_snapshot_digest: undefined,
+      expected_input_capsule_digest: undefined,
       now: '2026-05-31T00:03:00.000Z',
       expires_at: '2026-05-31T00:08:00.000Z',
     });
@@ -406,7 +406,7 @@ describe('Codex Session lease API', () => {
       worker_id: 'worker-thread-binding',
       worker_session_digest: 'sha256:worker-thread-binding-session',
       status: 'succeeded',
-      expected_previous_snapshot_digest: null,
+      expected_input_capsule_digest: null,
       codex_thread_id: 'thread-overwrite',
       codex_thread_id_digest: 'sha256:thread-overwrite',
     });

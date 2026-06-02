@@ -1,7 +1,7 @@
 import { DomainError, type IsoDateTime } from './types.js';
 
 export const internalArtifactKinds = [
-  'codex_session_snapshot',
+  'codex_runtime_capsule',
   'codex_runtime_job_artifact',
   'workspace_bundle',
   'generated_payload',

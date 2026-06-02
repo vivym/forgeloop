@@ -20,7 +20,7 @@ export const resettableTables = [
   'codex_runtime_profiles',
   'codex_session_leases',
   'codex_session_stale_terminalization_attempts',
-  'codex_session_snapshots',
+  'codex_runtime_capsules',
   'codex_session_turns',
   'execution_readiness_records',
   'workflow_manual_decisions',

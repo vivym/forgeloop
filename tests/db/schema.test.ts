@@ -60,7 +60,7 @@ import {
   codex_worker_session_nonces,
   codex_sessions,
   codex_session_leases,
-  codex_session_snapshots,
+  codex_runtime_capsules,
   codex_session_stale_terminalization_attempts,
   codex_session_turns,
   command_idempotency_records,
@@ -124,7 +124,7 @@ const requiredTables = {
   codex_runtime_setup_nonces,
   codex_sessions,
   codex_session_leases,
-  codex_session_snapshots,
+  codex_runtime_capsules,
   codex_session_stale_terminalization_attempts,
   codex_session_turns,
   automation_project_settings,
@@ -276,7 +276,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'codex_runtime_profile_revisions',
         'codex_runtime_setup_nonces',
         'codex_session_leases',
-        'codex_session_snapshots',
+        'codex_runtime_capsules',
         'codex_session_stale_terminalization_attempts',
         'codex_session_turns',
         'codex_sessions',
@@ -535,13 +535,36 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnNotNull(codex_sessions, 'role')).toBe(true);
     expect(columnNotNull(codex_sessions, 'lease_epoch')).toBe(true);
     expect(columnNotNull(codex_sessions, 'created_by_actor_id')).toBe(true);
+    expect(columnType(codex_sessions, 'latest_capsule_id')).toBe('PgUUID');
+    expect(columnType(codex_sessions, 'base_memory_bundle_ref')).toBe('PgText');
+    expect(columnType(codex_sessions, 'latest_environment_manifest_ref')).toBe('PgText');
+    expect(Object.keys(getTableColumns(codex_sessions))).not.toContain('latestSnapshotId');
     expect(hasIndex(codex_sessions, 'codex_sessions_owner_idx', ['owner_type', 'owner_id'])).toBe(true);
 
     expect(columnNotNull(plan_item_workflow_transitions, 'actor_id')).toBe(true);
     expect(columnNotNull(workflow_manual_decisions, 'created_by_actor_id')).toBe(true);
     expect(columnNotNull(execution_readiness_records, 'created_by_actor_id')).toBe(true);
     expect(columnNotNull(codex_session_turns, 'created_by_actor_id')).toBe(true);
-    expect(columnNotNull(codex_session_snapshots, 'created_by_actor_id')).toBe(true);
+    for (const columnName of [
+      'created_by_actor_id',
+      'created_from_turn_id',
+      'sequence',
+      'artifact_ref',
+      'digest',
+      'size_bytes',
+      'manifest_digest',
+      'thread_state_digest',
+      'memory_state_digest',
+      'environment_manifest_digest',
+      'codex_thread_id_digest',
+      'codex_cli_version',
+      'app_server_protocol_digest',
+      'runtime_profile_revision_id',
+      'trusted_runtime_manifest_digest',
+      'credential_binding_lineage_digest',
+    ]) {
+      expect(columnNotNull(codex_runtime_capsules, columnName)).toBe(true);
+    }
 
     expect(primaryKeyColumnNames(codex_session_leases)).toEqual([['id']]);
     expect(columnNotNull(codex_session_leases, 'lease_token_hash')).toBe(true);
