@@ -307,7 +307,7 @@ describe('Product generation CodexSession scheduler', () => {
     });
   });
 
-  it('fails closed when a bound session has no live runner owner', async () => {
+  it('schedules a restore-capable runtime job when a bound session has no live runner owner', async () => {
     const seeded = await seedSchedulerWorkflow('cccccccc');
     const firstTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'cccccc01');
     await bindSessionThread(seeded.workflow.active_codex_session_id, seeded.workflow.id, firstTurnId);
@@ -315,23 +315,49 @@ describe('Product generation CodexSession scheduler', () => {
       expected_input_capsule_digest: 'sha256:capsule-thread-bind',
     });
 
-    await expect(
-      scheduler.schedule(scheduleInput(seeded.workflow.id, seeded.workflow.active_codex_session_id, nextTurnId, seeded.ids.project, 'runner-missing')),
-    ).rejects.toMatchObject({ code: 'codex_session_runner_unavailable' });
+    const scheduled = await scheduler.schedule(
+      scheduleInput(seeded.workflow.id, seeded.workflow.active_codex_session_id, nextTurnId, seeded.ids.project, 'runner-missing'),
+    );
 
     const actionRun = await repository.getAutomationActionRun(
       stableUuid({ kind: 'action-run', scenario: 'runner-missing', turnId: nextTurnId }),
     );
-    expect(actionRun).toMatchObject({
-      status: 'failed',
-      result_json: expect.objectContaining({ product_generation_result: 'runtime_job_failed' }),
+    expect(actionRun).toMatchObject({ status: 'running' });
+    expect(scheduled.action_run.id).toBe(actionRun!.id);
+    const runtimeJob = await scheduler.runtimeJobForAction(repository, actionRun!, 'boundary_brainstorming_round');
+    expect(runtimeJob).toBeDefined();
+    expect(runtimeJob!.worker_id).not.toBe('binding-worker');
+    const workload = runtimeJob!.input_json as CodexGenerationWorkloadV1;
+    expect(workload.codex_session_runtime_context).toMatchObject({
+      codex_session_id: seeded.workflow.active_codex_session_id,
+      codex_session_turn_id: nextTurnId,
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: expectedThreadDigest,
+      },
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
+    });
+    expect(workload.codex_session_runtime_context).not.toHaveProperty('runner_runtime_job_id');
+    expect(workload.codex_session_runtime_context).not.toHaveProperty('runner_launch_lease_id');
+    expect(workload.codex_session_terminalization).toMatchObject({
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
+      input_capsule_id: expect.any(String),
+      input_capsule_digest: 'sha256:capsule-thread-bind',
+      input_capsule_ref: expect.stringContaining(`/codex_runtime_capsule/codex_session/${seeded.workflow.active_codex_session_id}/`),
+      input_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${seeded.workflow.active_codex_session_id}/memory-${firstTurnId}`,
+      input_memory_bundle_digest: capsuleDigest(`memory-${firstTurnId}`),
+      input_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${seeded.workflow.active_codex_session_id}/environment-${firstTurnId}`,
+      input_environment_manifest_digest: capsuleDigest(`environment-${firstTurnId}`),
     });
     await expect(repository.getCodexSessionTurn(nextTurnId)).resolves.toMatchObject({
-      status: 'failed',
-      lease_id: expect.any(String),
+      status: 'running',
+    });
+    await expect(repository.getCodexSession(seeded.workflow.active_codex_session_id)).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: workload.codex_session_runtime_context?.lease_id,
     });
     expect((await repository.getCodexSessionTurn(nextTurnId))?.codex_thread_id_digest).toBeUndefined();
-    await expect(scheduler.runtimeJobForAction(repository, actionRun!, 'boundary_brainstorming_round')).resolves.toBeUndefined();
   });
 
   it('rejects partial thread binding before creating a replacement runtime job', async () => {

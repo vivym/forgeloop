@@ -665,30 +665,12 @@ export class ProductGenerationRuntimeSchedulerService {
           `${missingContinuationReason}: Codex session ${session.id} resume continuation inputs are unavailable`,
         );
       }
-      if (
-        session.runner_worker_id === undefined ||
-        session.runner_runtime_job_id === undefined ||
-        session.runner_launch_lease_id === undefined ||
-        session.runner_expires_at === undefined ||
-        session.runner_expires_at <= input.now
-      ) {
-        await this.failCodexSessionProductGenerationBeforeRuntimeJob({
-          repository: input.repository,
-          actionRun: input.actionRun,
-          sessionId,
-          turnId,
-          ...(turn.expected_input_capsule_digest === undefined
-            ? {}
-            : { expectedInputCapsuleDigest: turn.expected_input_capsule_digest }),
-          workerId: session.runner_worker_id ?? 'codex-session-runner-unavailable',
-          now: input.now,
-          reasonCode: 'codex_session_runner_unavailable',
-        });
-        throw new DomainError(
-          'codex_session_runner_unavailable',
-          `codex_session_runner_unavailable: Codex session ${session.id} runner owner is unavailable`,
-        );
-      }
+      const hasLiveRunnerOwner =
+        session.runner_worker_id !== undefined &&
+        session.runner_runtime_job_id !== undefined &&
+        session.runner_launch_lease_id !== undefined &&
+        session.runner_expires_at !== undefined &&
+        session.runner_expires_at > input.now;
       return {
         workflow_id: workflowId,
         session,
@@ -699,9 +681,13 @@ export class ProductGenerationRuntimeSchedulerService {
           turn,
           ...(input.requestedTurnGroupStatus === undefined ? {} : { requested: input.requestedTurnGroupStatus }),
         }),
-        required_worker_id: session.runner_worker_id,
-        runner_runtime_job_id: session.runner_runtime_job_id,
-        runner_launch_lease_id: session.runner_launch_lease_id,
+        ...(hasLiveRunnerOwner
+          ? {
+              required_worker_id: session.runner_worker_id,
+              runner_runtime_job_id: session.runner_runtime_job_id,
+              runner_launch_lease_id: session.runner_launch_lease_id,
+            }
+          : {}),
       };
     }
     return {
