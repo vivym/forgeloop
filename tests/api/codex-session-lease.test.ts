@@ -331,6 +331,36 @@ describe('Codex Session lease API', () => {
     });
   });
 
+  it('rejects legacy output snapshot terminalization fields', async () => {
+    const { workflow } = await seedWorkflow(app, { idPrefix: '44444444' });
+    const sessionId = workflow.active_codex_session_id;
+    const turnId = '44444444-1111-4111-8111-111111119001';
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    await repository.createCodexSessionTurn({
+      id: turnId,
+      codex_session_id: sessionId,
+      workflow_id: workflow.id,
+      intent: 'continue_brainstorming',
+      status: 'running',
+      input_digest: 'sha256:legacy-output-snapshot',
+      created_by_actor_id: ids.actorTech,
+      created_at: '2026-05-31T00:00:00.000Z',
+      updated_at: '2026-05-31T00:00:00.000Z',
+    });
+
+    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${turnId}/terminalize`, {
+      lease_id: 'lease-legacy-output-snapshot',
+      lease_token: 'lease-token-legacy-output-snapshot',
+      lease_epoch: 1,
+      worker_id: 'worker-legacy-output-snapshot',
+      worker_session_digest: 'sha256:worker-legacy-output-snapshot',
+      status: 'succeeded',
+      expected_input_capsule_digest: null,
+      output_snapshot_id: 'snapshot-1',
+      output_snapshot_digest: 'sha256:legacy-output-snapshot-digest',
+    }).expect(400);
+  });
+
   it('records stale terminalization with the attempted stale lease epoch', async () => {
     const { workflow } = await seedWorkflow(app);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;

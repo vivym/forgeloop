@@ -351,6 +351,40 @@ describe('codex runtime domain contracts', () => {
     });
   });
 
+  it('allows restored Codex session resume turns without in-memory runner binding', () => {
+    const threadDigest = codexCanonicalDigest({
+      kind: 'codex_app_server_thread_id',
+      thread_id: 'thread-1',
+    });
+
+    const context = validateCodexSessionRuntimeContext({
+      schema_version: 'codex_session_runtime_context.v1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+      lease_id: 'lease-1',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: digestA,
+      expected_input_capsule_digest: digestB,
+      turn_group_status: 'intermediate',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: threadDigest,
+      },
+    });
+
+    expect(context).toMatchObject({
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: threadDigest,
+      },
+    });
+    expect(context.runner_runtime_job_id).toBeUndefined();
+    expect(context.runner_launch_lease_id).toBeUndefined();
+  });
+
   it('rejects mismatched Codex session thread digest with a public blocker code', () => {
     expectDomainErrorCode(
       () =>

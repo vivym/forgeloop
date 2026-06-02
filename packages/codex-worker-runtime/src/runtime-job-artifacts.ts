@@ -6,6 +6,7 @@ import {
   codexRuntimeGeneratedPayloadInlineMaxBytes,
   validateCodexRuntimeJobTerminalResult,
   type CodexDockerRuntimeEvidence,
+  type CodexRuntimeCapsule,
   type CodexGenerationRuntimeJobResult,
 } from '@forgeloop/domain';
 import type { CodexGenerationResult } from '@forgeloop/codex-runtime';
@@ -61,6 +62,7 @@ export const generationRuntimeJobTerminalResult = (
     internal_ref?: string;
   }>,
   runtimeEvidence?: CodexDockerRuntimeEvidence,
+  outputCapsule?: CodexRuntimeCapsule,
 ): CodexGenerationRuntimeJobResult => {
   const generatedPayloadDigest = codexCanonicalDigest(result.generated);
   const generatedPayloadArtifact = uploadedArtifacts.find((artifact) => artifact.kind === 'generated_payload');
@@ -101,8 +103,9 @@ export const generationRuntimeJobTerminalResult = (
               ? {}
               : { app_server_turn_id: result.codexThread.app_server_turn_id }),
           },
-        }),
+    }),
     ...(runtimeEvidence === undefined ? {} : { runtime_evidence: runtimeEvidence }),
+    ...(outputCapsule === undefined ? {} : { output_capsule: outputCapsule }),
     public_summary: result.publicSummary,
   };
   validateCodexRuntimeJobTerminalResult(terminalResult);

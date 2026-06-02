@@ -104,7 +104,10 @@ const sessionRuntimeContext = (overrides: Record<string, unknown> = {}) => ({
 const sessionTerminalization = (overrides: Record<string, unknown> = {}) => ({
   schema_version: 'codex_session_terminalization.v1' as const,
   lease_token: 'session-terminalization-token-secret',
-  expected_previous_snapshot_digest: digest('b'),
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'session-turn-1',
+  base_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/base-memory',
+  base_memory_bundle_digest: digest('b'),
   ...overrides,
 });
 
@@ -766,6 +769,345 @@ describe('remote codex worker client', () => {
     expect(JSON.stringify(terminalized)).not.toContain('launch-token-secret');
   });
 
+  it('rejects legacy snapshot terminalization fields instead of accepting compatibility aliases', async () => {
+    const terminalized: Record<string, unknown>[] = [];
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-')),
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async () => ({ worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' }),
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        fetchRuntimeJobWorkload: async () =>
+          generationWorkloadResponse({
+            codex_session_runtime_context: sessionRuntimeContext(),
+            codex_session_terminalization: sessionTerminalization({
+              expected_previous_snapshot_digest: digest('f'),
+            }),
+          }),
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: { startFromMaterialization: vi.fn() },
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-legacy-snapshot',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'failed',
+      reason_code: 'codex_generation_workload_unsupported',
+    });
+  });
+
+  it('restores capsule inputs before launch and packages output capsule before successful terminalization', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-'));
+    const events: string[] = [];
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const terminalized: Record<string, unknown>[] = [];
+    const inputCapsuleId = '22222222-2222-4222-8222-222222222222';
+    const outputCapsuleId = '33333333-3333-4333-8333-333333333333';
+    const outputCapsule = {
+      id: outputCapsuleId,
+      codex_session_id: 'session-1',
+      created_from_turn_id: 'session-turn-1',
+      sequence: 2,
+      artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/session-1/${outputCapsuleId}`,
+      digest: digest('c'),
+      size_bytes: '123',
+      manifest_digest: digest('d'),
+      thread_state_digest: digest('e'),
+      memory_state_digest: digest('f'),
+      environment_manifest_digest: digest('1'),
+      codex_thread_id_digest: codexThreadDigest('thread-1'),
+      codex_cli_version: '0.133.0',
+      app_server_protocol_digest: digest('2'),
+      runtime_profile_revision_id: 'profile-rev-1',
+      trusted_runtime_manifest_digest: digest('3'),
+      credential_binding_lineage_digest: digest('4'),
+      created_by_actor_id: 'worker-1',
+      created_at: '2026-05-23T00:00:00.000Z',
+    };
+    const terminalization = sessionTerminalization({
+      expected_input_capsule_digest: digest('b'),
+      input_capsule_id: inputCapsuleId,
+      input_capsule_digest: digest('b'),
+      input_capsule_ref: `artifact://internal/codex_runtime_capsule/codex_session/session-1/${inputCapsuleId}`,
+      input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
+      input_memory_bundle_digest: digest('5'),
+      input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+      input_environment_manifest_digest: digest('6'),
+    });
+    const controlPlaneClient = {
+      registerWorker: async (input: Record<string, unknown>) => {
+        sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+          plaintext_launch_token: 'launch-token-secret',
+          runtime_job_id: 'runtime-job-1',
+          launch_lease_id: 'lease-1',
+          envelope_id: 'envelope-1',
+          worker_id: 'worker-1',
+          worker_public_key_material: String(input.session_public_key_material),
+          key_id: String(input.session_public_key_id),
+          expires_at: '2026-05-23T00:10:00.000Z',
+        });
+        return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+      },
+      heartbeatWorker: async () => ({}),
+      pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
+      acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
+      getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+      claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+      fetchRuntimeJobWorkload: async () =>
+        generationWorkloadResponse({
+          codex_session_runtime_context: sessionRuntimeContext({
+            expected_input_capsule_digest: digest('b'),
+            continuation: {
+              kind: 'resume_thread',
+              codex_thread_id: 'thread-1',
+              codex_thread_id_digest: codexThreadDigest('thread-1'),
+            },
+          }),
+          codex_session_terminalization: terminalization,
+        }),
+      materializeRuntimeJob: async () => materialization(),
+      startRuntimeJob: async () => {
+        events.push('runtime-job-start');
+        return { runtime_job: { ...runtimeJob(), status: 'running' } };
+      },
+      markCodexSessionRunnerOwner: async () => ({}),
+      appendRuntimeJobEvent: async () => ({}),
+      uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
+        artifact: {
+          kind: input.kind,
+          name: input.name,
+          content_type: input.content_type,
+          digest: input.digest,
+          internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
+        },
+      }),
+      terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+        events.push('terminalize');
+        terminalized.push(input);
+        return {};
+      },
+    };
+    const launcher = {
+      startFromMaterialization: vi.fn(async (_materialization: CodexLaunchMaterialization, input?: Record<string, unknown>) => {
+        events.push('launcher-called');
+        expect(input).toMatchObject({ writeConfigAndAuth: false });
+        await mkdir(join(workerTempRoot, 'codex-home'), { recursive: true });
+        await mkdir(join(workerTempRoot, 'artifacts'), { recursive: true });
+        await (input?.beforeAppServerStart as (paths: { codexHomeHostPath: string; artifactHostPath: string }) => Promise<void>)({
+          codexHomeHostPath: join(workerTempRoot, 'codex-home'),
+          artifactHostPath: join(workerTempRoot, 'artifacts'),
+        });
+        events.push('app-server-start');
+        return {
+          endpoint: 'docker-exec:' + digest('8'),
+          createTransport: () => recordingAppServerTransport(generatedSpec(), events),
+          containerWorkspacePath: '/workspace' as const,
+          capsuleHookInput: {
+            codexHomeHostPath: join(workerTempRoot, 'codex-home'),
+            artifactHostPath: join(workerTempRoot, 'artifacts'),
+          },
+          publicEvidence: {
+            runtime_profile_id: 'profile-1',
+            runtime_profile_revision_id: 'profile-rev-1',
+            runtime_profile_digest: digest('7'),
+            runtime_target_kind: 'generation' as const,
+            source_access_mode: 'artifact_only' as const,
+            environment: 'test' as const,
+            launch_lease_id: 'lease-1',
+            worker_id: 'worker-1',
+            docker_image_digest: digest('4'),
+            container_id_digest: digest('9'),
+            app_server_effective_config_digest: digest('6'),
+            docker_policy_self_check_digest: digest('a'),
+            app_server_attempted: true as const,
+            selected_execution_mode: 'app_server' as const,
+          },
+          close: async () => undefined,
+        };
+      }),
+    };
+    const capsuleManager = {
+      restore: vi.fn(async (input: { inputCapsuleId: string }) => {
+        events.push(`restore:${input.inputCapsuleId}`);
+      }),
+      package: vi.fn(async () => {
+        events.push('package');
+        return outputCapsule;
+      }),
+    };
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot,
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient,
+      launcher,
+      capsuleManager,
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-capsule',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(events.indexOf(`restore:${inputCapsuleId}`)).toBeLessThan(events.indexOf('app-server-start'));
+    expect(events).not.toContain('thread/start');
+    expect(events).toContain('thread/resume');
+    expect(events.indexOf('package')).toBeLessThan(events.indexOf('terminalize'));
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'succeeded',
+      terminal_result_json: {
+        output_capsule: outputCapsule,
+      },
+    });
+  });
+
+  it('fails closed when output capsule packaging fails after a Codex turn', async () => {
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const terminalized: Record<string, unknown>[] = [];
+    const uploadedArtifacts: Record<string, unknown>[] = [];
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot: await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-')),
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+        },
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+        fetchRuntimeJobWorkload: async () =>
+          generationWorkloadResponse({
+            codex_session_runtime_context: sessionRuntimeContext(),
+            codex_session_terminalization: sessionTerminalization(),
+          }),
+        materializeRuntimeJob: async () => materialization(),
+        startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'running' } }),
+        markCodexSessionRunnerOwner: async () => ({}),
+        appendRuntimeJobEvent: async () => ({}),
+        uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          uploadedArtifacts.push(input);
+          return {
+            artifact: {
+              kind: input.kind,
+              name: input.name,
+              content_type: input.content_type,
+              digest: input.digest,
+              internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
+            },
+          };
+        },
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: {
+        startFromMaterialization: vi.fn(async () => ({
+          endpoint: 'docker-exec:' + digest('8'),
+          createTransport: () => appServerTransport(generatedSpec()),
+          containerWorkspacePath: '/workspace' as const,
+          capsuleHookInput: {
+            codexHomeHostPath: '/tmp/codex-home-redacted',
+            artifactHostPath: '/tmp/artifacts-redacted',
+          },
+          publicEvidence: {
+            runtime_profile_id: 'profile-1',
+            runtime_profile_revision_id: 'profile-rev-1',
+            runtime_profile_digest: digest('7'),
+            runtime_target_kind: 'generation' as const,
+            source_access_mode: 'artifact_only' as const,
+            environment: 'test' as const,
+            launch_lease_id: 'lease-1',
+            worker_id: 'worker-1',
+            docker_image_digest: digest('4'),
+            container_id_digest: digest('9'),
+            app_server_effective_config_digest: digest('6'),
+            docker_policy_self_check_digest: digest('a'),
+            app_server_attempted: true as const,
+            selected_execution_mode: 'app_server' as const,
+          },
+          close: async () => undefined,
+        })),
+      },
+      capsuleManager: {
+        restore: vi.fn(),
+        package: vi.fn(async () => {
+          throw new Error('codex_runtime_capsule_unknown_path');
+        }),
+      },
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-package-failure',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'failed',
+      reason_code: 'codex_runtime_capsule_unknown_path',
+    });
+    expect(uploadedArtifacts.find((artifact) => artifact.kind === 'startup_failure_evidence')).toMatchObject({
+      metadata_json: {
+        failure_stage: 'generation_capsule_packaging',
+        failure_subcode: 'runtime_capsule_unknown_path',
+      },
+    });
+  });
+
   it('keeps a CodexSession runner open for intermediate success and attaches resume turns without relaunching', async () => {
     const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-remote-worker-'));
     const calls: string[] = [];
@@ -773,6 +1115,7 @@ describe('remote codex worker client', () => {
     const terminalized: Record<string, unknown>[] = [];
     const heartbeatPayloads: Record<string, unknown>[] = [];
     const closed = vi.fn(async () => undefined);
+    const packagedTurns: string[] = [];
     let sealedEnvelope: SealedEnvelope | undefined;
     let pollCount = 0;
     let nowMs = Date.parse('2026-05-23T00:00:00.000Z');
@@ -834,7 +1177,10 @@ describe('remote codex worker client', () => {
         return generationWorkloadResponse({
           runtime_job_id: jobId,
           codex_session_runtime_context: jobId === 'runtime-job-1' ? startContext : resumeContext,
-          codex_session_terminalization: sessionTerminalization({ lease_token: `token-${jobId}` }),
+          codex_session_terminalization: sessionTerminalization({
+            lease_token: `token-${jobId}`,
+            ...(jobId === 'runtime-job-1' ? {} : { codex_session_turn_id: 'session-turn-2' }),
+          }),
         });
       },
       materializeRuntimeJob: async (_workerId: string, jobId: string) => {
@@ -888,6 +1234,10 @@ describe('remote codex worker client', () => {
         endpoint: 'docker-exec:' + digest('8'),
         createTransport: () => recordingAppServerTransport(generatedSpec(), transportMethods),
         containerWorkspacePath: '/workspace' as const,
+        capsuleHookInput: {
+          codexHomeHostPath: join(workerTempRoot, 'codex-home'),
+          artifactHostPath: join(workerTempRoot, 'artifacts'),
+        },
         publicEvidence: {
           runtime_profile_id: 'profile-1',
           runtime_profile_revision_id: 'profile-rev-1',
@@ -907,6 +1257,38 @@ describe('remote codex worker client', () => {
         close: closed,
       })),
     };
+    const capsuleManager = {
+      restore: vi.fn(),
+      package: vi.fn(async (input: { codexSessionTurnId: string }) => {
+        packagedTurns.push(input.codexSessionTurnId);
+        const sequence = packagedTurns.length;
+        const id =
+          sequence === 1
+            ? '11111111-1111-4111-8111-111111111111'
+            : '22222222-2222-4222-8222-222222222222';
+        return {
+          id,
+          codex_session_id: 'session-1',
+          created_from_turn_id: input.codexSessionTurnId,
+          sequence,
+          artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/session-1/${id}`,
+          digest: digest(sequence === 1 ? '1' : '2'),
+          size_bytes: '123',
+          manifest_digest: digest(sequence === 1 ? '3' : '4'),
+          thread_state_digest: digest('5'),
+          memory_state_digest: digest('6'),
+          environment_manifest_digest: digest('7'),
+          codex_thread_id_digest: codexThreadDigest('thread-1'),
+          codex_cli_version: '0.133.0',
+          app_server_protocol_digest: digest('8'),
+          runtime_profile_revision_id: 'profile-rev-1',
+          trusted_runtime_manifest_digest: digest('9'),
+          credential_binding_lineage_digest: digest('a'),
+          created_by_actor_id: 'worker-1',
+          created_at: '2026-05-23T00:00:00.000Z',
+        };
+      }),
+    };
     const worker = createRemoteCodexWorkerClient({
       workerId: 'worker-1',
       workerIdentity: 'remote-dev',
@@ -923,6 +1305,7 @@ describe('remote codex worker client', () => {
       maxConcurrency: 1,
       controlPlaneClient,
       launcher,
+      capsuleManager,
       scavenger: async () => undefined,
       now: () => new Date(nowMs).toISOString(),
       nonceFactory: () => `nonce-${calls.length}`,
@@ -960,12 +1343,18 @@ describe('remote codex worker client', () => {
         codex_thread_id_digest: codexThreadDigest('thread-1'),
         app_server_turn_id: 'turn-1',
       },
+      output_capsule: {
+        created_from_turn_id: 'session-turn-1',
+      },
     });
     expect(terminalized[1]?.terminal_result_json).toMatchObject({
       codex_session_thread: {
         codex_thread_id: 'thread-1',
         codex_thread_id_digest: codexThreadDigest('thread-1'),
         app_server_turn_id: 'turn-2',
+      },
+      output_capsule: {
+        created_from_turn_id: 'session-turn-2',
       },
     });
     expect(JSON.stringify(terminalized)).not.toContain('launch-token-secret');

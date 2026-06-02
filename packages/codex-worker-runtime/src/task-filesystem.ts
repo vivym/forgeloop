@@ -14,6 +14,8 @@ export interface PrepareCodexTaskFilesystemInput {
   launchLeaseId: string;
   codexConfigToml: string;
   authJson: unknown;
+  restoreCodexHome?: (codexHomeHostPath: string) => Promise<void>;
+  writeConfigAndAuth?: boolean;
 }
 
 export const assertInsideWorkerTempRoot = (root: string, child: string): void => {
@@ -124,11 +126,14 @@ export const prepareCodexTaskFilesystem = async (input: PrepareCodexTaskFilesyst
     await mkdir(path, { recursive: false, mode: 0o700 });
     await chmod(path, 0o700);
   }
-  await writeCodexHomeConfigAndAuth({
-    codexHomeHostPath,
-    codexConfigToml: input.codexConfigToml,
-    authJson: input.authJson,
-  });
+  await input.restoreCodexHome?.(codexHomeHostPath);
+  if (input.writeConfigAndAuth ?? true) {
+    await writeCodexHomeConfigAndAuth({
+      codexHomeHostPath,
+      codexConfigToml: input.codexConfigToml,
+      authJson: input.authJson,
+    });
+  }
 
   return { leaseTempRoot, codexHomeHostPath, artifactHostPath, socketHostDir };
 };

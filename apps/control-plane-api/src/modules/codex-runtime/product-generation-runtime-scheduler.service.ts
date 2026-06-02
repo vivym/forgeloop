@@ -768,9 +768,24 @@ export class ProductGenerationRuntimeSchedulerService {
       terminalization: {
         schema_version: 'codex_session_terminalization.v1',
         lease_token: leaseToken,
+        codex_session_id: session.id,
+        codex_session_turn_id: turn.id,
         ...(turn.expected_input_capsule_digest === undefined
           ? {}
           : { expected_input_capsule_digest: turn.expected_input_capsule_digest }),
+        ...(turn.input_capsule_id === undefined ? {} : { input_capsule_id: turn.input_capsule_id }),
+        ...(turn.input_capsule_digest === undefined ? {} : { input_capsule_digest: turn.input_capsule_digest }),
+        ...(turn.input_capsule_id === undefined
+          ? {}
+          : { input_capsule_ref: `artifact://internal/codex_runtime_capsule/codex_session/${session.id}/${turn.input_capsule_id}` }),
+        ...(turn.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: turn.base_memory_bundle_ref }),
+        ...(turn.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: turn.base_memory_bundle_digest }),
+        ...(turn.input_memory_bundle_ref === undefined ? {} : { input_memory_bundle_ref: turn.input_memory_bundle_ref }),
+        ...(turn.input_memory_bundle_digest === undefined ? {} : { input_memory_bundle_digest: turn.input_memory_bundle_digest }),
+        ...(turn.input_environment_manifest_ref === undefined ? {} : { input_environment_manifest_ref: turn.input_environment_manifest_ref }),
+        ...(turn.input_environment_manifest_digest === undefined
+          ? {}
+          : { input_environment_manifest_digest: turn.input_environment_manifest_digest }),
       },
     };
   }

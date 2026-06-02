@@ -400,7 +400,18 @@ const codexSessionRuntimeContextKeys = new Set([
 export interface CodexSessionTerminalizationV1 {
   schema_version: 'codex_session_terminalization.v1';
   lease_token: string;
+  codex_session_id: string;
+  codex_session_turn_id: string;
   expected_input_capsule_digest?: string;
+  input_capsule_id?: string;
+  input_capsule_digest?: string;
+  input_capsule_ref?: string;
+  base_memory_bundle_ref?: string;
+  base_memory_bundle_digest?: string;
+  input_memory_bundle_ref?: string;
+  input_memory_bundle_digest?: string;
+  input_environment_manifest_ref?: string;
+  input_environment_manifest_digest?: string;
 }
 
 export interface CodexRunExecutionWorkloadV1 {
@@ -564,6 +575,10 @@ export const codexPublicBlockerCodes = [
   'codex_session_thread_start_for_bound_session',
   'codex_session_thread_binding_stale',
   'codex_app_server_thread_id_missing',
+  'codex_runtime_capsule_missing',
+  'codex_memory_bundle_missing',
+  'codex_environment_manifest_missing',
+  'codex_runtime_capsule_unknown_path',
 ] as const;
 
 export type CodexPublicBlockerCode = (typeof codexPublicBlockerCodes)[number];
@@ -776,12 +791,6 @@ export const validateCodexSessionRuntimeContext = (value: unknown): CodexSession
       throw new DomainError(
         'codex_session_thread_binding_partial',
         'codex_session_thread_binding_partial: resume_thread requires thread id and digest.',
-      );
-    }
-    if (runnerRuntimeJobId === undefined || runnerLaunchLeaseId === undefined) {
-      throw new DomainError(
-        'codex_session_thread_binding_partial',
-        'codex_session_thread_binding_partial: resume_thread requires runner binding.',
       );
     }
     if (codexThreadIdDigest !== codexSessionThreadIdDigest(codexThreadId)) {

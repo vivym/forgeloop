@@ -206,6 +206,17 @@ describe('Product generation CodexSession scheduler', () => {
         codex_thread_id_digest: expectedThreadDigest,
       },
     });
+    const terminalization = (runtimeJob!.input_json as CodexGenerationWorkloadV1).codex_session_terminalization;
+    expect(terminalization).toMatchObject({
+      expected_input_capsule_digest: 'sha256:capsule-thread-bind',
+      input_capsule_id: expect.any(String),
+      input_capsule_digest: 'sha256:capsule-thread-bind',
+      input_capsule_ref: expect.stringContaining('/codex_runtime_capsule/codex_session/'),
+      input_memory_bundle_ref: expect.stringContaining('/codex_memory_bundle/codex_session/'),
+      input_memory_bundle_digest: expect.stringMatching(/^sha256:/),
+      input_environment_manifest_ref: expect.stringContaining('/codex_environment_manifest/codex_session/'),
+      input_environment_manifest_digest: expect.stringMatching(/^sha256:/),
+    });
   });
 
   it('routes a bound active session even when its single-concurrency runner worker is occupied by the live runner', async () => {
@@ -1294,6 +1305,10 @@ describe('Product generation CodexSession scheduler', () => {
         created_from_turn_id: turnId,
         created_by_actor_id: 'actor-tech',
       }),
+      output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${sessionId}/memory-${turnId}`,
+      output_memory_bundle_digest: capsuleDigest(`memory-${turnId}`),
+      output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${sessionId}/environment-${turnId}`,
+      output_environment_manifest_digest: capsuleDigest(`environment-${turnId}`),
       now,
     });
   }
