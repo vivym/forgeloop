@@ -1,5 +1,7 @@
 export * from './app-server-launcher.js';
 export * from './control-plane-client.js';
+export * from './codex-runtime-capsule/discovery.js';
+export * from './codex-runtime-capsule/path-classifier.js';
 export * from './docker-command.js';
 export * from './docker-exec-app-server-transport.js';
 export * from './docker-runner.js';

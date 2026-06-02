@@ -30,6 +30,7 @@
     "codex:runtime:bootstrap": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-dogfood-bootstrap.ts",
     "codex:remote-worker": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-remote-worker-dogfood.ts",
     "dogfood:codex-app-server-resume": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-app-server-resume-dogfood.ts",
+    "dogfood:codex-runtime-capsule-discovery": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-capsule-discovery.ts",
     "dogfood:codex-runtime:superpowers": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-superpowers-dogfood.ts",
     "check:codex-runtime-superpowers-no-baggage": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/check-codex-runtime-superpowers-no-baggage.ts",
     "check:runbook-scripts": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/check-runbook-scripts.ts"
