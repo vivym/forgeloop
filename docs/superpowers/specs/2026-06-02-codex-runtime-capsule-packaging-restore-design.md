@@ -174,6 +174,8 @@ Every capsule archive includes a canonical manifest:
     "digest": "sha256:..."
   },
   "memory_state": {
+    "base_bundle_ref": "artifact://internal/codex_memory_bundle/codex_session/codex-session-1/memory-base",
+    "base_bundle_digest": "sha256:...",
     "input_bundle_ref": "artifact://internal/codex_memory_bundle/codex_session/codex-session-1/memory-2",
     "input_bundle_digest": "sha256:...",
     "output_bundle_ref": "artifact://internal/codex_memory_bundle/codex_session/codex-session-1/memory-3",
@@ -263,7 +265,11 @@ Memories are runtime context, not static config. A Codex session can create or u
 
 ```ts
 type CodexSessionTurnMemoryState = {
+  base_memory_bundle_ref?: string;
+  base_memory_bundle_digest?: string;
+  input_memory_bundle_ref?: string;
   input_memory_bundle_digest?: string;
+  output_memory_bundle_ref?: string;
   output_memory_bundle_digest?: string;
   memory_delta_artifact_ref?: string;
   memory_delta_digest?: string;
@@ -281,6 +287,8 @@ Rules:
 - The next turn must use the prior turn's output memory bundle digest.
 - Merging session memories back to global memories is a separate human-approved promotion flow, not automatic.
 - The capsule manifest must include artifact refs for every memory bundle required by restore. Digest-only memory lineage is insufficient because a later worker cannot fetch a bundle from a digest alone.
+- First-turn work has no input capsule, so `CodexSession.base_memory_bundle_ref` and `base_memory_bundle_digest` are the fetchable source of truth for the selected base memory state.
+- Later-turn audit replay uses `CodexSessionTurn.input_memory_bundle_ref` and `output_memory_bundle_ref`, not digest lookup.
 
 Memory bundles may include selected user/project memory files and rollout summary references, but they must exclude unrelated global memory history. Bundle selection is part of session creation and must be recorded in the base memory manifest.
 
@@ -348,12 +356,19 @@ type CodexEnvironmentManifest = {
   trusted_project_digest: string;
   runtime_profile_revision_id: string;
   runtime_profile_digest: string;
+  plugin_manifest: CodexPluginManifest;
   plugin_manifest_digest: string;
+  skill_manifest: CodexSkillManifest;
   skill_manifest_digest: string;
+  tool_schema_manifest: CodexToolSchemaManifest;
   tool_schema_digest: string;
+  mcp_server_manifest: CodexMcpServerManifest;
   mcp_server_manifest_digest: string;
+  app_connector_manifest: CodexAppConnectorManifest;
   app_connector_manifest_digest: string;
+  credential_binding_lineage: CodexCredentialBindingLineage;
   credential_binding_lineage_digest: string;
+  trusted_runtime_manifest: CodexTrustedRuntimeManifest;
 };
 ```
 
@@ -367,6 +382,85 @@ Rules:
 - Restore must fail if a required plugin package, skill digest, MCP server manifest, app connector manifest, credential binding lineage entry, or tool schema cannot be reproduced.
 - Tool/app schema drift is a compatibility failure unless a migration explicitly updates the capsule manifest and records a human-approved recovery action.
 
+The `codex_environment_manifest` artifact is the fetchable source of truth for environment restore. It embeds every canonical sub-manifest needed to reconstruct the runtime capability set. Digest-only environment lineage is forbidden.
+
+Plugin and skill bytes are fetchable through package/bundle refs embedded in their manifests:
+
+```ts
+type CodexPluginManifest = {
+  schema_version: 'codex_plugin_manifest.v1';
+  plugins: Array<{
+    plugin_id: string;
+    source: string;
+    version: string;
+    package_ref: string;
+    package_digest: string;
+    enabled: boolean;
+  }>;
+};
+
+type CodexSkillManifest = {
+  schema_version: 'codex_skill_manifest.v1';
+  skills: Array<{
+    skill_id: string;
+    source_kind: 'project' | 'user' | 'plugin' | 'system';
+    bundle_ref: string;
+    bundle_digest: string;
+    entrypoint_relative_path: string;
+    enabled: boolean;
+  }>;
+};
+```
+
+MCP, tool schema, and connector manifests embed canonical, non-secret schema payloads:
+
+```ts
+type CodexMcpServerManifest = {
+  schema_version: 'codex_mcp_server_manifest.v1';
+  servers: Array<{
+    server_id: string;
+    command_payload: {
+      command: string;
+      args: string[];
+      cwd_policy_payload?: {
+        mode: 'runtime_root' | 'workspace_root' | 'fixed_relative';
+        relative_path?: string;
+      };
+      cwd_policy_digest?: string;
+    };
+    command_digest: string;
+    env_allowlist_payload: Array<{
+      name: string;
+      value_payload?: string;
+      value_digest?: string;
+      source: 'runtime_profile' | 'credential_binding' | 'literal_non_secret';
+    }>;
+    env_allowlist_digest: string;
+    tool_schema_payload: unknown;
+    tool_schema_digest: string;
+    enabled: boolean;
+  }>;
+};
+
+type CodexToolSchemaManifest = {
+  schema_version: 'codex_tool_schema_manifest.v1';
+  schemas: Array<{
+    tool_namespace: string;
+    tool_name: string;
+    schema_payload: unknown;
+    schema_digest: string;
+  }>;
+};
+```
+
+Rules:
+
+- `codex_environment_manifest` must include the embedded sub-manifest payloads and their canonical digests.
+- `codex_plugin_package` and `codex_skill_bundle` artifacts carry the bytes needed to materialize plugin and skill files.
+- Schema manifests embed non-secret schema payloads directly in `codex_environment_manifest`. They must not introduce extra schema artifact refs in this wave.
+- Restore rejects any missing environment manifest artifact, missing package/bundle ref, cross-session environment component ref, digest mismatch, or stale discovery report.
+- The packager records environment deltas by producing a new `codex_environment_manifest` artifact and linking it from the next capsule. There is no digest-only environment delta.
+
 `app_connector_manifest_digest` covers the enabled app/connector set exposed to Codex for this session:
 
 ```ts
@@ -376,8 +470,18 @@ type CodexAppConnectorManifest = {
     connector_id: string;
     app_id: string;
     connector_kind: string;
+    connector_schema_payload: unknown;
     connector_schema_digest: string;
+    tool_schema_payload: unknown;
     tool_schema_digest: string;
+    scope_payload: {
+      scopes: string[];
+      scope_policy_payload: {
+        policy_kind: 'exact' | 'subset';
+        allowed_scopes: string[];
+      };
+      scope_policy_digest: string;
+    };
     scope_digest: string;
     enabled: boolean;
   }>;
@@ -406,6 +510,9 @@ Rules:
 - Restore re-materializes auth from ForgeLoop credential bindings only after every lineage digest and scope digest matches the capsule manifest.
 - Missing, disabled, rotated-without-recorded-migration, or scope-drifted credential bindings block the session.
 - Connector schemas and scopes are runtime capabilities. They must be validated together with plugin, MCP, and tool schemas before app-server launch.
+- Connector schema payloads, tool schema payloads, scope payloads, MCP command payloads, and MCP env allowlist payloads are embedded as canonical non-secret JSON in `codex_environment_manifest`.
+- Payload digests must be recomputed during restore. A digest without the payload is invalid for this wave.
+- If an MCP env entry has `source: 'literal_non_secret'`, `value_payload` is required and `value_digest` must match it. If the source is `runtime_profile` or `credential_binding`, `value_payload` must be omitted and the value is re-materialized from the corresponding trusted runtime profile or credential binding lineage.
 
 `trusted_project_digest` and `runtime_profile_digest` cover the non-secret runtime contract:
 
@@ -439,7 +546,11 @@ with:
 ```ts
 latest_capsule_id?: string;
 latest_capsule_digest?: string;
+base_memory_bundle_ref?: string;
+base_memory_bundle_digest?: string;
+latest_memory_bundle_ref?: string;
 latest_memory_bundle_digest?: string;
+latest_environment_manifest_ref?: string;
 latest_environment_manifest_digest?: string;
 ```
 
@@ -447,6 +558,9 @@ Rules:
 
 - The session latest capsule changes only through lease-fenced trusted terminalization.
 - Stale terminalization must not mutate latest capsule fields.
+- `base_memory_bundle_ref` and `base_memory_bundle_digest` are written at session creation and are required before the first materialized turn.
+- `latest_memory_bundle_ref` and `latest_environment_manifest_ref` are trusted internal continuation pointers, not product DTO fields.
+- `codex_thread_id` and `codex_thread_id_digest` remain from Wave 3 as trusted internal fields. They are immutable after successful first binding, must match every capsule's `codex_thread_id_digest`, and partial binding failure blocks the session instead of falling back.
 - Public product DTOs may show continuity status and digest prefixes only if needed, never raw capsule refs by default.
 
 ### CodexSessionTurn
@@ -467,11 +581,17 @@ input_capsule_id?: string;
 input_capsule_digest?: string;
 output_capsule_id?: string;
 output_capsule_digest?: string;
+base_memory_bundle_ref?: string;
+base_memory_bundle_digest?: string;
+input_memory_bundle_ref?: string;
 input_memory_bundle_digest?: string;
+output_memory_bundle_ref?: string;
 output_memory_bundle_digest?: string;
 memory_delta_artifact_ref?: string;
 memory_delta_digest?: string;
+input_environment_manifest_ref?: string;
 input_environment_manifest_digest?: string;
+output_environment_manifest_ref?: string;
 output_environment_manifest_digest?: string;
 ```
 
@@ -479,6 +599,8 @@ Rules:
 
 - First materialized turn uses no input capsule.
 - Later turns require `expected_input_capsule_digest` to match `CodexSession.latest_capsule_digest`.
+- First materialized turn requires `base_memory_bundle_ref` and `base_memory_bundle_digest` copied from `CodexSession`.
+- Later turns require `input_memory_bundle_ref` and `input_environment_manifest_ref` to match the session latest continuation refs.
 - Terminalization requires `output_capsule_id` and `output_capsule_digest` for successful generation turns.
 - Failed, cancelled, stale, or blocked turns may omit output capsule depending on failure point, but must not advance latest capsule.
 
@@ -526,13 +648,14 @@ Trusted worker/internal routes and repository methods must be renamed with the d
 
 - `/internal/codex-sessions/:sessionId/snapshots` becomes `/internal/codex-sessions/:sessionId/runtime-capsules`;
 - `createCodexSessionSnapshot`, `getLatestSnapshot`, and similar repository/service names become capsule-named methods;
+- `codex_session_snapshot_stale` and similar error codes become capsule-named codes such as `codex_runtime_capsule_stale`;
 - error codes, metrics, tests, and no-baggage guards reject newly introduced `snapshot` names in this domain.
 
 The only permitted remaining mentions of old snapshot names are historical references inside superseded design docs and migration descriptions. Runtime code, API contracts, public DTOs, test names, and operator runbooks for this wave must use capsule language.
 
 ## Internal Artifact Store Kinds
 
-Add:
+Replace the prior `codex_session_snapshot` internal artifact kind with:
 
 ```text
 codex_runtime_capsule
@@ -541,7 +664,15 @@ codex_memory_bundle
 codex_memory_delta
 codex_environment_manifest
 codex_plugin_package
+codex_skill_bundle
 ```
+
+Rules:
+
+- `codex_session_snapshot` must be removed from `InternalArtifactKind`, ref parsing allowlists, upload validation, repository validation, tests, fixtures, and operator runbooks in the implementation wave.
+- New writes using `artifact://internal/codex_session_snapshot/...` are rejected.
+- Because the product is not live, no compatibility read adapter is allowed for `codex_session_snapshot`.
+- Existing local test fixtures or seed data that use the old kind must be rewritten or dropped in the same migration.
 
 Canonical refs:
 
@@ -552,6 +683,7 @@ artifact://internal/codex_memory_bundle/codex_session/{codex_session_id}/{memory
 artifact://internal/codex_memory_delta/codex_session/{codex_session_id}/{turn_id}
 artifact://internal/codex_environment_manifest/codex_session/{codex_session_id}/{environment_manifest_id}
 artifact://internal/codex_plugin_package/codex_session/{codex_session_id}/{plugin_package_id}
+artifact://internal/codex_skill_bundle/codex_session/{codex_session_id}/{skill_bundle_id}
 ```
 
 All are internal-only objects. None are product Attachments.
@@ -587,6 +719,7 @@ const resumeRequest = {
   method: 'thread/resume',
   params: {
     threadId: rawCodexThreadId,
+    excludeTurns: true,
     persistExtendedHistory: false
   }
 };
@@ -595,6 +728,7 @@ const resumeRequest = {
 Rules:
 
 - `rawCodexThreadId` comes from trusted `CodexSession` state after digest verification.
+- `excludeTurns: true` matches the current Wave 3 runtime request shape and avoids duplicating turn history through the resume response.
 - `persistExtendedHistory: false` is required by the current app-server `ThreadResumeParams` schema and is not an identity selector.
 - Normal restore must omit `history`.
 - Normal restore must omit `path`.
@@ -692,15 +826,23 @@ All failure modes are fail-closed:
 | Failure | Turn status | Session status | Public exposure |
 | --- | --- | --- | --- |
 | Missing input capsule | `failed` | `blocked` | product-safe blocker code |
+| Missing first-turn base memory bundle | `failed` | `blocked` | base memory missing |
 | Capsule digest mismatch | `failed` | `blocked` | digest mismatch code only |
 | Unsafe archive path | `failed` | `blocked` | unsafe capsule code only |
 | Missing memory bundle | `failed` | `blocked` | memory bundle missing |
 | Memory digest mismatch | `failed` | `blocked` | memory digest mismatch |
+| Missing environment manifest | `failed` | `blocked` | environment manifest missing |
+| Environment manifest digest mismatch | `failed` | `blocked` | environment manifest mismatch |
 | Plugin package missing | `failed` | `blocked` | plugin package missing |
+| Skill bundle missing | `failed` | `blocked` | skill bundle missing |
+| Skill manifest drift | `failed` | `blocked` | skill manifest drift |
+| MCP server manifest drift | `failed` | `blocked` | mcp manifest drift |
 | Tool schema drift | `failed` | `blocked` | tool schema drift |
 | App connector schema drift | `failed` | `blocked` | app connector schema drift |
+| Feature flag drift | `failed` | `blocked` | feature flag drift |
 | Credential binding lineage mismatch | `failed` | `blocked` | credential lineage mismatch |
 | Trusted runtime manifest drift | `failed` | `blocked` | runtime manifest drift |
+| Stale discovery report | `failed` | `blocked` | discovery report stale |
 | Codex CLI incompatible | `failed` | `blocked` | version incompatible |
 | Protocol digest incompatible | `failed` | `blocked` | protocol incompatible |
 | `thread/resume` failed | `failed` | `blocked` | resume failed |
@@ -764,13 +906,22 @@ Required coverage:
 - app connector manifest digest;
 - credential binding lineage digest;
 - plugin package digest;
+- skill bundle digest;
 - skill manifest digest;
+- MCP server manifest digest;
+- MCP command/env allowlist payload round-trip from `codex_environment_manifest`;
+- MCP cwd policy payload and literal non-secret env value payload round-trip from `codex_environment_manifest`;
 - tool schema digest;
+- tool schema payload round-trip from `codex_environment_manifest`;
+- feature flag digest;
 - trusted runtime manifest digest;
+- app connector schema and scope payload round-trip from `codex_environment_manifest`;
+- connector scope policy payload round-trip from `codex_environment_manifest`;
 - Internal Artifact Store ref owner/type validation;
 - cross-session component ref rejection;
 - stale capsule terminalization rejection;
 - request builder sends `threadId` and `persistExtendedHistory: false` for normal restore;
+- request builder sends `excludeTurns: true` for normal restore unless a later protocol discovery report explicitly changes this flag;
 - request builder rejects `thread/resume(history)`, `thread/resume(path)`, and `Thread.sessionId` resume identity for bound sessions;
 - raw thread id redaction in public DTOs and reports.
 
@@ -793,11 +944,19 @@ Required failures:
 
 - missing capsule;
 - missing component artifact;
+- missing first-turn base memory bundle;
 - memory digest mismatch;
+- missing environment manifest artifact;
+- environment manifest digest mismatch;
 - plugin package digest mismatch;
+- skill bundle digest mismatch;
+- skill manifest drift;
+- MCP server manifest drift;
 - app connector schema drift;
+- feature flag drift;
 - credential binding lineage mismatch;
 - trusted runtime manifest drift;
+- stale discovery report;
 - protocol digest mismatch;
 - app-server resume failure;
 - app-server thread mismatch;
