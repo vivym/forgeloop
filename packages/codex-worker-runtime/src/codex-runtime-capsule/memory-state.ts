@@ -28,7 +28,10 @@ export interface CodexMemoryBundleBuildResult {
 const bytesDigest = (bytes: Uint8Array): string => codexCanonicalDigest(Buffer.from(bytes).toString('utf8'));
 const materializedSourcePolicyDigest = 'sha256:0000000000000000000000000000000000000000000000000000000000000000';
 const bundleDigestMetadataByDigest = new Map<string, BundleDigestMetadata>();
-const deltaContentBytesByDigestAndPath = new Map<string, Map<string, Uint8Array>>();
+
+export interface CodexMemoryDeltaContentReader {
+  read(input: { deltaDigest: string; relativePath: string; expectedDigest: string }): Promise<Uint8Array>;
+}
 
 const validateMemoryRelativePath = (relativePath: string): string => {
   if (relativePath.trim() !== relativePath || relativePath.length === 0) {
@@ -204,15 +207,6 @@ export const diffCodexMemoryBundles = async (input: {
     output_bundle_digest: after.digest,
     operations: sortedOperations,
   });
-  const deltaContentBytes = new Map<string, Uint8Array>();
-  for (const operation of delta.operations) {
-    if (operation.op === 'add') {
-      deltaContentBytes.set(operation.relative_path, await readFile(memoryPath(input.afterRoot, operation.relative_path)));
-    } else if (operation.op === 'modify') {
-      deltaContentBytes.set(operation.relative_path, await readFile(memoryPath(input.afterRoot, operation.relative_path)));
-    }
-  }
-  deltaContentBytesByDigestAndPath.set(codexMemoryDeltaDigest(delta), deltaContentBytes);
   return delta;
 };
 
@@ -227,8 +221,10 @@ export const replayCodexMemoryDelta = async (input: {
   root: string;
   inputBundleDigest: string;
   delta: CodexMemoryDeltaManifest;
+  contentReader?: CodexMemoryDeltaContentReader;
 }): Promise<string> => {
   const delta = codexMemoryDeltaManifestSchema.parse(input.delta);
+  const deltaDigest = codexMemoryDeltaDigest(delta);
   if (delta.input_bundle_digest !== input.inputBundleDigest) {
     throw new Error('memory replay input bundle digest does not match delta input bundle digest');
   }
@@ -242,18 +238,20 @@ export const replayCodexMemoryDelta = async (input: {
     if (operation.op === 'add') {
       const path = memoryPath(input.root, operation.relative_path);
       await mkdir(dirname(path), { recursive: true });
-      const contentBytes = deltaContentBytesByDigestAndPath.get(codexMemoryDeltaDigest(delta))?.get(operation.relative_path);
-      if (contentBytes === undefined) {
-        throw new Error('memory replay add requires packaged content bytes');
-      }
+      const contentBytes = await readDeltaContentBytes(input.contentReader, {
+        deltaDigest,
+        relativePath: operation.relative_path,
+        expectedDigest: operation.content_digest,
+      });
       await writeFile(path, contentBytes);
       await assertFileDigest(input.root, operation.relative_path, operation.content_digest);
     } else if (operation.op === 'modify') {
       await assertFileDigest(input.root, operation.relative_path, operation.before_digest);
-      const contentBytes = deltaContentBytesByDigestAndPath.get(codexMemoryDeltaDigest(delta))?.get(operation.relative_path);
-      if (contentBytes === undefined) {
-        throw new Error('memory replay modify requires packaged after content bytes');
-      }
+      const contentBytes = await readDeltaContentBytes(input.contentReader, {
+        deltaDigest,
+        relativePath: operation.relative_path,
+        expectedDigest: operation.after_digest,
+      });
       await writeFile(memoryPath(input.root, operation.relative_path), contentBytes);
       await assertFileDigest(input.root, operation.relative_path, operation.after_digest);
     } else if (operation.op === 'delete') {
@@ -272,8 +270,22 @@ export const replayCodexMemoryDelta = async (input: {
   if (output.digest !== delta.output_bundle_digest) {
     throw new Error('memory replay output bundle digest mismatch');
   }
-  if (codexMemoryDeltaDigest(delta).length === 0) {
+  if (deltaDigest.length === 0) {
     throw new Error('unreachable memory delta digest');
   }
   return output.digest;
+};
+
+const readDeltaContentBytes = async (
+  contentReader: CodexMemoryDeltaContentReader | undefined,
+  input: { deltaDigest: string; relativePath: string; expectedDigest: string },
+): Promise<Uint8Array> => {
+  if (contentReader === undefined) {
+    throw new Error('memory replay add/modify requires a content reader');
+  }
+  const bytes = await contentReader.read(input);
+  if (bytesDigest(bytes) !== input.expectedDigest) {
+    throw new Error(`memory replay content digest mismatch for ${input.relativePath}`);
+  }
+  return bytes;
 };

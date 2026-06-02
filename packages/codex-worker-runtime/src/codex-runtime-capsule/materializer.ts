@@ -17,7 +17,7 @@ export type CodexRuntimeCapsuleManifest = z.infer<typeof codexRuntimeCapsuleMani
 export interface CodexRuntimeCapsuleMaterializerInput {
   codexHomeRoot: string;
   capsuleManifest: unknown;
-  environmentManifest?: unknown;
+  environmentManifest: unknown;
   runtimeProfileMaterialization: {
     codexConfigToml: string;
   };
@@ -29,7 +29,7 @@ export interface CodexRuntimeCapsuleMaterializerInput {
 export interface CodexRuntimeCapsuleMaterializationResult {
   capsuleManifest: CodexRuntimeCapsuleManifest;
   capsuleManifestDigest: string;
-  environmentMaterialization?: CodexEnvironmentMaterializationResult;
+  environmentMaterialization: CodexEnvironmentMaterializationResult;
   copiedCapsuleFiles: readonly string[];
 }
 
@@ -38,16 +38,16 @@ export class CodexRuntimeCapsuleMaterializer {
 
   async materialize(input: CodexRuntimeCapsuleMaterializerInput): Promise<CodexRuntimeCapsuleMaterializationResult> {
     const capsuleManifest = codexRuntimeCapsuleManifestSchema.parse(input.capsuleManifest);
-    let environmentMaterialization: CodexEnvironmentMaterializationResult | undefined;
-    if (input.environmentManifest !== undefined) {
-      environmentMaterialization = await materializeCodexEnvironmentState({
-        targetCodexHomeRoot: input.codexHomeRoot,
-        environmentManifest: input.environmentManifest as CodexEnvironmentManifest,
-        artifactReader: this.dependencies.artifactReader,
-      });
-      if (environmentMaterialization.environmentManifestDigest !== capsuleManifest.environment_manifest.digest) {
-        throw new Error('capsule environment manifest digest mismatch');
-      }
+    if (input.environmentManifest === undefined) {
+      throw new Error('capsule environment manifest is required before materialization');
+    }
+    const environmentMaterialization = await materializeCodexEnvironmentState({
+      targetCodexHomeRoot: input.codexHomeRoot,
+      environmentManifest: input.environmentManifest as CodexEnvironmentManifest,
+      artifactReader: this.dependencies.artifactReader,
+    });
+    if (environmentMaterialization.environmentManifestDigest !== capsuleManifest.environment_manifest.digest) {
+      throw new Error('capsule environment manifest digest mismatch');
     }
 
     await writeCodexHomeConfigAndAuth({
@@ -59,7 +59,7 @@ export class CodexRuntimeCapsuleMaterializer {
     return {
       capsuleManifest,
       capsuleManifestDigest: codexRuntimeCapsuleManifestDigest(capsuleManifest),
-      ...(environmentMaterialization === undefined ? {} : { environmentMaterialization }),
+      environmentMaterialization,
       copiedCapsuleFiles: capsuleManifest.included_files.filter((relativePath) => relativePath !== 'auth.json' && relativePath !== 'config.toml'),
     };
   }
