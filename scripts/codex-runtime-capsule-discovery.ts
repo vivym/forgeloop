@@ -36,7 +36,7 @@ const codexBin = (env: EnvLike): string => optionalEnv(env, 'FORGELOOP_CODEX_BIN
 const execCodex = async (env: EnvLike, args: readonly string[], options?: { cwd?: string }): Promise<string> => {
   const { stdout } = await execFile(codexBin(env), [...args], {
     cwd: options?.cwd,
-    env: process.env,
+    env: { ...process.env, ...env },
     maxBuffer: 1024 * 1024 * 10,
     timeout: timeoutMs,
   });
@@ -82,6 +82,8 @@ export const createInstalledCodexDiscoveryProbe = (env: EnvLike = process.env): 
       });
     } catch {
       return codexCanonicalDigest({ blocker: 'codex_runtime_capsule_discovery_app_server_schema_unavailable' });
+    } finally {
+      await rm(schemaRoot, { force: true, recursive: true });
     }
   },
   runControlledScenario: async () =>
