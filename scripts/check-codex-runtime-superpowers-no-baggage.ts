@@ -9,7 +9,8 @@ export type CodexRuntimeSuperpowersBaggagePattern =
   | 'raw_runtime_route'
   | 'host_codex_home'
   | 'exec_fallback'
-  | 'codex_exec_cli';
+  | 'codex_exec_cli'
+  | 'legacy_codex_session_snapshot';
 
 export type AllowedMatch = {
   file: string;
@@ -266,6 +267,12 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     reason: 'Negative test fixture proves the strict gate catches Codex exec CLI usage.',
   },
   {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_codex_session_snapshot',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches legacy Codex session snapshot vocabulary.',
+  },
+  {
     file: 'tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts',
     pattern: 'host_codex_home',
     owner: 'negative-test',
@@ -361,6 +368,28 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
   host_codex_home: [/~\/\.codex/, /\bCODEX_HOME\b/, /\bFORGELOOP_CODEX_HOME\b/, /\bhost_config_path\b/, /\bhost_auth_path\b/],
   exec_fallback: [/\bexec_fallback\b/],
   codex_exec_cli: [/\bcodex\s+exec\b/, /\brun\(\s*["']codex["']\s*,\s*\[\s*["']exec["']/],
+  legacy_codex_session_snapshot: [
+    /\bCodexSessionSnapshot\b/,
+    /\bcodex_session_snapshot\b/,
+    /\blatest_snapshot_/,
+    /\bexpected_previous_snapshot_digest\b/,
+    /\boutput_snapshot_/,
+    /\bforked_from_snapshot_id\b/,
+    /\bfork_point_snapshot_/,
+    /\bcodex_session_snapshot_stale\b/,
+    /\blatestSnapshot/,
+    /\bexpectedPreviousSnapshotDigest\b/,
+    /\boutputSnapshot/,
+    /\battemptedOutputSnapshotDigest\b/,
+    /\bforkedFromSnapshotId\b/,
+    /\bforkPointSnapshot/,
+    /\bcodexSessionSnapshots\b/,
+    /\bcreateCodexSessionSnapshot\b/,
+    /\bgetCodexSessionSnapshot\b/,
+    /\bgetLatestSnapshot\b/,
+    /\/codex-sessions\/[^'"]+\/snapshots/,
+    /:sessionId\/snapshots/,
+  ],
 };
 
 const fileExtension = (file: string): string => {
@@ -398,6 +427,9 @@ const isAllowed = (input: {
   line: string;
   allowlist: AllowedMatch[];
 }): boolean =>
+  (input.pattern === 'legacy_codex_session_snapshot' &&
+    input.file.split('/').slice(0, 3).join(':') === 'docs:superpowers:specs' &&
+    /supersedes|superseded|legacy|old|prior|previous/.test(input.line)) ||
   input.allowlist.some(
     (entry) =>
       entry.file === input.file &&
