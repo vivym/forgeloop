@@ -159,15 +159,38 @@ describe('plan item workflow contracts', () => {
     });
 
     expect(workflow.session).toMatchObject({ continuity_state: 'ready' });
-    expect(() =>
-      codexSessionPublicDtoSchema.parse({
+    const forbiddenSessionFields = [
+      'codex_thread_id',
+      'runner_worker_id',
+      'runner_launch_lease_id',
+      'runner_runtime_job_id',
+      'runner_expires_at',
+    ] as const;
+    for (const field of forbiddenSessionFields) {
+      expect(workflow.session).not.toHaveProperty(field);
+      expect(() =>
+        codexSessionPublicDtoSchema.parse({
+          id: 'codex-session-1',
+          status: 'idle',
+          role: 'active',
+          continuity_state: 'ready',
+          can_continue: true,
+          [field]: `${field}-value`,
+        }),
+      ).toThrow();
+    }
+    expect(codexSessionPublicDtoSchema.parse({
         id: 'codex-session-1',
         status: 'idle',
         role: 'active',
         continuity_state: 'ready',
         can_continue: true,
-        codex_thread_id: 'raw-thread-id',
-      }),
-    ).toThrow();
+      })).toEqual({
+        id: 'codex-session-1',
+        status: 'idle',
+        role: 'active',
+        continuity_state: 'ready',
+        can_continue: true,
+      });
   });
 });

@@ -68,6 +68,10 @@ export const codex_sessions = pgTable(
     credentialBindingVersionId: uuid('credential_binding_version_id').notNull(),
     activeLeaseId: uuid('active_lease_id'),
     leaseEpoch: integer('lease_epoch').notNull().default(0),
+    runnerWorkerId: uuid('runner_worker_id'),
+    runnerLaunchLeaseId: uuid('runner_launch_lease_id'),
+    runnerRuntimeJobId: uuid('runner_runtime_job_id'),
+    runnerExpiresAt: timestampColumn('runner_expires_at'),
     forkedFromSessionId: uuid('forked_from_session_id'),
     forkedFromTurnId: uuid('forked_from_turn_id'),
     forkedFromSnapshotId: uuid('forked_from_snapshot_id'),
@@ -85,6 +89,8 @@ export const codex_sessions = pgTable(
     index('codex_sessions_thread_digest_idx').on(table.codexThreadIdDigest),
     index('codex_sessions_latest_snapshot_idx').on(table.latestSnapshotId),
     index('codex_sessions_active_lease_idx').on(table.activeLeaseId),
+    index('codex_sessions_runner_worker_idx').on(table.runnerWorkerId),
+    index('codex_sessions_runner_launch_lease_idx').on(table.runnerLaunchLeaseId),
     uniqueIndex('codex_sessions_one_active_per_workflow_idx')
       .on(table.ownerId)
       .where(sql`${table.role} = 'active' and ${table.status} <> 'archived'`),

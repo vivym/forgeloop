@@ -330,6 +330,33 @@ describe('automation repository primitives', () => {
     ]);
   });
 
+  it('renews a running action with the same claim token without creating a new attempt', async () => {
+    const repository = new InMemoryDeliveryRepository();
+
+    const claimed = await repository.claimAutomationActionRun({
+      ...createActionInput('action-renew-same-claim'),
+      claim_token: 'action-renew-same-claim-token',
+      locked_until: '2026-05-05T00:00:30.000Z',
+      now,
+    });
+    const renewed = await repository.claimAutomationActionRun({
+      ...createActionInput('action-renew-same-claim', { now: later }),
+      claim_token: 'action-renew-same-claim-token',
+      locked_until: afterRetry,
+      now: later,
+    });
+
+    expect(renewed).toMatchObject({
+      id: claimed.id,
+      status: 'running',
+      claim_token: 'action-renew-same-claim-token',
+      attempt: 1,
+      claimed_at: claimed.claimed_at,
+      locked_until: afterRetry,
+      last_heartbeat_at: later,
+    });
+  });
+
   it('creates pending action runs and claims the next eligible run', async () => {
     const repository: DeliveryRepository = new InMemoryDeliveryRepository();
 

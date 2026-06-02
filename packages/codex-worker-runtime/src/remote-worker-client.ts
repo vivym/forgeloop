@@ -15,6 +15,7 @@ import {
   type CodexRuntimeJob,
   type CodexRuntimeTargetKind,
   type CodexRuntimeScope,
+  validateCodexSessionRuntimeContext,
   validateCodexRuntimeJobTerminalResult,
 } from '@forgeloop/domain';
 import {
@@ -64,6 +65,8 @@ type RemoteControlPlaneClient = {
   fetchRuntimeJobWorkload?(workerId: string, jobId: string, input: Record<string, unknown>): Promise<unknown>;
   materializeRuntimeJob?(workerId: string, jobId: string, input: Record<string, unknown>): Promise<CodexLaunchMaterialization>;
   startRuntimeJob?(workerId: string, jobId: string, input: Record<string, unknown>): Promise<unknown>;
+  markCodexSessionRunnerOwner?(workerId: string, jobId: string, input: Record<string, unknown>): Promise<unknown>;
+  attachCodexSessionRunnerRuntimeJob?(workerId: string, jobId: string, input: Record<string, unknown>): Promise<unknown>;
   appendRuntimeJobEvent?(workerId: string, jobId: string, input: Record<string, unknown>): Promise<unknown>;
   uploadRuntimeJobArtifact?(
     workerId: string,
@@ -80,6 +83,16 @@ type RemoteControlPlaneClient = {
 };
 
 type RemoteLauncher = Pick<DockerizedCodexAppServerLauncher, 'startFromMaterialization'>;
+type AppServerSession = Awaited<ReturnType<RemoteLauncher['startFromMaterialization']>>;
+type GenerationRunner = {
+  sessionId?: string;
+  runnerRuntimeJobId: string;
+  runnerLaunchLeaseId: string;
+  appServerSession: AppServerSession;
+  materialization: CodexLaunchMaterialization;
+  runtimeEvidenceDigest: string;
+  launchMaterializationDigest: string;
+};
 
 export interface RemoteCodexWorkerClientOptions {
   workerId: string;
@@ -190,6 +203,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
   let workerHeartbeatIntervalMs = 15_000;
   let lastWorkerHeartbeatAtMs: number | undefined;
   let nextWorkerHeartbeatAtMs = 0;
+  const generationRunners = new Map<string, GenerationRunner>();
 
   const ensureSession = async (): Promise<WorkerSession> => {
     if (session !== undefined) {
@@ -273,14 +287,21 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     if (input.force !== true && Number.isFinite(nowMs) && nowMs < nextWorkerHeartbeatAtMs) {
       return;
     }
+    const codexSessionRunners = Array.from(generationRunners.entries(), ([sessionId, runner]) => ({
+      session_id: sessionId,
+      runner_launch_lease_id: runner.runnerLaunchLeaseId,
+      runner_runtime_job_id: runner.runnerRuntimeJobId,
+      runner_expires_at: runnerExpiresAt(),
+    }));
     await options.controlPlaneClient.heartbeatWorker(options.workerId, {
       session_token: workerSession.token,
       nonce: nonce(),
       nonce_timestamp: nowValue,
       status: 'online',
       control_channel_status: 'connected',
-      active_lease_count: 0,
+      active_lease_count: codexSessionRunners.length,
       capabilities: options.capabilities,
+      ...(codexSessionRunners.length === 0 ? {} : { codex_session_runners: codexSessionRunners }),
     });
     if (Number.isFinite(nowMs)) {
       lastWorkerHeartbeatAtMs = nowMs;
@@ -340,100 +361,53 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       return;
     }
 
-    let appServerSession: Awaited<ReturnType<RemoteLauncher['startFromMaterialization']>> | undefined;
+    let runner: GenerationRunner | undefined;
     let successTerminalAttempted = false;
     const failureDiagnostic: RuntimeFailureDiagnostic = {
       runtime_target_kind: 'generation',
       app_server_started: false,
-      failure_stage: 'launch_envelope_claim',
+      failure_stage: 'generation_workload_fetch',
     };
     try {
-      const claimed = await options.controlPlaneClient.claimLaunchTokenEnvelope?.(options.workerId, job.id, {
-        ...workerProof(workerSession),
-        envelope_id: item.envelope?.id,
-        claim_request_id: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'claim' }),
-        accepted_worker_session_digest: sessionDigest,
-        accepted_session_public_key_id: publicKeyId,
-        accepted_session_epoch: workerSession.epoch,
-      });
-      const envelope = requiredEnvelope(claimed);
-      const launchToken = await decryptCodexLaunchTokenEnvelope({
-        envelope,
-        privateKeyHandle: workerSession.keyPair.privateKeyHandle,
-      });
-      failureDiagnostic.failure_stage = 'generation_workload_fetch';
       const workloadResponse = requiredGenerationWorkload(
         await options.controlPlaneClient.fetchRuntimeJobWorkload?.(options.workerId, job.id, workerProof(workerSession)),
       );
       const workload = workloadResponse.workload;
-      if (options.controlPlaneClient.materializeRuntimeJob === undefined) {
-        throw new Error('codex_control_plane_method_missing:materializeRuntimeJob');
-      }
       await throwIfCancelled(workerSession, job);
-      failureDiagnostic.failure_stage = 'launch_materialization';
-      const materialization = await options.controlPlaneClient.materializeRuntimeJob(options.workerId, job.id, {
-        ...workerProof(workerSession),
-        launch_lease_id: job.launch_lease_id,
-        launch_token: launchToken,
-        materialization_request_id: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'materialize' }),
-        accepted_worker_session_digest: sessionDigest,
-        accepted_session_public_key_id: publicKeyId,
-        accepted_session_epoch: workerSession.epoch,
-      });
-      await throwIfCancelled(workerSession, job);
-      failureDiagnostic.failure_stage = 'docker_app_server_startup';
-      appServerSession = await options.launcher.startFromMaterialization(materialization, {
-        workerSessionToken: workerSession.token,
-        terminalizeLaunchLeaseOnClose: false,
-      });
-      await throwIfCancelled(workerSession, job);
-      if (options.controlPlaneClient.startRuntimeJob === undefined) {
-        throw new Error('codex_control_plane_method_missing:startRuntimeJob');
-      }
+      runner =
+        workload.codex_session_runtime_context?.continuation.kind === 'resume_thread'
+          ? await attachGenerationRunner(workerSession, job, workload)
+          : await startGenerationRunner(workerSession, job, item, {
+              sessionDigest,
+              publicKeyId,
+              epoch: workerSession.epoch,
+              privateKeyHandle: workerSession.keyPair.privateKeyHandle,
+            });
       failureDiagnostic.app_server_started = true;
-      failureDiagnostic.runtime_evidence_digest = codexCanonicalDigest(appServerSession.publicEvidence);
-      failureDiagnostic.failure_stage = 'runtime_job_start';
-      await options.controlPlaneClient.startRuntimeJob(options.workerId, job.id, {
-        ...workerProof(workerSession),
-        start_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'start' }),
-        runtime_evidence_digest: failureDiagnostic.runtime_evidence_digest,
-        launch_materialization_digest: codexCanonicalDigest({
-          lease_id: materialization.lease_id,
-          expires_at: materialization.expires_at,
-          materialized_at: materialization.materialized_at,
-        }),
-      });
-      failureDiagnostic.failure_stage = 'app_server_started_event';
-      await options.controlPlaneClient.appendRuntimeJobEvent?.(options.workerId, job.id, {
-        ...workerProof(workerSession),
-        event_id: codexCanonicalDigest({ runtime_job_id: job.id, event: 'app_server_started' }),
-        event_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'event', event: 'app_server_started' }),
-        event_type: 'app_server_started',
-        event_payload_json: { runtime_evidence_digest: failureDiagnostic.runtime_evidence_digest },
-        event_payload_digest: codexCanonicalDigest({ runtime_evidence_digest: failureDiagnostic.runtime_evidence_digest }),
-      });
+      failureDiagnostic.runtime_evidence_digest = runner.runtimeEvidenceDigest;
 
       const runtime = generationRuntimeFactory({
         mode: 'app_server',
-        appServerEndpoint: appServerSession.endpoint,
+        appServerEndpoint: runner.appServerSession.endpoint,
         artifactRoot: '/artifacts',
-        timeoutMs: materialization.profile_revision.resource_limits.timeout_ms,
-        outputLimitBytes: materialization.profile_revision.resource_limits.output_limit_bytes,
+        timeoutMs: runner.materialization.profile_revision.resource_limits.timeout_ms,
+        outputLimitBytes: runner.materialization.profile_revision.resource_limits.output_limit_bytes,
         transportFactory: (endpoint) =>
-          appServerSession?.createTransport?.() ?? new CodexAppServerEndpointTransport(endpoint, appServerSession?.endpointAuth),
+          runner?.appServerSession.createTransport?.() ??
+          new CodexAppServerEndpointTransport(endpoint, runner?.appServerSession.endpointAuth),
       });
       failureDiagnostic.failure_stage = 'generation_runtime_turn';
       failureDiagnostic.generation_output_schema_sent = generationOutputSchemaSent(workload, workloadResponse.signedContext);
       failureDiagnostic.generation_context_operation = generationContextOperation(workloadResponse.signedContext);
       const generationResult = await runGenerationWithControl(workerSession, job, (signal) =>
-        runGeneration(runtime, workloadResponse, job, materialization, signal),
+        runGeneration(runtime, workloadResponse, job, runner!.materialization, signal),
       );
       failureDiagnostic.failure_stage = 'generation_artifact_upload';
       const uploadedArtifacts = await uploadGenerationArtifacts(workerSession, job, generationResult);
       failureDiagnostic.failure_stage = 'generation_cleanup';
-      await closeAfterGeneration(workerSession, job, appServerSession);
+      await closeAfterGeneration(workerSession, job, runner, workload);
       failureDiagnostic.failure_stage = 'generation_terminal_result';
-      const terminalResult = generationRuntimeJobTerminalResult(generationResult, uploadedArtifacts, appServerSession.publicEvidence);
+      const terminalResult = generationRuntimeJobTerminalResult(generationResult, uploadedArtifacts, runner.appServerSession.publicEvidence);
       failureDiagnostic.failure_stage = 'generation_terminalize';
       successTerminalAttempted = true;
       await terminalizeWithRetry(workerSession, job, {
@@ -452,11 +426,11 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
             });
           }
         }
-        await appServerSession?.close('failed', 'codex_runtime_job_unavailable').catch(() => undefined);
+        await closeGenerationRunner(runner, 'failed', 'codex_runtime_job_unavailable');
         return;
       }
       const reasonCode = await publicErrorCodeForJobError(error, workerSession, job);
-      await appServerSession?.close('failed', reasonCode).catch(() => undefined);
+      await closeGenerationRunner(runner, 'failed', reasonCode);
       if (reasonCode !== 'codex_runtime_job_cancelled') {
         const failureSubcode = generationFailureSubcode(error, failureDiagnostic.failure_stage);
         if (failureDiagnostic.failure_subcode === undefined && failureSubcode !== undefined) {
@@ -469,6 +443,121 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         reason_code: reasonCode,
       });
     }
+  };
+
+  const startGenerationRunner = async (
+    workerSession: WorkerSession,
+    job: Pick<CodexRuntimeJob, 'id' | 'launch_lease_id'>,
+    item: RuntimeJobPollItem,
+    accepted: {
+      sessionDigest: string;
+      publicKeyId: string;
+      epoch: number;
+      privateKeyHandle: CodexWorkerSessionKeyPair['privateKeyHandle'];
+    },
+  ): Promise<GenerationRunner> => {
+    const claimed = await options.controlPlaneClient.claimLaunchTokenEnvelope?.(options.workerId, job.id, {
+      ...workerProof(workerSession),
+      envelope_id: item.envelope?.id,
+      claim_request_id: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'claim' }),
+      accepted_worker_session_digest: accepted.sessionDigest,
+      accepted_session_public_key_id: accepted.publicKeyId,
+      accepted_session_epoch: accepted.epoch,
+    });
+    const envelope = requiredEnvelope(claimed);
+    const launchToken = await decryptCodexLaunchTokenEnvelope({
+      envelope,
+      privateKeyHandle: accepted.privateKeyHandle,
+    });
+    if (options.controlPlaneClient.materializeRuntimeJob === undefined) {
+      throw new Error('codex_control_plane_method_missing:materializeRuntimeJob');
+    }
+    await throwIfCancelled(workerSession, job);
+    const materialization = await options.controlPlaneClient.materializeRuntimeJob(options.workerId, job.id, {
+      ...workerProof(workerSession),
+      launch_lease_id: job.launch_lease_id,
+      launch_token: launchToken,
+      materialization_request_id: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'materialize' }),
+      accepted_worker_session_digest: accepted.sessionDigest,
+      accepted_session_public_key_id: accepted.publicKeyId,
+      accepted_session_epoch: accepted.epoch,
+    });
+    await throwIfCancelled(workerSession, job);
+    const appServerSession = await options.launcher.startFromMaterialization(materialization, {
+      workerSessionToken: workerSession.token,
+      terminalizeLaunchLeaseOnClose: false,
+    });
+    await throwIfCancelled(workerSession, job);
+    if (options.controlPlaneClient.startRuntimeJob === undefined) {
+      throw new Error('codex_control_plane_method_missing:startRuntimeJob');
+    }
+    const runtimeEvidenceDigest = codexCanonicalDigest(appServerSession.publicEvidence);
+    const launchMaterializationDigest = launchMaterializationDigestFor(materialization);
+    await options.controlPlaneClient.startRuntimeJob(options.workerId, job.id, {
+      ...workerProof(workerSession),
+      start_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'start' }),
+      runtime_evidence_digest: runtimeEvidenceDigest,
+      launch_materialization_digest: launchMaterializationDigest,
+    });
+    await appendAppServerStartedEvent(workerSession, job, runtimeEvidenceDigest);
+    return {
+      runnerRuntimeJobId: job.id,
+      runnerLaunchLeaseId: job.launch_lease_id,
+      appServerSession,
+      materialization,
+      runtimeEvidenceDigest,
+      launchMaterializationDigest,
+    };
+  };
+
+  const attachGenerationRunner = async (
+    workerSession: WorkerSession,
+    job: Pick<CodexRuntimeJob, 'id' | 'launch_lease_id'>,
+    workload: CodexGenerationWorkloadV1,
+  ): Promise<GenerationRunner> => {
+    const context = validateCodexSessionRuntimeContext(workload.codex_session_runtime_context);
+    if (context.continuation.kind !== 'resume_thread') {
+      throw new Error('codex_generation_workload_unsupported');
+    }
+    const runner = generationRunners.get(context.codex_session_id);
+    if (
+      runner === undefined ||
+      runner.runnerRuntimeJobId !== context.runner_runtime_job_id ||
+      runner.runnerLaunchLeaseId !== context.runner_launch_lease_id
+    ) {
+      throw new Error('codex_session_runner_unavailable');
+    }
+    if (options.controlPlaneClient.attachCodexSessionRunnerRuntimeJob === undefined) {
+      throw new Error('codex_control_plane_method_missing:attachCodexSessionRunnerRuntimeJob');
+    }
+    await throwIfCancelled(workerSession, job);
+    await options.controlPlaneClient.attachCodexSessionRunnerRuntimeJob(options.workerId, job.id, {
+      ...workerProof(workerSession),
+      session_id: context.codex_session_id,
+      runner_launch_lease_id: runner.runnerLaunchLeaseId,
+      runner_runtime_job_id: runner.runnerRuntimeJobId,
+      runner_expires_at: runnerExpiresAt(),
+      runtime_evidence_digest: runner.runtimeEvidenceDigest,
+      launch_materialization_digest: runner.launchMaterializationDigest,
+      attach_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'attach_session_runner' }),
+    });
+    await appendAppServerStartedEvent(workerSession, job, runner.runtimeEvidenceDigest);
+    return runner;
+  };
+
+  const appendAppServerStartedEvent = async (
+    workerSession: WorkerSession,
+    job: Pick<CodexRuntimeJob, 'id'>,
+    runtimeEvidenceDigest: string,
+  ): Promise<void> => {
+    await options.controlPlaneClient.appendRuntimeJobEvent?.(options.workerId, job.id, {
+      ...workerProof(workerSession),
+      event_id: codexCanonicalDigest({ runtime_job_id: job.id, event: 'app_server_started' }),
+      event_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'event', event: 'app_server_started' }),
+      event_type: 'app_server_started',
+      event_payload_json: { runtime_evidence_digest: runtimeEvidenceDigest },
+      event_payload_digest: codexCanonicalDigest({ runtime_evidence_digest: runtimeEvidenceDigest }),
+    });
   };
 
   const processRunExecutionJob = async (item: RuntimeJobPollItem, workerSession: WorkerSession): Promise<void> => {
@@ -908,14 +997,65 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
   const closeAfterGeneration = async (
     workerSession: WorkerSession,
     job: Pick<CodexRuntimeJob, 'id'>,
-    appServerSession: Awaited<ReturnType<RemoteLauncher['startFromMaterialization']>>,
+    runner: GenerationRunner,
+    workload: CodexGenerationWorkloadV1,
   ): Promise<void> => {
-    try {
-      await appServerSession.close('succeeded', 'generation complete');
-    } catch {
+    const context =
+      workload.codex_session_runtime_context === undefined
+        ? undefined
+        : validateCodexSessionRuntimeContext(workload.codex_session_runtime_context);
+    if (context?.turn_group_status === 'intermediate') {
+      if (context.continuation.kind === 'start_thread') {
+        if (options.controlPlaneClient.markCodexSessionRunnerOwner === undefined) {
+          throw new Error('codex_control_plane_method_missing:markCodexSessionRunnerOwner');
+        }
+        runner.sessionId = context.codex_session_id;
+        await options.controlPlaneClient.markCodexSessionRunnerOwner(options.workerId, job.id, {
+          ...workerProof(workerSession),
+          session_id: context.codex_session_id,
+          runner_launch_lease_id: runner.runnerLaunchLeaseId,
+          runner_runtime_job_id: runner.runnerRuntimeJobId,
+          runner_expires_at: runnerExpiresAt(),
+        });
+      }
+      if (context !== undefined) {
+        generationRunners.set(context.codex_session_id, runner);
+        return;
+      }
+    }
+    const closed = await closeGenerationRunner(runner, 'succeeded', 'generation complete');
+    if (!closed) {
       await uploadCleanupFailureArtifact(workerSession, job).catch(() => undefined);
     }
   };
+
+  const closeGenerationRunner = async (
+    runner: GenerationRunner | undefined,
+    status: 'succeeded' | 'failed',
+    reason: string,
+  ): Promise<boolean> => {
+    if (runner === undefined) {
+      return true;
+    }
+    if (runner.sessionId !== undefined && generationRunners.get(runner.sessionId) === runner) {
+      generationRunners.delete(runner.sessionId);
+    }
+    try {
+      await runner.appServerSession.close(status, reason);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const runnerExpiresAt = (): string => new Date(Date.parse(now()) + 10 * 60_000).toISOString();
+
+  const launchMaterializationDigestFor = (materialization: Pick<CodexLaunchMaterialization, 'lease_id' | 'expires_at' | 'materialized_at'>): string =>
+    codexCanonicalDigest({
+      lease_id: materialization.lease_id,
+      expires_at: materialization.expires_at,
+      materialized_at: materialization.materialized_at,
+    });
 
   const throwIfCancelled = async (workerSession: WorkerSession, job: Pick<CodexRuntimeJob, 'id'>): Promise<void> => {
     const control = await getControl(workerSession, job);
@@ -1259,6 +1399,9 @@ const runGeneration = async (
       signed_context: workload.signed_context_digest,
       prompt_template: workload.prompt_template_digest,
     },
+    ...(workload.codex_session_runtime_context === undefined
+      ? {}
+      : { codexSessionRuntimeContext: workload.codex_session_runtime_context }),
     signal,
   };
   let result: CodexGenerationResult<Record<string, unknown>>;
@@ -1330,10 +1473,41 @@ const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkloa
     throw new Error('codex_generation_workload_unsupported');
   }
   const typedWorkload = workload as unknown as CodexGenerationWorkloadV1;
+  const hasSessionRuntimeContext = typedWorkload.codex_session_runtime_context !== undefined;
+  const hasSessionTerminalization = typedWorkload.codex_session_terminalization !== undefined;
+  if (hasSessionRuntimeContext !== hasSessionTerminalization) {
+    throw new Error('codex_generation_workload_unsupported');
+  }
+  if (hasSessionRuntimeContext) {
+    try {
+      validateCodexSessionRuntimeContext(typedWorkload.codex_session_runtime_context);
+      validateCodexSessionTerminalization(typedWorkload.codex_session_terminalization);
+    } catch (error) {
+      if (isRecord(error) && typeof error.code === 'string' && publicRuntimeWorkerErrorCodes.has(error.code)) {
+        throw new Error(error.code);
+      }
+      throw new Error('codex_generation_workload_unsupported');
+    }
+  }
   if (!isRecord(response.signed_context) || codexCanonicalDigest(response.signed_context) !== typedWorkload.signed_context_digest) {
     throw new Error('codex_runtime_job_unavailable');
   }
   return { workload: typedWorkload, signedContext: response.signed_context };
+};
+
+const validateCodexSessionTerminalization = (value: unknown): void => {
+  if (!isRecord(value) || value.schema_version !== 'codex_session_terminalization.v1') {
+    throw new Error('codex_generation_workload_unsupported');
+  }
+  if (typeof value.lease_token !== 'string' || value.lease_token.length === 0) {
+    throw new Error('codex_generation_workload_unsupported');
+  }
+  if (
+    value.expected_previous_snapshot_digest !== undefined &&
+    (typeof value.expected_previous_snapshot_digest !== 'string' || value.expected_previous_snapshot_digest.length === 0)
+  ) {
+    throw new Error('codex_generation_workload_unsupported');
+  }
 };
 
 const runSpecWithPackagePrompt = (
@@ -1552,6 +1726,10 @@ const publicRuntimeWorkerErrorCodes = new Set([
   'codex_runtime_job_cancelled',
   'codex_runtime_job_success_terminal_unconfirmed',
   'codex_generation_workload_unsupported',
+  'codex_session_thread_binding_partial',
+  'codex_session_thread_digest_mismatch',
+  'codex_session_runner_unavailable',
+  'codex_app_server_resume_failed',
   'codex_runtime_job_expired',
   'codex_runtime_job_unavailable',
   'codex_workspace_bundle_invalid',

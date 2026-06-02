@@ -355,6 +355,36 @@ export interface CodexGenerationWorkloadV1 {
   prompt_template_digest: string;
   created_at: string;
   expires_at: string;
+  codex_session_runtime_context?: CodexSessionRuntimeContextV1;
+  codex_session_terminalization?: CodexSessionTerminalizationV1;
+}
+
+export type CodexThreadContinuationV1 =
+  | { kind: 'start_thread' }
+  | { kind: 'resume_thread'; codex_thread_id: string; codex_thread_id_digest: string };
+
+const codexSessionThreadIdDigest = (threadId: string): string =>
+  codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: threadId });
+
+export interface CodexSessionRuntimeContextV1 {
+  schema_version: 'codex_session_runtime_context.v1';
+  codex_session_id: string;
+  codex_session_turn_id: string;
+  lease_id: string;
+  lease_epoch: number;
+  worker_id: string;
+  worker_session_digest: string;
+  expected_previous_snapshot_digest?: string;
+  runner_runtime_job_id?: string;
+  runner_launch_lease_id?: string;
+  turn_group_status: 'intermediate' | 'complete';
+  continuation: CodexThreadContinuationV1;
+}
+
+export interface CodexSessionTerminalizationV1 {
+  schema_version: 'codex_session_terminalization.v1';
+  lease_token: string;
+  expected_previous_snapshot_digest?: string;
 }
 
 export interface CodexRunExecutionWorkloadV1 {
@@ -389,6 +419,11 @@ export interface CodexGenerationRuntimeJobResult {
     digest?: string;
     internal_ref?: string;
   }>;
+  codex_session_thread?: {
+    codex_thread_id: string;
+    codex_thread_id_digest: string;
+    app_server_turn_id?: string;
+  };
   runtime_evidence?: CodexDockerRuntimeEvidence;
   public_summary: string;
 }
@@ -503,6 +538,15 @@ export const codexPublicBlockerCodes = [
   'codex_workspace_bundle_invalid',
   'codex_runtime_job_stale',
   'codex_runtime_job_lease_terminal',
+  'codex_session_resume_without_binding',
+  'codex_session_thread_binding_partial',
+  'codex_session_runner_unavailable',
+  'codex_app_server_resume_failed',
+  'codex_app_server_thread_mismatch',
+  'codex_session_thread_digest_mismatch',
+  'codex_session_thread_start_for_bound_session',
+  'codex_session_thread_binding_stale',
+  'codex_app_server_thread_id_missing',
 ] as const;
 
 export type CodexPublicBlockerCode = (typeof codexPublicBlockerCodes)[number];
@@ -587,6 +631,9 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 const invalidProfile = (message: string, details?: Record<string, unknown>): DomainError =>
   new DomainError('codex_runtime_profile_invalid', message, details);
 
+const unsupportedGenerationWorkload = (message: string, details?: Record<string, unknown>): DomainError =>
+  new DomainError('codex_generation_workload_unsupported', message, details);
+
 const dockerPolicyUnavailable = (message: string, details?: Record<string, unknown>): DomainError =>
   new DomainError('codex_worker_docker_policy_unavailable', `codex_worker_docker_policy_unavailable: ${message}`, details);
 
@@ -641,6 +688,117 @@ const canonicalize = (value: unknown, allowUndefinedObjectField = false): Canoni
 const stableJson = (value: unknown): string => JSON.stringify(canonicalize(value));
 
 const isSha256Digest = (value: unknown): value is string => typeof value === 'string' && sha256DigestPattern.test(value);
+
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
+const requireRuntimeContextString = (record: Record<string, unknown>, key: keyof CodexSessionRuntimeContextV1): string => {
+  const value = record[key];
+  if (!isNonEmptyString(value)) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${String(key)} is required.`);
+  }
+  return value;
+};
+
+const optionalRuntimeContextString = (record: Record<string, unknown>, key: keyof CodexSessionRuntimeContextV1): string | undefined => {
+  const value = record[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isNonEmptyString(value)) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${String(key)} is invalid.`);
+  }
+  return value;
+};
+
+export const validateCodexSessionRuntimeContext = (value: unknown): CodexSessionRuntimeContextV1 => {
+  if (!isPlainObject(value) || value.schema_version !== 'codex_session_runtime_context.v1') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: session runtime context is unsupported.');
+  }
+
+  const continuation = value.continuation;
+  if (!isPlainObject(continuation)) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: continuation is required.');
+  }
+  if (continuation.kind !== 'start_thread' && continuation.kind !== 'resume_thread') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: continuation kind is unsupported.');
+  }
+
+  const runnerRuntimeJobId = optionalRuntimeContextString(value, 'runner_runtime_job_id');
+  const runnerLaunchLeaseId = optionalRuntimeContextString(value, 'runner_launch_lease_id');
+  const expectedPreviousSnapshotDigest = optionalRuntimeContextString(value, 'expected_previous_snapshot_digest');
+  if ((runnerRuntimeJobId === undefined) !== (runnerLaunchLeaseId === undefined)) {
+    throw new DomainError(
+      'codex_session_thread_binding_partial',
+      'codex_session_thread_binding_partial: runner binding must be complete.',
+    );
+  }
+
+  let parsedContinuation: CodexThreadContinuationV1;
+  if (continuation.kind === 'start_thread') {
+    if ('codex_thread_id' in continuation || 'codex_thread_id_digest' in continuation) {
+      throw new DomainError(
+        'codex_session_thread_binding_partial',
+        'codex_session_thread_binding_partial: start_thread must not carry thread binding fields.',
+      );
+    }
+    if (runnerRuntimeJobId !== undefined || runnerLaunchLeaseId !== undefined) {
+      throw unsupportedGenerationWorkload(
+        'codex_generation_workload_unsupported: runner binding is forbidden for start_thread.',
+      );
+    }
+    parsedContinuation = { kind: 'start_thread' };
+  } else {
+    const codexThreadId = continuation.codex_thread_id;
+    const codexThreadIdDigest = continuation.codex_thread_id_digest;
+    if (!isNonEmptyString(codexThreadId) || !isNonEmptyString(codexThreadIdDigest)) {
+      throw new DomainError(
+        'codex_session_thread_binding_partial',
+        'codex_session_thread_binding_partial: resume_thread requires thread id and digest.',
+      );
+    }
+    if (runnerRuntimeJobId === undefined || runnerLaunchLeaseId === undefined) {
+      throw new DomainError(
+        'codex_session_thread_binding_partial',
+        'codex_session_thread_binding_partial: resume_thread requires runner binding.',
+      );
+    }
+    if (codexThreadIdDigest !== codexSessionThreadIdDigest(codexThreadId)) {
+      throw new DomainError(
+        'codex_session_thread_digest_mismatch',
+        'codex_session_thread_digest_mismatch: resume_thread thread digest does not match thread id.',
+      );
+    }
+    parsedContinuation = {
+      kind: 'resume_thread',
+      codex_thread_id: codexThreadId,
+      codex_thread_id_digest: codexThreadIdDigest,
+    };
+  }
+
+  if (!Number.isInteger(value.lease_epoch) || Number(value.lease_epoch) <= 0) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: lease_epoch must be a positive integer.');
+  }
+  if (value.turn_group_status !== 'intermediate' && value.turn_group_status !== 'complete') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: turn_group_status is unsupported.');
+  }
+
+  return {
+    schema_version: 'codex_session_runtime_context.v1',
+    codex_session_id: requireRuntimeContextString(value, 'codex_session_id'),
+    codex_session_turn_id: requireRuntimeContextString(value, 'codex_session_turn_id'),
+    lease_id: requireRuntimeContextString(value, 'lease_id'),
+    lease_epoch: Number(value.lease_epoch),
+    worker_id: requireRuntimeContextString(value, 'worker_id'),
+    worker_session_digest: requireRuntimeContextString(value, 'worker_session_digest'),
+    ...(expectedPreviousSnapshotDigest === undefined
+      ? {}
+      : { expected_previous_snapshot_digest: expectedPreviousSnapshotDigest }),
+    ...(runnerRuntimeJobId === undefined ? {} : { runner_runtime_job_id: runnerRuntimeJobId }),
+    ...(runnerLaunchLeaseId === undefined ? {} : { runner_launch_lease_id: runnerLaunchLeaseId }),
+    turn_group_status: value.turn_group_status,
+    continuation: parsedContinuation,
+  };
+};
 
 const isRawPathEndpointOrContainerId = (value: string): boolean =>
   /^\/|https?:\/\/|^unix:|\.sock$/i.test(value) || /^[a-f0-9]{12,64}$/i.test(value);
@@ -1453,7 +1611,11 @@ export const assertCodexRuntimePublicSafeValue = (input: unknown, label: string)
 };
 
 export const codexRuntimeJobInputDigest = (input: unknown): string => {
-  assertCodexRuntimePublicSafeValue(input, 'job input');
+  const trustedInput =
+    isPlainObject(input) && input.schema_version === 'codex_generation_workload.v1' && input.codex_session_terminalization !== undefined
+      ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'codex_session_terminalization'))
+      : input;
+  assertCodexRuntimePublicSafeValue(trustedInput, 'job input');
   return codexCanonicalDigest(input);
 };
 
@@ -1581,6 +1743,7 @@ const codexGenerationRuntimeJobResultKeys = new Set([
   'generated_payload',
   'generated_payload_digest',
   'generation_artifacts',
+  'codex_session_thread',
   'runtime_evidence',
   'public_summary',
 ]);
@@ -1661,6 +1824,7 @@ const codexRunExecutionRuntimeJobResultKeys = new Set([
   'runtime_evidence',
   'public_summary',
 ]);
+const codexSessionThreadTerminalEvidenceKeys = new Set(['codex_thread_id', 'codex_thread_id_digest', 'app_server_turn_id']);
 
 const requireCodexRuntimeInternalRef = (input: Record<string, unknown>, field: string, label: string): string => {
   const internalRef = requireCodexRuntimeResultString(input, field);
@@ -1694,6 +1858,22 @@ const requireCodexRuntimeArtifact = (input: unknown, field: string): Record<stri
       throw unsafeCodexRuntimePublicValue(`Codex runtime terminal result field ${field} internal_ref requires digest.`);
     }
     requireCodexRuntimeInternalRef(input, 'internal_ref', `${field} internal_ref`);
+  }
+  return input;
+};
+
+const requireCodexSessionThreadTerminalEvidence = (input: unknown): Record<string, unknown> => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result field codex_session_thread must be an object.');
+  }
+  assertCodexRuntimeResultKeys(input, codexSessionThreadTerminalEvidenceKeys, 'codex_session_thread');
+  const codexThreadId = requireCodexRuntimeResultString(input, 'codex_thread_id');
+  const codexThreadIdDigest = requireCodexRuntimeResultString(input, 'codex_thread_id_digest');
+  if (codexThreadIdDigest !== codexSessionThreadIdDigest(codexThreadId)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result field codex_session_thread digest does not match thread id.');
+  }
+  if (input.app_server_turn_id !== undefined) {
+    requireCodexRuntimeResultString(input, 'app_server_turn_id');
   }
   return input;
 };
@@ -1978,6 +2158,9 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   requireCodexRuntimeResultArray(input, 'generation_artifacts').forEach((artifact) =>
     requireCodexRuntimeArtifact(artifact, 'generation_artifacts'),
   );
+  if (input.codex_session_thread !== undefined) {
+    requireCodexSessionThreadTerminalEvidence(input.codex_session_thread);
+  }
   if (input.runtime_evidence !== undefined) {
     validateCodexDockerRuntimeEvidence(input.runtime_evidence);
   }
@@ -2168,6 +2351,7 @@ export const validateCodexRuntimeJobTerminalResult = (
   const resultRecord = result as unknown as Record<string, unknown>;
   const omittedPublicSafeKeys = new Set<string>([
     ...(resultRecord.runtime_evidence !== undefined ? ['runtime_evidence'] : []),
+    ...(resultRecord.codex_session_thread !== undefined ? ['codex_session_thread'] : []),
     ...(productGenerationTaskKindSet.has(String(resultRecord.task_kind)) ? ['generated_payload'] : []),
   ]);
   const publicSafeInput =

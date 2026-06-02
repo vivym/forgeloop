@@ -25,6 +25,7 @@ export interface CodexGenerationRuntimeSafety {
   readonly repoIds: string[];
   readonly artifactRoot: string;
   readonly workspaceRoot?: string;
+  readonly allowThreadResume?: boolean;
   readonly policyDigests: Record<string, string>;
   createGenerationLease(input: GenerationLeaseInput): Promise<GenerationLease>;
   consumeGenerationCommand(input: {

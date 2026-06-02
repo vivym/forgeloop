@@ -23,6 +23,8 @@ import {
   importCodexCredentialSchema,
   importCodexRuntimeProfileSchema,
   importLocalCodexSchema,
+  attachCodexSessionRunnerRuntimeJobSchema,
+  markCodexSessionRunnerOwnerSchema,
   materializeCodexRuntimeJobSchema,
   materializeCodexLaunchLeaseSchema,
   pollCodexRuntimeJobsSchema,
@@ -51,6 +53,8 @@ import {
   type ImportCodexCredentialDto,
   type ImportCodexRuntimeProfileDto,
   type ImportLocalCodexDto,
+  type AttachCodexSessionRunnerRuntimeJobDto,
+  type MarkCodexSessionRunnerOwnerDto,
   type MaterializeCodexRuntimeJobDto,
   type MaterializeCodexLaunchLeaseDto,
   type PollCodexRuntimeJobsDto,
@@ -309,6 +313,24 @@ export class CodexRuntimeController {
     @Body(new ZodValidationPipe(startCodexRuntimeJobSchema)) body: StartCodexRuntimeJobDto,
   ) {
     return this.service.startRuntimeJob(workerId, jobId, body);
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/session-runner/owner')
+  markCodexSessionRunnerOwner(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(markCodexSessionRunnerOwnerSchema)) body: MarkCodexSessionRunnerOwnerDto,
+  ) {
+    return this.service.markCodexSessionRunnerOwner(workerId, jobId, body);
+  }
+
+  @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/session-runner/attach')
+  attachCodexSessionRunnerRuntimeJob(
+    @Param('workerId') workerId: string,
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(attachCodexSessionRunnerRuntimeJobSchema)) body: AttachCodexSessionRunnerRuntimeJobDto,
+  ) {
+    return this.service.attachCodexSessionRunnerRuntimeJob(workerId, jobId, body);
   }
 
   @Post('/internal/codex-workers/:workerId/runtime-jobs/:jobId/events')

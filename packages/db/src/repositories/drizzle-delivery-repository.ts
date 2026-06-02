@@ -109,6 +109,7 @@ import {
   validateCodexRuntimeJobArtifactIntake,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
+  validateCodexSessionRuntimeContext,
   isActiveRunSessionStatus,
   isWorkItemAutomationTerminal,
   normalizeAutomationCapabilities,
@@ -229,6 +230,7 @@ import type {
   ExecutionPackageGenerationPackageRecord,
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
+  FindCodexWorkerForSessionRunnerInput,
   GetActiveCodexGenerationActionRunFenceInput,
   GetAutomationActionRunByIdempotencyKeyInput,
   GetClaimedAutomationActionRunInput,
@@ -249,6 +251,7 @@ import type {
   GetCodexRuntimeJobArtifactByInternalRefInput,
   ListActiveManualPathHoldsInput,
   ListClaimableAutomationActionRunsInput,
+  MarkCodexSessionRunnerOwnerInput,
   MarkAutomationActionGatePendingInput,
   MaterializeCodexRuntimeJobInput,
   MaterializeCodexLaunchLeaseInput,
@@ -293,10 +296,13 @@ import type {
   CreatePlanItemWorkflowWithInitialSessionInput,
   RecoverCodexSessionLeaseForClaimInput,
   RenewCodexSessionLeaseInput,
+  RenewCodexSessionRunnerOwnerInput,
   SelectActiveCodexSessionForkInput,
   TerminalizeCodexSessionTurnInput,
   WorkflowRepositoryEvidenceInput,
   BoundaryRoundRecord,
+  AttachCodexSessionRunnerRuntimeJobInput,
+  ClearCodexSessionRunnerOwnerInput,
 } from './delivery-repository';
 import {
   assertInternalArtifactObjectInput,
@@ -449,6 +455,74 @@ const revisionDiff = (
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const isCodexSessionResumeRuntimeJobInput = (inputJson: Record<string, unknown>): boolean => {
+  const context = inputJson.codex_session_runtime_context;
+  if (!isRecord(context)) {
+    return false;
+  }
+  const continuation = context.continuation;
+  return isRecord(continuation) && continuation.kind === 'resume_thread';
+};
+
+const shouldKeepCodexSessionRunnerLeaseOpen = (job: CodexRuntimeJob, terminalStatus: string): boolean => {
+  if (terminalStatus !== 'succeeded' || job.codex_session_id === undefined || job.codex_session_turn_id === undefined) {
+    return false;
+  }
+  try {
+    const context = validateCodexSessionRuntimeContext(job.input_json.codex_session_runtime_context);
+    return (
+      context.codex_session_id === job.codex_session_id &&
+      context.codex_session_turn_id === job.codex_session_turn_id &&
+      context.continuation.kind === 'start_thread' &&
+      context.turn_group_status === 'intermediate'
+    );
+  } catch {
+    return false;
+  }
+};
+
+const codexSessionRunnerJobHasLiveEvidence = (
+  job: CodexRuntimeJob,
+  input: AttachCodexSessionRunnerRuntimeJobInput,
+): boolean =>
+  job.id === input.runner_runtime_job_id &&
+  job.launch_lease_id === input.runner_launch_lease_id &&
+  job.codex_session_id === input.session_id &&
+  job.worker_id === input.worker_id &&
+  job.runtime_evidence_digest !== undefined &&
+  job.launch_materialization_digest !== undefined &&
+  job.started_at !== undefined &&
+  job.expires_at > input.now &&
+  (job.status === 'running' ||
+    (job.status === 'terminal' &&
+      job.terminal_status === 'succeeded' &&
+      shouldKeepCodexSessionRunnerLeaseOpen(job, job.terminal_status)));
+
+const codexSessionResumeRuntimeJobMatchesAttach = (
+  job: CodexRuntimeJob,
+  session: CodexSession,
+  input: AttachCodexSessionRunnerRuntimeJobInput,
+): boolean => {
+  try {
+    const context = validateCodexSessionRuntimeContext(job.input_json.codex_session_runtime_context);
+    return (
+      context.continuation.kind === 'resume_thread' &&
+      session.codex_thread_id !== undefined &&
+      session.codex_thread_id_digest !== undefined &&
+      context.continuation.codex_thread_id === session.codex_thread_id &&
+      context.continuation.codex_thread_id_digest === session.codex_thread_id_digest &&
+      context.codex_session_id === input.session_id &&
+      context.codex_session_turn_id === job.codex_session_turn_id &&
+      context.worker_id === input.worker_id &&
+      context.worker_session_digest === job.accepted_worker_session_digest &&
+      context.runner_runtime_job_id === input.runner_runtime_job_id &&
+      context.runner_launch_lease_id === input.runner_launch_lease_id
+    );
+  } catch {
+    return false;
+  }
+};
 
 const changedFields = (base: unknown, compare: unknown): string[] => {
   if (valuesEqual(base, compare)) {
@@ -1272,6 +1346,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       existingSession.codex_thread_id_digest !== session.codex_thread_id_digest ||
       existingSession.active_lease_id !== session.active_lease_id ||
       existingSession.lease_epoch !== session.lease_epoch ||
+      existingSession.runner_worker_id !== session.runner_worker_id ||
+      existingSession.runner_launch_lease_id !== session.runner_launch_lease_id ||
+      existingSession.runner_runtime_job_id !== session.runner_runtime_job_id ||
+      existingSession.runner_expires_at !== session.runner_expires_at ||
       existingSession.archived_at !== session.archived_at
     ) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session ${session.id} service-owned state fields cannot change`);
@@ -1310,9 +1388,16 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     ) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Codex session turn ${turn.id} service-owned fields cannot be set at creation`);
     }
-    const session = await this.getCodexSession(turn.codex_session_id);
+    let session = await this.getCodexSession(turn.codex_session_id);
     const workflow = session === undefined ? undefined : await this.getPlanItemWorkflow(session.owner_id);
-    const cannotCreateTurn =
+    if (session !== undefined && workflow !== undefined) {
+      const activeLease = session.active_lease_id === undefined ? undefined : await this.getCodexSessionLease(session.active_lease_id);
+      const recovered = await this.recoverExpiredActiveCodexSessionLeaseForClaimUnlocked(session, activeLease, turn.created_at);
+      if (!recovered.conflict) {
+        session = recovered.session;
+      }
+    }
+    if (
       session === undefined ||
       workflow === undefined ||
       session.owner_type !== 'plan_item_workflow' ||
@@ -1320,20 +1405,478 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       workflow.id !== turn.workflow_id ||
       workflow.active_codex_session_id !== session.id ||
       session.role !== 'active' ||
-      !claimableCodexSessionStatuses.has(session.status);
-    if (cannotCreateTurn) {
+      !claimableCodexSessionStatuses.has(session.status)
+    ) {
       throw new DomainError('workflow_active_session_missing', `workflow_active_session_missing: Codex session ${turn.codex_session_id} is not active for workflow ${turn.workflow_id}`);
     }
-    if (session.latest_snapshot_digest !== turn.expected_previous_snapshot_digest) {
+    const activeSession = session;
+    if (activeSession.latest_snapshot_digest !== turn.expected_previous_snapshot_digest) {
       throw new DomainError('codex_session_snapshot_stale', `codex_session_snapshot_stale: Codex session ${turn.codex_session_id} snapshot is stale`);
     }
-    const updatedSession: CodexSession = { ...session, latest_turn_id: turn.id, latest_turn_digest: turn.input_digest, updated_at: turn.updated_at };
+    const updatedSession: CodexSession = { ...activeSession, latest_turn_id: turn.id, latest_turn_digest: turn.input_digest, updated_at: turn.updated_at };
     await this.db.insert(codex_session_turns).values(toDbRecord(turn, codex_session_turns) as never);
-    await this.db.update(codex_sessions).set(toDbRecord(updatedSession, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+    await this.db.update(codex_sessions).set(toDbRecord(updatedSession, codex_sessions) as never).where(eq(codex_sessions.id, activeSession.id));
   }
 
   async getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined> {
     return this.getById(codex_session_turns, codex_session_turns.id, id);
+  }
+
+  async markCodexSessionRunnerOwner(input: MarkCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    const [row] = await this.db
+      .update(codex_sessions)
+      .set({
+        runnerWorkerId: input.runner_worker_id,
+        runnerLaunchLeaseId: input.runner_launch_lease_id,
+        runnerRuntimeJobId: input.runner_runtime_job_id,
+        runnerExpiresAt: input.runner_expires_at,
+        updatedAt: input.now,
+      } as never)
+      .where(
+        and(
+          eq(codex_sessions.id, input.session_id),
+          or(
+            and(
+              isNull(codex_sessions.runnerWorkerId),
+              isNull(codex_sessions.runnerLaunchLeaseId),
+              isNull(codex_sessions.runnerRuntimeJobId),
+              isNull(codex_sessions.runnerExpiresAt),
+            ),
+            and(
+              eq(codex_sessions.runnerWorkerId, input.runner_worker_id),
+              eq(codex_sessions.runnerLaunchLeaseId, input.runner_launch_lease_id),
+              eq(codex_sessions.runnerRuntimeJobId, input.runner_runtime_job_id),
+              gt(codex_sessions.runnerExpiresAt, input.now),
+            ),
+            sql`${codex_sessions.runnerExpiresAt} <= ${input.now}`,
+          ),
+        ),
+      )
+      .returning();
+    if (row === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    return fromDbRecord<CodexSession>(row as Record<string, unknown>);
+  }
+
+  async clearCodexSessionRunnerOwner(input: ClearCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(codex_sessions)
+        .set({
+          runnerWorkerId: null,
+          runnerLaunchLeaseId: null,
+          runnerRuntimeJobId: null,
+          runnerExpiresAt: null,
+          updatedAt: input.now,
+        } as never)
+        .where(and(eq(codex_sessions.id, input.session_id), eq(codex_sessions.runnerLaunchLeaseId, input.runner_launch_lease_id)))
+        .returning();
+      if (row === undefined) {
+        throw new DomainError(
+          'codex_session_runner_unavailable',
+          `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+        );
+      }
+      const terminalIdempotencyKey = codexCanonicalDigest({
+        kind: 'clear_codex_session_runner_owner',
+        session_id: input.session_id,
+        runner_launch_lease_id: input.runner_launch_lease_id,
+        terminal_reason_code: input.terminal_reason_code,
+      });
+      const [leaseRow] = await tx
+        .update(codex_launch_leases)
+        .set({
+          status: 'terminal',
+          terminalizedAt: input.now,
+          terminalReasonCode: input.terminal_reason_code,
+          terminalIdempotencyKey: terminalIdempotencyKey,
+        } as never)
+        .where(
+          and(
+            eq(codex_launch_leases.id, input.runner_launch_lease_id),
+            or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
+            isNull(codex_launch_leases.terminalizedAt),
+          ),
+        )
+        .returning();
+      if (leaseRow !== undefined) {
+        const lease = fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>);
+        if (lease.worker_id !== undefined) {
+          await this.decrementCodexWorkerLeaseCounts(tx as ForgeloopDrizzleDatabase, [lease.worker_id]);
+        }
+      }
+      return fromDbRecord<CodexSession>(row as Record<string, unknown>);
+    });
+  }
+
+  async renewCodexSessionRunnerOwner(input: RenewCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    return this.withAdvisoryLocks(
+      [
+        `codex-session:${input.session_id}`,
+        ...this.codexRuntimeJobStateLockKeys(input.runner_runtime_job_id, input.runner_worker_id),
+        `codex-runtime-lease:${input.runner_launch_lease_id}`,
+      ],
+      async () => this.renewCodexSessionRunnerOwnerUnlocked(input),
+    );
+  }
+
+  private async renewCodexSessionRunnerOwnerUnlocked(input: RenewCodexSessionRunnerOwnerInput): Promise<CodexSession> {
+    const [runnerRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.runner_runtime_job_id))
+      .limit(1);
+    const [runnerLeaseRow] = await this.db
+      .select()
+      .from(codex_launch_leases)
+      .where(eq(codex_launch_leases.id, input.runner_launch_lease_id))
+      .limit(1);
+    const runner = runnerRow === undefined ? undefined : runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(runnerRow as Record<string, unknown>));
+    const runnerLease =
+      runnerLeaseRow === undefined ? undefined : fromDbRecord<CodexLaunchLeaseDbRecord>(runnerLeaseRow as Record<string, unknown>);
+    if (
+      runner === undefined ||
+      runnerLease === undefined ||
+      runner.id !== input.runner_runtime_job_id ||
+      runner.launch_lease_id !== input.runner_launch_lease_id ||
+      runner.codex_session_id !== input.session_id ||
+      runner.worker_id !== input.runner_worker_id ||
+      !timestampIsAfter(runner.expires_at, input.now) ||
+      runnerLease.id !== input.runner_launch_lease_id ||
+      runnerLease.worker_id !== input.runner_worker_id ||
+      !timestampIsAfter(runnerLease.expires_at, input.now) ||
+      (runnerLease.status !== 'active' && runnerLease.status !== 'materialized')
+    ) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    const [row] = await this.db
+      .update(codex_sessions)
+      .set({
+        runnerExpiresAt: input.runner_expires_at,
+        updatedAt: input.now,
+      } as never)
+      .where(
+        and(
+          eq(codex_sessions.id, input.session_id),
+          eq(codex_sessions.runnerWorkerId, input.runner_worker_id),
+          eq(codex_sessions.runnerLaunchLeaseId, input.runner_launch_lease_id),
+          eq(codex_sessions.runnerRuntimeJobId, input.runner_runtime_job_id),
+          gt(codex_sessions.runnerExpiresAt, input.now),
+        ),
+      )
+      .returning();
+    const [jobRow] = await this.db
+      .update(codex_runtime_jobs)
+      .set({ expiresAt: input.runner_expires_at, updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(codex_runtime_jobs.id, input.runner_runtime_job_id),
+          eq(codex_runtime_jobs.workerId, input.runner_worker_id),
+          eq(codex_runtime_jobs.launchLeaseId, input.runner_launch_lease_id),
+          eq(codex_runtime_jobs.codexSessionId, input.session_id),
+          gt(codex_runtime_jobs.expiresAt, input.now),
+        ),
+      )
+      .returning();
+    const [leaseRow] = await this.db
+      .update(codex_launch_leases)
+      .set({ expiresAt: input.runner_expires_at, updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(codex_launch_leases.id, input.runner_launch_lease_id),
+          eq(codex_launch_leases.workerId, input.runner_worker_id),
+          gt(codex_launch_leases.expiresAt, input.now),
+          or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
+        ),
+      )
+      .returning();
+    if (row === undefined || jobRow === undefined || leaseRow === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+    return fromDbRecord<CodexSession>(row as Record<string, unknown>);
+  }
+
+  async attachCodexSessionRunnerRuntimeJob(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
+    return this.withAdvisoryLocks(
+      [
+        `codex-session:${input.session_id}`,
+        ...this.codexRuntimeJobStateLockKeys(input.runner_runtime_job_id, input.worker_id),
+        ...this.codexRuntimeJobStateLockKeys(input.attached_runtime_job_id, input.worker_id),
+        `codex-runtime-lease:${input.runner_launch_lease_id}`,
+      ],
+      async (repository) => (repository as DrizzleDeliveryRepository).attachCodexSessionRunnerRuntimeJobUnlocked(input),
+    );
+  }
+
+  private async attachCodexSessionRunnerRuntimeJobUnlocked(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob> {
+    await this.assertCodexWorkerSession(input.worker_id, input.worker_session_token, 'codex_runtime_job_unavailable', input.now);
+    await this.recordCodexWorkerNonce(
+      input.worker_id,
+      input.worker_session_token,
+      input.nonce,
+      input.nonce_timestamp,
+      input.now,
+      input.replay_protection,
+    );
+    const [sessionRow] = await this.db
+      .update(codex_sessions)
+      .set({
+        runnerExpiresAt: input.runner_expires_at,
+        updatedAt: input.now,
+      } as never)
+      .where(
+        and(
+          eq(codex_sessions.id, input.session_id),
+          eq(codex_sessions.runnerWorkerId, input.worker_id),
+          eq(codex_sessions.runnerLaunchLeaseId, input.runner_launch_lease_id),
+          eq(codex_sessions.runnerRuntimeJobId, input.runner_runtime_job_id),
+          gt(codex_sessions.runnerExpiresAt, input.now),
+        ),
+      )
+      .returning();
+    const session = sessionRow === undefined ? undefined : fromDbRecord<CodexSession>(sessionRow as Record<string, unknown>);
+    if (session === undefined || session.runner_expires_at === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${input.session_id} runner owner is unavailable`,
+      );
+    }
+
+    const [existingRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.attached_runtime_job_id))
+      .limit(1);
+    if (existingRow === undefined) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    const existing = runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(existingRow as Record<string, unknown>));
+    const [runnerRow] = await this.db
+      .select()
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.id, input.runner_runtime_job_id))
+      .limit(1);
+    const runner = runnerRow === undefined ? undefined : fromDbRecord<CodexRuntimeJobDbRecord>(runnerRow as Record<string, unknown>);
+    const [runnerLeaseRow] = await this.db
+      .select()
+      .from(codex_launch_leases)
+      .where(eq(codex_launch_leases.id, input.runner_launch_lease_id))
+      .limit(1);
+    const runnerLease =
+      runnerLeaseRow === undefined ? undefined : fromDbRecord<CodexLaunchLeaseDbRecord>(runnerLeaseRow as Record<string, unknown>);
+    if (
+      runner === undefined ||
+      runnerLease === undefined ||
+      !codexSessionRunnerJobHasLiveEvidence(runtimeJobFromDbRecord(runner), input) ||
+      runnerLease.id !== input.runner_launch_lease_id ||
+      runnerLease.worker_id !== input.worker_id ||
+      runnerLease.status !== 'materialized' ||
+      runnerLease.expires_at <= input.now ||
+      existing.launch_lease_id === input.runner_launch_lease_id ||
+      existing.worker_id !== input.worker_id ||
+      existing.codex_session_id !== input.session_id ||
+      !codexSessionResumeRuntimeJobMatchesAttach(existing, session, input) ||
+      existing.status === 'terminal' ||
+      existing.cancel_requested_at !== undefined ||
+      existing.expires_at <= input.now
+    ) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    try {
+      await this.assertCodexRuntimeJobMaterializationDependencies(runner, runnerLease);
+    } catch {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} runner launch dependencies are unavailable`,
+      );
+    }
+    const [leaseRow] = await this.db
+      .select()
+      .from(codex_launch_leases)
+      .where(eq(codex_launch_leases.id, existing.launch_lease_id))
+      .limit(1);
+    const lease = leaseRow === undefined ? undefined : fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>);
+    if (lease === undefined) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    if (existing.status === 'running') {
+      if (
+        existing.status === 'running' &&
+        existing.codex_session_id === input.session_id &&
+        existing.worker_id === input.worker_id &&
+        existing.start_idempotency_key === input.idempotency_key &&
+        existing.start_request_digest === input.request_digest &&
+        existing.runtime_evidence_digest === input.runtime_evidence_digest &&
+        existing.launch_materialization_digest === input.launch_materialization_digest
+      ) {
+        await this.renewRunnerRuntimeJobLeaseForAttach(input);
+        return existing;
+      }
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    if (existing.status !== 'accepted' || lease.status !== 'active' || lease.expires_at <= input.now) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    if (!(await this.codexLaunchFenceIsActive(lease, input.now))) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} launch fence is unavailable`,
+      );
+    }
+    try {
+      await this.assertCodexRuntimeJobMaterializationDependencies(
+        fromDbRecord<CodexRuntimeJobDbRecord>(existingRow as Record<string, unknown>),
+        lease,
+      );
+    } catch {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} launch dependencies are unavailable`,
+      );
+    }
+    const [jobRow] = await this.db
+      .update(codex_runtime_jobs)
+      .set({
+        status: 'running',
+        startIdempotencyKey: input.idempotency_key,
+        startRequestDigest: input.request_digest,
+        runtimeEvidenceDigest: input.runtime_evidence_digest,
+        launchMaterializationDigest: input.launch_materialization_digest,
+        startedAt: input.now,
+        updatedAt: input.now,
+      } as never)
+      .where(
+        and(
+          eq(codex_runtime_jobs.id, input.attached_runtime_job_id),
+          eq(codex_runtime_jobs.status, 'accepted'),
+          eq(codex_runtime_jobs.workerId, input.worker_id),
+          eq(codex_runtime_jobs.launchLeaseId, existing.launch_lease_id),
+          eq(codex_runtime_jobs.codexSessionId, input.session_id),
+          eq(codex_runtime_jobs.inputDigest, existing.input_digest),
+          existing.accepted_worker_session_digest === undefined
+            ? isNull(codex_runtime_jobs.acceptedWorkerSessionDigest)
+            : eq(codex_runtime_jobs.acceptedWorkerSessionDigest, existing.accepted_worker_session_digest),
+          existing.codex_session_turn_id === undefined
+            ? isNull(codex_runtime_jobs.codexSessionTurnId)
+            : eq(codex_runtime_jobs.codexSessionTurnId, existing.codex_session_turn_id),
+          gt(codex_runtime_jobs.expiresAt, input.now),
+          isNull(codex_runtime_jobs.cancelRequestedAt),
+        ),
+      )
+      .returning();
+    const [leaseUpdateRow] = await this.db
+      .update(codex_launch_leases)
+      .set({ status: 'materialized', materializationRequestHash: input.request_digest, materializedAt: input.now } as never)
+      .where(
+        and(
+          eq(codex_launch_leases.id, existing.launch_lease_id),
+          eq(codex_launch_leases.status, 'active'),
+          eq(codex_launch_leases.workerId, input.worker_id),
+          eq(codex_launch_leases.targetType, lease.target_type),
+          eq(codex_launch_leases.targetId, lease.target_id),
+          eq(codex_launch_leases.targetKind, lease.target_kind),
+          eq(codex_launch_leases.projectId, lease.project_id),
+          lease.repo_id === undefined ? isNull(codex_launch_leases.repoId) : eq(codex_launch_leases.repoId, lease.repo_id),
+          eq(codex_launch_leases.launchAttempt, lease.launch_attempt),
+          eq(codex_launch_leases.runtimeProfileRevisionId, lease.runtime_profile_revision_id),
+          eq(codex_launch_leases.runtimeProfileDigest, lease.runtime_profile_digest),
+          eq(codex_launch_leases.credentialBindingId, lease.credential_binding_id),
+          eq(codex_launch_leases.credentialBindingVersionId, lease.credential_binding_version_id),
+          eq(codex_launch_leases.credentialPayloadDigest, lease.credential_payload_digest),
+          eq(codex_launch_leases.dockerImageDigest, lease.docker_image_digest),
+          eq(codex_launch_leases.networkPolicyDigest, lease.network_policy_digest),
+          lease.network_provider_config_digest === undefined
+            ? isNull(codex_launch_leases.networkProviderConfigDigest)
+            : eq(codex_launch_leases.networkProviderConfigDigest, lease.network_provider_config_digest),
+          lease.run_worker_lease_id === undefined
+            ? isNull(codex_launch_leases.runWorkerLeaseId)
+            : eq(codex_launch_leases.runWorkerLeaseId, lease.run_worker_lease_id),
+          lease.run_worker_lease_token_hash === undefined
+            ? isNull(codex_launch_leases.runWorkerLeaseTokenHash)
+            : eq(codex_launch_leases.runWorkerLeaseTokenHash, lease.run_worker_lease_token_hash),
+          lease.run_session_status === undefined
+            ? isNull(codex_launch_leases.runSessionStatus)
+            : eq(codex_launch_leases.runSessionStatus, lease.run_session_status),
+          lease.run_session_updated_at === undefined
+            ? isNull(codex_launch_leases.runSessionUpdatedAt)
+            : eq(codex_launch_leases.runSessionUpdatedAt, lease.run_session_updated_at),
+          lease.execution_package_version === undefined
+            ? isNull(codex_launch_leases.executionPackageVersion)
+            : eq(codex_launch_leases.executionPackageVersion, lease.execution_package_version),
+          gt(codex_launch_leases.expiresAt, input.now),
+        ),
+      )
+      .returning();
+    if (jobRow === undefined || leaseUpdateRow === undefined) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.attached_runtime_job_id} is unavailable`,
+      );
+    }
+    await this.renewRunnerRuntimeJobLeaseForAttach(input);
+    return runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>));
+  }
+
+  private async renewRunnerRuntimeJobLeaseForAttach(input: Pick<
+    AttachCodexSessionRunnerRuntimeJobInput,
+    'session_id' | 'runner_launch_lease_id' | 'runner_runtime_job_id' | 'runner_expires_at' | 'worker_id' | 'now'
+  >): Promise<void> {
+    const [jobRow] = await this.db
+      .update(codex_runtime_jobs)
+      .set({ expiresAt: input.runner_expires_at, updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(codex_runtime_jobs.id, input.runner_runtime_job_id),
+          eq(codex_runtime_jobs.workerId, input.worker_id),
+          eq(codex_runtime_jobs.launchLeaseId, input.runner_launch_lease_id),
+          eq(codex_runtime_jobs.codexSessionId, input.session_id),
+          gt(codex_runtime_jobs.expiresAt, input.now),
+        ),
+      )
+      .returning();
+    const [leaseRow] = await this.db
+      .update(codex_launch_leases)
+      .set({ expiresAt: input.runner_expires_at, updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(codex_launch_leases.id, input.runner_launch_lease_id),
+          eq(codex_launch_leases.workerId, input.worker_id),
+          gt(codex_launch_leases.expiresAt, input.now),
+          or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
+        ),
+      )
+      .returning();
+    if (jobRow === undefined || leaseRow === undefined) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.runner_runtime_job_id} runner lease is unavailable`,
+      );
+    }
   }
 
   async saveCodexSessionTurn(turn: CodexSessionTurn): Promise<void> {
@@ -1721,21 +2264,31 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
     const hasThreadIdInput = input.codex_thread_id !== undefined;
     const hasThreadDigestInput = input.codex_thread_id_digest !== undefined;
+    if (input.app_server_thread_binding_required === true && (!hasThreadIdInput || !hasThreadDigestInput)) {
+      throw new DomainError(
+        'codex_app_server_thread_id_missing',
+        `codex_app_server_thread_id_missing: Codex session ${input.session_id} app-server terminalization requires thread id and digest`,
+      );
+    }
     if (hasThreadIdInput !== hasThreadDigestInput) {
-      throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} thread binding is incomplete`);
+      throw new DomainError('codex_session_thread_binding_stale', `codex_session_thread_binding_stale: Codex session ${input.session_id} thread binding is incomplete`);
+    }
+    const hasSessionThreadId = session.codex_thread_id !== undefined;
+    const hasSessionThreadDigest = session.codex_thread_id_digest !== undefined;
+    const terminalizationAttemptsThreadBinding = hasThreadIdInput || hasThreadDigestInput || input.status === 'succeeded';
+    if (hasSessionThreadId !== hasSessionThreadDigest && terminalizationAttemptsThreadBinding) {
+      throw new DomainError('codex_session_thread_binding_stale', `codex_session_thread_binding_stale: Codex session ${input.session_id} has a partial thread binding`);
     }
     if (hasThreadIdInput && hasThreadDigestInput) {
-      const hasSessionThreadId = session.codex_thread_id !== undefined;
-      const hasSessionThreadDigest = session.codex_thread_id_digest !== undefined;
       if (hasSessionThreadId !== hasSessionThreadDigest) {
-        throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} has a partial thread binding`);
+        throw new DomainError('codex_session_thread_binding_stale', `codex_session_thread_binding_stale: Codex session ${input.session_id} has a partial thread binding`);
       }
       if (
         hasSessionThreadId &&
         hasSessionThreadDigest &&
         (session.codex_thread_id !== input.codex_thread_id || session.codex_thread_id_digest !== input.codex_thread_id_digest)
       ) {
-        throw new DomainError('codex_session_stale_terminalization', `codex_session_stale_terminalization: Codex session ${input.session_id} thread binding is stale`);
+        throw new DomainError('codex_session_thread_binding_stale', `codex_session_thread_binding_stale: Codex session ${input.session_id} thread binding is stale`);
       }
     }
     const outputSnapshot = existingOutputSnapshot ?? input.output_snapshot;
@@ -3144,17 +3697,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async findAvailableCodexWorker(input: FindAvailableCodexWorkerInput): Promise<CodexWorkerRegistration | undefined> {
-    const rows = await this.db
-      .select()
-      .from(codex_worker_registrations)
-      .where(
-        and(
-          eq(codex_worker_registrations.status, 'online'),
-          eq(codex_worker_registrations.controlChannelStatus, 'connected'),
-          gt(codex_worker_registrations.sessionTokenExpiresAt, input.now),
-          isNotNull(codex_worker_registrations.lastHeartbeatAt),
-        ),
-      )
+    const rows = await this.selectCandidateCodexWorkerRows(input)
       .orderBy(
         asc(codex_worker_registrations.leaseCount),
         desc(codex_worker_registrations.lastHeartbeatAt),
@@ -3163,18 +3706,50 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       );
     const matched = rows
       .map((row) => fromDbRecord<CodexWorkerRegistrationDbRecord>(row))
-      .find(
-        (record) =>
-          codexWorkerHeartbeatIsFresh(record.last_heartbeat_at, input.now) &&
-          record.lease_count < record.max_concurrency &&
-          capabilityList(record.capabilities_json, 'target_kinds').includes(input.target_kind) &&
-          codexWorkerScopeMatchesTarget(record.allowed_scopes_json, input.target_kind, codexScope(input.project_id, input.repo_id)) &&
-          capabilityList(record.capabilities_json, 'docker_image_digests').includes(input.docker_image_digest) &&
-          capabilityList(record.capabilities_json, 'network_policy_digests').includes(input.network_policy_digest) &&
-          (input.network_provider_config_digest === undefined ||
-            capabilityList(record.capabilities_json, 'network_provider_config_digests').includes(input.network_provider_config_digest)),
-      );
+      .find((record) => this.codexWorkerRecordMatchesRuntimeTarget(record, input) && record.lease_count < record.max_concurrency);
     return matched === undefined ? undefined : registrationFromDbRecord(matched);
+  }
+
+  async findCodexWorkerForSessionRunner(input: FindCodexWorkerForSessionRunnerInput): Promise<CodexWorkerRegistration | undefined> {
+    const rows = await this.selectCandidateCodexWorkerRows(input);
+    const matched = rows.map((row) => fromDbRecord<CodexWorkerRegistrationDbRecord>(row)).find((record) => this.codexWorkerRecordMatchesRuntimeTarget(record, input));
+    return matched === undefined ? undefined : registrationFromDbRecord(matched);
+  }
+
+  private selectCandidateCodexWorkerRows(input: FindAvailableCodexWorkerInput) {
+    const predicates = [
+      eq(codex_worker_registrations.status, 'online'),
+      eq(codex_worker_registrations.controlChannelStatus, 'connected'),
+      gt(codex_worker_registrations.sessionTokenExpiresAt, input.now),
+      isNotNull(codex_worker_registrations.lastHeartbeatAt),
+      ...(input.worker_id === undefined ? [] : [eq(codex_worker_registrations.id, input.worker_id)]),
+    ];
+    return this.db.select().from(codex_worker_registrations).where(and(...predicates));
+  }
+
+  private codexWorkerRecordMatchesRuntimeTarget(
+    record: CodexWorkerRegistrationDbRecord,
+    input: FindAvailableCodexWorkerInput,
+  ): boolean {
+    return (
+      (input.worker_id === undefined || record.id === input.worker_id) &&
+      codexWorkerHeartbeatIsFresh(record.last_heartbeat_at, input.now) &&
+      capabilityList(record.capabilities_json, 'target_kinds').includes(input.target_kind) &&
+      codexWorkerScopeMatchesTarget(record.allowed_scopes_json, input.target_kind, codexScope(input.project_id, input.repo_id)) &&
+      capabilityList(record.capabilities_json, 'docker_image_digests').includes(input.docker_image_digest) &&
+      capabilityList(record.capabilities_json, 'network_policy_digests').includes(input.network_policy_digest) &&
+      (input.network_provider_config_digest === undefined ||
+        capabilityList(record.capabilities_json, 'network_provider_config_digests').includes(input.network_provider_config_digest))
+    );
+  }
+
+  async getCodexWorkerSessionDigest(workerId: string): Promise<string | undefined> {
+    const [row] = await this.db
+      .select({ sessionTokenHash: codex_worker_registrations.sessionTokenHash })
+      .from(codex_worker_registrations)
+      .where(eq(codex_worker_registrations.id, workerId))
+      .limit(1);
+    return row?.sessionTokenHash;
   }
 
   async refreshCodexWorkerSession(input: RefreshCodexWorkerSessionInput): Promise<CodexWorkerRegistration> {
@@ -4098,6 +4673,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
     }
+    if (isCodexSessionResumeRuntimeJobInput(bundle.job.input_json)) {
+      throw codexDenied(
+        'codex_session_runner_unavailable',
+        'codex_session_runner_unavailable: Codex session resume jobs must attach to the session runner.',
+      );
+    }
     if (bundle.job.status === 'materializing' || bundle.job.status === 'running') {
       if (
         bundle.job.materialization_request_id === input.materialization_request_id &&
@@ -4171,6 +4752,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       bundle.job.expires_at <= input.now
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
+    }
+    if (isCodexSessionResumeRuntimeJobInput(bundle.job.input_json)) {
+      throw codexDenied(
+        'codex_session_runner_unavailable',
+        'codex_session_runner_unavailable: Codex session resume jobs must attach to the session runner.',
+      );
     }
     if (bundle.job.status === 'running') {
       if (
@@ -4402,7 +4989,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
             ),
           )
           .returning();
-        if (leaseRow !== undefined && bundle.lease.worker_id !== undefined) {
+        if (
+          leaseRow !== undefined &&
+          bundle.lease.worker_id !== undefined &&
+          (await this.codexLaunchLeaseOccupiesWorkerSlot(bundle.lease.id))
+        ) {
           await this.decrementCodexWorkerLeaseCounts(this.db, [bundle.lease.worker_id]);
         }
       }
@@ -4511,27 +5102,32 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       } as never)
       .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), notInArray(codex_runtime_jobs.status, ['queued', 'terminal'])))
       .returning();
-    const [leaseRow] = await this.db
-      .update(codex_launch_leases)
-      .set({
-        status: 'terminal',
-        terminalizedAt: input.now,
-        terminalReasonCode: input.reason_code,
-        terminalEvidenceSummaryJson: terminalResultJson ?? null,
-        terminalRuntimeJobId: input.runtime_job_id,
-        terminalIdempotencyKey: input.idempotency_key,
-      } as never)
-      .where(
-        and(
-          eq(codex_launch_leases.id, input.launch_lease_id),
-          or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
-        ),
-      )
-      .returning();
+    const keepRunnerLeaseOpen = shouldKeepCodexSessionRunnerLeaseOpen(runtimeJobFromDbRecord(bundle.job), input.terminal_status);
+    const [leaseRow] = keepRunnerLeaseOpen
+      ? [bundle.lease]
+      : await this.db
+          .update(codex_launch_leases)
+          .set({
+            status: 'terminal',
+            terminalizedAt: input.now,
+            terminalReasonCode: input.reason_code,
+            terminalEvidenceSummaryJson: terminalResultJson ?? null,
+            terminalRuntimeJobId: input.runtime_job_id,
+            terminalIdempotencyKey: input.idempotency_key,
+          } as never)
+          .where(
+            and(
+              eq(codex_launch_leases.id, input.launch_lease_id),
+              or(eq(codex_launch_leases.status, 'active'), eq(codex_launch_leases.status, 'materialized')),
+            ),
+          )
+          .returning();
     if (jobRow === undefined || leaseRow === undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job terminalization was denied.');
     }
-    await this.decrementCodexWorkerLeaseCounts(this.db, [input.worker_id]);
+    if (!keepRunnerLeaseOpen && (await this.codexLaunchLeaseOccupiesWorkerSlot(bundle.lease.id))) {
+      await this.decrementCodexWorkerLeaseCounts(this.db, [input.worker_id]);
+    }
     return runtimeJobFromDbRecord(fromDbRecord<CodexRuntimeJobDbRecord>(jobRow as Record<string, unknown>));
   }
 
@@ -4588,7 +5184,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         if (leaseRow !== undefined) {
           const leaseRecord = fromDbRecord<CodexLaunchLeaseDbRecord>(leaseRow as Record<string, unknown>);
           recoveredLaunchLeases.push(this.codexLaunchLeaseRecoveryEvidence(launchLeaseFromDbRecord(leaseRecord)));
-          if (leaseRecord.worker_id !== undefined) {
+          if (leaseRecord.worker_id !== undefined && (await this.codexLaunchLeaseOccupiesWorkerSlot(leaseRecord.id))) {
             workerIdsToDecrement.push(leaseRecord.worker_id);
           }
         }
@@ -4679,6 +5275,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (worker === undefined || !this.codexWorkerCanRunRuntimeJob(worker, input)) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job worker fence was rejected.');
     }
+    const occupiesWorkerSlot = !isCodexSessionResumeRuntimeJobInput(input.input_json);
 
     const credential = await this.resolveCodexCredentialForLaunch({
       credential_binding_id: input.credential_binding_id,
@@ -4767,23 +5364,25 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       await this.bindCodexRuntimePendingWorkspaceBundle(input);
     }
 
-    const [workerUpdate] = await this.db
-      .update(codex_worker_registrations)
-      .set({ leaseCount: sql`${codex_worker_registrations.leaseCount} + 1` } as never)
-      .where(
-        and(
-          eq(codex_worker_registrations.id, input.worker_id),
-          eq(codex_worker_registrations.status, 'online'),
-          eq(codex_worker_registrations.controlChannelStatus, 'connected'),
-          gt(codex_worker_registrations.sessionTokenExpiresAt, input.now),
-          gt(codex_worker_registrations.sessionPublicKeyExpiresAt, input.now),
-          isNotNull(codex_worker_registrations.lastHeartbeatAt),
-          sql`${codex_worker_registrations.leaseCount} < ${codex_worker_registrations.maxConcurrency}`,
-        ),
-      )
-      .returning({ id: codex_worker_registrations.id });
-    if (workerUpdate === undefined) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job worker fence was rejected.');
+    if (occupiesWorkerSlot) {
+      const [workerUpdate] = await this.db
+        .update(codex_worker_registrations)
+        .set({ leaseCount: sql`${codex_worker_registrations.leaseCount} + 1` } as never)
+        .where(
+          and(
+            eq(codex_worker_registrations.id, input.worker_id),
+            eq(codex_worker_registrations.status, 'online'),
+            eq(codex_worker_registrations.controlChannelStatus, 'connected'),
+            gt(codex_worker_registrations.sessionTokenExpiresAt, input.now),
+            gt(codex_worker_registrations.sessionPublicKeyExpiresAt, input.now),
+            isNotNull(codex_worker_registrations.lastHeartbeatAt),
+            sql`${codex_worker_registrations.leaseCount} < ${codex_worker_registrations.maxConcurrency}`,
+          ),
+        )
+        .returning({ id: codex_worker_registrations.id });
+      if (workerUpdate === undefined) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Runtime job worker fence was rejected.');
+      }
     }
 
     return {
@@ -5215,7 +5814,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       worker.session_token_expires_at > input.now &&
       worker.session_public_key_expires_at > input.now &&
       codexWorkerHeartbeatIsFresh(worker.last_heartbeat_at, input.now) &&
-      worker.lease_count < worker.max_concurrency &&
+      (isCodexSessionResumeRuntimeJobInput(input.input_json) || worker.lease_count < worker.max_concurrency) &&
       capabilityList(worker.capabilities_json, 'target_kinds').includes(input.target.target_kind) &&
       codexWorkerScopeMatchesTarget(worker.allowed_scopes_json, input.target.target_kind, codexScope(input.target.project_id, input.target.repo_id)) &&
       capabilityList(worker.capabilities_json, 'docker_image_digests').includes(input.docker_image_digest) &&
@@ -5533,7 +6132,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         .returning();
       if (row !== undefined) {
         const record = fromDbRecord<CodexLaunchLeaseDbRecord>(row as Record<string, unknown>);
-        await repository.decrementCodexWorkerLeaseCounts(tx as ForgeloopDrizzleDatabase, [input.worker_id]);
+        if (await repository.codexLaunchLeaseOccupiesWorkerSlot(record.id)) {
+          await repository.decrementCodexWorkerLeaseCounts(tx as ForgeloopDrizzleDatabase, [input.worker_id]);
+        }
         return launchLeaseFromDbRecord(record);
       }
       const [currentRow] = await tx
@@ -5581,7 +6182,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         .returning();
       if (leasedRow !== undefined) {
         const record = fromDbRecord<CodexLaunchLeaseDbRecord>(leasedRow as Record<string, unknown>);
-        await repository.decrementCodexWorkerLeaseCounts(tx as ForgeloopDrizzleDatabase, record.worker_id === undefined ? [] : [record.worker_id]);
+        await repository.decrementCodexWorkerLeaseCounts(
+          tx as ForgeloopDrizzleDatabase,
+          record.worker_id !== undefined && (await repository.codexLaunchLeaseOccupiesWorkerSlot(record.id)) ? [record.worker_id] : [],
+        );
         return launchLeaseFromDbRecord(record);
       }
       const [currentRow] = await tx.select().from(codex_launch_leases).where(eq(codex_launch_leases.id, input.lease_id)).limit(1);
@@ -5611,7 +6215,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         .returning();
       await repository.decrementCodexWorkerLeaseCounts(
         tx as ForgeloopDrizzleDatabase,
-        leaseRows.flatMap((row) => (row.workerId === null ? [] : [row.workerId])),
+        (
+          await Promise.all(
+            leaseRows.map(async (row) =>
+              row.workerId === null || !(await repository.codexLaunchLeaseOccupiesWorkerSlot(row.id)) ? [] : [row.workerId],
+            ),
+          )
+        ).flat(),
       );
       return leaseRows.length;
     });
@@ -5667,7 +6277,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       }
       await repository.decrementCodexWorkerLeaseCounts(
         tx as ForgeloopDrizzleDatabase,
-        recoveredRows.flatMap((row) => (row.workerId === null ? [] : [row.workerId])),
+        (
+          await Promise.all(
+            recoveredRows.map(async (row) =>
+              row.workerId === null || !(await repository.codexLaunchLeaseOccupiesWorkerSlot(row.id)) ? [] : [row.workerId],
+            ),
+          )
+        ).flat(),
       );
       return recoveredRows;
     });
@@ -8733,6 +9349,15 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
   }
 
+  private async codexLaunchLeaseOccupiesWorkerSlot(leaseId: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ inputJson: codex_runtime_jobs.inputJson })
+      .from(codex_runtime_jobs)
+      .where(eq(codex_runtime_jobs.launchLeaseId, leaseId))
+      .limit(1);
+    return row === undefined || !isCodexSessionResumeRuntimeJobInput(row.inputJson as Record<string, unknown>);
+  }
+
   private async findActiveCodexWorkerBootstrap(input: {
     worker_identity: string;
     bootstrap_token_hash: string;
@@ -9323,18 +9948,18 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const existing = await this.automationActionRunByIdempotencyKey(input.idempotency_key);
     if (existing !== undefined) {
       this.assertAutomationActionIdentityMatches(existing, input);
+      if (existing.status === 'running' && existing.claim_token === input.claim_token) {
+        const renewed: AutomationActionRun = {
+          ...existing,
+          locked_until: input.locked_until,
+          last_heartbeat_at: input.now,
+          updated_at: input.now,
+        };
+        await this.upsert(automation_action_runs, automation_action_runs.id, renewed);
+        return renewed;
+      }
       if (!this.isAutomationActionClaimable(existing, input.now)) {
         if (existing.status === 'running') {
-          if (existing.claim_token === input.claim_token) {
-            const renewed: AutomationActionRun = {
-              ...existing,
-              locked_until: input.locked_until,
-              last_heartbeat_at: input.now,
-              updated_at: input.now,
-            };
-            await this.upsert(automation_action_runs, automation_action_runs.id, renewed);
-            return renewed;
-          }
           throw new DomainError('INVALID_TRANSITION', `Automation action ${input.idempotency_key} already has an active claim`);
         }
         return redactAutomationActionClaim(existing);
@@ -9342,6 +9967,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     } else {
       await this.assertAutomationActionIdIsUnused(input.id, input.idempotency_key);
     }
+    const codexSessionTurnId = input.codex_session_turn_id ?? existing?.codex_session_turn_id;
     const actionRun: AutomationActionRun = {
       id: existing?.id ?? input.id,
       action_type: input.action_type,
@@ -9362,9 +9988,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       ...(existing?.codex_session_id === undefined && input.codex_session_id === undefined
         ? {}
         : { codex_session_id: existing?.codex_session_id ?? input.codex_session_id }),
-      ...(existing?.codex_session_turn_id === undefined && input.codex_session_turn_id === undefined
-        ? {}
-        : { codex_session_turn_id: existing?.codex_session_turn_id ?? input.codex_session_turn_id }),
+      ...(codexSessionTurnId === undefined ? {} : { codex_session_turn_id: codexSessionTurnId }),
       status: 'running',
       claim_token: input.claim_token,
       attempt: (existing?.attempt ?? 0) + 1,

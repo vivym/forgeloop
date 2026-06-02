@@ -15,8 +15,14 @@ import {
   publicFailureSubcodeFromAppServerErrorShape,
   publicFailureSubcodeForCodexErrorInfo,
 } from './app-server-error-categories.js';
-import type { CodexGenerationTaskKind } from './types.js';
+import type { CodexGenerationTaskKind, CodexThreadContinuation } from './types.js';
 import type { CodexGenerationRuntimeSafety, GenerationLease } from './generation-safety.js';
+
+export interface CodexThreadMetadata {
+  codex_thread_id: string;
+  codex_thread_id_digest: string;
+  app_server_turn_id?: string;
+}
 
 export interface AppServerGenerateInput {
   taskKind: CodexGenerationTaskKind;
@@ -24,6 +30,7 @@ export interface AppServerGenerateInput {
   outputSchemaVersion: string;
   outputSchema?: Record<string, unknown>;
   contextDigest?: string;
+  continuation?: CodexThreadContinuation;
   timeoutMs?: number;
   outputLimitBytes?: number;
   rawNotificationLimitBytes?: number;
@@ -34,6 +41,7 @@ export interface AppServerGenerateOutput {
   assistantText: string;
   extractedJson: unknown;
   rawArtifactRefs: Record<string, unknown>[];
+  codexThread?: CodexThreadMetadata;
 }
 
 export interface AppServerGenerationLimits {
@@ -76,6 +84,9 @@ const canonicalize = (value: unknown): CanonicalJsonValue => {
 
 const digest = (value: unknown): string =>
   `sha256:${createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex')}`;
+
+export const codexThreadIdDigest = (threadId: string): string =>
+  digest({ kind: 'codex_app_server_thread_id', thread_id: threadId });
 
 const byteLength = (value: string): number => Buffer.byteLength(value, 'utf8');
 
@@ -290,6 +301,15 @@ interface ActiveGenerationSession {
   turnId?: string;
 }
 
+const assertResumeContinuationDigest = (continuation: Extract<CodexThreadContinuation, { kind: 'resume_thread' }>): void => {
+  if (continuation.codex_thread_id.length === 0) {
+    throw new Error('codex_app_server_thread_id_missing');
+  }
+  if (continuation.codex_thread_id_digest !== codexThreadIdDigest(continuation.codex_thread_id)) {
+    throw new Error('codex_app_server_thread_mismatch');
+  }
+};
+
 export class AppServerGenerationDriver {
   #activeSession: ActiveGenerationSession | undefined;
   #generationActive = false;
@@ -388,6 +408,7 @@ export class AppServerGenerationDriver {
     nonce: () => string;
   }): Promise<AppServerGenerateOutput> {
     const { safety, deadline, now, nonce } = input;
+    const continuation = input.input.continuation ?? { kind: 'start_thread' };
     await this.#withDeadline(this.options.transport.initialize?.() ?? Promise.resolve(), deadline);
     const startTime = now();
     const lease = await this.#withDeadline(
@@ -407,19 +428,52 @@ export class AppServerGenerationDriver {
     );
     this.#activeSession = { safety, lease };
 
-    await this.#consume(safety, lease, 'thread/start', input.input.prompt, nonce(), now(), deadline);
-    const threadResponse = await this.#withDeadline(
-      this.options.transport.request('thread/start', {
-        approvalPolicy: 'never',
-        sandbox: 'read-only',
-      }),
-      deadline,
-    );
-    assertSafeEffectiveConfig(effectiveConfigFromResponse(threadResponse), safety);
+    let threadId: string;
+    if (continuation.kind === 'start_thread') {
+      await this.#consume(safety, lease, 'thread/start', input.input.prompt, nonce(), now(), deadline);
+      const threadResponse = await this.#withDeadline(
+        this.options.transport.request('thread/start', {
+          approvalPolicy: 'never',
+          experimentalRawEvents: false,
+          persistExtendedHistory: false,
+          sandbox: 'read-only',
+        }),
+        deadline,
+      );
+      assertSafeEffectiveConfig(effectiveConfigFromResponse(threadResponse), safety);
 
-    const threadId = extractThreadId(threadResponse);
-    if (threadId === undefined || threadId.length === 0) {
-      throw new Error('codex_app_server_unavailable');
+      const startedThreadId = extractThreadId(threadResponse);
+      if (startedThreadId === undefined || startedThreadId.length === 0) {
+        throw new Error('codex_app_server_unavailable');
+      }
+      threadId = startedThreadId;
+    } else {
+      assertResumeContinuationDigest(continuation);
+      if (safety.allowThreadResume !== true) {
+        throw new Error('codex_generation_command_invalid');
+      }
+      const resumeRequest = {
+        threadId: continuation.codex_thread_id,
+        excludeTurns: true,
+        persistExtendedHistory: false,
+      };
+      await this.#consume(safety, lease, 'thread/resume', resumeRequest, nonce(), now(), deadline);
+      const resumeResponse = await this.#withDeadline(
+        this.options.transport.request('thread/resume', resumeRequest).catch(() => {
+          throw new Error('codex_app_server_resume_failed');
+        }),
+        deadline,
+      );
+
+      const resumedThreadId = extractThreadId(resumeResponse);
+      if (resumedThreadId === undefined || resumedThreadId.length === 0) {
+        throw new Error('codex_app_server_thread_id_missing');
+      }
+      if (resumedThreadId !== continuation.codex_thread_id) {
+        throw new Error('codex_app_server_thread_mismatch');
+      }
+      assertSafeEffectiveConfig(effectiveConfigFromResponse(resumeResponse), safety);
+      threadId = continuation.codex_thread_id;
     }
     this.#activeSession.threadId = threadId;
 
@@ -451,10 +505,16 @@ export class AppServerGenerationDriver {
       deadline,
     );
     await this.#cleanupActiveSession('codex_generation_completed', { interrupt: false });
+    const codexThread: CodexThreadMetadata = {
+      codex_thread_id: threadId,
+      codex_thread_id_digest: codexThreadIdDigest(threadId),
+      ...(turnId === undefined ? {} : { app_server_turn_id: turnId }),
+    };
     return {
       assistantText,
       extractedJson: extractSingleJsonObject(assistantText),
       rawArtifactRefs: [],
+      codexThread,
     };
   }
 

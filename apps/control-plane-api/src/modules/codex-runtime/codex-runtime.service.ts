@@ -25,6 +25,7 @@ import {
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
   type AutomationActionRun,
+  type CodexGenerationWorkloadV1,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexGenerationRuntimeJobResult,
@@ -34,6 +35,7 @@ import {
   type CodexLaunchTarget,
   type CodexLaunchTokenEnvelope,
   type CodexRuntimeJob,
+  type CodexRuntimeJobTerminalStatus,
   type CodexRuntimeNetworkPolicy,
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
@@ -67,6 +69,8 @@ import type {
   ImportCodexCredentialDto,
   ImportCodexRuntimeProfileDto,
   ImportLocalCodexDto,
+  AttachCodexSessionRunnerRuntimeJobDto,
+  MarkCodexSessionRunnerOwnerDto,
   MaterializeCodexRuntimeJobDto,
   MaterializeCodexLaunchLeaseDto,
   PollCodexRuntimeJobsDto,
@@ -332,7 +336,12 @@ const publicRuntimeJobTerminalResult = (
   if (result === undefined) {
     return undefined;
   }
-  return validateCodexRuntimeJobTerminalResult(result);
+  const terminalResult = validateCodexRuntimeJobTerminalResult(result);
+  if ('codex_session_thread' in terminalResult) {
+    const { codex_session_thread: _trustedThreadEvidence, ...publicResult } = terminalResult;
+    return publicResult;
+  }
+  return terminalResult;
 };
 
 const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
@@ -670,22 +679,39 @@ export class CodexRuntimeService {
     return { worker, session_token: sessionToken, session_expires_at: sessionExpiresAt };
   }
 
-  heartbeatWorker(workerId: string, input: HeartbeatCodexWorkerDto) {
+  async heartbeatWorker(workerId: string, input: HeartbeatCodexWorkerDto) {
     const now = nowIso();
     assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
-    return this.repository
-      .heartbeatCodexWorker({
-        worker_id: workerId,
-        session_token: input.session_token,
-        nonce: input.nonce,
-        nonce_timestamp: input.nonce_timestamp,
-        status: input.status,
-        control_channel_status: input.control_channel_status,
-        active_lease_count: input.active_lease_count,
-        capabilities: input.capabilities as readonly CodexRuntimeTargetKind[],
+    const worker = await this.repository.heartbeatCodexWorker({
+      worker_id: workerId,
+      session_token: input.session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      status: input.status,
+      control_channel_status: input.control_channel_status,
+      active_lease_count: input.active_lease_count,
+      capabilities: input.capabilities as readonly CodexRuntimeTargetKind[],
+      now,
+    });
+    const renewedSessions = [];
+    for (const runner of input.codex_session_runners ?? []) {
+      const session = await this.repository.renewCodexSessionRunnerOwner({
+        session_id: runner.session_id,
+        runner_worker_id: workerId,
+        runner_launch_lease_id: runner.runner_launch_lease_id,
+        runner_runtime_job_id: runner.runner_runtime_job_id,
+        runner_expires_at: runner.runner_expires_at,
         now,
-      })
-      .then((worker) => ({ worker }));
+      });
+      renewedSessions.push({
+        id: session.id,
+        runner_worker_id: session.runner_worker_id,
+        runner_launch_lease_id: session.runner_launch_lease_id,
+        runner_runtime_job_id: session.runner_runtime_job_id,
+        runner_expires_at: session.runner_expires_at,
+      });
+    }
+    return { worker, codex_session_runners: renewedSessions };
   }
 
   async refreshWorkerSession(workerId: string, input: RefreshCodexWorkerSessionDto) {
@@ -1048,6 +1074,82 @@ export class CodexRuntimeService {
     return { runtime_job: publicRuntimeJob(runtimeJob) };
   }
 
+  async markCodexSessionRunnerOwner(workerId: string, jobId: string, input: MarkCodexSessionRunnerOwnerDto) {
+    assertWorkerBodyDigest(input);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    const runtimeJob = await this.requireWorkerRuntimeJob(workerId, jobId);
+    if (
+      runtimeJob.status !== 'running' ||
+      runtimeJob.codex_session_id === undefined ||
+      runtimeJob.codex_session_id !== input.session_id ||
+      runtimeJob.launch_lease_id !== input.runner_launch_lease_id ||
+      runtimeJob.id !== input.runner_runtime_job_id ||
+      runtimeJob.runtime_evidence_digest === undefined ||
+      runtimeJob.launch_materialization_digest === undefined
+    ) {
+      throw new BadRequestException('Codex session runner owner was rejected');
+    }
+    await this.repository.getCodexLaunchLeaseStatus({
+      launch_lease_id: runtimeJob.launch_lease_id,
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/session-runner/owner`,
+        input.body_digest,
+      ),
+      now,
+    });
+    const session = await this.repository.markCodexSessionRunnerOwner({
+      session_id: input.session_id,
+      runner_worker_id: workerId,
+      runner_launch_lease_id: input.runner_launch_lease_id,
+      runner_runtime_job_id: input.runner_runtime_job_id,
+      runner_expires_at: input.runner_expires_at,
+      now,
+    });
+    return {
+      session: {
+        id: session.id,
+        runner_worker_id: session.runner_worker_id,
+        runner_launch_lease_id: session.runner_launch_lease_id,
+        runner_runtime_job_id: session.runner_runtime_job_id,
+        runner_expires_at: session.runner_expires_at,
+      },
+    };
+  }
+
+  async attachCodexSessionRunnerRuntimeJob(workerId: string, jobId: string, input: AttachCodexSessionRunnerRuntimeJobDto) {
+    assertWorkerBodyDigest(input);
+    const now = nowIso();
+    assertFreshWorkerNonceTimestamp(input.nonce_timestamp, now);
+    const runtimeJob = await this.repository.attachCodexSessionRunnerRuntimeJob({
+      session_id: input.session_id,
+      runner_launch_lease_id: input.runner_launch_lease_id,
+      runner_runtime_job_id: input.runner_runtime_job_id,
+      runner_expires_at: input.runner_expires_at,
+      attached_runtime_job_id: jobId,
+      worker_id: workerId,
+      worker_session_token: input.worker_session_token,
+      nonce: input.nonce,
+      nonce_timestamp: input.nonce_timestamp,
+      runtime_evidence_digest: input.runtime_evidence_digest,
+      launch_materialization_digest: input.launch_materialization_digest,
+      idempotency_key: input.attach_idempotency_key,
+      request_digest: input.body_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/session-runner/attach`,
+        input.body_digest,
+      ),
+      now,
+    });
+    return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
   async appendRuntimeJobEvent(workerId: string, jobId: string, input: AppendCodexRuntimeJobEventDto) {
     assertWorkerBodyDigest(input);
     if (codexCanonicalDigest(input.event_payload_json) !== input.event_payload_digest) {
@@ -1267,7 +1369,7 @@ export class CodexRuntimeService {
     ) {
       await this.failProductGenerationActionRunForRuntimeTerminal({
         actionRunId: runtimeJob.target_id,
-        runtimeJobId: runtimeJob.id,
+        runtimeJob,
         terminalStatus: input.terminal_status,
         reasonCode: input.reason_code,
         now,
@@ -1278,11 +1380,17 @@ export class CodexRuntimeService {
 
   private async failProductGenerationActionRunForRuntimeTerminal(input: {
     actionRunId: string;
-    runtimeJobId: string;
-    terminalStatus: string;
+    runtimeJob: CodexRuntimeJob;
+    terminalStatus: CodexRuntimeJobTerminalStatus;
     reasonCode: string;
     now: string;
   }): Promise<void> {
+    await this.terminalizeCodexSessionTurnForFailedRuntimeJob({
+      runtimeJob: input.runtimeJob,
+      terminalStatus: input.terminalStatus,
+      reasonCode: input.reasonCode,
+      now: input.now,
+    });
     const actionRun = await this.repository.getAutomationActionRun(input.actionRunId);
     if (
       actionRun === undefined ||
@@ -1300,11 +1408,11 @@ export class CodexRuntimeService {
         status: input.terminalStatus === 'cancelled' ? 'blocked' : 'failed',
         result_json: {
           product_generation_result: 'runtime_job_failed',
-          runtime_job_id: input.runtimeJobId,
+          runtime_job_id: input.runtimeJob.id,
           reason_code: input.reasonCode,
           terminal_status: input.terminalStatus,
         },
-        retryable: input.terminalStatus !== 'cancelled',
+        retryable: input.terminalStatus !== 'cancelled' && !this.isCodexSessionRuntimeJob(input.runtimeJob),
         finished_at: input.now,
       });
     } catch (error) {
@@ -1315,6 +1423,101 @@ export class CodexRuntimeService {
       if (refreshed?.status !== 'succeeded' && refreshed?.status !== 'failed' && refreshed?.status !== 'blocked') {
         throw error;
       }
+    }
+  }
+
+  private async terminalizeCodexSessionTurnForFailedRuntimeJob(input: {
+    runtimeJob: CodexRuntimeJob;
+    terminalStatus: CodexRuntimeJobTerminalStatus;
+    reasonCode: string;
+    now: string;
+  }): Promise<void> {
+    const workload = input.runtimeJob.input_json as Partial<CodexGenerationWorkloadV1>;
+    const runtimeContext = workload.codex_session_runtime_context;
+    const terminalization = workload.codex_session_terminalization;
+    if (runtimeContext === undefined && terminalization === undefined) {
+      return;
+    }
+    if (
+      runtimeContext === undefined ||
+      terminalization === undefined ||
+      runtimeContext.codex_session_id !== input.runtimeJob.codex_session_id ||
+      runtimeContext.codex_session_turn_id !== input.runtimeJob.codex_session_turn_id ||
+      runtimeContext.lease_id === undefined ||
+      runtimeContext.lease_epoch === undefined
+    ) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Runtime job ${input.runtimeJob.id} CodexSession terminalization refs are invalid`,
+      );
+    }
+    try {
+      await this.repository.terminalizeCodexSessionTurn({
+        session_id: runtimeContext.codex_session_id,
+        turn_id: runtimeContext.codex_session_turn_id,
+        lease_id: runtimeContext.lease_id,
+        lease_token_hash: codexCredentialPayloadDigest(terminalization.lease_token),
+        lease_epoch: runtimeContext.lease_epoch,
+        worker_id: runtimeContext.worker_id,
+        worker_session_digest: runtimeContext.worker_session_digest,
+        status: input.terminalStatus === 'cancelled' ? 'cancelled' : 'failed',
+        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+          ? {}
+          : { expected_previous_snapshot_digest: runtimeContext.expected_previous_snapshot_digest }),
+        failure_code: input.reasonCode,
+        now: input.now,
+      });
+      await this.clearCodexSessionRunnerOwnerForTerminalRuntimeJob({
+        sessionId: runtimeContext.codex_session_id,
+        runnerLaunchLeaseId: runtimeContext.runner_launch_lease_id ?? input.runtimeJob.launch_lease_id,
+        reasonCode: input.reasonCode,
+        now: input.now,
+      });
+    } catch (error) {
+      if (error instanceof DomainError && error.code === 'codex_session_stale_terminalization') {
+        const turn = await this.repository.getCodexSessionTurn(runtimeContext.codex_session_turn_id);
+        if (turn?.status === 'failed' || turn?.status === 'cancelled' || turn?.status === 'succeeded' || turn?.status === 'stale') {
+          return;
+        }
+      }
+      throw error;
+    }
+  }
+
+  private isCodexSessionRuntimeJob(runtimeJob: CodexRuntimeJob): boolean {
+    const workload = runtimeJob.input_json as Partial<CodexGenerationWorkloadV1>;
+    return workload.codex_session_runtime_context !== undefined || workload.codex_session_terminalization !== undefined;
+  }
+
+  private async clearCodexSessionRunnerOwnerForTerminalRuntimeJob(input: {
+    sessionId: string;
+    runnerLaunchLeaseId?: string;
+    reasonCode: string;
+    now: string;
+  }): Promise<void> {
+    if (input.runnerLaunchLeaseId === undefined) {
+      return;
+    }
+    try {
+      await this.repository.clearCodexSessionRunnerOwner({
+        session_id: input.sessionId,
+        runner_launch_lease_id: input.runnerLaunchLeaseId,
+        terminal_reason_code: input.reasonCode,
+        now: input.now,
+      });
+    } catch (error) {
+      const session = await this.repository.getCodexSession(input.sessionId);
+      if (
+        error instanceof DomainError &&
+        error.code === 'codex_session_runner_unavailable' &&
+        session !== undefined &&
+        session.runner_launch_lease_id === undefined &&
+        session.runner_runtime_job_id === undefined &&
+        session.runner_worker_id === undefined
+      ) {
+        return;
+      }
+      throw error;
     }
   }
 

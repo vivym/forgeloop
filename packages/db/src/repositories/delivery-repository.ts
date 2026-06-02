@@ -258,6 +258,7 @@ export interface HeartbeatCodexWorkerInput {
   control_channel_status: CodexWorkerRegistration['control_channel_status'];
   active_lease_count: number;
   capabilities: readonly CodexRuntimeTargetKind[];
+  codex_session_runners?: readonly Omit<RenewCodexSessionRunnerOwnerInput, 'runner_worker_id' | 'now'>[];
   now: string;
 }
 
@@ -268,6 +269,7 @@ export interface CodexWorkerReplayProtectionInput {
 }
 
 export interface FindAvailableCodexWorkerInput {
+  worker_id?: string;
   project_id: string;
   repo_id?: string;
   target_kind: CodexRuntimeTargetKind;
@@ -275,6 +277,10 @@ export interface FindAvailableCodexWorkerInput {
   network_policy_digest: string;
   network_provider_config_digest?: string;
   now: string;
+}
+
+export interface FindCodexWorkerForSessionRunnerInput extends FindAvailableCodexWorkerInput {
+  worker_id: string;
 }
 
 export interface CodexLaunchFenceSnapshot {
@@ -348,9 +354,46 @@ export interface TerminalizeCodexSessionTurnInput {
   output_snapshot?: CodexSessionSnapshot;
   output_object_type?: WorkflowTransitionEvidenceObjectType;
   output_object_id?: string;
+  app_server_thread_binding_required?: boolean;
   codex_thread_id?: string;
   codex_thread_id_digest?: string;
   failure_code?: string;
+  now: string;
+}
+
+export interface MarkCodexSessionRunnerOwnerInput {
+  session_id: string;
+  runner_worker_id: string;
+  runner_launch_lease_id: string;
+  runner_runtime_job_id: string;
+  runner_expires_at: string;
+  now: string;
+}
+
+export interface ClearCodexSessionRunnerOwnerInput {
+  session_id: string;
+  runner_launch_lease_id: string;
+  terminal_reason_code: string;
+  now: string;
+}
+
+export type RenewCodexSessionRunnerOwnerInput = MarkCodexSessionRunnerOwnerInput;
+
+export interface AttachCodexSessionRunnerRuntimeJobInput {
+  session_id: string;
+  runner_launch_lease_id: string;
+  runner_runtime_job_id: string;
+  runner_expires_at: string;
+  attached_runtime_job_id: string;
+  worker_id: string;
+  worker_session_token: string;
+  nonce: string;
+  nonce_timestamp: string;
+  runtime_evidence_digest: string;
+  launch_materialization_digest: string;
+  idempotency_key: string;
+  request_digest: string;
+  replay_protection: CodexWorkerReplayProtectionInput;
   now: string;
 }
 
@@ -1498,6 +1541,10 @@ export interface DeliveryRepository {
   terminalizeCodexSessionTurn(
     input: TerminalizeCodexSessionTurnInput,
   ): Promise<{ session: CodexSession; turn: CodexSessionTurn }>;
+  markCodexSessionRunnerOwner(input: MarkCodexSessionRunnerOwnerInput): Promise<CodexSession>;
+  clearCodexSessionRunnerOwner(input: ClearCodexSessionRunnerOwnerInput): Promise<CodexSession>;
+  renewCodexSessionRunnerOwner(input: RenewCodexSessionRunnerOwnerInput): Promise<CodexSession>;
+  attachCodexSessionRunnerRuntimeJob(input: AttachCodexSessionRunnerRuntimeJobInput): Promise<CodexRuntimeJob>;
   createCodexSessionFork(input: CreateCodexSessionForkInput): Promise<CodexSession>;
   selectActiveCodexSessionFork(
     input: SelectActiveCodexSessionForkInput,
@@ -1526,6 +1573,8 @@ export interface DeliveryRepository {
   upsertCodexWorkerRegistration(input: UpsertCodexWorkerRegistrationInput): Promise<CodexWorkerRegistration>;
   heartbeatCodexWorker(input: HeartbeatCodexWorkerInput): Promise<CodexWorkerRegistration>;
   findAvailableCodexWorker(input: FindAvailableCodexWorkerInput): Promise<CodexWorkerRegistration | undefined>;
+  findCodexWorkerForSessionRunner(input: FindCodexWorkerForSessionRunnerInput): Promise<CodexWorkerRegistration | undefined>;
+  getCodexWorkerSessionDigest(workerId: string): Promise<string | undefined>;
   refreshCodexWorkerSession(input: RefreshCodexWorkerSessionInput): Promise<CodexWorkerRegistration>;
   createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(
     input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,

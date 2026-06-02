@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  codexThreadIdDigest,
   createCodexGenerationRuntime,
   type CodexAppServerTransport,
 } from '../../packages/codex-runtime/src/index';
@@ -128,6 +129,19 @@ const validExecutionPlanRevisionJson = JSON.stringify({
   rollback_notes: 'Revert scoped changes if validation fails.',
   handoff_criteria: ['Required checks pass'],
   public_summary: 'Generated an Execution Plan revision.',
+});
+
+const sessionRuntimeContext = (overrides: Record<string, unknown> = {}) => ({
+  schema_version: 'codex_session_runtime_context.v1' as const,
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'session-turn-1',
+  lease_id: 'lease-1',
+  lease_epoch: 1,
+  worker_id: 'worker-1',
+  worker_session_digest: 'sha256:' + 'a'.repeat(64),
+  turn_group_status: 'intermediate' as const,
+  continuation: { kind: 'start_thread' as const },
+  ...overrides,
 });
 
 const strictObjectSchemaIssues = (schema: unknown, path = '$'): string[] => {
@@ -766,6 +780,126 @@ describe('createCodexGenerationRuntime', () => {
         failure_subcode: 'app_server_bad_request',
       },
     });
+  });
+
+  it('preserves app-server resume thread mismatches as non-retryable runtime errors', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/resume') {
+        return { threadId: 'thread-2', config: { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'never' } };
+      }
+      return {};
+    });
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: () => ({
+        request,
+        notifications: async function* () {},
+        async close() {},
+      }),
+    });
+
+    await expect(
+      runtime.generatePlanDraft({
+        ...planInput,
+        codexSessionRuntimeContext: sessionRuntimeContext({
+          runner_runtime_job_id: 'runtime-job-previous',
+          runner_launch_lease_id: 'launch-lease-previous',
+          continuation: {
+            kind: 'resume_thread',
+            codex_thread_id: 'thread-1',
+            codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+          },
+        }),
+      }),
+    ).rejects.toMatchObject({
+      code: 'codex_app_server_thread_mismatch',
+      retryable: false,
+      publicResultJson: { status: 422, code: 'codex_app_server_thread_mismatch' },
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/resume']);
+  });
+
+  it('preserves app-server resume transport failures as non-retryable runtime errors', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/resume') {
+        throw new Error('socket reset');
+      }
+      return {};
+    });
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: () => ({
+        request,
+        notifications: async function* () {},
+        async close() {},
+      }),
+    });
+
+    await expect(
+      runtime.generatePlanDraft({
+        ...planInput,
+        codexSessionRuntimeContext: sessionRuntimeContext({
+          runner_runtime_job_id: 'runtime-job-previous',
+          runner_launch_lease_id: 'launch-lease-previous',
+          continuation: {
+            kind: 'resume_thread',
+            codex_thread_id: 'thread-1',
+            codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+          },
+        }),
+      }),
+    ).rejects.toMatchObject({
+      code: 'codex_app_server_resume_failed',
+      retryable: false,
+      publicResultJson: { status: 422, code: 'codex_app_server_resume_failed' },
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/resume']);
+  });
+
+  it('does not allow plain runtime task input to self-authorize app-server resume', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'thread/start') {
+        return { threadId: 'new-thread-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+      }
+      return { turnId: 'turn-1', effectiveConfig: { sandboxPolicy: { type: 'readOnly' } } };
+    });
+    const runtime = createCodexGenerationRuntime({
+      mode: 'app_server',
+      appServerEndpoint: 'unix:/tmp/codex-app-server.sock',
+      artifactRoot: '/tmp/forgeloop-artifacts',
+      timeoutMs: 250,
+      outputLimitBytes: 4_096,
+      rawNotificationLimitBytes: 8_192,
+      transportFactory: () => ({
+        request,
+        notifications: async function* () {
+          yield { type: 'assistant_message_delta', delta: validPlanJson };
+          yield { type: 'turn_completed', status: 'completed' };
+        },
+        async close() {},
+      }),
+    });
+
+    await runtime.generatePlanDraft({
+      ...planInput,
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+      },
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/start', 'turn/start']);
   });
 
   it('maps deterministic app-server output limits to public non-retryable errors', async () => {

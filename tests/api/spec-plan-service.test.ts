@@ -803,18 +803,27 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const rawRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: actionResponse.runtime_job.id }))!;
     expect(rawRuntimeJob.repo_id).toBe('repo-1');
     const { materialization } = await startGenerationRuntimeJob(repository, actionResponse.runtime_job, 'stale-env-fallback');
-    expect(materialization.launch_target).toMatchObject({ project_id: plan.project_id, repo_id: 'repo-1' });
-    expect(materialization.profile_revision.allowed_scopes).toContainEqual(
-      expect.objectContaining({ project_id: plan.project_id }),
-    );
-    expect(materialization.resolved_credentials).toHaveLength(1);
-    const materializedCredential = await repository.getCodexCredentialBindingPublic(materialization.resolved_credentials[0]!.binding_id);
-    expect(materializedCredential).toMatchObject({
-      project_id: plan.project_id,
-      profile_id: materialization.profile_revision.profile_id,
-      purpose: 'model_provider',
+    expect(rawRuntimeJob.input_json.codex_session_runtime_context?.continuation).toMatchObject({ kind: 'resume_thread' });
+    expect(materialization).toBeUndefined();
+    const projectScopedWorkerId = stableUuid({ kind: 'generation-worker', projectId: rawRuntimeJob.project_id, repoId: 'project' });
+    const workerSessionScope =
+      rawRuntimeJob.worker_id === projectScopedWorkerId || rawRuntimeJob.repo_id === undefined
+        ? rawRuntimeJob.project_id
+        : `${rawRuntimeJob.project_id}-${rawRuntimeJob.repo_id}`;
+    const launchLease = await repository.getCodexLaunchLeaseStatus({
+      launch_lease_id: rawRuntimeJob.launch_lease_id,
+      worker_id: rawRuntimeJob.worker_id,
+      worker_session_token: `session-${workerSessionScope}`,
+      nonce: 'stale-env-fallback-lease-status',
+      nonce_timestamp: '2026-05-05T00:00:45.000Z',
+      replay_protection: {
+        method: 'GET',
+        path: `/test/product-generation-runtime/${rawRuntimeJob.id}/stale-env-fallback/launch-lease`,
+        body_digest: digest(`${rawRuntimeJob.id}:stale-env-fallback:launch-lease:body`),
+      },
+      now: '2026-05-05T00:00:45.000Z',
     });
-    expect(materialization.resolved_credentials[0]?.binding_id).not.toBe('stale-credential-from-another-control-plane');
+    expect(launchLease.profile_revision_id).not.toBe('stale-profile-from-another-control-plane');
   });
 
   it('fails product generation without a retryable claim when the terminal result prompt contract mismatches the workload', async () => {
@@ -1009,6 +1018,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       generated_payload_digest: generatedPayloadDigest,
       generation_artifacts: [artifact],
     };
+    addCodexThreadEvidence(runtimeJob, terminalResult);
     await repository.terminalizeCodexRuntimeJob({
       runtime_job_id: runtimeJob.id,
       launch_lease_id: runtimeJob.launch_lease_id,
@@ -1116,6 +1126,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       generated_payload_digest: generatedPayloadDigest,
       generation_artifacts: [artifact],
     };
+    addCodexThreadEvidence(runtimeJob, terminalResult);
     await repository.terminalizeCodexRuntimeJob({
       runtime_job_id: runtimeJob.id,
       launch_lease_id: runtimeJob.launch_lease_id,
@@ -1164,6 +1175,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
     const terminalResult = generationTerminalResult('development_plan_item_spec_revision', generatedSpecRevision(item.id, boundary.revision_id));
     const runtimeJob = await requireInternalRuntimeJob(repository, actionResponse.runtime_job.id);
+    addCodexThreadEvidence(runtimeJob, terminalResult);
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, actionResponse.runtime_job, 'spec-service-terminal');
 
     await codexRuntimeService.terminalizeRuntimeJob(
@@ -1210,6 +1222,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const actionResponse = await generateItemSpecRevisionRuntime(app, item.id);
     const terminalResult = generationTerminalResult('development_plan_item_spec_revision', generatedSpecRevision(item.id, boundary.revision_id));
     const runtimeJob = await requireInternalRuntimeJob(repository, actionResponse.runtime_job.id);
+    addCodexThreadEvidence(runtimeJob, terminalResult);
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, actionResponse.runtime_job, 'spec-qa-owner');
 
     await codexRuntimeService.terminalizeRuntimeJob(
@@ -1408,6 +1421,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       generatedExecutionPlanRevision(item.id, specRevision.id),
     );
     const runtimeJob = await requireInternalRuntimeJob(repository, actionResponse.runtime_job.id);
+    addCodexThreadEvidence(runtimeJob, terminalResult);
     const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, actionResponse.runtime_job, 'execution-plan-success');
     await codexRuntimeService.terminalizeRuntimeJob(
       runtimeJob.worker_id,
@@ -1620,7 +1634,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(second.action_run.codex_session_turn_id).toBe(first.action_run.codex_session_turn_id);
   });
 
-  it('creates retry runtime jobs from the new claim time instead of the first attempt start time', async () => {
+  it('replays live running runtime jobs without rebuilding workload timestamps', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const generationRuntime = await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
@@ -1629,21 +1643,12 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const first = await generateItemSpecRevisionRuntime(app, item.id);
     const firstClaim = await repository.getAutomationActionRun(first.action_run.id);
     expect(firstClaim?.claim_token).toBeDefined();
-    await repository.completeAutomationActionRun({
-      id: firstClaim!.id,
-      idempotency_key: firstClaim!.idempotency_key,
-      claim_token: firstClaim!.claim_token!,
-      status: 'failed',
-      retryable: true,
-      finished_at: '2026-05-05T00:11:00.000Z',
-    });
-
-    const retryNow = '2026-05-05T00:11:30.000Z';
+    const retryNow = new Date(Date.parse(firstClaim!.claimed_at!) + 5 * 60 * 1000).toISOString();
     vi.stubEnv('FORGELOOP_AUTOMATION_TEST_NOW', retryNow);
     await repository.heartbeatCodexWorker({
       worker_id: generationRuntime.workerId,
       session_token: generationRuntime.sessionToken,
-      nonce: 'heartbeat-retry-runtime-job',
+      nonce: 'heartbeat-live-replay-runtime-job',
       nonce_timestamp: retryNow,
       status: 'online',
       control_channel_status: 'connected',
@@ -1654,15 +1659,16 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const second = await generateItemSpecRevisionRuntime(app, item.id);
 
     expect(second.action_run.id).toBe(first.action_run.id);
-    expect(second.runtime_job.id).not.toBe(first.runtime_job.id);
+    expect(second.runtime_job.id).toBe(first.runtime_job.id);
     const secondClaim = await repository.getAutomationActionRun(second.action_run.id);
     const rawSecondRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: second.runtime_job.id }))!;
-    expect(secondClaim).toMatchObject({ attempt: 2, claimed_at: rawSecondRuntimeJob.input_json.created_at });
+    expect(secondClaim).toMatchObject({ attempt: 1, claimed_at: rawSecondRuntimeJob.input_json.created_at });
     expect(rawSecondRuntimeJob.input_json).toMatchObject({
       created_at: secondClaim!.claimed_at,
       expires_at: new Date(Date.parse(secondClaim!.claimed_at!) + 10 * 60 * 1000).toISOString(),
     });
   });
+
 });
 
 async function seedRevisionAttachment(
@@ -1875,6 +1881,7 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
       public_summary: 'Boundary question generated.',
       artifacts: [],
   });
+  addCodexThreadEvidence(firstRoundRuntimeJob, firstRoundTerminalResult);
   const firstRoundTerminal = await startGenerationRuntimeJob(repository, firstRoundRuntimeJob, 'boundary-question');
   await codexRuntimeService.terminalizeRuntimeJob(
     firstRoundRuntimeJob.worker_id,
@@ -1926,6 +1933,7 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
     public_summary: 'Boundary Summary proposed.',
     artifacts: [],
   });
+  addCodexThreadEvidence(summaryRuntimeJob, summaryTerminalResult);
   const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, summaryRuntimeJob, 'boundary-summary');
   await codexRuntimeService.terminalizeRuntimeJob(
     summaryRuntimeJob.worker_id,
@@ -2014,7 +2022,7 @@ async function startGenerationRuntimeJob(
   repository: DeliveryRepository,
   runtimeJob: PublicRuntimeJobRef,
   suffix: string,
-): Promise<{ sessionToken: string; terminalAt: string; materialization: CodexLaunchMaterialization }> {
+): Promise<{ sessionToken: string; terminalAt: string; materialization?: CodexLaunchMaterialization }> {
   const job = await requireInternalRuntimeJob(repository, runtimeJob.id);
   const terminalAt = '2026-05-05T00:00:45.000Z';
   const projectScopedWorkerId = stableUuid({ kind: 'generation-worker', projectId: job.project_id, repoId: 'project' });
@@ -2047,6 +2055,39 @@ async function startGenerationRuntimeJob(
     replay_protection: replayProtection('accept'),
     now: terminalAt,
   });
+  const runtimeContext = job.input_json.codex_session_runtime_context;
+  const continuation =
+    runtimeContext !== undefined &&
+    typeof runtimeContext === 'object' &&
+    runtimeContext !== null &&
+    'continuation' in runtimeContext &&
+    typeof runtimeContext.continuation === 'object' &&
+    runtimeContext.continuation !== null &&
+    'kind' in runtimeContext.continuation
+      ? runtimeContext.continuation.kind
+      : undefined;
+  if (continuation === 'resume_thread') {
+    const runnerRuntimeJobId = String((runtimeContext as { runner_runtime_job_id?: unknown }).runner_runtime_job_id);
+    const runnerLaunchLeaseId = String((runtimeContext as { runner_launch_lease_id?: unknown }).runner_launch_lease_id);
+    await repository.attachCodexSessionRunnerRuntimeJob({
+      session_id: job.codex_session_id!,
+      runner_runtime_job_id: runnerRuntimeJobId,
+      runner_launch_lease_id: runnerLaunchLeaseId,
+      runner_expires_at: new Date(Date.parse(terminalAt) + 10 * 60 * 1000).toISOString(),
+      attached_runtime_job_id: job.id,
+      worker_id: job.worker_id,
+      worker_session_token: sessionToken,
+      nonce: `${suffix}-attach`,
+      nonce_timestamp: terminalAt,
+      runtime_evidence_digest: digest(`${suffix}:runtime-evidence`),
+      launch_materialization_digest: digest(`${suffix}:launch-materialization`),
+      idempotency_key: `${suffix}-start`,
+      request_digest: digest(`${suffix}:start`),
+      replay_protection: replayProtection('attach'),
+      now: terminalAt,
+    });
+    return { sessionToken, terminalAt };
+  }
   await repository.claimCodexLaunchTokenEnvelope({
     runtime_job_id: job.id,
     envelope_id: envelope!.id,
@@ -2091,6 +2132,16 @@ async function startGenerationRuntimeJob(
     replay_protection: replayProtection('start'),
     now: terminalAt,
   });
+  if (job.codex_session_id !== undefined && job.codex_session_turn_id !== undefined) {
+    await repository.markCodexSessionRunnerOwner({
+      session_id: job.codex_session_id,
+      runner_worker_id: job.worker_id,
+      runner_runtime_job_id: job.id,
+      runner_launch_lease_id: job.launch_lease_id,
+      runner_expires_at: new Date(Date.parse(terminalAt) + 10 * 60 * 1000).toISOString(),
+      now: terminalAt,
+    });
+  }
   return { sessionToken, terminalAt, materialization };
 }
 
@@ -2102,6 +2153,7 @@ async function terminalizeGenerationRuntimeJob(
 ) {
   const job = await requireInternalRuntimeJob(repository, runtimeJob.id);
   const { sessionToken, terminalAt } = await startGenerationRuntimeJob(repository, job, suffix);
+  addCodexThreadEvidence(job, terminalResult);
   const replayProtection = (step: string) => ({
     method: 'POST' as const,
     path: `/test/product-generation-runtime/${job.id}/${suffix}/${step}`,
@@ -2434,4 +2486,21 @@ function generationTerminalResult(
     generation_artifacts: [],
     public_summary: 'Generated product artifact.',
   };
+}
+
+function addCodexThreadEvidence(
+  runtimeJob: CodexRuntimeJob,
+  terminalResult: CodexGenerationRuntimeJobResult,
+): CodexGenerationRuntimeJobResult {
+  if (runtimeJob.codex_session_id === undefined || runtimeJob.codex_session_turn_id === undefined) {
+    return terminalResult;
+  }
+  const codexThreadId = `thread-${runtimeJob.codex_session_id}`;
+  return Object.assign(terminalResult, {
+    codex_session_thread: {
+      codex_thread_id: codexThreadId,
+      codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: codexThreadId }),
+      app_server_turn_id: `app-server-turn-${runtimeJob.codex_session_turn_id}`,
+    },
+  });
 }

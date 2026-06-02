@@ -299,6 +299,12 @@ export const heartbeatCodexWorkerSchema = z.object({
   control_channel_status: z.enum(['connected', 'disconnected']),
   active_lease_count: z.number().int().nonnegative(),
   capabilities: z.array(runtimeTargetKindSchema),
+  codex_session_runners: z.array(z.object({
+    session_id: z.string().min(1),
+    runner_launch_lease_id: z.string().min(1),
+    runner_runtime_job_id: z.string().min(1),
+    runner_expires_at: z.string().min(1),
+  }).strict()).optional(),
 }).strict();
 
 const workerSessionRequestSchema = z.object({
@@ -466,6 +472,23 @@ export const startCodexRuntimeJobSchema = workerSessionRequestSchema.extend({
   launch_materialization_digest: sha256DigestSchema,
 });
 
+export const markCodexSessionRunnerOwnerSchema = workerSessionRequestSchema.extend({
+  session_id: z.string().min(1),
+  runner_launch_lease_id: z.string().min(1),
+  runner_runtime_job_id: z.string().min(1),
+  runner_expires_at: z.string().min(1),
+});
+
+export const attachCodexSessionRunnerRuntimeJobSchema = workerSessionRequestSchema.extend({
+  session_id: z.string().min(1),
+  runner_launch_lease_id: z.string().min(1),
+  runner_runtime_job_id: z.string().min(1),
+  runner_expires_at: z.string().min(1),
+  runtime_evidence_digest: sha256DigestSchema,
+  launch_materialization_digest: sha256DigestSchema,
+  attach_idempotency_key: z.string().min(1),
+});
+
 export const appendCodexRuntimeJobEventSchema = workerSessionRequestSchema.extend({
   event_id: z.string().min(1),
   event_idempotency_key: z.string().min(1),
@@ -579,6 +602,8 @@ export type ClaimCodexRuntimeJobEnvelopeDto = z.infer<typeof claimCodexRuntimeJo
 export type CodexRuntimeWorkerQueryDto = z.infer<typeof codexRuntimeWorkerQuerySchema>;
 export type MaterializeCodexRuntimeJobDto = z.infer<typeof materializeCodexRuntimeJobSchema>;
 export type StartCodexRuntimeJobDto = z.infer<typeof startCodexRuntimeJobSchema>;
+export type MarkCodexSessionRunnerOwnerDto = z.infer<typeof markCodexSessionRunnerOwnerSchema>;
+export type AttachCodexSessionRunnerRuntimeJobDto = z.infer<typeof attachCodexSessionRunnerRuntimeJobSchema>;
 export type AppendCodexRuntimeJobEventDto = z.infer<typeof appendCodexRuntimeJobEventSchema>;
 export type CreateCodexRuntimeJobArtifactUploadMetadataDto = z.infer<
   typeof createCodexRuntimeJobArtifactUploadMetadataSchema

@@ -21,6 +21,7 @@ const staleTerminalizationCodes = new Set([
   'codex_session_lease_expired',
   'codex_session_stale_terminalization',
   'codex_session_snapshot_stale',
+  'codex_session_thread_binding_stale',
 ]);
 
 const hashLeaseToken = (token: string) => `sha256:${createHash('sha256').update(token).digest('hex')}`;
