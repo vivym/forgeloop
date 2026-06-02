@@ -89,6 +89,8 @@ Out of scope:
   - Maps capsule stale/blocker errors to product-safe responses.
 - Modify `apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts`
   - Renames fork and terminalization DTO fields to capsule names.
+- Modify `apps/control-plane-api/src/modules/plan-item-workflows/internal-codex-session.controller.ts`
+  - Exposes trusted `/internal/codex-sessions/:sessionId/runtime-capsules` route and removes the old `/snapshots` route.
 - Modify `apps/control-plane-api/src/modules/plan-item-workflows/codex-session-lease.service.ts`
   - Builds output capsules and terminalizes with capsule/memory/environment lineage.
 - Modify `apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts`
@@ -105,6 +107,10 @@ Out of scope:
   - Renames runtime context fields to capsule naming.
 - Modify `packages/codex-runtime/src/app-server-generation-driver.ts`
   - Keeps resume request shape strictly `{ threadId, excludeTurns: true, persistExtendedHistory: false }`.
+- Modify `tests/codex-runtime/app-server-generation-driver.test.ts`
+  - Proves bound-session restore uses `thread/resume(threadId)` only, with no `history`, `path`, `Thread.sessionId`, or replacement `thread/start`.
+- Modify `tests/codex-runtime/codex-app-server-schema-smoke.test.ts`
+  - Keeps generated app-server protocol facts pinned for `thread/resume` required fields.
 - Modify `packages/codex-worker-runtime/src/task-filesystem.ts`
   - Allows preparing a host-visible isolated `CODEX_HOME` with optional restore input before app-server launch.
 - Modify `packages/codex-worker-runtime/src/app-server-launcher.ts`
@@ -161,6 +167,8 @@ Out of scope:
   - Script smoke tests for skip/pass reporting shape.
 - Modify `tests/api/codex-session-lease.test.ts`
   - Capsule terminalization endpoint tests.
+- Modify `tests/api/plan-item-workflows.test.ts`
+  - Trusted route and fork DTO tests for capsule naming.
 - Modify `tests/api/codex-runtime-product-generation-scheduler.test.ts`
   - Scheduler fail-closed and worker context tests.
 
@@ -262,6 +270,32 @@ output_environment_manifest_digest?: string;
 
 - Rename `CodexSessionSnapshot` to `CodexRuntimeCapsule`.
 - Add capsule fields from the spec: `created_from_turn_id`, `thread_state_digest`, `memory_state_digest`, `environment_manifest_digest`, `codex_cli_version`, `app_server_protocol_digest`, `trusted_runtime_manifest_digest`, and `credential_binding_lineage_digest`.
+- Replace the capsule interface with the exact required shape; do not leave Wave 2 optional fields optional:
+
+```ts
+export interface CodexRuntimeCapsule {
+  id: string;
+  codex_session_id: string;
+  created_from_turn_id: string;
+  sequence: number;
+  artifact_ref: string;
+  digest: string;
+  size_bytes: string;
+  manifest_digest: string;
+  thread_state_digest: string;
+  memory_state_digest: string;
+  environment_manifest_digest: string;
+  codex_thread_id_digest: string;
+  codex_cli_version: string;
+  app_server_protocol_digest: string;
+  runtime_profile_revision_id: string;
+  trusted_runtime_manifest_digest: string;
+  credential_binding_lineage_digest: string;
+  created_by_actor_id: string;
+  created_at: IsoDateTime;
+}
+```
+
 - Rename stale attempt fields:
 
 ```ts
@@ -293,16 +327,37 @@ expect(
 ).toBe(false);
 ```
 
-- [ ] **Step 6: Run focused tests**
+- [ ] **Step 6: Write failing app-server resume request tests**
 
-Run: `pnpm vitest run tests/domain/plan-item-workflow.test.ts tests/domain/codex-runtime.test.ts tests/contracts/plan-item-workflow.test.ts --pool=forks --no-file-parallelism --maxWorkers=1`
+In `tests/codex-runtime/app-server-generation-driver.test.ts`, add or update the bound-session resume case so the fake transport records a request equivalent to:
+
+```ts
+expect(requests).toContainEqual({
+  method: 'thread/resume',
+  params: {
+    threadId: 'thread-1',
+    excludeTurns: true,
+    persistExtendedHistory: false,
+  },
+});
+expect(JSON.stringify(requests)).not.toContain('"history"');
+expect(JSON.stringify(requests)).not.toContain('"path"');
+expect(JSON.stringify(requests)).not.toContain('"sessionId"');
+expect(requests.filter((request) => request.method === 'thread/start')).toHaveLength(0);
+```
+
+In `tests/codex-runtime/codex-app-server-schema-smoke.test.ts`, keep generated protocol assertions for `ThreadResumeParams.threadId`, `ThreadResumeParams.excludeTurns`, and `ThreadResumeParams.persistExtendedHistory`.
+
+- [ ] **Step 7: Run focused tests**
+
+Run: `pnpm vitest run tests/domain/plan-item-workflow.test.ts tests/domain/codex-runtime.test.ts tests/contracts/plan-item-workflow.test.ts tests/codex-runtime/app-server-generation-driver.test.ts tests/codex-runtime/codex-app-server-schema-smoke.test.ts --pool=forks --no-file-parallelism --maxWorkers=1`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit domain/contracts rename**
+- [ ] **Step 8: Commit domain/contracts rename**
 
 ```bash
-git add packages/domain/src/plan-item-workflow.ts packages/domain/src/codex-runtime.ts packages/contracts/src/plan-item-workflow.ts packages/codex-runtime/src/types.ts tests/domain/plan-item-workflow.test.ts tests/domain/codex-runtime.test.ts tests/contracts/plan-item-workflow.test.ts
+git add packages/domain/src/plan-item-workflow.ts packages/domain/src/codex-runtime.ts packages/contracts/src/plan-item-workflow.ts packages/codex-runtime/src/types.ts packages/codex-runtime/src/app-server-generation-driver.ts tests/domain/plan-item-workflow.test.ts tests/domain/codex-runtime.test.ts tests/contracts/plan-item-workflow.test.ts tests/codex-runtime/app-server-generation-driver.test.ts tests/codex-runtime/codex-app-server-schema-smoke.test.ts
 git commit -m "feat: rename codex session continuity to capsules"
 ```
 
@@ -571,6 +626,7 @@ Create `tests/domain/codex-runtime-capsule.test.ts` with tests for:
 - plugin manifest package refs/digests;
 - skill manifest bundle refs/digests;
 - MCP command payload, cwd policy payload, and literal non-secret env payload round-trip;
+- exact `cwd_policy_payload`, `env_allowlist_payload.value_payload`, and `scope_payload.scope_policy_payload` round-trip;
 - tool schema payload round-trip;
 - app connector schema/scope policy payload round-trip;
 - credential binding lineage digest;
@@ -835,8 +891,10 @@ In `tests/codex-worker-runtime/codex-runtime-capsule-environment-state.test.ts`,
 - plugin package materialization from `codex_plugin_package` ref;
 - skill bundle materialization from `codex_skill_bundle` ref;
 - MCP env `literal_non_secret` requires `value_payload`;
+- MCP `command_payload.cwd_policy_payload` is embedded and digest-checked;
 - MCP env credential/runtime sources reject `value_payload`;
 - connector scope policy digest recomputes from embedded payload;
+- connector `scope_payload.scope_policy_payload` is embedded and digest-checked;
 - tool schema payload digest recomputes from embedded payload;
 - missing package/bundle refs fail closed.
 
@@ -1023,6 +1081,7 @@ git commit -m "feat: package and restore codex runtime capsules"
 - Modify: `apps/control-plane-api/src/modules/codex-runtime/product-generation-runtime-scheduler.service.ts`
 - Modify: `apps/control-plane-api/src/modules/automation/product-generation-result.service.ts`
 - Modify: `apps/control-plane-api/src/modules/plan-item-workflows/codex-session-lease.service.ts`
+- Modify: `apps/control-plane-api/src/modules/plan-item-workflows/internal-codex-session.controller.ts`
 - Modify: `apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts`
 - Modify: `apps/control-plane-api/src/modules/http/domain-error.filter.ts`
 - Modify: `tests/codex-worker-runtime/app-server-launcher.test.ts`
@@ -1053,6 +1112,32 @@ inputEnvironmentManifestRef: session.latest_environment_manifest_ref,
 ```
 
 In `tests/api/codex-session-lease.test.ts`, assert terminalization accepts `output_capsule_*` fields and rejects `output_snapshot_*`.
+
+In `tests/api/plan-item-workflows.test.ts` or a focused trusted-internal API test, assert the route rename:
+
+```ts
+await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/runtime-capsules`, {
+  capsule_id: 'capsule-1',
+  sequence: 1,
+  artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${sessionId}/capsule-1`,
+  digest: digestA,
+  size_bytes: '123',
+  manifest_digest: digestB,
+  thread_state_digest: digestC,
+  memory_state_digest: digestD,
+  environment_manifest_digest: digestE,
+  codex_thread_id_digest: digestF,
+  codex_cli_version: '0.133.0',
+  app_server_protocol_digest: digestG,
+  runtime_profile_revision_id: 'profile-revision-1',
+  trusted_runtime_manifest_digest: digestH,
+  credential_binding_lineage_digest: digestI,
+  created_from_turn_id: turnId,
+  actor_id: actorId,
+}).expect(201);
+
+await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/snapshots`, {}).expect(404);
+```
 
 - [ ] **Step 3: Run tests to verify failure**
 
@@ -1115,7 +1200,16 @@ output_capsule_manifest_digest
 
 Add memory/environment terminal fields from the spec. Reject old snapshot fields via strict schemas.
 
-- [ ] **Step 8: Update scheduler and product result bridge**
+- [ ] **Step 8: Rename trusted runtime-capsule route**
+
+In `apps/control-plane-api/src/modules/plan-item-workflows/internal-codex-session.controller.ts`:
+
+- add `POST /internal/codex-sessions/:sessionId/runtime-capsules` if capsule creation remains a separate trusted route;
+- otherwise route terminalization-created capsules through the same capsule-named service method and keep no `/snapshots` route;
+- call `createCodexRuntimeCapsule` / `getCodexRuntimeCapsule` repository methods only;
+- never expose raw component artifact refs in product DTOs.
+
+- [ ] **Step 9: Update scheduler and product result bridge**
 
 In scheduler/service files, use session latest capsule/memory/environment fields. Later turns missing latest capsule, memory, or environment refs must block with product-safe codes:
 
@@ -1125,16 +1219,16 @@ In scheduler/service files, use session latest capsule/memory/environment fields
 
 Do not start replacement threads on these failures.
 
-- [ ] **Step 9: Run focused orchestration tests**
+- [ ] **Step 10: Run focused orchestration tests**
 
 Run: `pnpm vitest run tests/codex-worker-runtime/app-server-launcher.test.ts tests/codex-worker-runtime/remote-worker-client.test.ts tests/api/codex-runtime-product-generation-scheduler.test.ts tests/api/codex-session-lease.test.ts tests/api/plan-item-workflows.test.ts --pool=forks --no-file-parallelism --maxWorkers=1`
 
 Expected: PASS.
 
-- [ ] **Step 10: Commit orchestration wiring**
+- [ ] **Step 11: Commit orchestration wiring**
 
 ```bash
-git add packages/codex-worker-runtime/src/task-filesystem.ts packages/codex-worker-runtime/src/app-server-launcher.ts packages/codex-worker-runtime/src/remote-worker-client.ts packages/codex-worker-runtime/src/runtime-job-artifacts.ts apps/control-plane-api/src/modules/codex-runtime/codex-runtime.dto.ts apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts apps/control-plane-api/src/modules/codex-runtime/product-generation-runtime-scheduler.service.ts apps/control-plane-api/src/modules/automation/product-generation-result.service.ts apps/control-plane-api/src/modules/plan-item-workflows/codex-session-lease.service.ts apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts apps/control-plane-api/src/modules/http/domain-error.filter.ts tests/codex-worker-runtime/app-server-launcher.test.ts tests/codex-worker-runtime/remote-worker-client.test.ts tests/api/codex-runtime-product-generation-scheduler.test.ts tests/api/codex-session-lease.test.ts tests/api/plan-item-workflows.test.ts
+git add packages/codex-worker-runtime/src/task-filesystem.ts packages/codex-worker-runtime/src/app-server-launcher.ts packages/codex-worker-runtime/src/remote-worker-client.ts packages/codex-worker-runtime/src/runtime-job-artifacts.ts apps/control-plane-api/src/modules/codex-runtime/codex-runtime.dto.ts apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts apps/control-plane-api/src/modules/codex-runtime/product-generation-runtime-scheduler.service.ts apps/control-plane-api/src/modules/automation/product-generation-result.service.ts apps/control-plane-api/src/modules/plan-item-workflows/codex-session-lease.service.ts apps/control-plane-api/src/modules/plan-item-workflows/internal-codex-session.controller.ts apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts apps/control-plane-api/src/modules/http/domain-error.filter.ts tests/codex-worker-runtime/app-server-launcher.test.ts tests/codex-worker-runtime/remote-worker-client.test.ts tests/api/codex-runtime-product-generation-scheduler.test.ts tests/api/codex-session-lease.test.ts tests/api/plan-item-workflows.test.ts
 git commit -m "feat: restore and package capsules in codex workers"
 ```
 
