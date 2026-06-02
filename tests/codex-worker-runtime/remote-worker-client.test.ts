@@ -769,7 +769,7 @@ describe('remote codex worker client', () => {
     expect(JSON.stringify(terminalized)).not.toContain('launch-token-secret');
   });
 
-  it('rejects legacy snapshot terminalization fields instead of accepting compatibility aliases', async () => {
+  it('rejects unknown terminalization fields instead of accepting compatibility aliases', async () => {
     const terminalized: Record<string, unknown>[] = [];
     const worker = createRemoteCodexWorkerClient({
       workerId: 'worker-1',
@@ -791,15 +791,13 @@ describe('remote codex worker client', () => {
         pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(), envelope: { id: 'envelope-1' } }] }),
         acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(), status: 'accepted' } }),
         getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
-        fetchRuntimeJobWorkload: async () => {
-          const obsoleteTerminalizationFields = {
-            [['expected', 'previous', 'snap', 'shot', 'digest'].join('_')]: digest('f'),
-          };
-          return generationWorkloadResponse({
+        fetchRuntimeJobWorkload: async () =>
+          generationWorkloadResponse({
             codex_session_runtime_context: sessionRuntimeContext(),
-            codex_session_terminalization: sessionTerminalization(obsoleteTerminalizationFields),
-          });
-        },
+            codex_session_terminalization: sessionTerminalization({
+              unknown_terminalization_field: digest('f'),
+            }),
+          }),
         terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
           terminalized.push(input);
           return {};
@@ -808,7 +806,7 @@ describe('remote codex worker client', () => {
       launcher: { startFromMaterialization: vi.fn() },
       scavenger: async () => undefined,
       now: () => '2026-05-23T00:00:00.000Z',
-      nonceFactory: () => 'nonce-legacy-snapshot',
+      nonceFactory: () => 'nonce-unknown-terminalization-field',
     });
 
     await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });

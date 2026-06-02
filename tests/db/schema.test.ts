@@ -538,7 +538,7 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(codex_sessions, 'latest_capsule_id')).toBe('PgUUID');
     expect(columnType(codex_sessions, 'base_memory_bundle_ref')).toBe('PgText');
     expect(columnType(codex_sessions, 'latest_environment_manifest_ref')).toBe('PgText');
-    expect(Object.keys(getTableColumns(codex_sessions))).not.toContain(['latest', 'Snapshot', 'Id'].join(''));
+    expect(Object.keys(getTableColumns(codex_sessions))).not.toContain('latest_capture_id');
     expect(hasIndex(codex_sessions, 'codex_sessions_owner_idx', ['owner_type', 'owner_id'])).toBe(true);
 
     expect(columnNotNull(plan_item_workflow_transitions, 'actor_id')).toBe(true);

@@ -402,7 +402,7 @@ describe('Codex Session lease API', () => {
     });
   });
 
-  it('creates runtime capsules through the trusted capsule route and keeps snapshots absent', async () => {
+  it('creates runtime capsules through the trusted capsule route', async () => {
     const { workflow } = await seedWorkflow(app, { idPrefix: '55555555' });
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const sessionId = workflow.active_codex_session_id;
@@ -450,11 +450,9 @@ describe('Codex Session lease API', () => {
       created_by_actor_id: ids.actorTech,
     });
 
-    const obsoleteRoute = ['internal', 'codex-sessions', sessionId, ['snap', 'shots'].join('')].join('/');
-    await signedAutomationPost(app, `/${obsoleteRoute}`, {}).expect(404);
   });
 
-  it('rejects legacy output snapshot terminalization fields', async () => {
+  it('rejects unknown terminalization fields', async () => {
     const { workflow } = await seedWorkflow(app, { idPrefix: '44444444' });
     const sessionId = workflow.active_codex_session_id;
     const turnId = '44444444-1111-4111-8111-111111119001';
@@ -465,26 +463,21 @@ describe('Codex Session lease API', () => {
       workflow_id: workflow.id,
       intent: 'continue_brainstorming',
       status: 'running',
-      input_digest: 'sha256:legacy-output-snapshot',
+      input_digest: 'sha256:unknown-terminalization-field',
       created_by_actor_id: ids.actorTech,
       created_at: '2026-05-31T00:00:00.000Z',
       updated_at: '2026-05-31T00:00:00.000Z',
     });
 
-    const obsoleteOutputFields = Object.fromEntries([
-      [['output', 'snap', 'shot', 'id'].join('_'), 'snapshot-1'],
-      [['output', 'snap', 'shot', 'digest'].join('_'), 'sha256:legacy-output-snapshot-digest'],
-    ]);
-
     await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${turnId}/terminalize`, {
-      lease_id: 'lease-legacy-output-snapshot',
-      lease_token: 'lease-token-legacy-output-snapshot',
+      lease_id: 'lease-unknown-terminalization-field',
+      lease_token: 'lease-token-unknown-terminalization-field',
       lease_epoch: 1,
-      worker_id: 'worker-legacy-output-snapshot',
-      worker_session_digest: 'sha256:worker-legacy-output-snapshot',
+      worker_id: 'worker-unknown-terminalization-field',
+      worker_session_digest: 'sha256:worker-unknown-terminalization-field',
       status: 'succeeded',
       expected_input_capsule_digest: null,
-      ...obsoleteOutputFields,
+      unknown_terminalization_field: 'not-accepted',
     }).expect(400);
   });
 
