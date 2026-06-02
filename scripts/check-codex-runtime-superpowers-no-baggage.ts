@@ -69,6 +69,11 @@ const defaultScanRoots = [
   'docs/superpowers/reports',
   'tests',
 ];
+const legacyCodexSessionSnapshotScanRoots = [
+  'packages/domain',
+  'packages/contracts',
+  'packages/db/src',
+];
 const scanExtensions = new Set(['.ts', '.tsx', '.md', '.json']);
 const ignoredHistoricalPathFragments = [
   'scripts/dogfood/strict-local-codex.ts',
@@ -374,6 +379,7 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
     /\blatest_snapshot_/,
     /\bexpected_previous_snapshot_digest\b/,
     /\boutput_snapshot_/,
+    /\battempted_output_snapshot_digest\b/,
     /\bforked_from_snapshot_id\b/,
     /\bfork_point_snapshot_/,
     /\bcodex_session_snapshot_stale\b/,
@@ -438,6 +444,16 @@ const isAllowed = (input: {
       (entry.excerpt === undefined || input.line.includes(entry.excerpt)),
   );
 
+const patternsForFile = (
+  file: string,
+): Array<[CodexRuntimeSuperpowersBaggagePattern, RegExp[]]> => {
+  const patterns = Object.entries(baggagePatterns) as Array<[CodexRuntimeSuperpowersBaggagePattern, RegExp[]]>;
+  if (legacyCodexSessionSnapshotScanRoots.some((root) => file === root || file.startsWith(`${root}/`))) {
+    return patterns.filter(([pattern]) => pattern === 'legacy_codex_session_snapshot');
+  }
+  return patterns;
+};
+
 const scanFile = (input: {
   rootDir: string;
   file: string;
@@ -452,9 +468,7 @@ const scanFile = (input: {
   const lines = content.split(/\r?\n/);
   const violations: CodexRuntimeSuperpowersNoBaggageViolation[] = [];
   for (const [lineIndex, line] of lines.entries()) {
-    for (const [pattern, expressions] of Object.entries(baggagePatterns) as Array<
-      [CodexRuntimeSuperpowersBaggagePattern, RegExp[]]
-    >) {
+    for (const [pattern, expressions] of patternsForFile(input.file)) {
       if (isIgnoredHistoricalPath(input.file, pattern)) {
         continue;
       }
@@ -479,11 +493,14 @@ export const scanCodexRuntimeSuperpowersNoBaggage = (input: {
   allowlist?: AllowedMatch[];
 }): CodexRuntimeSuperpowersNoBaggageScanResult => {
   const rootDir = resolve(input.rootDir ?? process.cwd());
+  const defaultFiles = [
+    ...defaultScanFiles,
+    ...defaultScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot)),
+    ...legacyCodexSessionSnapshotScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot)),
+  ];
   const files = Array.from(
     new Set(
-      (input.files ?? [...defaultScanFiles, ...defaultScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot))]).map((file) =>
-        relative(rootDir, resolve(rootDir, file)),
-      ),
+      (input.files ?? defaultFiles).map((file) => relative(rootDir, resolve(rootDir, file))),
     ),
   ).sort();
   const allowlist = input.allowlist ?? codexRuntimeSuperpowersNoBaggageAllowlist;

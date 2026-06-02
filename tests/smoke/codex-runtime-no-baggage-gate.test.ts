@@ -342,6 +342,7 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
       "const latest_snapshot_digest = 'sha256:old';",
       "const expected_previous_snapshot_digest = 'sha256:old';",
       "const output_snapshot_digest = 'sha256:old-output';",
+      "const attempted_output_snapshot_digest = 'sha256:attempted-output';",
       "const forked_from_snapshot_id = 'snapshot-1';",
       "const fork_point_snapshot_id = 'snapshot-1';",
       "const error = 'codex_session_snapshot_stale';",
