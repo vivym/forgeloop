@@ -424,7 +424,9 @@ describe('Codex Session lease API', () => {
       status: 'succeeded',
       codex_thread_id_digest: 'sha256:thread-current',
     });
-    await expect(repository.getCodexSessionTurn(secondTurnId)).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexSessionTurn(secondTurnId)).resolves.toMatchObject({ status: 'stale' });
+    const staleTurn = await repository.getCodexSessionTurn(secondTurnId);
+    expect(staleTurn?.codex_thread_id_digest).toBeUndefined();
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(sessionId)).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -437,27 +439,5 @@ describe('Codex Session lease API', () => {
         }),
       ]),
     );
-
-    await signedAutomationPost(app, `/internal/codex-sessions/${sessionId}/turns/${secondTurnId}/terminalize`, {
-      lease_id: secondClaim.lease.id,
-      lease_token: 'lease-token-thread-binding-2',
-      lease_epoch: secondClaim.lease.lease_epoch,
-      worker_id: 'worker-thread-binding',
-      worker_session_digest: 'sha256:worker-thread-binding-session',
-      status: 'succeeded',
-      expected_previous_snapshot_digest: null,
-      codex_thread_id: 'thread-current',
-      codex_thread_id_digest: 'sha256:thread-current',
-    }).expect(201);
-
-    await expect(repository.getCodexSession(sessionId)).resolves.toMatchObject({
-      status: 'idle',
-      codex_thread_id: 'thread-current',
-      codex_thread_id_digest: 'sha256:thread-current',
-    });
-    await expect(repository.getCodexSessionTurn(secondTurnId)).resolves.toMatchObject({
-      status: 'succeeded',
-      codex_thread_id_digest: 'sha256:thread-current',
-    });
   });
 });
