@@ -8,8 +8,19 @@ describe('Codex runtime capsule path classifier', () => {
     expect(classifyCodexHomePath('auth.json').classification).toBe('forbidden');
     expect(classifyCodexHomePath('config.toml').classification).toBe('forbidden');
     expect(classifyCodexHomePath('logs_1.sqlite').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('logs_1.sqlite-wal').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('logs_1.sqlite-shm').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('logs_1.sqlite-journal').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('goals_1.sqlite').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('memories_1.sqlite').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('codex-dev.db').classification).toBe('forbidden');
     expect(classifyCodexHomePath('state_5.sqlite').classification).toBe('forbidden_whole_db');
-    expect(classifyCodexHomePath('plugins/plugin-a/plugin.json').classification).toBe('environment_component');
+    expect(classifyCodexHomePath('state_5.sqlite-wal').classification).toBe('forbidden_whole_db');
+    expect(classifyCodexHomePath('state_5.sqlite-shm').classification).toBe('forbidden_whole_db');
+    expect(classifyCodexHomePath('state_5.sqlite-journal').classification).toBe('forbidden_whole_db');
+    expect(classifyCodexHomePath('plugins/plugin-a/plugin.json').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('cache/plugin-a/tool.bin').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('tmp/socket-placeholder').classification).toBe('forbidden');
     expect(classifyCodexHomePath('skills/project/SKILL.md').classification).toBe('environment_component');
     expect(classifyCodexHomePath('unknown.bin').classification).toBe('unknown');
   });
@@ -29,5 +40,8 @@ describe('Codex runtime capsule path classifier', () => {
     );
     expect(() => assertSafeCodexHomePathEntry({ relativePath: 'unknown.bin', entryKind: 'regular_file' })).toThrow(/unsafe/);
     expect(() => assertSafeCodexHomePathEntry({ relativePath: 'auth.json', entryKind: 'regular_file' })).toThrow(/unsafe/);
+    expect(() => assertSafeCodexHomePathEntry({ relativePath: 'plugins/plugin-a/plugin.json', entryKind: 'regular_file' })).toThrow(
+      /unsafe/,
+    );
   });
 });

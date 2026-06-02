@@ -24,6 +24,8 @@ import {
   codexRuntimeCapsuleManifestSchema,
   codexSkillManifestDigest,
   codexSkillManifestSchema,
+  codexThreadLocatorRepairManifestDigest,
+  codexThreadLocatorRepairManifestSchema,
   codexToolSchemaManifestDigest,
   codexToolSchemaManifestSchema,
   codexTrustedRuntimeManifestDigest,
@@ -427,6 +429,42 @@ describe('codex runtime capsule schemas and digests', () => {
   it('computes credential binding lineage and trusted runtime manifest digests', () => {
     expect(codexCredentialLineageDigest(credentialLineage)).toBe(codexCanonicalDigest(credentialLineage));
     expect(codexTrustedRuntimeManifestDigest(trustedRuntimeManifest)).toBe(codexCanonicalDigest(trustedRuntimeManifest));
+  });
+
+  it('validates locator repair manifests with safe rollout paths and minimal DB repair rows', () => {
+    const manifest = {
+      schema_version: 'codex_thread_locator_repair_manifest.v1',
+      codex_thread_id_digest: digestA,
+      rollout_relative_path: 'sessions/2026/06/02/rollout-abc.jsonl',
+      rollout_digest: digestB,
+      repair_strategy: 'minimal_state_index_upsert',
+      required_state_tables: [
+        {
+          table_name: 'sessions',
+          allowed_columns: ['id', 'path', 'updated_at'],
+          row_digest: digestC,
+        },
+      ],
+    };
+
+    expect(codexThreadLocatorRepairManifestSchema.parse(manifest)).toEqual(manifest);
+    expect(codexThreadLocatorRepairManifestDigest(manifest)).toBe(codexCanonicalDigest(manifest));
+    expect(() =>
+      codexThreadLocatorRepairManifestSchema.parse({
+        ...manifest,
+        codex_session_id: codexSessionId,
+        repair_id: 'legacy-repair',
+        locator_digest: digestD,
+      }),
+    ).toThrow();
+    for (const rollout_relative_path of [
+      '/Users/viv/.codex/sessions/2026/06/02/rollout-abc.jsonl',
+      '../sessions/2026/06/02/rollout-abc.jsonl',
+      'config.toml',
+      'sessions/2026/06/02/not-rollout.jsonl',
+    ]) {
+      expect(() => codexThreadLocatorRepairManifestSchema.parse({ ...manifest, rollout_relative_path })).toThrow();
+    }
   });
 
   it('rejects product-safe reports containing private runtime material', () => {

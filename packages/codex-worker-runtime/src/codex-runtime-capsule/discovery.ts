@@ -6,7 +6,12 @@ import {
   codexThreadLocatorRepairManifestSchema,
 } from '@forgeloop/domain';
 
-import { classifyCodexHomePath, type CodexHomePathClassification } from './path-classifier.js';
+import {
+  assertSafeCodexHomePathEntry,
+  classifyCodexHomePath,
+  type CodexHomePathClassification,
+  type CodexHomePathEntryKind,
+} from './path-classifier.js';
 
 export type CodexRuntimeCapsuleDiscoveryStatus = 'passed' | 'blocked';
 
@@ -15,16 +20,21 @@ export type CodexHomeMutationKind = 'created' | 'modified' | 'deleted';
 export interface ObservedCodexHomePathMutation {
   relative_path: string;
   mutation_kind: CodexHomeMutationKind;
+  entry_kind: CodexHomePathEntryKind;
   required_for_restore?: boolean;
 }
 
 export interface CodexThreadLocatorRepairManifest {
   schema_version: 'codex_thread_locator_repair_manifest.v1';
-  codex_session_id: string;
-  repair_id: string;
-  locator_digest: string;
-  repaired_locator_digest: string;
-  evidence_digest: string;
+  codex_thread_id_digest: string;
+  rollout_relative_path: string;
+  rollout_digest: string;
+  repair_strategy: 'app_server_scan' | 'minimal_state_index_upsert';
+  required_state_tables?: Array<{
+    table_name: string;
+    allowed_columns: string[];
+    row_digest: string;
+  }>;
 }
 
 export type CodexThreadLocatorRepairStrategy =
@@ -105,13 +115,25 @@ export const runCodexRuntimeCapsuleDiscovery = async (
   for (const mutation of observed.observed_path_mutations) {
     let classification: CodexHomePathClassification;
     try {
-      classification = classifyCodexHomePath(mutation.relative_path).classification;
+      classification = assertSafeCodexHomePathEntry({
+        relativePath: mutation.relative_path,
+        entryKind: mutation.entry_kind,
+      }).classification;
     } catch {
-      classification = 'unknown';
+      const pathClassification = safeClassifyCodexHomePath(mutation.relative_path);
+      classification = pathClassification;
+      if (pathClassification === 'unknown') {
+        pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_unknown_path');
+      } else {
+        pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_unsafe_path_entry');
+      }
     }
     counts[classification] += 1;
     if (classification === 'unknown') {
       pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_unknown_path');
+    }
+    if (classification === 'forbidden' || classification === 'forbidden_whole_db') {
+      pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_forbidden_path');
     }
     if ((classification === 'forbidden' || classification === 'forbidden_whole_db') && mutation.required_for_restore === true) {
       pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_forbidden_required_path');
@@ -126,8 +148,12 @@ export const runCodexRuntimeCapsuleDiscovery = async (
   if (observed.locator_repair_manifest === undefined) {
     pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_locator_repair_manifest_missing');
   } else {
-    const locatorRepairManifest = codexThreadLocatorRepairManifestSchema.parse(observed.locator_repair_manifest);
-    locatorRepairManifestDigest = codexThreadLocatorRepairManifestDigest(locatorRepairManifest);
+    const locatorRepairManifestResult = codexThreadLocatorRepairManifestSchema.safeParse(observed.locator_repair_manifest);
+    if (!locatorRepairManifestResult.success) {
+      pushBlocker(blockerCodes, 'codex_runtime_capsule_discovery_locator_repair_manifest_invalid');
+    } else {
+      locatorRepairManifestDigest = codexThreadLocatorRepairManifestDigest(locatorRepairManifestResult.data);
+    }
   }
 
   let publicObservationsDigest: string | undefined;
@@ -156,4 +182,12 @@ export const runCodexRuntimeCapsuleDiscovery = async (
   }
 
   return codexRuntimeCapsuleDiscoveryReportSchema.parse(report) as unknown as CodexRuntimeCapsuleDiscoveryReport;
+};
+
+const safeClassifyCodexHomePath = (relativePath: string): CodexHomePathClassification => {
+  try {
+    return classifyCodexHomePath(relativePath).classification;
+  } catch {
+    return 'unknown';
+  }
 };

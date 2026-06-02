@@ -19,9 +19,11 @@ export interface CodexHomePathEntrySafetyInput {
   entryKind: CodexHomePathEntryKind;
 }
 
-const forbiddenExactPaths = new Set(['auth.json', 'config.toml']);
-const forbiddenWholeDbPattern = /^state_[0-9]+\.sqlite$/;
-const forbiddenDbPattern = /^(?:logs_[0-9]+|mcp|history)\.sqlite$/;
+const forbiddenExactPaths = new Set(['auth.json', 'config.toml', 'codex-dev.db']);
+const forbiddenRawDirectoryPattern = /^(?:plugins|cache|tmp)\/.+/;
+const sqliteSuffixPattern = /\.sqlite.*$/;
+const forbiddenWholeDbPattern = /^state_[0-9]+\.sqlite.*$/;
+const forbiddenDbPattern = /^(?:logs_[0-9]+|goals_[0-9]+|memories_[0-9]+|mcp|history)\.sqlite.*$/;
 
 export const assertSafeCodexHomeRelativePath = (relativePath: string): string => {
   if (relativePath.trim() !== relativePath || relativePath.length === 0) {
@@ -58,11 +60,14 @@ export const assertSafeCodexHomePathEntry = (input: CodexHomePathEntrySafetyInpu
 };
 
 const classifySafeCodexHomePath = (relativePath: string): CodexHomePathClassification => {
-  if (forbiddenExactPaths.has(relativePath) || forbiddenDbPattern.test(relativePath)) {
+  if (forbiddenExactPaths.has(relativePath) || forbiddenRawDirectoryPattern.test(relativePath) || forbiddenDbPattern.test(relativePath)) {
     return 'forbidden';
   }
   if (forbiddenWholeDbPattern.test(relativePath)) {
     return 'forbidden_whole_db';
+  }
+  if (sqliteSuffixPattern.test(relativePath)) {
+    return 'unknown';
   }
   if (/^sessions\/[0-9]{4}\/[0-9]{2}\/[0-9]{2}\/rollout-[A-Za-z0-9._-]+\.jsonl$/.test(relativePath)) {
     return 'thread_state_allowed';
@@ -70,10 +75,10 @@ const classifySafeCodexHomePath = (relativePath: string): CodexHomePathClassific
   if (/^(?:memories|memory)\/.+/.test(relativePath)) {
     return 'memory_state_allowed';
   }
-  if (/^(?:plugins|skills|apps|mcp|connectors)\/.+/.test(relativePath)) {
+  if (/^(?:skills|apps|mcp|connectors)\/.+/.test(relativePath)) {
     return 'environment_component';
   }
-  if (/^(?:cache|tmp|generated|tool-cache)\/.+/.test(relativePath)) {
+  if (/^(?:generated|tool-cache)\/.+/.test(relativePath)) {
     return 'generated_environment';
   }
   return 'unknown';

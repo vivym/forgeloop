@@ -11,18 +11,21 @@ const digest = (input: unknown): string => codexCanonicalDigest(input);
 
 const locatorRepairManifest = {
   schema_version: 'codex_thread_locator_repair_manifest.v1',
-  codex_session_id: 'codex-session-1',
-  repair_id: 'repair-1',
-  locator_digest: digest({ locator: 'before' }),
-  repaired_locator_digest: digest({ locator: 'after' }),
-  evidence_digest: digest({ evidence: 'locator-repaired' }),
+  codex_thread_id_digest: digest({ thread: 'abc' }),
+  rollout_relative_path: 'sessions/2026/06/02/rollout-abc.jsonl',
+  rollout_digest: digest({ rollout: 'abc' }),
+  repair_strategy: 'minimal_state_index_upsert',
+  required_state_tables: [
+    {
+      table_name: 'sessions',
+      allowed_columns: ['id', 'path'],
+      row_digest: digest({ row: 'abc' }),
+    },
+  ],
 } as const;
 
 const observedState = (override: Partial<ObservedCodexHomeState> = {}): ObservedCodexHomeState => ({
-  observed_path_mutations: [
-    { relative_path: 'sessions/2026/06/02/rollout-abc.jsonl', mutation_kind: 'created' },
-    { relative_path: 'plugins/plugin-a/plugin.json', mutation_kind: 'created' },
-  ],
+  observed_path_mutations: [{ relative_path: 'sessions/2026/06/02/rollout-abc.jsonl', mutation_kind: 'created', entry_kind: 'regular_file' }],
   locator_repair_manifest: locatorRepairManifest,
   ...override,
 });
@@ -55,7 +58,7 @@ describe('Codex runtime capsule discovery gate', () => {
     expect(report.locator_repair_manifest_digest).toMatch(/^sha256:/);
     expect(report.path_mutation_counts).toMatchObject({
       thread_state_allowed: 1,
-      environment_component: 1,
+      environment_component: 0,
       unknown: 0,
       forbidden: 0,
       forbidden_whole_db: 0,
@@ -64,17 +67,29 @@ describe('Codex runtime capsule discovery gate', () => {
   });
 
   it('blocks when an unknown path exists', async () => {
-    await expectDiscoveryBlockers(observedState({ observed_path_mutations: [{ relative_path: 'unknown.bin', mutation_kind: 'created' }] }), [
+    await expectDiscoveryBlockers(
+      observedState({ observed_path_mutations: [{ relative_path: 'unknown.bin', mutation_kind: 'created', entry_kind: 'regular_file' }] }),
+      [
       'codex_runtime_capsule_discovery_unknown_path',
-    ]);
+      ],
+    );
   });
 
   it('blocks when a forbidden path is required', async () => {
     await expectDiscoveryBlockers(
       observedState({
-        observed_path_mutations: [{ relative_path: 'auth.json', mutation_kind: 'modified', required_for_restore: true }],
+        observed_path_mutations: [{ relative_path: 'auth.json', mutation_kind: 'modified', entry_kind: 'regular_file', required_for_restore: true }],
       }),
       ['codex_runtime_capsule_discovery_forbidden_required_path'],
+    );
+  });
+
+  it('blocks when a forbidden raw Codex home path is observed', async () => {
+    await expectDiscoveryBlockers(
+      observedState({
+        observed_path_mutations: [{ relative_path: 'plugins/plugin-a/plugin.json', mutation_kind: 'created', entry_kind: 'regular_file' }],
+      }),
+      ['codex_runtime_capsule_discovery_forbidden_path'],
     );
   });
 
@@ -91,6 +106,58 @@ describe('Codex runtime capsule discovery gate', () => {
     await expectDiscoveryBlockers(observedState({ locator_repair_manifest: undefined }), [
       'codex_runtime_capsule_discovery_locator_repair_manifest_missing',
     ]);
+  });
+
+  it('blocks when locator repair manifest has an unsafe rollout path or legacy shape', async () => {
+    await expectDiscoveryBlockers(
+      observedState({
+        locator_repair_manifest: {
+          ...locatorRepairManifest,
+          rollout_relative_path: '../sessions/2026/06/02/rollout-abc.jsonl',
+        },
+      }),
+      ['codex_runtime_capsule_discovery_locator_repair_manifest_invalid'],
+    );
+    await expectDiscoveryBlockers(
+      observedState({
+        locator_repair_manifest: {
+          schema_version: 'codex_thread_locator_repair_manifest.v1',
+          codex_session_id: 'codex-session-1',
+          repair_id: 'repair-1',
+          locator_digest: digest({ locator: 'before' }),
+          repaired_locator_digest: digest({ locator: 'after' }),
+          evidence_digest: digest({ evidence: 'locator-repaired' }),
+        },
+      }),
+      ['codex_runtime_capsule_discovery_locator_repair_manifest_invalid'],
+    );
+  });
+
+  it('blocks when observed entries are symlinks, sockets, or non-regular entries', async () => {
+    await expectDiscoveryBlockers(
+      observedState({
+        observed_path_mutations: [
+          { relative_path: 'sessions/2026/06/02/rollout-abc.jsonl', mutation_kind: 'created', entry_kind: 'symlink' },
+        ],
+      }),
+      ['codex_runtime_capsule_discovery_unsafe_path_entry'],
+    );
+    await expectDiscoveryBlockers(
+      observedState({
+        observed_path_mutations: [
+          { relative_path: 'sessions/2026/06/02/rollout-abc.jsonl', mutation_kind: 'created', entry_kind: 'socket' },
+        ],
+      }),
+      ['codex_runtime_capsule_discovery_unsafe_path_entry'],
+    );
+    await expectDiscoveryBlockers(
+      observedState({
+        observed_path_mutations: [
+          { relative_path: 'sessions/2026/06/02/rollout-abc.jsonl', mutation_kind: 'created', entry_kind: 'directory' },
+        ],
+      }),
+      ['codex_runtime_capsule_discovery_unsafe_path_entry'],
+    );
   });
 
   it('rejects raw thread ids or internal refs in public output', async () => {

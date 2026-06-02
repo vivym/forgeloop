@@ -316,12 +316,35 @@ export const codexRuntimeCapsuleManifestSchema = withSessionRefValidation(
 
 export const codexThreadLocatorRepairManifestSchema = z.object({
   schema_version: z.literal('codex_thread_locator_repair_manifest.v1'),
-  codex_session_id: nonEmptyStringSchema,
-  repair_id: nonEmptyStringSchema,
-  locator_digest: sha256DigestSchema,
-  repaired_locator_digest: sha256DigestSchema,
-  evidence_digest: sha256DigestSchema,
-}).strict();
+  codex_thread_id_digest: sha256DigestSchema,
+  rollout_relative_path: nonEmptyStringSchema,
+  rollout_digest: sha256DigestSchema,
+  repair_strategy: z.enum(['app_server_scan', 'minimal_state_index_upsert']),
+  required_state_tables: z.array(
+    z.object({
+      table_name: nonEmptyStringSchema,
+      allowed_columns: z.array(nonEmptyStringSchema),
+      row_digest: sha256DigestSchema,
+    }).strict(),
+  ).optional(),
+}).strict().superRefine((manifest, ctx) => {
+  const relativePath = manifest.rollout_relative_path;
+  if (
+    relativePath.trim() !== relativePath ||
+    relativePath.length === 0 ||
+    relativePath.startsWith('/') ||
+    /^[A-Za-z]:[\\/]/.test(relativePath) ||
+    relativePath.includes('\\') ||
+    relativePath.split('/').some((part) => part.length === 0 || part === '.' || part === '..') ||
+    !/^sessions\/[0-9]{4}\/[0-9]{2}\/[0-9]{2}\/rollout-[A-Za-z0-9._-]+\.jsonl$/.test(relativePath)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['rollout_relative_path'],
+      message: 'rollout_relative_path must be a safe Codex home rollout relative path.',
+    });
+  }
+});
 
 export const codexRuntimeCapsuleDiscoveryReportSchema = z.record(z.string(), jsonValueSchema).superRefine((value) => {
   assertCodexRuntimeCapsulePublicReportSafe(value);
