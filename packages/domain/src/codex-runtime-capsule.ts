@@ -323,7 +323,7 @@ export const codexThreadLocatorRepairManifestSchema = z.object({
   required_state_tables: z.array(
     z.object({
       table_name: nonEmptyStringSchema,
-      allowed_columns: z.array(nonEmptyStringSchema),
+      allowed_columns: z.array(nonEmptyStringSchema).min(1),
       row_digest: sha256DigestSchema,
     }).strict(),
   ).optional(),
@@ -342,6 +342,16 @@ export const codexThreadLocatorRepairManifestSchema = z.object({
       code: 'custom',
       path: ['rollout_relative_path'],
       message: 'rollout_relative_path must be a safe Codex home rollout relative path.',
+    });
+  }
+  if (
+    manifest.repair_strategy === 'minimal_state_index_upsert' &&
+    (manifest.required_state_tables === undefined || manifest.required_state_tables.length === 0)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['required_state_tables'],
+      message: 'minimal_state_index_upsert requires non-empty required_state_tables.',
     });
   }
 });

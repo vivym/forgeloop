@@ -465,6 +465,22 @@ describe('codex runtime capsule schemas and digests', () => {
     ]) {
       expect(() => codexThreadLocatorRepairManifestSchema.parse({ ...manifest, rollout_relative_path })).toThrow();
     }
+    expect(() => codexThreadLocatorRepairManifestSchema.parse({ ...manifest, required_state_tables: undefined })).toThrow();
+    expect(() => codexThreadLocatorRepairManifestSchema.parse({ ...manifest, required_state_tables: [] })).toThrow();
+    expect(() =>
+      codexThreadLocatorRepairManifestSchema.parse({
+        ...manifest,
+        required_state_tables: [{ table_name: 'sessions', allowed_columns: [], row_digest: digestC }],
+      }),
+    ).toThrow();
+    const appServerScanManifest = {
+      schema_version: 'codex_thread_locator_repair_manifest.v1',
+      codex_thread_id_digest: digestA,
+      rollout_relative_path: 'sessions/2026/06/02/rollout-abc.jsonl',
+      rollout_digest: digestB,
+      repair_strategy: 'app_server_scan',
+    };
+    expect(codexThreadLocatorRepairManifestSchema.parse(appServerScanManifest)).toEqual(appServerScanManifest);
   });
 
   it('rejects product-safe reports containing private runtime material', () => {

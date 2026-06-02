@@ -21,6 +21,8 @@ describe('Codex runtime capsule path classifier', () => {
     expect(classifyCodexHomePath('plugins/plugin-a/plugin.json').classification).toBe('forbidden');
     expect(classifyCodexHomePath('cache/plugin-a/tool.bin').classification).toBe('forbidden');
     expect(classifyCodexHomePath('tmp/socket-placeholder').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('skills/.system/SKILL.md').classification).toBe('forbidden');
+    expect(classifyCodexHomePath('skills/.system/tools/SKILL.md').classification).toBe('forbidden');
     expect(classifyCodexHomePath('skills/project/SKILL.md').classification).toBe('environment_component');
     expect(classifyCodexHomePath('unknown.bin').classification).toBe('unknown');
   });
@@ -43,5 +45,6 @@ describe('Codex runtime capsule path classifier', () => {
     expect(() => assertSafeCodexHomePathEntry({ relativePath: 'plugins/plugin-a/plugin.json', entryKind: 'regular_file' })).toThrow(
       /unsafe/,
     );
+    expect(() => assertSafeCodexHomePathEntry({ relativePath: 'skills/.system/SKILL.md', entryKind: 'regular_file' })).toThrow(/unsafe/);
   });
 });

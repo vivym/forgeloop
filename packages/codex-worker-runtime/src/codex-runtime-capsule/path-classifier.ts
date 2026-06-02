@@ -21,6 +21,7 @@ export interface CodexHomePathEntrySafetyInput {
 
 const forbiddenExactPaths = new Set(['auth.json', 'config.toml', 'codex-dev.db']);
 const forbiddenRawDirectoryPattern = /^(?:plugins|cache|tmp)\/.+/;
+const forbiddenSystemSkillPattern = /^skills\/\.system\/.+/;
 const sqliteSuffixPattern = /\.sqlite.*$/;
 const forbiddenWholeDbPattern = /^state_[0-9]+\.sqlite.*$/;
 const forbiddenDbPattern = /^(?:logs_[0-9]+|goals_[0-9]+|memories_[0-9]+|mcp|history)\.sqlite.*$/;
@@ -60,7 +61,12 @@ export const assertSafeCodexHomePathEntry = (input: CodexHomePathEntrySafetyInpu
 };
 
 const classifySafeCodexHomePath = (relativePath: string): CodexHomePathClassification => {
-  if (forbiddenExactPaths.has(relativePath) || forbiddenRawDirectoryPattern.test(relativePath) || forbiddenDbPattern.test(relativePath)) {
+  if (
+    forbiddenExactPaths.has(relativePath) ||
+    forbiddenRawDirectoryPattern.test(relativePath) ||
+    forbiddenSystemSkillPattern.test(relativePath) ||
+    forbiddenDbPattern.test(relativePath)
+  ) {
     return 'forbidden';
   }
   if (forbiddenWholeDbPattern.test(relativePath)) {
