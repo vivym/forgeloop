@@ -13,6 +13,13 @@ import {
   writeCodexRuntimeCapsuleDiscoveryReport,
   type CodexRuntimeCapsuleDiscoveryReport,
 } from '../../scripts/codex-runtime-capsule-discovery';
+import {
+  codexRuntimeCapsuleRestoreDogfoodCommand,
+  codexRuntimeCapsuleRestoreReportPath,
+  renderCodexRuntimeCapsuleRestoreSummary,
+  runCodexRuntimeCapsuleRestoreDogfood,
+  writeCodexRuntimeCapsuleRestoreReport,
+} from '../../scripts/codex-runtime-capsule-restore-dogfood';
 
 const rootUrl = new URL('../..', import.meta.url);
 const readJson = (path: string) => JSON.parse(readFileSync(new URL(path, rootUrl), 'utf8'));
@@ -117,4 +124,115 @@ describe('Codex runtime capsule discovery dogfood script', () => {
       await rm(tempDir, { force: true, recursive: true });
     }
   });
+});
+
+describe('Codex runtime capsule restore dogfood script', () => {
+  it('is registered as the root restore dogfood command', () => {
+    expect(codexRuntimeCapsuleRestoreDogfoodCommand).toBe(
+      'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-capsule-restore-dogfood.ts',
+    );
+    expect(readJson('package.json').scripts).toMatchObject({
+      'dogfood:codex-runtime-capsule-restore': codexRuntimeCapsuleRestoreDogfoodCommand,
+    });
+  });
+
+  it('skips product-safely when credentials are unavailable', async () => {
+    const restoreReport = await runCodexRuntimeCapsuleRestoreDogfood({
+      mode: 'fake',
+      credentialsAvailable: async () => false,
+      discoveryReport: async () => ({
+        ...reportFixture(),
+        status: 'passed',
+        blocker_codes: [],
+      }),
+    });
+    const summary = renderCodexRuntimeCapsuleRestoreSummary(restoreReport);
+
+    expect(restoreReport.status).toBe('skip');
+    expect(restoreReport.reason_code).toBe('codex_runtime_capsule_restore_credentials_unavailable');
+    expect(summary.split('\n')[0]).toBe('SKIP codex_runtime_capsule_restore_credentials_unavailable');
+    expect(JSON.stringify(restoreReport)).not.toContain('thread-raw');
+    expect(JSON.stringify(restoreReport)).not.toContain('auth.json');
+    expect(JSON.stringify(restoreReport)).not.toContain('config.toml');
+  });
+
+  it('blocks product-safely with discovery blocker codes only', async () => {
+    const restoreReport = await runCodexRuntimeCapsuleRestoreDogfood({
+      mode: 'fake',
+      credentialsAvailable: async () => true,
+      discoveryReport: async () => ({
+        ...reportFixture(),
+        status: 'blocked',
+        blocker_codes: ['codex_runtime_capsule_discovery_locator_repair_manifest_missing'],
+      }),
+    });
+    const serialized = JSON.stringify(restoreReport);
+    const summary = renderCodexRuntimeCapsuleRestoreSummary(restoreReport);
+
+    expect(restoreReport).toEqual({
+      schema_version: 'codex_runtime_capsule_restore_report.v1',
+      status: 'blocked',
+      blocker_codes: ['codex_runtime_capsule_discovery_locator_repair_manifest_missing'],
+    });
+    expect(summary).toContain('BLOCKED codex_runtime_capsule_discovery_locator_repair_manifest_missing');
+    expect(serialized).not.toContain('thread-raw');
+    expect(serialized).not.toContain('artifact://internal/');
+    expect(serialized).not.toContain('auth.json');
+    expect(serialized).not.toContain('config.toml');
+  });
+
+  it('passes fake cross-worker restore and writes the product-safe report', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'forgeloop-capsule-restore-test-'));
+    const reportPath = join(tempDir, 'codex-runtime-capsule-restore-report.json');
+    try {
+      const restoreReport = await runCodexRuntimeCapsuleRestoreDogfood({
+        mode: 'fake',
+        credentialsAvailable: async () => true,
+        discoveryReport: async () => ({
+          ...reportFixture(),
+          status: 'passed',
+          blocker_codes: [],
+        }),
+      });
+      await writeCodexRuntimeCapsuleRestoreReport(restoreReport, reportPath);
+
+      expect(restoreReport.status).toBe('passed');
+      expect(restoreReport.report_path).toBe(codexRuntimeCapsuleRestoreReportPath);
+      expect(restoreReport.restore_checks).toMatchObject({
+        thread_locator_digest_continuity: 'passed',
+        memory_delta_replay: 'passed',
+        environment_manifest_digest_continuity: 'passed',
+        second_capsule_packaged: 'passed',
+      });
+      expect(restoreReport.memory_delta_operation_counts).toMatchObject({ delete: 1, rename: 1 });
+      const serialized = await readFile(reportPath, 'utf8');
+      expect(serialized).toContain('"schema_version": "codex_runtime_capsule_restore_report.v1"');
+      expect(serialized).not.toContain('thread-raw');
+      expect(serialized).not.toContain('raw memory text');
+      expect(serialized).not.toContain('artifact://internal/');
+      expect(serialized).not.toContain('auth.json');
+      expect(serialized).not.toContain('config.toml');
+      expect(serialized).not.toContain('/Users/');
+    } finally {
+      await rm(tempDir, { force: true, recursive: true });
+    }
+  });
+});
+
+const reportFixture = (): CodexRuntimeCapsuleDiscoveryReport => ({
+  schema_version: 'codex_runtime_capsule_discovery_report.v1',
+  status: 'passed',
+  codex_cli_version_digest: `sha256:${'c'.repeat(64)}`,
+  app_server_protocol_digest: `sha256:${'d'.repeat(64)}`,
+  path_mutation_counts: {
+    thread_state_allowed: 1,
+    memory_state_allowed: 1,
+    environment_component: 1,
+    generated_environment: 0,
+    forbidden: 0,
+    forbidden_whole_db: 0,
+    unknown: 0,
+  },
+  observed_mutation_count: 3,
+  blocker_codes: [],
 });
