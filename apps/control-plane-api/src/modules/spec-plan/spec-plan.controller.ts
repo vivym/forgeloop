@@ -1,19 +1,9 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query } from '@nestjs/common';
-import { markdownDocumentSchema, type MarkdownDocument } from '@forgeloop/contracts';
+import { Controller, Get, Inject, Param, Patch, Post, Query } from '@nestjs/common';
+import { DomainError } from '@forgeloop/domain';
 
 import {
-  approveArtifactCommandSchema,
-  regenerateArtifactDraftCommandSchema,
-  rejectArtifactCommandSchema,
-  requestArtifactChangesCommandSchema,
   revisionCompareQuerySchema,
-  submitForApprovalCommandSchema,
-  type ApproveArtifactCommandDto,
-  type RegenerateArtifactDraftCommandDto,
-  type RejectArtifactCommandDto,
-  type RequestArtifactChangesCommandDto,
   type RevisionCompareQueryDto,
-  type SubmitForApprovalCommandDto,
 } from '../delivery/dto';
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import { SpecPlanService } from './spec-plan.service';
@@ -38,75 +28,43 @@ export class SpecPlanController {
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/spec/generate-draft')
-  generateItemSpecDraft(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
-  ) {
-    return this.specPlanService.generateItemSpecDraft(developmentPlanId, itemId, body);
+  generateItemSpecDraft() {
+    return this.legacyEntrypointDisabled('item-spec-generate-draft');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/spec-revisions/generate')
-  generateItemSpecRevisionRuntime(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
-  ) {
-    return this.specPlanService.generateItemSpecRevisionRuntime(developmentPlanId, itemId, body);
+  generateItemSpecRevisionRuntime() {
+    return this.legacyEntrypointDisabled('item-spec-runtime-generate');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/spec/submit-for-approval')
-  submitItemSpec(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
-  ) {
-    return this.specPlanService.submitItemSpecForApproval(developmentPlanId, itemId, body);
+  submitItemSpec() {
+    return this.legacyEntrypointDisabled('item-spec-submit');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/spec/approve')
-  approveItemSpec(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(approveArtifactCommandSchema)) body: ApproveArtifactCommandDto,
-  ) {
-    return this.specPlanService.approveItemSpec(developmentPlanId, itemId, body);
+  approveItemSpec() {
+    return this.legacyEntrypointDisabled('item-spec-approve');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/spec/request-changes')
-  requestItemSpecChanges(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(requestArtifactChangesCommandSchema)) body: RequestArtifactChangesCommandDto,
-  ) {
-    return this.specPlanService.requestItemSpecChanges(developmentPlanId, itemId, body);
+  requestItemSpecChanges() {
+    return this.legacyEntrypointDisabled('item-spec-request-changes');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/spec/reject')
-  rejectItemSpec(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(rejectArtifactCommandSchema)) body: RejectArtifactCommandDto,
-  ) {
-    return this.specPlanService.rejectItemSpec(developmentPlanId, itemId, body);
+  rejectItemSpec() {
+    return this.legacyEntrypointDisabled('item-spec-reject');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/spec/regenerate-draft')
-  regenerateItemSpecDraft(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(regenerateArtifactDraftCommandSchema)) body: RegenerateArtifactDraftCommandDto,
-  ) {
-    return this.specPlanService.regenerateItemSpecDraft(developmentPlanId, itemId, body);
+  regenerateItemSpecDraft() {
+    return this.legacyEntrypointDisabled('item-spec-regenerate-draft');
   }
 
   @Patch('development-plans/:developmentPlanId/items/:itemId/spec/draft')
-  saveItemSpecDraft(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(markdownDocumentSchema)) body: MarkdownDocument,
-  ) {
-    return this.specPlanService.saveItemSpecDraft(developmentPlanId, itemId, body);
+  saveItemSpecDraft() {
+    return this.legacyEntrypointDisabled('item-spec-save-draft');
   }
 
   @Get('development-plans/:developmentPlanId/items/:itemId/spec/revisions/compare')
@@ -119,75 +77,43 @@ export class SpecPlanController {
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/generate-draft')
-  generateItemImplementationPlanDraft(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
-  ) {
-    return this.specPlanService.generateItemImplementationPlanDraft(developmentPlanId, itemId, body);
+  generateItemImplementationPlanDraft() {
+    return this.legacyEntrypointDisabled('item-implementation-plan-generate-draft');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan-revisions/generate')
-  generateItemImplementationPlanRevisionRuntime(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
-  ) {
-    return this.specPlanService.generateItemImplementationPlanRevisionRuntime(developmentPlanId, itemId, body);
+  generateItemImplementationPlanRevisionRuntime() {
+    return this.legacyEntrypointDisabled('item-implementation-plan-runtime-generate');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/submit-for-approval')
-  submitItemImplementationPlan(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(submitForApprovalCommandSchema)) body: SubmitForApprovalCommandDto,
-  ) {
-    return this.specPlanService.submitItemImplementationPlanForApproval(developmentPlanId, itemId, body);
+  submitItemImplementationPlan() {
+    return this.legacyEntrypointDisabled('item-implementation-plan-submit');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/approve')
-  approveItemImplementationPlan(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(approveArtifactCommandSchema)) body: ApproveArtifactCommandDto,
-  ) {
-    return this.specPlanService.approveItemImplementationPlan(developmentPlanId, itemId, body);
+  approveItemImplementationPlan() {
+    return this.legacyEntrypointDisabled('item-implementation-plan-approve');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/request-changes')
-  requestItemImplementationPlanChanges(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(requestArtifactChangesCommandSchema)) body: RequestArtifactChangesCommandDto,
-  ) {
-    return this.specPlanService.requestItemImplementationPlanChanges(developmentPlanId, itemId, body);
+  requestItemImplementationPlanChanges() {
+    return this.legacyEntrypointDisabled('item-implementation-plan-request-changes');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/reject')
-  rejectItemImplementationPlan(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(rejectArtifactCommandSchema)) body: RejectArtifactCommandDto,
-  ) {
-    return this.specPlanService.rejectItemImplementationPlan(developmentPlanId, itemId, body);
+  rejectItemImplementationPlan() {
+    return this.legacyEntrypointDisabled('item-implementation-plan-reject');
   }
 
   @Post('development-plans/:developmentPlanId/items/:itemId/implementation-plan/regenerate-draft')
-  regenerateItemImplementationPlanDraft(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(regenerateArtifactDraftCommandSchema)) body: RegenerateArtifactDraftCommandDto,
-  ) {
-    return this.specPlanService.regenerateItemImplementationPlanDraft(developmentPlanId, itemId, body);
+  regenerateItemImplementationPlanDraft() {
+    return this.legacyEntrypointDisabled('item-implementation-plan-regenerate-draft');
   }
 
   @Patch('development-plans/:developmentPlanId/items/:itemId/implementation-plan/draft')
-  saveItemImplementationPlanDraft(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(markdownDocumentSchema)) body: MarkdownDocument,
-  ) {
-    return this.specPlanService.saveItemImplementationPlanDraft(developmentPlanId, itemId, body);
+  saveItemImplementationPlanDraft() {
+    return this.legacyEntrypointDisabled('item-implementation-plan-save-draft');
   }
 
   @Get('development-plans/:developmentPlanId/items/:itemId/implementation-plan/revisions/compare')
@@ -197,5 +123,12 @@ export class SpecPlanController {
     @Query(new ZodValidationPipe(revisionCompareQuerySchema)) query: RevisionCompareQueryDto,
   ) {
     return this.specPlanService.compareItemImplementationPlanRevisions(developmentPlanId, itemId, query);
+  }
+
+  private legacyEntrypointDisabled(operation: string): never {
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: ${operation} must use PlanItemWorkflow queued actions`,
+    );
   }
 }

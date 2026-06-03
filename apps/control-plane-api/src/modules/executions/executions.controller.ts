@@ -1,5 +1,6 @@
 import { Body, Controller, Headers, Inject, Param, Post } from '@nestjs/common';
 import { productObjectRefSchema } from '@forgeloop/contracts';
+import { DomainError } from '@forgeloop/domain';
 import { z } from 'zod';
 
 import { actorContextFromHeaders } from '../auth/actor-context';
@@ -72,12 +73,8 @@ export class ExecutionsController {
   constructor(@Inject(ExecutionsService) private readonly executionsService: ExecutionsService) {}
 
   @Post('development-plans/:developmentPlanId/items/:itemId/execution/start')
-  startExecution(
-    @Param('developmentPlanId') developmentPlanId: string,
-    @Param('itemId') itemId: string,
-    @Body(new ZodValidationPipe(startExecutionCommandSchema)) body: StartExecutionCommandDto,
-  ) {
-    return this.executionsService.startExecution(developmentPlanId, itemId, body);
+  startExecution() {
+    return this.legacyEntrypointDisabled('item-execution-start');
   }
 
   @Post('executions/:executionId/continue')
@@ -153,5 +150,12 @@ export class ExecutionsController {
     @Body(new ZodValidationPipe(qaAcceptCommandSchema)) body: QaAcceptCommandDto,
   ) {
     return this.executionsService.acceptQaHandoff(qaHandoffId, body);
+  }
+
+  private legacyEntrypointDisabled(operation: string): never {
+    throw new DomainError(
+      'workflow_legacy_entrypoint_disabled',
+      `workflow_legacy_entrypoint_disabled: ${operation} must use PlanItemWorkflow queued actions`,
+    );
   }
 }

@@ -3247,7 +3247,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       ...clone(workflow),
       status: input.transition.to_status,
       ...this.nextWorkflowPreviousStatus(workflow, input.transition),
-      ...(input.projection_patch ?? {}),
+      ...this.applyPlanItemWorkflowProjectionPatch(input.projection_patch),
       updated_at: input.transition.created_at,
     };
     if (input.transition.from_status === 'blocked' && input.transition.to_status !== 'blocked') {
@@ -3314,21 +3314,16 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     const transition = input.transition;
     const invalid =
       (patch.active_boundary_summary_revision_id !== undefined &&
-        (transition.from_status !== 'boundary_review' ||
-          transition.to_status !== 'spec_generation_queued' ||
-          transition.evidence_object_type !== 'boundary_summary_revision' ||
-          transition.evidence_object_id !== patch.active_boundary_summary_revision_id)) ||
+        patch.active_boundary_summary_revision_id !== null &&
+        !this.isBoundarySummaryProjectionPatchAllowed(transition, patch.active_boundary_summary_revision_id)) ||
       (patch.active_spec_doc_revision_id !== undefined &&
-        (transition.from_status !== 'spec_review' ||
-          transition.to_status !== 'implementation_plan_generation_queued' ||
-          transition.evidence_object_type !== 'spec_revision' ||
-          transition.evidence_object_id !== patch.active_spec_doc_revision_id)) ||
+        patch.active_spec_doc_revision_id !== null &&
+        !this.isSpecDocProjectionPatchAllowed(transition, patch.active_spec_doc_revision_id)) ||
       (patch.active_implementation_plan_doc_revision_id !== undefined &&
-        !this.isExecutionReadinessImplementationPlanProjectionPatchAllowed(
-          transition,
-          patch.active_implementation_plan_doc_revision_id,
-        )) ||
+        patch.active_implementation_plan_doc_revision_id !== null &&
+        !this.isImplementationPlanProjectionPatchAllowed(transition, patch.active_implementation_plan_doc_revision_id)) ||
       (patch.execution_package_id !== undefined &&
+        patch.execution_package_id !== null &&
         (transition.from_status !== 'execution_ready' ||
           transition.to_status !== 'execution_running' ||
           transition.evidence_object_type !== 'execution_package' ||
@@ -3339,6 +3334,56 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         `workflow_invalid_transition: Transition ${transition.id} projection patch is invalid`,
       );
     }
+  }
+
+  private isBoundarySummaryProjectionPatchAllowed(
+    transition: PlanItemWorkflowTransition,
+    activeBoundarySummaryRevisionId: string,
+  ): boolean {
+    if (transition.evidence_object_type !== 'boundary_summary_revision' || transition.evidence_object_id !== activeBoundarySummaryRevisionId) {
+      return false;
+    }
+    return (
+      (transition.from_status === 'brainstorming' && transition.to_status === 'boundary_review') ||
+      (transition.from_status === 'boundary_review' && transition.to_status === 'spec_generation_queued')
+    );
+  }
+
+  private isSpecDocProjectionPatchAllowed(
+    transition: PlanItemWorkflowTransition,
+    activeSpecRevisionId: string,
+  ): boolean {
+    if (transition.evidence_object_type !== 'spec_revision' || transition.evidence_object_id !== activeSpecRevisionId) {
+      return false;
+    }
+    return (
+      (transition.from_status === 'spec_generation_queued' && transition.to_status === 'spec_review') ||
+      (transition.from_status === 'spec_review' && transition.to_status === 'implementation_plan_generation_queued')
+    );
+  }
+
+  private isImplementationPlanProjectionPatchAllowed(
+    transition: PlanItemWorkflowTransition,
+    activeImplementationPlanRevisionId: string,
+  ): boolean {
+    if (
+      transition.evidence_object_type === 'implementation_plan_revision' &&
+      transition.evidence_object_id === activeImplementationPlanRevisionId &&
+      transition.from_status === 'implementation_plan_generation_queued' &&
+      transition.to_status === 'implementation_plan_review'
+    ) {
+      return true;
+    }
+    return this.isExecutionReadinessImplementationPlanProjectionPatchAllowed(transition, activeImplementationPlanRevisionId);
+  }
+
+  private applyPlanItemWorkflowProjectionPatch(
+    patch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): Partial<PlanItemWorkflow> {
+    if (patch === undefined) {
+      return {};
+    }
+    return Object.fromEntries(Object.entries(patch).map(([key, value]) => [key, value ?? undefined])) as Partial<PlanItemWorkflow>;
   }
 
   private isExecutionReadinessImplementationPlanProjectionPatchAllowed(
@@ -3845,6 +3890,41 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       ...(input.output_capsule_sequence === undefined ? {} : { output_capsule_sequence: input.output_capsule_sequence }),
       ...(input.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: input.codex_thread_id_digest }),
       ...(input.blocked_reason_code === undefined ? {} : { blocked_reason_code: input.blocked_reason_code }),
+      updated_at: input.now,
+    };
+    this.planItemWorkflowQueuedActions.set(updated.id, clone(updated));
+    return clone(updated);
+  }
+
+  async attachPlanItemWorkflowQueuedActionTurn(input: {
+    workflow_id: string;
+    action_id: string;
+    codex_session_turn_id: string;
+    now: string;
+  }): Promise<PlanItemWorkflowQueuedAction> {
+    const action = this.planItemWorkflowQueuedActions.get(input.action_id);
+    if (action === undefined || action.workflow_id !== input.workflow_id) {
+      throw new DomainError(
+        'workflow_action_not_found',
+        `workflow_action_not_found: Plan Item Workflow queued action ${input.action_id} does not exist`,
+      );
+    }
+    if (action.status !== 'running') {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} is not running`,
+      );
+    }
+    const turn = this.codexSessionTurns.get(input.codex_session_turn_id);
+    if (turn === undefined || turn.workflow_id !== action.workflow_id || turn.codex_session_id !== action.codex_session_id) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session turn ${input.codex_session_turn_id} does not belong to queued action ${input.action_id}`,
+      );
+    }
+    const updated: PlanItemWorkflowQueuedAction = {
+      ...clone(action),
+      codex_session_turn_id: input.codex_session_turn_id,
       updated_at: input.now,
     };
     this.planItemWorkflowQueuedActions.set(updated.id, clone(updated));

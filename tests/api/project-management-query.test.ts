@@ -17,6 +17,7 @@ import {
   reviewerHeaders,
   seedApprovedExecutionPlan,
   seedCompletedExecution,
+  startExecutionInternally,
 } from '../helpers/execution-supervision-fixtures';
 
 const reportIds = [
@@ -835,12 +836,7 @@ describe('project management query API', () => {
   it('preserves real execution supervision fields while keeping blocked resumable rows non-continuable', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
     const server = app.getHttpServer();
-    const started = (
-      await request(server)
-        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-        .send({ actor_id: executionActorDeveloper })
-        .expect(201)
-    ).body;
+    const started = await startExecutionInternally(app, developmentPlan.id, item.id);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     const interruptedAt = '2026-05-24T00:00:00.000Z';
     const continuedAt = '2026-05-24T00:01:00.000Z';

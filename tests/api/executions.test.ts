@@ -10,12 +10,32 @@ import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/co
 import {
   executionActorDeveloper,
   seedApprovedExecutionPlan,
+  startExecutionInternally,
 } from '../helpers/execution-supervision-fixtures';
 import {
   seedWorkflowWithApprovedImplementationPlan,
 } from '../helpers/plan-item-workflow-fixtures';
 
 const digest = (seed: string): string => `sha256:${seed.repeat(64).slice(0, 64)}`;
+
+async function expectInternalExecutionStartToReject(
+  app: INestApplication,
+  developmentPlanId: string,
+  itemId: string,
+  expectedMessage: string,
+) {
+  try {
+    await startExecutionInternally(app, developmentPlanId, itemId);
+  } catch (error) {
+    const response =
+      typeof (error as { getResponse?: () => unknown }).getResponse === 'function'
+        ? (error as { getResponse: () => unknown }).getResponse()
+        : undefined;
+    expect(`${error instanceof Error ? error.message : String(error)} ${JSON.stringify(response ?? error)}`).toContain(expectedMessage);
+    return;
+  }
+  throw new Error(`Expected internal execution start to reject with ${expectedMessage}`);
+}
 
 describe('Executions API', () => {
   let app: INestApplication;
@@ -51,14 +71,7 @@ describe('Executions API', () => {
         public_summary: 'Docs-only strict dogfood runtime execution.',
       },
     });
-    const server = app.getHttpServer();
-
-    const execution = (
-      await request(server)
-        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-        .send({ actor_id: executionActorDeveloper })
-        .expect(201)
-    ).body;
+    const execution = await startExecutionInternally(app, developmentPlan.id, item.id);
 
     expect(execution).toMatchObject({
       development_plan_item_id: item.id,
@@ -136,14 +149,6 @@ describe('Executions API', () => {
   it('rejects direct execution start for workflow-owned items', async () => {
     const seeded = await seedWorkflowWithApprovedImplementationPlan(app, { idPrefix: '13131313' });
     const server = app.getHttpServer();
-    await request(server)
-      .post(`/plan-item-workflows/${seeded.workflow.id}/approve-implementation-plan-and-mark-execution-ready`)
-      .send({
-        actor_id: seeded.ids.actorTech,
-        approved_implementation_plan_revision_id: seeded.implementationPlanRevision.id,
-        reason: 'Execution readiness approved.',
-      })
-      .expect(201);
 
     await request(server)
       .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/execution/start`)
@@ -199,12 +204,7 @@ describe('Executions API', () => {
     await repository.saveDevelopmentPlanItem(currentItem);
     await repository.saveDevelopmentPlanItemRevision(currentItemRevision);
 
-    const execution = (
-      await request(app.getHttpServer())
-        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-        .send({ actor_id: executionActorDeveloper })
-        .expect(201)
-    ).body;
+    const execution = await startExecutionInternally(app, developmentPlan.id, item.id);
 
     expect(execution).toMatchObject({
       development_plan_item_id: item.id,
@@ -239,24 +239,26 @@ describe('Executions API', () => {
     await repository.saveDevelopmentPlanItem(driftedItem);
     await repository.saveDevelopmentPlanItemRevision(driftedItemRevision);
 
-    await request(app.getHttpServer())
-      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-      .send({ actor_id: executionActorDeveloper })
-      .expect(400)
-      .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('approved_implementation_plan_not_current_item_revision');
-      });
+    await expectInternalExecutionStartToReject(
+      app,
+      developmentPlan.id,
+      item.id,
+      'approved_implementation_plan_not_current_item_revision',
+    );
     await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
-  it('requires an explicit execution actor before persisting Execution Package ownership', async () => {
+  it('rejects legacy direct execution start before body validation and without persisting Execution Package ownership', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app, { seedExecutionPackage: false });
     const server = app.getHttpServer();
 
     await request(server)
       .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
       .send({})
-      .expect(400);
+      .expect(409)
+      .expect(({ body }) => {
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
+      });
 
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await expect(repository.listExecutionPackages(developmentPlan.project_id)).resolves.toEqual([]);
@@ -264,32 +266,14 @@ describe('Executions API', () => {
 
   it('rejects execution start when approved document gates have no runnable internal Execution Package boundary', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app, { seedExecutionPackage: false });
-    const server = app.getHttpServer();
 
-    const response = await request(server)
-      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-      .send({ actor_id: executionActorDeveloper })
-      .expect(400);
-
-    expect(response.body.message).toContain('execution_package_boundary_missing');
+    await expectInternalExecutionStartToReject(app, developmentPlan.id, item.id, 'execution_package_boundary_missing');
   });
 
   it('does not create a second product Execution for an already-started item revision', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
-    const server = app.getHttpServer();
-    const firstExecution = (
-      await request(server)
-        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-        .send({ actor_id: executionActorDeveloper })
-        .expect(201)
-    ).body;
-
-    const replayedExecution = (
-      await request(server)
-        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-        .send({ actor_id: executionActorDeveloper })
-        .expect(201)
-    ).body;
+    const firstExecution = await startExecutionInternally(app, developmentPlan.id, item.id);
+    const replayedExecution = await startExecutionInternally(app, developmentPlan.id, item.id);
     expect(replayedExecution.id).toBe(firstExecution.id);
 
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -321,12 +305,7 @@ describe('Executions API', () => {
         public_summary: 'Docs-only strict runtime dogfood report.',
       },
     });
-    const execution = (
-      await request(app.getHttpServer())
-        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-        .send({ actor_id: executionActorDeveloper })
-        .expect(201)
-    ).body;
+    const execution = await startExecutionInternally(app, developmentPlan.id, item.id);
     const runSessionRef = execution.runtime_evidence_refs.find((ref: { type: string; id: string }) => ref.type === 'run_session');
     if (runSessionRef === undefined) {
       throw new Error('Run session runtime evidence ref was not recorded');
@@ -408,14 +387,7 @@ describe('Executions API', () => {
       },
     });
 
-    const response = await request(app.getHttpServer())
-      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-      .send({ actor_id: executionActorDeveloper })
-      .expect(400);
-
-    expect(response.body).toMatchObject({
-      code: 'path_policy_docs_allowlist_required',
-    });
+    await expectInternalExecutionStartToReject(app, developmentPlan.id, item.id, 'path_policy_docs_allowlist_required');
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
@@ -423,7 +395,6 @@ describe('Executions API', () => {
   it('fails closed for missing, draft, stale, or unapproved Implementation Plan Doc revisions', async () => {
     const { developmentPlan, item, executionPlan } = await seedApprovedExecutionPlan(app);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const server = app.getHttpServer();
 
     const blockedExecutionPlanStates = [
       {
@@ -450,10 +421,7 @@ describe('Executions API', () => {
 
     for (const blockedExecutionPlan of blockedExecutionPlanStates) {
       await repository.saveExecutionPlan(blockedExecutionPlan);
-      await request(server)
-        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-        .send({ actor_id: executionActorDeveloper })
-        .expect(400);
+      await expectInternalExecutionStartToReject(app, developmentPlan.id, item.id, 'cannot start execution');
     }
 
     await repository.saveExecutionPlan({
@@ -464,16 +432,12 @@ describe('Executions API', () => {
       approved_at: executionPlan.approved_at,
       current_revision_id: 'stale-revision',
     });
-    await request(server)
-      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-      .send({ actor_id: executionActorDeveloper })
-      .expect(400);
+    await expectInternalExecutionStartToReject(app, developmentPlan.id, item.id, 'approved_implementation_plan_revision_not_current');
   });
 
   it('fails closed when the approved Spec no longer owns the item Boundary chain', async () => {
     const { developmentPlan, item, specRevision } = await seedApprovedExecutionPlan(app);
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-    const server = app.getHttpServer();
 
     await repository.saveSpecRevision({
       ...specRevision,
@@ -482,32 +446,21 @@ describe('Executions API', () => {
         boundary_summary_revision_id: 'missing-boundary-summary-revision',
       },
     });
-    await request(server)
-      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-      .send({ actor_id: executionActorDeveloper })
-      .expect(400);
+    await expectInternalExecutionStartToReject(app, developmentPlan.id, item.id, 'approved_spec_boundary_revision_missing');
     await expect(repository.listRunSessions()).resolves.toHaveLength(0);
 
     await repository.saveSpecRevision({
       ...specRevision,
       development_plan_item_id: 'other-development-plan-item',
     });
-    await request(server)
-      .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-      .send({ actor_id: executionActorDeveloper })
-      .expect(400);
+    await expectInternalExecutionStartToReject(app, developmentPlan.id, item.id, 'approved_spec_item_mismatch');
     await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
   it('supports interrupt and continue controls for a running product Execution', async () => {
     const { developmentPlan, item } = await seedApprovedExecutionPlan(app);
     const server = app.getHttpServer();
-    const execution = (
-      await request(server)
-        .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
-        .send({ actor_id: executionActorDeveloper })
-        .expect(201)
-    ).body;
+    const execution = await startExecutionInternally(app, developmentPlan.id, item.id);
 
     const interrupted = (
       await request(server)

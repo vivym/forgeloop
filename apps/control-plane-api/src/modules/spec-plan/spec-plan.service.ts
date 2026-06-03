@@ -731,8 +731,23 @@ export class SpecPlanService {
     const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
     await this.assertLegacyPlanItemMutationAllowed(repository, item.id, context);
     const spec = await this.requireItemSpec(item.id, repository);
-    this.requireInReview(spec);
-    const updated = transitionSpecPlan(spec, { type: 'request_changes', at: this.now() }) as Spec;
+    if (
+      (spec.status !== 'in_review' || spec.gate_state !== 'awaiting_approval') &&
+      (spec.status !== 'approved' || spec.gate_state !== 'approved' || spec.approved_revision_id !== spec.current_revision_id)
+    ) {
+      throw new BadRequestException(`Spec ${spec.id} is not awaiting approval or approved`);
+    }
+    const updated =
+      spec.status === 'in_review'
+        ? (transitionSpecPlan(spec, { type: 'request_changes', at: this.now() }) as Spec)
+        : ({
+            ...spec,
+            status: 'draft',
+            editing_state: 'idle',
+            gate_state: 'changes_requested',
+            resolution: 'none',
+            updated_at: this.now(),
+          } satisfies Spec);
     await repository.saveSpec(updated);
     await this.updateDevelopmentPlanItemArtifactStatus(
       repository,
@@ -1177,6 +1192,36 @@ export class SpecPlanService {
     itemId: string,
     dto: ApproveArtifactCommandDto,
   ): Promise<ExecutionPlanDocument> {
+    const { approvedPlan, currentRevision, spec, specRevision, plan, item, workItem } =
+      await this.approveItemImplementationPlanDocumentOnlyWithRepository(repository, developmentPlanId, itemId, dto);
+    const project = this.requireFound(await repository.getProject(plan.project_id), `Project ${plan.project_id}`);
+    await this.executionPackages.createOrReuseItemExecutionPackage(repository, {
+      project,
+      workItem,
+      item,
+      spec,
+      specRevision,
+      executionPlan: approvedPlan,
+      executionPlanRevision: currentRevision,
+      ownerActorId: item.driver_actor_id ?? workItem.driver_actor_id,
+    });
+    return approvedPlan;
+  }
+
+  async approveItemImplementationPlanDocumentOnlyWithRepository(
+    repository: DeliveryRepository,
+    developmentPlanId: string,
+    itemId: string,
+    dto: ApproveArtifactCommandDto,
+  ): Promise<{
+    approvedPlan: ExecutionPlanDocument;
+    currentRevision: ExecutionPlanRevision;
+    plan: DevelopmentPlan;
+    item: DevelopmentPlanItem;
+    workItem: WorkItem;
+    spec: Spec;
+    specRevision: SpecRevision;
+  }> {
     const { plan, item, workItem } = await this.requirePlanItem(developmentPlanId, itemId, repository);
     const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
     const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
@@ -1214,18 +1259,7 @@ export class SpecPlanService {
       'approved',
       dto.rationale ?? 'Implementation Plan Doc approved.',
     );
-    const project = this.requireFound(await repository.getProject(plan.project_id), `Project ${plan.project_id}`);
-    await this.executionPackages.createOrReuseItemExecutionPackage(repository, {
-      project,
-      workItem,
-      item,
-      spec,
-      specRevision,
-      executionPlan: updated,
-      executionPlanRevision: currentRevision,
-      ownerActorId: item.driver_actor_id ?? workItem.driver_actor_id,
-    });
-    return updated;
+    return { approvedPlan: updated, currentRevision, plan, item, workItem, spec, specRevision };
   }
 
   async projectItemApprovedImplementationPlanForExecutionWithRepository(
@@ -1348,8 +1382,13 @@ export class SpecPlanService {
     const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
     await this.assertLegacyPlanItemMutationAllowed(repository, item.id, context);
     const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
-    if (executionPlan.status !== 'in_review') {
-      throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} is not awaiting approval`);
+    if (
+      executionPlan.status !== 'in_review' &&
+      (executionPlan.status !== 'approved' ||
+        executionPlan.approved_revision_id === undefined ||
+        executionPlan.approved_revision_id !== executionPlan.current_revision_id)
+    ) {
+      throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} is not awaiting approval or approved`);
     }
     const updated: ExecutionPlanDocument = { ...executionPlan, status: 'changes_requested', updated_at: this.now() };
     await repository.saveExecutionPlan(updated);

@@ -193,10 +193,12 @@ const methodReachesWorkflowGate = (methods: Map<string, string>, methodName: str
 const scanWorkflowOwnedPublicMutators = (rootDir: string): PublicWorkflowMutatorFinding[] =>
   workflowOwnedPublicMutatorControllers.flatMap(({ controllerFile, serviceFile, serviceProperty }) => {
     const controllerSource = readFileSync(join(rootDir, controllerFile), 'utf8');
+    const controllerMethods = serviceMethodsIn(controllerSource);
     const serviceMethods = serviceMethodsIn(readFileSync(join(rootDir, serviceFile), 'utf8'));
     return publicMutatorRoutesIn(controllerSource).flatMap((route) => {
       if (nonWorkflowStateMutatorRoutes.has(`${route.decorator} ${route.route}`)) return [];
       if (blockHasWorkflowGate(route.body)) return [];
+      if (methodReachesWorkflowGate(controllerMethods, route.method)) return [];
       const serviceMethod = serviceCallFromRoute(route.body, serviceProperty);
       if (serviceMethod === undefined) {
         return [
@@ -585,6 +587,13 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
           "  @Post('development-plans/:developmentPlanId/items/:itemId/boundary-brainstorming')",
           '  startBoundaryBrainstorming() {',
           '    return this.service.startBoundaryBrainstorming();',
+          '  }',
+          "  @Post('development-plans/:developmentPlanId/items/:itemId/boundary-brainstorming/restart')",
+          '  restartBoundaryBrainstorming() {',
+          "    return this.legacyEntrypointDisabled('boundary-brainstorming-restart');",
+          '  }',
+          '  private legacyEntrypointDisabled(operation: string): never {',
+          "    throw new DomainError('workflow_legacy_entrypoint_disabled', operation);",
           '  }',
           '}',
         ].join('\n'),

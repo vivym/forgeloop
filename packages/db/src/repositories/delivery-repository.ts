@@ -441,10 +441,10 @@ export interface WorkflowRepositoryEvidenceInput {
 export interface ApplyPlanItemWorkflowTransitionInput {
   transition: PlanItemWorkflowTransition;
   projection_patch?: {
-    active_boundary_summary_revision_id?: string;
-    active_spec_doc_revision_id?: string;
-    active_implementation_plan_doc_revision_id?: string;
-    execution_package_id?: string;
+    active_boundary_summary_revision_id?: string | null;
+    active_spec_doc_revision_id?: string | null;
+    active_implementation_plan_doc_revision_id?: string | null;
+    execution_package_id?: string | null;
   };
 }
 
@@ -464,6 +464,13 @@ export interface TerminalizePlanItemWorkflowQueuedActionInput {
   output_capsule_sequence?: number;
   codex_thread_id_digest?: string;
   blocked_reason_code?: string;
+  now: string;
+}
+
+export interface AttachPlanItemWorkflowQueuedActionTurnInput {
+  workflow_id: string;
+  action_id: string;
+  codex_session_turn_id: string;
   now: string;
 }
 
@@ -1606,6 +1613,7 @@ export interface DeliveryRepository {
   terminalizePlanItemWorkflowQueuedAction(
     input: TerminalizePlanItemWorkflowQueuedActionInput,
   ): Promise<PlanItemWorkflowQueuedAction>;
+  attachPlanItemWorkflowQueuedActionTurn(input: AttachPlanItemWorkflowQueuedActionTurnInput): Promise<PlanItemWorkflowQueuedAction>;
   markDependentPlanItemWorkflowQueuedActionsStale(
     input: MarkDependentPlanItemWorkflowQueuedActionsStaleInput,
   ): Promise<PlanItemWorkflowQueuedAction[]>;

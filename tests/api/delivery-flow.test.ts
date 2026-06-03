@@ -712,9 +712,9 @@ describe('delivery control plane API', () => {
       .post(`/development-plans/${draftSpec.developmentPlan.id}/items/${draftSpec.item.id}/spec/approve`)
       .set(reviewerHeaders)
       .send({ actor_id: actorReviewer })
-      .expect(400)
+      .expect(409)
       .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('not awaiting approval');
+        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
       });
 
     await approveSpec(app, workItem.id);

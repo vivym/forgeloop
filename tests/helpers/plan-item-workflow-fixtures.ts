@@ -270,6 +270,7 @@ export async function seedBoundaryReviewWorkflow(app: INestApplication, options:
       codex_session_id: seeded.workflow.active_codex_session_id,
       created_at: now,
     },
+    projection_patch: { active_boundary_summary_revision_id: boundaryRevision.id },
   });
   return { ...seeded, workflow, boundaryRevision };
 }
@@ -290,6 +291,7 @@ export async function seedSpecReviewWorkflow(app: INestApplication, options: { i
       codex_session_id: seeded.workflow.active_codex_session_id,
       created_at: now,
     },
+    projection_patch: { active_spec_doc_revision_id: specRevision.id },
   });
   return { ...seeded, workflow, specRevision };
 }
@@ -327,6 +329,7 @@ export async function seedWorkflowWithApprovedImplementationPlan(
       codex_session_id: implementationPlanQueuedWorkflow.active_codex_session_id,
       created_at: now,
     },
+    projection_patch: { active_implementation_plan_doc_revision_id: implementationPlanRevision.id },
   });
 
   return { ...seeded, workflow, implementationPlanRevision };
