@@ -83,7 +83,7 @@ Out of scope:
   - Remove or stop exporting public DTOs for Wave 5 forbidden routes.
 - Modify `apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.controller.ts`
   - Add the required Wave 5 public routes.
-  - Disable/remove legacy public mutation routes that bypass queued actions.
+  - Disable/remove legacy public mutation routes that bypass queued actions, including generic transition, old document draft/submit/generate, old request-change shortcuts, run-session controls, recovery, fork, archive, and execution-start routes.
   - Keep internal/admin routes only when they do not become product entry points.
 - Modify `apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts`
   - Own workflow start, message recording, queued action creation/replay, action run orchestration, artifact approval, request-changes cascade, readiness evaluation, and public projection.
@@ -159,6 +159,14 @@ Out of scope:
 
 ## Implementation Rules
 
+- The Wave 5 public mutation route set is exactly:
+  - `POST /development-plans/:developmentPlanId/items/:itemId/workflow/start-brainstorming`
+  - `POST /plan-item-workflows/:workflowId/messages`
+  - `POST /plan-item-workflows/:workflowId/actions/:actionId/run`
+  - `POST /plan-item-workflows/:workflowId/artifacts/:artifactType/revisions/:revisionId/approve`
+  - `POST /plan-item-workflows/:workflowId/artifacts/:artifactType/revisions/:revisionId/request-changes`
+  - `POST /plan-item-workflows/:workflowId/execution-readiness/evaluate`
+- Any other public workflow mutation route in `PlanItemWorkflowController` must be removed or return `workflow_legacy_entrypoint_disabled` / `workflow_wave5_entrypoint_disabled` for workflow-owned Plan Items. This includes generic `transitions`, old draft/save/submit/generate document routes, old request-change shortcuts, `block`, `archive`, `recover`, fork/select-fork, execution start, and run-session control routes.
 - Do not start execution in this wave.
 - Do not create or claim `RunSession`, execution package run lease, execution worker job, workspace bundle, code-writing turn, PR, or review/fix-loop state.
 - Do not add public fork, abandon, new-session, recovery, or scavenge mutations.
@@ -749,7 +757,7 @@ In `packages/db/src/repositories/in-memory-delivery-repository.ts`:
   - `stale` returns `{ claimed: false }` only when it already has `codex_session_turn_id` evidence from a prior run; stale queued actions without a turn throw `workflow_action_not_runnable`;
   - missing/wrong-workflow action throws `workflow_action_not_found`;
 - implement terminalization only from `running`;
-- implement stale cascade only for `queued` or `running` dependent actions;
+- implement stale cascade only for `queued` dependent actions. Never mark `running` actions stale from request-changes because Wave 5 has no cancellation/terminalization contract for an in-flight Codex turn;
 - implement `listCodexSessionTurns(sessionId)` sorted by `created_at` then `id` for API tests and dogfood continuity assertions;
 - return sorted lists by `created_at` then `id`.
 
@@ -761,7 +769,7 @@ In `packages/db/src/repositories/drizzle-delivery-repository.ts`:
 - implement `createOrReplayPlanItemWorkflowQueuedAction` inside transaction or conflict handling;
 - implement `claimOrReplayPlanItemWorkflowQueuedActionRun` with update condition `status = 'queued'`; when the update affects zero rows, re-read the action and return `{ claimed: false }` for existing running/terminal actions instead of throwing; reject stale queued actions that never created a turn;
 - implement terminalization with update condition `status = 'running'`;
-- implement stale cascade with one update scoped to workflow, status in active statuses, and action kinds;
+- implement stale cascade with one update scoped to workflow, `status = 'queued'`, and action kinds; running actions are a hard precondition failure in service logic, not cascade targets;
 - implement `listCodexSessionTurns(sessionId)` using `codex_session_turns_session_created_idx`;
 - throw `DomainError('workflow_action_not_found', ...)` only when the action does not exist for the workflow.
 
@@ -866,18 +874,39 @@ it('/messages rejects generation actions', async () => {
 
 In the same test file, assert these routes return `409` with `workflow_legacy_entrypoint_disabled` or `workflow_wave5_entrypoint_disabled` for workflow-owned items:
 
+- `POST /plan-item-workflows/:workflowId/transitions`
 - `POST /plan-item-workflows/:workflowId/boundary-brainstorming`
 - `POST /plan-item-workflows/:workflowId/boundary-brainstorming-sessions/:sessionId/answers`
+- `POST /plan-item-workflows/:workflowId/boundary-brainstorming-sessions/:sessionId/decisions`
 - `POST /plan-item-workflows/:workflowId/boundary-brainstorming-sessions/:sessionId/continue`
+- `POST /plan-item-workflows/:workflowId/boundary-brainstorming-sessions/:sessionId/summary-revisions/:revisionId/request-changes`
+- `POST /plan-item-workflows/:workflowId/boundary-summary-revisions/:revisionId/submit`
+- `POST /plan-item-workflows/:workflowId/boundary-summary-revisions/:revisionId/approve`
 - `POST /plan-item-workflows/:workflowId/spec/generate-draft`
 - `POST /plan-item-workflows/:workflowId/spec-revisions/generate`
 - `POST /plan-item-workflows/:workflowId/implementation-plan/generate-draft`
 - `POST /plan-item-workflows/:workflowId/implementation-plan-revisions/generate`
+- `POST /plan-item-workflows/:workflowId/spec/regenerate-draft`
+- `PATCH /plan-item-workflows/:workflowId/spec/draft`
+- `POST /plan-item-workflows/:workflowId/spec-revisions/:revisionId/submit`
+- `POST /plan-item-workflows/:workflowId/spec-revisions/:revisionId/approve`
+- `POST /plan-item-workflows/:workflowId/implementation-plan/regenerate-draft`
+- `PATCH /plan-item-workflows/:workflowId/implementation-plan/draft`
+- `POST /plan-item-workflows/:workflowId/implementation-plan-revisions/:revisionId/submit`
+- `POST /plan-item-workflows/:workflowId/implementation-plan-revisions/:revisionId/approve`
+- `POST /plan-item-workflows/:workflowId/request-boundary-changes`
+- `POST /plan-item-workflows/:workflowId/request-spec-changes`
+- `POST /plan-item-workflows/:workflowId/request-implementation-plan-changes`
+- `POST /plan-item-workflows/:workflowId/block`
+- `POST /plan-item-workflows/:workflowId/archive`
 - `POST /plan-item-workflows/:workflowId/approve-implementation-plan-and-mark-execution-ready`
 - `POST /plan-item-workflows/:workflowId/recover`
 - `POST /plan-item-workflows/:workflowId/codex-sessions/:sessionId/fork`
 - `POST /plan-item-workflows/:workflowId/codex-sessions/:sessionId/select-active-fork`
 - `POST /plan-item-workflows/:workflowId/execution/start`
+- `POST /plan-item-workflows/:workflowId/run-sessions/:runSessionId/input`
+- `POST /plan-item-workflows/:workflowId/run-sessions/:runSessionId/cancel`
+- `POST /plan-item-workflows/:workflowId/run-sessions/:runSessionId/resume`
 - direct item routes in `spec-plan.controller.ts` and `executions.controller.ts` for workflow-owned Plan Items.
 
 - [ ] **Step 3: Run failing API tests**
@@ -1116,6 +1145,34 @@ it('Implementation Plan Doc changes stale readiness only and queues plan revisio
   expect(response.body.active_spec_doc_revision_id).toBe(seeded.specRevision.id);
   expect(response.body.queued_actions).toContainEqual(expect.objectContaining({ kind: 'revise_implementation_plan_doc' }));
 });
+
+it('rejects Boundary and Spec change requests while a Codex action is running', async () => {
+  const seeded = await seedWorkflowWithApprovedImplementationPlan(app, { idPrefix: '67676767' });
+  await queueSpecGenerationForTest(app, seeded.workflow.id, seeded.boundaryRevision.id, { status: 'running' });
+
+  await request(app.getHttpServer())
+    .post(`/plan-item-workflows/${seeded.workflow.id}/artifacts/boundary-summary/revisions/${seeded.boundaryRevision.id}/request-changes`)
+    .send({ actor_id: seeded.ids.actorTech, reason_markdown: 'Boundary changed while action is running.' })
+    .expect(409)
+    .expect(({ body }) => {
+      expect(JSON.stringify(body)).toContain('workflow_action_already_running');
+    });
+});
+
+it('rejects Implementation Plan Doc change requests while any Codex action is queued or running', async () => {
+  const seeded = await seedWorkflowWithApprovedImplementationPlan(app, { idPrefix: '68686868' });
+  await queueImplementationPlanRevisionForTest(app, seeded.workflow.id, seeded.implementationPlanRevision.id, {
+    status: 'queued',
+  });
+
+  await request(app.getHttpServer())
+    .post(`/plan-item-workflows/${seeded.workflow.id}/artifacts/implementation-plan-doc/revisions/${seeded.implementationPlanRevision.id}/request-changes`)
+    .send({ actor_id: seeded.ids.actorTech, reason_markdown: 'Plan test matrix changed.' })
+    .expect(409)
+    .expect(({ body }) => {
+      expect(JSON.stringify(body)).toContain('workflow_action_already_pending');
+    });
+});
 ```
 
 - [ ] **Step 3: Run failing orchestration tests**
@@ -1220,17 +1277,19 @@ Do not create a Boundary Summary revision directly from `/messages`. The only di
 `requestWorkflowArtifactChanges` must:
 
 1. verify revision ownership;
-2. reject if a queued/running action exists unless the active queued action is one of the dependent actions being staled by this request;
-3. persist artifact change request;
-4. mark revision changes requested;
-5. clear downstream active revision ids and `execution_package_id`/readiness evidence as required;
-6. mark dependent active queued actions stale in the same transaction;
-7. transition workflow back to the relevant generation/conversation stage;
-8. create visible queued revision action:
+2. reject every request-changes command if any Codex action is `running`;
+3. for Boundary Summary and Spec Doc request-changes, allow dependent `queued` actions to be staled in the same transaction, but reject unrelated queued actions;
+4. for Implementation Plan Doc request-changes, reject when any Codex action is `queued` or `running`;
+5. persist artifact change request;
+6. mark revision changes requested;
+7. clear downstream active revision ids and `execution_package_id`/readiness evidence as required;
+8. mark dependent queued actions stale in the same transaction; never stale running actions;
+9. transition workflow back to the relevant generation/conversation stage;
+10. create visible queued revision action:
    - Boundary Summary -> `revise_boundary_summary`;
    - Spec Doc -> `revise_spec_doc`;
    - Implementation Plan Doc -> `revise_implementation_plan_doc`;
-9. return projection with queued action visible.
+11. return projection with queued action visible.
 
 - [ ] **Step 10: Run orchestration tests**
 
@@ -1922,7 +1981,7 @@ In `tests/smoke/codex-runtime-no-baggage-gate.test.ts`, add negative fixtures fo
 - public `spec/generate-draft` product path outside queued action run;
 - public `implementation-plan/generate-draft` product path outside queued action run;
 - public `execution/start` for Wave 5 workflow-owned Plan Items;
-- public `recover`, `fork`, `select-active-fork`, `new-session`, `abandon`, `scavenge`;
+- public generic `transitions`, old draft/save/submit/approve routes, old request-change shortcuts, run-session controls, `block`, `archive`, `recover`, `fork`, `select-active-fork`, `new-session`, `abandon`, `scavenge`;
 - composer label or command body containing `generate_spec_doc`, `generate_implementation_plan_doc`, `start_execution`;
 - raw `codex_thread_id`, `output_capsule_id`, `artifact://`, `memory_bundle_ref`, `prompt_transcript`, or local `/Users/` path in public UI/DTO files;
 - `CodexSessionSnapshot` in touched public product DTOs/UI/docs.
