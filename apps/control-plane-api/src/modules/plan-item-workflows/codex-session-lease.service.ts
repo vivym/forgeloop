@@ -3,7 +3,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
   type CodexSessionLease,
-  type CodexSessionSnapshot,
+  type CodexRuntimeCapsule,
 } from '@forgeloop/domain';
 import { automationActorIdHeaderName } from '@forgeloop/automation';
 import type { DeliveryRepository } from '@forgeloop/db';
@@ -12,6 +12,7 @@ import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
 import { ControlPlaneRuntimeService } from '../core/control-plane-runtime.service';
 import type {
   ClaimCodexSessionLeaseDto,
+  CreateCodexRuntimeCapsuleDto,
   RenewCodexSessionLeaseDto,
   TerminalizeCodexSessionTurnDto,
 } from './plan-item-workflow.dto';
@@ -20,7 +21,7 @@ const staleTerminalizationCodes = new Set([
   'codex_session_lease_conflict',
   'codex_session_lease_expired',
   'codex_session_stale_terminalization',
-  'codex_session_snapshot_stale',
+  'codex_runtime_capsule_stale',
   'codex_session_thread_binding_stale',
 ]);
 
@@ -38,24 +39,40 @@ type AutomationRequest = {
   headers: Record<string, string | string[] | undefined>;
 };
 
-const hasOutputSnapshot = (
+const hasOutputCapsule = (
   dto: TerminalizeCodexSessionTurnDto,
 ): dto is TerminalizeCodexSessionTurnDto & {
-  output_snapshot_id: string;
-  output_snapshot_sequence: number;
-  output_snapshot_artifact_ref: string;
-  output_snapshot_digest: string;
-  output_snapshot_size_bytes: string;
-  output_snapshot_manifest_digest: string;
+  output_capsule_id: string;
+  output_capsule_sequence: number;
+  output_capsule_artifact_ref: string;
+  output_capsule_digest: string;
+  output_capsule_size_bytes: string;
+  output_capsule_manifest_digest: string;
+  output_capsule_thread_state_digest: string;
+  output_capsule_memory_state_digest: string;
+  output_capsule_environment_manifest_digest: string;
+  output_capsule_codex_thread_id_digest: string;
+  output_capsule_codex_cli_version: string;
+  output_capsule_app_server_protocol_digest: string;
   runtime_profile_revision_id: string;
+  output_capsule_trusted_runtime_manifest_digest: string;
+  output_capsule_credential_binding_lineage_digest: string;
 } =>
-  dto.output_snapshot_id !== undefined &&
-  dto.output_snapshot_sequence !== undefined &&
-  dto.output_snapshot_artifact_ref !== undefined &&
-  dto.output_snapshot_digest !== undefined &&
-  dto.output_snapshot_size_bytes !== undefined &&
-  dto.output_snapshot_manifest_digest !== undefined &&
-  dto.runtime_profile_revision_id !== undefined;
+  dto.output_capsule_id !== undefined &&
+  dto.output_capsule_sequence !== undefined &&
+  dto.output_capsule_artifact_ref !== undefined &&
+  dto.output_capsule_digest !== undefined &&
+  dto.output_capsule_size_bytes !== undefined &&
+  dto.output_capsule_manifest_digest !== undefined &&
+  dto.output_capsule_thread_state_digest !== undefined &&
+  dto.output_capsule_memory_state_digest !== undefined &&
+  dto.output_capsule_environment_manifest_digest !== undefined &&
+  dto.output_capsule_codex_thread_id_digest !== undefined &&
+  dto.output_capsule_codex_cli_version !== undefined &&
+  dto.output_capsule_app_server_protocol_digest !== undefined &&
+  dto.runtime_profile_revision_id !== undefined &&
+  dto.output_capsule_trusted_runtime_manifest_digest !== undefined &&
+  dto.output_capsule_credential_binding_lineage_digest !== undefined;
 
 @Injectable()
 export class CodexSessionLeaseService {
@@ -77,7 +94,7 @@ export class CodexSessionLeaseService {
     };
     const claimed = await this.repository.claimCodexSessionLease({
       ...input,
-      ...(dto.expected_previous_snapshot_digest === null ? {} : { expected_previous_snapshot_digest: dto.expected_previous_snapshot_digest }),
+      ...(dto.expected_input_capsule_digest === null ? {} : { expected_input_capsule_digest: dto.expected_input_capsule_digest }),
     });
     return this.toLeaseResponse(claimed.lease);
   }
@@ -96,19 +113,52 @@ export class CodexSessionLeaseService {
     return this.toLeaseResponse(lease);
   }
 
+  async createRuntimeCapsule(sessionId: string, dto: CreateCodexRuntimeCapsuleDto) {
+    const capsule: CodexRuntimeCapsule = {
+      id: dto.capsule_id,
+      codex_session_id: sessionId,
+      sequence: dto.sequence,
+      artifact_ref: dto.artifact_ref,
+      digest: dto.digest,
+      size_bytes: dto.size_bytes,
+      manifest_digest: dto.manifest_digest,
+      thread_state_digest: dto.thread_state_digest,
+      memory_state_digest: dto.memory_state_digest,
+      environment_manifest_digest: dto.environment_manifest_digest,
+      codex_thread_id_digest: dto.codex_thread_id_digest,
+      codex_cli_version: dto.codex_cli_version,
+      app_server_protocol_digest: dto.app_server_protocol_digest,
+      runtime_profile_revision_id: dto.runtime_profile_revision_id,
+      trusted_runtime_manifest_digest: dto.trusted_runtime_manifest_digest,
+      credential_binding_lineage_digest: dto.credential_binding_lineage_digest,
+      created_from_turn_id: dto.created_from_turn_id,
+      created_by_actor_id: dto.actor_id,
+      created_at: this.now(),
+    };
+    await this.repository.createCodexRuntimeCapsule(capsule);
+    return { session_id: sessionId, capsule_id: capsule.id, status: 'created' };
+  }
+
   async terminalize(sessionId: string, turnId: string, dto: TerminalizeCodexSessionTurnDto, request: AutomationRequest) {
     const trustedActorId = this.requireTrustedActorId(request);
-    const outputSnapshot: CodexSessionSnapshot | undefined = hasOutputSnapshot(dto)
+    const outputCapsule: CodexRuntimeCapsule | undefined = hasOutputCapsule(dto)
       ? {
-          id: dto.output_snapshot_id,
+          id: dto.output_capsule_id,
           codex_session_id: sessionId,
-          sequence: dto.output_snapshot_sequence,
-          artifact_ref: dto.output_snapshot_artifact_ref,
-          digest: dto.output_snapshot_digest,
-          size_bytes: dto.output_snapshot_size_bytes,
-          manifest_digest: dto.output_snapshot_manifest_digest,
-          ...(dto.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: dto.codex_thread_id_digest }),
+          sequence: dto.output_capsule_sequence,
+          artifact_ref: dto.output_capsule_artifact_ref,
+          digest: dto.output_capsule_digest,
+          size_bytes: dto.output_capsule_size_bytes,
+          manifest_digest: dto.output_capsule_manifest_digest,
+          thread_state_digest: dto.output_capsule_thread_state_digest,
+          memory_state_digest: dto.output_capsule_memory_state_digest,
+          environment_manifest_digest: dto.output_capsule_environment_manifest_digest,
+          codex_thread_id_digest: dto.output_capsule_codex_thread_id_digest,
+          codex_cli_version: dto.output_capsule_codex_cli_version,
+          app_server_protocol_digest: dto.output_capsule_app_server_protocol_digest,
           runtime_profile_revision_id: dto.runtime_profile_revision_id,
+          trusted_runtime_manifest_digest: dto.output_capsule_trusted_runtime_manifest_digest,
+          credential_binding_lineage_digest: dto.output_capsule_credential_binding_lineage_digest,
           created_from_turn_id: turnId,
           created_by_actor_id: trustedActorId,
           created_at: this.now(),
@@ -125,7 +175,17 @@ export class CodexSessionLeaseService {
         worker_id: dto.worker_id,
         worker_session_digest: dto.worker_session_digest,
         status: dto.status,
-        ...(outputSnapshot === undefined ? {} : { output_snapshot: outputSnapshot }),
+        ...(outputCapsule === undefined ? {} : { output_capsule: outputCapsule }),
+        ...(dto.output_memory_bundle_ref === undefined ? {} : { output_memory_bundle_ref: dto.output_memory_bundle_ref }),
+        ...(dto.output_memory_bundle_digest === undefined ? {} : { output_memory_bundle_digest: dto.output_memory_bundle_digest }),
+        ...(dto.memory_delta_artifact_ref === undefined ? {} : { memory_delta_artifact_ref: dto.memory_delta_artifact_ref }),
+        ...(dto.memory_delta_digest === undefined ? {} : { memory_delta_digest: dto.memory_delta_digest }),
+        ...(dto.output_environment_manifest_ref === undefined
+          ? {}
+          : { output_environment_manifest_ref: dto.output_environment_manifest_ref }),
+        ...(dto.output_environment_manifest_digest === undefined
+          ? {}
+          : { output_environment_manifest_digest: dto.output_environment_manifest_digest }),
         ...(dto.codex_thread_id === undefined ? {} : { codex_thread_id: dto.codex_thread_id }),
         ...(dto.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: dto.codex_thread_id_digest }),
         ...(dto.failure_code === undefined ? {} : { failure_code: dto.failure_code }),
@@ -133,7 +193,7 @@ export class CodexSessionLeaseService {
       };
       const result = await this.repository.terminalizeCodexSessionTurn({
         ...input,
-        ...(dto.expected_previous_snapshot_digest === null ? {} : { expected_previous_snapshot_digest: dto.expected_previous_snapshot_digest }),
+        ...(dto.expected_input_capsule_digest === null ? {} : { expected_input_capsule_digest: dto.expected_input_capsule_digest }),
       });
       return { session_id: result.session.id, turn_id: result.turn.id, status: result.turn.status };
     } catch (error) {
@@ -165,14 +225,14 @@ export class CodexSessionLeaseService {
       lease_epoch: dto.lease_epoch,
       worker_id: dto.worker_id,
       worker_session_digest: dto.worker_session_digest,
-      ...(dto.output_snapshot_digest === undefined ? {} : { attempted_output_snapshot_digest: dto.output_snapshot_digest }),
+      ...(dto.output_capsule_digest === undefined ? {} : { attempted_output_capsule_digest: dto.output_capsule_digest }),
       ...(dto.codex_thread_id_digest === undefined ? {} : { attempted_codex_thread_id_digest: dto.codex_thread_id_digest }),
       failure_code: failureCode,
       created_at: now,
     };
     await repository.saveStaleCodexSessionTerminalizationAttempt({
       ...attempt,
-      ...(dto.expected_previous_snapshot_digest === null ? {} : { expected_previous_snapshot_digest: dto.expected_previous_snapshot_digest }),
+      ...(dto.expected_input_capsule_digest === null ? {} : { expected_input_capsule_digest: dto.expected_input_capsule_digest }),
     });
     if (safeTurn !== undefined) {
       await repository.markCodexSessionTurnStale({ session_id: sessionId, turn_id: safeTurn.id, now });
@@ -192,7 +252,7 @@ export class CodexSessionLeaseService {
   private requireTrustedActorId(request: AutomationRequest) {
     const value = firstHeaderValue(request.headers, automationActorIdHeaderName)?.trim();
     if (value === undefined || value.length === 0) {
-      throw new DomainError('workflow_actor_not_authorized', 'Trusted automation actor id is required for snapshot attribution');
+      throw new DomainError('workflow_actor_not_authorized', 'Trusted automation actor id is required for capsule attribution');
     }
     return value;
   }

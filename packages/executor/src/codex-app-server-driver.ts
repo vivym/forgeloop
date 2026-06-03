@@ -791,7 +791,7 @@ export class CodexAppServerProcessTransport implements CodexAppServerTransport {
           title: 'Forgeloop',
           version: '0.0.0',
         },
-        capabilities: null,
+        capabilities: { experimentalApi: true },
       });
       await this.#sendNotification('initialized');
       this.#initialized = true;

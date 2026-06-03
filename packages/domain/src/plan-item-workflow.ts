@@ -105,8 +105,14 @@ export interface CodexSession {
   role: CodexSessionRole;
   codex_thread_id?: string;
   codex_thread_id_digest?: string;
-  latest_snapshot_id?: string;
-  latest_snapshot_digest?: string;
+  latest_capsule_id?: string;
+  latest_capsule_digest?: string;
+  base_memory_bundle_ref?: string;
+  base_memory_bundle_digest?: string;
+  latest_memory_bundle_ref?: string;
+  latest_memory_bundle_digest?: string;
+  latest_environment_manifest_ref?: string;
+  latest_environment_manifest_digest?: string;
   latest_turn_id?: string;
   latest_turn_digest?: string;
   runtime_profile_id: string;
@@ -121,7 +127,7 @@ export interface CodexSession {
   runner_expires_at?: IsoDateTime | undefined;
   forked_from_session_id?: string;
   forked_from_turn_id?: string;
-  forked_from_snapshot_id?: string;
+  forked_from_capsule_id?: string;
   fork_reason?: string;
   created_by_actor_id: string;
   created_at: IsoDateTime;
@@ -136,9 +142,23 @@ export interface CodexSessionTurn {
   intent: CodexSessionTurnIntent;
   status: CodexSessionTurnStatus;
   input_digest: string;
-  expected_previous_snapshot_digest?: string;
-  output_snapshot_id?: string;
-  output_snapshot_digest?: string;
+  expected_input_capsule_digest?: string;
+  input_capsule_id?: string;
+  input_capsule_digest?: string;
+  output_capsule_id?: string;
+  output_capsule_digest?: string;
+  base_memory_bundle_ref?: string;
+  base_memory_bundle_digest?: string;
+  input_memory_bundle_ref?: string;
+  input_memory_bundle_digest?: string;
+  output_memory_bundle_ref?: string;
+  output_memory_bundle_digest?: string;
+  memory_delta_artifact_ref?: string;
+  memory_delta_digest?: string;
+  input_environment_manifest_ref?: string;
+  input_environment_manifest_digest?: string;
+  output_environment_manifest_ref?: string;
+  output_environment_manifest_digest?: string;
   output_object_type?: WorkflowTransitionEvidenceObjectType;
   output_object_id?: string;
   codex_thread_id_digest?: string;
@@ -151,17 +171,24 @@ export interface CodexSessionTurn {
   updated_at: IsoDateTime;
 }
 
-export interface CodexSessionSnapshot {
+export interface CodexRuntimeCapsule {
   id: string;
   codex_session_id: string;
+  created_from_turn_id: string;
   sequence: number;
   artifact_ref: string;
   digest: string;
   size_bytes: string;
   manifest_digest: string;
-  codex_thread_id_digest?: string;
+  thread_state_digest: string;
+  memory_state_digest: string;
+  environment_manifest_digest: string;
+  codex_thread_id_digest: string;
+  codex_cli_version: string;
+  app_server_protocol_digest: string;
   runtime_profile_revision_id: string;
-  created_from_turn_id?: string;
+  trusted_runtime_manifest_digest: string;
+  credential_binding_lineage_digest: string;
   created_by_actor_id: string;
   created_at: IsoDateTime;
 }
@@ -174,8 +201,8 @@ export interface CodexSessionStaleTerminalizationAttempt {
   lease_epoch?: number;
   worker_id: string;
   worker_session_digest: string;
-  expected_previous_snapshot_digest?: string;
-  attempted_output_snapshot_digest?: string;
+  expected_input_capsule_digest?: string;
+  attempted_output_capsule_digest?: string;
   attempted_codex_thread_id_digest?: string;
   failure_code: string;
   created_at: IsoDateTime;

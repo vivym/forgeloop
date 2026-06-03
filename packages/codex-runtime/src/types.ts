@@ -23,7 +23,7 @@ export interface CodexSessionRuntimeContext {
   lease_epoch: number;
   worker_id: string;
   worker_session_digest: string;
-  expected_previous_snapshot_digest?: string;
+  expected_input_capsule_digest?: string;
   runner_runtime_job_id?: string;
   runner_launch_lease_id?: string;
   turn_group_status: 'intermediate' | 'complete';

@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,6 +32,7 @@ const createFetchRecorder = (responseFactory: () => Response = () => jsonRespons
 };
 
 const parseRequestBody = (request: CapturedRequest): Record<string, unknown> => JSON.parse(String(request.init.body));
+const rawSha256Digest = (bytes: Buffer | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const expectWorkerDigest = (body: Record<string, unknown>) => {
   const { body_digest: bodyDigest, ...unsignedBody } = body;
@@ -39,6 +41,9 @@ const expectWorkerDigest = (body: Record<string, unknown>) => {
 
 const parseRuntimeArtifactMetadata = (request: CapturedRequest): Record<string, unknown> =>
   JSON.parse(Buffer.from(String((request.init.headers as Record<string, string>)['x-forgeloop-runtime-artifact-metadata']), 'base64url').toString('utf8'));
+
+const parseInternalArtifactMetadata = (request: CapturedRequest): Record<string, unknown> =>
+  JSON.parse(Buffer.from(String((request.init.headers as Record<string, string>)['x-forgeloop-artifact-metadata']), 'base64url').toString('utf8'));
 
 const tempRoots: string[] = [];
 
@@ -55,7 +60,7 @@ describe('CodexRuntimeControlPlaneClient', () => {
 
   it('signs trusted runtime job orchestration requests with exact path and raw body', async () => {
     const { fetchImpl, requests } = createFetchRecorder();
-    const signed: Array<{ method: string; pathAndQuery: string; rawBody: string }> = [];
+    const signed: Array<{ method: string; pathAndQuery: string; rawBody: string | Buffer; signedHeaders?: Record<string, string> }> = [];
     const client = new CodexRuntimeControlPlaneClient({
       baseUrl: 'https://control.test/',
       fetchImpl,
@@ -277,6 +282,96 @@ describe('CodexRuntimeControlPlaneClient', () => {
         }),
       ),
     );
+  });
+
+  it('uploads and downloads internal artifacts with trusted actor auth and byte digest validation', async () => {
+    const artifactBytes = Buffer.from('capsule bytes\n', 'utf8');
+    const artifactDigest = `sha256:${Buffer.from(await crypto.subtle.digest('SHA-256', artifactBytes)).toString('hex')}`;
+    let responseMode: 'upload' | 'download' = 'upload';
+    const { fetchImpl, requests } = createFetchRecorder(() => {
+      if (responseMode === 'download') {
+        return new Response(artifactBytes, {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'x-forgeloop-artifact-digest': artifactDigest,
+          },
+        });
+      }
+      return jsonResponse({
+        schema_version: 'internal_artifact_upload_response.v1',
+        artifact: {
+          ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
+          kind: 'codex_runtime_capsule',
+          content_type: 'application/json',
+          size_bytes: String(artifactBytes.byteLength),
+          digest: artifactDigest,
+          visibility: 'private',
+          owner_type: 'codex_session',
+          owner_id: 'session-1',
+          created_at: '2026-06-03T00:00:00.000Z',
+        },
+      }, 201);
+    });
+    const signed: Array<{ method: string; pathAndQuery: string; rawBody: string }> = [];
+    const client = new CodexRuntimeControlPlaneClient({
+      baseUrl: 'https://control.test',
+      fetchImpl,
+      trustedActorSigner: (input) => {
+        signed.push(input);
+        return { 'x-forgeloop-signature': rawSha256Digest(input.rawBody) };
+      },
+    });
+
+    await client.uploadInternalArtifact({
+      kind: 'codex_runtime_capsule',
+      ownerType: 'codex_session',
+      ownerId: 'session-1',
+      visibility: 'private',
+      contentType: 'application/json',
+      bytes: artifactBytes,
+      idempotencyKey: 'capsule-upload-1',
+      metadataJson: { schema_version: 'test.v1' },
+    });
+    responseMode = 'download';
+    const downloaded = await client.downloadInternalArtifact({
+      ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
+      expectedDigest: artifactDigest,
+    });
+    expect(Buffer.from(downloaded)).toEqual(artifactBytes);
+
+    expect(requests.map((request) => [request.init.method, new URL(request.url).pathname])).toEqual([
+      ['POST', '/internal/artifacts:upload'],
+      ['GET', '/internal/artifacts'],
+    ]);
+    expect(requests[0]!.init.body).toEqual(artifactBytes);
+    expect(parseInternalArtifactMetadata(requests[0]!)).toMatchObject({
+      schema_version: 'internal_artifact_upload.v1',
+      owner_type: 'codex_session',
+      owner_id: 'session-1',
+      kind: 'codex_runtime_capsule',
+      declared_artifact_digest: artifactDigest,
+      declared_size_bytes: String(artifactBytes.byteLength),
+      idempotency_key: 'capsule-upload-1',
+      metadata_json: { schema_version: 'test.v1' },
+    });
+    const metadataHeader = String((requests[0]!.init.headers as Record<string, string>)['x-forgeloop-artifact-metadata']);
+    expect(signed).toEqual([
+      {
+        method: 'POST',
+        pathAndQuery: '/internal/artifacts:upload',
+        rawBody: artifactBytes,
+        signedHeaders: { 'x-forgeloop-artifact-metadata': metadataHeader },
+      },
+      {
+        method: 'GET',
+        pathAndQuery: `/internal/artifacts?ref_base64url=${Buffer.from(
+          'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
+          'utf8',
+        ).toString('base64url')}`,
+        rawBody: '',
+      },
+    ]);
   });
 
   it('sends encoded runtime artifact upload paths while signing the server proof path', async () => {

@@ -92,10 +92,10 @@ describe('buildCodexAppServerDockerCommand', () => {
     expect(command.args).toContain('--network');
     expect(command.args).toContain('none');
     expect(command.args).toContain('HOME=/codex-home');
-    expect(command.args).toContain('/safe/codex-home:/codex-seed:ro');
-    expect(command.args).not.toContain('/safe/codex-home:/codex-home:rw');
-    expect(command.args).toContain('/codex-home:rw,noexec,nosuid,nodev,uid=501,gid=20,mode=700');
-    expect(command.args).toContain('cp /codex-seed/config.toml /codex-home/config.toml && cp /codex-seed/auth.json /codex-home/auth.json && chmod 600 /codex-home/config.toml /codex-home/auth.json && exec "$@"');
+    expect(command.args).toContain('/safe/codex-home:/codex-home:rw');
+    expect(command.args).not.toContain('/safe/codex-home:/codex-seed:ro');
+    expect(command.args).not.toContain('/codex-home:rw,noexec,nosuid,nodev,uid=501,gid=20,mode=700');
+    expect(command.args.join(' ')).not.toContain('/codex-seed');
     expect(command.args).toContain('ghcr.io/forgeloop/codex-app-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     expect(command.args).not.toContain('--publish');
     expect(command.args).not.toContain('/safe/run:/run/forgeloop:rw');

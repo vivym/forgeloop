@@ -181,12 +181,20 @@ describe('AppServerGenerationDriver', () => {
       },
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/resume', 'turn/start']);
-    expect(request).toHaveBeenNthCalledWith(1, 'thread/resume', {
-      threadId: 'thread-1',
-      excludeTurns: true,
-      persistExtendedHistory: false,
+    const requests = request.mock.calls.map(([method, params]) => ({ method, params }));
+    expect(requests.map(({ method }) => method)).toEqual(['thread/resume', 'turn/start']);
+    expect(requests).toContainEqual({
+      method: 'thread/resume',
+      params: {
+        threadId: 'thread-1',
+        excludeTurns: true,
+        persistExtendedHistory: false,
+      },
     });
+    expect(JSON.stringify(requests)).not.toContain('"history"');
+    expect(JSON.stringify(requests)).not.toContain('"path"');
+    expect(JSON.stringify(requests)).not.toContain('"sessionId"');
+    expect(requests.filter((request) => request.method === 'thread/start')).toHaveLength(0);
     expect(request).toHaveBeenNthCalledWith(2, 'turn/start', {
       approvalPolicy: 'never',
       input: [{ type: 'text', text: '{}', text_elements: [] }],

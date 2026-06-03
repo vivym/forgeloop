@@ -32,6 +32,8 @@ const actorReviewer = 'actor-reviewer';
 type RuntimeJobRef = Pick<CodexRuntimeJob, 'id' | 'worker_id' | 'launch_lease_id' | 'project_id' | 'repo_id'>;
 type PublicRuntimeJobRef = Pick<CodexRuntimeJob, 'id' | 'project_id' | 'repo_id'>;
 const now = '2026-05-23T00:00:00.000Z';
+const testCapsuleSequences = new Map<string, number>();
+const testCapsuleSequenceByRuntimeJob = new Map<string, number>();
 
 const createRuntimeArtifactObject = async (
   repository: DeliveryRepository,
@@ -74,6 +76,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
+    testCapsuleSequences.clear();
+    testCapsuleSequenceByRuntimeJob.clear();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
@@ -2496,11 +2500,45 @@ function addCodexThreadEvidence(
     return terminalResult;
   }
   const codexThreadId = `thread-${runtimeJob.codex_session_id}`;
+  const scopeKey = runtimeJob.repo_id ?? 'project';
+  const capsuleId = stableUuid({ kind: 'test-runtime-capsule', runtimeJobId: runtimeJob.id });
+  let sequence = testCapsuleSequenceByRuntimeJob.get(runtimeJob.id);
+  if (sequence === undefined) {
+    sequence = (testCapsuleSequences.get(runtimeJob.codex_session_id) ?? 0) + 1;
+    testCapsuleSequences.set(runtimeJob.codex_session_id, sequence);
+    testCapsuleSequenceByRuntimeJob.set(runtimeJob.id, sequence);
+  }
+  const digestFor = (kind: string) => codexCanonicalDigest({ kind, runtimeJobId: runtimeJob.id });
   return Object.assign(terminalResult, {
     codex_session_thread: {
       codex_thread_id: codexThreadId,
       codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: codexThreadId }),
       app_server_turn_id: `app-server-turn-${runtimeJob.codex_session_turn_id}`,
     },
+    output_capsule: {
+      id: capsuleId,
+      codex_session_id: runtimeJob.codex_session_id,
+      created_from_turn_id: runtimeJob.codex_session_turn_id,
+      sequence,
+      artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${runtimeJob.codex_session_id}/${capsuleId}`,
+      digest: digestFor('test-runtime-capsule-digest'),
+      size_bytes: '1024',
+      manifest_digest: digestFor('test-runtime-capsule-manifest'),
+      thread_state_digest: digestFor('test-runtime-capsule-thread-state'),
+      memory_state_digest: digestFor('test-runtime-capsule-memory-state'),
+      environment_manifest_digest: digestFor('test-runtime-capsule-environment-manifest'),
+      codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: codexThreadId }),
+      codex_cli_version: '0.1.0-test',
+      app_server_protocol_digest: digestFor('test-runtime-capsule-app-server-protocol'),
+      runtime_profile_revision_id: stableUuid({ kind: 'generation-profile-revision', projectId: runtimeJob.project_id, repoId: scopeKey }),
+      trusted_runtime_manifest_digest: digestFor('test-runtime-capsule-trusted-runtime-manifest'),
+      credential_binding_lineage_digest: digestFor('test-runtime-capsule-credential-lineage'),
+      created_by_actor_id: runtimeJob.worker_id,
+      created_at: '2026-05-05T00:00:45.000Z',
+    },
+    output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${runtimeJob.codex_session_id}/memory-${runtimeJob.codex_session_turn_id}`,
+    output_memory_bundle_digest: digestFor('test-runtime-capsule-memory-bundle'),
+    output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${runtimeJob.codex_session_id}/environment-${runtimeJob.codex_session_turn_id}`,
+    output_environment_manifest_digest: digestFor('test-runtime-capsule-environment-bundle'),
   });
 }

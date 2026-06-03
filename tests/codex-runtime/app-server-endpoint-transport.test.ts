@@ -127,7 +127,10 @@ describe('CodexAppServerEndpointTransport websocket support', () => {
 
     expect(authorization).toBe('Bearer secret-token');
     expect(received).toEqual([
-      expect.objectContaining({ method: 'initialize' }),
+      expect.objectContaining({
+        method: 'initialize',
+        params: expect.objectContaining({ capabilities: { experimentalApi: true } }),
+      }),
       expect.objectContaining({ method: 'initialized' }),
     ]);
   });

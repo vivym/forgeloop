@@ -82,17 +82,20 @@ const createLocalDockerGenerationRuntimeOptions = async () => {
   if (config.codexWorkerMode !== 'local_docker') {
     return undefined;
   }
-  const workerId = requiredLocalDockerConfig(config.workerId, 'FORGELOOP_CODEX_WORKER_ID or FORGELOOP_WORKER_IDENTITY');
+  const workerId = requiredLocalDockerConfig(config.workerId, 'FORGELOOP_WORKER_ID or FORGELOOP_WORKER_IDENTITY');
   const workerTempRoot = requiredLocalDockerConfig(config.workerTempRoot, 'FORGELOOP_WORKER_TEMP_ROOT');
   const workerBootstrapToken = requiredLocalDockerConfig(config.workerBootstrapToken, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN');
   const workerBootstrapTokenVersion = requiredLocalDockerConfig(
     config.workerBootstrapTokenVersion,
     'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION',
   );
-  const workerDockerImageDigests = requiredLocalDockerConfig(config.workerDockerImageDigests, 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST');
+  const workerDockerImageDigests = requiredLocalDockerConfig(
+    config.workerDockerImageDigests,
+    'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS',
+  );
   const workerNetworkPolicyDigests = requiredLocalDockerConfig(
     config.workerNetworkPolicyDigests,
-    'FORGELOOP_CODEX_NETWORK_POLICY_DIGEST',
+    'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS',
   );
   const generationCredentialBindingId = requiredLocalDockerConfig(
     config.generationCredentialBindingId,

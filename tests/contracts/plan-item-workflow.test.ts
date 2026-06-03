@@ -165,6 +165,7 @@ describe('plan item workflow contracts', () => {
       'runner_launch_lease_id',
       'runner_runtime_job_id',
       'runner_expires_at',
+      'latest_capsule_ref',
     ] as const;
     for (const field of forbiddenSessionFields) {
       expect(workflow.session).not.toHaveProperty(field);
@@ -192,5 +193,18 @@ describe('plan item workflow contracts', () => {
         continuity_state: 'ready',
         can_continue: true,
       });
+  });
+
+  it('rejects raw capsule refs in public Codex session DTOs', () => {
+    expect(
+      codexSessionPublicDtoSchema.safeParse({
+        id: 'session-1',
+        status: 'idle',
+        role: 'active',
+        continuity_state: 'ready',
+        can_continue: true,
+        latest_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
+      }).success,
+    ).toBe(false);
   });
 });

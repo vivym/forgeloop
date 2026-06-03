@@ -30,6 +30,7 @@ import {
   CodexRuntimeControlPlaneClient,
   DockerizedCodexAppServerLauncher,
   createLocalCodexWorkerRuntime,
+  createRemoteWorkerCapsuleManager,
   createRemoteCodexWorkerClient,
 } from '../packages/codex-worker-runtime/src/index';
 import { InMemoryDeliveryRepository, type DeliveryRepository } from '../packages/db/src/index';
@@ -119,26 +120,14 @@ const positiveIntConfigEnv = (env: EnvLike, key: string): number => {
 };
 
 export const requestedGenerationMode = (env: EnvLike = process.env): AutomationGenerationPlanningConfig['mode'] => {
-  const explicitLegacyMode = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_AUTOMATION_GENERATION');
-  const legacyMode = explicitLegacyMode ?? 'fake';
-  const driver = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_DRIVER');
-  const mode = legacyMode === 'codex' ? 'app_server' : legacyMode;
-  if (driver !== undefined) {
-    if (driver === 'cli' || driver === 'exec' || driver === 'exec_fallback' || driver === 'codex_exec') {
-      throw new Error(`FORGELOOP_CODEX_GENERATION_DRIVER_${driver}_not_allowed`);
-    }
-    if (driver !== 'fake' && driver !== 'app_server') {
-      throw new Error('FORGELOOP_CODEX_GENERATION_DRIVER_must_be_fake_or_app_server');
-    }
-    if (explicitLegacyMode !== undefined && mode !== driver) {
-      throw new Error('FORGELOOP_CODEX_GENERATION_DRIVER_conflicts_with_FORGELOOP_CODEX_AUTOMATION_GENERATION');
-    }
+  const driver = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_DRIVER') ?? 'fake';
+  if (driver === 'cli' || driver === 'exec' || driver === 'exec_fallback' || driver === 'codex_exec') {
+    throw new Error(`FORGELOOP_CODEX_GENERATION_DRIVER_${driver}_not_allowed`);
+  }
+  if (driver === 'fake' || driver === 'app_server' || driver === 'disabled') {
     return driver;
   }
-  if (mode === 'fake' || mode === 'app_server' || mode === 'disabled') {
-    return mode;
-  }
-  throw new Error('FORGELOOP_CODEX_AUTOMATION_GENERATION_invalid');
+  throw new Error('FORGELOOP_CODEX_GENERATION_DRIVER_must_be_fake_app_server_or_disabled');
 };
 
 const preflightBlockedGeneration = (reasonCode: string): DogfoodGenerationRuntimeConfig => ({
@@ -230,6 +219,16 @@ const requiredDogfoodEnv = (key: string): string => {
   return value;
 };
 
+const sha256DigestPattern = /^sha256:[a-f0-9]{64}$/;
+
+const requiredDogfoodSha256DigestEnv = (key: string): string => {
+  const value = requiredDogfoodEnv(key);
+  if (!sha256DigestPattern.test(value)) {
+    throw new Error(`${key}_must_be_sha256_digest`);
+  }
+  return value;
+};
+
 const dogfoodPositiveIntEnv = (key: string): number | undefined => {
   const raw = optionalNonBlankEnv(process.env, key);
   if (raw === undefined) {
@@ -316,7 +315,7 @@ const createDogfoodLocalDockerGenerationRuntime = async (input: {
   const generationRuntimeProfileId = String(bootstrapSummary.generation_runtime_profile_id);
   const generationCredentialBindingId = String(bootstrapSummary.generation_credential_binding_id);
   const generationWorkerIdentity = String(bootstrapSummary.generation_worker_identity ?? `${bootstrapConfig.workerIdentity}-generation`);
-  const workerId = optionalNonBlankEnv(process.env, 'FORGELOOP_CODEX_WORKER_ID') ?? generationWorkerIdentity;
+  const workerId = optionalNonBlankEnv(process.env, 'FORGELOOP_WORKER_ID') ?? generationWorkerIdentity;
   const generationAllowedScope = { project_id: bootstrapConfig.allowedScope.project_id };
   const generationAllowedCapabilities = {
     target_kinds: ['generation'],
@@ -327,6 +326,8 @@ const createDogfoodLocalDockerGenerationRuntime = async (input: {
   const workerTempRoot = requiredDogfoodEnv('FORGELOOP_WORKER_TEMP_ROOT');
   const generationArtifactRoot = requiredDogfoodEnv('FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT');
   const dockerBin = optionalNonBlankEnv(process.env, 'FORGELOOP_DOCKER_BIN') ?? 'docker';
+  const codexCliVersion = requiredDogfoodEnv('FORGELOOP_CODEX_CLI_VERSION');
+  const appServerProtocolDigest = requiredDogfoodSha256DigestEnv('FORGELOOP_CODEX_APP_SERVER_PROTOCOL_DIGEST');
   const controlPlaneClient = new CodexRuntimeControlPlaneClient({
     baseUrl: input.baseUrl,
     trustedActorSigner: dogfoodTrustedActorSigner,
@@ -464,7 +465,7 @@ const createDogfoodRemoteOutboundGenerationRuntime = async (input: {
   const generationRuntimeProfileId = String(bootstrapSummary.generation_runtime_profile_id);
   const generationCredentialBindingId = String(bootstrapSummary.generation_credential_binding_id);
   const generationWorkerIdentity = String(bootstrapSummary.generation_worker_identity ?? bootstrapConfig.workerIdentity);
-  const workerId = optionalNonBlankEnv(process.env, 'FORGELOOP_CODEX_WORKER_ID') ?? generationWorkerIdentity;
+  const workerId = optionalNonBlankEnv(process.env, 'FORGELOOP_WORKER_ID') ?? generationWorkerIdentity;
   const generationAllowedScope = { project_id: bootstrapConfig.allowedScope.project_id };
   const generationAllowedCapabilities = {
     target_kinds: ['generation'],
@@ -496,6 +497,13 @@ const createDogfoodRemoteOutboundGenerationRuntime = async (input: {
     now,
     nonceFactory,
   });
+  const capsuleManager = createRemoteWorkerCapsuleManager({
+    controlPlaneClient,
+    workerId,
+    codexCliVersion,
+    appServerProtocolDigest,
+    now,
+  });
   let remoteWorkerRunning = true;
   const worker = createRemoteCodexWorkerClient({
     workerId,
@@ -518,6 +526,7 @@ const createDogfoodRemoteOutboundGenerationRuntime = async (input: {
     maxConcurrency: 1,
     controlPlaneClient,
     launcher,
+    capsuleManager,
     scavenger: async () => undefined,
     pollIntervalMs: remote.pollIntervalMs,
     controlPollIntervalMs: remote.pollIntervalMs,

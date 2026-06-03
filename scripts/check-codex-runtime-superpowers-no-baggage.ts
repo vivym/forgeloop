@@ -9,7 +9,9 @@ export type CodexRuntimeSuperpowersBaggagePattern =
   | 'raw_runtime_route'
   | 'host_codex_home'
   | 'exec_fallback'
-  | 'codex_exec_cli';
+  | 'codex_exec_cli'
+  | 'legacy_codex_runtime_env_alias'
+  | 'legacy_codex_session_snapshot';
 
 export type AllowedMatch = {
   file: string;
@@ -63,10 +65,16 @@ const defaultScanRoots = [
   'packages/codex-worker-runtime',
   'packages/workflow',
   'packages/run-worker',
+  'apps/automation-daemon/src',
   'apps/control-plane-api/src/modules',
   'docs/runbooks',
   'docs/superpowers/reports',
   'tests',
+];
+const legacyCodexSessionSnapshotScanRoots = [
+  'packages/domain',
+  'packages/contracts',
+  'packages/db/src',
 ];
 const scanExtensions = new Set(['.ts', '.tsx', '.md', '.json']);
 const ignoredHistoricalPathFragments = [
@@ -153,6 +161,13 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     owner: 'internal-runtime-storage',
     reason: 'Docker command sets container-local CODEX_HOME, not host Codex state.',
     excerpt: 'CODEX_HOME=/codex-home',
+  },
+  {
+    file: 'packages/codex-worker-runtime/src/codex-runtime-capsule/app-server-stdio.ts',
+    pattern: 'host_codex_home',
+    owner: 'internal-runtime-storage',
+    reason: 'Stdio probe sets an isolated child-process CODEX_HOME, not host Codex state.',
+    excerpt: 'CODEX_HOME: options.codexHomeRoot',
   },
   {
     file: 'packages/codex-runtime/src/runtime.ts',
@@ -266,6 +281,18 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     reason: 'Negative test fixture proves the strict gate catches Codex exec CLI usage.',
   },
   {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_codex_runtime_env_alias',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches legacy Codex runtime env aliases.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_codex_session_snapshot',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches legacy Codex session snapshot vocabulary.',
+  },
+  {
     file: 'tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts',
     pattern: 'host_codex_home',
     owner: 'negative-test',
@@ -361,6 +388,33 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
   host_codex_home: [/~\/\.codex/, /\bCODEX_HOME\b/, /\bFORGELOOP_CODEX_HOME\b/, /\bhost_config_path\b/, /\bhost_auth_path\b/],
   exec_fallback: [/\bexec_fallback\b/],
   codex_exec_cli: [/\bcodex\s+exec\b/, /\brun\(\s*["']codex["']\s*,\s*\[\s*["']exec["']/],
+  legacy_codex_runtime_env_alias: [
+    /\bFORGELOOP_CODEX_AUTOMATION_GENERATION\b/,
+    /\bFORGELOOP_CODEX_WORKER_ID\b/,
+  ],
+  legacy_codex_session_snapshot: [
+    /\bCodexSessionSnapshot\b/,
+    /\bcodex_session_snapshot\b/,
+    /\blatest_snapshot_/,
+    /\bexpected_previous_snapshot_digest\b/,
+    /\boutput_snapshot_/,
+    /\battempted_output_snapshot_digest\b/,
+    /\bforked_from_snapshot_id\b/,
+    /\bfork_point_snapshot_/,
+    /\bcodex_session_snapshot_stale\b/,
+    /\blatestSnapshot/,
+    /\bexpectedPreviousSnapshotDigest\b/,
+    /\boutputSnapshot/,
+    /\battemptedOutputSnapshotDigest\b/,
+    /\bforkedFromSnapshotId\b/,
+    /\bforkPointSnapshot/,
+    /\bcodexSessionSnapshots\b/,
+    /\bcreateCodexSessionSnapshot\b/,
+    /\bgetCodexSessionSnapshot\b/,
+    /\bgetLatestSnapshot\b/,
+    /\/codex-sessions\/[^'"]+\/snapshots/,
+    /:sessionId\/snapshots/,
+  ],
 };
 
 const fileExtension = (file: string): string => {
@@ -368,12 +422,13 @@ const fileExtension = (file: string): string => {
   return dot < 0 ? '' : file.slice(dot);
 };
 
-const isIgnoredHistoricalPath = (file: string): boolean =>
+const isIgnoredHistoricalPath = (file: string, pattern: CodexRuntimeSuperpowersBaggagePattern): boolean =>
   file.includes('/node_modules/') ||
-  ignoredHistoricalPathFragments.some((fragment) => file === fragment || file.includes(fragment)) ||
-  (file.startsWith('scripts/') && !activeStrictScripts.has(file)) ||
-  (file.startsWith('tests/') && !activeTask8Tests.has(file)) ||
-  (file.startsWith('docs/superpowers/reports/') && !file.includes('codex-runtime-superpowers'));
+  (pattern !== 'legacy_codex_session_snapshot' &&
+    (ignoredHistoricalPathFragments.some((fragment) => file === fragment || file.includes(fragment)) ||
+      (file.startsWith('scripts/') && !activeStrictScripts.has(file)) ||
+      (file.startsWith('tests/') && !activeTask8Tests.has(file)) ||
+      (file.startsWith('docs/superpowers/reports/') && !file.includes('codex-runtime-superpowers'))));
 
 const collectFilesUnder = (rootDir: string, relativePath: string): string[] => {
   const absolutePath = join(rootDir, relativePath);
@@ -382,14 +437,14 @@ const collectFilesUnder = (rootDir: string, relativePath: string): string[] => {
   }
   const stat = statSync(absolutePath);
   if (stat.isFile()) {
-    return scanExtensions.has(fileExtension(relativePath)) && !isIgnoredHistoricalPath(relativePath) ? [relativePath] : [];
+    return scanExtensions.has(fileExtension(relativePath)) && !relativePath.includes('/node_modules/') ? [relativePath] : [];
   }
   if (!stat.isDirectory()) {
     return [];
   }
   return readdirSync(absolutePath)
     .flatMap((entry) => collectFilesUnder(rootDir, join(relativePath, entry)))
-    .filter((file) => !isIgnoredHistoricalPath(file));
+    .filter((file) => !file.includes('/node_modules/'));
 };
 
 const isAllowed = (input: {
@@ -398,12 +453,25 @@ const isAllowed = (input: {
   line: string;
   allowlist: AllowedMatch[];
 }): boolean =>
+  (input.pattern === 'legacy_codex_session_snapshot' &&
+    input.file.split('/').slice(0, 3).join(':') === 'docs:superpowers:specs' &&
+    /supersedes|superseded|legacy|old|prior|previous/.test(input.line)) ||
   input.allowlist.some(
     (entry) =>
       entry.file === input.file &&
       entry.pattern === input.pattern &&
       (entry.excerpt === undefined || input.line.includes(entry.excerpt)),
   );
+
+const patternsForFile = (
+  file: string,
+): Array<[CodexRuntimeSuperpowersBaggagePattern, RegExp[]]> => {
+  const patterns = Object.entries(baggagePatterns) as Array<[CodexRuntimeSuperpowersBaggagePattern, RegExp[]]>;
+  if (legacyCodexSessionSnapshotScanRoots.some((root) => file === root || file.startsWith(`${root}/`))) {
+    return patterns.filter(([pattern]) => pattern === 'legacy_codex_session_snapshot');
+  }
+  return patterns;
+};
 
 const scanFile = (input: {
   rootDir: string;
@@ -419,9 +487,10 @@ const scanFile = (input: {
   const lines = content.split(/\r?\n/);
   const violations: CodexRuntimeSuperpowersNoBaggageViolation[] = [];
   for (const [lineIndex, line] of lines.entries()) {
-    for (const [pattern, expressions] of Object.entries(baggagePatterns) as Array<
-      [CodexRuntimeSuperpowersBaggagePattern, RegExp[]]
-    >) {
+    for (const [pattern, expressions] of patternsForFile(input.file)) {
+      if (isIgnoredHistoricalPath(input.file, pattern)) {
+        continue;
+      }
       if (expressions.some((expression) => expression.test(line))) {
         if (!isAllowed({ file: input.file, pattern, line, allowlist: input.allowlist })) {
           violations.push({
@@ -443,11 +512,14 @@ export const scanCodexRuntimeSuperpowersNoBaggage = (input: {
   allowlist?: AllowedMatch[];
 }): CodexRuntimeSuperpowersNoBaggageScanResult => {
   const rootDir = resolve(input.rootDir ?? process.cwd());
+  const defaultFiles = [
+    ...defaultScanFiles,
+    ...defaultScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot)),
+    ...legacyCodexSessionSnapshotScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot)),
+  ];
   const files = Array.from(
     new Set(
-      (input.files ?? [...defaultScanFiles, ...defaultScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot))]).map((file) =>
-        relative(rootDir, resolve(rootDir, file)),
-      ),
+      (input.files ?? defaultFiles).map((file) => relative(rootDir, resolve(rootDir, file))),
     ),
   ).sort();
   const allowlist = input.allowlist ?? codexRuntimeSuperpowersNoBaggageAllowlist;

@@ -334,6 +334,168 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
     }
   });
 
+  it('flags active legacy Codex session snapshot vocabulary', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-snapshots-'));
+    const legacyLines = [
+      'type CodexSessionSnapshot = {};',
+      "const ref = 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1';",
+      "const latest_snapshot_digest = 'sha256:old';",
+      "const expected_previous_snapshot_digest = 'sha256:old';",
+      "const output_snapshot_digest = 'sha256:old-output';",
+      "const attempted_output_snapshot_digest = 'sha256:attempted-output';",
+      "const forked_from_snapshot_id = 'snapshot-1';",
+      "const fork_point_snapshot_id = 'snapshot-1';",
+      "const error = 'codex_session_snapshot_stale';",
+      "const latest = { latestSnapshot: 'snapshot-1' };",
+      "const previous = { expectedPreviousSnapshotDigest: 'sha256:old' };",
+      "const output = { outputSnapshot: 'snapshot-2' };",
+      "const attempted = { attemptedOutputSnapshotDigest: 'sha256:attempted' };",
+      "const forked = { forkedFromSnapshotId: 'snapshot-1' };",
+      "const forkPoint = { forkPointSnapshot: 'snapshot-1' };",
+      'const collection = repository.codexSessionSnapshots;',
+      'await repository.createCodexSessionSnapshot(snapshot);',
+      "await repository.getCodexSessionSnapshot('snapshot-1');",
+      'await repository.getLatestSnapshot(sessionId);',
+      "await fetch('/internal/codex-sessions/session-1/snapshots');",
+      "await fetch('/internal/codex-sessions/:sessionId/snapshots');",
+    ];
+    try {
+      writeFileSync(join(tempRoot, 'strict-dogfood.ts'), legacyLines.join('\n'));
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: ['strict-dogfood.ts'],
+        allowlist: [],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.violations).toHaveLength(legacyLines.length);
+      expect(result.violations.map((violation) => violation.pattern)).toEqual(
+        legacyLines.map(() => 'legacy_codex_session_snapshot'),
+      );
+      expect(result.violations.map((violation) => violation.excerpt)).toEqual(legacyLines);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('flags active legacy Codex runtime env aliases in daemon and dogfood files', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-env-aliases-'));
+    const legacyAutomationEnv = ['FORGELOOP', 'CODEX', 'AUTOMATION', 'GENERATION'].join('_');
+    const legacyWorkerEnv = ['FORGELOOP', 'CODEX', 'WORKER', 'ID'].join('_');
+    try {
+      const daemonDir = join(tempRoot, 'apps', 'automation-daemon', 'src');
+      const scriptDir = join(tempRoot, 'scripts');
+      mkdirSync(daemonDir, { recursive: true });
+      mkdirSync(scriptDir, { recursive: true });
+      writeFileSync(join(daemonDir, 'config.ts'), `process.env.${legacyAutomationEnv};\n`);
+      writeFileSync(join(scriptDir, 'codex-remote-worker-dogfood.ts'), `process.env.${legacyWorkerEnv};\n`);
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        allowlist: [],
+      });
+
+      expect(result.violations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            file: 'apps/automation-daemon/src/config.ts',
+            pattern: 'legacy_codex_runtime_env_alias',
+          }),
+          expect.objectContaining({
+            file: 'scripts/codex-remote-worker-dogfood.ts',
+            pattern: 'legacy_codex_runtime_env_alias',
+          }),
+        ]),
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('scans active API domain db and worker tests for legacy snapshot vocabulary', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-active-tests-'));
+    const activeTestFixtures = [
+      {
+        file: 'tests/api/codex-session-lease.test.ts',
+        source: "await fetch('/internal/codex-sessions/session-1/snapshots');",
+      },
+      {
+        file: 'tests/domain/internal-artifacts.test.ts',
+        source: "const ref = 'artifact://internal/codex_session_snapshot/codex_session/session-1/snapshot-1';",
+      },
+      {
+        file: 'tests/db/schema.test.ts',
+        source: "expect(columns).not.toContain('latestSnapshotId');",
+      },
+      {
+        file: 'tests/codex-worker-runtime/remote-worker-client.test.ts',
+        source: "const terminalization = { expected_previous_snapshot_digest: 'sha256:old' };",
+      },
+    ];
+    try {
+      for (const fixture of activeTestFixtures) {
+        const directory = join(tempRoot, ...fixture.file.split('/').slice(0, -1));
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(tempRoot, fixture.file), fixture.source);
+      }
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        allowlist: [],
+      });
+
+      expect(result.violations).toHaveLength(activeTestFixtures.length);
+      expect(result.violations).toEqual(
+        expect.arrayContaining(
+          activeTestFixtures.map((fixture) =>
+            expect.objectContaining({
+              file: fixture.file,
+              pattern: 'legacy_codex_session_snapshot',
+            }),
+          ),
+        ),
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('allows superseded snapshot vocabulary only in historical design specs', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-historical-snapshots-'));
+    try {
+      const specsSegment = ['s', 'p', 'e', 'c', 's'].join('');
+      const historicalSpecFile = join('docs', 'superpowers', specsSegment, '2026-06-02-codex-runtime-capsule-packaging-restore-design.md');
+      const specDir = join(tempRoot, 'docs', 'superpowers', specsSegment);
+      const runbookDir = join(tempRoot, 'docs', 'runbooks');
+      mkdirSync(specDir, { recursive: true });
+      mkdirSync(runbookDir, { recursive: true });
+      writeFileSync(
+        join(specDir, '2026-06-02-codex-runtime-capsule-packaging-restore-design.md'),
+        'This design supersedes `CodexSessionSnapshot`; future work uses `CodexRuntimeCapsule` instead.',
+      );
+      writeFileSync(join(runbookDir, 'codex-runtime.md'), 'Runbook still says CodexSessionSnapshot.');
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: [
+          historicalSpecFile,
+          'docs/runbooks/codex-runtime.md',
+        ],
+        allowlist: [],
+      });
+
+      expect(result.violations).toEqual([
+        expect.objectContaining({
+          file: 'docs/runbooks/codex-runtime.md',
+          pattern: 'legacy_codex_session_snapshot',
+        }),
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('keeps the current strict Codex runtime Superpowers lane free of unowned baggage matches', () => {
     const result = scanCodexRuntimeSuperpowersNoBaggage({
       rootDir: repoRoot,

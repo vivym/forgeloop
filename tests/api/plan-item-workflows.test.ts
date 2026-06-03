@@ -115,7 +115,7 @@ describe('Plan Item Workflow API', () => {
       },
     });
     expect(response.body.session.codex_thread_id).toBeUndefined();
-    expect(response.body.session.latest_snapshot_digest).toBeUndefined();
+    expect(response.body.session.latest_capsule_digest).toBeUndefined();
     expect(response.body.session.lease_token_hash).toBeUndefined();
     expect(response.body.session.worker_id).toBeUndefined();
 
@@ -758,7 +758,7 @@ describe('Plan Item Workflow API', () => {
       can_continue: false,
     });
     expect(fork.forked_from_turn_id).toBeUndefined();
-    expect(fork.latest_snapshot_digest).toBeUndefined();
+    expect(fork.latest_capsule_digest).toBeUndefined();
     expect(fork.codex_thread_id).toBeUndefined();
     expect(fork.lease_token_hash).toBeUndefined();
 

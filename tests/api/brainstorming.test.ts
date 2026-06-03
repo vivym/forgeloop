@@ -26,6 +26,9 @@ const expectedQuestions = [
   'What risks or dependency constraints should block generation?',
 ];
 
+const testCapsuleSequences = new Map<string, number>();
+const testCapsuleSequenceByRuntimeJob = new Map<string, number>();
+
 const withBodyDigest = <T extends Record<string, unknown>>(body: T): T & { body_digest: string } => ({
   ...body,
   body_digest: codexCanonicalDigest(body),
@@ -129,6 +132,8 @@ describe('Boundary Brainstorming API', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
+    testCapsuleSequences.clear();
+    testCapsuleSequenceByRuntimeJob.clear();
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
@@ -1222,17 +1227,52 @@ function generationTerminalResult(
   };
 }
 
-function codexThreadEvidenceForRuntimeJob(runtimeJob: Pick<CodexRuntimeJob, 'codex_session_id' | 'codex_session_turn_id' | 'id'>) {
+function codexSessionContinuationEvidenceForRuntimeJob(
+  runtimeJob: Pick<CodexRuntimeJob, 'codex_session_id' | 'codex_session_turn_id' | 'project_id' | 'worker_id' | 'id'>,
+) {
   if (runtimeJob.codex_session_id === undefined || runtimeJob.codex_session_turn_id === undefined) {
     return {};
   }
   const codexThreadId = `thread-${runtimeJob.codex_session_id}`;
+  const capsuleId = stableUuid({ kind: 'test-runtime-capsule', runtimeJobId: runtimeJob.id });
+  let sequence = testCapsuleSequenceByRuntimeJob.get(runtimeJob.id);
+  if (sequence === undefined) {
+    sequence = (testCapsuleSequences.get(runtimeJob.codex_session_id) ?? 0) + 1;
+    testCapsuleSequences.set(runtimeJob.codex_session_id, sequence);
+    testCapsuleSequenceByRuntimeJob.set(runtimeJob.id, sequence);
+  }
+  const digestFor = (kind: string) => codexCanonicalDigest({ kind, runtimeJobId: runtimeJob.id });
   return {
     codex_session_thread: {
       codex_thread_id: codexThreadId,
       codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: codexThreadId }),
       app_server_turn_id: `app-server-turn-${runtimeJob.codex_session_turn_id}`,
     },
+    output_capsule: {
+      id: capsuleId,
+      codex_session_id: runtimeJob.codex_session_id,
+      created_from_turn_id: runtimeJob.codex_session_turn_id,
+      sequence,
+      artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${runtimeJob.codex_session_id}/${capsuleId}`,
+      digest: digestFor('test-runtime-capsule-digest'),
+      size_bytes: '1024',
+      manifest_digest: digestFor('test-runtime-capsule-manifest'),
+      thread_state_digest: digestFor('test-runtime-capsule-thread-state'),
+      memory_state_digest: digestFor('test-runtime-capsule-memory-state'),
+      environment_manifest_digest: digestFor('test-runtime-capsule-environment-manifest'),
+      codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: codexThreadId }),
+      codex_cli_version: '0.1.0-test',
+      app_server_protocol_digest: digestFor('test-runtime-capsule-app-server-protocol'),
+      runtime_profile_revision_id: stableUuid({ kind: 'boundary-generation-profile-revision', projectId: runtimeJob.project_id }),
+      trusted_runtime_manifest_digest: digestFor('test-runtime-capsule-trusted-runtime-manifest'),
+      credential_binding_lineage_digest: digestFor('test-runtime-capsule-credential-lineage'),
+      created_by_actor_id: runtimeJob.worker_id,
+      created_at: '2026-05-05T00:01:45.000Z',
+    },
+    output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${runtimeJob.codex_session_id}/memory-${runtimeJob.codex_session_turn_id}`,
+    output_memory_bundle_digest: digestFor('test-runtime-capsule-memory-bundle'),
+    output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${runtimeJob.codex_session_id}/environment-${runtimeJob.codex_session_turn_id}`,
+    output_environment_manifest_digest: digestFor('test-runtime-capsule-environment-bundle'),
   };
 }
 
@@ -1240,7 +1280,7 @@ function withCodexThreadEvidence(
   runtimeJob: CodexRuntimeJob,
   terminalResult: CodexGenerationRuntimeJobResult,
 ): CodexGenerationRuntimeJobResult {
-  return { ...terminalResult, ...codexThreadEvidenceForRuntimeJob(runtimeJob) };
+  return { ...terminalResult, ...codexSessionContinuationEvidenceForRuntimeJob(runtimeJob) };
 }
 
 async function runtimeJobActionForRound(repository: DeliveryRepository, round: { runtime_job_id?: string | undefined }) {

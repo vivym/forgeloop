@@ -174,14 +174,10 @@ const workerCapabilitiesEnv = (fallback: CodexRuntimeTargetKind[]): CodexRuntime
   });
 };
 
-const firstDigestList = (primaryKey: string, listKey: string): string[] => {
-  const primary = optionalEnv(primaryKey);
-  if (primary !== undefined) {
-    return [primary];
-  }
+const requiredDigestList = (listKey: string): string[] => {
   const values = stringListEnv(listKey);
   if (values.length === 0) {
-    throw new Error(`Missing required Codex runtime config: ${primaryKey}`);
+    throw new Error(`Missing required Codex runtime config: ${listKey}`);
   }
   return values;
 };
@@ -400,15 +396,15 @@ const createLocalDockerLeasedDriverFactory = (input: {
 
   const dockerBin = optionalEnv('FORGELOOP_DOCKER_BIN') ?? 'docker';
   const dockerRunner = new CliDockerRunner(dockerBin);
-  const workerId = optionalEnv('FORGELOOP_CODEX_WORKER_ID') ?? `${input.runWorkerId}-codex`;
+  const workerId = optionalEnv('FORGELOOP_WORKER_ID') ?? `${input.runWorkerId}-codex`;
   const workerIdentity = optionalEnv('FORGELOOP_WORKER_IDENTITY') ?? workerId;
   const workerTempRoot = requiredEnv('FORGELOOP_WORKER_TEMP_ROOT');
   const bootstrapToken = requiredEnv('FORGELOOP_WORKER_BOOTSTRAP_TOKEN');
   const bootstrapTokenVersion = positiveIntEnv('FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION');
   const hostUid = nonNegativeIntEnv('FORGELOOP_WORKER_HOST_UID', process.getuid?.() ?? 0);
   const hostGid = nonNegativeIntEnv('FORGELOOP_WORKER_HOST_GID', process.getgid?.() ?? 0);
-  const dockerImageDigests = firstDigestList('FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST', 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS');
-  const networkPolicyDigests = firstDigestList('FORGELOOP_CODEX_NETWORK_POLICY_DIGEST', 'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS');
+  const dockerImageDigests = requiredDigestList('FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS');
+  const networkPolicyDigests = requiredDigestList('FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS');
   const networkProviderConfigDigests = stringListEnv('FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS');
   const runtimeSelection = input.runExecutionRuntimeConfig.selection();
   const maxConcurrency = positiveIntEnv('FORGELOOP_WORKER_MAX_CONCURRENCY', 1);

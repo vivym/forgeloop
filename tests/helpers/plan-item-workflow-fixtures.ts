@@ -345,7 +345,7 @@ export async function createExecutionReadinessRecord(
 export async function createFork(
   app: INestApplication,
   workflowId: string,
-  options: { reason?: string; forked_from_turn_id?: string; forked_from_snapshot_id?: string } = {},
+  options: { reason?: string; forked_from_turn_id?: string; forked_from_capsule_id?: string } = {},
 ) {
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const workflow = await repository.getPlanItemWorkflow(workflowId);
@@ -353,7 +353,7 @@ export async function createFork(
   const activeSession = await repository.getCodexSession(workflow.active_codex_session_id);
   if (activeSession === undefined) throw new Error(`Workflow ${workflowId} active session does not exist`);
   let forkedFromTurnId = options.forked_from_turn_id;
-  if (forkedFromTurnId === undefined && options.forked_from_snapshot_id === undefined) {
+  if (forkedFromTurnId === undefined && options.forked_from_capsule_id === undefined) {
     forkedFromTurnId = `${workflow.id.slice(0, 8)}-1111-4111-8111-111111119901`;
     await repository.createCodexSessionTurn({
       id: forkedFromTurnId,
@@ -365,11 +365,11 @@ export async function createFork(
         workflow_id: workflow.id,
         codex_session_id: workflow.active_codex_session_id,
         fixture_turn_id: forkedFromTurnId,
-        expected_previous_snapshot_digest: activeSession.latest_snapshot_digest ?? null,
+        expected_input_capsule_digest: activeSession.latest_capsule_digest ?? null,
       }),
-      ...(activeSession.latest_snapshot_digest === undefined
+      ...(activeSession.latest_capsule_digest === undefined
         ? {}
-        : { expected_previous_snapshot_digest: activeSession.latest_snapshot_digest }),
+        : { expected_input_capsule_digest: activeSession.latest_capsule_digest }),
       created_by_actor_id: workflow.created_by_actor_id,
       created_at: now,
       updated_at: now,
@@ -383,7 +383,7 @@ export async function createFork(
         actor_id: workflow.created_by_actor_id,
         reason: options.reason ?? 'Explore a candidate fork.',
         ...(forkedFromTurnId === undefined ? {} : { forked_from_turn_id: forkedFromTurnId }),
-        ...(options.forked_from_snapshot_id === undefined ? {} : { forked_from_snapshot_id: options.forked_from_snapshot_id }),
+        ...(options.forked_from_capsule_id === undefined ? {} : { forked_from_capsule_id: options.forked_from_capsule_id }),
       })
       .expect(201)
   ).body;
@@ -900,9 +900,9 @@ async function createWorkflowFixtureTurn(
       codex_session_id: codexSessionId,
       intent: input.intent,
       fixture_turn_id: input.id,
-      expected_previous_snapshot_digest: session?.latest_snapshot_digest ?? null,
+      expected_input_capsule_digest: session?.latest_capsule_digest ?? null,
     }),
-    ...(session?.latest_snapshot_digest === undefined ? {} : { expected_previous_snapshot_digest: session.latest_snapshot_digest }),
+    ...(session?.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
     created_by_actor_id: input.actor_id,
     created_at: now,
     updated_at: now,

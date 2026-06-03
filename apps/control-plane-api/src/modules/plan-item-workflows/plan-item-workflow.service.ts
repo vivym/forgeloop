@@ -724,7 +724,7 @@ export class PlanItemWorkflowService {
           workflow_id: workflow.id,
           parent_session_id: sessionId,
           ...(input.forked_from_turn_id === undefined ? {} : { forked_from_turn_id: input.forked_from_turn_id }),
-          ...(input.forked_from_snapshot_id === undefined ? {} : { forked_from_snapshot_id: input.forked_from_snapshot_id }),
+          ...(input.forked_from_capsule_id === undefined ? {} : { forked_from_capsule_id: input.forked_from_capsule_id }),
           fork_reason: input.reason,
           created_by_actor_id: input.actor_id,
           now: this.now(),
@@ -1586,7 +1586,7 @@ export class PlanItemWorkflowService {
       operation,
       intent,
       actor_id: actorId,
-      expected_previous_snapshot_digest: session.latest_snapshot_digest ?? null,
+      expected_input_capsule_digest: session.latest_capsule_digest ?? null,
       created_at: now,
     });
     const turn: CodexSessionTurn = {
@@ -1596,7 +1596,7 @@ export class PlanItemWorkflowService {
       intent,
       status: 'running',
       input_digest: inputDigest,
-      ...(session.latest_snapshot_digest === undefined ? {} : { expected_previous_snapshot_digest: session.latest_snapshot_digest }),
+      ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
       created_by_actor_id: actorId,
       created_at: now,
       updated_at: now,

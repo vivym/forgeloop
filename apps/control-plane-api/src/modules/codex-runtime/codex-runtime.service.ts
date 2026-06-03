@@ -337,8 +337,24 @@ const publicRuntimeJobTerminalResult = (
     return undefined;
   }
   const terminalResult = validateCodexRuntimeJobTerminalResult(result);
-  if ('codex_session_thread' in terminalResult) {
-    const { codex_session_thread: _trustedThreadEvidence, ...publicResult } = terminalResult;
+  if (
+    'codex_session_thread' in terminalResult ||
+    'output_capsule' in terminalResult ||
+    'output_memory_bundle_ref' in terminalResult ||
+    'memory_delta_artifact_ref' in terminalResult ||
+    'output_environment_manifest_ref' in terminalResult
+  ) {
+    const {
+      codex_session_thread: _trustedThreadEvidence,
+      output_capsule: _trustedOutputCapsule,
+      output_memory_bundle_ref: _trustedOutputMemoryBundleRef,
+      output_memory_bundle_digest: _trustedOutputMemoryBundleDigest,
+      memory_delta_artifact_ref: _trustedMemoryDeltaArtifactRef,
+      memory_delta_digest: _trustedMemoryDeltaDigest,
+      output_environment_manifest_ref: _trustedOutputEnvironmentManifestRef,
+      output_environment_manifest_digest: _trustedOutputEnvironmentManifestDigest,
+      ...publicResult
+    } = terminalResult;
     return publicResult;
   }
   return terminalResult;
@@ -1461,9 +1477,9 @@ export class CodexRuntimeService {
         worker_id: runtimeContext.worker_id,
         worker_session_digest: runtimeContext.worker_session_digest,
         status: input.terminalStatus === 'cancelled' ? 'cancelled' : 'failed',
-        ...(runtimeContext.expected_previous_snapshot_digest === undefined
+        ...(runtimeContext.expected_input_capsule_digest === undefined
           ? {}
-          : { expected_previous_snapshot_digest: runtimeContext.expected_previous_snapshot_digest }),
+          : { expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest }),
         failure_code: input.reasonCode,
         now: input.now,
       });

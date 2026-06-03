@@ -9,8 +9,11 @@ const explicitE2eSelected = process.argv.some((argument) => /(?:^|[\\/])tests[\\
 export default defineConfig({
   resolve: {
     alias: {
+      '@forgeloop/codex-runtime': resolve(rootDir, 'packages/codex-runtime/src/index.ts'),
+      '@forgeloop/codex-worker-runtime': resolve(rootDir, 'packages/codex-worker-runtime/src/index.ts'),
       '@forgeloop/contracts': resolve(rootDir, 'packages/contracts/src/index.ts'),
       '@forgeloop/domain': resolve(rootDir, 'packages/domain/src/index.ts'),
+      '@forgeloop/executor': resolve(rootDir, 'packages/executor/src/index.ts'),
     },
   },
   test: {

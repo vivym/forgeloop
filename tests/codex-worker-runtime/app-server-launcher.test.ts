@@ -159,6 +159,70 @@ describe('DockerizedCodexAppServerLauncher', () => {
     await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
   });
 
+  it('runs restore before app-server start and successful packaging before cleanup', async () => {
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
+    const events: string[] = [];
+    const runner = new FakeDockerRunner({
+      effectiveConfig: {
+        target_kind: 'generation',
+        approval_policy: 'never',
+        source_write_policy: 'artifact_only',
+        forbidden_writable_roots: ['workspace'],
+      },
+    });
+    const originalStart = runner.start.bind(runner);
+    runner.start = async (command) => {
+      events.push('docker-start');
+      return originalStart(command);
+    };
+    const launcher = new DockerizedCodexAppServerLauncher({
+      dockerBin: 'docker',
+      workerId: 'worker-1',
+      workerSessionToken: 'session-1',
+      workerTempRoot,
+      dockerRunner: runner,
+      controlPlaneClient: {
+        materializeLaunchLease: async () => materialization(workerTempRoot),
+        terminalizeLaunchLease: async () => ({}),
+      },
+      hostUid: 501,
+      hostGid: 20,
+      nonceFactory: () => 'nonce-1',
+      now: () => '2026-05-21T00:00:00.000Z',
+    });
+
+    const session = await launcher.startFromMaterialization(materialization(workerTempRoot), {
+      workerSessionToken: 'session-1',
+      restoreCodexHome: async (codexHomeHostPath) => {
+        events.push(`restore:${await readFile(join(codexHomeHostPath, 'config.toml'), 'utf8').catch(() => 'no-config')}`);
+      },
+      beforeAppServerStart: async ({ codexHomeHostPath, codexHomeContainerPath }) => {
+        expect(codexHomeContainerPath).toBe('/codex-home');
+        events.push(`before-start:${await readFile(join(codexHomeHostPath, 'config.toml'), 'utf8')}`);
+      },
+      afterAppServerStart: async ({ codexHomeHostPath, codexHomeContainerPath }) => {
+        expect(codexHomeContainerPath).toBe('/codex-home');
+        events.push(`after-start:${await readFile(join(codexHomeHostPath, 'config.toml'), 'utf8')}`);
+      },
+      beforeRuntimeCleanup: async ({ codexHomeHostPath, codexHomeContainerPath, status }) => {
+        expect(codexHomeContainerPath).toBe('/codex-home');
+        await stat(codexHomeHostPath);
+        events.push(`before-cleanup:${status}`);
+      },
+    });
+
+    await session.close('succeeded', 'done');
+
+    expect(events).toEqual([
+      'restore:no-config',
+      'before-start:approval_policy = "never"',
+      'docker-start',
+      'after-start:approval_policy = "never"',
+      'before-cleanup:succeeded',
+    ]);
+    await expect(stat(join(workerTempRoot, 'lease-1'))).rejects.toThrow();
+  });
+
   it('starts websocket app-server sessions with private bearer auth material', async () => {
     const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-worker-'));
     const runner = new FakeDockerRunner({

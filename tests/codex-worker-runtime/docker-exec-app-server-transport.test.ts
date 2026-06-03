@@ -17,6 +17,7 @@ describe('CodexAppServerDockerExecTransport', () => {
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));
+const rpcPath = ${JSON.stringify(join(root, 'rpc.jsonl'))};
 let buffer = '';
 let upgraded = false;
 const acceptKey = key => crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
@@ -66,6 +67,7 @@ process.stdin.on('data', chunk => {
   let decoded = decode(buffer);
   while (decoded) {
     const message = JSON.parse(decoded.payload);
+    fs.appendFileSync(rpcPath, JSON.stringify(message) + '\\n');
     buffer = decoded.remaining;
     if (message.id !== undefined) {
       process.stdout.write(frame(JSON.stringify({
@@ -108,6 +110,7 @@ process.stdin.on('data', chunk => {
       '--sock',
       '/run/forgeloop/codex.sock',
     ]);
+    await expect(readFile(join(root, 'rpc.jsonl'), 'utf8')).resolves.toContain('"experimentalApi":true');
   });
 
   it('times out a docker exec proxy that never completes websocket upgrade', async () => {

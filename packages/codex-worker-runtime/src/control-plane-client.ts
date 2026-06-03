@@ -1,9 +1,11 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import {
   codexCanonicalDigest,
+  encodeInternalArtifactRefBase64Url,
   runtimeArtifactUploadProofPayload,
   type CodexRuntimeStatusProjection,
   type CodexDockerPolicy,
@@ -15,12 +17,17 @@ import {
   type CodexRuntimeResourceLimits,
   type CodexRuntimeTargetKind,
   type CodexSourceAccessMode,
+  type InternalArtifactKind,
+  type InternalArtifactOwnerType,
+  type InternalArtifactVisibility,
 } from '@forgeloop/domain';
 
 import { workspaceBundleArchiveDigest } from './workspace-bundle.js';
 
 const hasFilesystemCode = (error: unknown, code: string): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === code;
+
+const rawSha256Digest = (bytes: Uint8Array): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const maybeLstat = async (path: string) => {
   try {
@@ -111,7 +118,12 @@ export interface CodexRuntimeControlPlaneClientOptions {
   baseUrl: string;
   fetchImpl?: typeof fetch;
   trustedActorHeaders?: Record<string, string>;
-  trustedActorSigner?: (input: { method: string; pathAndQuery: string; rawBody: string }) => Record<string, string>;
+  trustedActorSigner?: (input: {
+    method: string;
+    pathAndQuery: string;
+    rawBody: string | Buffer;
+    signedHeaders?: Record<string, string>;
+  }) => Record<string, string>;
   nonceFactory?: () => string;
   now?: () => string;
 }
@@ -269,6 +281,108 @@ export class CodexRuntimeControlPlaneClient {
     const requestPath = `/internal/codex-workers/${encodeURIComponent(workerId)}/runtime-jobs/${encodeURIComponent(jobId)}/artifacts`;
     const proofPath = `/internal/codex-workers/${workerId}/runtime-jobs/${jobId}/artifacts`;
     return this.#workerPostArtifact(requestPath, proofPath, workerId, jobId, input);
+  }
+
+  async uploadInternalArtifact(input: {
+    kind: InternalArtifactKind;
+    ownerType: InternalArtifactOwnerType;
+    ownerId: string;
+    visibility: InternalArtifactVisibility;
+    contentType: string;
+    bytes: Uint8Array;
+    idempotencyKey: string;
+    metadataJson?: Record<string, unknown>;
+    maxSizeBytes?: number;
+  }): Promise<{
+    ref: string;
+    kind: InternalArtifactKind;
+    content_type: string;
+    size_bytes: string;
+    digest: string;
+    visibility: InternalArtifactVisibility;
+    owner_type: InternalArtifactOwnerType;
+    owner_id: string;
+    created_at: string;
+  }> {
+    const path = '/internal/artifacts:upload';
+    const digest = rawSha256Digest(input.bytes);
+    const metadata = {
+      schema_version: 'internal_artifact_upload.v1',
+      owner_type: input.ownerType,
+      owner_id: input.ownerId,
+      kind: input.kind,
+      visibility: input.visibility,
+      content_type: input.contentType,
+      declared_size_bytes: String(input.bytes.byteLength),
+      declared_artifact_digest: digest,
+      idempotency_key: input.idempotencyKey,
+      metadata_json: input.metadataJson ?? {},
+      created_by_actor_type: 'codex_worker',
+      created_by_actor_id: this.#trustedActorHeaders['X-Forgeloop-Actor-Id'] ?? this.#trustedActorHeaders['x-forgeloop-actor-id'] ?? 'codex-worker',
+      ...(input.maxSizeBytes === undefined ? {} : { max_size_bytes: input.maxSizeBytes }),
+    };
+    const metadataHeader = Buffer.from(JSON.stringify(metadata), 'utf8').toString('base64url');
+    const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/octet-stream',
+        'x-forgeloop-artifact-metadata': metadataHeader,
+        ...this.#trustedHeaders('POST', path, Buffer.from(input.bytes), {
+          'x-forgeloop-artifact-metadata': metadataHeader,
+        }),
+      },
+      body: input.bytes,
+    });
+    if (!response.ok) {
+      throw new Error(`codex_control_plane_request_failed:${response.status}`);
+    }
+    const parsed = (await response.json()) as unknown;
+    if (!isRecord(parsed) || !isRecord(parsed.artifact)) {
+      throw new Error('codex_control_plane_internal_artifact_response_invalid');
+    }
+    const artifact = parsed.artifact;
+    const artifactDigest = requiredString(artifact, 'digest');
+    if (artifactDigest !== digest) {
+      throw new Error('codex_control_plane_internal_artifact_digest_rejected');
+    }
+    return {
+      ref: requiredString(artifact, 'ref'),
+      kind: requiredString(artifact, 'kind') as InternalArtifactKind,
+      content_type: requiredString(artifact, 'content_type'),
+      size_bytes: requiredString(artifact, 'size_bytes'),
+      digest: artifactDigest,
+      visibility: requiredString(artifact, 'visibility') as InternalArtifactVisibility,
+      owner_type: requiredString(artifact, 'owner_type') as InternalArtifactOwnerType,
+      owner_id: requiredString(artifact, 'owner_id'),
+      created_at: requiredString(artifact, 'created_at'),
+    };
+  }
+
+  async downloadInternalArtifact(input: {
+    ref: string;
+    expectedDigest: string;
+    maxSizeBytes?: number;
+  }): Promise<Uint8Array> {
+    const pathAndQuery = `/internal/artifacts?ref_base64url=${encodeInternalArtifactRefBase64Url(input.ref)}`;
+    const response = await this.#fetch(`${this.#baseUrl}${pathAndQuery}`, {
+      method: 'GET',
+      headers: {
+        accept: 'application/octet-stream',
+        ...this.#trustedHeaders('GET', pathAndQuery, ''),
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`codex_control_plane_request_failed:${response.status}`);
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (input.maxSizeBytes !== undefined && bytes.byteLength > input.maxSizeBytes) {
+      throw new Error('codex_control_plane_internal_artifact_size_rejected');
+    }
+    if (rawSha256Digest(bytes) !== input.expectedDigest) {
+      throw new Error('codex_control_plane_internal_artifact_digest_rejected');
+    }
+    return bytes;
   }
 
   async getRuntimeJobControl(workerId: string, jobId: string, input: WorkerRequestInput): Promise<unknown> {
@@ -442,15 +556,30 @@ export class CodexRuntimeControlPlaneClient {
     return response.json();
   }
 
-  #trustedHeaders(method: string, pathAndQuery: string, rawBody: string): Record<string, string> {
+  #trustedHeaders(
+    method: string,
+    pathAndQuery: string,
+    rawBody: string | Buffer,
+    signedHeaders?: Record<string, string>,
+  ): Record<string, string> {
     return {
-      ...this.#signedHeaders(method, pathAndQuery, rawBody),
+      ...this.#signedHeaders(method, pathAndQuery, rawBody, signedHeaders),
       ...this.#trustedActorHeaders,
     };
   }
 
-  #signedHeaders(method: string, pathAndQuery: string, rawBody: string): Record<string, string> {
-    return this.#trustedActorSigner?.({ method, pathAndQuery, rawBody }) ?? {};
+  #signedHeaders(
+    method: string,
+    pathAndQuery: string,
+    rawBody: string | Buffer,
+    signedHeaders?: Record<string, string>,
+  ): Record<string, string> {
+    return this.#trustedActorSigner?.({
+      method,
+      pathAndQuery,
+      rawBody,
+      ...(signedHeaders === undefined ? {} : { signedHeaders }),
+    }) ?? {};
   }
 
   #workerPayload(input: WorkerRequestInput): Record<string, unknown> {
@@ -579,6 +708,14 @@ export type WorkerRequestInput = Record<string, unknown> & {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const requiredString = (record: Record<string, unknown>, key: string): string => {
+  const value = record[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error('codex_control_plane_response_invalid');
+  }
+  return value;
+};
 
 export const normalizeMaterializationResponse = (value: unknown): CodexLaunchMaterialization => {
   if (isRecord(value) && isRecord(value.runtime_profile) && isRecord(value.credential) && isRecord(value.launch_target)) {
