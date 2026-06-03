@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,6 +32,7 @@ const createFetchRecorder = (responseFactory: () => Response = () => jsonRespons
 };
 
 const parseRequestBody = (request: CapturedRequest): Record<string, unknown> => JSON.parse(String(request.init.body));
+const rawSha256Digest = (bytes: Buffer | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const expectWorkerDigest = (body: Record<string, unknown>) => {
   const { body_digest: bodyDigest, ...unsignedBody } = body;
@@ -58,7 +60,7 @@ describe('CodexRuntimeControlPlaneClient', () => {
 
   it('signs trusted runtime job orchestration requests with exact path and raw body', async () => {
     const { fetchImpl, requests } = createFetchRecorder();
-    const signed: Array<{ method: string; pathAndQuery: string; rawBody: string }> = [];
+    const signed: Array<{ method: string; pathAndQuery: string; rawBody: string | Buffer; signedHeaders?: Record<string, string> }> = [];
     const client = new CodexRuntimeControlPlaneClient({
       baseUrl: 'https://control.test/',
       fetchImpl,
@@ -317,7 +319,7 @@ describe('CodexRuntimeControlPlaneClient', () => {
       fetchImpl,
       trustedActorSigner: (input) => {
         signed.push(input);
-        return { 'x-forgeloop-signature': codexCanonicalDigest(input) };
+        return { 'x-forgeloop-signature': rawSha256Digest(input.rawBody) };
       },
     });
 
@@ -353,8 +355,14 @@ describe('CodexRuntimeControlPlaneClient', () => {
       idempotency_key: 'capsule-upload-1',
       metadata_json: { schema_version: 'test.v1' },
     });
+    const metadataHeader = String((requests[0]!.init.headers as Record<string, string>)['x-forgeloop-artifact-metadata']);
     expect(signed).toEqual([
-      { method: 'POST', pathAndQuery: '/internal/artifacts:upload', rawBody: '' },
+      {
+        method: 'POST',
+        pathAndQuery: '/internal/artifacts:upload',
+        rawBody: artifactBytes,
+        signedHeaders: { 'x-forgeloop-artifact-metadata': metadataHeader },
+      },
       {
         method: 'GET',
         pathAndQuery: `/internal/artifacts?ref_base64url=${Buffer.from(

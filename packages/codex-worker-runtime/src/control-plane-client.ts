@@ -118,7 +118,12 @@ export interface CodexRuntimeControlPlaneClientOptions {
   baseUrl: string;
   fetchImpl?: typeof fetch;
   trustedActorHeaders?: Record<string, string>;
-  trustedActorSigner?: (input: { method: string; pathAndQuery: string; rawBody: string }) => Record<string, string>;
+  trustedActorSigner?: (input: {
+    method: string;
+    pathAndQuery: string;
+    rawBody: string | Buffer;
+    signedHeaders?: Record<string, string>;
+  }) => Record<string, string>;
   nonceFactory?: () => string;
   now?: () => string;
 }
@@ -316,13 +321,16 @@ export class CodexRuntimeControlPlaneClient {
       created_by_actor_id: this.#trustedActorHeaders['X-Forgeloop-Actor-Id'] ?? this.#trustedActorHeaders['x-forgeloop-actor-id'] ?? 'codex-worker',
       ...(input.maxSizeBytes === undefined ? {} : { max_size_bytes: input.maxSizeBytes }),
     };
+    const metadataHeader = Buffer.from(JSON.stringify(metadata), 'utf8').toString('base64url');
     const response = await this.#fetch(`${this.#baseUrl}${path}`, {
       method: 'POST',
       headers: {
         accept: 'application/json',
         'content-type': 'application/octet-stream',
-        'x-forgeloop-artifact-metadata': Buffer.from(JSON.stringify(metadata), 'utf8').toString('base64url'),
-        ...this.#trustedHeaders('POST', path, ''),
+        'x-forgeloop-artifact-metadata': metadataHeader,
+        ...this.#trustedHeaders('POST', path, Buffer.from(input.bytes), {
+          'x-forgeloop-artifact-metadata': metadataHeader,
+        }),
       },
       body: input.bytes,
     });
@@ -548,15 +556,30 @@ export class CodexRuntimeControlPlaneClient {
     return response.json();
   }
 
-  #trustedHeaders(method: string, pathAndQuery: string, rawBody: string): Record<string, string> {
+  #trustedHeaders(
+    method: string,
+    pathAndQuery: string,
+    rawBody: string | Buffer,
+    signedHeaders?: Record<string, string>,
+  ): Record<string, string> {
     return {
-      ...this.#signedHeaders(method, pathAndQuery, rawBody),
+      ...this.#signedHeaders(method, pathAndQuery, rawBody, signedHeaders),
       ...this.#trustedActorHeaders,
     };
   }
 
-  #signedHeaders(method: string, pathAndQuery: string, rawBody: string): Record<string, string> {
-    return this.#trustedActorSigner?.({ method, pathAndQuery, rawBody }) ?? {};
+  #signedHeaders(
+    method: string,
+    pathAndQuery: string,
+    rawBody: string | Buffer,
+    signedHeaders?: Record<string, string>,
+  ): Record<string, string> {
+    return this.#trustedActorSigner?.({
+      method,
+      pathAndQuery,
+      rawBody,
+      ...(signedHeaders === undefined ? {} : { signedHeaders }),
+    }) ?? {};
   }
 
   #workerPayload(input: WorkerRequestInput): Record<string, unknown> {

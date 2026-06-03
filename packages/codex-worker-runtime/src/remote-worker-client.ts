@@ -658,24 +658,27 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       throw new Error('codex_runtime_capsule_missing');
     }
     if (terminalization.input_capsule_id === undefined) {
-      if (terminalization.base_memory_bundle_ref === undefined || terminalization.base_memory_bundle_digest === undefined) {
+      const hasBaseMemory = terminalization.base_memory_bundle_ref !== undefined || terminalization.base_memory_bundle_digest !== undefined;
+      if (hasBaseMemory && (terminalization.base_memory_bundle_ref === undefined || terminalization.base_memory_bundle_digest === undefined)) {
         throw new Error('codex_memory_bundle_missing');
       }
-      if (options.capsuleManager === undefined) {
+      if (hasBaseMemory && options.capsuleManager === undefined) {
         throw new Error('codex_runtime_capsule_missing');
       }
       return {
         writeConfigAndAuth: false,
         beforeAppServerStart: async ({ codexHomeHostPath, artifactHostPath }) => {
-          await options.capsuleManager!.materializeBaseMemory({
-            codexHomeHostPath,
-            artifactHostPath,
-            codexSessionId: terminalization.codex_session_id,
-            codexSessionTurnId: terminalization.codex_session_turn_id,
-            baseMemoryBundleRef: terminalization.base_memory_bundle_ref!,
-            baseMemoryBundleDigest: terminalization.base_memory_bundle_digest!,
-            materialization,
-          });
+          if (terminalization.base_memory_bundle_ref !== undefined && terminalization.base_memory_bundle_digest !== undefined) {
+            await options.capsuleManager!.materializeBaseMemory({
+              codexHomeHostPath,
+              artifactHostPath,
+              codexSessionId: terminalization.codex_session_id,
+              codexSessionTurnId: terminalization.codex_session_turn_id,
+              baseMemoryBundleRef: terminalization.base_memory_bundle_ref,
+              baseMemoryBundleDigest: terminalization.base_memory_bundle_digest,
+              materialization,
+            });
+          }
           await writeCodexHomeConfigAndAuth({
             codexHomeHostPath,
             codexConfigToml: materialization.profile_revision.codex_config_toml,
@@ -688,6 +691,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       throw new Error('codex_runtime_capsule_missing');
     }
     const required = requiredCapsuleRestoreTerminalization(terminalization);
+    const resumeContinuation = context.continuation.kind === 'resume_thread' ? context.continuation : undefined;
     return {
       writeConfigAndAuth: false,
       beforeAppServerStart: async ({ codexHomeHostPath, artifactHostPath }) => {
@@ -712,22 +716,22 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         });
         void artifactHostPath;
       },
-      afterAppServerStart: async ({ codexHomeHostPath, codexHomeContainerPath }) => {
-        const continuation = context.continuation;
-        if (continuation.kind !== 'resume_thread') {
-          throw new Error('codex_runtime_capsule_missing');
-        }
-        await options.capsuleManager!.repairLocator({
-          codexHomeHostPath,
-          codexHomeContainerPath,
-          codexSessionId: required.codex_session_id,
-          codexSessionTurnId: required.codex_session_turn_id,
-          codexThreadId: continuation.codex_thread_id,
-          codexThreadIdDigest: continuation.codex_thread_id_digest,
-          inputCapsuleId: required.input_capsule_id,
-          inputCapsuleDigest: required.input_capsule_digest,
-        });
-      },
+      ...(resumeContinuation === undefined
+        ? {}
+        : {
+            afterAppServerStart: async ({ codexHomeHostPath, codexHomeContainerPath }) => {
+              await options.capsuleManager!.repairLocator({
+                codexHomeHostPath,
+                codexHomeContainerPath,
+                codexSessionId: required.codex_session_id,
+                codexSessionTurnId: required.codex_session_turn_id,
+                codexThreadId: resumeContinuation.codex_thread_id,
+                codexThreadIdDigest: resumeContinuation.codex_thread_id_digest,
+                inputCapsuleId: required.input_capsule_id,
+                inputCapsuleDigest: required.input_capsule_digest,
+              });
+            },
+          }),
     };
   };
 
@@ -1668,9 +1672,6 @@ const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkloa
     try {
       const context = validateCodexSessionRuntimeContext(typedWorkload.codex_session_runtime_context);
       const terminalization = parseCodexSessionTerminalization(typedWorkload.codex_session_terminalization);
-      if (terminalization?.input_capsule_id !== undefined && context.continuation.kind !== 'resume_thread') {
-        throw new Error('codex_generation_workload_unsupported');
-      }
       if (context.continuation.kind === 'resume_thread' && terminalization?.input_capsule_id === undefined) {
         throw new Error('codex_runtime_capsule_missing');
       }
