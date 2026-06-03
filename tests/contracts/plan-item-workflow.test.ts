@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   codexSessionPublicDtoSchema,
   planItemWorkflowPublicDtoSchema,
+  planItemWorkflowQueuedActionSchema,
   planItemWorkflowTransitionSchema,
+  workflowMessageCommandSchema,
   workflowManualDecisionSchema,
 } from '@forgeloop/contracts';
 
@@ -206,5 +208,68 @@ describe('plan item workflow contracts', () => {
         latest_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
       }).success,
     ).toBe(false);
+  });
+
+  it('validates only Wave 5 message actions', () => {
+    expect(
+      workflowMessageCommandSchema.parse({
+        actor_id: 'actor-tech',
+        action: 'answer_boundary_question',
+        body_markdown: 'The boundary is API only.',
+      }).action,
+    ).toBe('answer_boundary_question');
+
+    expect(() =>
+      workflowMessageCommandSchema.parse({
+        actor_id: 'actor-tech',
+        action: 'generate_spec_doc',
+        body_markdown: 'Generate the spec.',
+      }),
+    ).toThrow();
+  });
+
+  it('validates queued action public shape without raw runtime refs', () => {
+    const parsed = planItemWorkflowQueuedActionSchema.parse({
+      id: 'action-1',
+      workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      kind: 'generate_spec_doc',
+      status: 'queued',
+      source_revision_id: 'boundary-revision-1',
+      expected_input_capsule_digest: `sha256:${'a'.repeat(64)}`,
+      context_preview_digest: `sha256:${'b'.repeat(64)}`,
+      idempotency_key: `sha256:${'c'.repeat(64)}`,
+      created_by_actor_id: 'actor-tech',
+      created_at: '2026-06-03T00:00:00.000Z',
+      updated_at: '2026-06-03T00:00:00.000Z',
+    });
+
+    expect(parsed.kind).toBe('generate_spec_doc');
+    expect(JSON.stringify(parsed)).not.toContain('codex_thread_id');
+    expect(JSON.stringify(parsed)).not.toContain('artifact_ref');
+  });
+
+  it('rejects public workflow DTOs that expose raw runtime internals', () => {
+    expect(() =>
+      planItemWorkflowPublicDtoSchema.parse({
+        id: 'workflow-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+        status: 'spec_generation_queued',
+        active_codex_session_id: 'session-1',
+        session: {
+          id: 'session-1',
+          status: 'idle',
+          role: 'active',
+          continuity_state: 'ready',
+          can_continue: true,
+          codex_thread_id: 'raw-thread-id',
+        },
+        queued_actions: [],
+        timeline_events: [],
+        created_at: '2026-06-03T00:00:00.000Z',
+        updated_at: '2026-06-03T00:00:00.000Z',
+      }),
+    ).toThrow();
   });
 });

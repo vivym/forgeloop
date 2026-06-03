@@ -81,7 +81,13 @@ export type DomainErrorCode =
   | 'codex_session_runner_unavailable'
   | 'codex_session_fork_invalid'
   | 'codex_generation_workload_unsupported'
-  | 'workflow_legacy_entrypoint_disabled';
+  | 'workflow_legacy_entrypoint_disabled'
+  | 'workflow_invalid_message_action'
+  | 'workflow_action_already_pending'
+  | 'workflow_action_not_runnable'
+  | 'workflow_action_not_active_session'
+  | 'workflow_capsule_digest_mismatch'
+  | 'workflow_context_digest_mismatch';
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode;
