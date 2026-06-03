@@ -56,7 +56,9 @@ import type {
   Organization,
   Plan,
   PlanRevision,
+  PlanItemWorkflowMessage,
   PlanItemWorkflow,
+  PlanItemWorkflowQueuedAction,
   PlanItemWorkflowTransition,
   Project,
   ProjectRepo,
@@ -125,6 +127,7 @@ import type {
   ClaimCodexLaunchTokenEnvelopeInput,
   ClaimCommandIdempotencyInput,
   ClaimExecutionPackageGenerationRunInput,
+  ClaimOrReplayPlanItemWorkflowQueuedActionRunInput,
   CompleteAutomationActionRunInput,
   CompleteExecutionPackageGenerationRunInput,
   CodexLaunchFenceSnapshot,
@@ -178,6 +181,7 @@ import type {
   MaterializeCodexLaunchLeaseInput,
   PendingWorkspaceBundleInput,
   PendingWorkspaceBundleReplayInput,
+  PlanItemWorkflowArtifactChangeRequest,
   PollCodexRuntimeJobsInput,
   DeliveryRepository,
   RecoverStaleCodexRuntimeJobsInput,
@@ -208,6 +212,7 @@ import type {
   TombstoneInternalArtifactObjectInput,
   TerminalizeCodexLaunchLeaseInput,
   TerminalizeCodexSessionTurnInput,
+  TerminalizePlanItemWorkflowQueuedActionInput,
   TraceArtifactRefRecord,
   TraceEventRecord,
   TraceLinkRecord,
@@ -795,6 +800,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly developmentPlanItemRevisions = new Map<string, DevelopmentPlanItemRevision>();
   private readonly planItemWorkflows = new Map<string, PlanItemWorkflow>();
   private readonly planItemWorkflowTransitions = new Map<string, PlanItemWorkflowTransition>();
+  private readonly planItemWorkflowQueuedActions = new Map<string, PlanItemWorkflowQueuedAction>();
+  private readonly planItemWorkflowMessages = new Map<string, PlanItemWorkflowMessage>();
+  private readonly planItemWorkflowArtifactChangeRequests = new Map<string, PlanItemWorkflowArtifactChangeRequest>();
   private readonly workflowManualDecisions = new Map<string, WorkflowManualDecision>();
   private readonly executionReadinessRecords = new Map<string, ExecutionReadinessRecord>();
   private readonly codexSessions = new Map<string, CodexSession>();
@@ -3739,6 +3747,170 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       : { repository_id: matchedRepo.id, resolved_ref: evidence };
   }
 
+  async createOrReplayPlanItemWorkflowQueuedAction(
+    action: PlanItemWorkflowQueuedAction,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const existing = valuesFor(this.planItemWorkflowQueuedActions).find(
+      (candidate) =>
+        candidate.workflow_id === action.workflow_id &&
+        candidate.idempotency_key === action.idempotency_key &&
+        (candidate.status === 'queued' || candidate.status === 'running'),
+    );
+    if (existing !== undefined) {
+      return clone(existing);
+    }
+    if (this.planItemWorkflowQueuedActions.has(action.id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow queued action ${action.id} already exists`,
+      );
+    }
+    this.assertWorkflowCodexSessionProvenance(
+      action.workflow_id,
+      action.codex_session_id,
+      `Plan Item Workflow queued action ${action.id}`,
+    );
+    this.planItemWorkflowQueuedActions.set(action.id, clone(action));
+    return clone(action);
+  }
+
+  async getPlanItemWorkflowQueuedAction(input: {
+    workflow_id: string;
+    action_id: string;
+  }): Promise<PlanItemWorkflowQueuedAction | undefined> {
+    const action = this.planItemWorkflowQueuedActions.get(input.action_id);
+    return action === undefined || action.workflow_id !== input.workflow_id ? undefined : clone(action);
+  }
+
+  async listPlanItemWorkflowQueuedActions(workflowId: string): Promise<PlanItemWorkflowQueuedAction[]> {
+    return valuesFor(this.planItemWorkflowQueuedActions)
+      .filter((action) => action.workflow_id === workflowId)
+      .sort(byCreatedAtThenId)
+      .map(clone);
+  }
+
+  async listActivePlanItemWorkflowQueuedActions(workflowId: string): Promise<PlanItemWorkflowQueuedAction[]> {
+    return valuesFor(this.planItemWorkflowQueuedActions)
+      .filter((action) => action.workflow_id === workflowId && (action.status === 'queued' || action.status === 'running'))
+      .sort(byCreatedAtThenId)
+      .map(clone);
+  }
+
+  async claimOrReplayPlanItemWorkflowQueuedActionRun(
+    input: ClaimOrReplayPlanItemWorkflowQueuedActionRunInput,
+  ): Promise<{ action: PlanItemWorkflowQueuedAction; claimed: boolean }> {
+    const action = this.planItemWorkflowQueuedActions.get(input.action_id);
+    if (action === undefined || action.workflow_id !== input.workflow_id) {
+      throw new DomainError(
+        'workflow_action_not_found',
+        `workflow_action_not_found: Plan Item Workflow queued action ${input.action_id} does not exist`,
+      );
+    }
+    if (action.status === 'queued') {
+      const running: PlanItemWorkflowQueuedAction = { ...clone(action), status: 'running', updated_at: input.now };
+      this.planItemWorkflowQueuedActions.set(running.id, clone(running));
+      return { action: clone(running), claimed: true };
+    }
+    if (action.status === 'stale' && action.codex_session_turn_id === undefined) {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} is stale`,
+      );
+    }
+    return { action: clone(action), claimed: false };
+  }
+
+  async terminalizePlanItemWorkflowQueuedAction(
+    input: TerminalizePlanItemWorkflowQueuedActionInput,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const action = this.planItemWorkflowQueuedActions.get(input.action_id);
+    if (action === undefined || action.workflow_id !== input.workflow_id) {
+      throw new DomainError(
+        'workflow_action_not_found',
+        `workflow_action_not_found: Plan Item Workflow queued action ${input.action_id} does not exist`,
+      );
+    }
+    if (action.status !== 'running') {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} is not running`,
+      );
+    }
+    const updated: PlanItemWorkflowQueuedAction = {
+      ...clone(action),
+      status: input.status,
+      ...(input.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: input.codex_session_turn_id }),
+      ...(input.output_capsule_id === undefined ? {} : { output_capsule_id: input.output_capsule_id }),
+      ...(input.output_capsule_digest === undefined ? {} : { output_capsule_digest: input.output_capsule_digest }),
+      ...(input.output_capsule_sequence === undefined ? {} : { output_capsule_sequence: input.output_capsule_sequence }),
+      ...(input.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: input.codex_thread_id_digest }),
+      ...(input.blocked_reason_code === undefined ? {} : { blocked_reason_code: input.blocked_reason_code }),
+      updated_at: input.now,
+    };
+    this.planItemWorkflowQueuedActions.set(updated.id, clone(updated));
+    return clone(updated);
+  }
+
+  async markDependentPlanItemWorkflowQueuedActionsStale(input: {
+    workflow_id: string;
+    action_kinds: PlanItemWorkflowQueuedAction['kind'][];
+    reason: string;
+    now: string;
+  }): Promise<PlanItemWorkflowQueuedAction[]> {
+    const actionKinds = new Set(input.action_kinds);
+    const staleActions = valuesFor(this.planItemWorkflowQueuedActions)
+      .filter((action) => action.workflow_id === input.workflow_id && action.status === 'queued' && actionKinds.has(action.kind))
+      .sort(byCreatedAtThenId)
+      .map((action): PlanItemWorkflowQueuedAction => ({
+        ...clone(action),
+        status: 'stale',
+        blocked_reason_code: input.reason,
+        updated_at: input.now,
+      }));
+    for (const action of staleActions) {
+      this.planItemWorkflowQueuedActions.set(action.id, clone(action));
+    }
+    return staleActions.map(clone);
+  }
+
+  async savePlanItemWorkflowMessage(message: PlanItemWorkflowMessage): Promise<void> {
+    if (this.planItemWorkflowMessages.has(message.id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow message ${message.id} already exists`,
+      );
+    }
+    this.assertWorkflowCodexSessionProvenance(
+      message.workflow_id,
+      message.codex_session_id,
+      `Plan Item Workflow message ${message.id}`,
+    );
+    this.planItemWorkflowMessages.set(message.id, clone(message));
+  }
+
+  async listPlanItemWorkflowMessages(workflowId: string): Promise<PlanItemWorkflowMessage[]> {
+    return valuesFor(this.planItemWorkflowMessages)
+      .filter((message) => message.workflow_id === workflowId)
+      .sort(byCreatedAtThenId)
+      .map(clone);
+  }
+
+  async savePlanItemWorkflowArtifactChangeRequest(request: PlanItemWorkflowArtifactChangeRequest): Promise<void> {
+    if (this.planItemWorkflowArtifactChangeRequests.has(request.id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow artifact change request ${request.id} already exists`,
+      );
+    }
+    if (this.planItemWorkflows.get(request.workflow_id) === undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow ${request.workflow_id} does not exist`,
+      );
+    }
+    this.planItemWorkflowArtifactChangeRequests.set(request.id, clone(request));
+  }
+
   async getCodexSession(id: string): Promise<CodexSession | undefined> {
     return this.cloneMaybe(this.codexSessions.get(id));
   }
@@ -3887,6 +4059,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   async getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined> {
     return this.cloneMaybe(this.codexSessionTurns.get(id));
+  }
+
+  async listCodexSessionTurns(sessionId: string): Promise<CodexSessionTurn[]> {
+    return valuesFor(this.codexSessionTurns)
+      .filter((turn) => turn.codex_session_id === sessionId)
+      .sort(byCreatedAtThenId)
+      .map(clone);
   }
 
   async markCodexSessionRunnerOwner(input: MarkCodexSessionRunnerOwnerInput): Promise<CodexSession> {
@@ -8863,6 +9042,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.developmentPlanItemRevisions,
       this.planItemWorkflows,
       this.planItemWorkflowTransitions,
+      this.planItemWorkflowQueuedActions,
+      this.planItemWorkflowMessages,
+      this.planItemWorkflowArtifactChangeRequests,
       this.workflowManualDecisions,
       this.executionReadinessRecords,
       this.codexSessions,

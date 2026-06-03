@@ -57,7 +57,9 @@ import type {
   Organization,
   Plan,
   PlanRevision,
+  PlanItemWorkflowMessage,
   PlanItemWorkflow,
+  PlanItemWorkflowQueuedAction,
   PlanItemWorkflowTransition,
   Project,
   ProjectRepo,
@@ -171,6 +173,9 @@ import {
   object_events,
   organizations,
   plan_revisions,
+  plan_item_workflow_artifact_change_requests,
+  plan_item_workflow_messages,
+  plan_item_workflow_queued_actions,
   plan_item_workflow_transitions,
   plan_item_workflows,
   plans,
@@ -206,6 +211,7 @@ import type {
   ClaimCodexLaunchTokenEnvelopeInput,
   ClaimCommandIdempotencyInput,
   ClaimExecutionPackageGenerationRunInput,
+  ClaimOrReplayPlanItemWorkflowQueuedActionRunInput,
   CompleteAutomationActionRunInput,
   CompleteExecutionPackageGenerationRunInput,
   CodexLaunchFenceSnapshot,
@@ -257,6 +263,7 @@ import type {
   MaterializeCodexLaunchLeaseInput,
   PendingWorkspaceBundleInput,
   PendingWorkspaceBundleReplayInput,
+  PlanItemWorkflowArtifactChangeRequest,
   PollCodexRuntimeJobsInput,
   DeliveryRepository,
   RecoverStaleCodexRuntimeJobsInput,
@@ -299,6 +306,7 @@ import type {
   RenewCodexSessionRunnerOwnerInput,
   SelectActiveCodexSessionForkInput,
   TerminalizeCodexSessionTurnInput,
+  TerminalizePlanItemWorkflowQueuedActionInput,
   WorkflowRepositoryEvidenceInput,
   BoundaryRoundRecord,
   AttachCodexSessionRunnerRuntimeJobInput,
@@ -1368,6 +1376,194 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return matchedRepo === undefined ? undefined : { repository_id: matchedRepo.id, resolved_ref: evidence };
   }
 
+  async createOrReplayPlanItemWorkflowQueuedAction(
+    action: PlanItemWorkflowQueuedAction,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const existing = await this.listActivePlanItemWorkflowQueuedActions(action.workflow_id);
+    const replay = existing.find((candidate) => candidate.idempotency_key === action.idempotency_key);
+    if (replay !== undefined) {
+      return replay;
+    }
+    if ((await this.getById(plan_item_workflow_queued_actions, plan_item_workflow_queued_actions.id, action.id)) !== undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow queued action ${action.id} already exists`,
+      );
+    }
+    await this.assertWorkflowCodexSessionProvenance(
+      action.workflow_id,
+      action.codex_session_id,
+      `Plan Item Workflow queued action ${action.id}`,
+    );
+    await this.db.insert(plan_item_workflow_queued_actions).values(toDbRecord(action, plan_item_workflow_queued_actions) as never);
+    return action;
+  }
+
+  async getPlanItemWorkflowQueuedAction(input: {
+    workflow_id: string;
+    action_id: string;
+  }): Promise<PlanItemWorkflowQueuedAction | undefined> {
+    const action = await this.getById<PlanItemWorkflowQueuedAction>(
+      plan_item_workflow_queued_actions,
+      plan_item_workflow_queued_actions.id,
+      input.action_id,
+    );
+    return action === undefined || action.workflow_id !== input.workflow_id ? undefined : action;
+  }
+
+  async listPlanItemWorkflowQueuedActions(workflowId: string): Promise<PlanItemWorkflowQueuedAction[]> {
+    return this.listWhere<PlanItemWorkflowQueuedAction>(
+      plan_item_workflow_queued_actions,
+      eq(plan_item_workflow_queued_actions.workflowId, workflowId),
+      [plan_item_workflow_queued_actions.createdAt, plan_item_workflow_queued_actions.id],
+    );
+  }
+
+  async listActivePlanItemWorkflowQueuedActions(workflowId: string): Promise<PlanItemWorkflowQueuedAction[]> {
+    return this.listWhere<PlanItemWorkflowQueuedAction>(
+      plan_item_workflow_queued_actions,
+      and(
+        eq(plan_item_workflow_queued_actions.workflowId, workflowId),
+        inArray(plan_item_workflow_queued_actions.status, ['queued', 'running']),
+      ),
+      [plan_item_workflow_queued_actions.createdAt, plan_item_workflow_queued_actions.id],
+    );
+  }
+
+  async claimOrReplayPlanItemWorkflowQueuedActionRun(
+    input: ClaimOrReplayPlanItemWorkflowQueuedActionRunInput,
+  ): Promise<{ action: PlanItemWorkflowQueuedAction; claimed: boolean }> {
+    const [updated] = await this.db
+      .update(plan_item_workflow_queued_actions)
+      .set({ status: 'running', updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(plan_item_workflow_queued_actions.id, input.action_id),
+          eq(plan_item_workflow_queued_actions.workflowId, input.workflow_id),
+          eq(plan_item_workflow_queued_actions.status, 'queued'),
+        ),
+      )
+      .returning();
+    if (updated !== undefined) {
+      return { action: fromDbRecord<PlanItemWorkflowQueuedAction>(updated), claimed: true };
+    }
+    const action = await this.getPlanItemWorkflowQueuedAction(input);
+    if (action === undefined) {
+      throw new DomainError(
+        'workflow_action_not_found',
+        `workflow_action_not_found: Plan Item Workflow queued action ${input.action_id} does not exist`,
+      );
+    }
+    if (action.status === 'stale' && action.codex_session_turn_id === undefined) {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} is stale`,
+      );
+    }
+    return { action, claimed: false };
+  }
+
+  async terminalizePlanItemWorkflowQueuedAction(
+    input: TerminalizePlanItemWorkflowQueuedActionInput,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const patch = {
+      status: input.status,
+      codexSessionTurnId: input.codex_session_turn_id,
+      outputCapsuleId: input.output_capsule_id,
+      outputCapsuleDigest: input.output_capsule_digest,
+      outputCapsuleSequence: input.output_capsule_sequence,
+      codexThreadIdDigest: input.codex_thread_id_digest,
+      blockedReasonCode: input.blocked_reason_code,
+      updatedAt: input.now,
+    };
+    const [updated] = await this.db
+      .update(plan_item_workflow_queued_actions)
+      .set(patch as never)
+      .where(
+        and(
+          eq(plan_item_workflow_queued_actions.id, input.action_id),
+          eq(plan_item_workflow_queued_actions.workflowId, input.workflow_id),
+          eq(plan_item_workflow_queued_actions.status, 'running'),
+        ),
+      )
+      .returning();
+    if (updated === undefined) {
+      const existing = await this.getPlanItemWorkflowQueuedAction(input);
+      throw new DomainError(
+        existing === undefined ? 'workflow_action_not_found' : 'workflow_action_not_runnable',
+        existing === undefined
+          ? `workflow_action_not_found: Plan Item Workflow queued action ${input.action_id} does not exist`
+          : `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} is not running`,
+      );
+    }
+    return fromDbRecord<PlanItemWorkflowQueuedAction>(updated);
+  }
+
+  async markDependentPlanItemWorkflowQueuedActionsStale(input: {
+    workflow_id: string;
+    action_kinds: PlanItemWorkflowQueuedAction['kind'][];
+    reason: string;
+    now: string;
+  }): Promise<PlanItemWorkflowQueuedAction[]> {
+    const rows = await this.db
+      .update(plan_item_workflow_queued_actions)
+      .set({ status: 'stale', blockedReasonCode: input.reason, updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(plan_item_workflow_queued_actions.workflowId, input.workflow_id),
+          eq(plan_item_workflow_queued_actions.status, 'queued'),
+          inArray(plan_item_workflow_queued_actions.kind, input.action_kinds),
+        ),
+      )
+      .returning();
+    return rows
+      .map((row) => fromDbRecord<PlanItemWorkflowQueuedAction>(row))
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+  }
+
+  async savePlanItemWorkflowMessage(message: PlanItemWorkflowMessage): Promise<void> {
+    const existing = await this.getById(plan_item_workflow_messages, plan_item_workflow_messages.id, message.id);
+    if (existing !== undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow message ${message.id} already exists`,
+      );
+    }
+    await this.assertWorkflowCodexSessionProvenance(
+      message.workflow_id,
+      message.codex_session_id,
+      `Plan Item Workflow message ${message.id}`,
+    );
+    await this.db.insert(plan_item_workflow_messages).values(toDbRecord(message, plan_item_workflow_messages) as never);
+  }
+
+  async listPlanItemWorkflowMessages(workflowId: string): Promise<PlanItemWorkflowMessage[]> {
+    return this.listWhere<PlanItemWorkflowMessage>(
+      plan_item_workflow_messages,
+      eq(plan_item_workflow_messages.workflowId, workflowId),
+      [plan_item_workflow_messages.createdAt, plan_item_workflow_messages.id],
+    );
+  }
+
+  async savePlanItemWorkflowArtifactChangeRequest(request: PlanItemWorkflowArtifactChangeRequest): Promise<void> {
+    const existing = await this.getById(plan_item_workflow_artifact_change_requests, plan_item_workflow_artifact_change_requests.id, request.id);
+    if (existing !== undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow artifact change request ${request.id} already exists`,
+      );
+    }
+    if ((await this.getPlanItemWorkflow(request.workflow_id)) === undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow ${request.workflow_id} does not exist`,
+      );
+    }
+    await this.db
+      .insert(plan_item_workflow_artifact_change_requests)
+      .values(toDbRecord(request, plan_item_workflow_artifact_change_requests) as never);
+  }
+
   async getCodexSession(id: string): Promise<CodexSession | undefined> {
     return this.getById(codex_sessions, codex_sessions.id, id);
   }
@@ -1493,6 +1689,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined> {
     return this.getById(codex_session_turns, codex_session_turns.id, id);
+  }
+
+  async listCodexSessionTurns(sessionId: string): Promise<CodexSessionTurn[]> {
+    return this.listWhere<CodexSessionTurn>(
+      codex_session_turns,
+      eq(codex_session_turns.codexSessionId, sessionId),
+      [codex_session_turns.createdAt, codex_session_turns.id],
+    );
   }
 
   async markCodexSessionRunnerOwner(input: MarkCodexSessionRunnerOwnerInput): Promise<CodexSession> {

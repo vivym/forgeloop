@@ -83,6 +83,7 @@ export type DomainErrorCode =
   | 'codex_generation_workload_unsupported'
   | 'workflow_legacy_entrypoint_disabled'
   | 'workflow_invalid_message_action'
+  | 'workflow_action_not_found'
   | 'workflow_action_already_pending'
   | 'workflow_action_not_runnable'
   | 'workflow_action_not_active_session'

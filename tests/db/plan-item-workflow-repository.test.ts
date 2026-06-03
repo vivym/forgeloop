@@ -21,6 +21,7 @@ import {
   type ExecutionPackage,
   type ExecutionPlanRevision,
   type InternalArtifactObject,
+  type PlanItemWorkflowQueuedAction,
   type PlanItemWorkflow,
   type PlanItemWorkflowTransition,
   type RunSession,
@@ -53,6 +54,15 @@ const drizzleDatabaseUrl = process.env.FORGELOOP_TEST_DATABASE_URL ?? process.en
 const drizzleTest =
   drizzleDatabaseUrl !== undefined && isResettableDatabaseUrl(drizzleDatabaseUrl) ? it : it.skip;
 const activePools: Array<{ end: () => Promise<void> }> = [];
+
+interface WorkflowQueuedActionRepositoryFixture {
+  workflowId: string;
+  sessionId: string;
+  actorId: string;
+  boundaryRevisionId: string;
+  specRevisionId: string;
+  implementationPlanRevisionId: string;
+}
 
 afterEach(async () => {
   await Promise.all(activePools.splice(0).map((pool) => pool.end()));
@@ -185,6 +195,126 @@ const readinessRecordInput = {
   created_by_actor_id: 'actor-tech',
   created_at: now,
 } as const;
+
+const queuedActionFixture = (
+  fixture: WorkflowQueuedActionRepositoryFixture,
+  overrides: Partial<PlanItemWorkflowQueuedAction> = {},
+): PlanItemWorkflowQueuedAction => ({
+  id: testUuid('plan-item-workflow-action-1'),
+  workflow_id: fixture.workflowId,
+  codex_session_id: fixture.sessionId,
+  kind: 'generate_spec_doc',
+  status: 'queued',
+  source_revision_id: fixture.boundaryRevisionId,
+  expected_input_capsule_digest: `sha256:${'a'.repeat(64)}`,
+  context_preview_digest: `sha256:${'b'.repeat(64)}`,
+  idempotency_key: `sha256:${'c'.repeat(64)}`,
+  created_by_actor_id: fixture.actorId,
+  created_at: '2026-06-03T00:00:00.000Z',
+  updated_at: '2026-06-03T00:00:00.000Z',
+  ...overrides,
+});
+
+const workflowQueuedActionRepositoryContract = (
+  createRepository: () => Promise<{ repository: DeliveryRepository; fixture: WorkflowQueuedActionRepositoryFixture }>,
+  testCase: typeof it = it,
+) => {
+  testCase('creates or replays workflow queued actions by scoped idempotency key', async () => {
+    const { repository, fixture } = await createRepository();
+    const input = queuedActionFixture(fixture);
+
+    const first = await repository.createOrReplayPlanItemWorkflowQueuedAction(input);
+    const second = await repository.createOrReplayPlanItemWorkflowQueuedAction({
+      ...input,
+      id: testUuid('plan-item-workflow-action-duplicate'),
+    });
+
+    expect(second.id).toBe(first.id);
+    await expect(repository.listPlanItemWorkflowQueuedActions(fixture.workflowId)).resolves.toEqual([first]);
+    await expect(repository.listActivePlanItemWorkflowQueuedActions(fixture.workflowId)).resolves.toEqual([first]);
+  });
+
+  testCase('claims queued action by compare-and-set and replays duplicate run claims', async () => {
+    const { repository, fixture } = await createRepository();
+    const action = await repository.createOrReplayPlanItemWorkflowQueuedAction(queuedActionFixture(fixture));
+
+    const first = await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+      workflow_id: action.workflow_id,
+      action_id: action.id,
+      now: '2026-06-03T00:01:00.000Z',
+    });
+
+    expect(first).toMatchObject({
+      claimed: true,
+      action: expect.objectContaining({ id: action.id, status: 'running', updated_at: '2026-06-03T00:01:00.000Z' }),
+    });
+
+    const second = await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+      workflow_id: action.workflow_id,
+      action_id: action.id,
+      now: '2026-06-03T00:01:01.000Z',
+    });
+
+    expect(second).toMatchObject({
+      claimed: false,
+      action: expect.objectContaining({ id: action.id, status: 'running', updated_at: '2026-06-03T00:01:00.000Z' }),
+    });
+  });
+
+  testCase('marks dependent queued actions stale during request-changes cascade', async () => {
+    const { repository, fixture } = await createRepository();
+    const specAction = await repository.createOrReplayPlanItemWorkflowQueuedAction(
+      queuedActionFixture(fixture, {
+        id: testUuid('plan-item-workflow-action-spec'),
+        kind: 'generate_spec_doc',
+        source_revision_id: fixture.boundaryRevisionId,
+        idempotency_key: `sha256:${'d'.repeat(64)}`,
+        created_at: '2026-06-03T00:00:00.000Z',
+        updated_at: '2026-06-03T00:00:00.000Z',
+      }),
+    );
+    const planAction = await repository.createOrReplayPlanItemWorkflowQueuedAction(
+      queuedActionFixture(fixture, {
+        id: testUuid('plan-item-workflow-action-plan'),
+        kind: 'generate_implementation_plan_doc',
+        source_revision_id: fixture.specRevisionId,
+        idempotency_key: `sha256:${'e'.repeat(64)}`,
+        created_at: '2026-06-03T00:00:01.000Z',
+        updated_at: '2026-06-03T00:00:01.000Z',
+      }),
+    );
+    await repository.createOrReplayPlanItemWorkflowQueuedAction(
+      queuedActionFixture(fixture, {
+        id: testUuid('plan-item-workflow-action-running'),
+        kind: 'generate_spec_doc',
+        source_revision_id: fixture.boundaryRevisionId,
+        idempotency_key: `sha256:${'f'.repeat(64)}`,
+        created_at: '2026-06-03T00:00:02.000Z',
+        updated_at: '2026-06-03T00:00:02.000Z',
+      }),
+    );
+    await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+      workflow_id: fixture.workflowId,
+      action_id: testUuid('plan-item-workflow-action-running'),
+      now: '2026-06-03T00:01:00.000Z',
+    });
+
+    const stale = await repository.markDependentPlanItemWorkflowQueuedActionsStale({
+      workflow_id: specAction.workflow_id,
+      reason: 'boundary_changes_requested',
+      action_kinds: ['generate_spec_doc', 'generate_implementation_plan_doc'],
+      now: '2026-06-03T00:02:00.000Z',
+    });
+
+    expect(stale.map((action) => action.id)).toEqual([specAction.id, planAction.id]);
+    await expect(
+      repository.getPlanItemWorkflowQueuedAction({
+        workflow_id: fixture.workflowId,
+        action_id: testUuid('plan-item-workflow-action-running'),
+      }),
+    ).resolves.toMatchObject({ status: 'running' });
+  });
+};
 
 const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
 const bytesDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -1532,6 +1662,24 @@ const applyWorkflowTransition = async (
 };
 
 describe('Plan Item Workflow repository', () => {
+  describe('queued action persistence contract', () => {
+    workflowQueuedActionRepositoryContract(async () => {
+      const repository = new InMemoryDeliveryRepository();
+      await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+      return {
+        repository,
+        fixture: {
+          workflowId: 'workflow-1',
+          sessionId: 'session-1',
+          actorId: 'actor-tech',
+          boundaryRevisionId: 'boundary-summary-revision-1',
+          specRevisionId: 'spec-revision-1',
+          implementationPlanRevisionId: 'implementation-plan-revision-1',
+        },
+      };
+    });
+  });
+
   it('creates workflow with initial active Codex Session', async () => {
     const repository = new InMemoryDeliveryRepository();
 
@@ -6701,6 +6849,27 @@ describe('Plan Item Workflow repository', () => {
 });
 
 describe('Plan Item Workflow Drizzle repository critical paths', () => {
+  describe('queued action persistence contract', () => {
+    workflowQueuedActionRepositoryContract(
+      async () => {
+        const repository = await createDrizzleWorkflowRepository();
+        await repository.createPlanItemWorkflowWithInitialSession(drizzleWorkflowInput);
+        return {
+          repository,
+          fixture: {
+            workflowId: uuidFixture.workflowId,
+            sessionId: uuidFixture.sessionId,
+            actorId: uuidFixture.actorTechId,
+            boundaryRevisionId: uuidFixture.boundarySummaryRevisionId,
+            specRevisionId: uuidFixture.specRevisionId,
+            implementationPlanRevisionId: uuidFixture.executionPlanRevisionId,
+          },
+        };
+      },
+      drizzleTest,
+    );
+  });
+
   drizzleTest('persists, renews, and clears session-bound runner ownership', async () => {
     const repository = await createDrizzleWorkflowRepository();
     await repository.createPlanItemWorkflowWithInitialSession(drizzleWorkflowInput);

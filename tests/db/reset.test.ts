@@ -104,6 +104,15 @@ describe('database reset guard', () => {
       resettableTables.indexOf('codex_sessions'),
     );
     expect(resettableTables.indexOf('codex_session_turns')).toBeLessThan(resettableTables.indexOf('codex_sessions'));
+    expect(resettableTables.indexOf('plan_item_workflow_queued_actions')).toBeLessThan(
+      resettableTables.indexOf('plan_item_workflows'),
+    );
+    expect(resettableTables.indexOf('plan_item_workflow_messages')).toBeLessThan(
+      resettableTables.indexOf('plan_item_workflows'),
+    );
+    expect(resettableTables.indexOf('plan_item_workflow_artifact_change_requests')).toBeLessThan(
+      resettableTables.indexOf('plan_item_workflows'),
+    );
     expect(resettableTables.indexOf('plan_item_workflow_transitions')).toBeLessThan(
       resettableTables.indexOf('plan_item_workflows'),
     );
