@@ -12,6 +12,7 @@ import {
 import {
   CliDockerRunner,
   CodexRuntimeControlPlaneClient,
+  createRemoteWorkerCapsuleManager,
   createRemoteCodexWorkerClient,
   DockerizedCodexAppServerLauncher,
 } from '../packages/codex-worker-runtime/src/index';
@@ -40,6 +41,8 @@ export interface CodexRemoteWorkerDogfoodConfig {
   dockerImageDigests: string[];
   networkPolicyDigests: string[];
   networkProviderConfigDigests?: string[];
+  codexCliVersion: string;
+  appServerProtocolDigest: string;
   hostUid: number;
   hostGid: number;
   maxConcurrency: number;
@@ -108,24 +111,28 @@ const digestListEnv = (env: EnvLike, key: string): string[] | undefined => {
   return values;
 };
 
+const requiredDigestListEnv = (env: EnvLike, key: string): string[] => {
+  const value = digestListEnv(env, key);
+  if (value === undefined) {
+    throw new Error(`${key}_missing`);
+  }
+  return value;
+};
+
+const requiredSha256DigestEnv = (env: EnvLike, key: string): string => {
+  const value = requiredEnv(env, key);
+  if (!sha256DigestPattern.test(value)) {
+    throw new Error(`${key}_must_be_sha256_digest`);
+  }
+  return value;
+};
+
 const parseJson = (value: string, key: string): unknown => {
   try {
     return JSON.parse(value);
   } catch {
     throw new Error(`${key}_invalid_json`);
   }
-};
-
-const singleDigestListEnv = (env: EnvLike, pluralKey: string, singleKey: string): string[] => {
-  const plural = digestListEnv(env, pluralKey);
-  if (plural !== undefined) {
-    return plural;
-  }
-  const single = requiredEnv(env, singleKey);
-  if (!sha256DigestPattern.test(single)) {
-    throw new Error(`${singleKey}_must_be_pinned_sha256_digest`);
-  }
-  return [single];
 };
 
 const allowedScopesEnv = (env: EnvLike): CodexRuntimeScope[] => {
@@ -207,7 +214,7 @@ const assertNoSharedFilesystemInputs = (env: EnvLike): void => {
 
 export const loadCodexRemoteWorkerDogfoodConfig = (env: EnvLike = process.env): CodexRemoteWorkerDogfoodConfig => {
   const workerIdentity = requiredEnv(env, 'FORGELOOP_WORKER_IDENTITY');
-  const workerId = optionalEnv(env, 'FORGELOOP_CODEX_WORKER_ID') ?? workerIdentity;
+  const workerId = optionalEnv(env, 'FORGELOOP_WORKER_ID') ?? workerIdentity;
   const noSharedFilesystem = booleanEnv(env, 'FORGELOOP_CODEX_NO_SHARED_FILESYSTEM');
   if (noSharedFilesystem) {
     assertNoSharedFilesystemInputs(env);
@@ -228,15 +235,13 @@ export const loadCodexRemoteWorkerDogfoodConfig = (env: EnvLike = process.env): 
     allowedRepoRoots: noSharedFilesystem ? [] : pathListEnv(env, 'FORGELOOP_AUTOMATION_ALLOWED_REPO_ROOTS'),
     allowedScopes: allowedScopesEnv(env),
     capabilities: capabilitiesEnv(env),
-    dockerImageDigests: singleDigestListEnv(env, 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS', 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST'),
-    networkPolicyDigests: singleDigestListEnv(
-      env,
-      'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS',
-      'FORGELOOP_CODEX_NETWORK_POLICY_DIGEST',
-    ),
+    dockerImageDigests: requiredDigestListEnv(env, 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS'),
+    networkPolicyDigests: requiredDigestListEnv(env, 'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS'),
     ...(digestListEnv(env, 'FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS') === undefined
       ? {}
       : { networkProviderConfigDigests: digestListEnv(env, 'FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS') }),
+    codexCliVersion: requiredEnv(env, 'FORGELOOP_CODEX_CLI_VERSION'),
+    appServerProtocolDigest: requiredSha256DigestEnv(env, 'FORGELOOP_CODEX_APP_SERVER_PROTOCOL_DIGEST'),
     hostUid: nonNegativeIntEnv(env, 'FORGELOOP_WORKER_HOST_UID', process.getuid?.() ?? 0),
     hostGid: nonNegativeIntEnv(env, 'FORGELOOP_WORKER_HOST_GID', process.getgid?.() ?? 0),
     maxConcurrency: positiveIntEnv(env, 'FORGELOOP_WORKER_MAX_CONCURRENCY', 1),
@@ -256,6 +261,8 @@ export const renderCodexRemoteWorkerDogfoodStartSummary = (config: CodexRemoteWo
     `Capabilities: ${config.capabilities.join(',')}`,
     `Docker image digests: ${config.dockerImageDigests.join(',')}`,
     `Network policy digests: ${config.networkPolicyDigests.join(',')}`,
+    `Codex CLI version digest: ${codexCanonicalDigest(config.codexCliVersion)}`,
+    `App-server protocol digest: ${config.appServerProtocolDigest}`,
     ...(config.networkProviderConfigDigests === undefined
       ? []
       : [`Network provider config digests: ${config.networkProviderConfigDigests.join(',')}`]),
@@ -379,6 +386,13 @@ const createDogfoodWorker = (config: CodexRemoteWorkerDogfoodConfig): RemoteDogf
     now,
     nonceFactory,
   });
+  const capsuleManager = createRemoteWorkerCapsuleManager({
+    controlPlaneClient,
+    workerId: config.workerId,
+    codexCliVersion: config.codexCliVersion,
+    appServerProtocolDigest: config.appServerProtocolDigest,
+    now,
+  });
   return createRemoteCodexWorkerClient({
     workerId: config.workerId,
     workerIdentity: config.workerIdentity,
@@ -396,6 +410,7 @@ const createDogfoodWorker = (config: CodexRemoteWorkerDogfoodConfig): RemoteDogf
     maxConcurrency: config.maxConcurrency,
     controlPlaneClient,
     launcher,
+    capsuleManager,
     scavenger: async () => undefined,
     pollIntervalMs: config.pollIntervalMs,
     controlPollIntervalMs: config.controlPollIntervalMs,

@@ -139,12 +139,7 @@ const codexRunWorkerModeEnv = (env: EnvLike): CodexWorkerMode => {
 };
 
 const workerIdEnv = (env: EnvLike, workerIdentity: string | undefined): string | undefined => {
-  const canonical = optionalNonBlankEnv(env, 'FORGELOOP_WORKER_ID');
-  const legacy = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_WORKER_ID');
-  if (canonical !== undefined && legacy !== undefined && canonical !== legacy) {
-    throw new Error('Invalid automation daemon config: FORGELOOP_WORKER_ID conflicts with FORGELOOP_CODEX_WORKER_ID');
-  }
-  return canonical ?? legacy ?? workerIdentity;
+  return optionalNonBlankEnv(env, 'FORGELOOP_WORKER_ID') ?? workerIdentity;
 };
 
 const appServerTransportEnv = (env: EnvLike): CodexAppServerTransport | undefined => {
@@ -229,31 +224,13 @@ const workerCapabilitiesEnv = (env: EnvLike): Array<'generation' | 'run_executio
   });
 };
 
-const legacyGenerationModeEnv = (env: EnvLike): AutomationGenerationPlanningConfig['mode'] => {
-  const raw = env.FORGELOOP_CODEX_AUTOMATION_GENERATION?.trim() ?? 'disabled';
-  if (raw === 'disabled' || raw === 'fake') {
-    return raw;
-  }
-  if (raw === 'codex') {
-    return 'app_server';
-  }
-  throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_AUTOMATION_GENERATION must be disabled, fake, or codex');
-};
-
 const generationDriverEnv = (env: EnvLike): AutomationGenerationPlanningConfig['mode'] => {
-  const legacyMode = legacyGenerationModeEnv(env);
   const rawDriver = env.FORGELOOP_CODEX_GENERATION_DRIVER?.trim();
   if (rawDriver === undefined || rawDriver.length === 0) {
-    return legacyMode;
+    return 'disabled';
   }
-  if (rawDriver === 'cli' || rawDriver === 'exec' || rawDriver === 'exec_fallback' || rawDriver === 'codex_exec') {
-    throw new Error(`Invalid automation daemon config: FORGELOOP_CODEX_GENERATION_DRIVER=${rawDriver} is not allowed`);
-  }
-  if (rawDriver !== 'fake' && rawDriver !== 'app_server') {
-    throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_GENERATION_DRIVER must be fake or app_server');
-  }
-  if (env.FORGELOOP_CODEX_AUTOMATION_GENERATION !== undefined && legacyMode !== rawDriver) {
-    throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_GENERATION_DRIVER conflicts with FORGELOOP_CODEX_AUTOMATION_GENERATION');
+  if (rawDriver !== 'disabled' && rawDriver !== 'fake' && rawDriver !== 'app_server') {
+    throw new Error('Invalid automation daemon config: FORGELOOP_CODEX_GENERATION_DRIVER must be disabled, fake, or app_server');
   }
   return rawDriver;
 };
@@ -273,7 +250,6 @@ const generationPlanningEnv = (env: EnvLike): AutomationGenerationPlanningConfig
 };
 
 const generationPlanningExplicitEnv = (env: EnvLike): boolean =>
-  env.FORGELOOP_CODEX_AUTOMATION_GENERATION !== undefined ||
   env.FORGELOOP_CODEX_GENERATION_DRIVER !== undefined ||
   env.FORGELOOP_CODEX_GENERATION_PACKAGE_DRAFTS_ENABLED !== undefined;
 
@@ -305,8 +281,8 @@ const assertAppServerRuntimeConfig = (
     requiredEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN');
     requiredEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION');
     requiredEnv(env, 'FORGELOOP_WORKER_TEMP_ROOT');
-    requiredEnv(env, 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST');
-    requiredEnv(env, 'FORGELOOP_CODEX_NETWORK_POLICY_DIGEST');
+    requiredEnv(env, 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS');
+    requiredEnv(env, 'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS');
     requiredEnv(env, 'FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID');
     requiredEnv(env, 'FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID');
   }
@@ -333,8 +309,8 @@ const assertRemoteWorkerModeConfig = (
   requiredEnv(env, 'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION');
   requiredEnv(env, 'FORGELOOP_WORKER_TEMP_ROOT');
   requiredEnv(env, 'FORGELOOP_DOCKER_BIN');
-  requiredEnv(env, 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST');
-  requiredEnv(env, 'FORGELOOP_CODEX_NETWORK_POLICY_DIGEST');
+  requiredEnv(env, 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS');
+  requiredEnv(env, 'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS');
   requiredEnv(env, 'FORGELOOP_CODEX_WORKER_SCOPES_JSON');
   requiredEnv(env, 'FORGELOOP_CODEX_WORKER_CAPABILITIES');
   requiredEnv(env, 'FORGELOOP_WORKER_MAX_CONCURRENCY');
@@ -366,14 +342,8 @@ export const loadAutomationDaemonConfig = (env: EnvLike = process.env): Automati
   const workerHostGid = optionalPositiveIntEnv(env, 'FORGELOOP_WORKER_HOST_GID');
   const workerAuthorizedScopes = workerScopesEnv(env);
   const workerCapabilities = workerCapabilitiesEnv(env);
-  const singleDockerImageDigest = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST');
-  const workerDockerImageDigests =
-    stringListEnv(env, 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS') ??
-    (singleDockerImageDigest === undefined ? undefined : [singleDockerImageDigest]);
-  const singleNetworkPolicyDigest = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_NETWORK_POLICY_DIGEST');
-  const workerNetworkPolicyDigests =
-    stringListEnv(env, 'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS') ??
-    (singleNetworkPolicyDigest === undefined ? undefined : [singleNetworkPolicyDigest]);
+  const workerDockerImageDigests = stringListEnv(env, 'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS');
+  const workerNetworkPolicyDigests = stringListEnv(env, 'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS');
   const workerNetworkProviderConfigDigests = stringListEnv(env, 'FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS');
   const generationRuntimeProfileId = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_ID');
   const generationCredentialBindingId = optionalNonBlankEnv(env, 'FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID');

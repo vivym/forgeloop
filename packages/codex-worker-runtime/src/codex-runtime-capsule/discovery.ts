@@ -29,7 +29,7 @@ export interface CodexThreadLocatorRepairManifest {
   codex_thread_id_digest: string;
   rollout_relative_path: string;
   rollout_digest: string;
-  repair_strategy: 'minimal_state_index_upsert';
+  repair_strategy: 'app_server_scan' | 'minimal_state_index_upsert';
   required_state_tables?: Array<{
     table_name: string;
     allowed_columns: string[];

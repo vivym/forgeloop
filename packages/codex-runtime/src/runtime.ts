@@ -42,6 +42,7 @@ export type CodexGenerationErrorCode =
   | 'codex_app_server_resume_failed'
   | 'codex_app_server_thread_id_missing'
   | 'codex_app_server_thread_mismatch'
+  | 'codex_runtime_capsule_missing'
   | 'codex_generation_timeout'
   | 'codex_generation_cancelled'
   | 'codex_generation_concurrency_limit_exceeded'
@@ -654,6 +655,7 @@ const appServerNonRetryableCodes = new Set<CodexGenerationErrorCode>([
   'codex_app_server_resume_failed',
   'codex_app_server_thread_id_missing',
   'codex_app_server_thread_mismatch',
+  'codex_runtime_capsule_missing',
   'codex_generation_raw_log_too_large',
   'generated_output_too_large',
 ]);

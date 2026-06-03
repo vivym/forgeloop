@@ -379,6 +379,40 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
     }
   });
 
+  it('flags active legacy Codex runtime env aliases in daemon and dogfood files', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-env-aliases-'));
+    const legacyAutomationEnv = ['FORGELOOP', 'CODEX', 'AUTOMATION', 'GENERATION'].join('_');
+    const legacyWorkerEnv = ['FORGELOOP', 'CODEX', 'WORKER', 'ID'].join('_');
+    try {
+      const daemonDir = join(tempRoot, 'apps', 'automation-daemon', 'src');
+      const scriptDir = join(tempRoot, 'scripts');
+      mkdirSync(daemonDir, { recursive: true });
+      mkdirSync(scriptDir, { recursive: true });
+      writeFileSync(join(daemonDir, 'config.ts'), `process.env.${legacyAutomationEnv};\n`);
+      writeFileSync(join(scriptDir, 'codex-remote-worker-dogfood.ts'), `process.env.${legacyWorkerEnv};\n`);
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        allowlist: [],
+      });
+
+      expect(result.violations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            file: 'apps/automation-daemon/src/config.ts',
+            pattern: 'legacy_codex_runtime_env_alias',
+          }),
+          expect.objectContaining({
+            file: 'scripts/codex-remote-worker-dogfood.ts',
+            pattern: 'legacy_codex_runtime_env_alias',
+          }),
+        ]),
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('scans active API domain db and worker tests for legacy snapshot vocabulary', () => {
     const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-active-tests-'));
     const activeTestFixtures = [

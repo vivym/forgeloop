@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCodexMemoryBundleFromRoot,
   diffCodexMemoryBundles,
+  materializeCodexMemoryBundleToRoot,
   replayCodexMemoryDelta,
   type CodexMemoryDeltaContentReader,
   type CodexMemoryDeltaManifest,
@@ -53,14 +54,33 @@ describe('Codex runtime capsule memory state', () => {
 
     expect(result.manifest.entries.map((entry) => entry.relative_path)).toEqual([
       'memories/user.md',
-      'sessions/2026-06-03.md',
     ]);
     expect(result.manifest.entries[0]).toMatchObject({
       content_digest: contentDigest('remember user preference\n'),
       size_bytes: String(Buffer.byteLength('remember user preference\n')),
+      content: 'remember user preference\n',
       operation: 'present',
     });
     expect(result.digest).toBe(codexMemoryBundleDigest(result.manifest));
+  });
+
+  it('materializes a full memory bundle into an empty isolated memory root', async () => {
+    const sourceRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-source-'));
+    const targetRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-memory-target-'));
+    await writeMemoryFile(sourceRoot, 'memories/user.md', 'remember user preference\n');
+    await writeMemoryFile(sourceRoot, 'sessions/2026-06-03.md', 'session note\n');
+    await writeMemoryFile(targetRoot, 'sessions/2026/06/03/rollout-thread.jsonl', '{"event":"thread"}\n');
+    const bundle = await buildCodexMemoryBundleFromRoot({
+      root: sourceRoot,
+      codexSessionId: 'codex-session-1',
+      bundleId: 'bundle-1',
+      sourcePolicyDigest: digest({ policy: 'memory-source' }),
+    });
+
+    await expect(materializeCodexMemoryBundleToRoot({ root: targetRoot, bundle: bundle.manifest })).resolves.toBe(bundle.digest);
+
+    await expect(readFile(join(targetRoot, 'memories/user.md'), 'utf8')).resolves.toBe('remember user preference\n');
+    await expect(readFile(join(targetRoot, 'sessions/2026/06/03/rollout-thread.jsonl'), 'utf8')).resolves.toBe('{"event":"thread"}\n');
   });
 
   it('diffs and replays a deletion operation', async () => {

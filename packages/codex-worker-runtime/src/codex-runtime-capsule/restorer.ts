@@ -8,6 +8,8 @@ import {
   codexMemoryBundleManifestSchema,
   codexMemoryDeltaDigest,
   codexMemoryDeltaManifestSchema,
+  codexRuntimeCapsuleArchiveDigest,
+  codexRuntimeCapsuleArchiveSchema,
   codexRuntimeCapsuleManifestDigest,
   codexRuntimeCapsuleManifestSchema,
 } from '@forgeloop/domain';
@@ -20,20 +22,26 @@ import {
   type CodexThreadLocatorRepairExecutor,
 } from './thread-state.js';
 import {
+  materializeCodexMemoryBundleToRoot,
+  type CodexMemoryBundleManifest,
+  type CodexMemoryDeltaManifest,
+} from './memory-state.js';
+import {
   validateCodexEnvironmentState,
+  materializeCodexEnvironmentState,
   type CapsuleComponentArtifactReader,
   type CodexEnvironmentManifest,
 } from './environment-state.js';
 
 type RestoredRuntimeCapsuleManifest = z.infer<typeof codexRuntimeCapsuleManifestSchema>;
-type CodexMemoryBundleManifest = z.infer<typeof codexMemoryBundleManifestSchema>;
-type CodexMemoryDeltaManifest = z.infer<typeof codexMemoryDeltaManifestSchema>;
+type RestoredRuntimeCapsuleArchive = z.infer<typeof codexRuntimeCapsuleArchiveSchema>;
 
 export interface RestoredCodexRuntimeCapsule {
   capsuleManifest: RestoredRuntimeCapsuleManifest;
   capsuleManifestDigest: string;
   threadStateBundle: ThreadStateBundle;
   environmentManifest: CodexEnvironmentManifest;
+  outputMemoryBundle: CodexMemoryBundleManifest;
 }
 
 const parseJsonArtifact = async <T>(
@@ -54,6 +62,9 @@ const parseJsonArtifact = async <T>(
 };
 
 const digestForLabel = (value: unknown, label: string): string => {
+  if (label === 'capsule archive') {
+    return codexRuntimeCapsuleArchiveDigest(value);
+  }
   if (label === 'capsule manifest') {
     return codexRuntimeCapsuleManifestDigest(value);
   }
@@ -116,13 +127,17 @@ export const restoreCodexRuntimeCapsule = async (input: {
     codexSessionId: input.codexSessionId,
   });
 
-  const capsuleManifest = await parseJsonArtifact(
+  const capsuleArchive = await parseJsonArtifact(
     input.artifactReader,
     input.capsuleRef,
     input.expectedCapsuleDigest,
-    'capsule manifest',
-    (value) => codexRuntimeCapsuleManifestSchema.parse(value) as RestoredRuntimeCapsuleManifest,
+    'capsule archive',
+    (value) => codexRuntimeCapsuleArchiveSchema.parse(value) as RestoredRuntimeCapsuleArchive,
   );
+  const capsuleManifest = capsuleArchive.manifest;
+  if (codexRuntimeCapsuleManifestDigest(capsuleManifest) !== capsuleArchive.manifest_digest) {
+    throw new Error('capsule manifest digest mismatch');
+  }
   assertRuntimeMatches({
     capsuleManifest,
     codexSessionId: input.codexSessionId,
@@ -167,22 +182,28 @@ export const restoreCodexRuntimeCapsule = async (input: {
       throw new Error('memory bundle codex session mismatch');
     }
   }
-  assertCodexSessionArtifactRef({
-    ref: capsuleManifest.memory_state.delta_ref,
-    expectedKind: 'codex_memory_delta',
-    codexSessionId: input.codexSessionId,
-  });
-  const memoryDelta = await parseJsonArtifact(input.artifactReader, capsuleManifest.memory_state.delta_ref, capsuleManifest.memory_state.delta_digest, 'memory delta', (value) =>
-    codexMemoryDeltaManifestSchema.parse(value) as CodexMemoryDeltaManifest,
-  );
-  if (memoryDelta.codex_session_id !== input.codexSessionId) {
-    throw new Error('memory delta codex session mismatch');
-  }
-  if (memoryDelta.input_bundle_digest !== capsuleManifest.memory_state.input_bundle_digest) {
-    throw new Error('memory delta input bundle digest mismatch');
-  }
-  if (memoryDelta.output_bundle_digest !== capsuleManifest.memory_state.output_bundle_digest) {
-    throw new Error('memory delta output bundle digest mismatch');
+  if (capsuleManifest.memory_state.delta_ref !== undefined && capsuleManifest.memory_state.delta_digest !== undefined) {
+    assertCodexSessionArtifactRef({
+      ref: capsuleManifest.memory_state.delta_ref,
+      expectedKind: 'codex_memory_delta',
+      codexSessionId: input.codexSessionId,
+    });
+    const memoryDelta = await parseJsonArtifact(
+      input.artifactReader,
+      capsuleManifest.memory_state.delta_ref,
+      capsuleManifest.memory_state.delta_digest,
+      'memory delta',
+      (value) => codexMemoryDeltaManifestSchema.parse(value) as CodexMemoryDeltaManifest,
+    );
+    if (memoryDelta.codex_session_id !== input.codexSessionId) {
+      throw new Error('memory delta codex session mismatch');
+    }
+    if (memoryDelta.input_bundle_digest !== capsuleManifest.memory_state.input_bundle_digest) {
+      throw new Error('memory delta input bundle digest mismatch');
+    }
+    if (memoryDelta.output_bundle_digest !== capsuleManifest.memory_state.output_bundle_digest) {
+      throw new Error('memory delta output bundle digest mismatch');
+    }
   }
 
   assertCodexSessionArtifactRef({
@@ -205,6 +226,17 @@ export const restoreCodexRuntimeCapsule = async (input: {
     throw new Error('environment manifest runtime protocol or CLI version mismatch');
   }
 
+  const outputMemoryBundle = memoryBundles[2]!;
+  await materializeCodexMemoryBundleToRoot({
+    root: input.codexHomeRoot,
+    bundle: outputMemoryBundle,
+  });
+  await materializeCodexEnvironmentState({
+    targetCodexHomeRoot: input.codexHomeRoot,
+    environmentManifest,
+    artifactReader: input.artifactReader,
+  });
+
   await restoreCodexThreadStateBundle({
     codexHomeRoot: input.codexHomeRoot,
     bundle: threadStateBundle,
@@ -219,5 +251,6 @@ export const restoreCodexRuntimeCapsule = async (input: {
     capsuleManifestDigest: codexRuntimeCapsuleManifestDigest(capsuleManifest),
     threadStateBundle,
     environmentManifest,
+    outputMemoryBundle,
   };
 };

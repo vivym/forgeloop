@@ -95,7 +95,27 @@ describe('Codex runtime capsule thread state', () => {
     ).toThrow(/private runtime material|public report/i);
   });
 
-  it('rejects locator repair strategy app_server_scan', async () => {
+  it('accepts locator repair strategy app_server_scan without state table rows', async () => {
+    const sourceRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-thread-source-'));
+    await writeCodexHomeFile(sourceRoot, rolloutRelativePath, rolloutContent);
+
+    const result = await packageCodexThreadStateBundle({
+      codexHomeRoot: sourceRoot,
+      locatorRepair: {
+        schema_version: 'codex_thread_locator_repair_manifest.v1',
+        codex_thread_id_digest: digest({ thread: 'thread-a' }),
+        rollout_relative_path: rolloutRelativePath,
+        rollout_digest: digest(rolloutContent),
+        repair_strategy: 'app_server_scan',
+      },
+      codexSessionId,
+      capsuleId,
+    });
+
+    expect(result.bundle.locator_repair_manifest.repair_strategy).toBe('app_server_scan');
+  });
+
+  it('rejects app_server_scan locator repair when state table rows are declared', async () => {
     const sourceRoot = await mkdtemp(join(tmpdir(), 'forgeloop-codex-thread-source-'));
     await writeCodexHomeFile(sourceRoot, rolloutRelativePath, rolloutContent);
 
@@ -106,7 +126,7 @@ describe('Codex runtime capsule thread state', () => {
         codexSessionId,
         capsuleId,
       }),
-    ).rejects.toThrow(/repair_strategy|unsupported|invalid/i);
+    ).rejects.toThrow(/app_server_scan|state table/i);
   });
 
   it('rejects locator repair requiring whole state_5.sqlite', async () => {

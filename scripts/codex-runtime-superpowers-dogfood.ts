@@ -417,11 +417,11 @@ export const sanitizeCodexRemoteWorkerDogfoodEnv = (
       : optionalEnv(env, 'FORGELOOP_CODEX_RUN_EXECUTION_WORKER_IDENTITY');
   if (targetSpecificWorkerIdentity !== undefined) {
     sanitized.FORGELOOP_WORKER_IDENTITY = targetSpecificWorkerIdentity;
-    sanitized.FORGELOOP_CODEX_WORKER_ID = targetSpecificWorkerIdentity;
+    sanitized.FORGELOOP_WORKER_ID = targetSpecificWorkerIdentity;
   } else if (baseWorkerIdentity !== undefined) {
     const workerIdentity = codexRuntimeDogfoodWorkerIdentityForTarget(baseWorkerIdentity, targetKind);
     sanitized.FORGELOOP_WORKER_IDENTITY = workerIdentity;
-    sanitized.FORGELOOP_CODEX_WORKER_ID = workerIdentity;
+    sanitized.FORGELOOP_WORKER_ID = workerIdentity;
   }
   const projectId = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_PROJECT_ID') ?? optionalEnv(env, 'FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID');
   const repoId = optionalEnv(env, 'FORGELOOP_CODEX_DOGFOOD_REPO_ID') ?? optionalEnv(env, 'FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID');
@@ -437,8 +437,8 @@ export const sanitizeCodexRemoteWorkerDogfoodEnv = (
     if (
       sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN !== undefined &&
       sanitized.FORGELOOP_WORKER_IDENTITY !== undefined &&
-      sanitized.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST !== undefined &&
-      sanitized.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST !== undefined &&
+      sanitized.FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS !== undefined &&
+      sanitized.FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS !== undefined &&
       sanitized.FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS !== undefined
     ) {
       sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN = codexRuntimeDogfoodBootstrapTokenForTarget(
@@ -448,8 +448,8 @@ export const sanitizeCodexRemoteWorkerDogfoodEnv = (
           allowedScope: { project_id: projectId },
           allowedCapabilities: {
             target_kinds: ['generation'],
-            docker_image_digests: [sanitized.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST],
-            network_policy_digests: [sanitized.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST],
+            docker_image_digests: [sanitized.FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS],
+            network_policy_digests: [sanitized.FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS],
             network_provider_config_digests: [sanitized.FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS],
           },
         },
@@ -462,8 +462,8 @@ export const sanitizeCodexRemoteWorkerDogfoodEnv = (
     if (
       sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN !== undefined &&
       sanitized.FORGELOOP_WORKER_IDENTITY !== undefined &&
-      sanitized.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST !== undefined &&
-      sanitized.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST !== undefined &&
+      sanitized.FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS !== undefined &&
+      sanitized.FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS !== undefined &&
       sanitized.FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS !== undefined
     ) {
       sanitized.FORGELOOP_WORKER_BOOTSTRAP_TOKEN = codexRuntimeDogfoodBootstrapTokenForTarget(
@@ -473,8 +473,8 @@ export const sanitizeCodexRemoteWorkerDogfoodEnv = (
           allowedScope: { project_id: projectId, repo_id: repoId },
           allowedCapabilities: {
             target_kinds: ['run_execution'],
-            docker_image_digests: [sanitized.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST],
-            network_policy_digests: [sanitized.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST],
+            docker_image_digests: [sanitized.FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS],
+            network_policy_digests: [sanitized.FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS],
             network_provider_config_digests: [sanitized.FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS],
           },
         },
@@ -1173,12 +1173,10 @@ export const createCodexRuntimeSuperpowersDogfoodHttpClient = (
   const syncWorkerRuntimeDigestsFromBootstrap = (summary: Record<string, unknown>): void => {
     const dockerImageDigest = typeof summary.docker_image_digest === 'string' ? summary.docker_image_digest : undefined;
     if (dockerImageDigest !== undefined) {
-      env.FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST = dockerImageDigest;
       env.FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS = dockerImageDigest;
     }
     const networkPolicyDigest = typeof summary.network_policy_digest === 'string' ? summary.network_policy_digest : undefined;
     if (networkPolicyDigest !== undefined) {
-      env.FORGELOOP_CODEX_NETWORK_POLICY_DIGEST = networkPolicyDigest;
       env.FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS = networkPolicyDigest;
     }
     const networkProviderConfigDigest =

@@ -1,25 +1,13 @@
-import { AutomationHttpError } from '@forgeloop/automation';
+import { AutomationHttpError, type AutomationPackageDraftGenerationRuntime } from '@forgeloop/automation';
 import type { DockerizedCodexAppServerLauncher, LocalCodexWorkerRuntime } from '@forgeloop/codex-worker-runtime';
 import {
   CodexAppServerEndpointTransport,
   CodexGenerationError,
   createCodexGenerationRuntime,
-  validateBoundaryRoundRuntimeResult,
-  validateGeneratedExecutionPlanRevision,
   validateGeneratedPackageDraftSet,
-  validateGeneratedPlanDraft,
-  validateGeneratedSpecDraft,
-  validateGeneratedSpecRevision,
   type CodexGenerationResult,
-  type CodexGenerationRuntime,
   type CodexGenerationRuntimeTaskInput,
-  type CodexGenerationTaskKind,
-  type BoundaryRoundRuntimeResultV1,
-  type GeneratedExecutionPlanRevisionV1,
   type GeneratedPackageDraftSetV1,
-  type GeneratedPlanDraftV1,
-  type GeneratedSpecDraftV1,
-  type GeneratedSpecRevisionV1,
 } from '@forgeloop/codex-runtime';
 import {
   codexCanonicalDigest,
@@ -33,21 +21,11 @@ import {
 
 import type { AutomationDaemonConfig } from './config.js';
 
-type GenerationTaskKind = CodexGenerationTaskKind;
+type GenerationTaskKind = 'package_drafts';
 type GenerationInput = CodexGenerationRuntimeTaskInput<Record<string, unknown>>;
-type GeneratedForTask<TTaskKind extends GenerationTaskKind> = TTaskKind extends 'spec_draft'
-  ? GeneratedSpecDraftV1
-  : TTaskKind extends 'plan_draft'
-    ? GeneratedPlanDraftV1
-    : TTaskKind extends 'package_drafts'
-      ? GeneratedPackageDraftSetV1
-      : TTaskKind extends 'boundary_brainstorming_round'
-        ? BoundaryRoundRuntimeResultV1
-        : TTaskKind extends 'development_plan_item_spec_revision'
-          ? GeneratedSpecRevisionV1
-          : TTaskKind extends 'development_plan_item_execution_plan_revision'
-            ? GeneratedExecutionPlanRevisionV1
-            : never;
+type GeneratedForTask<TTaskKind extends GenerationTaskKind> = TTaskKind extends 'package_drafts'
+  ? GeneratedPackageDraftSetV1
+  : never;
 
 type RemoteRuntimeJobProjection = {
   id?: unknown;
@@ -147,23 +125,29 @@ export interface CreateLeasedDockerCodexGenerationRuntimeOptions {
     sessionToken: string;
     generationInput: GenerationInput;
   }): Promise<{ leaseId: string; launchToken: string }>;
-  innerRuntimeFactory?: (config: Parameters<typeof createCodexGenerationRuntime>[0]) => CodexGenerationRuntime;
+  innerRuntimeFactory?: (config: Parameters<typeof createCodexGenerationRuntime>[0]) => AutomationPackageDraftGenerationRuntime;
   runtimeConfig?: Partial<Parameters<typeof createCodexGenerationRuntime>[0]>;
   onDockerRuntimeEvidence?: (evidence: CodexDockerRuntimeEvidence) => void;
 }
 
 export const createLeasedDockerCodexGenerationRuntime = (
   options: CreateLeasedDockerCodexGenerationRuntimeOptions,
-): CodexGenerationRuntime => {
+): AutomationPackageDraftGenerationRuntime => {
   const innerRuntimeFactory = options.innerRuntimeFactory ?? createCodexGenerationRuntime;
 
   const generateWithLease = async <T>(
     taskKind: GenerationTaskKind,
     input: GenerationInput,
-    call: (runtime: CodexGenerationRuntime, input: GenerationInput) => Promise<T>,
+    call: (runtime: AutomationPackageDraftGenerationRuntime, input: GenerationInput) => Promise<T>,
   ): Promise<T> => {
     if (input.orchestration === undefined) {
       throw new Error('codex_launch_lease_denied');
+    }
+    if (input.codexSessionRuntimeContext !== undefined) {
+      throw new CodexGenerationError('codex_runtime_capsule_missing', {
+        retryable: false,
+        publicResultJson: { status: 422, code: 'codex_runtime_capsule_missing' },
+      });
     }
     const worker = await options.worker.selectForLaunch({
       projectId: input.projectId,
@@ -202,24 +186,8 @@ export const createLeasedDockerCodexGenerationRuntime = (
   };
 
   return {
-    generateSpecDraft: (input) =>
-      generateWithLease('spec_draft', input, (runtime, taskInput) => runtime.generateSpecDraft(taskInput)),
-    generatePlanDraft: (input) =>
-      generateWithLease('plan_draft', input, (runtime, taskInput) => runtime.generatePlanDraft(taskInput)),
     generatePackageDrafts: (input) =>
       generateWithLease('package_drafts', input, (runtime, taskInput) => runtime.generatePackageDrafts(taskInput)),
-    generateBoundaryBrainstormingRound: (input) =>
-      generateWithLease('boundary_brainstorming_round', input, (runtime, taskInput) =>
-        runtime.generateBoundaryBrainstormingRound(taskInput),
-      ),
-    generateDevelopmentPlanItemSpecRevision: (input) =>
-      generateWithLease('development_plan_item_spec_revision', input, (runtime, taskInput) =>
-        runtime.generateDevelopmentPlanItemSpecRevision(taskInput),
-      ),
-    generateDevelopmentPlanItemExecutionPlanRevision: (input) =>
-      generateWithLease('development_plan_item_execution_plan_revision', input, (runtime, taskInput) =>
-        runtime.generateDevelopmentPlanItemExecutionPlanRevision(taskInput),
-      ),
   };
 };
 
@@ -286,18 +254,8 @@ const validateGeneratedPayloadForTask = <TTaskKind extends GenerationTaskKind>(
   generatedPayload: unknown,
 ): GeneratedForTask<TTaskKind> => {
   switch (taskKind) {
-    case 'spec_draft':
-      return validateGeneratedSpecDraft(generatedPayload) as GeneratedForTask<TTaskKind>;
-    case 'plan_draft':
-      return validateGeneratedPlanDraft(generatedPayload) as GeneratedForTask<TTaskKind>;
     case 'package_drafts':
       return validateGeneratedPackageDraftSet(generatedPayload) as GeneratedForTask<TTaskKind>;
-    case 'boundary_brainstorming_round':
-      return validateBoundaryRoundRuntimeResult(generatedPayload) as GeneratedForTask<TTaskKind>;
-    case 'development_plan_item_spec_revision':
-      return validateGeneratedSpecRevision(generatedPayload) as GeneratedForTask<TTaskKind>;
-    case 'development_plan_item_execution_plan_revision':
-      return validateGeneratedExecutionPlanRevision(generatedPayload) as GeneratedForTask<TTaskKind>;
   }
 };
 
@@ -335,6 +293,7 @@ const validateRemoteTerminalResult = <TTaskKind extends GenerationTaskKind>(
   promptVersion: string,
   outputSchemaVersion: string,
   terminalResultJson: unknown,
+  requiresRuntimeCapsule: boolean,
 ): CodexGenerationResult<GeneratedForTask<TTaskKind>> => {
   let terminalResult: ReturnType<typeof validateCodexRuntimeJobTerminalResult>;
   try {
@@ -362,6 +321,12 @@ const validateRemoteTerminalResult = <TTaskKind extends GenerationTaskKind>(
   }
 
   const generated = validateGeneratedPayloadForTask(taskKind, result.generated_payload);
+  if (requiresRuntimeCapsule && result.output_capsule === undefined) {
+    throw new CodexGenerationError('codex_runtime_capsule_missing', {
+      retryable: false,
+      publicResultJson: { status: 422, code: 'codex_runtime_capsule_missing' },
+    });
+  }
 
   return {
     taskKind,
@@ -411,7 +376,7 @@ const terminalFailureFor = (runtimeJob: RemoteRuntimeJobProjection): CodexGenera
   });
 };
 
-export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGenerationRuntimeOptions): CodexGenerationRuntime => {
+export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGenerationRuntimeOptions): AutomationPackageDraftGenerationRuntime => {
   const now = options.now ?? (() => new Date().toISOString());
   const monotonicNowMs = options.monotonicNowMs ?? (() => Date.now());
   const sleep = options.sleep ?? ((durationMs: number) => new Promise<void>((resolve) => setTimeout(resolve, durationMs)));
@@ -461,6 +426,12 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
   ): Promise<CodexGenerationResult<GeneratedForTask<TTaskKind>>> => {
     if (input.orchestration === undefined) {
       throw new Error('codex_runtime_job_denied');
+    }
+    if (input.codexSessionRuntimeContext !== undefined) {
+      throw new CodexGenerationError('codex_runtime_capsule_missing', {
+        retryable: false,
+        publicResultJson: { status: 422, code: 'codex_runtime_capsule_missing' },
+      });
     }
     const isAborted = (): boolean => input.signal?.aborted === true;
     if (isAborted()) {
@@ -682,6 +653,7 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
           input.promptVersion,
           input.outputSchemaVersion,
           runtimeJob.terminal_result_json,
+          input.codexSessionRuntimeContext !== undefined,
         );
       }
       const pollSleepMs = Math.min(options.pollIntervalMs, remainingWaitMs());
@@ -696,13 +668,7 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
   };
 
   return {
-    generateSpecDraft: (input) => generateWithRemoteJob('spec_draft', input),
-    generatePlanDraft: (input) => generateWithRemoteJob('plan_draft', input),
     generatePackageDrafts: (input) => generateWithRemoteJob('package_drafts', input),
-    generateBoundaryBrainstormingRound: (input) => generateWithRemoteJob('boundary_brainstorming_round', input),
-    generateDevelopmentPlanItemSpecRevision: (input) => generateWithRemoteJob('development_plan_item_spec_revision', input),
-    generateDevelopmentPlanItemExecutionPlanRevision: (input) =>
-      generateWithRemoteJob('development_plan_item_execution_plan_revision', input),
   };
 };
 
@@ -712,7 +678,7 @@ export const createAutomationDaemonGenerationRuntime = (
     localDocker?: CreateLeasedDockerCodexGenerationRuntimeOptions;
     remoteOutbound?: { controlPlaneClient: RemoteCodexGenerationControlPlaneClient };
   } = {},
-): CodexGenerationRuntime | undefined => {
+): AutomationPackageDraftGenerationRuntime | undefined => {
   const hasEnabledGenerationTask = Object.values(config.generationPlanning.tasks).some((task) => task.enabled);
   if (config.generationPlanning.mode === 'disabled' || !hasEnabledGenerationTask) {
     return undefined;

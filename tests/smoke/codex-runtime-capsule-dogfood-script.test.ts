@@ -269,7 +269,18 @@ describe('Codex runtime capsule restore dogfood script', () => {
         environment_manifest_digest_continuity: 'passed',
         second_capsule_packaged: 'passed',
       });
-      expect(restoreReport.memory_delta_operation_counts).toMatchObject({ delete: 1, rename: 1 });
+      expect(restoreReport.orchestration_path).toBe('remote_worker_client');
+      expect(restoreReport.orchestration_checks).toMatchObject({
+        restore_before_app_server_start: 'passed',
+        locator_repaired_before_resume: 'passed',
+        resumed_without_thread_start: 'passed',
+        packaged_before_terminalize: 'passed',
+        terminal_result_capsule_fields: 'passed',
+      });
+      expect(restoreReport.terminal_result_digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(restoreReport.terminal_result_capsule_digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(restoreReport.memory_delta_replay_operation_counts).toMatchObject({ add: 0, delete: 1, rename: 1 });
+      expect(restoreReport.memory_delta_operation_counts).toMatchObject({ add: 1, delete: 0, rename: 0 });
       const serialized = await readFile(reportPath, 'utf8');
       expect(serialized).toContain('"schema_version": "codex_runtime_capsule_restore_report.v1"');
       expect(serialized).not.toContain('thread-raw');
@@ -305,7 +316,18 @@ describe('Codex runtime capsule restore dogfood script', () => {
           environment_manifest_digest_continuity: 'passed',
           second_capsule_packaged: 'passed',
         },
-        memory_delta_operation_counts: { add: 1, modify: 0, delete: 1, rename: 1 },
+        orchestration_path: 'remote_worker_client',
+        orchestration_checks: {
+          restore_before_app_server_start: 'passed',
+          locator_repaired_before_resume: 'passed',
+          resumed_without_thread_start: 'passed',
+          packaged_before_terminalize: 'passed',
+          terminal_result_capsule_fields: 'passed',
+        },
+        terminal_result_digest: `sha256:${'7'.repeat(64)}`,
+        terminal_result_capsule_digest: `sha256:${'8'.repeat(64)}`,
+        memory_delta_replay_operation_counts: { add: 0, modify: 0, delete: 1, rename: 1 },
+        memory_delta_operation_counts: { add: 1, modify: 0, delete: 0, rename: 0 },
         memory_input_digest: `sha256:${'2'.repeat(64)}`,
         memory_output_digest: `sha256:${'3'.repeat(64)}`,
         resumed_memory_input_digest: `sha256:${'3'.repeat(64)}`,

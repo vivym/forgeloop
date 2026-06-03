@@ -215,7 +215,9 @@ describe('Codex runtime capsule environment state', () => {
     const result = await materializeCodexEnvironmentState({ targetCodexHomeRoot, environmentManifest: manifest, artifactReader: reader() });
 
     expect(result.environmentManifestDigest).toBe(environment_digest);
-    await expect(readFile(join(targetCodexHomeRoot, 'plugins', 'plugin-a', 'package.bin'), 'utf8')).resolves.toBe('plugin package bytes');
+    await expect(readFile(join(targetCodexHomeRoot, 'generated', 'plugins', 'plugin-a', 'package.bin'), 'utf8')).resolves.toBe(
+      'plugin package bytes',
+    );
   });
 
   it('materializes enabled skill bundles from codex_skill_bundle refs', async () => {
@@ -224,8 +226,12 @@ describe('Codex runtime capsule environment state', () => {
 
     await materializeCodexEnvironmentState({ targetCodexHomeRoot, environmentManifest: manifest, artifactReader: reader() });
 
-    await expect(readFile(join(targetCodexHomeRoot, 'skills', 'skill-a', 'bundle.bin'), 'utf8')).resolves.toBe('skill bundle bytes');
-    await expect(readFile(join(targetCodexHomeRoot, 'skills', 'skill-a', 'entrypoint.txt'), 'utf8')).resolves.toBe('SKILL.md\n');
+    await expect(readFile(join(targetCodexHomeRoot, 'generated', 'skills', 'skill-a', 'bundle.bin'), 'utf8')).resolves.toBe(
+      'skill bundle bytes',
+    );
+    await expect(readFile(join(targetCodexHomeRoot, 'generated', 'skills', 'skill-a', 'entrypoint.txt'), 'utf8')).resolves.toBe(
+      'SKILL.md\n',
+    );
   });
 
   it('requires MCP literal_non_secret env entries to include value payloads', async () => {

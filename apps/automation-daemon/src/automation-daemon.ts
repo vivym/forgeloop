@@ -5,12 +5,12 @@ import {
   type AutomationGenerationPlanningConfig,
   type AutomationExecutorClient,
   type AutomationExecutorResult,
+  type AutomationPackageDraftGenerationRuntime,
   type RuntimePolicyProjection,
   type RuntimeSnapshot,
   type RuntimeSnapshotRepo,
   type WorkflowPolicyDigestStatus,
 } from '@forgeloop/automation';
-import type { CodexGenerationRuntime } from '@forgeloop/codex-runtime';
 
 export interface AutomationDaemonClient extends AutomationExecutorClient {
   runtimeSnapshot(): Promise<RuntimeSnapshot>;
@@ -36,7 +36,7 @@ export interface AutomationDaemonOptions {
   loopIntervalMs: number;
   noClaimBackoffMs: number;
   generationPlanning?: AutomationGenerationPlanningConfig;
-  generationRuntime?: CodexGenerationRuntime;
+  generationRuntime?: AutomationPackageDraftGenerationRuntime;
   claimToken?: string;
   sleep?: (ms: number) => Promise<void>;
   onIterationError?: (error: unknown) => void;

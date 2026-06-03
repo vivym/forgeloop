@@ -88,6 +88,7 @@ export const codexMemoryBundleManifestSchema = z.object({
       source_kind: z.enum(['user_memory', 'project_memory', 'session_memory', 'rollout_summary_reference']),
       content_digest: sha256DigestSchema,
       size_bytes: decimalSizeSchema,
+      content: z.string().optional(),
       operation: z.enum(['present', 'deleted']).optional(),
     }).strict(),
   ),
@@ -293,9 +294,17 @@ export const codexRuntimeCapsuleManifestSchema = withSessionRefValidation(
       input_bundle_digest: sha256DigestSchema,
       output_bundle_ref: z.string(),
       output_bundle_digest: sha256DigestSchema,
-      delta_ref: z.string(),
-      delta_digest: sha256DigestSchema,
-    }).strict(),
+      delta_ref: z.string().optional(),
+      delta_digest: sha256DigestSchema.optional(),
+    }).strict().superRefine((memoryState, ctx) => {
+      if ((memoryState.delta_ref === undefined) !== (memoryState.delta_digest === undefined)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['delta_ref'],
+          message: 'delta_ref and delta_digest must be supplied together.',
+        });
+      }
+    }),
     environment_manifest: z.object({
       artifact_ref: z.string(),
       digest: sha256DigestSchema,
@@ -309,10 +318,25 @@ export const codexRuntimeCapsuleManifestSchema = withSessionRefValidation(
     { ref: manifest.memory_state.base_bundle_ref, kind: 'codex_memory_bundle' },
     { ref: manifest.memory_state.input_bundle_ref, kind: 'codex_memory_bundle' },
     { ref: manifest.memory_state.output_bundle_ref, kind: 'codex_memory_bundle' },
-    { ref: manifest.memory_state.delta_ref, kind: 'codex_memory_delta' },
+    ...(manifest.memory_state.delta_ref === undefined ? [] : [{ ref: manifest.memory_state.delta_ref, kind: 'codex_memory_delta' as const }]),
     { ref: manifest.environment_manifest.artifact_ref, kind: 'codex_environment_manifest' },
   ],
 );
+
+export const codexRuntimeCapsuleArchiveSchema = z.object({
+  schema_version: z.literal('codex_runtime_capsule_archive.v1'),
+  manifest: codexRuntimeCapsuleManifestSchema,
+  manifest_digest: sha256DigestSchema,
+}).strict().superRefine((archive, ctx) => {
+  const actualManifestDigest = codexRuntimeCapsuleManifestDigest(archive.manifest);
+  if (archive.manifest_digest !== actualManifestDigest) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['manifest_digest'],
+      message: 'manifest_digest must match the canonical capsule manifest digest.',
+    });
+  }
+});
 
 export const codexThreadLocatorRepairThreadsColumns = [
   'id',
@@ -348,7 +372,7 @@ export const codexThreadLocatorRepairManifestSchema = z.object({
   codex_thread_id_digest: sha256DigestSchema,
   rollout_relative_path: nonEmptyStringSchema,
   rollout_digest: sha256DigestSchema,
-  repair_strategy: z.literal('minimal_state_index_upsert'),
+  repair_strategy: z.enum(['app_server_scan', 'minimal_state_index_upsert']),
   required_state_tables: z.array(
     z.object({
       table_name: nonEmptyStringSchema,
@@ -372,6 +396,16 @@ export const codexThreadLocatorRepairManifestSchema = z.object({
       path: ['rollout_relative_path'],
       message: 'rollout_relative_path must be a safe Codex home rollout relative path.',
     });
+  }
+  if (manifest.repair_strategy === 'app_server_scan') {
+    if (manifest.required_state_tables !== undefined && manifest.required_state_tables.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['required_state_tables'],
+        message: 'app_server_scan must not declare state table repair rows.',
+      });
+    }
+    return;
   }
   if (manifest.required_state_tables === undefined || manifest.required_state_tables.length !== 1) {
     ctx.addIssue({
@@ -460,6 +494,9 @@ const digestParsed = <Schema extends z.ZodTypeAny>(schema: Schema, input: unknow
 
 export const codexRuntimeCapsuleManifestDigest = (manifest: unknown): string =>
   digestParsed(codexRuntimeCapsuleManifestSchema, manifest);
+
+export const codexRuntimeCapsuleArchiveDigest = (archive: unknown): string =>
+  digestParsed(codexRuntimeCapsuleArchiveSchema, archive);
 
 export const codexMemoryBundleDigest = (manifest: unknown): string => digestParsed(codexMemoryBundleManifestSchema, manifest);
 export const codexMemoryBundleManifestDigest = codexMemoryBundleDigest;

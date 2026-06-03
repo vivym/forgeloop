@@ -51,7 +51,7 @@ describe('runbook script consistency gate', () => {
   it('documents the env vars that the remote worker script actually reads', () => {
     const runbook = readFileSync(new URL('docs/runbooks/codex-remote-worker-runtime.md', rootUrl), 'utf8');
 
-    expect(runbook).toContain('FORGELOOP_CODEX_WORKER_ID');
+    expect(runbook).toContain('FORGELOOP_WORKER_ID');
     expect(runbook).toContain('FORGELOOP_AUTOMATION_ACTOR_ID');
     expect(runbook).toContain('FORGELOOP_AUTOMATION_DAEMON_IDENTITY');
     expect(runbook).toContain('FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID=project-1');

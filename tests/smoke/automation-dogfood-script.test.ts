@@ -74,9 +74,11 @@ const remoteWorkerEnv = () => ({
   FORGELOOP_WORKER_BOOTSTRAP_TOKEN: 'worker-bootstrap-token',
   FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION: '1',
   FORGELOOP_WORKER_TEMP_ROOT: '/tmp/forgeloop-remote-worker',
-  FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: digest('a'),
-  FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: digest('b'),
+  FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS: digest('a'),
+  FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS: digest('b'),
   FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS: digest('c'),
+  FORGELOOP_CODEX_CLI_VERSION: 'codex-cli 0.133.0',
+  FORGELOOP_CODEX_APP_SERVER_PROTOCOL_DIGEST: digest('d'),
   FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: 'project-1',
   FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: 'repo-1',
 });
@@ -152,27 +154,20 @@ describe('automation dogfood script', () => {
   });
 
   it('parses dogfood generation env without hiding explicit conflicts', () => {
-    expect(requestedGenerationMode({ FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex' })).toBe('app_server');
+    expect(requestedGenerationMode({})).toBe('fake');
     expect(requestedGenerationMode({ FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server' })).toBe('app_server');
-    expect(() =>
-      requestedGenerationMode({
-        FORGELOOP_CODEX_AUTOMATION_GENERATION: 'fake',
-        FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
-      }),
-    ).toThrow(/conflicts/);
-    expect(() => requestedGenerationMode({ FORGELOOP_CODEX_GENERATION_DRIVER: 'disabled' })).toThrow(
-      /must_be_fake_or_app_server/,
-    );
+    expect(requestedGenerationMode({ FORGELOOP_CODEX_GENERATION_DRIVER: 'disabled' })).toBe('disabled');
+    expect(() => requestedGenerationMode({ FORGELOOP_CODEX_GENERATION_DRIVER: 'codex' })).toThrow(/must_be_fake_app_server_or_disabled/);
   });
 
   it('does not create a fake runtime for disabled or app-server preflight skips', () => {
-    const disabled = loadDogfoodGenerationRuntimeConfig({ FORGELOOP_CODEX_AUTOMATION_GENERATION: 'disabled' });
+    const disabled = loadDogfoodGenerationRuntimeConfig({ FORGELOOP_CODEX_GENERATION_DRIVER: 'disabled' });
     expect(disabled.planning.mode).toBe('disabled');
     expect(disabled.runtime).toBeUndefined();
     expect(disabled.appServerDogfood).toEqual({ status: 'skipped', reasonCode: 'generation_disabled' });
 
     const directEndpoint = loadDogfoodGenerationRuntimeConfig({
-      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
       FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'unix:/tmp/forgeloop-codex.sock',
       FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
     });
@@ -181,7 +176,7 @@ describe('automation dogfood script', () => {
     expect(directEndpoint.appServerDogfood).toEqual({ status: 'blocked', reasonCode: 'codex_docker_runtime_required' });
 
     const localDocker = loadDogfoodGenerationRuntimeConfig({
-      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
       FORGELOOP_CODEX_WORKER_MODE: 'local_docker',
     });
     expect(localDocker.runtime).toBeUndefined();
@@ -190,7 +185,7 @@ describe('automation dogfood script', () => {
 
   it('loads remote outbound generation dogfood as a deferred request bound after dogfood control-plane boot', () => {
     const remote = loadDogfoodGenerationRuntimeConfig({
-      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
       FORGELOOP_CODEX_WORKER_MODE: 'remote_outbound',
       FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS: '600000',
       FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS: '1000',
@@ -209,6 +204,8 @@ describe('automation dogfood script', () => {
     const source = readText('scripts/automation-dogfood.ts');
 
     expect(source).toContain('createRemoteCodexWorkerClient');
+    expect(source).toContain('createRemoteWorkerCapsuleManager');
+    expect(source).toContain('capsuleManager');
     expect(source).toContain('runCodexRuntimeDogfoodBootstrap(bootstrapConfig)');
     expect(source).toContain('generation_runtime_profile_id');
     expect(source).toContain('generation_credential_binding_id');
@@ -291,7 +288,8 @@ describe('automation dogfood script', () => {
   it('does not hard-code fake runtime when codex app-server mode is requested', () => {
     const source = readText('scripts/automation-dogfood.ts');
 
-    expect(source).toContain('FORGELOOP_CODEX_AUTOMATION_GENERATION');
+    expect(source).toContain('FORGELOOP_CODEX_GENERATION_DRIVER');
+    expect(source).not.toContain('FORGELOOP_CODEX_AUTOMATION_GENERATION');
     expect(source).toContain('FORGELOOP_CODEX_WORKER_MODE');
     expect(source).not.toContain('parseCodexAppServerEndpoint');
     expect(source).not.toContain("generationRuntime: createCodexGenerationRuntime({ mode: 'fake' })");
@@ -677,6 +675,7 @@ describe('automation dogfood script', () => {
     expect(summary).toContain('Remote Codex worker dogfood');
     expect(summary).toContain(digest('a'));
     expect(summary).toContain(digest('b'));
+    expect(summary).toContain(digest('d'));
     expect(summary).not.toContain('remote-worker-1');
     expect(summary).not.toContain('http://127.0.0.1:31337');
     expect(summary).not.toContain('trusted-secret');

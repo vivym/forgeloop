@@ -50,15 +50,15 @@ FORGELOOP_CONTROL_PLANE_URL=http://127.0.0.1:3000 \
 FORGELOOP_TRUSTED_ACTOR_HEADER_SECRET=... \
 FORGELOOP_AUTOMATION_ACTOR_ID=codex-worker-operator \
 FORGELOOP_AUTOMATION_DAEMON_IDENTITY=codex-remote-worker-dogfood \
-FORGELOOP_CODEX_WORKER_ID=codex-worker-local-1 \
+FORGELOOP_WORKER_ID=codex-worker-local-1 \
 FORGELOOP_WORKER_IDENTITY=codex-worker-local \
 FORGELOOP_WORKER_BOOTSTRAP_TOKEN=... \
 FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION=1 \
 FORGELOOP_WORKER_TEMP_ROOT=/tmp/forgeloop-codex-worker \
 FORGELOOP_DOCKER_BIN=docker \
 FORGELOOP_CODEX_NO_SHARED_FILESYSTEM=1 \
-FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST=sha256:... \
-FORGELOOP_CODEX_NETWORK_POLICY_DIGEST=sha256:... \
+FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS=sha256:... \
+FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS=sha256:... \
 FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID=project-1 \
 FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID=repo-1 \
 FORGELOOP_CODEX_WORKER_CAPABILITIES=generation,run_execution \
@@ -152,7 +152,7 @@ For worker restart:
 
 1. Run the temp-root scavenger before the first online heartbeat.
 2. Remove only owner-tagged task directories under `FORGELOOP_WORKER_TEMP_ROOT`.
-3. Re-register with the same `FORGELOOP_CODEX_WORKER_ID` only after the previous worker session is expired, recovered, or explicitly replaced.
+3. Re-register with the same `FORGELOOP_WORKER_ID` only after the previous worker session is expired, recovered, or explicitly replaced.
 4. Resume polling accepted runtime jobs and consume terminal evidence through normal writer boundaries.
 
 ## Public-Safe Blocker Codes

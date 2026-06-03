@@ -2,7 +2,9 @@ import type { AutomationPrecondition, AutomationPreconditionCapability, Automati
 import {
   CodexGenerationError,
   validateGeneratedPackageDraftSet,
-  type CodexGenerationRuntime,
+  type CodexGenerationResult,
+  type CodexGenerationRuntimeTaskInput,
+  type GeneratedPackageDraftSetV1,
 } from '@forgeloop/codex-runtime';
 
 import { AutomationHttpError } from './http-client.js';
@@ -14,6 +16,12 @@ import type {
   NextAction,
 } from './types.js';
 
+export interface AutomationPackageDraftGenerationRuntime {
+  generatePackageDrafts(
+    input: CodexGenerationRuntimeTaskInput<Record<string, unknown>>,
+  ): Promise<CodexGenerationResult<GeneratedPackageDraftSetV1>>;
+}
+
 export interface ExecuteClaimedActionInput {
   client: AutomationExecutorClient;
   action: NextAction;
@@ -21,7 +29,7 @@ export interface ExecuteClaimedActionInput {
   actorId: string;
   daemonIdentity?: string;
   leaseMs?: number;
-  generationRuntime?: CodexGenerationRuntime;
+  generationRuntime?: AutomationPackageDraftGenerationRuntime;
   generationPlanning?: AutomationGenerationPlanningConfig;
 }
 
@@ -30,7 +38,7 @@ export interface ExecuteActionRunInput {
   action: AutomationActionRunRecord;
   actorId: string;
   daemonIdentity?: string;
-  generationRuntime?: CodexGenerationRuntime;
+  generationRuntime?: AutomationPackageDraftGenerationRuntime;
   generationPlanning?: AutomationGenerationPlanningConfig;
 }
 
@@ -241,6 +249,7 @@ const publicSafeErrorCodes = new Set([
   'codex_runtime_job_unavailable',
   'codex_runtime_job_expired',
   'codex_runtime_job_cancelled',
+  'codex_runtime_capsule_missing',
   'codex_docker_runtime_evidence_unsafe',
   'codex_runtime_profile_invalid',
   'generated_output_invalid_json',
@@ -296,6 +305,7 @@ const isBlockedByGate = (code: string | undefined, error?: unknown): boolean =>
   code === 'codex_runtime_workspace_isolation_unavailable' ||
   code === 'codex_runtime_job_unavailable' ||
   code === 'codex_runtime_job_expired' ||
+  code === 'codex_runtime_capsule_missing' ||
   code === 'codex_docker_runtime_evidence_unsafe' ||
   code === 'codex_runtime_profile_invalid' ||
   code === 'generated_package_dependency_invalid' ||

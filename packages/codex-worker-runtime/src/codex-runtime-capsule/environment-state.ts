@@ -236,7 +236,7 @@ export const materializeCodexEnvironmentState = async (input: {
   const materializedSkillBundles: string[] = [];
 
   for (const pluginPackage of prepared.pluginPackages) {
-    const pluginDir = join(input.targetCodexHomeRoot, 'plugins', pluginPackage.pluginId);
+    const pluginDir = join(input.targetCodexHomeRoot, 'generated', 'plugins', pluginPackage.pluginId);
     await mkdir(pluginDir, { recursive: true });
     const packagePath = join(pluginDir, 'package.bin');
     await writeFile(packagePath, pluginPackage.bytes);
@@ -244,7 +244,7 @@ export const materializeCodexEnvironmentState = async (input: {
   }
 
   for (const skillBundle of prepared.skillBundles) {
-    const skillDir = join(input.targetCodexHomeRoot, 'skills', skillBundle.skillId);
+    const skillDir = join(input.targetCodexHomeRoot, 'generated', 'skills', skillBundle.skillId);
     await mkdir(skillDir, { recursive: true });
     const bundlePath = join(skillDir, 'bundle.bin');
     await writeFile(bundlePath, skillBundle.bytes);

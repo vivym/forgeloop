@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +11,8 @@ import {
   codexEnvironmentManifestDigest,
   codexMemoryBundleDigest,
   codexMemoryDeltaDigest,
+  codexRuntimeCapsuleArchiveDigest,
+  codexRuntimeCapsuleArchiveSchema,
   codexMcpManifestDigest,
   codexPluginManifestDigest,
   codexRuntimeCapsuleManifestDigest,
@@ -31,6 +34,7 @@ const codexSessionId = 'codex-session-1';
 const rolloutRelativePath = 'sessions/2026/06/03/rollout-thread-a.jsonl';
 const rolloutContent = '{"type":"turn_context","thread":"redacted"}\n';
 const digest = (input: unknown): string => codexCanonicalDigest(input);
+const rawDigest = (bytes: Uint8Array): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const ref = (kind: InternalArtifactKind, artifactId: string, ownerId = codexSessionId): string =>
   buildInternalArtifactRef({ kind, owner_type: 'codex_session', owner_id: ownerId, artifact_id: artifactId });
@@ -48,18 +52,60 @@ class MapArtifactReader implements CapsuleComponentArtifactReader {
 }
 
 const jsonBytes = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value));
+const pluginBytes = new TextEncoder().encode('plugin package bytes');
+const skillBytes = new TextEncoder().encode('skill bundle bytes');
+
+const makeCapsuleArchive = (manifest: unknown) =>
+  codexRuntimeCapsuleArchiveSchema.parse({
+    schema_version: 'codex_runtime_capsule_archive.v1',
+    manifest,
+    manifest_digest: codexRuntimeCapsuleManifestDigest(manifest),
+  });
+
+const setCapsuleArchive = (setup: { artifacts: Map<string, Uint8Array>; capsuleRef: string; capsuleManifest: unknown }): string => {
+  const archive = makeCapsuleArchive(setup.capsuleManifest);
+  setup.artifacts.set(setup.capsuleRef, jsonBytes(archive));
+  return codexRuntimeCapsuleArchiveDigest(archive);
+};
 
 const makeMemoryBundle = (bundleId: string) => ({
   schema_version: 'codex_memory_bundle_manifest.v1',
   bundle_id: bundleId,
   codex_session_id: codexSessionId,
   source_policy_digest: digest({ source: bundleId }),
-  entries: [],
+  entries: [{
+    relative_path: 'memories/session.md',
+    source_kind: 'session_memory',
+    content_digest: digest(`${bundleId} memory\n`),
+    size_bytes: String(Buffer.byteLength(`${bundleId} memory\n`)),
+    content: `${bundleId} memory\n`,
+    operation: 'present',
+  }],
 });
 
 const makeEnvironmentManifest = () => {
-  const pluginManifest = { schema_version: 'codex_plugin_manifest.v1', plugins: [] };
-  const skillManifest = { schema_version: 'codex_skill_manifest.v1', skills: [] };
+  const pluginManifest = {
+    schema_version: 'codex_plugin_manifest.v1',
+    plugins: [{
+      plugin_id: 'plugin-a',
+      source: 'project',
+      version: '1.0.0',
+      package_ref: ref('codex_plugin_package', 'plugin-a'),
+      package_digest: rawDigest(pluginBytes),
+      enabled: true,
+    }],
+  };
+  const skillManifest = {
+    schema_version: 'codex_skill_manifest.v1',
+    skills: [{
+      skill_id: 'skill-a',
+      source_kind: 'project',
+      bundle_ref: ref('codex_skill_bundle', 'skill-a'),
+      bundle_digest: rawDigest(skillBytes),
+      entrypoint_relative_path: 'SKILL.md',
+      enabled: true,
+    }],
+  };
   const toolSchemaManifest = { schema_version: 'codex_tool_schema_manifest.v1', schemas: [] };
   const mcpServerManifest = { schema_version: 'codex_mcp_server_manifest.v1', servers: [] };
   const appConnectorManifest = { schema_version: 'codex_app_connector_manifest.v1', connectors: [] };
@@ -139,7 +185,7 @@ const makeArtifacts = () => {
     turn_id: 'turn-1',
     input_bundle_digest: codexMemoryBundleDigest(inputMemoryBundle),
     output_bundle_digest: codexMemoryBundleDigest(outputMemoryBundle),
-    operations: [{ op: 'add', relative_path: 'memories/session.md', content_digest: digest('session memory\n') }],
+    operations: [{ op: 'modify', relative_path: 'memories/session.md', before_digest: digest('input memory\n'), after_digest: digest('output memory\n') }],
   };
   const environmentManifest = makeEnvironmentManifest();
   const capsuleManifest = {
@@ -166,20 +212,25 @@ const makeArtifacts = () => {
     excluded_patterns: ['auth.json', 'config.toml'],
     forbidden_patterns_checked: ['auth.json', 'config.toml', 'state_*.sqlite', 'plugins/**'],
   };
+  const capsuleArchive = makeCapsuleArchive(capsuleManifest);
   const artifacts = new Map<string, Uint8Array>([
-    [ref('codex_runtime_capsule', 'capsule-1'), jsonBytes(capsuleManifest)],
+    [ref('codex_runtime_capsule', 'capsule-1'), jsonBytes(capsuleArchive)],
     [capsuleManifest.thread_state.artifact_ref, jsonBytes(threadBundle)],
     [capsuleManifest.memory_state.base_bundle_ref, jsonBytes(baseMemoryBundle)],
     [capsuleManifest.memory_state.input_bundle_ref, jsonBytes(inputMemoryBundle)],
     [capsuleManifest.memory_state.output_bundle_ref, jsonBytes(outputMemoryBundle)],
     [capsuleManifest.memory_state.delta_ref, jsonBytes(memoryDelta)],
     [capsuleManifest.environment_manifest.artifact_ref, jsonBytes(environmentManifest)],
+    [ref('codex_plugin_package', 'plugin-a'), pluginBytes],
+    [ref('codex_skill_bundle', 'skill-a'), skillBytes],
   ]);
   return {
     artifacts,
+    capsuleArchive,
     capsuleManifest,
     capsuleRef: ref('codex_runtime_capsule', 'capsule-1'),
-    capsuleDigest: codexRuntimeCapsuleManifestDigest(capsuleManifest),
+    capsuleDigest: codexRuntimeCapsuleArchiveDigest(capsuleArchive),
+    capsuleManifestDigest: codexRuntimeCapsuleManifestDigest(capsuleManifest),
     environmentManifest,
     baseMemoryBundle,
     inputMemoryBundle,
@@ -204,8 +255,11 @@ describe('Codex runtime capsule restorer', () => {
       deferLocatorRepair: true,
     });
 
-    expect(result.capsuleManifestDigest).toBe(setup.capsuleDigest);
+    expect(result.capsuleManifestDigest).toBe(setup.capsuleManifestDigest);
     await expect(readFile(join(codexHomeRoot, rolloutRelativePath), 'utf8')).resolves.toBe(rolloutContent);
+    await expect(readFile(join(codexHomeRoot, 'memories/session.md'), 'utf8')).resolves.toBe('output memory\n');
+    await expect(readFile(join(codexHomeRoot, 'generated/plugins/plugin-a/package.bin'), 'utf8')).resolves.toBe('plugin package bytes');
+    await expect(readFile(join(codexHomeRoot, 'generated/skills/skill-a/bundle.bin'), 'utf8')).resolves.toBe('skill bundle bytes');
   });
 
   it('rejects missing component artifact', async () => {
@@ -228,14 +282,18 @@ describe('Codex runtime capsule restorer', () => {
   it('rejects cross-session component ref', async () => {
     const setup = makeArtifacts();
     setup.capsuleManifest.thread_state.artifact_ref = ref('codex_thread_state_bundle', 'thread-state', 'other-session');
-    const capsuleBytes = jsonBytes(setup.capsuleManifest);
-    setup.artifacts.set(setup.capsuleRef, capsuleBytes);
+    const archiveBytes = jsonBytes({
+      schema_version: 'codex_runtime_capsule_archive.v1',
+      manifest: setup.capsuleManifest,
+      manifest_digest: digest({ invalid: 'cross-session-component-ref' }),
+    });
+    setup.artifacts.set(setup.capsuleRef, archiveBytes);
 
     await expect(
       restoreCodexRuntimeCapsule({
         codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
         codexSessionId,
-        expectedCapsuleDigest: digest(Buffer.from(capsuleBytes).toString('utf8')),
+        expectedCapsuleDigest: rawDigest(archiveBytes),
         capsuleRef: setup.capsuleRef,
         artifactReader: new MapArtifactReader(setup.artifacts),
         currentCodexCliVersion: 'codex-cli 1.2.3',
@@ -271,13 +329,13 @@ describe('Codex runtime capsule restorer', () => {
       ...setup.inputMemoryBundle,
       codex_session_id: 'other-session',
     });
-    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+    const capsuleDigest = setCapsuleArchive(setup);
 
     await expect(
       restoreCodexRuntimeCapsule({
         codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
         codexSessionId,
-        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        expectedCapsuleDigest: capsuleDigest,
         capsuleRef: setup.capsuleRef,
         artifactReader: new MapArtifactReader(setup.artifacts),
         currentCodexCliVersion: 'codex-cli 1.2.3',
@@ -291,13 +349,13 @@ describe('Codex runtime capsule restorer', () => {
     const memoryDelta = { ...setup.memoryDelta, codex_session_id: 'other-session' };
     setup.artifacts.set(setup.capsuleManifest.memory_state.delta_ref, jsonBytes(memoryDelta));
     setup.capsuleManifest.memory_state.delta_digest = codexMemoryDeltaDigest(memoryDelta);
-    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+    const capsuleDigest = setCapsuleArchive(setup);
 
     await expect(
       restoreCodexRuntimeCapsule({
         codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
         codexSessionId,
-        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        expectedCapsuleDigest: capsuleDigest,
         capsuleRef: setup.capsuleRef,
         artifactReader: new MapArtifactReader(setup.artifacts),
         currentCodexCliVersion: 'codex-cli 1.2.3',
@@ -314,13 +372,13 @@ describe('Codex runtime capsule restorer', () => {
     const memoryDelta = { ...setup.memoryDelta, [field]: digest({ tampered: field }) };
     setup.artifacts.set(setup.capsuleManifest.memory_state.delta_ref, jsonBytes(memoryDelta));
     setup.capsuleManifest.memory_state.delta_digest = codexMemoryDeltaDigest(memoryDelta);
-    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+    const capsuleDigest = setCapsuleArchive(setup);
 
     await expect(
       restoreCodexRuntimeCapsule({
         codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
         codexSessionId,
-        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        expectedCapsuleDigest: capsuleDigest,
         capsuleRef: setup.capsuleRef,
         artifactReader: new MapArtifactReader(setup.artifacts),
         currentCodexCliVersion: 'codex-cli 1.2.3',
@@ -351,13 +409,13 @@ describe('Codex runtime capsule restorer', () => {
     const threadBundle = { ...setup.threadBundle, codex_session_id: 'other-session' };
     setup.artifacts.set(setup.capsuleManifest.thread_state.artifact_ref, jsonBytes(threadBundle));
     setup.capsuleManifest.thread_state.digest = digest(threadBundle);
-    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+    const capsuleDigest = setCapsuleArchive(setup);
 
     await expect(
       restoreCodexRuntimeCapsule({
         codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
         codexSessionId,
-        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        expectedCapsuleDigest: capsuleDigest,
         capsuleRef: setup.capsuleRef,
         artifactReader: new MapArtifactReader(setup.artifacts),
         currentCodexCliVersion: 'codex-cli 1.2.3',
@@ -379,13 +437,13 @@ describe('Codex runtime capsule restorer', () => {
     };
     setup.artifacts.set(setup.capsuleManifest.thread_state.artifact_ref, jsonBytes(threadBundle));
     setup.capsuleManifest.thread_state.digest = digest(threadBundle);
-    setup.artifacts.set(setup.capsuleRef, jsonBytes(setup.capsuleManifest));
+    const capsuleDigest = setCapsuleArchive(setup);
 
     await expect(
       restoreCodexRuntimeCapsule({
         codexHomeRoot: await mkdtemp(join(tmpdir(), 'forgeloop-codex-restore-')),
         codexSessionId,
-        expectedCapsuleDigest: codexRuntimeCapsuleManifestDigest(setup.capsuleManifest),
+        expectedCapsuleDigest: capsuleDigest,
         capsuleRef: setup.capsuleRef,
         artifactReader: new MapArtifactReader(setup.artifacts),
         currentCodexCliVersion: 'codex-cli 1.2.3',

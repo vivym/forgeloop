@@ -17,8 +17,8 @@ const completeRemoteWorkerEnv = () => ({
   FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION: '1',
   FORGELOOP_WORKER_TEMP_ROOT: '/tmp/forgeloop-remote-worker',
   FORGELOOP_DOCKER_BIN: 'docker',
-  FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: digest('a'),
-  FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: digest('b'),
+  FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS: digest('a'),
+  FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS: digest('b'),
   FORGELOOP_CODEX_WORKER_SCOPES_JSON: JSON.stringify([{ project_id: 'project-1', repo_id: 'repo-1' }]),
   FORGELOOP_CODEX_WORKER_CAPABILITIES: 'generation,run_execution',
   FORGELOOP_WORKER_MAX_CONCURRENCY: '2',
@@ -30,8 +30,8 @@ const requiredRemoteWorkerEnvKeys = [
   'FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION',
   'FORGELOOP_WORKER_TEMP_ROOT',
   'FORGELOOP_DOCKER_BIN',
-  'FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST',
-  'FORGELOOP_CODEX_NETWORK_POLICY_DIGEST',
+  'FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS',
+  'FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS',
   'FORGELOOP_CODEX_WORKER_SCOPES_JSON',
   'FORGELOOP_CODEX_WORKER_CAPABILITIES',
   'FORGELOOP_WORKER_MAX_CONCURRENCY',
@@ -41,7 +41,7 @@ describe('automation daemon generation config', () => {
   it('does not expose retired WorkItem Spec or Plan draft task knobs', () => {
     const config = loadAutomationDaemonConfig({
       ...baseEnv,
-      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'fake',
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'fake',
     });
 
     expect(config.generationPlanning.tasks).toEqual({
@@ -56,7 +56,7 @@ describe('automation daemon generation config', () => {
   it('defaults package_drafts to disabled for 2A', () => {
     const config = loadAutomationDaemonConfig({
       ...baseEnv,
-      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'fake',
+      FORGELOOP_CODEX_GENERATION_DRIVER: 'fake',
     });
 
     expect(config.generationPlanning.tasks.package_drafts.enabled).toBe(false);
@@ -72,7 +72,7 @@ describe('automation daemon generation config', () => {
     expect(() =>
       loadAutomationDaemonConfig({
         ...baseEnv,
-        FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+        FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
       }),
     ).toThrow(/app-server/i);
   });
@@ -91,8 +91,8 @@ describe('automation daemon generation config', () => {
       FORGELOOP_WORKER_MAX_CONCURRENCY: '2',
       FORGELOOP_DOCKER_BIN: 'docker',
       FORGELOOP_CODEX_APP_SERVER_TRANSPORT: 'docker_exec',
-      FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: `sha256:${'a'.repeat(64)}`,
-      FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: `sha256:${'b'.repeat(64)}`,
+      FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS: `sha256:${'a'.repeat(64)}`,
+      FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS: `sha256:${'b'.repeat(64)}`,
       FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: 'project-1',
       FORGELOOP_CODEX_ALLOWED_SCOPE_REPO_ID: 'repo-1',
       FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID: 'credential-binding-1',
@@ -207,8 +207,8 @@ describe('automation daemon generation config', () => {
         FORGELOOP_WORKER_BOOTSTRAP_TOKEN: 'bootstrap-token',
         FORGELOOP_WORKER_BOOTSTRAP_TOKEN_VERSION: '1',
         FORGELOOP_WORKER_TEMP_ROOT: '/tmp/forgeloop-worker',
-        FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: `sha256:${'a'.repeat(64)}`,
-        FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: `sha256:${'b'.repeat(64)}`,
+        FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS: `sha256:${'a'.repeat(64)}`,
+        FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS: `sha256:${'b'.repeat(64)}`,
         FORGELOOP_CODEX_ALLOWED_SCOPE_PROJECT_ID: 'project-1',
         FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID: 'credential-binding-1',
       }),
@@ -247,31 +247,22 @@ describe('automation daemon generation config', () => {
     ).toThrow(/FORGELOOP_CODEX_APP_SERVER_ENDPOINT/);
   });
 
-  it('maps legacy codex generation mode to the app_server generation driver when governed runtime config is present', () => {
+  it('ignores retired generation mode env aliases instead of mapping them to active drivers', () => {
+    const legacyGenerationModeKey = ['FORGELOOP', 'CODEX', 'AUTOMATION', 'GENERATION'].join('_');
     const config = loadAutomationDaemonConfig({
       ...baseEnv,
-      FORGELOOP_CODEX_AUTOMATION_GENERATION: 'codex',
+      [legacyGenerationModeKey]: 'codex',
       FORGELOOP_CODEX_APP_SERVER_ENDPOINT: 'unix:/tmp/forgeloop-codex.sock',
       FORGELOOP_CODEX_GENERATION_ARTIFACT_ROOT: '/tmp/forgeloop-artifacts',
     });
 
-    expect(config.generationPlanning.mode).toBe('app_server');
-    expect(config.generationPlanningExplicit).toBe(true);
+    expect(config.generationPlanning.mode).toBe('disabled');
+    expect(config.generationPlanningExplicit).toBe(false);
     expect(config.appServerEndpoint).toBe('unix:/tmp/forgeloop-codex.sock');
     expect(config.generationArtifactRoot).toBe('/tmp/forgeloop-artifacts');
   });
 
-  it('rejects conflicting legacy and new generation drivers', () => {
-    expect(() =>
-      loadAutomationDaemonConfig({
-        ...baseEnv,
-        FORGELOOP_CODEX_AUTOMATION_GENERATION: 'fake',
-        FORGELOOP_CODEX_GENERATION_DRIVER: 'app_server',
-      }),
-    ).toThrow(/FORGELOOP_CODEX_GENERATION_DRIVER/);
-  });
-
-  it.each(['cli', 'exec', 'exec_fallback', 'codex_exec'])('rejects forbidden generation driver %s', (driver) => {
+  it.each(['local', 'shell', 'worker'])('rejects non-canonical generation driver %s', (driver) => {
     expect(() =>
       loadAutomationDaemonConfig({
         ...baseEnv,

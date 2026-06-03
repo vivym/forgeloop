@@ -480,6 +480,13 @@ describe('codex runtime capsule schemas and digests', () => {
         required_state_tables: [{ table_name: 'threads', allowed_columns: ['id', 'rollout_path'], row_digest: digestC }],
       }),
     ).toThrow();
+    expect(
+      codexThreadLocatorRepairManifestSchema.parse({
+        ...manifest,
+        repair_strategy: 'app_server_scan',
+        required_state_tables: undefined,
+      }),
+    ).toMatchObject({ repair_strategy: 'app_server_scan' });
     expect(() => codexThreadLocatorRepairManifestSchema.parse({ ...manifest, repair_strategy: 'app_server_scan' })).toThrow();
   });
 

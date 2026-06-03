@@ -6,6 +6,8 @@ import {
   buildInternalArtifactRef,
   codexAppConnectorManifestDigest,
   codexCanonicalDigest,
+  codexRuntimeCapsuleArchiveDigest,
+  codexRuntimeCapsuleArchiveSchema,
   codexCredentialLineageDigest,
   codexEnvironmentManifestDigest,
   codexMemoryBundleDigest,
@@ -201,7 +203,13 @@ describe('Codex runtime capsule packager', () => {
     expect(parseInternalArtifactRef(result.manifest.environment_manifest.artifact_ref)).toMatchObject({
       kind: 'codex_environment_manifest',
     });
-    expect(result.digest).toBe(codexRuntimeCapsuleManifestDigest(result.manifest));
+    const finalWrite = writer.writes.at(-1);
+    expect(finalWrite?.kind).toBe('codex_runtime_capsule');
+    const archive = codexRuntimeCapsuleArchiveSchema.parse(JSON.parse(Buffer.from(finalWrite!.content).toString('utf8')));
+    expect(archive.manifest).toEqual(result.manifest);
+    expect(archive.manifest_digest).toBe(codexRuntimeCapsuleManifestDigest(result.manifest));
+    expect(result.digest).toBe(codexRuntimeCapsuleArchiveDigest(archive));
+    expect(result.digest).not.toBe(codexRuntimeCapsuleManifestDigest(result.manifest));
   });
 
   it.each(['auth.json', 'config.toml', 'logs_1.sqlite', 'memories_1.sqlite', 'plugins/plugin-a/package.json'])(

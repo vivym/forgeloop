@@ -100,6 +100,16 @@ export interface RemoteWorkerCapsuleRestoreInput {
   deferLocatorRepair?: boolean;
 }
 
+export interface RemoteWorkerCapsuleBaseMemoryInput {
+  codexHomeHostPath: string;
+  artifactHostPath: string;
+  codexSessionId: string;
+  codexSessionTurnId: string;
+  baseMemoryBundleRef: string;
+  baseMemoryBundleDigest: string;
+  materialization: CodexLaunchMaterialization;
+}
+
 export interface RemoteWorkerCapsuleLocatorRepairInput {
   codexHomeHostPath: string;
   codexHomeContainerPath: string;
@@ -124,6 +134,7 @@ export interface RemoteWorkerCapsulePackageInput {
 }
 
 export interface RemoteWorkerCapsuleManager {
+  materializeBaseMemory(input: RemoteWorkerCapsuleBaseMemoryInput): Promise<void>;
   restore(input: RemoteWorkerCapsuleRestoreInput): Promise<void>;
   repairLocator(input: RemoteWorkerCapsuleLocatorRepairInput): Promise<void>;
   package(input: RemoteWorkerCapsulePackageInput): Promise<GenerationOutputCapsulePackageResult>;
@@ -650,7 +661,28 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       if (terminalization.base_memory_bundle_ref === undefined || terminalization.base_memory_bundle_digest === undefined) {
         throw new Error('codex_memory_bundle_missing');
       }
-      return {};
+      if (options.capsuleManager === undefined) {
+        throw new Error('codex_runtime_capsule_missing');
+      }
+      return {
+        writeConfigAndAuth: false,
+        beforeAppServerStart: async ({ codexHomeHostPath, artifactHostPath }) => {
+          await options.capsuleManager!.materializeBaseMemory({
+            codexHomeHostPath,
+            artifactHostPath,
+            codexSessionId: terminalization.codex_session_id,
+            codexSessionTurnId: terminalization.codex_session_turn_id,
+            baseMemoryBundleRef: terminalization.base_memory_bundle_ref!,
+            baseMemoryBundleDigest: terminalization.base_memory_bundle_digest!,
+            materialization,
+          });
+          await writeCodexHomeConfigAndAuth({
+            codexHomeHostPath,
+            codexConfigToml: materialization.profile_revision.codex_config_toml,
+            authJson: materialization.resolved_credentials[0]?.payload ?? {},
+          });
+        },
+      };
     }
     if (options.capsuleManager === undefined) {
       throw new Error('codex_runtime_capsule_missing');

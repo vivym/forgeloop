@@ -8,6 +8,7 @@ export * from './codex-runtime-capsule/materializer.js';
 export * from './codex-runtime-capsule/memory-state.js';
 export * from './codex-runtime-capsule/packager.js';
 export * from './codex-runtime-capsule/path-classifier.js';
+export * from './codex-runtime-capsule/remote-worker-capsule-manager.js';
 export * from './codex-runtime-capsule/restorer.js';
 export * from './codex-runtime-capsule/thread-state.js';
 export * from './docker-command.js';

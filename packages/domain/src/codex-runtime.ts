@@ -1486,6 +1486,9 @@ export const normalizeCodexRuntimeNetworkPolicy = (policy: CodexRuntimeNetworkPo
 export const codexCanonicalDigest = (value: unknown): string =>
   `sha256:${createHash('sha256').update(stableJson(value)).digest('hex')}`;
 
+export const codexCanonicalJsonBytes = (value: unknown): Uint8Array =>
+  new TextEncoder().encode(stableJson(value));
+
 export const codexCredentialPayloadDigest = (payload: unknown): string => codexCanonicalDigest(payload);
 
 export const codexRuntimeNetworkPolicyDigest = (policy: CodexRuntimeNetworkPolicy): string =>

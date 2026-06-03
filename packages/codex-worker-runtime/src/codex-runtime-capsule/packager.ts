@@ -5,11 +5,14 @@ import {
   assertCodexSessionArtifactRef,
   buildInternalArtifactRef,
   codexCanonicalDigest,
+  codexCanonicalJsonBytes,
   codexEnvironmentManifestDigest,
   codexMemoryBundleDigest,
   codexMemoryBundleManifestSchema,
   codexMemoryDeltaDigest,
   codexMemoryDeltaManifestSchema,
+  codexRuntimeCapsuleArchiveDigest,
+  codexRuntimeCapsuleArchiveSchema,
   codexRuntimeCapsuleManifestDigest,
   codexRuntimeCapsuleManifestSchema,
   DomainError,
@@ -60,8 +63,8 @@ export interface CodexRuntimeCapsulePackageInput {
     inputBundleDigest: string;
     outputBundle: CodexMemoryBundleManifest;
     outputBundleDigest: string;
-    delta: CodexMemoryDeltaManifest;
-    deltaDigest: string;
+    delta?: CodexMemoryDeltaManifest;
+    deltaDigest?: string;
   };
   environmentManifest: unknown;
   environmentManifestDigest: string;
@@ -74,8 +77,6 @@ export interface CodexRuntimeCapsulePackageResult {
   artifactSizeBytes: string;
   threadState: ThreadStateBundleBuildResult;
 }
-
-const jsonBytes = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value));
 
 const unknownPathError = (relativePath: string, reason: string): DomainError =>
   new DomainError('codex_runtime_capsule_unknown_path', 'Codex runtime capsule contains a path that cannot be packaged.', {
@@ -132,7 +133,7 @@ const writeJsonArtifact = async (
     metadata?: Record<string, unknown>;
   },
 ): Promise<{ ref: string; digest: string; size_bytes: string }> => {
-  const content = jsonBytes(input.manifest);
+  const content = codexCanonicalJsonBytes(input.manifest);
   const written = await artifactWriter.write({
     kind: input.kind,
     ownerId: input.ownerId,
@@ -164,11 +165,19 @@ export const packageCodexRuntimeCapsule = async (
   const baseMemoryBundle = codexMemoryBundleManifestSchema.parse(input.memoryState.baseBundle);
   const inputMemoryBundle = codexMemoryBundleManifestSchema.parse(input.memoryState.inputBundle);
   const outputMemoryBundle = codexMemoryBundleManifestSchema.parse(input.memoryState.outputBundle);
-  const memoryDelta = codexMemoryDeltaManifestSchema.parse(input.memoryState.delta);
   assertDigest(codexMemoryBundleDigest(baseMemoryBundle), input.memoryState.baseBundleDigest, 'base memory bundle');
   assertDigest(codexMemoryBundleDigest(inputMemoryBundle), input.memoryState.inputBundleDigest, 'input memory bundle');
   assertDigest(codexMemoryBundleDigest(outputMemoryBundle), input.memoryState.outputBundleDigest, 'output memory bundle');
-  assertDigest(codexMemoryDeltaDigest(memoryDelta), input.memoryState.deltaDigest, 'memory delta');
+  const memoryDelta =
+    input.memoryState.delta === undefined
+      ? undefined
+      : codexMemoryDeltaManifestSchema.parse(input.memoryState.delta);
+  if ((memoryDelta === undefined) !== (input.memoryState.deltaDigest === undefined)) {
+    throw new Error('memory delta and digest must be provided together');
+  }
+  if (memoryDelta !== undefined && input.memoryState.deltaDigest !== undefined) {
+    assertDigest(codexMemoryDeltaDigest(memoryDelta), input.memoryState.deltaDigest, 'memory delta');
+  }
   const environmentValidation = validateCodexEnvironmentState({ environmentManifest: input.environmentManifest });
   assertDigest(environmentValidation.environmentManifestDigest, input.environmentManifestDigest, 'environment manifest');
 
@@ -201,13 +210,16 @@ export const packageCodexRuntimeCapsule = async (
     manifest: outputMemoryBundle,
     digest: input.memoryState.outputBundleDigest,
   });
-  const memoryDeltaWrite = await writeJsonArtifact(input.artifactWriter, {
-    kind: 'codex_memory_delta',
-    ownerId,
-    artifactId: `${input.capsuleId}-memory-delta`,
-    manifest: memoryDelta,
-    digest: input.memoryState.deltaDigest,
-  });
+  const memoryDeltaWrite =
+    memoryDelta === undefined || input.memoryState.deltaDigest === undefined
+      ? undefined
+      : await writeJsonArtifact(input.artifactWriter, {
+          kind: 'codex_memory_delta',
+          ownerId,
+          artifactId: `${input.capsuleId}-memory-delta`,
+          manifest: memoryDelta,
+          digest: input.memoryState.deltaDigest,
+        });
   const environmentWrite = await writeJsonArtifact(input.artifactWriter, {
     kind: 'codex_environment_manifest',
     ownerId,
@@ -232,22 +244,36 @@ export const packageCodexRuntimeCapsule = async (
       input_bundle_digest: inputMemoryWrite.digest,
       output_bundle_ref: outputMemoryWrite.ref,
       output_bundle_digest: outputMemoryWrite.digest,
-      delta_ref: memoryDeltaWrite.ref,
-      delta_digest: memoryDeltaWrite.digest,
+      ...(memoryDeltaWrite === undefined
+        ? {}
+        : {
+            delta_ref: memoryDeltaWrite.ref,
+            delta_digest: memoryDeltaWrite.digest,
+          }),
     },
     environment_manifest: { artifact_ref: environmentWrite.ref, digest: environmentWrite.digest },
     included_files: [input.locatorRepair.rollout_relative_path],
     excluded_patterns: ['auth.json', 'config.toml', 'state_*.sqlite', 'logs_*.sqlite', 'memories_*.sqlite', 'plugins/**'],
     forbidden_patterns_checked: ['auth.json', 'config.toml', 'state_*.sqlite', 'logs_*.sqlite', 'memories_*.sqlite', 'plugins/**'],
   });
-  const capsuleDigest = codexRuntimeCapsuleManifestDigest(manifest);
+  const capsuleManifestDigest = codexRuntimeCapsuleManifestDigest(manifest);
+  const capsuleArchive = codexRuntimeCapsuleArchiveSchema.parse({
+    schema_version: 'codex_runtime_capsule_archive.v1',
+    manifest,
+    manifest_digest: capsuleManifestDigest,
+  });
+  const capsuleDigest = codexRuntimeCapsuleArchiveDigest(capsuleArchive);
   const capsuleWrite = await writeJsonArtifact(input.artifactWriter, {
     kind: 'codex_runtime_capsule',
     ownerId,
     artifactId: input.capsuleId,
-    manifest,
+    manifest: capsuleArchive,
     digest: capsuleDigest,
-    metadata: { schema_version: manifest.schema_version },
+    metadata: {
+      schema_version: capsuleArchive.schema_version,
+      manifest_schema_version: manifest.schema_version,
+      manifest_digest: capsuleManifestDigest,
+    },
   });
   const canonicalCapsuleRef = buildInternalArtifactRef({
     kind: 'codex_runtime_capsule',

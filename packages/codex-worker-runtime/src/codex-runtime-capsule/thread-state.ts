@@ -73,7 +73,7 @@ const parseLocatorRepair = (locatorRepair: CodexThreadLocatorRepairManifest): Co
   codexThreadLocatorRepairManifestSchema.parse(locatorRepair) as CodexThreadLocatorRepairManifest;
 
 const assertSupportedRepairStrategy = (locatorRepair: CodexThreadLocatorRepairManifest): void => {
-  if (locatorRepair.repair_strategy !== 'minimal_state_index_upsert') {
+  if (locatorRepair.repair_strategy !== 'minimal_state_index_upsert' && locatorRepair.repair_strategy !== 'app_server_scan') {
     throw new Error(`unsupported locator repair strategy: ${String(locatorRepair.repair_strategy)}`);
   }
 };
@@ -193,17 +193,18 @@ export const restoreCodexThreadStateBundle = async (input: {
   await assertNoExistingSymlink(input.codexHomeRoot, entry.relative_path);
   await writeFile(join(input.codexHomeRoot, entry.relative_path), entry.content);
 
-  if (locatorRepair.repair_strategy === 'minimal_state_index_upsert') {
-    if (input.deferLocatorRepair === true) {
-      return;
-    }
-    if (input.codexThreadId === undefined || input.repairExecutor === undefined) {
-      throw new Error('thread state locator repair executor missing');
-    }
-    await input.repairExecutor({
-      codexHomeRoot: input.codexHomeRoot,
-      locatorRepair,
-      codexThreadId: input.codexThreadId,
-    });
+  if (locatorRepair.repair_strategy === 'app_server_scan') {
+    return;
   }
+  if (input.deferLocatorRepair === true) {
+    return;
+  }
+  if (input.codexThreadId === undefined || input.repairExecutor === undefined) {
+    throw new Error('thread state locator repair executor missing');
+  }
+  await input.repairExecutor({
+    codexHomeRoot: input.codexHomeRoot,
+    locatorRepair,
+    codexThreadId: input.codexThreadId,
+  });
 };

@@ -34,6 +34,7 @@ const defaultBundleMetadata: CodexMemoryBundleMetadata = {
   bundleId: 'materialized',
   sourcePolicyDigest: materializedSourcePolicyDigest,
 };
+const memoryMaterializationPrefixes = ['memories/'] as const;
 
 export interface CodexMemoryDeltaContentReader {
   read(input: { deltaDigest: string; relativePath: string; expectedDigest: string }): Promise<Uint8Array>;
@@ -148,16 +149,24 @@ const listRegularFiles = async (root: string, prefix = ''): Promise<string[]> =>
   return files.sort((left, right) => left.localeCompare(right));
 };
 
+const isMaterializedMemoryPath = (relativePath: string): boolean =>
+  memoryMaterializationPrefixes.some((prefix) => relativePath.startsWith(prefix));
+
 const buildEntriesFromRoot = async (root: string): Promise<MemoryEntry[]> => {
   const entries: MemoryEntry[] = [];
   for (const relativePath of await listRegularFiles(root)) {
+    if (!isMaterializedMemoryPath(relativePath)) {
+      continue;
+    }
     await assertRegularFileNoSymlink(root, relativePath);
     const bytes = await readFile(memoryPath(root, relativePath));
+    const content = Buffer.from(bytes).toString('utf8');
     entries.push({
       relative_path: relativePath,
       source_kind: 'session_memory',
       content_digest: bytesDigest(bytes),
       size_bytes: String(bytes.byteLength),
+      content,
       operation: 'present',
     });
   }
@@ -190,6 +199,30 @@ const buildComparableBundle = async (root: string, input: BundleBuildMetadata): 
     codexSessionId: input.codexSessionId,
     bundleId: input.bundleId,
     sourcePolicyDigest: input.sourcePolicyDigest,
+  });
+
+const expectedEntriesBundle = (input: {
+  bundle: CodexMemoryBundleManifest;
+  bundleId: string;
+  sourcePolicyDigest: string;
+}): CodexMemoryBundleManifest =>
+  codexMemoryBundleManifestSchema.parse({
+    schema_version: 'codex_memory_bundle_manifest.v1',
+    bundle_id: input.bundleId,
+    codex_session_id: input.bundle.codex_session_id,
+    ...(input.bundle.created_from_turn_id === undefined ? {} : { created_from_turn_id: input.bundle.created_from_turn_id }),
+    source_policy_digest: input.sourcePolicyDigest,
+    entries: input.bundle.entries
+      .filter((entry) => entry.operation !== 'deleted')
+      .map((entry) => ({
+        relative_path: entry.relative_path,
+        source_kind: entry.source_kind,
+        content_digest: entry.content_digest,
+        size_bytes: entry.size_bytes,
+        ...(entry.content === undefined ? {} : { content: entry.content }),
+        operation: 'present' as const,
+      }))
+      .sort((left, right) => left.relative_path.localeCompare(right.relative_path)),
   });
 
 const entriesByPath = (entries: readonly MemoryEntry[]): Map<string, MemoryEntry> =>
@@ -278,6 +311,133 @@ export const diffCodexMemoryBundles = async (input: {
     operations: sortedOperations,
   });
   return delta;
+};
+
+export const diffCodexMemoryBundleManifests = (input: {
+  inputBundle: CodexMemoryBundleManifest;
+  outputBundle: CodexMemoryBundleManifest;
+  codexSessionId: string;
+  turnId: string;
+}): CodexMemoryDeltaManifest | undefined => {
+  const inputBundle = codexMemoryBundleManifestSchema.parse(input.inputBundle);
+  const outputBundle = codexMemoryBundleManifestSchema.parse(input.outputBundle);
+  if (inputBundle.codex_session_id !== input.codexSessionId || outputBundle.codex_session_id !== input.codexSessionId) {
+    throw new Error('memory diff bundle codex session mismatch');
+  }
+  const inputEntries = entriesByPath(inputBundle.entries.filter((entry) => entry.operation !== 'deleted'));
+  const outputEntries = entriesByPath(outputBundle.entries.filter((entry) => entry.operation !== 'deleted'));
+  const operations: CodexMemoryDeltaManifest['operations'] = [];
+  const deleted = [...inputEntries.values()].filter((entry) => !outputEntries.has(entry.relative_path));
+  const added = [...outputEntries.values()].filter((entry) => !inputEntries.has(entry.relative_path));
+  const usedAdded = new Set<string>();
+  const usedDeleted = new Set<string>();
+
+  for (const beforeEntry of deleted.sort((left, right) => left.relative_path.localeCompare(right.relative_path))) {
+    const renamedTo = added
+      .filter((afterEntry) => !usedAdded.has(afterEntry.relative_path) && afterEntry.content_digest === beforeEntry.content_digest)
+      .sort((left, right) => left.relative_path.localeCompare(right.relative_path))[0];
+    if (renamedTo !== undefined) {
+      usedDeleted.add(beforeEntry.relative_path);
+      usedAdded.add(renamedTo.relative_path);
+      operations.push({
+        op: 'rename',
+        from_relative_path: beforeEntry.relative_path,
+        to_relative_path: renamedTo.relative_path,
+        before_digest: beforeEntry.content_digest,
+        after_digest: renamedTo.content_digest,
+      });
+    }
+  }
+  for (const beforeEntry of deleted) {
+    if (!usedDeleted.has(beforeEntry.relative_path)) {
+      operations.push({ op: 'delete', relative_path: beforeEntry.relative_path, before_digest: beforeEntry.content_digest });
+    }
+  }
+  for (const afterEntry of added) {
+    if (!usedAdded.has(afterEntry.relative_path)) {
+      operations.push({ op: 'add', relative_path: afterEntry.relative_path, content_digest: afterEntry.content_digest });
+    }
+  }
+  for (const beforeEntry of inputBundle.entries) {
+    if (beforeEntry.operation === 'deleted') {
+      continue;
+    }
+    const afterEntry = outputEntries.get(beforeEntry.relative_path);
+    if (afterEntry !== undefined && afterEntry.content_digest !== beforeEntry.content_digest) {
+      operations.push({
+        op: 'modify',
+        relative_path: beforeEntry.relative_path,
+        before_digest: beforeEntry.content_digest,
+        after_digest: afterEntry.content_digest,
+      });
+    }
+  }
+  if (operations.length === 0) {
+    return undefined;
+  }
+  return codexMemoryDeltaManifestSchema.parse({
+    schema_version: 'codex_memory_delta_manifest.v1',
+    codex_session_id: input.codexSessionId,
+    turn_id: input.turnId,
+    input_bundle_digest: codexMemoryBundleDigest(inputBundle),
+    output_bundle_digest: codexMemoryBundleDigest(outputBundle),
+    operations: operations.sort((left, right) => {
+      const leftPath = 'relative_path' in left ? left.relative_path : left.from_relative_path;
+      const rightPath = 'relative_path' in right ? right.relative_path : right.from_relative_path;
+      return leftPath.localeCompare(rightPath) || left.op.localeCompare(right.op);
+    }),
+  });
+};
+
+export const materializeCodexMemoryBundleToRoot = async (input: {
+  root: string;
+  bundle: CodexMemoryBundleManifest;
+  bundleMetadata?: CodexMemoryBundleMetadata;
+}): Promise<string> => {
+  const bundle = codexMemoryBundleManifestSchema.parse(input.bundle);
+  await assertSafeRoot(input.root);
+  for (const existingFile of await listRegularFiles(input.root)) {
+    if (isMaterializedMemoryPath(existingFile)) {
+      throw new Error('memory bundle materialization target contains existing memory files');
+    }
+  }
+
+  for (const entry of bundle.entries) {
+    if (entry.operation === 'deleted') {
+      continue;
+    }
+    if (entry.content === undefined) {
+      throw new Error(`memory bundle entry ${entry.relative_path} is missing content`);
+    }
+    const bytes = Buffer.from(entry.content, 'utf8');
+    if (String(bytes.byteLength) !== entry.size_bytes) {
+      throw new Error(`memory bundle entry size mismatch for ${entry.relative_path}`);
+    }
+    if (bytesDigest(bytes) !== entry.content_digest) {
+      throw new Error(`memory bundle entry digest mismatch for ${entry.relative_path}`);
+    }
+    await ensureSafeParentDirectory(input.root, entry.relative_path);
+    await assertNoExistingTargetSymlink(input.root, entry.relative_path);
+    await writeFile(memoryPath(input.root, entry.relative_path), bytes);
+    await assertFileDigest(input.root, entry.relative_path, entry.content_digest);
+  }
+
+  const metadata = input.bundleMetadata ?? {
+    bundleId: bundle.bundle_id,
+    sourcePolicyDigest: bundle.source_policy_digest,
+  };
+  const expectedDigest = codexMemoryBundleDigest(expectedEntriesBundle({ bundle, ...metadata }));
+  if (codexMemoryBundleDigest(bundle) !== expectedDigest) {
+    throw new Error('memory bundle manifest digest mismatch');
+  }
+  const materialized = await buildComparableBundle(input.root, {
+    ...metadata,
+    codexSessionId: bundle.codex_session_id,
+  });
+  if (materialized.digest !== expectedDigest) {
+    throw new Error('memory bundle materialized digest mismatch');
+  }
+  return materialized.digest;
 };
 
 const assertFileDigest = async (root: string, relativePath: string, expectedDigest: string): Promise<void> => {

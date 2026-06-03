@@ -1321,9 +1321,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     });
     expect(bootstrapPatches).toHaveLength(1);
     expect(dogfoodEnv).toMatchObject({
-      FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: dockerImageDigest,
       FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS: dockerImageDigest,
-      FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: networkPolicyDigest,
       FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS: networkPolicyDigest,
       FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS: networkProviderConfigDigest,
     });
@@ -1405,8 +1403,8 @@ describe('Codex runtime Superpowers dogfood script', () => {
       FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
       FORGELOOP_WORKER_IDENTITY: 'codex-worker',
       FORGELOOP_WORKER_BOOTSTRAP_TOKEN: 'worker-bootstrap-token',
-      FORGELOOP_CODEX_DOCKER_IMAGE_DIGEST: digest('docker-image'),
-      FORGELOOP_CODEX_NETWORK_POLICY_DIGEST: digest('network-policy'),
+      FORGELOOP_CODEX_WORKER_DOCKER_IMAGE_DIGESTS: digest('docker-image'),
+      FORGELOOP_CODEX_WORKER_NETWORK_POLICY_DIGESTS: digest('network-policy'),
       FORGELOOP_CODEX_WORKER_NETWORK_PROVIDER_CONFIG_DIGESTS: digest('network-provider-config'),
       FORGELOOP_CODEX_DOGFOOD_PROJECT_ID: 'project-1',
       FORGELOOP_CODEX_DOGFOOD_REPO_ID: 'repo-1',
@@ -1424,7 +1422,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       FORGELOOP_CONTROL_PLANE_URL: 'http://control-plane.invalid',
       FORGELOOP_CODEX_NO_SHARED_FILESYSTEM: '1',
       FORGELOOP_WORKER_IDENTITY: generationWorkerIdentity,
-      FORGELOOP_CODEX_WORKER_ID: generationWorkerIdentity,
+      FORGELOOP_WORKER_ID: generationWorkerIdentity,
       FORGELOOP_CODEX_WORKER_CAPABILITIES: 'generation',
       FORGELOOP_CODEX_WORKER_SCOPES_JSON: JSON.stringify([{ project_id: 'project-1' }]),
     });
@@ -1450,7 +1448,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
     const runWorkerEnv = sanitizeCodexRemoteWorkerDogfoodEnv(baseEnv, 'run_execution');
     expect(runWorkerEnv).toMatchObject({
       FORGELOOP_WORKER_IDENTITY: runExecutionWorkerIdentity,
-      FORGELOOP_CODEX_WORKER_ID: runExecutionWorkerIdentity,
+      FORGELOOP_WORKER_ID: runExecutionWorkerIdentity,
       FORGELOOP_CODEX_WORKER_CAPABILITIES: 'run_execution',
       FORGELOOP_CODEX_WORKER_SCOPES_JSON: JSON.stringify([{ project_id: 'project-1', repo_id: 'repo-1' }]),
     });
@@ -1476,7 +1474,7 @@ describe('Codex runtime Superpowers dogfood script', () => {
       'generation',
     );
     expect(targetSpecificEnv.FORGELOOP_WORKER_IDENTITY).toBe(generationWorkerIdentity);
-    expect(targetSpecificEnv.FORGELOOP_CODEX_WORKER_ID).toBe(generationWorkerIdentity);
+    expect(targetSpecificEnv.FORGELOOP_WORKER_ID).toBe(generationWorkerIdentity);
     expect(targetSpecificEnv.FORGELOOP_WORKER_BOOTSTRAP_TOKEN).toBe(
       codexRuntimeDogfoodBootstrapTokenForTarget('worker-bootstrap-token', {
         workerIdentity: generationWorkerIdentity,

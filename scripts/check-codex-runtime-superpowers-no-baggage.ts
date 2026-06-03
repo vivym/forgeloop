@@ -10,6 +10,7 @@ export type CodexRuntimeSuperpowersBaggagePattern =
   | 'host_codex_home'
   | 'exec_fallback'
   | 'codex_exec_cli'
+  | 'legacy_codex_runtime_env_alias'
   | 'legacy_codex_session_snapshot';
 
 export type AllowedMatch = {
@@ -64,6 +65,7 @@ const defaultScanRoots = [
   'packages/codex-worker-runtime',
   'packages/workflow',
   'packages/run-worker',
+  'apps/automation-daemon/src',
   'apps/control-plane-api/src/modules',
   'docs/runbooks',
   'docs/superpowers/reports',
@@ -280,6 +282,12 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
   },
   {
     file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_codex_runtime_env_alias',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches legacy Codex runtime env aliases.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
     pattern: 'legacy_codex_session_snapshot',
     owner: 'negative-test',
     reason: 'Negative test fixture proves the strict gate catches legacy Codex session snapshot vocabulary.',
@@ -380,6 +388,10 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
   host_codex_home: [/~\/\.codex/, /\bCODEX_HOME\b/, /\bFORGELOOP_CODEX_HOME\b/, /\bhost_config_path\b/, /\bhost_auth_path\b/],
   exec_fallback: [/\bexec_fallback\b/],
   codex_exec_cli: [/\bcodex\s+exec\b/, /\brun\(\s*["']codex["']\s*,\s*\[\s*["']exec["']/],
+  legacy_codex_runtime_env_alias: [
+    /\bFORGELOOP_CODEX_AUTOMATION_GENERATION\b/,
+    /\bFORGELOOP_CODEX_WORKER_ID\b/,
+  ],
   legacy_codex_session_snapshot: [
     /\bCodexSessionSnapshot\b/,
     /\bcodex_session_snapshot\b/,
