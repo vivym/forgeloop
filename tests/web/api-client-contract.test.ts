@@ -176,4 +176,34 @@ describe('AI-native web API client contract', () => {
       execution_owner_actor_id: 'actor-dev',
     });
   });
+
+  it('returns the queued-action workflow run envelope', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          workflow: { id: 'workflow-1', status: 'spec_review' },
+          queued_action: { id: 'action-1', workflow_id: 'workflow-1', status: 'running' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const commands = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await expect(
+      commands.runWorkflowQueuedAction('workflow-1', 'action-1', { actor_id: 'actor-tech' }),
+    ).resolves.toMatchObject({
+      workflow: { id: 'workflow-1', status: 'spec_review' },
+      queued_action: { id: 'action-1', workflow_id: 'workflow-1', status: 'running' },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.local/plan-item-workflows/workflow-1/actions/action-1/run',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ actor_id: 'actor-tech' }),
+        headers: expect.objectContaining({
+          'X-Forgeloop-Actor-Id': 'actor-tech',
+        }),
+      }),
+    );
+  });
 });

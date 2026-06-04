@@ -2152,7 +2152,7 @@ export class PlanItemWorkflowService {
     };
     return (
       hasNonEmptyStringArray('validation_strategy') &&
-      hasNonEmptyStringArray('required_checks') &&
+      (hasNonEmptyStringArray('required_checks') || this.requiredChecksFromStructuredDocument(structuredDocument) !== undefined) &&
       hasNonEmptyStringArray('handoff_criteria')
     );
   }

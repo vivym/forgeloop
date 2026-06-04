@@ -610,7 +610,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ]);
   });
 
-  it('schedules runtime-backed Spec generation and writes a draft revision from the approved Boundary Summary only', async () => {
+  it('schedules runtime-backed Spec generation and writes a reviewable revision from the approved Boundary Summary only', async () => {
     const { plan, item, boundary } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -690,7 +690,8 @@ describe('SpecPlanService item-scoped delivery API', () => {
     expect(spec).toMatchObject({
       development_plan_item_id: item.id,
       boundary_summary_id: boundary.id,
-      status: 'draft',
+      status: 'in_review',
+      gate_state: 'awaiting_approval',
     });
     expect(spec.approved_revision_id).toBeUndefined();
     const specRevisions = await repository.listSpecRevisions(spec.id);
@@ -703,7 +704,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
         author_actor_id: actorTech,
       }),
     ]);
-    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ spec_status: 'draft' });
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ spec_status: 'in_review' });
   });
 
   it('uses deterministic sorted repo scope for runtime-backed Spec generation', async () => {
@@ -1099,7 +1100,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       },
     });
     const [spec] = await repository.listSpecs();
-    expect(spec).toMatchObject({ development_plan_item_id: item.id, status: 'draft' });
+    expect(spec).toMatchObject({ development_plan_item_id: item.id, status: 'in_review', gate_state: 'awaiting_approval' });
     const [runtimeArtifact] = await repository.listCodexRuntimeJobArtifacts({ runtime_job_id: runtimeJob.id });
     expect(JSON.stringify(runtimeArtifact?.metadata_json)).not.toContain('generated_payload');
     await expect(repository.getAutomationActionRun(actionResponse.action_run.id)).resolves.toMatchObject({
@@ -1138,7 +1139,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     );
 
     const [spec] = await repository.listSpecs();
-    expect(spec).toMatchObject({ development_plan_item_id: item.id, status: 'draft' });
+    expect(spec).toMatchObject({ development_plan_item_id: item.id, status: 'in_review', gate_state: 'awaiting_approval' });
     await expect(repository.listSpecRevisions(spec.id)).resolves.toHaveLength(1);
     await expect(repository.getAutomationActionRun(actionResponse.action_run.id)).resolves.toMatchObject({
       status: 'succeeded',
@@ -1186,6 +1187,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
 
     const [spec] = await repository.listSpecs();
     const [specRevision] = await repository.listSpecRevisions(spec.id);
+    const workflow = await activeWorkflowForItem(app, item.id);
     expect(specRevision).toMatchObject({
       qa_owner_actor_id: actorReviewer,
       testability_note: expect.stringContaining(item.title),
@@ -1193,7 +1195,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
       test_strategy_summary: 'API writer tests',
     });
 
-    await submitCurrentSpecRevision(app, item.id);
+    await transitionWorkflowForSpecSubmit(app, workflow.id, specRevision.id, actorTech);
     await approveCurrentSpecRevision(app, item.id, actorReviewer, 'Runtime Spec approved with QA evidence.');
     await generateItemImplementationPlanRevisionRuntime(app, item.id);
   });
@@ -1275,7 +1277,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ).resolves.toMatchObject({ applied: true, revision: { id: first.applied ? first.revision.id : undefined } });
   });
 
-  it('schedules runtime-backed Implementation Plan Doc generation and writes structured draft fields from the approved Spec', async () => {
+  it('schedules runtime-backed Implementation Plan Doc generation and writes structured review fields from the approved Spec', async () => {
     const { plan, item, boundary } = await seedApprovedBoundary(app);
     await seedGenerationRuntimeForProject(app, plan.project_id, 'repo-1');
     const server = app.getHttpServer();
@@ -1353,7 +1355,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     const [executionPlan] = await repository.listExecutionPlansForDevelopmentPlanItem(item.id);
     expect(executionPlan).toMatchObject({
       development_plan_item_id: item.id,
-      status: 'draft',
+      status: 'in_review',
     });
     expect(executionPlan.approved_revision_id).toBeUndefined();
     const [executionPlanRevision] = await repository.listExecutionPlanRevisions(executionPlan.id);
@@ -1373,7 +1375,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
         handoff_criteria: ['Targeted tests pass'],
       }),
     });
-    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'draft' });
+    await expect(repository.getDevelopmentPlanItem(item.id)).resolves.toMatchObject({ implementation_plan_status: 'in_review' });
     const replayed = await generateItemImplementationPlanRevisionRuntime(app, item.id);
     expect(replayed.action_run.id).toBe(actionResponse.action_run.id);
     expect(replayed.runtime_job.id).toBe(actionResponse.runtime_job.id);

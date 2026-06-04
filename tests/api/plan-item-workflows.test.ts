@@ -536,6 +536,17 @@ describe('Plan Item Workflow API', () => {
     expect(approval.body.readiness).toMatchObject({ state: 'not_evaluated', can_evaluate: true });
 
     await request(app.getHttpServer())
+      .get(`/query/development-plans/${planSeed.plan.id}/items/${planSeed.item.id}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_item_workflow).toMatchObject({
+          id: planSeed.workflow.id,
+          status: 'implementation_plan_review',
+          readiness: { state: 'not_evaluated', can_evaluate: true, blocker_codes: [] },
+        });
+      });
+
+    await request(app.getHttpServer())
       .post(`/plan-item-workflows/${planSeed.workflow.id}/execution-readiness/evaluate`)
       .send({ actor_id: planSeed.ids.actorTech, rationale_markdown: 'Check readiness after deterministic queued generation.' })
       .expect(201)
@@ -543,6 +554,17 @@ describe('Plan Item Workflow API', () => {
         expect(body.status).toBe('execution_ready');
         expect(body.readiness).toMatchObject({ state: 'ready', can_evaluate: false, blocker_codes: [] });
         expect(body).not.toHaveProperty('execution_package_id');
+      });
+
+    await request(app.getHttpServer())
+      .get(`/query/development-plans/${planSeed.plan.id}/items/${planSeed.item.id}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_item_workflow).toMatchObject({
+          id: planSeed.workflow.id,
+          status: 'execution_ready',
+          readiness: { state: 'ready', can_evaluate: false, blocker_codes: [] },
+        });
       });
 
     const readyWorkflow = await repository.getPlanItemWorkflow(planSeed.workflow.id);

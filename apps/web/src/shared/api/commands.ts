@@ -40,6 +40,7 @@ import type {
   RunOperatorCommandResponse,
   RunPackageBody,
   RunSession,
+  RunQueuedWorkflowActionResponse,
   BugDetail,
   InitiativeDetail,
   SpecRevision,
@@ -481,7 +482,7 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         ...actorRequest(body.actor_id),
       }),
     runWorkflowQueuedAction: (workflowId: string, actionId: string, body: RunQueuedWorkflowActionBody) =>
-      request<PlanItemWorkflowPublicDto>(
+      request<RunQueuedWorkflowActionResponse>(
         `/plan-item-workflows/${encodeURIComponent(workflowId)}/actions/${encodeURIComponent(actionId)}/run`,
         {
           method: 'POST',

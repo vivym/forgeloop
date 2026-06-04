@@ -8,6 +8,7 @@ import type {
   MyWorkQueueItem,
   ObjectRef,
   ProductObjectRef,
+  PlanItemWorkflowReadiness,
   PlanItemWorkflowTimelineEvent,
   ProductSafeDisabledReason,
   ReleaseReadinessDetail,
@@ -38,7 +39,7 @@ import type {
   Attachment,
   WorkItem,
 } from '@forgeloop/domain';
-import { planItemWorkflowPublicProjection } from '@forgeloop/domain';
+import { codexCanonicalDigest, planItemWorkflowPublicProjection } from '@forgeloop/domain';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
 
@@ -587,6 +588,7 @@ async function planItemWorkflowProjection(repository: DeliveryRepository, workfl
     session,
     queued_actions: queuedActions,
     timeline_events,
+    readiness: await planItemWorkflowReadinessProjection(repository, workflow),
     context_preview: {
       digest: queuedActions[0]?.context_preview_digest ?? `sha256:${'0'.repeat(64)}`,
       ...(session.latest_capsule_digest === undefined ? {} : { capsule_digest: session.latest_capsule_digest }),
@@ -602,6 +604,46 @@ async function planItemWorkflowProjection(repository: DeliveryRepository, workfl
       updated_at: workflow.updated_at,
     },
   });
+}
+
+async function planItemWorkflowReadinessProjection(
+  repository: DeliveryRepository,
+  workflow: NonNullable<Awaited<ReturnType<DeliveryRepository['getPlanItemWorkflow']>>>,
+): Promise<PlanItemWorkflowReadiness | undefined> {
+  const transitions = await repository.listPlanItemWorkflowTransitions(workflow.id);
+  const latestReadinessTransition = transitions
+    .filter((transition) => transition.evidence_object_type === 'execution_readiness_record')
+    .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id))[0];
+  if (latestReadinessTransition !== undefined) {
+    const record = await repository.getExecutionReadinessRecord(latestReadinessTransition.evidence_object_id);
+    if (record !== undefined && record.invalidated_at === undefined) {
+      return {
+        state: record.readiness_state === 'ready' ? 'ready' : 'blocked',
+        can_evaluate: record.readiness_state !== 'ready',
+        blocker_codes: record.blocker_codes,
+        evaluated_at: record.created_at,
+        evidence_digest: codexCanonicalDigest({
+          execution_readiness_record_id: record.id,
+          workflow_id: record.workflow_id,
+          approved_boundary_summary_revision_id: record.approved_boundary_summary_revision_id,
+          approved_spec_revision_id: record.approved_spec_revision_id,
+          approved_implementation_plan_revision_id: record.approved_implementation_plan_revision_id,
+          readiness_state: record.readiness_state,
+          blocker_codes: record.blocker_codes,
+        }),
+      };
+    }
+  }
+
+  if (
+    workflow.status === 'implementation_plan_review' &&
+    workflow.active_boundary_summary_revision_id !== undefined &&
+    workflow.active_spec_doc_revision_id !== undefined &&
+    workflow.active_implementation_plan_doc_revision_id !== undefined
+  ) {
+    return { state: 'not_evaluated', can_evaluate: true, blocker_codes: [] };
+  }
+  return undefined;
 }
 
 export async function listSpecsExecutionPlans(

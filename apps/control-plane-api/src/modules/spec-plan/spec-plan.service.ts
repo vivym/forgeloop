@@ -129,7 +129,7 @@ export class SpecPlanService {
     const completedReplay = await this.replayAppliedProductGenerationSchedule(
       repository,
       itemId,
-      'item_spec_runtime_draft_generated',
+      'item_spec_runtime_review_generated',
       'generate_development_plan_item_spec_revision',
       actorId,
       context,
@@ -238,7 +238,7 @@ export class SpecPlanService {
     const completedReplay = await this.replayAppliedProductGenerationSchedule(
       repository,
       itemId,
-      'item_spec_runtime_draft_generated',
+      'item_spec_runtime_review_generated',
       'generate_development_plan_item_spec_revision',
       actorId,
       context,
@@ -286,7 +286,7 @@ export class SpecPlanService {
     const completedReplay = await this.replayAppliedProductGenerationSchedule(
       repository,
       itemId,
-      'item_implementation_plan_runtime_draft_generated',
+      'item_implementation_plan_runtime_review_generated',
       generationIdentity.action_type,
       actorId,
       context,
@@ -401,7 +401,7 @@ export class SpecPlanService {
     const completedReplay = await this.replayAppliedProductGenerationSchedule(
       repository,
       itemId,
-      'item_implementation_plan_runtime_draft_generated',
+      'item_implementation_plan_runtime_review_generated',
       'generate_development_plan_item_implementation_plan_revision',
       actorId,
       context,
@@ -894,7 +894,8 @@ export class SpecPlanService {
         },
         author_actor_id: String(precondition.requested_by_actor_id),
       });
-      await repository.saveSpec({ ...spec, current_revision_id: revision.id, updated_at: this.now() });
+      const reviewReadySpec = transitionSpecPlan({ ...spec, current_revision_id: revision.id }, { type: 'submit_for_approval', at: this.now() }) as Spec;
+      await repository.saveSpec(reviewReadySpec);
       await repository.saveWorkItem({
         ...loaded.workItem,
         current_spec_id: spec.id,
@@ -906,11 +907,11 @@ export class SpecPlanService {
         loaded.plan,
         loaded.item,
         'spec_status',
-        'draft',
+        'in_review',
         'spec_runtime_generation_applied',
         String(precondition.requested_by_actor_id),
       );
-      await this.eventWithRepository(repository, 'development_plan_item', loaded.item.id, 'item_spec_runtime_draft_generated', String(precondition.requested_by_actor_id), {
+      await this.eventWithRepository(repository, 'development_plan_item', loaded.item.id, 'item_spec_runtime_review_generated', String(precondition.requested_by_actor_id), {
         spec_id: spec.id,
         spec_revision_id: revision.id,
         context_manifest_id: loaded.contextManifest.id,
@@ -1554,13 +1555,13 @@ export class SpecPlanService {
         },
         author_actor_id: String(precondition.requested_by_actor_id),
       });
-      await repository.saveExecutionPlan({ ...executionPlan, current_revision_id: revision.id, updated_at: this.now() });
+      await repository.saveExecutionPlan({ ...executionPlan, status: 'in_review', current_revision_id: revision.id, updated_at: this.now() });
       await this.updateDevelopmentPlanItemArtifactStatus(
         repository,
         loaded.plan,
         loaded.item,
         'implementation_plan_status',
-        'draft',
+        'in_review',
         'implementation_plan_runtime_generation_applied',
         String(precondition.requested_by_actor_id),
       );
@@ -1568,7 +1569,7 @@ export class SpecPlanService {
         repository,
         'development_plan_item',
         loaded.item.id,
-        'item_implementation_plan_runtime_draft_generated',
+        'item_implementation_plan_runtime_review_generated',
         String(precondition.requested_by_actor_id),
         {
           implementation_plan_id: executionPlan.id,

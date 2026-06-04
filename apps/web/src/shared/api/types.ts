@@ -408,6 +408,11 @@ export interface RunQueuedWorkflowActionBody {
   actor_id: string;
 }
 
+export interface RunQueuedWorkflowActionResponse {
+  workflow: PlanItemWorkflowPublicDto;
+  queued_action: PlanItemWorkflowPublicDto['queued_actions'][number];
+}
+
 export interface ApproveWorkflowArtifactRevisionBody {
   actor_id: string;
   decision_markdown?: string;
