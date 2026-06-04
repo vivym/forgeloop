@@ -4,7 +4,7 @@ import { cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { boundarySummary, developmentPlan, developmentPlanItem, projectId, spec, specRevision } from './fixtures/product-data';
+import { boundarySummary, developmentPlan, developmentPlanItem, execution, executionPlanRevision, projectId, spec, specRevision } from './fixtures/product-data';
 import { expectFirstViewportContract } from './helpers/first-viewport-contract';
 import { renderRoute } from './router-test-utils';
 
@@ -344,40 +344,245 @@ describe('Development Plan routes', () => {
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
 
     expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-    expectTextContent(screen.getByTestId('gate-rail'), /Boundary/i);
-    expectTextContent(screen.getByTestId('gate-rail'), /Spec/i);
-    expectTextContent(screen.getByTestId('gate-rail'), /Implementation Plan Doc/i);
-    expect(screen.getByRole('region', { name: /development plan item revisions/i })).toBeTruthy();
-    expect(screen.getByText(/Item revision 1/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /compare item revisions/i })).toBeTruthy();
-    expect(screen.getByRole('region', { name: /boundary summary revisions/i })).toBeTruthy();
-    expect(screen.getByText(/Boundary summary revision 1/i)).toBeTruthy();
-    expect(screen.getAllByText(boundarySummary.summary_markdown).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: /compare boundary revisions/i })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: /workflow timeline/i })).toBeTruthy();
+    expect(screen.getByRole('log', { name: /codex conversation/i })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: /artifact and context/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /open boundary summary/i })).toBeTruthy();
+    expect(document.body.textContent).toMatch(/Boundary Summary available|Context Preview/i);
     expect(document.body.textContent).not.toMatch(/\bTask\b|Work Item Owner|owner_actor_id/);
   });
 
-  it('renders the Plan Item overview as one active gate workspace with compact rails', async () => {
+  it('renders workflow-owned Plan Items as a chat-first workspace', async () => {
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
 
     expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-    expect(document.querySelector('[data-product-shell="plan-item-gate-workspace"]')).toBeInstanceOf(HTMLElement);
-    expectTextContent(screen.getByTestId('plan-item-identity-row'), developmentPlanItem.title);
-    expectTextContent(screen.getByTestId('plan-item-identity-row'), /Plan Item Driver|Responsible role|Risk/i);
-    expectTextContent(screen.getByTestId('gate-rail'), /Boundary/i);
-    expectTextContent(screen.getByTestId('gate-rail'), /Spec/i);
-    expectTextContent(screen.getByTestId('gate-rail'), /Implementation Plan Doc/i);
-    expectTextContent(screen.getByTestId('gate-rail'), /Execution/i);
-    expectTextContent(screen.getByTestId('gate-rail'), /Code Review/i);
-    expectTextContent(screen.getByTestId('gate-rail'), /QA/i);
-    expectTextContent(screen.getByTestId('gate-rail'), /Release/i);
-    expectTextContent(screen.getByTestId('active-gate-workspace'), /Spec|Implementation Plan Doc|QA|Code Review|Brainstorming/i);
-    expect(screen.queryAllByTestId('full-gate-body')).toHaveLength(1);
-    expectTextContent(screen.getByTestId('decision-evidence-rail'), /Decision/i);
-    expectTextContent(screen.getByTestId('decision-evidence-rail'), /Evidence/i);
-    expectTextContent(screen.getByTestId('decision-evidence-rail'), /Activity/i);
-    expectTextContent(screen.getByTestId('decision-evidence-rail'), /Context/i);
-    expect(screen.queryByText(/Development Plan Item Detail: Approved state/i)).toBeNull();
+    expect(screen.getByRole('navigation', { name: /workflow timeline/i })).toBeTruthy();
+    expect(screen.getByRole('log', { name: /codex conversation/i })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: /artifact and context/i })).toBeTruthy();
+    expect(screen.getByRole('form', { name: /workflow message/i })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: /message/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /generate spec/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /start execution/i })).toBeNull();
+  });
+
+  it('keeps the conversation visible while artifact drawer is open', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+
+    await user.click(await screen.findByRole('button', { name: /open spec doc/i }));
+
+    expect(screen.getByRole('log', { name: /codex conversation/i })).toBeInstanceOf(HTMLElement);
+    expect(screen.getByRole('region', { name: /spec doc revision/i })).toBeInstanceOf(HTMLElement);
+  });
+
+  it('shows public markdown excerpts for workflow artifacts in the drawer', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+
+    await user.click(await screen.findByRole('button', { name: /open boundary summary/i }));
+    expect(screen.getByRole('region', { name: /boundary summary revision/i }).textContent).toContain(boundarySummary.summary_markdown);
+
+    await user.click(screen.getByRole('button', { name: /open spec doc/i }));
+    expect(screen.getByRole('region', { name: /spec doc revision/i }).textContent).toContain(specRevision.content);
+
+    await user.click(screen.getByRole('button', { name: /open implementation plan doc/i }));
+    expect(screen.getByRole('region', { name: /implementation plan doc revision/i }).textContent).toContain(executionPlanRevision.content);
+    expect(document.body.textContent).not.toMatch(/raw-thread-id|artifact:\/\/|prompt transcript|\/Users\//i);
+  });
+
+  it('places Run generation on queued action events, not in the composer', async () => {
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+
+    const composer = await screen.findByRole('form', { name: /workflow message/i });
+    expect(within(composer).queryByRole('button', { name: /run generation/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /run generation for spec doc/i })).toBeTruthy();
+  });
+
+  it('records workflow chat input through messages without running queued generation', async () => {
+    const user = userEvent.setup();
+    const posted: string[] = [];
+    let itemFetchCount = 0;
+    const idleWorkflowItem = {
+      ...itemOverride({
+        boundary_status: 'approved',
+        spec_status: 'approved',
+        implementation_plan_status: 'approved',
+        execution_status: 'not_started',
+      }),
+      plan_item_workflow: workflowProjectionFixture({
+        queued_actions: [],
+        timeline_events: [],
+        status: 'brainstorming',
+      }),
+    };
+
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: () => {
+          itemFetchCount += 1;
+          return idleWorkflowItem;
+        },
+        'POST /plan-item-workflows/workflow-product-workspace-preview/messages': ({ init }) => {
+          posted.push(`message:${JSON.stringify(parseRequestBody(init))}`);
+          return { ...idleWorkflowItem.plan_item_workflow, timeline_events: [] };
+        },
+      },
+    });
+
+    await user.type(await screen.findByRole('textbox', { name: /message/i }), 'Continue from the current boundary.');
+    await user.click(screen.getByRole('button', { name: /^send message$/i }));
+
+    expect(posted).toEqual([
+      expect.stringContaining('message:'),
+    ]);
+    expect(posted[0]).toContain('"action":"continue_ai"');
+    expect(posted.join('\n')).not.toContain('/actions/');
+    await waitFor(() => expect(itemFetchCount).toBeGreaterThan(1));
+    expect(document.body.textContent).not.toMatch(/raw-thread-id|artifact:\/\/|prompt transcript|\/Users\//i);
+  });
+
+  it('sends workflow-owned queued and artifact commands through queued-action APIs only', async () => {
+    const user = userEvent.setup();
+    const posted: string[] = [];
+    let itemFetchCount = 0;
+    let workflow = workflowProjectionFixture();
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: () => {
+          itemFetchCount += 1;
+          return itemOverride(
+            {
+              boundary_status: 'approved',
+              spec_status: 'approved',
+              implementation_plan_status: 'approved',
+              execution_status: 'not_started',
+            },
+            {
+              item: {
+                plan_item_workflow: workflow,
+              },
+            },
+          );
+        },
+        'POST /plan-item-workflows/workflow-product-workspace-preview/actions/action-generate-spec-doc/run': ({ init }) => {
+          posted.push(`run:${JSON.stringify(parseRequestBody(init))}`);
+          workflow = workflowProjectionFixture({
+            status: 'spec_review',
+            queued_actions: [],
+            timeline_events: [
+              {
+                id: 'event-human-spec-question',
+                workflow_id: 'workflow-product-workspace-preview',
+                event_type: 'human_message',
+                status: 'recorded',
+                actor_id: 'actor-reviewer',
+                body_markdown: 'Please tighten the acceptance criteria before review.',
+                created_at: '2026-05-18T00:23:30.000Z',
+              },
+            ],
+          });
+          return { id: 'action-generate-spec-doc', status: 'blocked' };
+        },
+        [`POST /plan-item-workflows/workflow-product-workspace-preview/artifacts/spec-doc/revisions/${specRevision.id}/approve`]: ({ init }) => {
+          posted.push(`approve:${JSON.stringify(parseRequestBody(init))}`);
+          return { status: 'implementation_plan_generation_queued' };
+        },
+        [`POST /plan-item-workflows/workflow-product-workspace-preview/artifacts/spec-doc/revisions/${specRevision.id}/request-changes`]: ({ init }) => {
+          posted.push(`request:${JSON.stringify(parseRequestBody(init))}`);
+          return { status: 'brainstorming' };
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+    await user.click(await screen.findByRole('button', { name: /run generation for spec doc/i }));
+    await user.click(screen.getByRole('button', { name: /open spec doc/i }));
+    await user.click(screen.getByRole('button', { name: /^approve revision$/i }));
+    await user.type(screen.getByRole('textbox', { name: /request changes feedback/i }), 'Tighten acceptance evidence.');
+    await user.click(screen.getByRole('button', { name: /^request changes$/i }));
+
+    expect(posted).toEqual([
+      `run:${JSON.stringify({ actor_id: 'actor-owner' })}`,
+      `approve:${JSON.stringify({ actor_id: 'actor-owner', decision_markdown: 'Approved Spec Doc from workflow drawer.' })}`,
+      `request:${JSON.stringify({ actor_id: 'actor-owner', reason_markdown: 'Tighten acceptance evidence.' })}`,
+    ]);
+    expect(screen.getByRole('log', { name: /codex conversation/i }).textContent).toContain(
+      'Please tighten the acceptance criteria before review.',
+    );
+    await waitFor(() => expect(itemFetchCount).toBeGreaterThan(1));
+    expect(document.body.textContent).not.toMatch(/raw-thread-id|artifact:\/\/|prompt transcript|\/Users\//i);
+  });
+
+  it('refreshes workflow projection after readiness evaluation', async () => {
+    const user = userEvent.setup();
+    let itemFetchCount = 0;
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: () => {
+          itemFetchCount += 1;
+          return itemOverride(
+            {
+              boundary_status: 'approved',
+              spec_status: 'approved',
+              implementation_plan_status: 'approved',
+              execution_status: 'not_started',
+            },
+            {
+              item: {
+                plan_item_workflow: workflowProjectionFixture({
+                  status: 'implementation_plan_review',
+                  queued_actions: [],
+                  timeline_events: [],
+                  readiness: { state: 'not_evaluated', can_evaluate: true, blocker_codes: [] },
+                  blockers: [],
+                }),
+              },
+            },
+          );
+        },
+        'POST /plan-item-workflows/workflow-product-workspace-preview/execution-readiness/evaluate': ({ init }) => ({
+          ...workflowProjectionFixture({ readiness: { state: 'ready', can_evaluate: false, blocker_codes: [] }, blockers: [] }),
+          actor_id: (parseRequestBody(init) as { actor_id?: string }).actor_id,
+        }),
+      },
+    });
+
+    await user.click(await screen.findByRole('button', { name: /^evaluate readiness$/i }));
+
+    await waitFor(() => expect(itemFetchCount).toBeGreaterThan(1));
+  });
+
+  it('disables artifact review and readiness actions outside their workflow stages with public reasons', async () => {
+    const user = userEvent.setup();
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
+          {
+            boundary_status: 'approved',
+            spec_status: 'approved',
+            implementation_plan_status: 'approved',
+            execution_status: 'not_started',
+          },
+          {
+            item: {
+              plan_item_workflow: workflowProjectionFixture({
+                status: 'spec_generation_queued',
+                readiness: { state: 'not_evaluated', can_evaluate: false, blocker_codes: [] },
+                blockers: [],
+              }),
+            },
+          },
+        ),
+      },
+    });
+
+    await user.click(await screen.findByRole('button', { name: /open spec doc/i }));
+
+    expectButtonDisabled(screen.getByRole('button', { name: /^approve revision$/i }));
+    expectButtonDisabled(screen.getByRole('button', { name: /^request changes$/i }));
+    expectButtonDisabled(screen.getByRole('button', { name: /^evaluate readiness$/i }));
+    expect(document.body.textContent).toContain('Spec Doc review is available only during Spec Review.');
+    expect(document.body.textContent).toContain('Execution Ready can be evaluated only during Implementation Plan Review.');
   });
 
   it('renders Development Plan Item overview and execution as gate-flow workspaces', async () => {
@@ -388,11 +593,11 @@ describe('Development Plan routes', () => {
       const screen = await renderRoute(route);
 
       expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-      expectFirstViewportContract(screen, { pageFamily: 'gate-workspace', heading: developmentPlanItem.title });
-      expect(document.querySelector('[data-page-family="gate-workspace"]')).toBeTruthy();
-      expect(document.querySelector('[data-product-shell="plan-item-gate-workspace"]')).toBeTruthy();
-      expect(document.querySelector('[data-gate-workspace][data-primary-work-surface]')).toBeTruthy();
-      expect(document.querySelector('[data-gate-workspace]')?.textContent).toContain(developmentPlanItem.next_action);
+      expectFirstViewportContract(screen, { pageFamily: 'plan-item-workflow', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-page-family="plan-item-workflow"]')).toBeTruthy();
+      expect(document.querySelector('[data-product-shell="plan-item-workflow-workspace"]')).toBeTruthy();
+      expect(document.querySelector('[data-plan-item-workflow-workspace][data-primary-work-surface]')).toBeTruthy();
+      expect(document.querySelector('[data-plan-item-workflow-workspace]')?.textContent).toMatch(/Workflow timeline|Codex conversation|Context Preview/i);
       expect(document.body.textContent).not.toMatch(/\bTask\b|Work Item Owner|owner_actor_id|\/specs\/|\/plans\//);
       cleanup();
     }
@@ -403,27 +608,27 @@ describe('Development Plan routes', () => {
       const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/${focus}`);
 
       expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-      expectFirstViewportContract(screen, { pageFamily: 'document-review', heading: developmentPlanItem.title });
-      expect(document.querySelector('[data-page-family="document-review"]')).toBeTruthy();
-      expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeTruthy();
-      expect(await screen.findByLabelText(/editor toolbar/i)).toBeTruthy();
-      expect(screen.getByRole('button', { name: /source mode|rich mode/i })).toBeTruthy();
-      expect(screen.getByRole('button', { name: /insert image/i })).toBeTruthy();
-      expect(screen.getByRole('button', { name: /save/i })).toBeTruthy();
-      if (focus === 'spec') {
-        expect(screen.getByRole('button', { name: /submit spec for review/i })).toBeTruthy();
-        expect(screen.getByRole('button', { name: /approve spec/i })).toBeTruthy();
-      } else {
-        expect(screen.getByRole('button', { name: /submit implementation plan doc for review/i })).toBeTruthy();
-        expect(screen.getByRole('button', { name: /approve implementation plan doc/i })).toBeTruthy();
-      }
+      expectFirstViewportContract(screen, { pageFamily: 'plan-item-workflow', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-page-family="plan-item-workflow"]')).toBeTruthy();
+      expect(document.querySelector('[data-plan-item-workflow-workspace][data-primary-work-surface]')).toBeTruthy();
+      expect(screen.getByRole('log', { name: /codex conversation/i })).toBeTruthy();
+      expect(screen.getByRole('complementary', { name: /artifact and context/i })).toBeTruthy();
+      expect(screen.queryByLabelText(/editor toolbar/i)).toBeNull();
+      expect(screen.queryByRole('button', { name: /generate spec|generate implementation plan doc|start execution/i })).toBeNull();
       cleanup();
     }
   });
 
   it('does not expose draft save when the persisted item-scoped revision body is unavailable', async () => {
+    const legacyItem = itemOverride({
+      boundary_status: 'approved',
+      spec_status: 'in_review',
+      implementation_plan_status: 'missing',
+      execution_status: 'not_started',
+    });
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`, {
       apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: legacyItem,
         [`GET /spec-revisions/${specRevision.id}`]: new Response(JSON.stringify({ message: 'revision unavailable' }), {
           headers: { 'content-type': 'application/json' },
           status: 500,
@@ -440,8 +645,15 @@ describe('Development Plan routes', () => {
   it('loads and saves real item-scoped Spec revision drafts through the route API', async () => {
     const user = userEvent.setup();
     const draftBodies: unknown[] = [];
+    const legacyItem = itemOverride({
+      boundary_status: 'approved',
+      spec_status: 'in_review',
+      implementation_plan_status: 'missing',
+      execution_status: 'not_started',
+    });
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`, {
       apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: legacyItem,
         [`GET /spec-revisions/${specRevision.id}`]: {
           ...specRevision,
           content: 'Persisted route Spec body',
@@ -481,9 +693,20 @@ describe('Development Plan routes', () => {
   it('prioritizes the active gate body on Development Plan Item focus routes', async () => {
     for (const [route, title, bodyText] of [
       [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, 'Gate summary', /Boundary|Spec|Execution/i],
-      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, 'Execution supervision', /Codex worker is rebuilding product workspace preview data/i],
+      [`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, 'Execution supervision', /Execution|running/i],
     ] as const) {
-      const screen = await renderRoute(route);
+      const screen = await renderRoute(route, {
+        apiOverrides: {
+          [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride({
+            boundary_status: 'approved',
+            spec_status: 'approved',
+            implementation_plan_status: 'approved',
+            execution_status: route.endsWith('/execution') ? 'running' : 'not_started',
+            review_status: 'not_started',
+            qa_handoff_status: 'not_started',
+          }),
+        },
+      });
 
       expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
       const activeBody = document.querySelector('[data-active-gate-body]');
@@ -515,290 +738,25 @@ describe('Development Plan routes', () => {
     expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
   });
 
-  it('exposes item-scoped lifecycle actions only when their gate prerequisites are met', async () => {
-    const user = userEvent.setup();
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
-
-    expectButtonDisabled(await screen.findByRole('button', { name: /^generate spec$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /submit spec for review/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /approve spec/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /request spec changes/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /reject spec/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /regenerate spec/i }));
-    expectButtonEnabled(screen.getByRole('button', { name: /compare spec revisions/i }));
-
-    expectButtonDisabled(screen.getByRole('button', { name: /^generate implementation plan doc$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /submit implementation plan doc for review/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /approve implementation plan doc/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /request implementation plan doc changes/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /reject implementation plan doc/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /regenerate implementation plan doc/i }));
-    expectButtonEnabled(screen.getByRole('button', { name: /compare implementation plan doc revisions/i }));
-
-    expectButtonDisabled(screen.getByRole('button', { name: /^start execution$/i }));
-    expectButtonEnabled(screen.getByRole('button', { name: /^interrupt execution$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^continue execution$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^ready for code review$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^create qa handoff$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^accept qa handoff$/i }));
-    expectButtonEnabled(screen.getByRole('button', { name: /^block qa handoff$/i }));
-
-    await user.click(screen.getByRole('button', { name: /compare spec revisions/i }));
-    expect(await screen.findByText(/Compare Spec Revisions command completed/i)).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: /compare implementation plan doc revisions/i }));
-    expect(await screen.findByText(/Compare Implementation Plan Doc Revisions command completed/i)).toBeTruthy();
-  });
-
-  it('enables generation, approval, execution, review, and QA actions at the right item statuses', async () => {
-    const scenarios = [
-      {
-        status: { boundary_status: 'approved', spec_status: 'missing' },
-        enabled: /^generate spec$/i,
-        disabled: [/^generate implementation plan doc$/i, /^start execution$/i],
-      },
-      {
-        status: { boundary_status: 'approved', spec_status: 'in_review' },
-        enabled: /approve spec/i,
-        disabled: [/^generate implementation plan doc$/i, /^start execution$/i],
-      },
-      {
-        status: { boundary_status: 'approved', spec_status: 'approved', implementation_plan_status: 'missing' },
-        enabled: /^generate implementation plan doc$/i,
-        disabled: [/^start execution$/i],
-      },
-      {
-        status: { boundary_status: 'approved', spec_status: 'approved', implementation_plan_status: 'in_review' },
-        enabled: /approve implementation plan doc/i,
-        disabled: [/^start execution$/i],
-      },
-      {
-        status: { boundary_status: 'approved', spec_status: 'approved', implementation_plan_status: 'approved', execution_status: 'not_started' },
-        enabled: /^start execution$/i,
-        disabled: [/^ready for code review$/i],
-      },
-      {
-        status: { boundary_status: 'approved', spec_status: 'approved', implementation_plan_status: 'approved', execution_status: 'completed', review_status: 'not_started' },
-        enabled: /^ready for code review$/i,
-        disabled: [/^create qa handoff$/i],
-      },
-      {
-        status: { boundary_status: 'approved', spec_status: 'approved', implementation_plan_status: 'approved', execution_status: 'completed', review_status: 'approved', qa_handoff_status: 'not_started' },
-        enabled: /^create qa handoff$/i,
-        disabled: [/^accept qa handoff$/i],
-      },
-      {
-        status: { boundary_status: 'approved', spec_status: 'approved', implementation_plan_status: 'approved', execution_status: 'completed', review_status: 'approved', qa_handoff_status: 'in_review' },
-        enabled: /^accept qa handoff$/i,
-        disabled: [/^continue execution$/i],
-      },
-    ] as const;
-
-    for (const scenario of scenarios) {
-      const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
-        apiOverrides: {
-          [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(scenario.status),
-        },
-      });
-
-      expectButtonEnabled(await screen.findByRole('button', { name: scenario.enabled }));
-      for (const name of scenario.disabled) {
-        expectButtonDisabled(screen.getByRole('button', { name }));
-      }
-      cleanup();
-    }
-  });
-
-  it('keeps lifecycle actions disabled before prerequisite gates are approved', async () => {
-    const pendingItem = {
-      ...developmentPlanItem,
-      boundary_status: 'pending',
-      spec_status: 'missing',
-      implementation_plan_status: 'missing',
-      execution_status: 'not_started',
-      review_status: 'not_started',
-      qa_handoff_status: 'not_started',
-      specs: [],
-      implementation_plan_docs: [],
-      executions: [],
-      qa_handoffs: [],
-    };
+  it('does not expose retired direct Plan Item generation or execution commands', async () => {
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
       apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(pendingItem),
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride({
+          boundary_status: developmentPlanItem.boundary_status,
+          spec_status: developmentPlanItem.spec_status,
+          implementation_plan_status: developmentPlanItem.implementation_plan_status,
+          execution_status: developmentPlanItem.execution_status,
+          review_status: developmentPlanItem.review_status,
+          qa_handoff_status: developmentPlanItem.qa_handoff_status,
+        }),
       },
     });
 
-    expectButtonDisabled(await screen.findByRole('button', { name: /^generate spec$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^generate implementation plan doc$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^start execution$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^ready for code review$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^create qa handoff$/i }));
-  });
-
-  it('keeps Implementation Plan Doc and execution actions disabled when QA strategy or package boundaries are missing', async () => {
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
-      apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
-          {
-            boundary_status: 'approved',
-            spec_status: 'approved',
-            implementation_plan_status: 'missing',
-            execution_status: 'not_started',
-          },
-          {
-            spec: {
-              qa_owner_actor_id: undefined,
-              testability_note: '',
-              acceptance_criteria: [],
-              test_strategy_summary: '',
-            },
-          },
-        ),
-      },
-    });
-
-    const generateImplementationPlanDoc = await screen.findByRole('button', { name: /^generate implementation plan doc$/i });
-    expectButtonDisabled(generateImplementationPlanDoc);
-    expect(generateImplementationPlanDoc.getAttribute('aria-describedby')).toBeTruthy();
-    expect(document.body.textContent).toMatch(/QA\/Test Owner|testability note|acceptance criteria|test strategy/i);
-    expectButtonDisabled(screen.getByRole('button', { name: /^start execution$/i }));
-    cleanup();
-
-    const noPackageScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
-      apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
-          {
-            boundary_status: 'approved',
-            spec_status: 'approved',
-            implementation_plan_status: 'approved',
-            execution_status: 'not_started',
-          },
-          {
-            runtimeBoundary: null,
-          },
-        ),
-      },
-    });
-
-    const startExecution = await noPackageScreen.findByRole('button', { name: /^start execution$/i });
-    expectButtonDisabled(startExecution);
-    expect(document.body.textContent).toMatch(/runnable internal execution boundary/i);
-  });
-
-  it('allows low-risk single-surface Plan Items to generate an Implementation Plan Doc without QA strategy fields', async () => {
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
-      apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
-          {
-            boundary_status: 'approved',
-            spec_status: 'approved',
-            implementation_plan_status: 'missing',
-            execution_status: 'not_started',
-          },
-          {
-            item: {
-              risk: 'low',
-              release_impact: 'none',
-              affected_surfaces: ['apps/web/src/features/requirements'],
-            },
-            spec: {
-              qa_owner_actor_id: undefined,
-              test_owner_actor_id: undefined,
-              testability_note: '',
-              acceptance_criteria: [],
-              test_strategy_summary: '',
-            },
-          },
-        ),
-      },
-    });
-
-    const generateImplementationPlanDoc = await screen.findByRole('button', { name: /^generate implementation plan doc$/i });
-    expectButtonEnabled(generateImplementationPlanDoc);
-    expect(document.body.textContent).toMatch(/QA\/test strategy is optional for low-risk, single-surface Plan Items/i);
-  });
-
-  it('uses combined verification evidence and canonical execution status gates', async () => {
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
-      apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
-          {
-            boundary_status: 'approved',
-            spec_status: 'approved',
-            implementation_plan_status: 'approved',
-            execution_status: 'completed',
-            review_status: 'not_started',
-          },
-          { execution: { status: 'completed', evidence_refs: [], test_evidence_refs: [{ type: 'execution', id: 'test-evidence', title: 'Test evidence' }] } },
-        ),
-      },
-    });
-
-    expectButtonEnabled(await screen.findByRole('button', { name: /^ready for code review$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^interrupt execution$/i }));
-    expectButtonDisabled(screen.getByRole('button', { name: /^continue execution$/i }));
-    cleanup();
-
-    const invalidActiveScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
-      apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
-          {
-            boundary_status: 'approved',
-            spec_status: 'approved',
-            implementation_plan_status: 'approved',
-            execution_status: 'running',
-          },
-          { execution: { status: 'created', worker_state: 'active' } },
-        ),
-      },
-    });
-
-    expectButtonDisabled(await invalidActiveScreen.findByRole('button', { name: /^interrupt execution$/i }));
-  });
-
-  it('makes audited exception QA visible and requires QA acceptance evidence', async () => {
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
-      apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
-          {
-            boundary_status: 'approved',
-            spec_status: 'approved',
-            implementation_plan_status: 'approved',
-            execution_status: 'completed',
-            review_status: 'changes_requested',
-            qa_handoff_status: 'not_started',
-          },
-          {
-            codeReview: {
-              status: 'changes_requested',
-              audited_exception: { reason: 'Prepare QA while review risk is audited.' },
-            },
-          },
-        ),
-      },
-    });
-
-    expect(await screen.findByText(/Audited code review exception enables early QA preparation/i)).toBeTruthy();
-    expectButtonEnabled(screen.getByRole('button', { name: /^create qa handoff$/i }));
-    cleanup();
-
-    const noEvidenceScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
-      apiOverrides: {
-        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
-          {
-            boundary_status: 'approved',
-            spec_status: 'approved',
-            implementation_plan_status: 'approved',
-            execution_status: 'completed',
-            review_status: 'approved',
-            qa_handoff_status: 'pending',
-          },
-          { execution: { status: 'completed', evidence_refs: [], test_evidence_refs: [] } },
-        ),
-      },
-    });
-
-    expectButtonDisabled(await noEvidenceScreen.findByRole('button', { name: /^accept qa handoff$/i }));
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^generate spec$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^generate implementation plan doc$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^start execution$/i })).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Lifecycle actions|Generate Spec|Generate Implementation Plan Doc|Start execution/i);
   });
 
   it('renders release linkage, blockers, and QA evidence context in the Plan Item side rail', async () => {
@@ -883,15 +841,36 @@ describe('Development Plan routes', () => {
 
   it('routes Plan Item Review and QA gate cards to actionable handoff surfaces', async () => {
     const user = userEvent.setup();
-    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+    const gateItem = itemOverride(
+      {
+        boundary_status: 'approved',
+        spec_status: 'approved',
+        implementation_plan_status: 'approved',
+        execution_status: 'completed',
+        review_status: 'changes_requested',
+        qa_handoff_status: 'pending',
+      },
+      {
+        codeReview: { execution_id: execution.id, status: 'changes_requested' },
+        execution: { id: execution.id, development_plan_item_ref: execution.development_plan_item_ref },
+      },
+    );
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: gateItem,
+      },
+    });
 
     await user.click(await screen.findByRole('button', { name: /^open code review$/i }));
-    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
     expect(document.querySelector('[data-page-family="execution-supervision"]')).toBeTruthy();
     expect(await screen.findByRole('heading', { name: /Code review handoff/i })).toBeTruthy();
 
     cleanup();
-    const qaScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
+    const qaScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: gateItem,
+      },
+    });
     await user.click(await qaScreen.findByRole('button', { name: /^open qa handoff$/i }));
     expect(await qaScreen.findByRole('heading', { name: 'QA' })).toBeTruthy();
     expect(document.querySelector('[data-page-family="qa-handoff"]')).toBeTruthy();
@@ -907,7 +886,7 @@ describe('Development Plan routes', () => {
     const itemScreen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);
     expect(await itemScreen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
     expect(itemScreen.queryByLabelText(/Development Plan Item Detail .* state/i)).toBeNull();
-    expect(document.querySelector('[data-product-shell="plan-item-gate-workspace"]')).toBeTruthy();
+    expect(document.querySelector('[data-product-shell="plan-item-workflow-workspace"]')).toBeTruthy();
   });
 });
 
@@ -995,6 +974,78 @@ function itemOverride(
       ...options.qaHandoff,
     }],
     href: `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
+  };
+}
+
+function workflowProjectionFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'workflow-product-workspace-preview',
+    development_plan_id: developmentPlan.id,
+    development_plan_item_id: developmentPlanItem.id,
+    status: 'spec_generation_queued',
+    active_boundary_summary_revision_id: boundarySummary.revision_id,
+    active_spec_doc_revision_id: specRevision.id,
+    active_implementation_plan_doc_revision_id: executionPlanRevision.id,
+    session: {
+      status: 'idle',
+      role: 'active',
+      continuity_state: 'ready',
+      can_continue: true,
+      last_turn_at: '2026-05-18T00:24:00.000Z',
+    },
+    queued_actions: [
+      {
+        id: 'action-generate-spec-doc',
+        workflow_id: 'workflow-product-workspace-preview',
+        kind: 'generate_spec_doc',
+        status: 'queued',
+        source_revision_id: boundarySummary.revision_id,
+        expected_input_capsule_digest: `sha256:${'a'.repeat(64)}`,
+        context_preview_digest: `sha256:${'b'.repeat(64)}`,
+        idempotency_key: `sha256:${'c'.repeat(64)}`,
+        created_by_actor_id: 'actor-reviewer',
+        created_at: '2026-05-18T00:23:00.000Z',
+        updated_at: '2026-05-18T00:23:00.000Z',
+      },
+    ],
+    timeline_events: [
+      {
+        id: 'event-spec-queued',
+        workflow_id: 'workflow-product-workspace-preview',
+        event_type: 'queued_action',
+        status: 'queued',
+        actor_id: 'actor-reviewer',
+        queued_action_id: 'action-generate-spec-doc',
+        queued_action_kind: 'generate_spec_doc',
+        queued_action_status: 'queued',
+        created_at: '2026-05-18T00:23:00.000Z',
+      },
+    ],
+    context_preview: {
+      digest: `sha256:${'d'.repeat(64)}`,
+      capsule_digest: `sha256:${'e'.repeat(64)}`,
+      boundary_summary_revision_id: boundarySummary.revision_id,
+      spec_doc_revision_id: specRevision.id,
+      implementation_plan_doc_revision_id: executionPlanRevision.id,
+      message_count: 1,
+      queued_action_count: 1,
+      updated_at: '2026-05-18T00:24:00.000Z',
+    },
+    readiness: {
+      state: 'blocked',
+      can_evaluate: true,
+      blocker_codes: ['execution_package_missing'],
+    },
+    blockers: [
+      {
+        code: 'execution_package_missing',
+        status: 'active',
+        created_at: '2026-05-18T00:24:00.000Z',
+      },
+    ],
+    created_at: '2026-05-18T00:20:00.000Z',
+    updated_at: '2026-05-18T00:24:00.000Z',
+    ...overrides,
   };
 }
 

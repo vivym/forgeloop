@@ -4,6 +4,7 @@ import type { SpecRevision } from '@forgeloop/domain';
 import { specPlanEditingState, specPlanGateState, specPlanResolution, specPlanStatus, timestampColumn } from './_shared';
 import { actors } from './actor';
 import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
+import { development_plan_item_revisions } from './development-plan';
 
 export const specs = pgTable('specs', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -30,6 +31,7 @@ export const spec_revisions = pgTable('spec_revisions', {
   specId: uuid('spec_id').notNull(),
   workItemId: uuid('work_item_id').notNull(),
   developmentPlanItemId: uuid('development_plan_item_id'),
+  developmentPlanItemRevisionId: uuid('development_plan_item_revision_id').references(() => development_plan_item_revisions.id),
   workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
   codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
   codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),

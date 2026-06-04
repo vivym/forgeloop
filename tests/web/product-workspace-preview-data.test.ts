@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { defaultProductApiResponses } from './fixtures/product-api-mock';
+import { sanitizeProductActionsForDisplay } from '../../apps/web/src/features/product-actions/product-actions';
 import {
   bugDetail,
   codeReviewHandoff,
@@ -153,6 +154,44 @@ describe('product workspace preview data', () => {
     expect(actions.map((action) => action.target?.href)).toEqual(
       expect.arrayContaining([`/development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-product-workspace-preview-state'].id}`]),
     );
+  });
+
+  it('downgrades run_package product actions to navigation instead of executable commands', () => {
+    const actions = sanitizeProductActionsForDisplay([
+      {
+        id: 'run-fixture-package',
+        lane_id: 'execution-owner',
+        priority: 'primary',
+        label: 'Run package',
+        enabled: true,
+        kind: 'command',
+        command: {
+          type: 'run_package',
+          object_type: 'execution_package',
+          object_id: executionPackage.id,
+          scope_ref: { type: 'requirement', id: requirementDetail.id },
+          package_id: executionPackage.id,
+        },
+        target: {
+          kind: 'object',
+          object_type: 'execution',
+          object_id: execution.id,
+          href: `/executions/${execution.id}`,
+        },
+      },
+    ]);
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      kind: 'navigate',
+      label: 'Open execution',
+      target: {
+        kind: 'object',
+        object_type: 'execution',
+        href: `/executions/${execution.id}`,
+      },
+    });
+    expect(actions.map((action) => action.kind === 'command' ? action.command.type : undefined).filter(Boolean)).not.toContain('run_package');
   });
 
   it('does not carry retired fixture terminology in active preview fixtures', () => {

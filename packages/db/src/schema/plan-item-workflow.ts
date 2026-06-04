@@ -279,6 +279,8 @@ export const execution_readiness_records = pgTable(
       .notNull()
       .references(() => actors.id),
     createdAt: timestampColumn('created_at').notNull(),
+    invalidatedAt: timestampColumn('invalidated_at'),
+    invalidatedReason: text('invalidated_reason'),
   },
   (table) => [
     index('execution_readiness_records_workflow_idx').on(table.workflowId),

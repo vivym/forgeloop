@@ -11,7 +11,7 @@ import {
 } from '../../apps/web/src/features/product-surfaces/role-lens';
 
 describe('AI-native web API client contract', () => {
-  it('exposes AI-native command and query methods without product Task or direct Spec/Plan commands', () => {
+  it('exposes AI-native workflow commands without product Task or direct Spec/Plan commands', () => {
     const commands = createForgeloopCommandApi();
     const query = createForgeloopQueryApi();
 
@@ -19,10 +19,12 @@ describe('AI-native web API client contract', () => {
       'generateDevelopmentPlanDraft',
       'regenerateDevelopmentPlanDraft',
       'linkPlanningInputToDevelopmentPlan',
-      'generateItemSpecDraft',
-      'regenerateItemSpecDraft',
-      'generateItemImplementationPlanDraft',
-      'startItemExecution',
+      'startPlanItemWorkflowBrainstorming',
+      'recordWorkflowMessage',
+      'runWorkflowQueuedAction',
+      'approveWorkflowArtifactRevision',
+      'requestWorkflowArtifactChanges',
+      'evaluateWorkflowExecutionReadiness',
       'markExecutionReadyForCodeReview',
       'acceptQaHandoff',
     ]) {
@@ -44,6 +46,15 @@ describe('AI-native web API client contract', () => {
     expect(commands).not.toHaveProperty('createTask');
     expect(commands).not.toHaveProperty('createSpec');
     expect(commands).not.toHaveProperty('createPlan');
+    expect(commands).not.toHaveProperty('generateItemSpecDraft');
+    expect(commands).not.toHaveProperty('regenerateItemSpecDraft');
+    expect(commands).not.toHaveProperty('generateItemImplementationPlanDraft');
+    expect(commands).not.toHaveProperty('regenerateItemImplementationPlanDraft');
+    expect(commands).not.toHaveProperty('startItemExecution');
+    expect(commands).not.toHaveProperty('startBrainstormingSession');
+    expect(commands).not.toHaveProperty('answerBrainstormingQuestion');
+    expect(commands).not.toHaveProperty('recordBrainstormingDecision');
+    expect(commands).not.toHaveProperty('approveBoundary');
   });
 
   it('strictly parses typed Requirement projections without client-side business fallbacks', async () => {

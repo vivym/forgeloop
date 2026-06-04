@@ -153,10 +153,7 @@ describe('Executions API', () => {
     await request(server)
       .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/execution/start`)
       .send({ actor_id: seeded.ids.actorLeader })
-      .expect(409)
-      .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
 
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await expect(repository.listExecutions()).resolves.toHaveLength(0);
@@ -255,10 +252,7 @@ describe('Executions API', () => {
     await request(server)
       .post(`/development-plans/${developmentPlan.id}/items/${item.id}/execution/start`)
       .send({})
-      .expect(409)
-      .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
 
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await expect(repository.listExecutionPackages(developmentPlan.project_id)).resolves.toEqual([]);

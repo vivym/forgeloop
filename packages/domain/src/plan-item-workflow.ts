@@ -116,6 +116,7 @@ export interface PlanItemWorkflowMessage {
   action: WorkflowMessageAction;
   body_markdown: string;
   created_queued_action_id?: string;
+  client_message_id?: string;
   created_at: IsoDateTime;
 }
 
@@ -134,6 +135,8 @@ export interface ExecutionReadinessRecord {
   supporting_evidence: TransitionSupportingEvidence[];
   created_by_actor_id: string;
   created_at: IsoDateTime;
+  invalidated_at?: IsoDateTime;
+  invalidated_reason?: string;
 }
 
 export interface CodexSession {
@@ -398,7 +401,6 @@ const codexSessionContinuityState = (status: CodexSessionStatus): 'ready' | 'run
 };
 
 export const codexSessionPublicProjection = (session: CodexSession) => ({
-  id: session.id,
   status: session.status,
   role: session.role,
   continuity_state: codexSessionContinuityState(session.status),
@@ -537,13 +539,12 @@ export const planItemWorkflowPublicProjection = (input: {
     | 'development_plan_id'
     | 'development_plan_item_id'
     | 'status'
-    | 'active_codex_session_id'
-    | 'active_boundary_summary_revision_id'
-    | 'active_spec_doc_revision_id'
-    | 'active_implementation_plan_doc_revision_id'
-    | 'execution_package_id'
-    | 'created_at'
-    | 'updated_at'
+	    | 'active_codex_session_id'
+	    | 'active_boundary_summary_revision_id'
+	    | 'active_spec_doc_revision_id'
+	    | 'active_implementation_plan_doc_revision_id'
+	    | 'created_at'
+	    | 'updated_at'
   >;
   session: CodexSession;
   queued_actions?: readonly PlanItemWorkflowQueuedAction[];
@@ -556,7 +557,6 @@ export const planItemWorkflowPublicProjection = (input: {
   development_plan_id: input.workflow.development_plan_id,
   development_plan_item_id: input.workflow.development_plan_item_id,
   status: input.workflow.status,
-  active_codex_session_id: input.workflow.active_codex_session_id ?? input.session.id,
   ...(input.workflow.active_boundary_summary_revision_id === undefined
     ? {}
     : { active_boundary_summary_revision_id: input.workflow.active_boundary_summary_revision_id }),
@@ -566,12 +566,10 @@ export const planItemWorkflowPublicProjection = (input: {
   ...(input.workflow.active_implementation_plan_doc_revision_id === undefined
     ? {}
     : { active_implementation_plan_doc_revision_id: input.workflow.active_implementation_plan_doc_revision_id }),
-  ...(input.workflow.execution_package_id === undefined ? {} : { execution_package_id: input.workflow.execution_package_id }),
   session: codexSessionPublicProjection(input.session),
   queued_actions: (input.queued_actions ?? []).map((action) => ({
     id: action.id,
     workflow_id: action.workflow_id,
-    codex_session_id: action.codex_session_id,
     kind: action.kind,
     status: action.status,
     ...(action.source_revision_id === undefined ? {} : { source_revision_id: action.source_revision_id }),
@@ -582,7 +580,6 @@ export const planItemWorkflowPublicProjection = (input: {
       : { expected_input_capsule_digest: action.expected_input_capsule_digest }),
     context_preview_digest: action.context_preview_digest,
     idempotency_key: action.idempotency_key,
-    ...(action.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: action.codex_session_turn_id }),
     ...(action.output_capsule_digest === undefined ? {} : { output_capsule_digest: action.output_capsule_digest }),
     ...(action.output_capsule_sequence === undefined ? {} : { output_capsule_sequence: action.output_capsule_sequence }),
     ...(action.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: action.codex_thread_id_digest }),

@@ -2,7 +2,11 @@ import type { DeliveryRepository } from '@forgeloop/db';
 import type {
   Actor,
   Attachment,
+  BoundarySummary,
+  BoundarySummaryRevision,
   CodeReviewHandoff,
+  CodexRuntimeCapsule,
+  CodexSessionTurn,
   DevelopmentPlan,
   DevelopmentPlanItem,
   DevelopmentPlanItemRevision,
@@ -14,6 +18,8 @@ import type {
   ExecutionPlanRevision,
   Organization,
   Plan,
+  PlanItemWorkflowQueuedAction,
+  PlanItemWorkflowTransition,
   PlanRevision,
   Project,
   ProjectRepo,
@@ -24,8 +30,10 @@ import type {
   RunSession,
   Spec,
   SpecRevision,
+  WorkflowManualDecision,
   WorkItem,
 } from '@forgeloop/domain';
+import { buildPlanItemWorkflowQueuedActionIdempotencyKey, codexCanonicalDigest } from '@forgeloop/domain';
 
 export const productWorkspacePreviewSeedId = 'project-product-workspace-preview';
 
@@ -74,6 +82,7 @@ export async function seedProductWorkspacePreviewRepository(repository: Delivery
   await repository.savePlanRevision(planRevision);
   await repository.saveExecutionPlan(executionPlan);
   await repository.saveExecutionPlanRevision(executionPlanRevision);
+  await seedPlanItemWorkflowPreview(repository);
   await repository.saveExecutionPackage(executionPackage);
   await repository.saveRunSession(runSession);
   await repository.saveReviewPacket(reviewPacket);
@@ -691,6 +700,346 @@ const executionPlanRevision = {
   content: 'Implement the Requirements database view using Plan Item governed document-workspace data.',
   author_actor_id: techLeadActorId,
   created_at: '2026-05-18T00:17:40.000Z',
+} satisfies ExecutionPlanRevision;
+
+const workflowPreviewIds = {
+  workflow: 'workflow-product-workspace-preview',
+  codexSession: 'codex-session-product-workspace-preview',
+  turn: 'turn-product-workspace-preview-boundary',
+  boundarySummary: 'boundary-summary-product-workspace-preview',
+  boundaryRevision: 'boundaryrev-product-workspace-preview-v1',
+  spec: 'spec-product-workspace-preview-state',
+  specRevision: 'specrev-product-workspace-preview-state-v1',
+  executionPlan: 'implementation-plan-doc-product-workspace-preview-state',
+  executionPlanRevision: 'planrev-product-workspace-preview-state-v1',
+  queuedAction: 'action-generate-spec-doc',
+  manualDecision: 'decision-product-workspace-start-brainstorming',
+  startTransition: 'transition-product-workspace-start-brainstorming',
+  boundaryReviewTransition: 'transition-product-workspace-boundary-review',
+  transition: 'transition-product-workspace-boundary-approved',
+};
+
+const workflowPreviewItemId = 'dpi-product-workspace-preview-state';
+const workflowPreviewItemRevisionId = 'dpirev-product-workspace-preview-state-v1';
+const workflowPreviewContextDigest = (part: string) =>
+  codexCanonicalDigest({ fixture: 'product_workspace_preview_workflow', part });
+
+async function seedPlanItemWorkflowPreview(repository: DeliveryRepository): Promise<void> {
+  const existing = await repository.getActivePlanItemWorkflowByItem(workflowPreviewItemId);
+  if (existing !== undefined) {
+    return;
+  }
+
+  const created = await repository.createPlanItemWorkflowWithInitialSession({
+    id: workflowPreviewIds.workflow,
+    codex_session_id: workflowPreviewIds.codexSession,
+    development_plan_id: developmentPlanId,
+    development_plan_item_id: workflowPreviewItemId,
+    runtime_profile_id: 'runtime-profile-product-workspace-preview',
+    runtime_profile_revision_id: 'runtime-profile-revision-product-workspace-preview',
+    credential_binding_id: 'credential-binding-product-workspace-preview',
+    credential_binding_version_id: 'credential-binding-revision-product-workspace-preview',
+    actor_id: techLeadActorId,
+    now: '2026-05-18T00:21:00.000Z',
+  });
+
+  const turn: CodexSessionTurn = {
+    id: workflowPreviewIds.turn,
+    workflow_id: created.workflow.id,
+    codex_session_id: created.session.id,
+    intent: 'draft_boundary_summary',
+    status: 'running',
+    input_digest: workflowPreviewContextDigest('boundary_input'),
+    created_by_actor_id: techLeadActorId,
+    created_at: '2026-05-18T00:21:20.000Z',
+    updated_at: '2026-05-18T00:21:40.000Z',
+  };
+  await repository.createCodexSessionTurn(turn);
+
+  const workerId = techLeadActorId;
+  const workerSessionDigest = workflowPreviewContextDigest('worker_session');
+  const leaseTokenHash = workflowPreviewContextDigest('lease_token');
+  const lease = await repository.claimCodexSessionLease({
+    session_id: created.session.id,
+    workflow_id: created.workflow.id,
+    lease_id: 'lease-product-workspace-preview-boundary',
+    lease_token_hash: leaseTokenHash,
+    worker_id: workerId,
+    worker_session_digest: workerSessionDigest,
+    now: '2026-05-18T00:21:30.000Z',
+    expires_at: '2026-05-18T00:22:30.000Z',
+  });
+
+  const codexThreadId = 'thread-product-workspace-preview';
+  const codexThreadIdDigest = workflowPreviewContextDigest('codex_thread');
+  const outputCapsule: CodexRuntimeCapsule = {
+    id: 'capsule-product-workspace-preview-boundary',
+    codex_session_id: created.session.id,
+    created_from_turn_id: turn.id,
+    sequence: 1,
+    artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${created.session.id}/capsule-product-workspace-preview-boundary`,
+    digest: workflowPreviewContextDigest('boundary_capsule'),
+    size_bytes: '2048',
+    manifest_digest: workflowPreviewContextDigest('boundary_capsule_manifest'),
+    thread_state_digest: workflowPreviewContextDigest('boundary_thread_state'),
+    memory_state_digest: workflowPreviewContextDigest('boundary_memory_state'),
+    environment_manifest_digest: workflowPreviewContextDigest('boundary_environment'),
+    codex_thread_id_digest: codexThreadIdDigest,
+    codex_cli_version: 'codex-preview-fixture',
+    app_server_protocol_digest: workflowPreviewContextDigest('app_server_protocol'),
+    runtime_profile_revision_id: created.session.runtime_profile_revision_id,
+    trusted_runtime_manifest_digest: workflowPreviewContextDigest('trusted_runtime_manifest'),
+    credential_binding_lineage_digest: workflowPreviewContextDigest('credential_binding_lineage'),
+    created_by_actor_id: techLeadActorId,
+    created_at: '2026-05-18T00:21:40.000Z',
+  };
+  const terminal = await repository.terminalizeCodexSessionTurn({
+    session_id: created.session.id,
+    turn_id: turn.id,
+    lease_id: lease.lease.id,
+    lease_token_hash: leaseTokenHash,
+    lease_epoch: lease.lease.lease_epoch,
+    worker_id: workerId,
+    worker_session_digest: workerSessionDigest,
+    status: 'succeeded',
+    output_capsule: outputCapsule,
+    output_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${created.session.id}/memory-product-workspace-preview`,
+    output_memory_bundle_digest: workflowPreviewContextDigest('output_memory_bundle'),
+    output_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${created.session.id}/environment-product-workspace-preview`,
+    output_environment_manifest_digest: workflowPreviewContextDigest('output_environment_manifest'),
+    output_object_type: 'boundary_summary_revision',
+    output_object_id: workflowPreviewIds.boundaryRevision,
+    app_server_thread_binding_required: true,
+    codex_thread_id: codexThreadId,
+    codex_thread_id_digest: codexThreadIdDigest,
+    now: '2026-05-18T00:21:40.000Z',
+  });
+  const completedTurn = terminal.turn;
+  const latestCapsuleDigest = completedTurn.output_capsule_digest;
+  if (latestCapsuleDigest === undefined) {
+    throw new Error('Product workspace preview workflow seed requires a terminal boundary turn capsule digest');
+  }
+
+  const boundarySummary = {
+    id: workflowPreviewIds.boundarySummary,
+    revision_id: workflowPreviewIds.boundaryRevision,
+    brainstorming_session_id: 'brainstorming-session-product-workspace-preview',
+    brainstorming_session_revision_id: 'brainstorming-session-revision-product-workspace-preview',
+    development_plan_id: developmentPlanId,
+    development_plan_item_id: workflowPreviewItemId,
+    development_plan_item_revision_id: workflowPreviewItemRevisionId,
+    source_ref: sourceRef,
+    summary: 'Generate the Spec Doc from the approved product workspace preview boundary.',
+    approved_by_actor_id: techLeadActorId,
+    approved_at: '2026-05-18T00:22:00.000Z',
+    created_at: '2026-05-18T00:21:45.000Z',
+    updated_at: '2026-05-18T00:22:00.000Z',
+  } satisfies BoundarySummary;
+  await repository.saveBoundarySummary(boundarySummary);
+
+  const boundaryRevision = {
+    id: workflowPreviewIds.boundaryRevision,
+    boundary_summary_id: boundarySummary.id,
+    session_id: boundarySummary.brainstorming_session_id,
+    session_revision_id: boundarySummary.brainstorming_session_revision_id,
+    source_round_id: 'boundary-round-product-workspace-preview',
+    development_plan_id: developmentPlanId,
+    development_plan_item_id: workflowPreviewItemId,
+    development_plan_item_revision_id: workflowPreviewItemRevisionId,
+    revision_number: 1,
+    status: 'approved',
+    summary_markdown:
+      'Approved boundary: drive the Plan Item through the Superpowers product loop with a queued Spec Doc generation action.',
+    confirmed_scope: ['Plan Item Workflow workspace', 'Queued Spec Doc generation', 'Public-safe context preview'],
+    confirmed_out_of_scope: ['Execution start', 'RunSession creation', 'Raw Codex session exposure'],
+    accepted_assumptions: ['Spec and Implementation Plan documents remain markdown artifacts reviewed by humans.'],
+    open_risks: ['Visual review still needs real browser verification.'],
+    validation_expectations: ['The Plan Item route renders the chat-first workflow workspace from live API data.'],
+    question_answer_snapshot: [
+      {
+        question_id: 'question-product-workspace-boundary',
+        answer_id: 'answer-product-workspace-boundary',
+        text: 'The product loop should show approved boundary context and the queued Spec Doc action.',
+      },
+    ],
+    decision_snapshot: [
+      {
+        decision_id: 'decision-product-workspace-boundary',
+        text: 'Queue Spec Doc generation instead of exposing direct generation routes.',
+        rationale: 'All Codex-producing turns must run through durable queued actions.',
+      },
+    ],
+    context_manifest_id: 'context-manifest-product-workspace-preview',
+    context_manifest_revision_id: 'context-manifest-revision-product-workspace-preview',
+    approved_by_actor_id: techLeadActorId,
+    approved_at: '2026-05-18T00:22:00.000Z',
+    created_at: '2026-05-18T00:21:50.000Z',
+    workflow_id: created.workflow.id,
+    codex_session_id: created.session.id,
+    codex_session_turn_id: completedTurn.id,
+  } satisfies BoundarySummaryRevision;
+  await repository.saveBoundarySummaryRevision(boundaryRevision);
+
+  await repository.saveSpec(workflowPreviewSpec);
+  await repository.saveSpecRevision(workflowPreviewSpecRevision);
+  await repository.saveExecutionPlan(workflowPreviewExecutionPlan);
+  await repository.saveExecutionPlanRevision(workflowPreviewExecutionPlanRevision);
+
+  const manualDecision = {
+    id: workflowPreviewIds.manualDecision,
+    workflow_id: created.workflow.id,
+    codex_session_id: created.session.id,
+    kind: 'start_brainstorming',
+    reason: 'Seed the product workspace preview workflow from the same public start-brainstorming path.',
+    created_by_actor_id: techLeadActorId,
+    created_at: '2026-05-18T00:21:00.000Z',
+  } satisfies WorkflowManualDecision;
+  await repository.saveWorkflowManualDecision(manualDecision);
+
+  await repository.applyPlanItemWorkflowTransition({
+    transition: {
+      id: workflowPreviewIds.startTransition,
+      workflow_id: created.workflow.id,
+      from_status: 'not_started',
+      to_status: 'brainstorming',
+      actor_id: techLeadActorId,
+      reason: 'Seed product workspace preview Brainstorming start.',
+      evidence_object_type: 'manual_decision',
+      evidence_object_id: manualDecision.id,
+      codex_session_id: created.session.id,
+      created_at: '2026-05-18T00:21:00.000Z',
+    } satisfies PlanItemWorkflowTransition,
+  });
+
+  await repository.applyPlanItemWorkflowTransition({
+    transition: {
+      id: workflowPreviewIds.boundaryReviewTransition,
+      workflow_id: created.workflow.id,
+      from_status: 'brainstorming',
+      to_status: 'boundary_review',
+      actor_id: techLeadActorId,
+      reason: 'Seed generated boundary review for product workspace preview.',
+      evidence_object_type: 'boundary_summary_revision',
+      evidence_object_id: boundaryRevision.id,
+      codex_session_id: created.session.id,
+      codex_session_turn_id: completedTurn.id,
+      created_at: '2026-05-18T00:21:55.000Z',
+    } satisfies PlanItemWorkflowTransition,
+    projection_patch: {
+      active_boundary_summary_revision_id: boundaryRevision.id,
+    },
+  });
+
+  const updatedWorkflow = await repository.applyPlanItemWorkflowTransition({
+    transition: {
+      id: workflowPreviewIds.transition,
+      workflow_id: created.workflow.id,
+      from_status: 'boundary_review',
+      to_status: 'spec_generation_queued',
+      actor_id: techLeadActorId,
+      reason: 'Seed approved boundary and queued Spec Doc generation for product workspace preview.',
+      evidence_object_type: 'boundary_summary_revision',
+      evidence_object_id: boundaryRevision.id,
+      codex_session_id: created.session.id,
+      codex_session_turn_id: completedTurn.id,
+      created_at: '2026-05-18T00:22:00.000Z',
+    } satisfies PlanItemWorkflowTransition,
+    projection_patch: {
+      active_boundary_summary_revision_id: boundaryRevision.id,
+    },
+  });
+
+  const queuedAction = {
+    id: workflowPreviewIds.queuedAction,
+    workflow_id: updatedWorkflow.id,
+    codex_session_id: created.session.id,
+    kind: 'generate_spec_doc',
+    status: 'queued',
+    source_revision_id: boundaryRevision.id,
+    expected_input_capsule_digest: latestCapsuleDigest,
+    context_preview_digest: workflowPreviewContextDigest('queued_spec_context'),
+    idempotency_key: buildPlanItemWorkflowQueuedActionIdempotencyKey({
+      workflow_id: updatedWorkflow.id,
+      kind: 'generate_spec_doc',
+      source_revision_id: boundaryRevision.id,
+      context_preview_digest: workflowPreviewContextDigest('queued_spec_context'),
+      expected_input_capsule_digest: latestCapsuleDigest,
+    }),
+    created_by_actor_id: techLeadActorId,
+    created_at: '2026-05-18T00:23:00.000Z',
+    updated_at: '2026-05-18T00:23:00.000Z',
+  } satisfies PlanItemWorkflowQueuedAction;
+  await repository.createOrReplayPlanItemWorkflowQueuedAction(queuedAction);
+}
+
+const workflowPreviewSpec = {
+  id: workflowPreviewIds.spec,
+  work_item_id: 'req-product-workspace-clarity',
+  development_plan_item_id: workflowPreviewItemId,
+  workflow_id: workflowPreviewIds.workflow,
+  boundary_summary_id: workflowPreviewIds.boundarySummary,
+  entity_type: 'spec',
+  status: 'in_review',
+  editing_state: 'idle',
+  gate_state: 'awaiting_approval',
+  resolution: 'none',
+  current_revision_id: workflowPreviewIds.specRevision,
+  created_at: '2026-05-18T00:22:30.000Z',
+  updated_at: '2026-05-18T00:22:40.000Z',
+} satisfies Spec;
+
+const workflowPreviewSpecRevision = {
+  id: workflowPreviewIds.specRevision,
+  spec_id: workflowPreviewIds.spec,
+  work_item_id: workflowPreviewSpec.work_item_id,
+  development_plan_item_id: workflowPreviewItemId,
+  workflow_id: workflowPreviewIds.workflow,
+  codex_session_id: workflowPreviewIds.codexSession,
+  codex_session_turn_id: workflowPreviewIds.turn,
+  boundary_summary_id: workflowPreviewIds.boundarySummary,
+  revision_number: 1,
+  summary: 'Product workspace preview Spec Doc',
+  content:
+    'The Plan Item route must present the Superpowers loop as a chat-first workspace with timeline, conversation, artifacts, and context preview.',
+  background: 'The previous route could fall back to the old gate workspace when real seed data lacked an active workflow.',
+  goals: ['Show live workflow context', 'Keep generation behind queued actions', 'Avoid raw runtime identifiers in public data'],
+  scope_in: ['Plan Item workflow workspace', 'Public-safe artifact rail', 'Queued Spec Doc action'],
+  scope_out: ['Execution start', 'RunSession controls'],
+  acceptance_criteria: ['The seeded Plan Item renders data-plan-item-workflow-workspace', 'The old gate workspace is not rendered'],
+  risk_notes: ['Seed data must stay aligned with the public workflow DTO contract'],
+  test_strategy_summary: 'Use focused web tests and browser verification against the live preview seed.',
+  author_actor_id: techLeadActorId,
+  artifact_refs: [],
+  created_at: '2026-05-18T00:22:35.000Z',
+} satisfies SpecRevision;
+
+const workflowPreviewExecutionPlan = {
+  id: workflowPreviewIds.executionPlan,
+  development_plan_item_id: workflowPreviewItemId,
+  workflow_id: workflowPreviewIds.workflow,
+  status: 'draft',
+  current_revision_id: workflowPreviewIds.executionPlanRevision,
+  created_at: '2026-05-18T00:22:45.000Z',
+  updated_at: '2026-05-18T00:22:50.000Z',
+} satisfies ExecutionPlanDocument;
+
+const workflowPreviewExecutionPlanRevision = {
+  id: workflowPreviewIds.executionPlanRevision,
+  execution_plan_id: workflowPreviewIds.executionPlan,
+  development_plan_item_id: workflowPreviewItemId,
+  workflow_id: workflowPreviewIds.workflow,
+  codex_session_id: workflowPreviewIds.codexSession,
+  codex_session_turn_id: workflowPreviewIds.turn,
+  based_on_spec_revision_id: workflowPreviewIds.specRevision,
+  revision_number: 1,
+  summary: 'Product workspace preview Implementation Plan Doc',
+  content:
+    'Preserve the route contract, drive all generation through queued actions, and verify the first viewport with a real browser.',
+  structured_document: {
+    steps: ['Seed active workflow data', 'Render chat-first workspace', 'Verify no old gate fallback'],
+  },
+  author_actor_id: techLeadActorId,
+  created_at: '2026-05-18T00:22:48.000Z',
 } satisfies ExecutionPlanRevision;
 
 const executionPackage = {

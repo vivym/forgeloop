@@ -2923,7 +2923,7 @@ describe('automation command boundaries', () => {
     expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(0);
   });
 
-  it('serializes duplicate manual run gate checks for the same package', async () => {
+  it('fails closed for duplicate manual run attempts without creating RunSessions', async () => {
     const repository = new OverlapDetectingRepository();
     const { app } = await createTestApp(repository);
     apps.push(app);
@@ -2941,9 +2941,12 @@ describe('automation command boundaries', () => {
         .send({ workflow_only: true }),
     ]);
 
-    expect(repository.maxActiveRunChecksInFlight).toBe(1);
-    expect(results.map((result) => (result.status === 'fulfilled' ? result.value.status : 500)).sort()).toEqual([201, 422]);
-    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(1);
+    expect(results.map((result) => (result.status === 'fulfilled' ? result.value.status : 500)).sort()).toEqual([409, 409]);
+    expect(
+      results.map((result) => (result.status === 'fulfilled' ? result.value.body.code : undefined)),
+    ).toEqual(['workflow_legacy_entrypoint_disabled', 'workflow_legacy_entrypoint_disabled']);
+    expect(repository.maxActiveRunChecksInFlight).toBe(0);
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(0);
   });
 
   it('blocks a run enqueue idempotency key after completion persistence fails post side effect', async () => {
@@ -3501,6 +3504,10 @@ describe('automation command boundaries', () => {
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(humanAdminHeaders)
       .send({ workflow_only: true })
-      .expect(422);
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+      });
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(0);
   });
 });

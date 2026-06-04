@@ -1596,6 +1596,11 @@ export interface DeliveryRepository {
   getWorkflowManualDecision(id: string): Promise<WorkflowManualDecision | undefined>;
   saveExecutionReadinessRecord(record: ExecutionReadinessRecord): Promise<void>;
   getExecutionReadinessRecord(id: string): Promise<ExecutionReadinessRecord | undefined>;
+  invalidateExecutionReadinessRecordsForWorkflow(input: {
+    workflow_id: string;
+    reason: string;
+    now: string;
+  }): Promise<number>;
   getBoundarySummaryRevisionById(revisionId: string): Promise<BoundarySummaryRevision | undefined>;
   resolveWorkflowRepositoryEvidence(
     input: WorkflowRepositoryEvidenceInput,
@@ -1618,6 +1623,11 @@ export interface DeliveryRepository {
     input: MarkDependentPlanItemWorkflowQueuedActionsStaleInput,
   ): Promise<PlanItemWorkflowQueuedAction[]>;
   savePlanItemWorkflowMessage(message: PlanItemWorkflowMessage): Promise<void>;
+  attachPlanItemWorkflowMessageQueuedAction(input: {
+    workflow_id: string;
+    message_id: string;
+    queued_action_id: string;
+  }): Promise<PlanItemWorkflowMessage>;
   listPlanItemWorkflowMessages(workflowId: string): Promise<PlanItemWorkflowMessage[]>;
   savePlanItemWorkflowArtifactChangeRequest(request: PlanItemWorkflowArtifactChangeRequest): Promise<void>;
   getCodexSession(id: string): Promise<CodexSession | undefined>;
@@ -1764,6 +1774,7 @@ export interface DeliveryRepository {
   compareDevelopmentPlanItemRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
   saveBrainstormingSession(session: BrainstormingSession): Promise<void>;
   getBrainstormingSession(id: string): Promise<BrainstormingSession | undefined>;
+  listBrainstormingSessionsForWorkflow(workflowId: string): Promise<BrainstormingSession[]>;
   saveBoundaryRound(round: BoundaryRoundRecord): Promise<void>;
   listBoundaryRounds(sessionId: string): Promise<BoundaryRoundRecord[]>;
   saveBoundaryQuestion(question: BoundaryQuestionRecord): Promise<void>;

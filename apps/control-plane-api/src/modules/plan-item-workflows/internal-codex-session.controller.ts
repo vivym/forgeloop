@@ -12,7 +12,7 @@ import {
   type CreateCodexRuntimeCapsuleDto,
   type RenewCodexSessionLeaseDto,
   type TerminalizeCodexSessionTurnDto,
-} from './plan-item-workflow.dto';
+} from './internal-codex-session.dto';
 
 type AutomationRequest = {
   headers: Record<string, string | string[] | undefined>;

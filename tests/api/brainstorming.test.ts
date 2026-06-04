@@ -33,7 +33,7 @@ describe('Boundary Brainstorming public API', () => {
     ['development-plans/:developmentPlanId/items/:itemId/brainstorming-sessions', 'item-brainstorming-start', 'basic'],
     ['development-plans/:developmentPlanId/items/:itemId/boundary-brainstorming', 'item-boundary-brainstorming-start', 'boundary'],
     ['development-plans/:developmentPlanId/items/:itemId/boundary-brainstorming/restart', 'item-boundary-brainstorming-restart', 'boundary'],
-  ] as const)('disables legacy item mutation route POST /%s', async (template, _operation, bodyKind) => {
+  ] as const)('does not mount legacy item mutation route POST /%s', async (template, _operation, bodyKind) => {
     const { plan, item, ids } = await seedDevelopmentPlanItem(app, { idPrefix: '58585858' });
     const path = `/${template}`
       .replace(':developmentPlanId', plan.id)
@@ -50,10 +50,7 @@ describe('Boundary Brainstorming public API', () => {
     await request(app.getHttpServer())
       .post(path)
       .send(body)
-      .expect(409)
-      .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
   });
 
   it.each([
@@ -71,7 +68,7 @@ describe('Boundary Brainstorming public API', () => {
       'boundary-brainstorming-sessions/:sessionId/summary-revisions/:revisionId/request-changes',
       { actor_id: 'actor-tech', feedback_markdown: 'Legacy changes.' },
     ],
-  ] as const)('disables legacy session mutation route POST /%s', async (template, body) => {
+  ] as const)('does not mount legacy session mutation route POST /%s', async (template, body) => {
     const seeded = await seedBoundaryReviewWorkflow(app, { idPrefix: '59595959' });
     const sessionId = await sessionIdForBoundaryRevision(app, seeded.boundaryRevision);
     const path = `/${template}`
@@ -81,10 +78,7 @@ describe('Boundary Brainstorming public API', () => {
     await request(app.getHttpServer())
       .post(path)
       .send(body)
-      .expect(409)
-      .expect(({ body: responseBody }) => {
-        expect(responseBody.code).toBe('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
   });
 
   it('keeps read-only revision endpoints available for workflow-owned artifacts', async () => {

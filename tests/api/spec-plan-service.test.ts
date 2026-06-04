@@ -104,10 +104,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     await request(server)
       .post(`/plan-item-workflows/${unapprovedWorkflow.id}/spec/generate-draft`)
       .send({ actor_id: actorTech })
-      .expect(409)
-      .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
 
     const { plan, item, boundary, workflow } = await seedApprovedBoundary(app);
     const specRevision = await generateItemSpecDraft(app, plan.id, item.id);
@@ -167,15 +164,12 @@ describe('SpecPlanService item-scoped delivery API', () => {
         validation_expectations: ['Spec generation remains blocked'],
         actor_id: actorTech,
       })
-      .expect(409);
+      .expect(404);
 
     await request(server)
       .post(`/plan-item-workflows/${workflow.id}/spec/generate-draft`)
       .send({ actor_id: actorTech })
-      .expect(409)
-      .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
   });
 
   it('rejects Implementation Plan Doc generation when required QA and test strategy evidence is missing from approved Spec', async () => {
@@ -407,7 +401,7 @@ describe('SpecPlanService item-scoped delivery API', () => {
     await request(server)
         .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/submit-for-approval`)
         .send({ actor_id: actorTech })
-        .expect(409);
+        .expect(404);
 
     const secondExecutionPlanRevision = await regenerateItemImplementationPlanDraft(
       app,
@@ -670,7 +664,13 @@ describe('SpecPlanService item-scoped delivery API', () => {
         actionRunId: actionResponse.action_run.id,
         terminalResult,
       }),
-    ).resolves.toEqual({ applied: true });
+    ).resolves.toMatchObject({
+      applied: true,
+      artifact: {
+        object_type: 'spec_revision',
+        to_status: 'spec_review',
+      },
+    });
     const completedAction = await repository.getAutomationActionRun(actionResponse.action_run.id);
     expect(completedAction).toMatchObject({
       status: 'succeeded',
@@ -1091,7 +1091,13 @@ describe('SpecPlanService item-scoped delivery API', () => {
         actionRunId: actionResponse.action_run.id,
         terminalResult,
       }),
-    ).resolves.toEqual({ applied: true });
+    ).resolves.toMatchObject({
+      applied: true,
+      artifact: {
+        object_type: 'spec_revision',
+        to_status: 'spec_review',
+      },
+    });
     const [spec] = await repository.listSpecs();
     expect(spec).toMatchObject({ development_plan_item_id: item.id, status: 'draft' });
     const [runtimeArtifact] = await repository.listCodexRuntimeJobArtifacts({ runtime_job_id: runtimeJob.id });
@@ -1206,17 +1212,14 @@ describe('SpecPlanService item-scoped delivery API', () => {
 	    await expect(generateItemSpecRevisionRuntime(app, item.id)).rejects.toThrow('stale_boundary_summary_revision');
   });
 
-  it('rejects legacy Spec draft generation through the disabled public mutator', async () => {
+  it('does not mount legacy Spec draft generation public mutator', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
 
     await request(server)
       .post(`/development-plans/${plan.id}/items/${item.id}/spec/generate-draft`)
       .send({ actor_id: actorTech })
-      .expect(409)
-      .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
   });
 
   it('does not create a Spec revision when the generation precondition is stale', async () => {
@@ -1454,17 +1457,14 @@ describe('SpecPlanService item-scoped delivery API', () => {
     ).resolves.toMatchObject({ applied: true, revision: { id: first.applied ? first.revision.id : undefined } });
   });
 
-  it('rejects legacy Implementation Plan Doc draft generation through the disabled public mutator', async () => {
+  it('does not mount legacy Implementation Plan Doc draft generation public mutator', async () => {
     const { plan, item } = await seedApprovedBoundary(app);
     const server = app.getHttpServer();
 
     await request(server)
       .post(`/development-plans/${plan.id}/items/${item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorTech })
-      .expect(409)
-      .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
   });
 
   it('replays runtime-backed Spec generation scheduling for duplicate POSTs', async () => {
@@ -1731,16 +1731,12 @@ async function regenerateItemImplementationPlanDraft(
 }
 
 async function startWorkflowForPlanItem(app: INestApplication, planId: string, itemId: string, projectId: string) {
-  const generationRuntime = await seedGenerationRuntimeForProject(app, projectId);
+  await seedGenerationRuntimeForProject(app, projectId);
   return (
     await request(app.getHttpServer())
       .post(`/development-plans/${planId}/items/${itemId}/workflow/start-brainstorming`)
       .send({
         actor_id: actorTech,
-        runtime_profile_id: generationRuntime.profileId,
-        runtime_profile_revision_id: generationRuntime.profileRevisionId,
-        credential_binding_id: generationRuntime.credentialBindingId,
-        credential_binding_version_id: generationRuntime.credentialVersionId,
         reason: 'Start Spec/Plan service workflow fixture.',
       })
       .expect(201)
@@ -1868,13 +1864,21 @@ async function createWorkflowContext(
   if (session === undefined) {
     throw new Error(`Codex session ${workflow.active_codex_session_id} was not found`);
   }
+  const turnId = stableUuid({
+    kind: 'spec-plan-service-context-turn',
+    itemId,
+    operation: input.operation,
+  });
+  const existingTurn = await repository.getCodexSessionTurn(turnId);
+  if (existingTurn !== undefined) {
+    return {
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      codex_session_turn_id: existingTurn.id,
+    };
+  }
   const turn = await createWorkflowFixtureTurn(repository, workflow, session, {
-    id: stableUuid({
-      kind: 'spec-plan-service-context-turn',
-      itemId,
-      operation: input.operation,
-      count: (await repository.listCodexSessionTurns(session.id)).length + 1,
-    }),
+    id: turnId,
     intent: input.intent,
     actor_id: input.actor_id,
   });
@@ -2046,19 +2050,15 @@ async function seedApprovedBoundary(app: INestApplication, itemOverrides: ItemSe
   const seeded = await seedDevelopmentPlanItem(app, itemOverrides);
   const server = app.getHttpServer();
 	  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-	  const generationRuntime = await seedGenerationRuntimeForProject(app, seeded.plan.project_id);
-	  const workflowActorId = seeded.item.driver_actor_id ?? seeded.item.reviewer_actor_id ?? seeded.workItem.driver_actor_id;
-	  const startedWorkflow = (
-    await request(server)
-      .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/workflow/start-brainstorming`)
-      .send({
-        actor_id: workflowActorId,
-        runtime_profile_id: generationRuntime.profileId,
-        runtime_profile_revision_id: generationRuntime.profileRevisionId,
-        credential_binding_id: generationRuntime.credentialBindingId,
-        credential_binding_version_id: generationRuntime.credentialVersionId,
-        reason: 'Start Spec/Plan service workflow fixture.',
-	      })
+		  await seedGenerationRuntimeForProject(app, seeded.plan.project_id);
+		  const workflowActorId = seeded.item.driver_actor_id ?? seeded.item.reviewer_actor_id ?? seeded.workItem.driver_actor_id;
+		  const startedWorkflow = (
+	    await request(server)
+	      .post(`/development-plans/${seeded.plan.id}/items/${seeded.item.id}/workflow/start-brainstorming`)
+	      .send({
+	        actor_id: workflowActorId,
+	        reason: 'Start Spec/Plan service workflow fixture.',
+		      })
 	      .expect(201)
 	  ).body;
 	  const workflow = (await repository.getPlanItemWorkflow(startedWorkflow.id))!;

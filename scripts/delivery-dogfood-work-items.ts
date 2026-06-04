@@ -648,12 +648,18 @@ const runPackage = async (
         workflow_only: runMode.workflowOnly,
         ...body,
       })
-      .expect(201)
-  ).body as { status: string; run_session_id?: string };
-  if (response.status !== 'accepted' || response.run_session_id === undefined) {
-    throw new Error(`Run command was not accepted: ${JSON.stringify(response)}`);
+  );
+  if (response.status === 409 && JSON.stringify(response.body).includes('workflow_legacy_entrypoint_disabled')) {
+    throw new Error(`workflow_legacy_entrypoint_disabled: legacy delivery dogfood package ${path} is disabled in Wave 5`);
   }
-  return response.run_session_id;
+  if (response.status !== 201) {
+    throw new Error(`Run command failed ${response.status}: ${response.text}`);
+  }
+  const bodyJson = response.body as { status: string; run_session_id?: string };
+  if (bodyJson.status !== 'accepted' || bodyJson.run_session_id === undefined) {
+    throw new Error(`Run command was not accepted: ${JSON.stringify(bodyJson)}`);
+  }
+  return bodyJson.run_session_id;
 };
 
 const approveReviewPacket = async (

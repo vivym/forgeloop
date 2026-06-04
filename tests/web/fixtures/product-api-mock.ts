@@ -83,6 +83,8 @@ const itemImplementationPlanRevisionFor = (revision: typeof executionPlanRevisio
   attachment_refs: [],
 });
 
+const safeDigest = (seed: string) => `sha256:${seed.repeat(64).slice(0, 64)}`;
+
 const cockpitPlanRevisionFor = (revision: typeof planRevision, item: Pick<typeof workItem, 'id' | 'kind' | 'title'>) => {
   const { work_item_id: _workItemId, ...publicRevision } = revision;
   return { ...publicRevision, scope_ref: scopeRefForItem(item) };
@@ -290,12 +292,22 @@ const developmentPlanItemResponseFor = (item: (typeof developmentPlan.items)[num
     title: specRevision.summary,
     current_revision_id: spec.current_revision_id,
     approved_revision_id: spec.approved_revision_id,
+    current_revision_markdown: specRevision.content,
+    markdown_excerpt: specRevision.content,
     acceptance_criteria: specRevision.acceptance_criteria,
     test_strategy_summary: specRevision.test_strategy_summary,
     qa_owner_actor_id: 'actor-qa',
     testability_note: 'QA/Test Owner reviewed acceptance and validation expectations.',
   }],
-  implementation_plan_docs: [{ id: executionPlanRevision.execution_plan_id, artifact_type: 'implementation_plan_doc', title: executionPlanRevision.summary, current_revision_id: executionPlan.current_revision_id, approved_revision_id: executionPlan.approved_revision_id }],
+  implementation_plan_docs: [{
+    id: executionPlanRevision.execution_plan_id,
+    artifact_type: 'implementation_plan_doc',
+    title: executionPlanRevision.summary,
+    current_revision_id: executionPlan.current_revision_id,
+    approved_revision_id: executionPlan.approved_revision_id,
+    current_revision_markdown: executionPlanRevision.content,
+    markdown_excerpt: executionPlanRevision.content,
+  }],
   runtime_boundary: {
     type: 'execution_package',
     id: executionPackage.id,
@@ -307,6 +319,88 @@ const developmentPlanItemResponseFor = (item: (typeof developmentPlan.items)[num
   executions: [{ id: execution.id, title: execution.ref.title, status: execution.status }],
   code_review_handoffs: [{ id: codeReviewHandoff.id, title: codeReviewHandoff.ref.title, status: codeReviewHandoff.status }],
   qa_handoffs: [{ id: qaHandoff.id, title: qaHandoff.ref.title, status: qaHandoff.status }],
+  ...(item.id === developmentPlanItem.id
+    ? {
+        plan_item_workflow: {
+          id: 'workflow-product-workspace-preview',
+          development_plan_id: item.development_plan_id,
+          development_plan_item_id: item.id,
+          status: 'spec_generation_queued',
+          active_boundary_summary_revision_id: boundarySummary.revision_id,
+          active_spec_doc_revision_id: specRevision.id,
+          active_implementation_plan_doc_revision_id: executionPlanRevision.id,
+          session: {
+            status: 'idle',
+            role: 'active',
+            continuity_state: 'ready',
+            can_continue: true,
+            last_turn_at: '2026-05-18T00:24:00.000Z',
+          },
+          queued_actions: [
+            {
+              id: 'action-generate-spec-doc',
+              workflow_id: 'workflow-product-workspace-preview',
+              kind: 'generate_spec_doc',
+              status: 'queued',
+              source_revision_id: boundarySummary.revision_id,
+              expected_input_capsule_digest: safeDigest('a'),
+              context_preview_digest: safeDigest('b'),
+              idempotency_key: safeDigest('c'),
+              created_by_actor_id: 'actor-reviewer',
+              created_at: '2026-05-18T00:23:00.000Z',
+              updated_at: '2026-05-18T00:23:00.000Z',
+            },
+          ],
+          timeline_events: [
+            {
+              id: 'event-boundary-approved',
+              workflow_id: 'workflow-product-workspace-preview',
+              event_type: 'artifact.approved',
+              status: 'approved',
+              actor_id: 'actor-reviewer',
+              object_type: 'boundary_summary_revision',
+              object_id: boundarySummary.revision_id,
+              created_at: '2026-05-18T00:22:00.000Z',
+            },
+            {
+              id: 'event-spec-queued',
+              workflow_id: 'workflow-product-workspace-preview',
+              event_type: 'queued_action',
+              status: 'queued',
+              actor_id: 'actor-reviewer',
+              queued_action_id: 'action-generate-spec-doc',
+              queued_action_kind: 'generate_spec_doc',
+              queued_action_status: 'queued',
+              created_at: '2026-05-18T00:23:00.000Z',
+            },
+          ],
+          context_preview: {
+            digest: safeDigest('d'),
+            capsule_digest: safeDigest('e'),
+            boundary_summary_revision_id: boundarySummary.revision_id,
+            spec_doc_revision_id: specRevision.id,
+            implementation_plan_doc_revision_id: executionPlanRevision.id,
+            message_count: 1,
+            queued_action_count: 1,
+            updated_at: '2026-05-18T00:24:00.000Z',
+          },
+          readiness: {
+            state: 'blocked',
+            can_evaluate: true,
+            blocker_codes: ['execution_package_missing'],
+          },
+          blockers: [
+            {
+              code: 'execution_package_missing',
+              status: 'active',
+              created_at: '2026-05-18T00:24:00.000Z',
+            },
+          ],
+          created_at: '2026-05-18T00:20:00.000Z',
+          updated_at: '2026-05-18T00:24:00.000Z',
+        },
+      }
+    : {}),
   compare_links: {
     item_revisions_href: `/development-plans/${developmentPlan.id}/items/${item.id}/revisions/compare`,
     boundary_summary_revisions_href: `/boundary-summaries/${boundarySummary.id}/revisions/compare`,
@@ -873,38 +967,17 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     development_plan_id: developmentPlan.id,
     source_ref: developmentPlan.source_refs[0],
   },
-  [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/brainstorming-sessions`]: brainstormingSession,
-  [`POST /brainstorming-sessions/${brainstormingSession.id}/answers`]: brainstormingSession.answers[0],
-  [`POST /brainstorming-sessions/${brainstormingSession.id}/decisions`]: brainstormingSession.decisions[0],
-  [`POST /brainstorming-sessions/${brainstormingSession.id}/approve-boundary`]: {
-    session: brainstormingSession,
-    boundary_summary: boundarySummary,
-  },
-  [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-cockpit-command-center'].id}/spec/generate-draft`]: cockpitSpecRevisionFor(
-    specRevision,
-    workItem,
-  ),
+  [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/workflow/start-brainstorming`]: developmentPlanItem.plan_item_workflow,
   [`GET /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-cockpit-command-center'].id}/spec/revisions/compare?base_revision_id=${specRevision.id}&compare_revision_id=${specRevision.id}`]: {
     base_revision_id: specRevision.id,
     compare_revision_id: specRevision.id,
     changed_fields: [],
-  },
-  [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-requirements-database-view'].id}/implementation-plan/generate-draft`]: {
-    id: executionPlanRevision.id,
-    implementation_plan_id: executionPlan.id,
-    development_plan_item_id: developmentPlanItemsById['dpi-requirements-database-view'].id,
-    based_on_spec_revision_id: specRevision.id,
-    revision_number: 1,
-    summary: planRevision.summary,
-    content: planRevision.content,
-    created_at: planRevision.created_at,
   },
   [`GET /development-plans/${developmentPlan.id}/items/${developmentPlanItemsById['dpi-requirements-database-view'].id}/implementation-plan/revisions/compare?base_revision_id=${executionPlanRevision.id}&compare_revision_id=${executionPlanRevision.id}`]: {
     base_revision_id: executionPlanRevision.id,
     compare_revision_id: executionPlanRevision.id,
     changed_fields: [],
   },
-  [`POST /development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution/start`]: execution,
   [`POST /executions/${execution.id}/continue`]: { ...execution, status: 'running' },
   [`POST /executions/${execution.id}/interrupt`]: { ...execution, status: 'interrupted' },
   [`POST /executions/${execution.id}/ready-for-code-review`]: codeReviewHandoff,

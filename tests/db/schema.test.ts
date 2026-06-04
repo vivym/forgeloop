@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import { getTableColumns } from 'drizzle-orm';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
@@ -253,6 +254,32 @@ const uniqueIndexColumns = (table: ConfiguredTable, indexName: string) => {
 };
 
 describe('P1 core schema release flow Drizzle schema', () => {
+  it('registers every SQL migration in the Drizzle journal', () => {
+    const migrationFiles = readdirSync('packages/db/migrations')
+      .filter((file) => /^\d{4}_.+\.sql$/.test(file))
+      .map((file) => file.replace(/\.sql$/, ''))
+      .sort();
+    const journal = JSON.parse(readFileSync('packages/db/migrations/meta/_journal.json', 'utf8')) as {
+      entries: Array<{ idx: number; tag: string }>;
+    };
+
+    expect(journal.entries.map((entry) => entry.tag).sort()).toEqual(migrationFiles);
+    expect(journal.entries.map((entry) => entry.idx)).toEqual(journal.entries.map((_, index) => index));
+
+    const latestEntry = journal.entries.at(-1);
+    expect(latestEntry).toBeDefined();
+    const latestMigrationMeta = JSON.parse(readFileSync(`packages/db/migrations/meta/${String(latestEntry?.idx).padStart(4, '0')}_snapshot.json`, 'utf8')) as {
+      tables: Record<string, { columns: Record<string, unknown> }>;
+    };
+    expect(latestMigrationMeta.tables['public.plan_item_workflow_messages']).toBeDefined();
+    expect(latestMigrationMeta.tables['public.plan_item_workflow_queued_actions']).toBeDefined();
+    expect(latestMigrationMeta.tables['public.plan_item_workflow_artifact_change_requests']).toBeDefined();
+    expect(latestMigrationMeta.tables['public.execution_readiness_records']?.columns.invalidated_at).toBeDefined();
+    expect(latestMigrationMeta.tables['public.execution_readiness_records']?.columns.invalidated_reason).toBeDefined();
+    expect(latestMigrationMeta.tables['public.spec_revisions']?.columns.development_plan_item_revision_id).toBeDefined();
+    expect(latestMigrationMeta.tables['public.execution_plan_revisions']?.columns.development_plan_item_revision_id).toBeDefined();
+  });
+
   it('exports every required delivery table', () => {
     expect(Object.keys(requiredTables).sort()).toEqual(
       [
@@ -699,7 +726,9 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(boundary_summary_revisions, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(execution_readiness_records, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(spec_revisions, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(spec_revisions, 'development_plan_item_revision_id')).toBe('PgUUID');
     expect(columnType(execution_plan_revisions, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(execution_plan_revisions, 'development_plan_item_revision_id')).toBe('PgUUID');
     expect(columnType(automation_action_runs, 'workflow_id')).toBe('PgUUID');
     expect(columnType(codex_runtime_jobs, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(run_sessions, 'codex_session_turn_id')).toBe('PgUUID');
@@ -999,6 +1028,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(boundary_summaries, 'brainstorming_session_id', column(brainstorming_sessions, 'id'))).toBe(true);
     expect(hasForeignKey(boundary_summary_revisions, 'boundary_summary_id', column(boundary_summaries, 'id'))).toBe(true);
     expect(hasForeignKey(boundary_summary_revisions, 'codex_session_turn_id', column(codex_session_turns, 'id'))).toBe(true);
+    expect(hasForeignKey(spec_revisions, 'development_plan_item_revision_id', column(development_plan_item_revisions, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_plan_revisions, 'development_plan_item_revision_id', column(development_plan_item_revisions, 'id'))).toBe(true);
     expect(hasForeignKey(execution_readiness_records, 'codex_session_turn_id', column(codex_session_turns, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plans, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plan_revisions, 'execution_plan_id', column(execution_plans, 'id'))).toBe(true);

@@ -24,6 +24,7 @@ export interface ExecutionPlanRevision extends WorkflowPersistenceRefs {
   id: string;
   execution_plan_id: string;
   development_plan_item_id: string;
+  development_plan_item_revision_id?: string;
   based_on_spec_revision_id: string;
   revision_number: number;
   summary: string;

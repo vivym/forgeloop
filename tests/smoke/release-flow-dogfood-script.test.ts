@@ -487,46 +487,11 @@ describe('release flow dogfood script helpers', () => {
     }
   });
 
-  it('registers strict local Codex worktree cleanup before failed terminal runs throw', async () => {
+  it('reports strict local Codex package run as failed when the legacy public run entrypoint is disabled', async () => {
     const repository = new InMemoryDeliveryRepository();
     const app = await createDurableTestApp(repository);
-    let failedRunId = '';
     const realWorkerDrain = vi.fn(async () => {
-      const runSessions = await repository.listRecoverableRunSessions();
-      const currentRun =
-        runSessions.find((runSession) => runSession.status === 'queued' && runSession.executor_type === 'local_codex') ??
-        runSessions.find((runSession) => runSession.status === 'queued') ??
-        runSessions.at(-1);
-      if (currentRun === undefined) {
-        throw new Error('expected local_codex run session');
-      }
-      failedRunId = currentRun.id;
-      await repository.saveRunSession({
-        ...currentRun,
-        status: 'failed',
-        runtime_metadata: {
-          durability_mode: 'durable',
-          workspace_path: `${repoPath}/.worktrees/${currentRun.id}`,
-          recovery_attempt_count: 0,
-          effective_dangerous_mode: 'confirmed',
-          app_server_attempted: true,
-          selected_execution_mode: 'exec_fallback',
-          exec_fallback_dangerous_bypass: true,
-          app_server_fallback_reason: 'connection refused',
-        },
-        updated_at: '2026-05-11T00:01:00.000Z',
-        finished_at: '2026-05-11T00:01:00.000Z',
-      });
-      await repository.appendRunEvent({
-        id: 'failed-run-live-event',
-        run_session_id: currentRun.id,
-        event_type: 'turn_started',
-        source: 'codex',
-        visibility: 'public',
-        summary: 'Codex turn started before failure.',
-        payload: {},
-        created_at: '2026-05-11T00:00:30.000Z',
-      });
+      throw new Error('legacy public package run should fail before worker drain');
     });
     const cleanupCalls: string[] = [];
     const cleanupActions: Array<{ label: string; run: () => Promise<void> }> = [];
@@ -564,15 +529,16 @@ describe('release flow dogfood script helpers', () => {
         },
       });
 
-      expect(realWorkerDrain).toHaveBeenCalled();
+      expect(realWorkerDrain).not.toHaveBeenCalled();
       expect(lifecycle.markers.find((marker) => marker.marker === 'Strict local_codex run')).toMatchObject({
         status: 'FAILED',
+        details: expect.arrayContaining(['strict_local_codex_failed']),
       });
-      expect(cleanupActions.map((action) => action.label)).toEqual(expect.arrayContaining(['source guard', 'worktree']));
+      expect(cleanupActions.map((action) => action.label)).toEqual(['source guard']);
       for (const action of cleanupActions) {
         await action.run();
       }
-      expect(cleanupCalls).toEqual(expect.arrayContaining([`git worktree remove --force ${repoPath}/.worktrees/${failedRunId}`]));
+      expect(cleanupCalls).toEqual(['git rev-parse HEAD']);
     } finally {
       await app.close();
     }

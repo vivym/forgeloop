@@ -6,6 +6,13 @@ export type CodexRuntimeSuperpowersBaggagePattern =
   | 'legacy_work_items_route'
   | 'legacy_tasks_route'
   | 'legacy_plan_draft_generator'
+  | 'legacy_workflow_direct_spec_generation'
+  | 'legacy_workflow_direct_plan_generation'
+  | 'legacy_workflow_direct_execution_start'
+  | 'legacy_workflow_run_session_control'
+  | 'wave5_forbidden_session_mutation'
+  | 'workflow_composer_generation_action'
+  | 'public_raw_codex_runtime_ref'
   | 'raw_runtime_route'
   | 'host_codex_home'
   | 'exec_fallback'
@@ -46,6 +53,9 @@ const defaultScanFiles = [
   'apps/control-plane-api/src/modules/spec-plan/spec-plan.service.ts',
   'apps/control-plane-api/src/modules/executions/executions.controller.ts',
   'apps/control-plane-api/src/modules/executions/executions.service.ts',
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.controller.ts',
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts',
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts',
   'apps/control-plane-api/src/modules/codex-runtime/codex-runtime.dto.ts',
   'apps/control-plane-api/src/modules/codex-runtime/codex-runtime.controller.ts',
   'apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts',
@@ -67,6 +77,8 @@ const defaultScanRoots = [
   'packages/run-worker',
   'apps/automation-daemon/src',
   'apps/control-plane-api/src/modules',
+  'apps/web/src/features/development-plans',
+  'apps/web/src/shared/api',
   'docs/runbooks',
   'docs/superpowers/reports',
   'tests',
@@ -108,6 +120,22 @@ const activeTask8Tests = new Set([
   'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
   'tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts',
   'tests/smoke/runbook-script-consistency.test.ts',
+]);
+const wave5WorkflowProductFiles = new Set([
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.controller.ts',
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts',
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts',
+  'packages/contracts/src/plan-item-workflow.ts',
+  'apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts',
+  'apps/control-plane-api/src/modules/executions/executions.controller.ts',
+  'apps/web/src/features/development-plans/development-plan-item-detail-route.tsx',
+  'apps/web/src/features/development-plans/plan-item-workflow-view-model.ts',
+  'apps/web/src/features/development-plans/plan-item-workflow-workspace.tsx',
+  'apps/web/src/shared/api/commands.ts',
+  'apps/web/src/shared/api/hooks.ts',
+  'apps/web/src/shared/api/query-keys.ts',
+  'apps/web/src/shared/api/types.ts',
+  'tests/web/fixtures/product-api-mock.ts',
 ]);
 
 export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
@@ -293,6 +321,48 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     reason: 'Negative test fixture proves the strict gate catches legacy Codex session snapshot vocabulary.',
   },
   {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_workflow_direct_spec_generation',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches Wave 5 direct Spec Doc routes.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_workflow_direct_plan_generation',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches Wave 5 direct Implementation Plan routes.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_workflow_direct_execution_start',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches Wave 5 direct execution start routes.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_workflow_run_session_control',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches Wave 5 direct run-session controls.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'wave5_forbidden_session_mutation',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches forbidden Wave 5 public session mutations.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'workflow_composer_generation_action',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches generation actions in the workflow composer.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'public_raw_codex_runtime_ref',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches raw runtime refs on public UI surfaces.',
+  },
+  {
     file: 'tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts',
     pattern: 'host_codex_home',
     owner: 'negative-test',
@@ -377,6 +447,43 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
     /type:\s*z\.literal\(\s*['"]task['"]\s*\)/,
   ],
   legacy_plan_draft_generator: [/\bgeneratePlanDraft\b/],
+  legacy_workflow_direct_spec_generation: [
+    /\/?(?:plan-item-workflows\/[^"'`\s]+|development-plans\/[^"'`\s]+\/items\/[^"'`\s]+)\/spec(?:\/|-)generate-draft(?:\/|\b)/,
+    /\/?(?:plan-item-workflows\/[^"'`\s]+\/)?spec-revisions(?:\/[^"'`\s]+)?\/(?:generate|submit|approve)(?:\/|\b)/,
+    /\/?(?:plan-item-workflows\/[^"'`\s]+|development-plans\/[^"'`\s]+\/items\/[^"'`\s]+)\/spec(?:\/[^"'`\s]+)?\/(?:draft|regenerate-draft|submit-for-approval|submit|approve|reject|request-changes)(?:\/|\b)/,
+  ],
+  legacy_workflow_direct_plan_generation: [
+    /\/?(?:plan-item-workflows\/[^"'`\s]+|development-plans\/[^"'`\s]+\/items\/[^"'`\s]+)\/implementation-plan(?:\/|-)generate-draft(?:\/|\b)/,
+    /\/?(?:plan-item-workflows\/[^"'`\s]+\/)?implementation-plan-revisions(?:\/[^"'`\s]+)?\/(?:generate|submit|approve)(?:\/|\b)/,
+    /\/?(?:plan-item-workflows\/[^"'`\s]+|development-plans\/[^"'`\s]+\/items\/[^"'`\s]+)\/implementation-plan(?:\/[^"'`\s]+)?\/(?:draft|regenerate-draft|submit-for-approval|submit|approve|reject|request-changes)(?:\/|\b)/,
+  ],
+  legacy_workflow_direct_execution_start: [
+    /\/?(?:plan-item-workflows\/[^"'`\s]+|development-plans\/[^"'`\s]+\/items\/[^"'`\s]+)\/execution\/start(?:\/|\b)/,
+  ],
+  legacy_workflow_run_session_control: [
+    /\/?(?:plan-item-workflows\/[^"'`\s]+\/)?run-sessions\/[^"'`\s]+\/(?:input|cancel|resume)(?:\/|\b)/,
+  ],
+  wave5_forbidden_session_mutation: [
+    /\/?plan-item-workflows\/[^"'`\s]+\/(?:transitions|block|archive|recover)(?:\/|\b)/,
+    /\/?plan-item-workflows\/[^"'`\s]+\/(?:request-boundary-changes|request-spec-changes|request-implementation-plan-changes)(?:\/|\b)/,
+    /\/?plan-item-workflows\/[^"'`\s]+\/codex-sessions\/[^"'`\s]+\/(?:fork|select-active-fork|new-session|abandon|scavenge)(?:\/|\b)/,
+  ],
+  workflow_composer_generation_action: [
+    /\baction:\s*['"](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)['"]/,
+    /<option\s+value=["'](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)["']/,
+    /\bWorkflowMessageAction\b.*\b(?:generate_spec_doc|generate_implementation_plan_doc|start_execution)\b/,
+  ],
+  public_raw_codex_runtime_ref: [
+    /\bcodex_thread_id\b(?!_digest)/,
+    /\b(?:active_)?codex_session_id\b/,
+    /\bcodex_session_turn_id\b/,
+    /\bselected_codex_session_id\b/,
+    /\boutput_capsule_id\b/,
+    /\bmemory_bundle_ref\b/,
+    /\bprompt_transcript\b/,
+    /artifact:\/\//,
+    /\/Users\//,
+  ],
   raw_runtime_route: [
     /\/(?:plans|specs|replay)(?:\/|\b)/,
     /\broute\(\s*['"](?:plans|specs|replay)['"]\s*\)/,
@@ -424,6 +531,16 @@ const fileExtension = (file: string): string => {
 
 const isIgnoredHistoricalPath = (file: string, pattern: CodexRuntimeSuperpowersBaggagePattern): boolean =>
   file.includes('/node_modules/') ||
+  ([
+    'legacy_workflow_direct_spec_generation',
+    'legacy_workflow_direct_plan_generation',
+    'legacy_workflow_direct_execution_start',
+    'legacy_workflow_run_session_control',
+    'wave5_forbidden_session_mutation',
+    'workflow_composer_generation_action',
+    'public_raw_codex_runtime_ref',
+  ].includes(pattern) &&
+    !wave5WorkflowProductFiles.has(file)) ||
   (pattern !== 'legacy_codex_session_snapshot' &&
     (ignoredHistoricalPathFragments.some((fragment) => file === fragment || file.includes(fragment)) ||
       (file.startsWith('scripts/') && !activeStrictScripts.has(file)) ||
@@ -453,6 +570,50 @@ const isAllowed = (input: {
   line: string;
   allowlist: AllowedMatch[];
 }): boolean =>
+  (input.file.startsWith('apps/web/src/shared/api/') &&
+    [
+      'legacy_work_items_route',
+      'legacy_workflow_direct_spec_generation',
+      'legacy_workflow_direct_plan_generation',
+      'legacy_workflow_direct_execution_start',
+      'legacy_workflow_run_session_control',
+    ].includes(input.pattern)) ||
+  (input.pattern === 'legacy_workflow_direct_spec_generation' &&
+    input.file === 'apps/web/src/shared/api/commands.ts' &&
+    input.line.includes('const itemSpecPath')) ||
+  (input.pattern === 'legacy_workflow_direct_plan_generation' &&
+    input.file === 'apps/web/src/shared/api/commands.ts' &&
+    input.line.includes('const itemImplementationPlanPath')) ||
+  (input.pattern === 'legacy_workflow_direct_execution_start' &&
+    input.file === 'apps/control-plane-api/src/modules/executions/executions.service.ts' &&
+    input.line.includes('workflow_legacy_entrypoint_disabled')) ||
+  (input.pattern === 'legacy_workflow_direct_execution_start' &&
+    input.file === 'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts' &&
+    /assertActorCanMutateWorkflow|manual_decision_kind|workflow_legacy_entrypoint_disabled/.test(input.line)) ||
+  (input.pattern === 'wave5_forbidden_session_mutation' &&
+    input.file === 'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts' &&
+    /assertActorCanMutateWorkflow|manual_decision_kind|workflow_invalid_transition/.test(input.line)) ||
+  (input.pattern === 'wave5_forbidden_session_mutation' &&
+    input.file === 'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts' &&
+    /forkCodexSessionBodySchema|ForkCodexSessionBodyDto|forked_from_/.test(input.line)) ||
+  (input.pattern === 'workflow_composer_generation_action' &&
+    input.file !== 'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts' &&
+    !input.file.endsWith('plan-item-workflow-workspace.tsx') &&
+    !/\baction:\s*['"](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)['"]/.test(input.line) &&
+    !/<option\s+value=["'](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)["']/.test(input.line)) ||
+  (input.pattern === 'public_raw_codex_runtime_ref' &&
+    input.file.startsWith('apps/control-plane-api/src/modules/plan-item-workflows/') &&
+    !input.file.endsWith('plan-item-workflow.controller.ts') &&
+    !input.file.endsWith('plan-item-workflow.dto.ts')) ||
+  (input.pattern === 'public_raw_codex_runtime_ref' &&
+    input.file === 'packages/contracts/src/plan-item-workflow.ts' &&
+    /internalPlanItemWorkflowTransitionSchema|internalWorkflowManualDecisionSchema|codex_session_id|codex_session_turn_id|selected_codex_session_id/.test(input.line)) ||
+  (input.pattern === 'public_raw_codex_runtime_ref' &&
+    input.file === 'apps/web/src/features/development-plans/plan-item-workflow-view-model.ts' &&
+    isPlanItemWorkflowUiRuntimeSafetyAssertionLine(input.line)) ||
+  (input.pattern === 'public_raw_codex_runtime_ref' &&
+    input.file === 'apps/web/src/shared/api/types.ts' &&
+    input.line.includes("from '@forgeloop/contracts'")) ||
   (input.pattern === 'legacy_codex_session_snapshot' &&
     input.file.split('/').slice(0, 3).join(':') === 'docs:superpowers:specs' &&
     /supersedes|superseded|legacy|old|prior|previous/.test(input.line)) ||
@@ -462,6 +623,11 @@ const isAllowed = (input: {
       entry.pattern === input.pattern &&
       (entry.excerpt === undefined || input.line.includes(entry.excerpt)),
   );
+
+const isPlanItemWorkflowUiRuntimeSafetyAssertionLine = (line: string): boolean =>
+  /^\s*['"](?:active_codex_session_id|codex_session_id|codex_session_turn_id|output_capsule_id|memory_bundle_ref|prompt_transcript)['"],?\s*$/.test(line) ||
+  /^\s*const forbiddenKeyPatterns = \[\/codex_thread_id\$\/i, \/capsule_ref\$\/i, \/artifact_ref\$\/i, \/credential\.\*metadata\/i\];\s*$/.test(line) ||
+  /^\s*const forbiddenValuePatterns = \[\/artifact:/.test(line);
 
 const patternsForFile = (
   file: string,

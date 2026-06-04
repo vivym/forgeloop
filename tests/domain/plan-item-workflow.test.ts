@@ -270,7 +270,6 @@ describe('plan item workflow domain', () => {
         },
       ),
     ).toEqual({
-      id: 'session-1',
       status: 'idle',
       role: 'active',
       continuity_state: 'ready',

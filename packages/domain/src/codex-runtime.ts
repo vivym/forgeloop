@@ -348,6 +348,7 @@ export interface CodexGenerationWorkloadV1 {
   schema_version: 'codex_generation_workload.v1';
   runtime_job_id: string;
   action_run_id: string;
+  plan_item_workflow_action_id?: string;
   task_kind: CodexGenerationTaskKind;
   prompt_version: string;
   output_schema_version: string;

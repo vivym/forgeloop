@@ -278,10 +278,7 @@ describeIfDb('durable revision lookup', () => {
     await request(secondApp.getHttpServer())
       .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorOwner })
-      .expect(409)
-      .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
   });
 
   it('generates packages after restart', async () => {
@@ -336,8 +333,8 @@ describeIfDb('durable revision lookup', () => {
     const response = await request(app.getHttpServer())
       .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorOwner })
-      .expect(409);
-    expect(response.body.code).toBe('workflow_legacy_entrypoint_disabled');
+      .expect(404);
+    expect(response.body.statusCode).toBe(404);
   });
 
   it('rejects legacy item-scoped Implementation Plan Doc generation before missing revision validation', async () => {
@@ -354,8 +351,8 @@ describeIfDb('durable revision lookup', () => {
     const response = await request(app.getHttpServer())
       .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorOwner })
-      .expect(409);
-    expect(response.body.code).toBe('workflow_legacy_entrypoint_disabled');
+      .expect(404);
+    expect(response.body.statusCode).toBe(404);
   });
 
   it('returns 400 when approved plan current_revision_id is missing', async () => {

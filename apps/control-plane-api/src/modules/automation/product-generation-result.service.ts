@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Buffer } from 'node:buffer';
+import { randomUUID } from 'node:crypto';
 import {
   validateBoundaryRoundRuntimeResult,
   type BoundaryRoundRuntimeResultV1,
@@ -12,12 +13,19 @@ import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
   DomainError,
+  assertPlanItemWorkflowTransitionAllowed,
   validateCodexRuntimeJobTerminalResult,
   type AutomationActionRun,
+  type BoundarySummaryRevision,
   type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
   type CodexRuntimeJob,
+  type ExecutionPlanRevision,
   type InternalArtifactObject,
+  type PlanItemWorkflowQueuedAction,
+  type PlanItemWorkflowStatus,
+  type PlanItemWorkflowTransition,
+  type SpecRevision,
 } from '@forgeloop/domain';
 import { LocalInternalArtifactStore, type DeliveryRepository } from '@forgeloop/db';
 
@@ -60,6 +68,19 @@ type PreparedProductGenerationResult =
         | 'public_unsafe_payload'
         | 'unsupported_generated_payload_ref';
     };
+
+type AppliedGeneratedArtifact =
+  | { object_type: 'boundary_summary_revision'; object_id: string; to_status: Extract<PlanItemWorkflowStatus, 'boundary_review'> }
+  | { object_type: 'spec_revision'; object_id: string; to_status: Extract<PlanItemWorkflowStatus, 'spec_review'> }
+  | {
+      object_type: 'implementation_plan_revision';
+      object_id: string;
+      to_status: Extract<PlanItemWorkflowStatus, 'implementation_plan_review'>;
+    };
+
+type PreparedProductGenerationApplyOutcome =
+  | { applied: true; artifact?: AppliedGeneratedArtifact }
+  | Extract<ProductGenerationResultApplyOutcome, { applied: false }>;
 
 @Injectable()
 export class ProductGenerationResultService {
@@ -112,6 +133,10 @@ export class ProductGenerationResultService {
     ) {
       return this.completeProductActionIfOwned(actionRun, { applied: false, reason: 'invalid_precondition' });
     }
+    if (!this.runtimeJobActionBindingMatchesActionRun(activeFence.runtime_job, actionRun)) {
+      await this.failCodexSessionTurnForRejectedRuntimeResult(activeFence.runtime_job, 'workflow_action_not_runnable');
+      return this.completeProductActionIfOwned(actionRun, { applied: false, reason: 'invalid_precondition' });
+    }
 
     const prepared = await this.prepareProductGenerationResult(input.runtimeJobId, terminalResult);
     if (!prepared.prepared) {
@@ -126,9 +151,11 @@ export class ProductGenerationResultService {
     const outcome = await this.applyPreparedProductGenerationResult(actionRun, input.runtimeJobId, prepared);
     if (!outcome.applied) {
       await this.failCodexSessionTurnForRejectedRuntimeResult(activeFence.runtime_job, outcome.reason);
+      await this.failPlanItemWorkflowQueuedActionIfOwned(actionRun, outcome.reason);
       await this.clearCodexSessionRunnerOwnerAfterTerminalResultRejection(activeFence.runtime_job);
       return this.completeProductActionIfOwned(actionRun, outcome);
     }
+    await this.completePlanItemWorkflowQueuedActionIfOwned(actionRun, outcome.artifact);
     return this.completeProductActionIfOwned(actionRun, outcome);
   }
 
@@ -179,21 +206,42 @@ export class ProductGenerationResultService {
     actionRun: AutomationActionRun,
     runtimeJobId: string,
     prepared: Extract<PreparedProductGenerationResult, { prepared: true }>,
-  ): Promise<ProductGenerationResultApplyOutcome> {
+  ): Promise<PreparedProductGenerationApplyOutcome> {
     switch (prepared.task_kind) {
-      case 'boundary_brainstorming_round':
-        return this.brainstormingService.applyBoundaryRoundRuntimeResult({
+      case 'boundary_brainstorming_round': {
+        const result = await this.brainstormingService.applyBoundaryRoundRuntimeResult({
           actionRun,
           runtime_job_id: runtimeJobId,
           generated: prepared.generated,
         });
+        if (!result.applied) return result;
+        return result.revision === undefined
+          ? { applied: true }
+          : {
+              applied: true,
+              artifact: {
+                object_type: 'boundary_summary_revision',
+                object_id: result.revision.id,
+                to_status: 'boundary_review',
+              },
+            };
+      }
       case 'development_plan_item_spec_revision': {
         const result = await this.specPlanService.writeGeneratedItemSpecRevision({
           actionRun,
           runtime_job_id: runtimeJobId,
           generated: prepared.generated,
         });
-        return result.applied ? { applied: true } : result;
+        return result.applied
+          ? {
+              applied: true,
+              artifact: {
+                object_type: 'spec_revision',
+                object_id: result.revision.id,
+                to_status: 'spec_review',
+              },
+            }
+          : result;
       }
       case 'development_plan_item_execution_plan_revision': {
         const result = await this.specPlanService.writeGeneratedItemImplementationPlanRevision({
@@ -201,7 +249,16 @@ export class ProductGenerationResultService {
           runtime_job_id: runtimeJobId,
           generated: prepared.generated,
         });
-        return result.applied ? { applied: true } : result;
+        return result.applied
+          ? {
+              applied: true,
+              artifact: {
+                object_type: 'implementation_plan_revision',
+                object_id: result.revision.id,
+                to_status: 'implementation_plan_review',
+              },
+            }
+          : result;
       }
     }
   }
@@ -424,6 +481,178 @@ export class ProductGenerationResultService {
       terminalization,
       reasonCode,
     });
+  }
+
+  private async completePlanItemWorkflowQueuedActionIfOwned(
+    actionRun: AutomationActionRun,
+    artifact: AppliedGeneratedArtifact | undefined,
+  ): Promise<void> {
+    const owned = await this.workflowQueuedActionForActionRun(actionRun);
+    if (owned === undefined) {
+      return;
+    }
+    const { workflow, action, turn } = owned;
+    const capsule = turn.output_capsule_id === undefined ? undefined : await this.repository.getCodexRuntimeCapsule(turn.output_capsule_id);
+    if (turn.status !== 'succeeded' || capsule === undefined || turn.output_capsule_digest !== capsule.digest) {
+      await this.terminalizeWorkflowActionBestEffort(action, 'blocked', 'codex_runtime_capsule_missing');
+      return;
+    }
+
+    if (artifact !== undefined && workflow.status !== artifact.to_status) {
+      await this.applyPlanItemWorkflowRuntimeResultTransition({
+        workflow_id: workflow.id,
+        from_status: workflow.status,
+        to_status: artifact.to_status,
+        actor_id: action.created_by_actor_id,
+        codex_session_id: action.codex_session_id,
+        codex_session_turn_id: turn.id,
+        evidence_object_type: artifact.object_type,
+        evidence_object_id: artifact.object_id,
+      });
+    }
+
+    await this.repository.terminalizePlanItemWorkflowQueuedAction({
+      workflow_id: action.workflow_id,
+      action_id: action.id,
+      status: 'succeeded',
+      codex_session_turn_id: turn.id,
+      output_capsule_id: capsule.id,
+      output_capsule_digest: capsule.digest,
+      output_capsule_sequence: capsule.sequence,
+      ...(turn.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: turn.codex_thread_id_digest }),
+      now: this.now(),
+    });
+  }
+
+  private async failPlanItemWorkflowQueuedActionIfOwned(actionRun: AutomationActionRun, reasonCode: string): Promise<void> {
+    const owned = await this.workflowQueuedActionForActionRun(actionRun);
+    if (owned === undefined) {
+      return;
+    }
+    await this.terminalizeWorkflowActionBestEffort(owned.action, 'failed', reasonCode);
+  }
+
+  private async workflowQueuedActionForActionRun(actionRun: AutomationActionRun): Promise<
+    | {
+        workflow: NonNullable<Awaited<ReturnType<DeliveryRepository['getPlanItemWorkflow']>>>;
+        action: PlanItemWorkflowQueuedAction;
+        turn: NonNullable<Awaited<ReturnType<DeliveryRepository['getCodexSessionTurn']>>>;
+      }
+    | undefined
+  > {
+    if (
+      actionRun.workflow_id === undefined ||
+      actionRun.codex_session_id === undefined ||
+      actionRun.codex_session_turn_id === undefined
+    ) {
+      return undefined;
+    }
+    const [workflow, turn, actions] = await Promise.all([
+      this.repository.getPlanItemWorkflow(actionRun.workflow_id),
+      this.repository.getCodexSessionTurn(actionRun.codex_session_turn_id),
+      this.repository.listPlanItemWorkflowQueuedActions(actionRun.workflow_id),
+    ]);
+    if (
+      workflow === undefined ||
+      turn === undefined ||
+      workflow.active_codex_session_id !== actionRun.codex_session_id ||
+      turn.workflow_id !== actionRun.workflow_id ||
+      turn.codex_session_id !== actionRun.codex_session_id
+    ) {
+      return undefined;
+    }
+    const planItemWorkflowActionId = this.planItemWorkflowActionIdForActionRun(actionRun);
+    if (planItemWorkflowActionId === undefined) {
+      return undefined;
+    }
+    const action = actions.find(
+      (candidate) =>
+        candidate.id === planItemWorkflowActionId &&
+        candidate.status === 'running' &&
+        candidate.codex_session_id === actionRun.codex_session_id &&
+        candidate.codex_session_turn_id === actionRun.codex_session_turn_id,
+    );
+    return action === undefined ? undefined : { workflow, action, turn };
+  }
+
+  private planItemWorkflowActionIdForActionRun(actionRun: AutomationActionRun): string | undefined {
+    const value = actionRun.action_input_json.plan_item_workflow_action_id;
+    return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+  }
+
+  private runtimeJobActionBindingMatchesActionRun(runtimeJob: CodexRuntimeJob, actionRun: AutomationActionRun): boolean {
+    const workload = runtimeJob.input_json as Partial<CodexGenerationWorkloadV1>;
+    const workloadActionId = workload.plan_item_workflow_action_id;
+    const actionRunActionId = this.planItemWorkflowActionIdForActionRun(actionRun);
+    if (workloadActionId === undefined && actionRunActionId === undefined) {
+      return true;
+    }
+    return workloadActionId === actionRunActionId;
+  }
+
+  private async applyPlanItemWorkflowRuntimeResultTransition(input: {
+    workflow_id: string;
+    from_status: PlanItemWorkflowStatus;
+    to_status: PlanItemWorkflowStatus;
+    actor_id: string;
+    codex_session_id: string;
+    codex_session_turn_id: string;
+    evidence_object_type: AppliedGeneratedArtifact['object_type'];
+    evidence_object_id: string;
+  }): Promise<void> {
+    const now = this.now();
+    const transition: PlanItemWorkflowTransition = {
+      id: randomUUID(),
+      workflow_id: input.workflow_id,
+      from_status: input.from_status,
+      to_status: input.to_status,
+      actor_id: input.actor_id,
+      evidence_object_type: input.evidence_object_type,
+      evidence_object_id: input.evidence_object_id,
+      codex_session_id: input.codex_session_id,
+      codex_session_turn_id: input.codex_session_turn_id,
+      reason: `Runtime generated ${input.evidence_object_type}.`,
+      created_at: now,
+    };
+    assertPlanItemWorkflowTransitionAllowed(transition);
+    await this.repository.applyPlanItemWorkflowTransition({
+      transition,
+      projection_patch: this.workflowProjectionPatchForArtifact(input.evidence_object_type, input.evidence_object_id),
+    });
+  }
+
+  private workflowProjectionPatchForArtifact(
+    objectType: AppliedGeneratedArtifact['object_type'],
+    objectId: string,
+  ): NonNullable<Parameters<DeliveryRepository['applyPlanItemWorkflowTransition']>[0]['projection_patch']> {
+    if (objectType === 'boundary_summary_revision') {
+      return { active_boundary_summary_revision_id: objectId };
+    }
+    if (objectType === 'spec_revision') {
+      return { active_spec_doc_revision_id: objectId };
+    }
+    return { active_implementation_plan_doc_revision_id: objectId };
+  }
+
+  private async terminalizeWorkflowActionBestEffort(
+    action: PlanItemWorkflowQueuedAction,
+    status: 'failed' | 'blocked',
+    reasonCode: string,
+  ): Promise<void> {
+    try {
+      await this.repository.terminalizePlanItemWorkflowQueuedAction({
+        workflow_id: action.workflow_id,
+        action_id: action.id,
+        status,
+        ...(action.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: action.codex_session_turn_id }),
+        blocked_reason_code: reasonCode,
+        now: this.now(),
+      });
+    } catch (error) {
+      if (!(error instanceof DomainError && error.code === 'workflow_invalid_transition')) {
+        throw error;
+      }
+    }
   }
 
   private async clearCodexSessionRunnerOwnerAfterSuccessfulCompleteTurn(

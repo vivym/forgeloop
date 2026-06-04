@@ -6,6 +6,7 @@ import {
   developmentPlanWorkspaceViewModel,
   developmentPlanViewModel,
 } from '../../apps/web/src/features/development-plans/development-plan-view-model';
+import { toPlanItemWorkflowWorkspaceModel } from '../../apps/web/src/features/development-plans/plan-item-workflow-view-model';
 import { executionViewModel } from '../../apps/web/src/features/executions/execution-view-model';
 import { myWorkQueueViewModel } from '../../apps/web/src/features/my-work/my-work-view-model';
 import {
@@ -17,10 +18,14 @@ import {
 import { releaseViewModel } from '../../apps/web/src/features/releases/release-view-model';
 import { reportViewModel } from '../../apps/web/src/features/reports/report-view-model';
 import { documentReviewQueueViewModel } from '../../apps/web/src/features/reviews/review-queue-view-model';
+import type { PlanItemWorkflowPublicDto } from '../../apps/web/src/shared/api/types';
 import {
   actorId,
+  boundarySummary,
   developmentPlan,
   developmentPlanItem,
+  executionPlan,
+  executionPlanRevision,
   execution,
   bugListItem,
   initiativeListItem,
@@ -32,6 +37,8 @@ import {
   reportFixtures,
   requirementDetail,
   requirementListItem,
+  spec,
+  specRevision,
   techDebtListItem,
   workItemKindCockpitFixtures,
 } from './fixtures/product-data';
@@ -78,6 +85,44 @@ describe('product-grade presentation view models', () => {
     expect(row.developmentPlanCoverage).toBe('Unavailable');
     expect(row.planItemCoverage).toBe('Unavailable');
     expect(row.relatedObjects).toBe('Unavailable');
+  });
+
+  it('rejects raw Plan Item Workflow runtime internals before they enter UI workspace state', () => {
+    const workflow = planItemWorkflowFixture();
+    const item = {
+      ...developmentPlanItem,
+      plan_item_workflow: {
+        ...workflow,
+        active_codex_session_id: 'session-raw-leak',
+      },
+      specs: [{
+        id: spec.id,
+        title: specRevision.summary,
+        current_revision_id: spec.current_revision_id,
+        approved_revision_id: spec.approved_revision_id,
+        current_revision_markdown: specRevision.content,
+      }],
+      implementation_plan_docs: [{
+        id: executionPlan.id,
+        title: executionPlanRevision.summary,
+        current_revision_id: executionPlan.current_revision_id,
+        approved_revision_id: executionPlan.approved_revision_id,
+        current_revision_markdown: executionPlanRevision.content,
+      }],
+    };
+
+    expect(() =>
+      toPlanItemWorkflowWorkspaceModel({
+        item,
+        roleLens: 'tech_lead',
+        boundaryRevisions: [{
+          id: boundarySummary.revision_id,
+          boundary_summary_id: boundarySummary.id,
+          revision_number: 1,
+          summary_markdown: boundarySummary.summary,
+        }],
+      }),
+    ).toThrow(/active_codex_session_id/);
   });
 
   it('projects initiative-specific row fields for the typed workspace', () => {
@@ -725,3 +770,76 @@ describe('product-grade presentation view models', () => {
     );
   });
 });
+
+const safeDigest = (char: string) => `sha256:${char.repeat(64)}`;
+
+function planItemWorkflowFixture(): PlanItemWorkflowPublicDto {
+  return {
+    id: 'workflow-product-workspace-preview',
+    development_plan_id: developmentPlan.id,
+    development_plan_item_id: developmentPlanItem.id,
+    status: 'spec_generation_queued',
+    active_boundary_summary_revision_id: boundarySummary.revision_id,
+    active_spec_doc_revision_id: specRevision.id,
+    active_implementation_plan_doc_revision_id: executionPlanRevision.id,
+    session: {
+      status: 'idle',
+      role: 'active',
+      continuity_state: 'ready',
+      can_continue: true,
+      last_turn_at: '2026-05-18T00:24:00.000Z',
+    },
+    queued_actions: [
+      {
+        id: 'action-generate-spec-doc',
+        workflow_id: 'workflow-product-workspace-preview',
+        kind: 'generate_spec_doc',
+        status: 'queued',
+        source_revision_id: boundarySummary.revision_id,
+        expected_input_capsule_digest: safeDigest('a'),
+        context_preview_digest: safeDigest('b'),
+        idempotency_key: safeDigest('c'),
+        created_by_actor_id: 'actor-reviewer',
+        created_at: '2026-05-18T00:23:00.000Z',
+        updated_at: '2026-05-18T00:23:00.000Z',
+      },
+    ],
+    timeline_events: [
+      {
+        id: 'event-spec-queued',
+        workflow_id: 'workflow-product-workspace-preview',
+        event_type: 'queued_action',
+        status: 'queued',
+        actor_id: 'actor-reviewer',
+        queued_action_id: 'action-generate-spec-doc',
+        queued_action_kind: 'generate_spec_doc',
+        queued_action_status: 'queued',
+        created_at: '2026-05-18T00:23:00.000Z',
+      },
+    ],
+    context_preview: {
+      digest: safeDigest('d'),
+      capsule_digest: safeDigest('e'),
+      boundary_summary_revision_id: boundarySummary.revision_id,
+      spec_doc_revision_id: specRevision.id,
+      implementation_plan_doc_revision_id: executionPlanRevision.id,
+      message_count: 1,
+      queued_action_count: 1,
+      updated_at: '2026-05-18T00:24:00.000Z',
+    },
+    readiness: {
+      state: 'blocked',
+      can_evaluate: true,
+      blocker_codes: ['execution_package_missing'],
+    },
+    blockers: [
+      {
+        code: 'execution_package_missing',
+        status: 'active',
+        created_at: '2026-05-18T00:24:00.000Z',
+      },
+    ],
+    created_at: '2026-05-18T00:20:00.000Z',
+    updated_at: '2026-05-18T00:24:00.000Z',
+  } satisfies PlanItemWorkflowPublicDto;
+}

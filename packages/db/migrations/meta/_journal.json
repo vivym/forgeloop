@@ -8,6 +8,27 @@
       "when": 1780434819999,
       "tag": "0000_clean_capsule_runtime_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1780436520000,
+      "tag": "0001_plan_item_workflow_queued_actions",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780452300000,
+      "tag": "0002_execution_readiness_invalidation",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780523033612,
+      "tag": "0003_plan_item_workflow_revision_binding",
+      "breakpoints": true
     }
   ]
 }

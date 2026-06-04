@@ -1,6 +1,5 @@
 import { Body, Controller, Headers, Inject, Param, Post } from '@nestjs/common';
 import { productObjectRefSchema } from '@forgeloop/contracts';
-import { DomainError } from '@forgeloop/domain';
 import { z } from 'zod';
 
 import { actorContextFromHeaders } from '../auth/actor-context';
@@ -10,13 +9,6 @@ import { ExecutionsService } from './executions.service';
 
 const nonEmptyString = z.string().trim().min(1);
 const productEvidenceRefsSchema = z.array(productObjectRefSchema);
-
-const startExecutionCommandSchema = z
-  .object({
-    actor_id: nonEmptyString,
-  })
-  .strict();
-type StartExecutionCommandDto = z.infer<typeof startExecutionCommandSchema>;
 
 const readyForCodeReviewCommandSchema = actorCommandSchema
   .extend({
@@ -71,11 +63,6 @@ type QaAcceptCommandDto = z.infer<typeof qaAcceptCommandSchema>;
 @Controller()
 export class ExecutionsController {
   constructor(@Inject(ExecutionsService) private readonly executionsService: ExecutionsService) {}
-
-  @Post('development-plans/:developmentPlanId/items/:itemId/execution/start')
-  startExecution() {
-    return this.legacyEntrypointDisabled('item-execution-start');
-  }
 
   @Post('executions/:executionId/continue')
   continueExecution(
@@ -150,12 +137,5 @@ export class ExecutionsController {
     @Body(new ZodValidationPipe(qaAcceptCommandSchema)) body: QaAcceptCommandDto,
   ) {
     return this.executionsService.acceptQaHandoff(qaHandoffId, body);
-  }
-
-  private legacyEntrypointDisabled(operation: string): never {
-    throw new DomainError(
-      'workflow_legacy_entrypoint_disabled',
-      `workflow_legacy_entrypoint_disabled: ${operation} must use PlanItemWorkflow queued actions`,
-    );
   }
 }

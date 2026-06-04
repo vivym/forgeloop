@@ -113,7 +113,6 @@ export const planItemWorkflowQueuedActionSchema = z
   .object({
     id: nonEmpty,
     workflow_id: nonEmpty,
-    codex_session_id: nonEmpty,
     kind: planItemWorkflowQueuedActionKindSchema,
     status: planItemWorkflowQueuedActionStatusSchema,
     source_revision_id: nonEmpty.optional(),
@@ -122,7 +121,6 @@ export const planItemWorkflowQueuedActionSchema = z
     expected_input_capsule_digest: safeDigest.optional(),
     context_preview_digest: safeDigest,
     idempotency_key: safeDigest,
-    codex_session_turn_id: nonEmpty.optional(),
     output_capsule_digest: safeDigest.optional(),
     output_capsule_sequence: z.number().int().nonnegative().optional(),
     codex_thread_id_digest: safeDigest.optional(),
@@ -154,25 +152,56 @@ export const planItemWorkflowTransitionSchema = z
     evidence_object_id: nonEmpty,
     evidence_digest: nonEmpty.optional(),
     supporting_evidence: z.array(transitionSupportingEvidenceSchema).optional(),
-    codex_session_id: nonEmpty,
-    codex_session_turn_id: nonEmpty.optional(),
     created_at: isoDateTime,
   })
   .strict();
 export type PlanItemWorkflowTransition = z.infer<typeof planItemWorkflowTransitionSchema>;
 
-export const workflowManualDecisionSchema = z
+export const internalPlanItemWorkflowTransitionSchema = planItemWorkflowTransitionSchema
+  .extend({
+    codex_session_id: nonEmpty,
+    codex_session_turn_id: nonEmpty.optional(),
+  })
+  .strict();
+export type InternalPlanItemWorkflowTransition = z.infer<typeof internalPlanItemWorkflowTransitionSchema>;
+
+const workflowManualDecisionBaseSchema = z
   .object({
     id: nonEmpty,
     workflow_id: nonEmpty,
-    codex_session_id: nonEmpty,
     kind: workflowManualDecisionKindSchema,
     reason: nonEmpty,
-    selected_codex_session_id: nonEmpty.optional(),
     related_object_type: workflowTransitionEvidenceObjectTypeSchema.optional(),
     related_object_id: nonEmpty.optional(),
     created_by_actor_id: nonEmpty,
     created_at: isoDateTime,
+  })
+  .strict();
+
+export const workflowManualDecisionSchema = workflowManualDecisionBaseSchema
+  .superRefine((decision, ctx) => {
+    if (decision.kind === 'fork_select') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['kind'],
+        message: 'fork_select is internal runtime evidence and is not public-safe',
+      });
+    }
+
+    if ((decision.related_object_type === undefined) !== (decision.related_object_id === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['related_object_id'],
+        message: 'related_object_type and related_object_id must be provided together',
+      });
+    }
+  });
+export type WorkflowManualDecision = z.infer<typeof workflowManualDecisionSchema>;
+
+export const internalWorkflowManualDecisionSchema = workflowManualDecisionBaseSchema
+  .extend({
+    codex_session_id: nonEmpty,
+    selected_codex_session_id: nonEmpty.optional(),
   })
   .strict()
   .superRefine((decision, ctx) => {
@@ -191,20 +220,11 @@ export const workflowManualDecisionSchema = z
         message: 'selected_codex_session_id is only allowed for fork_select',
       });
     }
-
-    if ((decision.related_object_type === undefined) !== (decision.related_object_id === undefined)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['related_object_id'],
-        message: 'related_object_type and related_object_id must be provided together',
-      });
-    }
   });
-export type WorkflowManualDecision = z.infer<typeof workflowManualDecisionSchema>;
+export type InternalWorkflowManualDecision = z.infer<typeof internalWorkflowManualDecisionSchema>;
 
 export const codexSessionPublicDtoSchema = z
   .object({
-    id: nonEmpty,
     status: codexSessionStatusSchema,
     role: codexSessionRoleSchema,
     continuity_state: z.enum(['ready', 'running', 'blocked', 'stale']),
@@ -221,6 +241,7 @@ export const planItemWorkflowTimelineEventSchema = z
     workflow_id: nonEmpty.optional(),
     event_type: nonEmpty,
     status: nonEmpty.optional(),
+    body_markdown: nonEmpty.optional(),
     actor_id: nonEmpty.optional(),
     object_type: workflowTransitionEvidenceObjectTypeSchema.optional(),
     object_id: nonEmpty.optional(),
@@ -276,11 +297,9 @@ export const planItemWorkflowPublicDtoSchema = z
     development_plan_id: nonEmpty,
     development_plan_item_id: nonEmpty,
     status: planItemWorkflowStatusSchema,
-    active_codex_session_id: nonEmpty,
     active_boundary_summary_revision_id: nonEmpty.optional(),
     active_spec_doc_revision_id: nonEmpty.optional(),
     active_implementation_plan_doc_revision_id: nonEmpty.optional(),
-    execution_package_id: nonEmpty.optional(),
     session: codexSessionPublicDtoSchema,
     queued_actions: z.array(planItemWorkflowQueuedActionSchema).default([]),
     timeline_events: z.array(planItemWorkflowTimelineEventSchema).default([]),

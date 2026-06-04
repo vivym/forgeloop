@@ -4,8 +4,12 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { RUN_DURABILITY_MODE } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import {
+  DELIVERY_REPOSITORY,
+  RUN_DURABILITY_MODE,
+} from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import type { DeliveryRepository } from '../../packages/db/src';
 import { seedReadyExecutionPackageThroughApi } from '../helpers/delivery-runtime-fixtures';
 
 const actorOwner = 'actor-owner';
@@ -24,21 +28,23 @@ describe('async run API', () => {
     await app.close();
   });
 
-  it('returns immediately with run_session_id and no workflow_result', async () => {
+  it('fails closed without creating a RunSession', async () => {
     const executionPackage = await seedReadyExecutionPackageThroughApi(app);
 
     const response = await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(actorHeaderName, actorOwner)
       .send({ workflow_only: true })
-      .expect(201);
+      .expect(409);
 
     expect(response.body).toMatchObject({
-      status: 'accepted',
-      run_session_id: expect.stringContaining('run-session'),
-      execution_package_id: executionPackage.id,
+      code: 'workflow_legacy_entrypoint_disabled',
     });
+    expect(response.body).not.toHaveProperty('run_session_id');
     expect(response.body).not.toHaveProperty('workflow_result');
+
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toEqual([]);
   });
 
   it('rejects durable run requests that provide the deleted body actor field', async () => {

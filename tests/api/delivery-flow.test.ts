@@ -24,12 +24,16 @@ import {
   codexCredentialPayloadDigest,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
+  transitionExecutionPackage,
+  transitionReviewPacket,
+  transitionRunSession,
   type CodexRuntimeProfileRevision,
 } from '../../packages/domain/src';
-import { InMemoryDeliveryRepository, type TraceEventRecord } from '../../packages/db/src/index';
-import type { ReviewPacket, RunSession } from '../../packages/domain/src/index';
+import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
+import type { ExecutionPackage, ReviewPacket, RunSession } from '../../packages/domain/src/index';
 import { FakeCodexSessionDriver, RunWorker } from '../../packages/run-worker/src';
 import { seedItemScopedSpecPlan } from '../helpers/item-scoped-artifact-fixtures';
+import { succeededSelfReview } from '../helpers/delivery-runtime-fixtures';
 import { createWorkflowPolicyRepoRoot } from '../helpers/runtime-policy-repo';
 
 const actorOwner = 'actor-owner';
@@ -347,17 +351,13 @@ const startWorkflowForItem = async (
     secret_payload_json: secretPayload,
   });
 
-  await request(app.getHttpServer())
-    .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/workflow/start-brainstorming`)
-    .send({
-      actor_id: actorReviewer,
-      runtime_profile_id: profileId,
-      runtime_profile_revision_id: profileRevisionId,
-      credential_binding_id: credentialBindingId,
-      credential_binding_version_id: credentialBindingVersionId,
-      reason: 'Start workflow to verify legacy item-scoped document fences.',
-    })
-    .expect(201);
+	  await request(app.getHttpServer())
+	    .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/workflow/start-brainstorming`)
+	    .send({
+	      actor_id: actorReviewer,
+	      reason: 'Start workflow to verify legacy item-scoped document fences.',
+	    })
+	    .expect(201);
 };
 
 const repositoryFor = (app: INestApplication): InMemoryDeliveryRepository =>
@@ -403,6 +403,104 @@ const waitForReviewPacket = async (app: INestApplication, runSessionId: string):
       runSession?.status ?? 'missing'
     }; runtimeMetadata=${runtimeMetadata}; events=${eventSummaries}`,
   );
+};
+
+let seededRunCounter = 0;
+
+const seedSucceededRunWithReadyReviewPacket = async (
+  app: INestApplication,
+  executionPackage: ExecutionPackage,
+): Promise<{ runSession: RunSession; reviewPacket: ReviewPacket; executionPackage: ExecutionPackage }> => {
+  const repository = repositoryFor(app);
+  const sequence = ++seededRunCounter;
+  const runSessionId = `run-session-seeded-${sequence}`;
+  const at = `2026-05-05T00:${String(sequence).padStart(2, '0')}:00.000Z`;
+  const queuedPackage = transitionExecutionPackage(executionPackage, {
+    type: 'run',
+    run_session_id: runSessionId,
+    at,
+  });
+  const executingPackage = transitionExecutionPackage(queuedPackage, {
+    type: 'workflow_start',
+    at,
+  });
+  const reviewPackage = transitionExecutionPackage(executingPackage, {
+    type: 'execution_succeeded',
+    at,
+  });
+  const createdRunSession = transitionRunSession(undefined, {
+    type: 'create',
+    id: runSessionId,
+    execution_package_id: executionPackage.id,
+    requested_by_actor_id: actorOwner,
+    executor_type: 'mock',
+    at,
+  });
+  const executorResult: ExecutorResult = {
+    run_session_id: runSessionId,
+    executor_type: 'mock',
+    executor_version: 'delivery-flow-test-seed',
+    status: 'succeeded',
+    started_at: at,
+    finished_at: at,
+    summary: `Seeded run ${runSessionId} completed.`,
+    changed_files: [
+      {
+        repo_id: executionPackage.repo_id,
+        path: evidenceChangedFilePath(executionPackage.allowed_paths),
+        change_kind: 'modified',
+      },
+    ],
+    checks: executionPackage.required_checks.map((check) => ({
+      check_id: check.check_id,
+      command: check.command,
+      status: 'succeeded',
+      exit_code: 0,
+      duration_seconds: 0,
+      blocks_review: check.blocks_review,
+    })),
+    artifacts: executionPackage.required_artifact_kinds.map((kind) => ({
+      kind,
+      name: `${kind}.txt`,
+      content_type: 'text/plain',
+      local_ref: `/tmp/forgeloop-delivery-flow/${safePathSegment(runSessionId)}/${kind}.txt`,
+    })),
+    raw_metadata: { seeded: true },
+  };
+  const runningRunSession = transitionRunSession(createdRunSession, {
+    type: 'worker_started',
+    runtime_metadata: {
+      durability_mode: 'volatile_demo',
+      recovery_attempt_count: 0,
+      effective_dangerous_mode: 'not_requested',
+    },
+    at,
+  });
+  const runSession = transitionRunSession(runningRunSession, {
+    type: 'executor_success',
+    executor_result: executorResult,
+    at,
+  });
+  const reviewPacket = transitionReviewPacket(undefined, {
+    type: 'create',
+    id: `review-packet:${runSessionId}`,
+    run_session_id: runSessionId,
+    execution_package_id: executionPackage.id,
+    reviewer_actor_id: executionPackage.reviewer_actor_id,
+    spec_revision_id: executionPackage.spec_revision_id,
+    plan_revision_id: executionPackage.plan_revision_id,
+    changed_files: executorResult.changed_files,
+    check_result_summary: 'Required checks passed.',
+    self_review: succeededSelfReview(),
+    risk_notes: [],
+    at,
+  });
+
+  await repository.saveExecutionPackage(reviewPackage);
+  await repository.saveRunSession(runSession);
+  await repository.saveReviewPacket(reviewPacket);
+
+  return { runSession, reviewPacket, executionPackage: reviewPackage };
 };
 
 const getAvailablePort = async (): Promise<number> =>
@@ -483,12 +581,6 @@ class SequencingRepository extends InMemoryDeliveryRepository {
   }
 }
 
-class FailingTraceRepository extends InMemoryDeliveryRepository {
-  override async saveTraceEvent(_event: TraceEventRecord): Promise<void> {
-    throw new Error('trace store unavailable');
-  }
-}
-
 describe('delivery control plane API', () => {
   let app: INestApplication;
 
@@ -532,23 +624,38 @@ describe('delivery control plane API', () => {
     expect(generatedPackages[0].phase).toBe('draft');
     expect(generatedPackages[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
     expect(generatedPackages[0]).not.toHaveProperty('work_item_id');
+    expect(generatedPackages[0]).not.toHaveProperty('workflow_id');
+    expect(generatedPackages[0]).not.toHaveProperty('codex_session_id');
+    expect(generatedPackages[0]).not.toHaveProperty('codex_session_turn_id');
 
     const executionPackage = await createManualPackage(app, planRevisionId);
     expect(executionPackage).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
     expect(executionPackage).not.toHaveProperty('work_item_id');
+    expect(executionPackage).not.toHaveProperty('workflow_id');
+    expect(executionPackage).not.toHaveProperty('codex_session_id');
+    expect(executionPackage).not.toHaveProperty('codex_session_turn_id');
     const packageList = (await request(server).get(`/work-items/${workItem.id}/execution-packages`).expect(200)).body;
     expect(packageList.length).toBeGreaterThanOrEqual(2);
     expect(packageList[0]).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
     expect(packageList[0]).not.toHaveProperty('work_item_id');
+    expect(packageList[0]).not.toHaveProperty('workflow_id');
+    expect(packageList[0]).not.toHaveProperty('codex_session_id');
+    expect(packageList[0]).not.toHaveProperty('codex_session_turn_id');
     const packageDetail = (await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200)).body;
     expect(packageDetail).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
     expect(packageDetail).not.toHaveProperty('work_item_id');
+    expect(packageDetail).not.toHaveProperty('workflow_id');
+    expect(packageDetail).not.toHaveProperty('codex_session_id');
+    expect(packageDetail).not.toHaveProperty('codex_session_turn_id');
     const patchedPackage = (await request(server)
       .patch(`/execution-packages/${executionPackage.id}`)
       .send({ objective: 'Edited before ready.' })
       .expect(200)).body;
     expect(patchedPackage).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
     expect(patchedPackage).not.toHaveProperty('work_item_id');
+    expect(patchedPackage).not.toHaveProperty('workflow_id');
+    expect(patchedPackage).not.toHaveProperty('codex_session_id');
+    expect(patchedPackage).not.toHaveProperty('codex_session_turn_id');
     const readyPackage = (await request(server)
       .post(`/execution-packages/${executionPackage.id}/mark-ready`)
       .set(ownerHeaders)
@@ -557,61 +664,17 @@ describe('delivery control plane API', () => {
     expect(readyPackage).toMatchObject({ scope_ref: { type: 'requirement', id: workItem.id } });
     expect(readyPackage).not.toHaveProperty('work_item_id');
 
-    const firstRun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    expect(firstRun).toMatchObject({ status: 'accepted', run_session_id: expect.any(String) });
-    expect(firstRun).not.toHaveProperty('workflow_result');
-    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
-    await request(server).get(`/run-sessions/${firstRun.run_session_id}`).expect(200);
-    await request(server).get(`/review-packets/${firstReviewPacketId}`).expect(200);
-
     await request(server)
-      .post(`/review-packets/${firstReviewPacketId}/request-changes`)
-      .set(reviewerHeaders)
-      .send({
-        summary: 'Please tighten the API assertions.',
-        reviewed_by_actor_id: actorReviewer,
-        reviewed_at: '2026-05-05T01:00:00.000Z',
-        requested_changes: [
-          {
-            title: 'Add rerun coverage',
-            description: 'Verify requested changes are carried into reruns.',
-            file_path: 'tests/api/delivery-flow.test.ts',
-            severity: 'major',
-            suggested_validation: 'pnpm test tests/api',
-          },
-        ],
-      })
-      .expect(201);
-
-    const rerun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .set(ownerHeaders)
-        .send({ previous_run_session_id: firstRun.run_session_id, workflow_only: true })
-        .expect(201)
-    ).body;
-    const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
-    const rerunSession = (await request(server).get(`/run-sessions/${rerun.run_session_id}`).expect(200)).body;
-    expect(rerunSession).not.toHaveProperty('run_spec');
-    expect((await repositoryFor(app).getRunSession(rerun.run_session_id))?.run_spec?.review_context.latest_decision).toBe(
-      'changes_requested',
-    );
-
-    await request(server)
-      .post(`/review-packets/${rerunReviewPacketId}/approve`)
-      .set(reviewerHeaders)
-      .send({
-        summary: 'Approved for handoff.',
-        reviewed_by_actor_id: actorReviewer,
-        reviewed_at: '2026-05-05T02:00:00.000Z',
-      })
-      .expect(201);
+      .post(`/execution-packages/${executionPackage.id}/run`)
+      .set(ownerHeaders)
+      .send({ workflow_only: true })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body).not.toHaveProperty('run_session_id');
+        expect(body).not.toHaveProperty('workflow_result');
+      });
+    expect(await repositoryFor(app).listRunSessionsForPackage(executionPackage.id)).toEqual([]);
 
     const documentReviews = (await request(server).get('/query/reviews').query({ project_id: project.id }).expect(200)).body;
     expect(documentReviews.items).toEqual(
@@ -636,7 +699,9 @@ describe('delivery control plane API', () => {
     expect(executionLane.items.map((item: { object: { type: string } }) => item.object.type)).not.toContain('execution_package');
     expect((await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200)).body).toMatchObject({
       id: executionPackage.id,
-      resolution: 'completed',
+      phase: 'ready',
+      activity_state: 'idle',
+      resolution: 'none',
     });
 
     await request(server).get(`/query/work-item-cockpit/${workItem.id}`).expect(404);
@@ -712,10 +777,7 @@ describe('delivery control plane API', () => {
       .post(`/development-plans/${draftSpec.developmentPlan.id}/items/${draftSpec.item.id}/spec/approve`)
       .set(reviewerHeaders)
       .send({ actor_id: actorReviewer })
-      .expect(409)
-      .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
 
     await approveSpec(app, workItem.id);
     const { planRevisionId } = await approvePlan(app, workItem.id);
@@ -731,14 +793,8 @@ describe('delivery control plane API', () => {
       .send({ actor_id: actorOwner, expected_package_version: readyPackage.version })
       .expect(400);
 
-    const run = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
+    const { reviewPacket } = await seedSucceededRunWithReadyReviewPacket(app, readyPackage as ExecutionPackage);
+    const reviewPacketId = reviewPacket.id;
     await request(server)
       .post(`/review-packets/${reviewPacketId}/approve`)
       .set(reviewerHeaders)
@@ -808,14 +864,10 @@ describe('delivery control plane API', () => {
       .set(ownerHeaders)
       .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
       .expect(201);
-    const run = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
+    const readyPackage = (await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200))
+      .body as ExecutionPackage;
+    const { reviewPacket } = await seedSucceededRunWithReadyReviewPacket(app, readyPackage);
+    const reviewPacketId = reviewPacket.id;
     await request(server)
       .post(`/review-packets/${reviewPacketId}/request-changes`)
       .set(reviewerHeaders)
@@ -844,21 +896,17 @@ describe('delivery control plane API', () => {
       .set(ownerHeaders)
       .send({ actor_id: actorOwner, expected_package_version: executionPackage.version })
       .expect(201);
-    const run = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
+    const readyPackage = (await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200))
+      .body as ExecutionPackage;
+    const { runSession, reviewPacket } = await seedSucceededRunWithReadyReviewPacket(app, readyPackage);
+    const reviewPacketId = reviewPacket.id;
 
     await request(server)
       .patch(`/execution-packages/${executionPackage.id}`)
       .send({ objective: 'Edited package creates a fresh run spec.' })
       .expect(422);
 
-    const oldRun = (await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body;
+    const oldRun = (await request(server).get(`/run-sessions/${runSession.id}`).expect(200)).body;
     const openPacket = (await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body;
     expect(oldRun.status).toBe('succeeded');
     expect(openPacket.status).toBe('ready');
@@ -873,14 +921,10 @@ describe('delivery control plane API', () => {
     const repository = repositoryFor(app);
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
-    const run = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
+    const readyPackage = (await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200))
+      .body as ExecutionPackage;
+    const { runSession, reviewPacket } = await seedSucceededRunWithReadyReviewPacket(app, readyPackage);
+    const reviewPacketId = reviewPacket.id;
     const readyPacket = await repository.getReviewPacket(reviewPacketId);
     await repository.saveReviewPacket({ ...readyPacket!, status: 'in_review' });
 
@@ -889,19 +933,26 @@ describe('delivery control plane API', () => {
       .send({ objective: 'Edit while human review has started.' })
       .expect(422);
 
-    expect((await request(server).get(`/run-sessions/${run.run_session_id}`).expect(200)).body.status).toBe('succeeded');
+    expect((await request(server).get(`/run-sessions/${runSession.id}`).expect(200)).body.status).toBe('succeeded');
     expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body.status).toBe('in_review');
   });
 
-  it('validates run, rerun, and force-rerun request bodies and previous run ids', async () => {
+  it('validates disabled run, rerun, and force-rerun request bodies without creating execution state', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
     const { planRevisionId } = await approvePlan(app, workItem.id);
     const executionPackage = await createManualPackage(app, planRevisionId);
+    const repository = repositoryFor(app);
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
-    await request(server).post(`/execution-packages/${executionPackage.id}/run`).send({ workflow_only: true }).expect(401);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/run`)
+      .send({ workflow_only: true })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+      });
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(ownerHeaders)
@@ -913,25 +964,6 @@ describe('delivery control plane API', () => {
       })
       .expect(400);
 
-    const run = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
-    await request(server)
-      .post(`/review-packets/${reviewPacketId}/request-changes`)
-      .set(reviewerHeaders)
-      .send({
-        summary: 'Rerun required.',
-        reviewed_by_actor_id: actorReviewer,
-        reviewed_at: '2026-05-05T03:00:00.000Z',
-        requested_changes: [{ title: 'Rerun', description: 'Exercise validation.' }],
-      })
-      .expect(201);
-
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/rerun`)
       .set(ownerHeaders)
@@ -940,32 +972,26 @@ describe('delivery control plane API', () => {
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/rerun`)
       .set(ownerHeaders)
-      .send({ previous_run_session_id: 'run-session-stale', workflow_only: true })
-      .expect(400);
-    await request(server)
-      .post(`/execution-packages/${executionPackage.id}/rerun`)
-      .set(ownerHeaders)
       .send({
-        previous_run_session_id: run.run_session_id,
+        previous_run_session_id: 'run-session-seeded',
         force: true,
         force_reason: 'Rerun must reject force-only fields.',
         workflow_only: true,
       })
       .expect(400);
-
-    const rerun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .set(ownerHeaders)
-        .send({ previous_run_session_id: run.run_session_id, workflow_only: true })
-        .expect(201)
-    ).body;
-    await waitForReviewPacket(app, rerun.run_session_id);
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/rerun`)
+      .set(ownerHeaders)
+      .send({ previous_run_session_id: 'run-session-seeded', workflow_only: true })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+      });
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
       .set(ownerHeaders)
-      .send({ previous_run_session_id: rerun.run_session_id, workflow_only: true })
+      .send({ previous_run_session_id: 'run-session-seeded', workflow_only: true })
       .expect(400);
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
@@ -976,10 +1002,15 @@ describe('delivery control plane API', () => {
         force_reason: 'Stale run id.',
         workflow_only: true,
       })
-      .expect(400);
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+      });
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toEqual([]);
+    expect(await repository.listTraceEventsForSubject('execution_package', executionPackage.id)).toEqual([]);
   });
 
-  it('records rerun replacement trace links and updates the payload when the new ReviewPacket is created', async () => {
+  it('does not archive an open ReviewPacket when disabled force-rerun is requested', async () => {
     const server = app.getHttpServer();
     const { workItem } = await createProjectRepoWorkItem(app);
     await approveSpec(app, workItem.id);
@@ -987,224 +1018,46 @@ describe('delivery control plane API', () => {
     const executionPackage = await createManualPackage(app, planRevisionId);
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
-    const firstRun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
-    await request(server)
-      .post(`/review-packets/${firstReviewPacketId}/request-changes`)
-      .set(reviewerHeaders)
-      .send({
-        summary: 'Rerun required.',
-        reviewed_by_actor_id: actorReviewer,
-        reviewed_at: '2026-05-05T03:00:00.000Z',
-        requested_changes: [{ title: 'Rerun', description: 'Exercise trace replacement links.' }],
-      })
-      .expect(201);
+    const readyPackage = (await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200))
+      .body as ExecutionPackage;
+    const { runSession, reviewPacket } = await seedSucceededRunWithReadyReviewPacket(app, readyPackage);
 
-    const rerun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/rerun`)
-        .set(ownerHeaders)
-        .send({ previous_run_session_id: firstRun.run_session_id, workflow_only: true })
-        .expect(201)
-    ).body;
-    const repository = repositoryFor(app);
-    const queuedReplacementEvent = (await repository.listTraceEventsForSubject('run_session', rerun.run_session_id)).find(
-      (event) => event.event_type === 'run_replacement_recorded',
-    );
-
-    expect(queuedReplacementEvent).toMatchObject({
-      subject_type: 'run_session',
-      subject_id: rerun.run_session_id,
-      payload: {
-        mode: 'rerun_package',
-        execution_package_id: executionPackage.id,
-        work_item_id: workItem.id,
-        new_run_session_id: rerun.run_session_id,
-        previous_run_session_id: firstRun.run_session_id,
-        previous_review_packet_id: firstReviewPacketId,
-        triggering_review_packet_id: firstReviewPacketId,
-      },
-    });
-    expect(queuedReplacementEvent?.payload).not.toHaveProperty('new_review_packet_id');
-    expect(await repository.listTraceLinks(queuedReplacementEvent!.id)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ relationship: 'belongs_to', object_type: 'work_item', object_id: workItem.id }),
-        expect.objectContaining({
-          relationship: 'belongs_to',
-          object_type: 'execution_package',
-          object_id: executionPackage.id,
-        }),
-        expect.objectContaining({ relationship: 'generated_by', object_type: 'run_session', object_id: rerun.run_session_id }),
-        expect.objectContaining({ relationship: 'supersedes', object_type: 'run_session', object_id: firstRun.run_session_id }),
-        expect.objectContaining({ relationship: 'replaces', object_type: 'review_packet', object_id: firstReviewPacketId }),
-      ]),
-    );
-
-    const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
-    const updatedReplacementEvent = (await repository.listTraceEventsForSubject('run_session', rerun.run_session_id)).find(
-      (event) => event.event_type === 'run_replacement_recorded',
-    );
-
-    expect(updatedReplacementEvent?.payload).toMatchObject({ new_review_packet_id: rerunReviewPacketId });
-    expect(await repository.listTraceLinks(updatedReplacementEvent!.id)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ relationship: 'generated_by', object_type: 'review_packet', object_id: rerunReviewPacketId }),
-      ]),
-    );
-  });
-
-  it('commits rerun primary records when replacement trace writes fail', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    try {
-      const repository = new FailingTraceRepository();
-      replaceRuntimeRepository(app, repository);
-      const server = app.getHttpServer();
-      const { workItem } = await createProjectRepoWorkItem(app);
-      await approveSpec(app, workItem.id);
-      const { planRevisionId } = await approvePlan(app, workItem.id);
-      const executionPackage = await createManualPackage(app, planRevisionId);
-
-      await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
-      const firstRun = (
-        await request(server)
-          .post(`/execution-packages/${executionPackage.id}/run`)
-          .set(ownerHeaders)
-          .send({ workflow_only: true })
-          .expect(201)
-      ).body;
-      const firstReviewPacketId = (await waitForReviewPacket(app, firstRun.run_session_id)).id;
-      await request(server)
-        .post(`/review-packets/${firstReviewPacketId}/request-changes`)
-        .set(reviewerHeaders)
-      .send({
-          summary: 'Rerun required.',
-          reviewed_by_actor_id: actorReviewer,
-          reviewed_at: '2026-05-05T03:00:00.000Z',
-          requested_changes: [{ title: 'Rerun', description: 'Primary records must survive trace failure.' }],
-        })
-        .expect(201);
-
-      warnSpy.mockClear();
-      const rerun = (
-        await request(server)
-          .post(`/execution-packages/${executionPackage.id}/rerun`)
-          .set(ownerHeaders)
-          .send({ previous_run_session_id: firstRun.run_session_id, workflow_only: true })
-          .expect(201)
-      ).body;
-      const rerunReviewPacketId = (await waitForReviewPacket(app, rerun.run_session_id)).id;
-      const persistedPackage = await repository.getExecutionPackage(executionPackage.id);
-      const persistedRerun = await repository.getRunSession(rerun.run_session_id);
-      const reviewPackets = await repository.listReviewPacketsForPackage(executionPackage.id);
-
-      expect(persistedPackage?.last_run_session_id).toBe(rerun.run_session_id);
-      expect(persistedRerun?.run_spec?.review_context.latest_decision).toBe('changes_requested');
-      expect(reviewPackets.map((packet) => packet.id)).toEqual(expect.arrayContaining([firstReviewPacketId, rerunReviewPacketId]));
-      expect(warnSpy).toHaveBeenCalledWith(
-        '[forgeloop:review-evidence.trace] best-effort trace write failed',
-        expect.objectContaining({ source: 'control-plane-api', error: 'trace store unavailable' }),
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it('enforces owner-only force-rerun and archives the current open ReviewPacket', async () => {
-    const server = app.getHttpServer();
-    const { workItem } = await createProjectRepoWorkItem(app);
-    await approveSpec(app, workItem.id);
-    const { planRevisionId } = await approvePlan(app, workItem.id);
-    const executionPackage = await createManualPackage(app, planRevisionId);
-
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
-    const run = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
       .set(reviewerHeaders)
       .send({
-        previous_run_session_id: run.run_session_id,
+        previous_run_session_id: runSession.id,
         force: true,
         force_reason: 'Reviewer is not the owner.',
         workflow_only: true,
       })
-      .expect(403);
-
-    const forceRun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/force-rerun`)
-        .set(ownerHeaders)
-        .send({
-          previous_run_session_id: run.run_session_id,
-          force: true,
-          force_reason: 'Owner wants a fresh run before review.',
-          workflow_only: true,
-        })
-        .expect(201)
-    ).body;
-
-    const forceReviewPacketId = (await waitForReviewPacket(app, forceRun.run_session_id)).id;
-    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body.status).toBe('archived');
-    expect(forceReviewPacketId).not.toBe(reviewPacketId);
-  });
-
-  it('rejects force-rerun after completed review and leaves the completed packet immutable', async () => {
-    const server = app.getHttpServer();
-    const { workItem } = await createProjectRepoWorkItem(app);
-    await approveSpec(app, workItem.id);
-    const { planRevisionId } = await approvePlan(app, workItem.id);
-    const executionPackage = await createManualPackage(app, planRevisionId);
-
-    await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
-    const run = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
-    await request(server)
-      .post(`/review-packets/${reviewPacketId}/approve`)
-      .set(reviewerHeaders)
-      .send({
-        summary: 'Completed review.',
-        reviewed_by_actor_id: actorReviewer,
-        reviewed_at: '2026-05-05T04:00:00.000Z',
-      })
-      .expect(201);
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+      });
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
       .set(ownerHeaders)
       .send({
-        previous_run_session_id: run.run_session_id,
+        previous_run_session_id: runSession.id,
         force: true,
-        force_reason: 'Cannot force-rerun after completed review.',
+        force_reason: 'Owner wants a fresh run before review.',
         workflow_only: true,
       })
-      .expect(400);
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+      });
 
-    expect((await request(server).get(`/review-packets/${reviewPacketId}`).expect(200)).body).toMatchObject({
-      status: 'completed',
-      decision: 'approved',
-      summary: 'Completed review.',
+    expect((await request(server).get(`/review-packets/${reviewPacket.id}`).expect(200)).body).toMatchObject({
+      status: 'ready',
+      decision: 'none',
     });
+    expect(await repositoryFor(app).listRunSessionsForPackage(executionPackage.id)).toHaveLength(1);
   });
 
-  it('archives the current open ReviewPacket before saving the force-rerun RunSession', async () => {
+  it('does not mutate archive sequencing when disabled force-rerun is requested', async () => {
     const repository = new SequencingRepository();
     replaceRuntimeRepository(app, repository);
     const server = app.getHttpServer();
@@ -1214,32 +1067,26 @@ describe('delivery control plane API', () => {
     const executionPackage = await createManualPackage(app, planRevisionId);
 
     await request(server).post(`/execution-packages/${executionPackage.id}/mark-ready`).set(ownerHeaders).send({ actor_id: actorOwner, expected_package_version: executionPackage.version }).expect(201);
-    const run = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({ workflow_only: true })
-        .expect(201)
-    ).body;
-    const reviewPacketId = (await waitForReviewPacket(app, run.run_session_id)).id;
+    const readyPackage = (await request(server).get(`/execution-packages/${executionPackage.id}`).expect(200))
+      .body as ExecutionPackage;
+    const { runSession } = await seedSucceededRunWithReadyReviewPacket(app, readyPackage);
     repository.operations.length = 0;
 
-    const forceRun = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/force-rerun`)
-        .set(ownerHeaders)
-        .send({
-          previous_run_session_id: run.run_session_id,
-          force: true,
-          force_reason: 'Owner wants a fresh run before review.',
-          workflow_only: true,
-        })
-        .expect(201)
-    ).body;
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/force-rerun`)
+      .set(ownerHeaders)
+      .send({
+        previous_run_session_id: runSession.id,
+        force: true,
+        force_reason: 'Owner wants a fresh run before review.',
+        workflow_only: true,
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+      });
 
-    expect(repository.operations.indexOf(`archiveReviewPacket:${reviewPacketId}`)).toBeLessThan(
-      repository.operations.indexOf(`saveRunSession:${forceRun.run_session_id}`),
-    );
+    expect(repository.operations).toEqual([]);
   });
 
   it('rejects legacy item-scoped Spec and Implementation Plan Doc request-changes command paths', async () => {
@@ -1257,10 +1104,7 @@ describe('delivery control plane API', () => {
       .post(`/development-plans/${specSeed.developmentPlan.id}/items/${specSeed.item.id}/spec/request-changes`)
       .set(reviewerHeaders)
       .send({ actor_id: actorReviewer, rationale: 'Clarify the API acceptance criteria.' })
-      .expect(409)
-      .expect(({ body }) => {
-        expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
-      });
+      .expect(404);
 
     const { workItem: planWorkItem } = await createProjectRepoWorkItem(app);
     const planSeed = await seedItemScopedSpecPlan(app, planWorkItem.id, {
@@ -1273,10 +1117,7 @@ describe('delivery control plane API', () => {
       await request(server)
         .post(`/development-plans/${planSeed.developmentPlan.id}/items/${planSeed.item.id}/implementation-plan/generate-draft`)
         .send({ actor_id: actorOwner })
-        .expect(409)
-        .expect(({ body }) => {
-          expect(JSON.stringify(body)).toContain('workflow_legacy_entrypoint_disabled');
-        })
+        .expect(404)
     ).body;
     expect(executionPlanRevision.id).toBeUndefined();
   });
