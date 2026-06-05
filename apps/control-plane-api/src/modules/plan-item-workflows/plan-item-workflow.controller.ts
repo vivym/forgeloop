@@ -1,46 +1,21 @@
-import { Body, Controller, Headers, Inject, Param, Patch, Post } from '@nestjs/common';
-import {
-  regenerateArtifactDraftCommandSchema,
-  runControlSchema,
-  runInputSchema,
-  type RegenerateArtifactDraftCommandDto,
-  type RunControlDto,
-  type RunInputDto,
-} from '../delivery/dto';
-import { actorContextFromHeaders } from '../auth/actor-context';
+import { Body, Controller, Inject, Param, Post } from '@nestjs/common';
+
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import {
-  approveImplementationPlanAndMarkExecutionReadySchema,
-  forkCodexSessionBodySchema,
-  manualDecisionBodySchema,
-  requestWorkflowChangesSchema,
-  selectCodexSessionForkBodySchema,
+  approveWorkflowArtifactRevisionBodySchema,
+  artifactTypeSchema,
+  evaluateWorkflowExecutionReadinessBodySchema,
+  requestWorkflowArtifactChangesBodySchema,
+  runQueuedWorkflowActionBodySchema,
   startBrainstormingWorkflowSchema,
-  workflowActorCommandSchema,
-  workflowBoundaryAnswerBodySchema,
-  workflowBoundaryContinueBodySchema,
-  workflowBoundaryDecisionBodySchema,
-  workflowBoundaryStartCommandSchema,
-  workflowBoundarySummaryChangesBodySchema,
-  workflowDraftDocumentBodySchema,
-  workflowRevisionBodySchema,
-  workflowTransitionCommandSchema,
-  type ApproveImplementationPlanAndMarkExecutionReadyDto,
-  type ForkCodexSessionBodyDto,
-  type ManualDecisionBodyDto,
-  type RequestWorkflowChangesDto,
-  type SelectCodexSessionForkBodyDto,
+  workflowMessageCommandBodySchema,
+  type ApproveWorkflowArtifactRevisionBodyDto,
+  type EvaluateWorkflowExecutionReadinessBodyDto,
+  type RequestWorkflowArtifactChangesBodyDto,
+  type RunQueuedWorkflowActionBodyDto,
   type StartBrainstormingWorkflowDto,
-  type WorkflowActorCommandDto,
-  type WorkflowBoundaryAnswerBodyDto,
-  type WorkflowBoundaryContinueBodyDto,
-  type WorkflowBoundaryDecisionBodyDto,
-  type WorkflowBoundaryStartCommandDto,
-  type WorkflowBoundarySummaryChangesBodyDto,
-  type WorkflowDraftDocumentBodyDto,
-  type WorkflowRevisionBodyDto,
-  type WorkflowRevisionCommandDto,
-  type WorkflowTransitionCommandDto,
+  type WorkflowArtifactTypeDto,
+  type WorkflowMessageCommandBodyDto,
 } from './plan-item-workflow.dto';
 import { PlanItemWorkflowService } from './plan-item-workflow.service';
 
@@ -57,287 +32,48 @@ export class PlanItemWorkflowController {
     return this.service.startBrainstorming(developmentPlanId, itemId, body);
   }
 
-  @Post('plan-item-workflows/:workflowId/transitions')
-  transition(
+  @Post('plan-item-workflows/:workflowId/messages')
+  recordMessage(
     @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(workflowTransitionCommandSchema)) body: WorkflowTransitionCommandDto,
+    @Body(new ZodValidationPipe(workflowMessageCommandBodySchema)) body: WorkflowMessageCommandBodyDto,
   ) {
-    return this.service.transitionWorkflow(workflowId, body);
+    return this.service.recordWorkflowMessage(workflowId, body);
   }
 
-  @Post('plan-item-workflows/:workflowId/boundary-brainstorming')
-  startBoundaryBrainstorming(
+  @Post('plan-item-workflows/:workflowId/actions/:actionId/run')
+  runQueuedAction(
     @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(workflowBoundaryStartCommandSchema)) body: WorkflowBoundaryStartCommandDto,
+    @Param('actionId') actionId: string,
+    @Body(new ZodValidationPipe(runQueuedWorkflowActionBodySchema)) body: RunQueuedWorkflowActionBodyDto,
   ) {
-    return this.service.startBoundaryBrainstorming(workflowId, body);
+    return this.service.runQueuedWorkflowAction(workflowId, actionId, body);
   }
 
-  @Post('plan-item-workflows/:workflowId/boundary-brainstorming-sessions/:sessionId/answers')
-  answerBoundaryQuestion(
+  @Post('plan-item-workflows/:workflowId/artifacts/:artifactType/revisions/:revisionId/approve')
+  approveArtifactRevision(
     @Param('workflowId') workflowId: string,
-    @Param('sessionId') sessionId: string,
-    @Body(new ZodValidationPipe(workflowBoundaryAnswerBodySchema)) body: WorkflowBoundaryAnswerBodyDto,
-  ) {
-    return this.service.answerBoundaryQuestion(workflowId, sessionId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/boundary-brainstorming-sessions/:sessionId/decisions')
-  recordBoundaryDecision(
-    @Param('workflowId') workflowId: string,
-    @Param('sessionId') sessionId: string,
-    @Body(new ZodValidationPipe(workflowBoundaryDecisionBodySchema)) body: WorkflowBoundaryDecisionBodyDto,
-  ) {
-    return this.service.recordBoundaryDecision(workflowId, sessionId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/boundary-brainstorming-sessions/:sessionId/continue')
-  continueBoundaryBrainstorming(
-    @Param('workflowId') workflowId: string,
-    @Param('sessionId') sessionId: string,
-    @Body(new ZodValidationPipe(workflowBoundaryContinueBodySchema)) body: WorkflowBoundaryContinueBodyDto,
-  ) {
-    return this.service.continueBoundaryBrainstorming(workflowId, sessionId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/boundary-brainstorming-sessions/:sessionId/summary-revisions/:revisionId/request-changes')
-  requestBoundarySummaryChanges(
-    @Param('workflowId') workflowId: string,
-    @Param('sessionId') sessionId: string,
+    @Param('artifactType', new ZodValidationPipe(artifactTypeSchema)) artifactType: WorkflowArtifactTypeDto,
     @Param('revisionId') revisionId: string,
-    @Body(new ZodValidationPipe(workflowBoundarySummaryChangesBodySchema)) body: WorkflowBoundarySummaryChangesBodyDto,
+    @Body(new ZodValidationPipe(approveWorkflowArtifactRevisionBodySchema)) body: ApproveWorkflowArtifactRevisionBodyDto,
   ) {
-    return this.service.requestBoundarySummaryChanges(workflowId, sessionId, revisionId, body);
+    return this.service.approveWorkflowArtifactRevision(workflowId, artifactType, revisionId, body);
   }
 
-  @Post('plan-item-workflows/:workflowId/boundary-summary-revisions/:revisionId/submit')
-  submitBoundarySummary(
+  @Post('plan-item-workflows/:workflowId/artifacts/:artifactType/revisions/:revisionId/request-changes')
+  requestArtifactChanges(
     @Param('workflowId') workflowId: string,
+    @Param('artifactType', new ZodValidationPipe(artifactTypeSchema)) artifactType: WorkflowArtifactTypeDto,
     @Param('revisionId') revisionId: string,
-    @Body(new ZodValidationPipe(workflowRevisionBodySchema)) body: WorkflowRevisionBodyDto,
+    @Body(new ZodValidationPipe(requestWorkflowArtifactChangesBodySchema)) body: RequestWorkflowArtifactChangesBodyDto,
   ) {
-    return this.service.submitBoundarySummary(workflowId, { ...body, revision_id: revisionId });
+    return this.service.requestWorkflowArtifactChanges(workflowId, artifactType, revisionId, body);
   }
 
-  @Post('plan-item-workflows/:workflowId/boundary-summary-revisions/:revisionId/approve')
-  approveBoundary(
+  @Post('plan-item-workflows/:workflowId/execution-readiness/evaluate')
+  evaluateExecutionReadiness(
     @Param('workflowId') workflowId: string,
-    @Param('revisionId') revisionId: string,
-    @Body(new ZodValidationPipe(workflowRevisionBodySchema)) body: WorkflowRevisionBodyDto,
+    @Body(new ZodValidationPipe(evaluateWorkflowExecutionReadinessBodySchema)) body: EvaluateWorkflowExecutionReadinessBodyDto,
   ) {
-    return this.service.approveBoundary(workflowId, { ...body, revision_id: revisionId });
-  }
-
-  @Post('plan-item-workflows/:workflowId/spec/generate-draft')
-  generateSpecRevision(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto,
-  ) {
-    return this.service.generateSpecRevision(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/spec-revisions/generate')
-  generateSpecRevisionRuntime(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto,
-  ) {
-    return this.service.generateSpecRevisionRuntime(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/spec/regenerate-draft')
-  regenerateSpecRevision(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(regenerateArtifactDraftCommandSchema)) body: RegenerateArtifactDraftCommandDto,
-  ) {
-    return this.service.regenerateSpecRevision(workflowId, body);
-  }
-
-  @Patch('plan-item-workflows/:workflowId/spec/draft')
-  saveSpecDraft(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(workflowDraftDocumentBodySchema)) body: WorkflowDraftDocumentBodyDto,
-  ) {
-    return this.service.saveSpecDraft(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/spec-revisions/:revisionId/submit')
-  submitSpecRevision(
-    @Param('workflowId') workflowId: string,
-    @Param('revisionId') revisionId: string,
-    @Body(new ZodValidationPipe(workflowRevisionBodySchema)) body: WorkflowRevisionBodyDto,
-  ) {
-    return this.service.submitSpecRevision(workflowId, { ...body, revision_id: revisionId });
-  }
-
-  @Post('plan-item-workflows/:workflowId/spec-revisions/:revisionId/approve')
-  approveSpec(
-    @Param('workflowId') workflowId: string,
-    @Param('revisionId') revisionId: string,
-    @Body(new ZodValidationPipe(workflowRevisionBodySchema)) body: WorkflowRevisionBodyDto,
-  ) {
-    return this.service.approveSpec(workflowId, { ...body, revision_id: revisionId });
-  }
-
-  @Post('plan-item-workflows/:workflowId/implementation-plan/generate-draft')
-  generateImplementationPlanRevision(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto,
-  ) {
-    return this.service.generateImplementationPlanRevision(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/implementation-plan-revisions/generate')
-  generateImplementationPlanRevisionRuntime(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto,
-  ) {
-    return this.service.generateImplementationPlanRevisionRuntime(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/implementation-plan/regenerate-draft')
-  regenerateImplementationPlanRevision(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(regenerateArtifactDraftCommandSchema)) body: RegenerateArtifactDraftCommandDto,
-  ) {
-    return this.service.regenerateImplementationPlanRevision(workflowId, body);
-  }
-
-  @Patch('plan-item-workflows/:workflowId/implementation-plan/draft')
-  saveImplementationPlanDraft(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(workflowDraftDocumentBodySchema)) body: WorkflowDraftDocumentBodyDto,
-  ) {
-    return this.service.saveImplementationPlanDraft(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/implementation-plan-revisions/:revisionId/submit')
-  submitImplementationPlanRevision(
-    @Param('workflowId') workflowId: string,
-    @Param('revisionId') revisionId: string,
-    @Body(new ZodValidationPipe(workflowRevisionBodySchema)) body: WorkflowRevisionBodyDto,
-  ) {
-    return this.service.submitImplementationPlanRevision(workflowId, { ...body, revision_id: revisionId });
-  }
-
-  @Post('plan-item-workflows/:workflowId/implementation-plan-revisions/:revisionId/approve')
-  approveImplementationPlan(
-    @Param('workflowId') workflowId: string,
-    @Param('revisionId') revisionId: string,
-    @Body(new ZodValidationPipe(workflowRevisionBodySchema)) body: WorkflowRevisionBodyDto,
-  ) {
-    return this.service.approveImplementationPlan(workflowId, { ...body, revision_id: revisionId });
-  }
-
-  @Post('plan-item-workflows/:workflowId/request-boundary-changes')
-  requestBoundaryChanges(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(requestWorkflowChangesSchema)) body: RequestWorkflowChangesDto,
-  ) {
-    return this.service.requestBoundaryChanges(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/request-spec-changes')
-  requestSpecChanges(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(requestWorkflowChangesSchema)) body: RequestWorkflowChangesDto,
-  ) {
-    return this.service.requestSpecChanges(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/request-implementation-plan-changes')
-  requestImplementationPlanChanges(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(requestWorkflowChangesSchema)) body: RequestWorkflowChangesDto,
-  ) {
-    return this.service.requestImplementationPlanChanges(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/block')
-  block(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(manualDecisionBodySchema)) body: ManualDecisionBodyDto,
-  ) {
-    return this.service.blockWorkflow(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/recover')
-  recover(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(manualDecisionBodySchema)) body: ManualDecisionBodyDto,
-  ) {
-    return this.service.recoverWorkflow(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/archive')
-  archive(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(manualDecisionBodySchema)) body: ManualDecisionBodyDto,
-  ) {
-    return this.service.archiveWorkflow(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/approve-implementation-plan-and-mark-execution-ready')
-  approveImplementationPlanAndMarkExecutionReady(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(approveImplementationPlanAndMarkExecutionReadySchema))
-    body: ApproveImplementationPlanAndMarkExecutionReadyDto,
-  ) {
-    return this.service.approveImplementationPlanAndMarkExecutionReady(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/codex-sessions/:sessionId/fork')
-  forkCodexSession(
-    @Param('workflowId') workflowId: string,
-    @Param('sessionId') sessionId: string,
-    @Body(new ZodValidationPipe(forkCodexSessionBodySchema)) body: ForkCodexSessionBodyDto,
-  ) {
-    return this.service.forkCodexSession(workflowId, sessionId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/codex-sessions/:sessionId/select-active-fork')
-  selectActiveCodexSessionFork(
-    @Param('workflowId') workflowId: string,
-    @Param('sessionId') sessionId: string,
-    @Body(new ZodValidationPipe(selectCodexSessionForkBodySchema)) body: SelectCodexSessionForkBodyDto,
-  ) {
-    return this.service.selectActiveCodexSessionFork(workflowId, sessionId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/execution/start')
-  startExecution(
-    @Param('workflowId') workflowId: string,
-    @Body(new ZodValidationPipe(workflowActorCommandSchema)) body: WorkflowActorCommandDto,
-  ) {
-    return this.service.startExecution(workflowId, body);
-  }
-
-  @Post('plan-item-workflows/:workflowId/run-sessions/:runSessionId/input')
-  sendRunInput(
-    @Param('workflowId') workflowId: string,
-    @Param('runSessionId') runSessionId: string,
-    @Body(new ZodValidationPipe(runInputSchema)) body: RunInputDto,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-  ) {
-    return this.service.sendRunInput(workflowId, runSessionId, body, actorContextFromHeaders(headers));
-  }
-
-  @Post('plan-item-workflows/:workflowId/run-sessions/:runSessionId/cancel')
-  cancelRun(
-    @Param('workflowId') workflowId: string,
-    @Param('runSessionId') runSessionId: string,
-    @Body(new ZodValidationPipe(runControlSchema)) body: RunControlDto,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-  ) {
-    return this.service.cancelRun(workflowId, runSessionId, body, actorContextFromHeaders(headers));
-  }
-
-  @Post('plan-item-workflows/:workflowId/run-sessions/:runSessionId/resume')
-  resumeRun(
-    @Param('workflowId') workflowId: string,
-    @Param('runSessionId') runSessionId: string,
-    @Body(new ZodValidationPipe(runControlSchema)) body: RunControlDto,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-  ) {
-    return this.service.resumeRun(workflowId, runSessionId, body, actorContextFromHeaders(headers));
+    return this.service.evaluateExecutionReadiness(workflowId, body);
   }
 }

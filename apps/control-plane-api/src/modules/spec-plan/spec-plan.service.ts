@@ -112,102 +112,106 @@ export class SpecPlanService {
     dto: SubmitForApprovalCommandDto,
     context?: WorkflowChildContext,
   ): Promise<ProductGenerationScheduleResult> {
-    return this.withPlanItemMutation(developmentPlanId, async (repository) => {
-      await this.assertLegacyPlanItemMutationAllowed(repository, itemId, context);
-      const actorId = this.requireActorId(dto.actor_id);
-      const completedReplay = await this.replayAppliedProductGenerationSchedule(
+    return this.withPlanItemMutation(developmentPlanId, (repository) =>
+      this.generateItemSpecRevisionRuntimeWithRepository(repository, developmentPlanId, itemId, dto, context),
+    );
+  }
+
+  async generateItemSpecRevisionRuntimeWithRepository(
+    repository: DeliveryRepository,
+    developmentPlanId: string,
+    itemId: string,
+    dto: SubmitForApprovalCommandDto,
+    context?: WorkflowChildContext,
+  ): Promise<ProductGenerationScheduleResult> {
+    await this.assertLegacyPlanItemMutationAllowed(repository, itemId, context);
+    const actorId = this.requireActorId(dto.actor_id);
+    const completedReplay = await this.replayAppliedProductGenerationSchedule(
+      repository,
+      itemId,
+      'item_spec_runtime_review_generated',
+      'generate_development_plan_item_spec_revision',
+      actorId,
+      context,
+    );
+    if (completedReplay !== undefined) {
+      return completedReplay;
+    }
+    const { plan, item, workItem, boundary, boundaryRevision, brainstormingSession } =
+      await this.requireApprovedBoundaryRevision(developmentPlanId, itemId, repository, { requireCurrentItemRevision: true });
+    const generationIdentity = this.specGenerationIdentity(item, boundaryRevision, actorId, context);
+    const replayed = await this.replayScheduledProductGeneration(repository, generationIdentity, context);
+    if (replayed !== undefined) {
+      return replayed;
+    }
+    if ((await this.findItemSpec(item.id, repository)) !== undefined) {
+      throw new ConflictException(`Development Plan Item ${item.id} already has a Spec`);
+    }
+    const contextManifest = this.stableProductGenerationContextManifest(
+      await this.buildItemContextManifest(
+        { plan, item, workItem, boundary, brainstormingSession, actorGuidance: actorId },
         repository,
-        itemId,
-        'item_spec_runtime_draft_generated',
-        'generate_development_plan_item_spec_revision',
-        actorId,
-        context,
-      );
-      if (completedReplay !== undefined) {
-        return completedReplay;
-      }
-      const { plan, item, workItem, boundary, boundaryRevision, brainstormingSession } =
-        await this.requireApprovedBoundaryRevision(developmentPlanId, itemId, repository, { requireCurrentItemRevision: true });
-      const generationIdentity = {
+      ),
+      {
+        task_kind: 'development_plan_item_spec_revision',
+        development_plan_item_id: item.id,
+        development_plan_item_revision_id: item.revision_id,
+        boundary_summary_revision_id: boundaryRevision.id,
+        requested_by_actor_id: actorId,
+      },
+    );
+    await repository.saveContextManifest(contextManifest);
+	    const actionInput = this.specGenerationActionInput({
+	      plan,
+	      item,
+	      workItem,
+	      boundaryRevision,
+	      brainstormingSession,
+	      contextManifest,
+	      actorId,
+	      ...(context === undefined ? {} : { context }),
+	    });
+    const precondition = actionInput.precondition_fingerprint_json;
+    const repoIds = await this.productGenerationRepoIds(repository, plan.project_id);
+    const automationScope = this.productGenerationAutomationScope(plan.project_id, repoIds);
+    return this.productRuntimeScheduler.schedule({
+      repository,
+      action_run: {
+        id: this.id('automation-action-run'),
         action_type: 'generate_development_plan_item_spec_revision',
         target_object_type: 'development_plan_item',
         target_object_id: item.id,
         target_revision_id: item.revision_id,
-        idempotency_key: `development-plan-item-spec-generation:${item.id}:${item.revision_id}:${boundaryRevision.id}:${actorId}`,
+        target_status: item.spec_status,
+        idempotency_key: generationIdentity.idempotency_key,
+        automation_scope: automationScope,
+        automation_settings_version: 1,
+        capability_fingerprint: 'development-plan-item-spec-runtime:v1',
+        precondition_fingerprint: codexCanonicalDigest(precondition),
+        action_input_json: actionInput,
+        ...(context === undefined ? {} : { workflow_id: context.workflow_id, codex_session_id: context.codex_session_id }),
+        ...(context?.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: context.codex_session_turn_id }),
+        created_by: actorId,
+        now: this.now(),
+      },
+      task_kind: 'development_plan_item_spec_revision',
+      prompt_version: 'development-plan-item-spec-revision:v1',
+      output_schema_version: 'spec_revision.v1',
+      context_manifest: contextManifest,
+      signed_context_json: this.productGenerationSignedContext({
         task_kind: 'development_plan_item_spec_revision',
-      } satisfies ProductGenerationIdentity;
-      const replayed = await this.replayScheduledProductGeneration(repository, generationIdentity, context);
-      if (replayed !== undefined) {
-        return replayed;
-      }
-      if ((await this.findItemSpec(item.id, repository)) !== undefined) {
-        throw new ConflictException(`Development Plan Item ${item.id} already has a Spec`);
-      }
-      const contextManifest = this.stableProductGenerationContextManifest(
-        await this.buildItemContextManifest(
-          { plan, item, workItem, boundary, brainstormingSession, actorGuidance: actorId },
-          repository,
-        ),
-        {
-          task_kind: 'development_plan_item_spec_revision',
-          development_plan_item_id: item.id,
-          development_plan_item_revision_id: item.revision_id,
-          boundary_summary_revision_id: boundaryRevision.id,
-          requested_by_actor_id: actorId,
-        },
-      );
-      await repository.saveContextManifest(contextManifest);
-      const actionInput = this.specGenerationActionInput({
         plan,
         item,
         workItem,
+        boundary,
         boundaryRevision,
         brainstormingSession,
         contextManifest,
         actorId,
-      });
-      const precondition = actionInput.precondition_fingerprint_json;
-      const repoIds = await this.productGenerationRepoIds(repository, plan.project_id);
-      const automationScope = this.productGenerationAutomationScope(plan.project_id, repoIds);
-      return this.productRuntimeScheduler.schedule({
-        repository,
-        action_run: {
-          id: this.id('automation-action-run'),
-          action_type: 'generate_development_plan_item_spec_revision',
-          target_object_type: 'development_plan_item',
-          target_object_id: item.id,
-          target_revision_id: item.revision_id,
-          target_status: item.spec_status,
-          idempotency_key: generationIdentity.idempotency_key,
-          automation_scope: automationScope,
-          automation_settings_version: 1,
-          capability_fingerprint: 'development-plan-item-spec-runtime:v1',
-          precondition_fingerprint: codexCanonicalDigest(precondition),
-          action_input_json: actionInput,
-          ...(context === undefined ? {} : { workflow_id: context.workflow_id, codex_session_id: context.codex_session_id }),
-          ...(context?.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: context.codex_session_turn_id }),
-          created_by: actorId,
-          now: this.now(),
-        },
-        task_kind: 'development_plan_item_spec_revision',
-        prompt_version: 'development-plan-item-spec-revision:v1',
-        output_schema_version: 'spec_revision.v1',
-        context_manifest: contextManifest,
-        signed_context_json: this.productGenerationSignedContext({
-          task_kind: 'development_plan_item_spec_revision',
-          plan,
-          item,
-          workItem,
-          boundary,
-          boundaryRevision,
-          brainstormingSession,
-          contextManifest,
-          actorId,
-        }),
-        project_id: plan.project_id,
-        repo_ids: repoIds,
-        context,
-      });
+      }),
+      project_id: plan.project_id,
+      repo_ids: repoIds,
+      context,
     });
   }
 
@@ -234,7 +238,7 @@ export class SpecPlanService {
     const completedReplay = await this.replayAppliedProductGenerationSchedule(
       repository,
       itemId,
-      'item_spec_runtime_draft_generated',
+      'item_spec_runtime_review_generated',
       'generate_development_plan_item_spec_revision',
       actorId,
       context,
@@ -246,7 +250,7 @@ export class SpecPlanService {
       await this.requireApprovedBoundaryRevision(developmentPlanId, itemId, repository, { requireCurrentItemRevision: true });
     return this.replayScheduledProductGeneration(
       repository,
-      this.specGenerationIdentity(item, boundaryRevision, actorId),
+      this.specGenerationIdentity(item, boundaryRevision, actorId, context),
       context,
     );
   }
@@ -257,116 +261,120 @@ export class SpecPlanService {
     dto: SubmitForApprovalCommandDto,
     context?: WorkflowChildContext,
   ): Promise<ProductGenerationScheduleResult> {
-    return this.withPlanItemMutation(developmentPlanId, async (repository) => {
-      await this.assertLegacyPlanItemMutationAllowed(repository, itemId, context);
-      const actorId = this.requireActorId(dto.actor_id);
-      const { plan, item, workItem, boundary, boundaryRevision, brainstormingSession } =
-        await this.requireApprovedBoundaryRevision(developmentPlanId, itemId, repository, { requireCurrentItemRevision: false });
-      const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
-      const generationIdentity = {
+    return this.withPlanItemMutation(developmentPlanId, (repository) =>
+      this.generateItemImplementationPlanRevisionRuntimeWithRepository(repository, developmentPlanId, itemId, dto, context),
+    );
+  }
+
+  async generateItemImplementationPlanRevisionRuntimeWithRepository(
+    repository: DeliveryRepository,
+    developmentPlanId: string,
+    itemId: string,
+    dto: SubmitForApprovalCommandDto,
+    context?: WorkflowChildContext,
+  ): Promise<ProductGenerationScheduleResult> {
+    await this.assertLegacyPlanItemMutationAllowed(repository, itemId, context);
+    const actorId = this.requireActorId(dto.actor_id);
+    const { plan, item, workItem, boundary, boundaryRevision, brainstormingSession } =
+      await this.requireApprovedBoundaryRevision(developmentPlanId, itemId, repository, { requireCurrentItemRevision: false });
+    const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
+    const generationIdentity = this.implementationPlanGenerationIdentity(item, boundaryRevision, specRevision, actorId, context);
+    const replayed = await this.replayScheduledProductGeneration(repository, generationIdentity, context);
+    if (replayed !== undefined) {
+      return replayed;
+    }
+    const completedReplay = await this.replayAppliedProductGenerationSchedule(
+      repository,
+      itemId,
+      'item_implementation_plan_runtime_review_generated',
+      generationIdentity.action_type,
+      actorId,
+      context,
+    );
+    if (completedReplay !== undefined) {
+      return completedReplay;
+    }
+    if ((await this.findItemExecutionPlan(item.id, repository)) !== undefined) {
+      throw new ConflictException(`Development Plan Item ${item.id} already has an Implementation Plan Doc`);
+    }
+    this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
+    await this.requireCurrentItemRevisionAtApprovedSpecGate(item, repository);
+    const contextManifest = this.stableProductGenerationContextManifest(
+      await this.buildItemContextManifest(
+        {
+          plan,
+          item,
+          workItem,
+          boundary,
+          brainstormingSession,
+          actorGuidance: actorId,
+          approvedSpecRevisionId: specRevision.id,
+        },
+        repository,
+      ),
+      {
+        task_kind: 'development_plan_item_execution_plan_revision',
+        development_plan_item_id: item.id,
+        development_plan_item_revision_id: item.revision_id,
+        boundary_summary_revision_id: boundaryRevision.id,
+        approved_spec_revision_id: specRevision.id,
+        requested_by_actor_id: actorId,
+      },
+    );
+    await repository.saveContextManifest(contextManifest);
+	    const actionInput = this.implementationPlanGenerationActionInput({
+	      plan,
+	      item,
+	      workItem,
+	      boundaryRevision,
+	      brainstormingSession,
+	      specRevision,
+	      contextManifest,
+	      actorId,
+	      ...(context === undefined ? {} : { context }),
+	    });
+    const precondition = actionInput.precondition_fingerprint_json;
+    const repoIds = await this.productGenerationRepoIds(repository, plan.project_id);
+    const automationScope = this.productGenerationAutomationScope(plan.project_id, repoIds);
+    return this.productRuntimeScheduler.schedule({
+      repository,
+      action_run: {
+        id: this.id('automation-action-run'),
         action_type: 'generate_development_plan_item_implementation_plan_revision',
         target_object_type: 'development_plan_item',
         target_object_id: item.id,
         target_revision_id: item.revision_id,
-        idempotency_key: `development-plan-item-execution-plan-generation:${item.id}:${item.revision_id}:${boundaryRevision.id}:${specRevision.id}:${actorId}`,
+        target_status: item.implementation_plan_status,
+        idempotency_key: generationIdentity.idempotency_key,
+        automation_scope: automationScope,
+        automation_settings_version: 1,
+        capability_fingerprint: 'development-plan-item-execution-plan-runtime:v1',
+        precondition_fingerprint: codexCanonicalDigest(precondition),
+        action_input_json: actionInput,
+        ...(context === undefined ? {} : { workflow_id: context.workflow_id, codex_session_id: context.codex_session_id }),
+        ...(context?.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: context.codex_session_turn_id }),
+        now: this.now(),
+        created_by: actorId,
+      },
+      task_kind: 'development_plan_item_execution_plan_revision',
+      prompt_version: 'development-plan-item-execution-plan-revision:v1',
+      output_schema_version: 'execution_plan_revision.v1',
+      context_manifest: contextManifest,
+      signed_context_json: this.productGenerationSignedContext({
         task_kind: 'development_plan_item_execution_plan_revision',
-      } satisfies ProductGenerationIdentity;
-      const replayed = await this.replayScheduledProductGeneration(repository, generationIdentity, context);
-      if (replayed !== undefined) {
-        return replayed;
-      }
-      const completedReplay = await this.replayAppliedProductGenerationSchedule(
-        repository,
-        itemId,
-        'item_implementation_plan_runtime_draft_generated',
-        generationIdentity.action_type,
-        actorId,
-        context,
-      );
-      if (completedReplay !== undefined) {
-        return completedReplay;
-      }
-      if ((await this.findItemExecutionPlan(item.id, repository)) !== undefined) {
-        throw new ConflictException(`Development Plan Item ${item.id} already has an Implementation Plan Doc`);
-      }
-      this.assertApprovedSpecMatchesBoundary(item.id, spec, specRevision, boundary);
-      await this.requireCurrentItemRevisionAtApprovedSpecGate(item, repository);
-      const contextManifest = this.stableProductGenerationContextManifest(
-        await this.buildItemContextManifest(
-          {
-            plan,
-            item,
-            workItem,
-            boundary,
-            brainstormingSession,
-            actorGuidance: actorId,
-            approvedSpecRevisionId: specRevision.id,
-          },
-          repository,
-        ),
-        {
-          task_kind: 'development_plan_item_execution_plan_revision',
-          development_plan_item_id: item.id,
-          development_plan_item_revision_id: item.revision_id,
-          boundary_summary_revision_id: boundaryRevision.id,
-          approved_spec_revision_id: specRevision.id,
-          requested_by_actor_id: actorId,
-        },
-      );
-      await repository.saveContextManifest(contextManifest);
-      const actionInput = this.implementationPlanGenerationActionInput({
         plan,
         item,
         workItem,
+        boundary,
         boundaryRevision,
         brainstormingSession,
         specRevision,
         contextManifest,
         actorId,
-      });
-      const precondition = actionInput.precondition_fingerprint_json;
-      const repoIds = await this.productGenerationRepoIds(repository, plan.project_id);
-      const automationScope = this.productGenerationAutomationScope(plan.project_id, repoIds);
-      return this.productRuntimeScheduler.schedule({
-        repository,
-        action_run: {
-          id: this.id('automation-action-run'),
-          action_type: 'generate_development_plan_item_implementation_plan_revision',
-          target_object_type: 'development_plan_item',
-          target_object_id: item.id,
-          target_revision_id: item.revision_id,
-          target_status: item.implementation_plan_status,
-          idempotency_key: generationIdentity.idempotency_key,
-          automation_scope: automationScope,
-          automation_settings_version: 1,
-          capability_fingerprint: 'development-plan-item-execution-plan-runtime:v1',
-          precondition_fingerprint: codexCanonicalDigest(precondition),
-          action_input_json: actionInput,
-          ...(context === undefined ? {} : { workflow_id: context.workflow_id, codex_session_id: context.codex_session_id }),
-          ...(context?.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: context.codex_session_turn_id }),
-          now: this.now(),
-          created_by: actorId,
-        },
-        task_kind: 'development_plan_item_execution_plan_revision',
-        prompt_version: 'development-plan-item-execution-plan-revision:v1',
-        output_schema_version: 'execution_plan_revision.v1',
-        context_manifest: contextManifest,
-        signed_context_json: this.productGenerationSignedContext({
-          task_kind: 'development_plan_item_execution_plan_revision',
-          plan,
-          item,
-          workItem,
-          boundary,
-          boundaryRevision,
-          brainstormingSession,
-          specRevision,
-          contextManifest,
-          actorId,
-        }),
-        project_id: plan.project_id,
-        repo_ids: repoIds,
-        context,
-      });
+      }),
+      project_id: plan.project_id,
+      repo_ids: repoIds,
+      context,
     });
   }
 
@@ -393,7 +401,7 @@ export class SpecPlanService {
     const completedReplay = await this.replayAppliedProductGenerationSchedule(
       repository,
       itemId,
-      'item_implementation_plan_runtime_draft_generated',
+      'item_implementation_plan_runtime_review_generated',
       'generate_development_plan_item_implementation_plan_revision',
       actorId,
       context,
@@ -406,7 +414,7 @@ export class SpecPlanService {
     const { specRevision } = await this.requireApprovedItemSpec(item, repository);
     return this.replayScheduledProductGeneration(
       repository,
-      this.implementationPlanGenerationIdentity(item, boundaryRevision, specRevision, actorId),
+      this.implementationPlanGenerationIdentity(item, boundaryRevision, specRevision, actorId, context),
       context,
     );
   }
@@ -731,8 +739,23 @@ export class SpecPlanService {
     const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
     await this.assertLegacyPlanItemMutationAllowed(repository, item.id, context);
     const spec = await this.requireItemSpec(item.id, repository);
-    this.requireInReview(spec);
-    const updated = transitionSpecPlan(spec, { type: 'request_changes', at: this.now() }) as Spec;
+    if (
+      (spec.status !== 'in_review' || spec.gate_state !== 'awaiting_approval') &&
+      (spec.status !== 'approved' || spec.gate_state !== 'approved' || spec.approved_revision_id !== spec.current_revision_id)
+    ) {
+      throw new BadRequestException(`Spec ${spec.id} is not awaiting approval or approved`);
+    }
+    const updated =
+      spec.status === 'in_review'
+        ? (transitionSpecPlan(spec, { type: 'request_changes', at: this.now() }) as Spec)
+        : ({
+            ...spec,
+            status: 'draft',
+            editing_state: 'idle',
+            gate_state: 'changes_requested',
+            resolution: 'none',
+            updated_at: this.now(),
+          } satisfies Spec);
     await repository.saveSpec(updated);
     await this.updateDevelopmentPlanItemArtifactStatus(
       repository,
@@ -871,7 +894,8 @@ export class SpecPlanService {
         },
         author_actor_id: String(precondition.requested_by_actor_id),
       });
-      await repository.saveSpec({ ...spec, current_revision_id: revision.id, updated_at: this.now() });
+      const reviewReadySpec = transitionSpecPlan({ ...spec, current_revision_id: revision.id }, { type: 'submit_for_approval', at: this.now() }) as Spec;
+      await repository.saveSpec(reviewReadySpec);
       await repository.saveWorkItem({
         ...loaded.workItem,
         current_spec_id: spec.id,
@@ -883,11 +907,11 @@ export class SpecPlanService {
         loaded.plan,
         loaded.item,
         'spec_status',
-        'draft',
+        'in_review',
         'spec_runtime_generation_applied',
         String(precondition.requested_by_actor_id),
       );
-      await this.eventWithRepository(repository, 'development_plan_item', loaded.item.id, 'item_spec_runtime_draft_generated', String(precondition.requested_by_actor_id), {
+      await this.eventWithRepository(repository, 'development_plan_item', loaded.item.id, 'item_spec_runtime_review_generated', String(precondition.requested_by_actor_id), {
         spec_id: spec.id,
         spec_revision_id: revision.id,
         context_manifest_id: loaded.contextManifest.id,
@@ -1177,6 +1201,36 @@ export class SpecPlanService {
     itemId: string,
     dto: ApproveArtifactCommandDto,
   ): Promise<ExecutionPlanDocument> {
+    const { approvedPlan, currentRevision, spec, specRevision, plan, item, workItem } =
+      await this.approveItemImplementationPlanDocumentOnlyWithRepository(repository, developmentPlanId, itemId, dto);
+    const project = this.requireFound(await repository.getProject(plan.project_id), `Project ${plan.project_id}`);
+    await this.executionPackages.createOrReuseItemExecutionPackage(repository, {
+      project,
+      workItem,
+      item,
+      spec,
+      specRevision,
+      executionPlan: approvedPlan,
+      executionPlanRevision: currentRevision,
+      ownerActorId: item.driver_actor_id ?? workItem.driver_actor_id,
+    });
+    return approvedPlan;
+  }
+
+  async approveItemImplementationPlanDocumentOnlyWithRepository(
+    repository: DeliveryRepository,
+    developmentPlanId: string,
+    itemId: string,
+    dto: ApproveArtifactCommandDto,
+  ): Promise<{
+    approvedPlan: ExecutionPlanDocument;
+    currentRevision: ExecutionPlanRevision;
+    plan: DevelopmentPlan;
+    item: DevelopmentPlanItem;
+    workItem: WorkItem;
+    spec: Spec;
+    specRevision: SpecRevision;
+  }> {
     const { plan, item, workItem } = await this.requirePlanItem(developmentPlanId, itemId, repository);
     const { spec, specRevision } = await this.requireApprovedItemSpec(item, repository);
     const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
@@ -1214,18 +1268,7 @@ export class SpecPlanService {
       'approved',
       dto.rationale ?? 'Implementation Plan Doc approved.',
     );
-    const project = this.requireFound(await repository.getProject(plan.project_id), `Project ${plan.project_id}`);
-    await this.executionPackages.createOrReuseItemExecutionPackage(repository, {
-      project,
-      workItem,
-      item,
-      spec,
-      specRevision,
-      executionPlan: updated,
-      executionPlanRevision: currentRevision,
-      ownerActorId: item.driver_actor_id ?? workItem.driver_actor_id,
-    });
-    return updated;
+    return { approvedPlan: updated, currentRevision, plan, item, workItem, spec, specRevision };
   }
 
   async projectItemApprovedImplementationPlanForExecutionWithRepository(
@@ -1348,8 +1391,13 @@ export class SpecPlanService {
     const { plan, item } = await this.requirePlanItem(developmentPlanId, itemId, repository);
     await this.assertLegacyPlanItemMutationAllowed(repository, item.id, context);
     const executionPlan = await this.requireItemExecutionPlan(item.id, repository);
-    if (executionPlan.status !== 'in_review') {
-      throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} is not awaiting approval`);
+    if (
+      executionPlan.status !== 'in_review' &&
+      (executionPlan.status !== 'approved' ||
+        executionPlan.approved_revision_id === undefined ||
+        executionPlan.approved_revision_id !== executionPlan.current_revision_id)
+    ) {
+      throw new BadRequestException(`Implementation Plan Doc ${executionPlan.id} is not awaiting approval or approved`);
     }
     const updated: ExecutionPlanDocument = { ...executionPlan, status: 'changes_requested', updated_at: this.now() };
     await repository.saveExecutionPlan(updated);
@@ -1507,13 +1555,13 @@ export class SpecPlanService {
         },
         author_actor_id: String(precondition.requested_by_actor_id),
       });
-      await repository.saveExecutionPlan({ ...executionPlan, current_revision_id: revision.id, updated_at: this.now() });
+      await repository.saveExecutionPlan({ ...executionPlan, status: 'in_review', current_revision_id: revision.id, updated_at: this.now() });
       await this.updateDevelopmentPlanItemArtifactStatus(
         repository,
         loaded.plan,
         loaded.item,
         'implementation_plan_status',
-        'draft',
+        'in_review',
         'implementation_plan_runtime_generation_applied',
         String(precondition.requested_by_actor_id),
       );
@@ -1521,7 +1569,7 @@ export class SpecPlanService {
         repository,
         'development_plan_item',
         loaded.item.id,
-        'item_implementation_plan_runtime_draft_generated',
+        'item_implementation_plan_runtime_review_generated',
         String(precondition.requested_by_actor_id),
         {
           implementation_plan_id: executionPlan.id,
@@ -1981,6 +2029,7 @@ export class SpecPlanService {
     brainstormingSession: BrainstormingSession;
     contextManifest: ContextManifest;
     actorId: string;
+    context?: WorkflowChildContext;
   }) {
     const precondition = {
       source_ref: input.item.source_ref,
@@ -2008,6 +2057,9 @@ export class SpecPlanService {
       context_manifest_revision_id: input.contextManifest.revision_id,
       requested_by_actor_id: input.actorId,
       precondition_fingerprint_json: precondition,
+      ...(input.context?.plan_item_workflow_action_id === undefined
+        ? {}
+        : { plan_item_workflow_action_id: input.context.plan_item_workflow_action_id }),
     };
   }
 
@@ -2020,6 +2072,7 @@ export class SpecPlanService {
     specRevision: SpecRevision;
     contextManifest: ContextManifest;
     actorId: string;
+    context?: WorkflowChildContext;
   }) {
     const precondition = {
       source_ref: input.item.source_ref,
@@ -2049,6 +2102,9 @@ export class SpecPlanService {
       context_manifest_revision_id: input.contextManifest.revision_id,
       requested_by_actor_id: input.actorId,
       precondition_fingerprint_json: precondition,
+      ...(input.context?.plan_item_workflow_action_id === undefined
+        ? {}
+        : { plan_item_workflow_action_id: input.context.plan_item_workflow_action_id }),
     };
   }
 
@@ -2317,13 +2373,16 @@ export class SpecPlanService {
     item: DevelopmentPlanItem,
     boundaryRevision: BoundarySummaryRevision,
     actorId: string,
+    context?: WorkflowChildContext,
   ): ProductGenerationIdentity {
+    const actionScope =
+      context?.plan_item_workflow_action_id === undefined ? '' : `:${context.plan_item_workflow_action_id}`;
     return {
       action_type: 'generate_development_plan_item_spec_revision',
       target_object_type: 'development_plan_item',
       target_object_id: item.id,
       target_revision_id: item.revision_id,
-      idempotency_key: `development-plan-item-spec-generation:${item.id}:${item.revision_id}:${boundaryRevision.id}:${actorId}`,
+      idempotency_key: `development-plan-item-spec-generation:${item.id}:${item.revision_id}:${boundaryRevision.id}:${actorId}${actionScope}`,
       task_kind: 'development_plan_item_spec_revision',
     };
   }
@@ -2333,13 +2392,16 @@ export class SpecPlanService {
     boundaryRevision: BoundarySummaryRevision,
     specRevision: SpecRevision,
     actorId: string,
+    context?: WorkflowChildContext,
   ): ProductGenerationIdentity {
+    const actionScope =
+      context?.plan_item_workflow_action_id === undefined ? '' : `:${context.plan_item_workflow_action_id}`;
     return {
       action_type: 'generate_development_plan_item_implementation_plan_revision',
       target_object_type: 'development_plan_item',
       target_object_id: item.id,
       target_revision_id: item.revision_id,
-      idempotency_key: `development-plan-item-execution-plan-generation:${item.id}:${item.revision_id}:${boundaryRevision.id}:${specRevision.id}:${actorId}`,
+      idempotency_key: `development-plan-item-execution-plan-generation:${item.id}:${item.revision_id}:${boundaryRevision.id}:${specRevision.id}:${actorId}${actionScope}`,
       task_kind: 'development_plan_item_execution_plan_revision',
     };
   }
@@ -2351,7 +2413,13 @@ export class SpecPlanService {
     if (actionRun.workflow_id !== context.workflow_id || actionRun.codex_session_id !== context.codex_session_id) {
       return false;
     }
-    return actionRun.codex_session_turn_id !== undefined;
+    if (actionRun.codex_session_turn_id !== context.codex_session_turn_id) {
+      return false;
+    }
+    if (context.plan_item_workflow_action_id === undefined) {
+      return true;
+    }
+    return actionRun.action_input_json.plan_item_workflow_action_id === context.plan_item_workflow_action_id;
   }
 
   private stableUuid(input: Record<string, unknown>): string {

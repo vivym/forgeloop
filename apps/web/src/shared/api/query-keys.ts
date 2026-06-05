@@ -83,6 +83,7 @@ export const queryKeys = {
     developmentPlanId,
     itemId,
   ],
+  planItemWorkflow: (workflowId: string | undefined) => ['plan-item-workflow', workflowId],
   boundarySummaryRevisions: (boundarySummaryId: string | undefined) => ['boundary-summary-revisions', boundarySummaryId],
   executions: (query: ListProductQuery) => ['executions', normalizeProductRegistryQuery(query)],
   execution: (executionId: string | undefined) => ['execution', executionId],

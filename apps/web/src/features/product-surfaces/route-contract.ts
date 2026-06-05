@@ -8,6 +8,7 @@ export type ProductPageFamily =
   | 'document-evidence'
   | 'planning-table'
   | 'plan-authoring'
+  | 'plan-item-workflow'
   | 'gate-workspace'
   | 'gate-flow'
   | 'document-review'

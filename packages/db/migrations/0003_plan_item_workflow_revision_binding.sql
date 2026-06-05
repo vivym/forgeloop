@@ -1,0 +1,4 @@
+ALTER TABLE "spec_revisions" ADD COLUMN "development_plan_item_revision_id" uuid;--> statement-breakpoint
+ALTER TABLE "execution_plan_revisions" ADD COLUMN "development_plan_item_revision_id" uuid;--> statement-breakpoint
+ALTER TABLE "spec_revisions" ADD CONSTRAINT "spec_revisions_development_plan_item_revision_id_development_plan_item_revisions_id_fk" FOREIGN KEY ("development_plan_item_revision_id") REFERENCES "public"."development_plan_item_revisions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "execution_plan_revisions" ADD CONSTRAINT "execution_plan_revisions_development_plan_item_revision_id_development_plan_item_revisions_id_fk" FOREIGN KEY ("development_plan_item_revision_id") REFERENCES "public"."development_plan_item_revisions"("id") ON DELETE no action ON UPDATE no action;

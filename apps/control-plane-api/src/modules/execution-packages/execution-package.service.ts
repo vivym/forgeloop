@@ -88,7 +88,10 @@ const workflowRefsFromRevision = (
   };
 };
 
-export type PublicExecutionPackage = Omit<ExecutionPackage, 'work_item_id'> & { scope_ref: ObjectRef };
+export type PublicExecutionPackage = Omit<
+  ExecutionPackage,
+  'work_item_id' | 'workflow_id' | 'codex_session_id' | 'codex_session_turn_id'
+> & { scope_ref: ObjectRef };
 
 const productGateRejectedActorClasses = new Set<AutomationActorClass>([
   'automation_daemon',
@@ -508,7 +511,16 @@ export class ExecutionPackageService {
   }
 
   private async toPublicExecutionPackage(executionPackage: ExecutionPackage): Promise<PublicExecutionPackage> {
-    const { work_item_id: workItemId, ...publicPackage } = executionPackage;
+    const {
+      work_item_id: workItemId,
+      workflow_id: _workflowId,
+      codex_session_id: _codexSessionId,
+      codex_session_turn_id: _codexSessionTurnId,
+      ...publicPackage
+    } = executionPackage;
+    void _workflowId;
+    void _codexSessionId;
+    void _codexSessionTurnId;
     return { ...publicPackage, scope_ref: await this.scopeRefForWorkItemId(workItemId) };
   }
 

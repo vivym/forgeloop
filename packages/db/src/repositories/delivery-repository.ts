@@ -60,7 +60,9 @@ import type {
   Organization,
   Plan,
   PlanRevision,
+  PlanItemWorkflowMessage,
   PlanItemWorkflow,
+  PlanItemWorkflowQueuedAction,
   PlanItemWorkflowTransition,
   Project,
   ProjectRepo,
@@ -85,6 +87,7 @@ import type {
 } from '@forgeloop/domain';
 import { DomainError, parseInternalArtifactRef } from '@forgeloop/domain';
 import type { BoundaryRound, ObjectRef, WorkflowTransitionEvidenceObjectType } from '@forgeloop/contracts';
+import type { PlanItemWorkflowQueuedActionKind } from '@forgeloop/contracts';
 
 import type { trace_link_relationship_values } from '../schema/_shared';
 
@@ -438,11 +441,55 @@ export interface WorkflowRepositoryEvidenceInput {
 export interface ApplyPlanItemWorkflowTransitionInput {
   transition: PlanItemWorkflowTransition;
   projection_patch?: {
-    active_boundary_summary_revision_id?: string;
-    active_spec_doc_revision_id?: string;
-    active_implementation_plan_doc_revision_id?: string;
-    execution_package_id?: string;
+    active_boundary_summary_revision_id?: string | null;
+    active_spec_doc_revision_id?: string | null;
+    active_implementation_plan_doc_revision_id?: string | null;
+    execution_package_id?: string | null;
   };
+}
+
+export interface ClaimOrReplayPlanItemWorkflowQueuedActionRunInput {
+  workflow_id: string;
+  action_id: string;
+  now: string;
+}
+
+export interface TerminalizePlanItemWorkflowQueuedActionInput {
+  workflow_id: string;
+  action_id: string;
+  status: 'succeeded' | 'failed' | 'blocked' | 'cancelled' | 'stale';
+  codex_session_turn_id?: string;
+  output_capsule_id?: string;
+  output_capsule_digest?: string;
+  output_capsule_sequence?: number;
+  codex_thread_id_digest?: string;
+  blocked_reason_code?: string;
+  now: string;
+}
+
+export interface AttachPlanItemWorkflowQueuedActionTurnInput {
+  workflow_id: string;
+  action_id: string;
+  codex_session_turn_id: string;
+  now: string;
+}
+
+export interface MarkDependentPlanItemWorkflowQueuedActionsStaleInput {
+  workflow_id: string;
+  action_kinds: PlanItemWorkflowQueuedActionKind[];
+  reason: string;
+  now: string;
+}
+
+export interface PlanItemWorkflowArtifactChangeRequest {
+  id: string;
+  workflow_id: string;
+  artifact_type: 'boundary-summary' | 'spec-doc' | 'implementation-plan-doc';
+  revision_id: string;
+  reason_markdown: string;
+  created_queued_action_id?: string;
+  requested_by_actor_id: string;
+  created_at: string;
 }
 
 export interface CreateCodexSessionForkInput {
@@ -1549,14 +1596,45 @@ export interface DeliveryRepository {
   getWorkflowManualDecision(id: string): Promise<WorkflowManualDecision | undefined>;
   saveExecutionReadinessRecord(record: ExecutionReadinessRecord): Promise<void>;
   getExecutionReadinessRecord(id: string): Promise<ExecutionReadinessRecord | undefined>;
+  invalidateExecutionReadinessRecordsForWorkflow(input: {
+    workflow_id: string;
+    reason: string;
+    now: string;
+  }): Promise<number>;
   getBoundarySummaryRevisionById(revisionId: string): Promise<BoundarySummaryRevision | undefined>;
   resolveWorkflowRepositoryEvidence(
     input: WorkflowRepositoryEvidenceInput,
   ): Promise<{ repository_id: string; resolved_ref: string } | undefined>;
+  createOrReplayPlanItemWorkflowQueuedAction(action: PlanItemWorkflowQueuedAction): Promise<PlanItemWorkflowQueuedAction>;
+  getPlanItemWorkflowQueuedAction(input: {
+    workflow_id: string;
+    action_id: string;
+  }): Promise<PlanItemWorkflowQueuedAction | undefined>;
+  listPlanItemWorkflowQueuedActions(workflowId: string): Promise<PlanItemWorkflowQueuedAction[]>;
+  listActivePlanItemWorkflowQueuedActions(workflowId: string): Promise<PlanItemWorkflowQueuedAction[]>;
+  claimOrReplayPlanItemWorkflowQueuedActionRun(
+    input: ClaimOrReplayPlanItemWorkflowQueuedActionRunInput,
+  ): Promise<{ action: PlanItemWorkflowQueuedAction; claimed: boolean }>;
+  terminalizePlanItemWorkflowQueuedAction(
+    input: TerminalizePlanItemWorkflowQueuedActionInput,
+  ): Promise<PlanItemWorkflowQueuedAction>;
+  attachPlanItemWorkflowQueuedActionTurn(input: AttachPlanItemWorkflowQueuedActionTurnInput): Promise<PlanItemWorkflowQueuedAction>;
+  markDependentPlanItemWorkflowQueuedActionsStale(
+    input: MarkDependentPlanItemWorkflowQueuedActionsStaleInput,
+  ): Promise<PlanItemWorkflowQueuedAction[]>;
+  savePlanItemWorkflowMessage(message: PlanItemWorkflowMessage): Promise<void>;
+  attachPlanItemWorkflowMessageQueuedAction(input: {
+    workflow_id: string;
+    message_id: string;
+    queued_action_id: string;
+  }): Promise<PlanItemWorkflowMessage>;
+  listPlanItemWorkflowMessages(workflowId: string): Promise<PlanItemWorkflowMessage[]>;
+  savePlanItemWorkflowArtifactChangeRequest(request: PlanItemWorkflowArtifactChangeRequest): Promise<void>;
   getCodexSession(id: string): Promise<CodexSession | undefined>;
   saveCodexSession(session: CodexSession): Promise<void>;
   createCodexSessionTurn(turn: CodexSessionTurn): Promise<void>;
   getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined>;
+  listCodexSessionTurns(sessionId: string): Promise<CodexSessionTurn[]>;
   saveCodexSessionTurn(turn: CodexSessionTurn): Promise<void>;
   markCodexSessionTurnStale(input: { session_id: string; turn_id: string; now: string }): Promise<void>;
   createCodexRuntimeCapsule(capsule: CodexRuntimeCapsule): Promise<void>;
@@ -1696,6 +1774,7 @@ export interface DeliveryRepository {
   compareDevelopmentPlanItemRevisions(query: RevisionCompareQuery): Promise<StructuredRevisionDiff>;
   saveBrainstormingSession(session: BrainstormingSession): Promise<void>;
   getBrainstormingSession(id: string): Promise<BrainstormingSession | undefined>;
+  listBrainstormingSessionsForWorkflow(workflowId: string): Promise<BrainstormingSession[]>;
   saveBoundaryRound(round: BoundaryRoundRecord): Promise<void>;
   listBoundaryRounds(sessionId: string): Promise<BoundaryRoundRecord[]>;
   saveBoundaryQuestion(question: BoundaryQuestionRecord): Promise<void>;

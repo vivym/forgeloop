@@ -21,6 +21,7 @@ import type {
   ObjectRef,
   OverrideApproveReleaseRequest,
   PatchReleaseRequest,
+  PlanItemWorkflowPublicDto,
   ProductLaneId,
   productListQuerySchema,
   ReleaseActorCommandRequest,
@@ -50,7 +51,6 @@ export type {
   BugDetail,
   BugListItem,
   BoundarySummary,
-  BrainstormingSession,
   BoardCard,
   CodeReviewHandoff,
   CloseReleaseRequest,
@@ -107,6 +107,7 @@ export type {
   ProductLaneItem,
   ProductLaneResponse,
   ProductNavigateAction,
+  PlanItemWorkflowPublicDto,
   ProductListItem,
   ProductListQuery,
   ProductListResponse,
@@ -394,6 +395,38 @@ export interface ActorCommandBody {
 
 export type SubmitForApprovalBody = ActorCommandBody;
 
+export type WorkflowArtifactType = 'boundary_summary' | 'spec_doc' | 'implementation_plan_doc';
+
+export interface WorkflowMessageCommandBody {
+  actor_id: string;
+  action: 'answer_boundary_question' | 'continue_ai';
+  body_markdown: string;
+  client_message_id?: string;
+}
+
+export interface RunQueuedWorkflowActionBody {
+  actor_id: string;
+}
+
+export interface RunQueuedWorkflowActionResponse {
+  workflow: PlanItemWorkflowPublicDto;
+  queued_action: PlanItemWorkflowPublicDto['queued_actions'][number];
+}
+
+export interface ApproveWorkflowArtifactRevisionBody {
+  actor_id: string;
+  decision_markdown?: string;
+}
+
+export interface RequestWorkflowArtifactChangesBody {
+  actor_id: string;
+  reason_markdown: string;
+}
+
+export interface EvaluateWorkflowExecutionReadinessBody {
+  actor_id: string;
+}
+
 export interface ApproveArtifactBody extends ActorCommandBody {
   rationale?: string;
 }
@@ -407,7 +440,6 @@ export interface MarkPackageReadyBody extends ActorCommandBody {
 }
 
 export interface RunPackageBody {
-  execution_package_id?: string;
   executor_type?: ExecutorType;
   workflow_only?: boolean;
   previous_run_session_id?: string;

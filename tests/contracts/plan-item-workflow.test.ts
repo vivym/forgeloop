@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   codexSessionPublicDtoSchema,
+  internalPlanItemWorkflowTransitionSchema,
+  internalWorkflowManualDecisionSchema,
   planItemWorkflowPublicDtoSchema,
+  planItemWorkflowQueuedActionSchema,
   planItemWorkflowTransitionSchema,
+  workflowMessageCommandSchema,
   workflowManualDecisionSchema,
 } from '@forgeloop/contracts';
 
@@ -22,11 +26,39 @@ describe('plan item workflow contracts', () => {
           object_id: 'plan-revision-1',
         },
       ],
-      codex_session_id: 'codex-session-1',
       created_at: '2026-05-31T00:00:00.000Z',
     });
 
     expect(parsed.evidence_object_type).toBe('execution_readiness_record');
+    expect(() =>
+      planItemWorkflowTransitionSchema.parse({
+        ...parsed,
+        codex_session_id: 'codex-session-1',
+      }),
+    ).toThrow();
+    expect(() =>
+      planItemWorkflowTransitionSchema.parse({
+        ...parsed,
+        codex_session_turn_id: 'turn-1',
+      }),
+    ).toThrow();
+  });
+
+  it('keeps raw runtime transition evidence behind internal schemas', () => {
+    const parsed = internalPlanItemWorkflowTransitionSchema.parse({
+      id: 'transition-1',
+      workflow_id: 'workflow-1',
+      from_status: 'implementation_plan_review',
+      to_status: 'execution_ready',
+      actor_id: 'actor-tech',
+      evidence_object_type: 'execution_readiness_record',
+      evidence_object_id: 'readiness-1',
+      codex_session_id: 'codex-session-1',
+      codex_session_turn_id: 'turn-1',
+      created_at: '2026-05-31T00:00:00.000Z',
+    });
+
+    expect(parsed.codex_session_id).toBe('codex-session-1');
   });
 
   it('rejects invalid manual decision kinds and accepts start_brainstorming', () => {
@@ -34,7 +66,6 @@ describe('plan item workflow contracts', () => {
       workflowManualDecisionSchema.parse({
         id: 'decision-1',
         workflow_id: 'workflow-1',
-        codex_session_id: 'codex-session-1',
         kind: 'start_brainstorming',
         reason: 'Start Superpowers workflow.',
         created_by_actor_id: 'actor-tech',
@@ -46,7 +77,6 @@ describe('plan item workflow contracts', () => {
       workflowManualDecisionSchema.parse({
         id: 'decision-2',
         workflow_id: 'workflow-1',
-        codex_session_id: 'codex-session-1',
         kind: 'start',
         reason: 'Ambiguous.',
         created_by_actor_id: 'actor-tech',
@@ -55,12 +85,11 @@ describe('plan item workflow contracts', () => {
     ).toThrow();
   });
 
-  it('requires fork_select manual decisions to select a Codex session', () => {
+  it('rejects fork_select from the public manual decision schema', () => {
     expect(() =>
       workflowManualDecisionSchema.parse({
         id: 'decision-1',
         workflow_id: 'workflow-1',
-        codex_session_id: 'codex-session-1',
         kind: 'fork_select',
         reason: 'Use the completed candidate fork.',
         created_by_actor_id: 'actor-tech',
@@ -72,14 +101,12 @@ describe('plan item workflow contracts', () => {
       workflowManualDecisionSchema.parse({
         id: 'decision-2',
         workflow_id: 'workflow-1',
-        codex_session_id: 'codex-session-1',
         kind: 'fork_select',
         reason: 'Use the completed candidate fork.',
-        selected_codex_session_id: 'codex-session-2',
         created_by_actor_id: 'actor-tech',
         created_at: '2026-05-31T00:00:00.000Z',
       }),
-    ).not.toThrow();
+    ).toThrow();
   });
 
   it('rejects selected Codex sessions on non-fork manual decisions', () => {
@@ -87,7 +114,6 @@ describe('plan item workflow contracts', () => {
       workflowManualDecisionSchema.parse({
         id: 'decision-1',
         workflow_id: 'workflow-1',
-        codex_session_id: 'codex-session-1',
         kind: 'change_request',
         reason: 'Revise the spec.',
         selected_codex_session_id: 'codex-session-2',
@@ -102,7 +128,6 @@ describe('plan item workflow contracts', () => {
       workflowManualDecisionSchema.parse({
         id: 'decision-1',
         workflow_id: 'workflow-1',
-        codex_session_id: 'codex-session-1',
         kind: 'change_request',
         reason: 'Revise the spec.',
         related_object_type: 'spec_revision',
@@ -115,7 +140,6 @@ describe('plan item workflow contracts', () => {
       workflowManualDecisionSchema.parse({
         id: 'decision-2',
         workflow_id: 'workflow-1',
-        codex_session_id: 'codex-session-1',
         kind: 'change_request',
         reason: 'Revise the spec.',
         related_object_id: 'spec-revision-1',
@@ -128,7 +152,6 @@ describe('plan item workflow contracts', () => {
       workflowManualDecisionSchema.parse({
         id: 'decision-3',
         workflow_id: 'workflow-1',
-        codex_session_id: 'codex-session-1',
         kind: 'change_request',
         reason: 'Revise the spec.',
         related_object_type: 'spec_revision',
@@ -139,15 +162,40 @@ describe('plan item workflow contracts', () => {
     ).not.toThrow();
   });
 
+  it('keeps raw runtime manual decision evidence behind internal schemas', () => {
+    expect(() =>
+      workflowManualDecisionSchema.parse({
+        id: 'decision-1',
+        workflow_id: 'workflow-1',
+        codex_session_id: 'codex-session-1',
+        kind: 'start_brainstorming',
+        reason: 'Start Superpowers workflow.',
+        created_by_actor_id: 'actor-tech',
+        created_at: '2026-05-31T00:00:00.000Z',
+      }),
+    ).toThrow();
+
+    const parsed = internalWorkflowManualDecisionSchema.parse({
+      id: 'decision-1',
+      workflow_id: 'workflow-1',
+      codex_session_id: 'codex-session-1',
+      kind: 'fork_select',
+      reason: 'Use the completed candidate fork.',
+      selected_codex_session_id: 'codex-session-2',
+      created_by_actor_id: 'actor-tech',
+      created_at: '2026-05-31T00:00:00.000Z',
+    });
+
+    expect(parsed.selected_codex_session_id).toBe('codex-session-2');
+  });
+
   it('keeps normal public DTOs free of raw runtime internals', () => {
     const workflow = planItemWorkflowPublicDtoSchema.parse({
       id: 'workflow-1',
       development_plan_id: 'plan-1',
       development_plan_item_id: 'item-1',
       status: 'brainstorming',
-      active_codex_session_id: 'codex-session-1',
       session: {
-        id: 'codex-session-1',
         status: 'idle',
         role: 'active',
         continuity_state: 'ready',
@@ -166,12 +214,12 @@ describe('plan item workflow contracts', () => {
       'runner_runtime_job_id',
       'runner_expires_at',
       'latest_capsule_ref',
+      'id',
     ] as const;
     for (const field of forbiddenSessionFields) {
       expect(workflow.session).not.toHaveProperty(field);
       expect(() =>
         codexSessionPublicDtoSchema.parse({
-          id: 'codex-session-1',
           status: 'idle',
           role: 'active',
           continuity_state: 'ready',
@@ -180,14 +228,14 @@ describe('plan item workflow contracts', () => {
         }),
       ).toThrow();
     }
-    expect(codexSessionPublicDtoSchema.parse({
-        id: 'codex-session-1',
+    expect(
+      codexSessionPublicDtoSchema.parse({
         status: 'idle',
         role: 'active',
         continuity_state: 'ready',
         can_continue: true,
-      })).toEqual({
-        id: 'codex-session-1',
+      }),
+    ).toEqual({
         status: 'idle',
         role: 'active',
         continuity_state: 'ready',
@@ -198,7 +246,6 @@ describe('plan item workflow contracts', () => {
   it('rejects raw capsule refs in public Codex session DTOs', () => {
     expect(
       codexSessionPublicDtoSchema.safeParse({
-        id: 'session-1',
         status: 'idle',
         role: 'active',
         continuity_state: 'ready',
@@ -206,5 +253,126 @@ describe('plan item workflow contracts', () => {
         latest_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
       }).success,
     ).toBe(false);
+  });
+
+  it('validates only Wave 5 message actions', () => {
+    expect(
+      workflowMessageCommandSchema.parse({
+        actor_id: 'actor-tech',
+        action: 'answer_boundary_question',
+        body_markdown: 'The boundary is API only.',
+      }).action,
+    ).toBe('answer_boundary_question');
+
+    expect(() =>
+      workflowMessageCommandSchema.parse({
+        actor_id: 'actor-tech',
+        action: 'generate_spec_doc',
+        body_markdown: 'Generate the spec.',
+      }),
+    ).toThrow();
+  });
+
+  it('validates queued action public shape without raw runtime refs', () => {
+    const parsed = planItemWorkflowQueuedActionSchema.parse({
+      id: 'action-1',
+      workflow_id: 'workflow-1',
+      kind: 'generate_spec_doc',
+      status: 'queued',
+      source_revision_id: 'boundary-revision-1',
+      expected_input_capsule_digest: `sha256:${'a'.repeat(64)}`,
+      context_preview_digest: `sha256:${'b'.repeat(64)}`,
+      idempotency_key: `sha256:${'c'.repeat(64)}`,
+      created_by_actor_id: 'actor-tech',
+      created_at: '2026-06-03T00:00:00.000Z',
+      updated_at: '2026-06-03T00:00:00.000Z',
+    });
+
+    expect(parsed.kind).toBe('generate_spec_doc');
+    expect(JSON.stringify(parsed)).not.toContain('codex_thread_id');
+    expect(JSON.stringify(parsed)).not.toContain('artifact_ref');
+    expect(() =>
+      planItemWorkflowQueuedActionSchema.parse({
+        ...parsed,
+        codex_session_id: 'session-1',
+      }),
+    ).toThrow();
+    expect(() =>
+      planItemWorkflowQueuedActionSchema.parse({
+        ...parsed,
+        codex_session_turn_id: 'turn-1',
+      }),
+    ).toThrow();
+    expect(() =>
+      planItemWorkflowQueuedActionSchema.parse({
+        ...parsed,
+        output_capsule_id: 'capsule-1',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects public workflow DTOs that expose raw runtime internals', () => {
+    expect(() =>
+      planItemWorkflowPublicDtoSchema.parse({
+        id: 'workflow-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+        status: 'spec_generation_queued',
+        session: {
+          status: 'idle',
+          role: 'active',
+          continuity_state: 'ready',
+          can_continue: true,
+          codex_thread_id: 'raw-thread-id',
+        },
+        queued_actions: [],
+        timeline_events: [],
+        created_at: '2026-06-03T00:00:00.000Z',
+        updated_at: '2026-06-03T00:00:00.000Z',
+      }),
+    ).toThrow();
+    expect(() =>
+      planItemWorkflowPublicDtoSchema.parse({
+        id: 'workflow-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+        status: 'spec_generation_queued',
+        active_codex_session_id: 'session-1',
+        session: {
+          status: 'idle',
+          role: 'active',
+          continuity_state: 'ready',
+          can_continue: true,
+        },
+        queued_actions: [],
+        timeline_events: [],
+        created_at: '2026-06-03T00:00:00.000Z',
+        updated_at: '2026-06-03T00:00:00.000Z',
+      }),
+    ).toThrow();
+    expect(() =>
+      planItemWorkflowPublicDtoSchema.parse({
+        id: 'workflow-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+        status: 'execution_ready',
+        execution_package_id: 'execution-package-internal-boundary',
+        session: {
+          status: 'idle',
+          role: 'active',
+          continuity_state: 'ready',
+          can_continue: true,
+        },
+        queued_actions: [],
+        timeline_events: [],
+        readiness: {
+          state: 'ready',
+          can_evaluate: false,
+          blocker_codes: [],
+        },
+        created_at: '2026-06-03T00:00:00.000Z',
+        updated_at: '2026-06-03T00:00:00.000Z',
+      }),
+    ).toThrow();
   });
 });

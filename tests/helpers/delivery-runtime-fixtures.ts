@@ -887,6 +887,51 @@ export const seedReadyExecutionPackageThroughApi = async (app: INestApplication)
   return persistedPackage;
 };
 
+export const seedReadyExecutionPackageRunSession = async (
+  repository: DeliveryRepository,
+  options: { durabilityMode?: 'durable' | 'volatile_demo' } = {},
+): Promise<{ executionPackage: ExecutionPackage; runSession: RunSession }> => {
+  const executionPackage = await seedReadyExecutionPackage(repository);
+  const runSessionId = `run-session-fixture-${readyExecutionPackageSeedCounter}`;
+  const runningPackage = transitionExecutionPackage(executionPackage, {
+    type: 'run',
+    run_session_id: runSessionId,
+    at: now,
+  });
+  const runSession = transitionRunSession(undefined, {
+    type: 'create',
+    id: runSessionId,
+    execution_package_id: executionPackage.id,
+    requested_by_actor_id: actorOwner,
+    executor_type: 'mock',
+    run_spec: runSpecFor(executionPackage, runSessionId),
+    at: now,
+  });
+
+  await repository.saveExecutionPackage(runningPackage);
+  const persistedRunSession: RunSession = {
+    ...runSession,
+    runtime_metadata: {
+      durability_mode: options.durabilityMode ?? 'volatile_demo',
+      recovery_attempt_count: 0,
+      effective_dangerous_mode: 'not_requested',
+    },
+  };
+  await repository.saveRunSession(persistedRunSession);
+  await repository.appendRunEvent({
+    id: `run-event-queued-${persistedRunSession.id}`,
+    run_session_id: persistedRunSession.id,
+    event_type: 'run_queued',
+    source: 'api',
+    visibility: 'public',
+    summary: 'Run queued.',
+    payload: { execution_package_id: runningPackage.id },
+    created_at: now,
+  });
+
+  return { executionPackage: runningPackage, runSession: persistedRunSession };
+};
+
 export const seedAppWithRunSession = async (
   options: { durabilityMode?: 'durable' | 'volatile_demo' } = {},
 ): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository; runSessionId: string }> => {
@@ -901,32 +946,9 @@ export const seedAppWithRunSession = async (
   await app.init();
 
   const repo = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
-  const executionPackage = await seedReadyExecutionPackage(repo);
+  const { runSession } = await seedReadyExecutionPackageRunSession(repo, options);
 
-  const run = (
-    await request(app.getHttpServer())
-      .post(`/execution-packages/${executionPackage.id}/run`)
-      .set(ownerHeaders)
-      .send({
-        workflow_only: true,
-      })
-      .expect(201)
-  ).body as { run_session_id: string };
-
-  const runSession = await repo.getRunSession(run.run_session_id);
-
-  if (runSession !== undefined) {
-    await repo.saveRunSession({
-      ...runSession,
-      runtime_metadata: {
-        durability_mode: options.durabilityMode ?? 'volatile_demo',
-        recovery_attempt_count: 0,
-        effective_dangerous_mode: 'not_requested',
-      },
-    });
-  }
-
-  return { app, repo, runSessionId: run.run_session_id };
+  return { app, repo, runSessionId: runSession.id };
 };
 
 const createTestApp = async (): Promise<{ app: INestApplication; repo: InMemoryDeliveryRepository }> => {

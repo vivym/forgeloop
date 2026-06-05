@@ -511,6 +511,9 @@ export class ProductGenerationRuntimeSchedulerService {
       schema_version: 'codex_generation_workload.v1',
       runtime_job_id: runtimeJobId,
       action_run_id: input.actionRun.id,
+      ...(input.context?.plan_item_workflow_action_id === undefined
+        ? {}
+        : { plan_item_workflow_action_id: input.context.plan_item_workflow_action_id }),
       task_kind: input.taskKind,
       prompt_version: input.promptVersion,
       output_schema_version: input.outputSchemaVersion,
@@ -899,11 +902,15 @@ export class ProductGenerationRuntimeSchedulerService {
       actionRun.codex_session_id !== undefined &&
       actionRun.codex_session_turn_id !== undefined &&
       context?.workflow_id !== undefined &&
-      context.codex_session_id !== undefined;
+      context.codex_session_id !== undefined &&
+      context.codex_session_turn_id !== undefined;
     if (
       refsComplete &&
       actionRun.workflow_id === context.workflow_id &&
-      actionRun.codex_session_id === context.codex_session_id
+      actionRun.codex_session_id === context.codex_session_id &&
+      actionRun.codex_session_turn_id === context.codex_session_turn_id &&
+      (context.plan_item_workflow_action_id === undefined ||
+        actionRun.action_input_json.plan_item_workflow_action_id === context.plan_item_workflow_action_id)
     ) {
       return;
     }

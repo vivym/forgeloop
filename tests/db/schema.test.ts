@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import { getTableColumns } from 'drizzle-orm';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
@@ -65,6 +66,9 @@ import {
   codex_session_turns,
   command_idempotency_records,
   execution_readiness_records,
+  plan_item_workflow_artifact_change_requests,
+  plan_item_workflow_messages,
+  plan_item_workflow_queued_actions,
   boundary_answers,
   boundary_decisions,
   boundary_questions,
@@ -132,6 +136,9 @@ const requiredTables = {
   manual_path_hold_idempotency_records,
   command_idempotency_records,
   execution_readiness_records,
+  plan_item_workflow_artifact_change_requests,
+  plan_item_workflow_messages,
+  plan_item_workflow_queued_actions,
   boundary_answers,
   boundary_decisions,
   boundary_questions,
@@ -247,6 +254,32 @@ const uniqueIndexColumns = (table: ConfiguredTable, indexName: string) => {
 };
 
 describe('P1 core schema release flow Drizzle schema', () => {
+  it('registers every SQL migration in the Drizzle journal', () => {
+    const migrationFiles = readdirSync('packages/db/migrations')
+      .filter((file) => /^\d{4}_.+\.sql$/.test(file))
+      .map((file) => file.replace(/\.sql$/, ''))
+      .sort();
+    const journal = JSON.parse(readFileSync('packages/db/migrations/meta/_journal.json', 'utf8')) as {
+      entries: Array<{ idx: number; tag: string }>;
+    };
+
+    expect(journal.entries.map((entry) => entry.tag).sort()).toEqual(migrationFiles);
+    expect(journal.entries.map((entry) => entry.idx)).toEqual(journal.entries.map((_, index) => index));
+
+    const latestEntry = journal.entries.at(-1);
+    expect(latestEntry).toBeDefined();
+    const latestMigrationMeta = JSON.parse(readFileSync(`packages/db/migrations/meta/${String(latestEntry?.idx).padStart(4, '0')}_snapshot.json`, 'utf8')) as {
+      tables: Record<string, { columns: Record<string, unknown> }>;
+    };
+    expect(latestMigrationMeta.tables['public.plan_item_workflow_messages']).toBeDefined();
+    expect(latestMigrationMeta.tables['public.plan_item_workflow_queued_actions']).toBeDefined();
+    expect(latestMigrationMeta.tables['public.plan_item_workflow_artifact_change_requests']).toBeDefined();
+    expect(latestMigrationMeta.tables['public.execution_readiness_records']?.columns.invalidated_at).toBeDefined();
+    expect(latestMigrationMeta.tables['public.execution_readiness_records']?.columns.invalidated_reason).toBeDefined();
+    expect(latestMigrationMeta.tables['public.spec_revisions']?.columns.development_plan_item_revision_id).toBeDefined();
+    expect(latestMigrationMeta.tables['public.execution_plan_revisions']?.columns.development_plan_item_revision_id).toBeDefined();
+  });
+
   it('exports every required delivery table', () => {
     expect(Object.keys(requiredTables).sort()).toEqual(
       [
@@ -291,6 +324,9 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'development_plan_source_links',
         'development_plans',
         'execution_readiness_records',
+        'plan_item_workflow_artifact_change_requests',
+        'plan_item_workflow_messages',
+        'plan_item_workflow_queued_actions',
         'execution_plan_revisions',
         'execution_plans',
         'execution_package_dependencies',
@@ -571,12 +607,128 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasIndex(codex_session_leases, 'codex_session_leases_session_epoch_idx', ['codex_session_id', 'lease_epoch'])).toBe(true);
   });
 
+  it('defines Plan Item Workflow message, queued action, and artifact change request tables', () => {
+    expect(primaryKeyColumnNames(plan_item_workflow_messages)).toEqual([['id']]);
+    expect(columnNotNull(plan_item_workflow_messages, 'workflow_id')).toBe(true);
+    expect(columnNotNull(plan_item_workflow_messages, 'codex_session_id')).toBe(true);
+    expect(columnNotNull(plan_item_workflow_messages, 'actor_id')).toBe(true);
+    expect(columnNotNull(plan_item_workflow_messages, 'action')).toBe(true);
+    expect(columnNotNull(plan_item_workflow_messages, 'body_markdown')).toBe(true);
+    expect(columnType(plan_item_workflow_messages, 'created_queued_action_id')).toBe('PgUUID');
+    expect(columnType(plan_item_workflow_messages, 'client_message_id')).toBe('PgText');
+    expect(hasForeignKey(plan_item_workflow_messages, 'workflow_id', column(plan_item_workflows, 'id'))).toBe(true);
+    expect(hasForeignKey(plan_item_workflow_messages, 'codex_session_id', column(codex_sessions, 'id'))).toBe(true);
+    expect(hasForeignKey(plan_item_workflow_messages, 'actor_id', column(actors, 'id'))).toBe(true);
+    expect(
+      hasIndex(plan_item_workflow_messages, 'plan_item_workflow_messages_workflow_created_idx', [
+        'workflow_id',
+        'created_at',
+      ]),
+    ).toBe(true);
+    expect(hasIndex(plan_item_workflow_messages, 'plan_item_workflow_messages_session_idx', ['codex_session_id'])).toBe(
+      true,
+    );
+
+    expect(primaryKeyColumnNames(plan_item_workflow_queued_actions)).toEqual([['id']]);
+    for (const columnName of [
+      'workflow_id',
+      'codex_session_id',
+      'kind',
+      'status',
+      'context_preview_digest',
+      'idempotency_key',
+      'created_by_actor_id',
+      'created_at',
+      'updated_at',
+    ]) {
+      expect(columnNotNull(plan_item_workflow_queued_actions, columnName)).toBe(true);
+    }
+    for (const columnName of [
+      'source_revision_id',
+      'change_request_id',
+      'created_from_message_id',
+      'expected_input_capsule_digest',
+      'codex_session_turn_id',
+      'output_capsule_id',
+      'output_capsule_digest',
+      'output_capsule_sequence',
+      'codex_thread_id_digest',
+      'blocked_reason_code',
+    ]) {
+      expect(column(plan_item_workflow_queued_actions, columnName)).toBeDefined();
+    }
+    expect(columnType(plan_item_workflow_queued_actions, 'kind')).toBe('PgText');
+    expect(columnType(plan_item_workflow_queued_actions, 'status')).toBe('PgText');
+    expect(columnType(plan_item_workflow_queued_actions, 'blocked_reason_code')).toBe('PgText');
+    expect(hasForeignKey(plan_item_workflow_queued_actions, 'workflow_id', column(plan_item_workflows, 'id'))).toBe(true);
+    expect(hasForeignKey(plan_item_workflow_queued_actions, 'codex_session_id', column(codex_sessions, 'id'))).toBe(true);
+    expect(hasForeignKey(plan_item_workflow_queued_actions, 'created_by_actor_id', column(actors, 'id'))).toBe(true);
+    expect(
+      hasForeignKey(
+        plan_item_workflow_queued_actions,
+        'created_from_message_id',
+        column(plan_item_workflow_messages, 'id'),
+      ),
+    ).toBe(true);
+    expect(
+      hasUniqueIndex(plan_item_workflow_queued_actions, 'plan_item_workflow_queued_actions_active_idempotency_idx', [
+        'workflow_id',
+        'idempotency_key',
+      ]),
+    ).toBe(true);
+    expect(
+      hasIndex(plan_item_workflow_queued_actions, 'plan_item_workflow_queued_actions_workflow_status_idx', [
+        'workflow_id',
+        'status',
+      ]),
+    ).toBe(true);
+    expect(hasIndex(plan_item_workflow_queued_actions, 'plan_item_workflow_queued_actions_session_idx', ['codex_session_id'])).toBe(
+      true,
+    );
+    expect(hasIndex(plan_item_workflow_queued_actions, 'plan_item_workflow_queued_actions_turn_idx', ['codex_session_turn_id'])).toBe(
+      true,
+    );
+
+    expect(primaryKeyColumnNames(plan_item_workflow_artifact_change_requests)).toEqual([['id']]);
+    for (const columnName of [
+      'workflow_id',
+      'artifact_type',
+      'revision_id',
+      'reason_markdown',
+      'requested_by_actor_id',
+      'created_at',
+    ]) {
+      expect(columnNotNull(plan_item_workflow_artifact_change_requests, columnName)).toBe(true);
+    }
+    expect(columnType(plan_item_workflow_artifact_change_requests, 'created_queued_action_id')).toBe('PgUUID');
+    expect(hasForeignKey(plan_item_workflow_artifact_change_requests, 'workflow_id', column(plan_item_workflows, 'id'))).toBe(
+      true,
+    );
+    expect(hasForeignKey(plan_item_workflow_artifact_change_requests, 'requested_by_actor_id', column(actors, 'id'))).toBe(
+      true,
+    );
+    expect(
+      hasIndex(plan_item_workflow_artifact_change_requests, 'plan_item_workflow_artifact_change_requests_workflow_created_idx', [
+        'workflow_id',
+        'created_at',
+      ]),
+    ).toBe(true);
+    expect(
+      hasIndex(plan_item_workflow_artifact_change_requests, 'plan_item_workflow_artifact_change_requests_revision_idx', [
+        'artifact_type',
+        'revision_id',
+      ]),
+    ).toBe(true);
+  });
+
   it('adds workflow references to child delivery records', () => {
     expect(columnType(brainstorming_sessions, 'workflow_id')).toBe('PgUUID');
     expect(columnType(boundary_summary_revisions, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(execution_readiness_records, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(spec_revisions, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(spec_revisions, 'development_plan_item_revision_id')).toBe('PgUUID');
     expect(columnType(execution_plan_revisions, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(columnType(execution_plan_revisions, 'development_plan_item_revision_id')).toBe('PgUUID');
     expect(columnType(automation_action_runs, 'workflow_id')).toBe('PgUUID');
     expect(columnType(codex_runtime_jobs, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(run_sessions, 'codex_session_turn_id')).toBe('PgUUID');
@@ -876,6 +1028,8 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasForeignKey(boundary_summaries, 'brainstorming_session_id', column(brainstorming_sessions, 'id'))).toBe(true);
     expect(hasForeignKey(boundary_summary_revisions, 'boundary_summary_id', column(boundary_summaries, 'id'))).toBe(true);
     expect(hasForeignKey(boundary_summary_revisions, 'codex_session_turn_id', column(codex_session_turns, 'id'))).toBe(true);
+    expect(hasForeignKey(spec_revisions, 'development_plan_item_revision_id', column(development_plan_item_revisions, 'id'))).toBe(true);
+    expect(hasForeignKey(execution_plan_revisions, 'development_plan_item_revision_id', column(development_plan_item_revisions, 'id'))).toBe(true);
     expect(hasForeignKey(execution_readiness_records, 'codex_session_turn_id', column(codex_session_turns, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plans, 'development_plan_item_id', column(development_plan_items, 'id'))).toBe(true);
     expect(hasForeignKey(execution_plan_revisions, 'execution_plan_id', column(execution_plans, 'id'))).toBe(true);

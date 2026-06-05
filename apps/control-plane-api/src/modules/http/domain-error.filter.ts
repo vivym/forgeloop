@@ -9,6 +9,13 @@ const forbiddenDomainErrorCodes = new Set<DomainErrorCode>([
 
 const conflictDomainErrorCodes = new Set<DomainErrorCode>([
   'workflow_legacy_entrypoint_disabled',
+  'workflow_wave5_entrypoint_disabled',
+  'workflow_action_already_pending',
+  'workflow_action_not_runnable',
+  'workflow_execution_readiness_blocked',
+  'workflow_evidence_not_current',
+  'workflow_context_digest_mismatch',
+  'workflow_capsule_digest_mismatch',
   'codex_session_lease_conflict',
   'codex_session_lease_expired',
   'codex_session_stale_terminalization',

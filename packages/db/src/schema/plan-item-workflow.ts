@@ -8,6 +8,8 @@ import type {
   CodexSessionTurn,
   ExecutionReadinessRecord,
   PlanItemWorkflow,
+  PlanItemWorkflowMessage,
+  PlanItemWorkflowQueuedAction,
   PlanItemWorkflowTransition,
   WorkflowManualDecision,
 } from '@forgeloop/domain';
@@ -163,6 +165,93 @@ export const workflow_manual_decisions = pgTable(
   ],
 );
 
+export const plan_item_workflow_messages = pgTable(
+  'plan_item_workflow_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => plan_item_workflows.id),
+    codexSessionId: uuid('codex_session_id')
+      .notNull()
+      .references(() => codex_sessions.id),
+    actorId: uuid('actor_id')
+      .notNull()
+      .references(() => actors.id),
+    action: text('action').$type<PlanItemWorkflowMessage['action']>().notNull(),
+    bodyMarkdown: text('body_markdown').notNull(),
+    createdQueuedActionId: uuid('created_queued_action_id'),
+    clientMessageId: text('client_message_id'),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    index('plan_item_workflow_messages_workflow_created_idx').on(table.workflowId, table.createdAt),
+    index('plan_item_workflow_messages_session_idx').on(table.codexSessionId),
+  ],
+);
+
+export const plan_item_workflow_queued_actions = pgTable(
+  'plan_item_workflow_queued_actions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => plan_item_workflows.id),
+    codexSessionId: uuid('codex_session_id')
+      .notNull()
+      .references(() => codex_sessions.id),
+    kind: text('kind').$type<PlanItemWorkflowQueuedAction['kind']>().notNull(),
+    status: text('status').$type<PlanItemWorkflowQueuedAction['status']>().notNull(),
+    sourceRevisionId: uuid('source_revision_id'),
+    changeRequestId: uuid('change_request_id'),
+    createdFromMessageId: uuid('created_from_message_id').references(() => plan_item_workflow_messages.id),
+    expectedInputCapsuleDigest: text('expected_input_capsule_digest'),
+    contextPreviewDigest: text('context_preview_digest').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    codexSessionTurnId: uuid('codex_session_turn_id'),
+    outputCapsuleId: uuid('output_capsule_id'),
+    outputCapsuleDigest: text('output_capsule_digest'),
+    outputCapsuleSequence: integer('output_capsule_sequence'),
+    codexThreadIdDigest: text('codex_thread_id_digest'),
+    blockedReasonCode: text('blocked_reason_code'),
+    createdByActorId: uuid('created_by_actor_id')
+      .notNull()
+      .references(() => actors.id),
+    createdAt: timestampColumn('created_at').notNull(),
+    updatedAt: timestampColumn('updated_at').notNull(),
+  },
+  (table) => [
+    index('plan_item_workflow_queued_actions_workflow_status_idx').on(table.workflowId, table.status),
+    index('plan_item_workflow_queued_actions_session_idx').on(table.codexSessionId),
+    index('plan_item_workflow_queued_actions_turn_idx').on(table.codexSessionTurnId),
+    uniqueIndex('plan_item_workflow_queued_actions_active_idempotency_idx')
+      .on(table.workflowId, table.idempotencyKey)
+      .where(sql`${table.status} in ('queued', 'running')`),
+  ],
+);
+
+export const plan_item_workflow_artifact_change_requests = pgTable(
+  'plan_item_workflow_artifact_change_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => plan_item_workflows.id),
+    artifactType: text('artifact_type').$type<'boundary-summary' | 'spec-doc' | 'implementation-plan-doc'>().notNull(),
+    revisionId: uuid('revision_id').notNull(),
+    reasonMarkdown: text('reason_markdown').notNull(),
+    createdQueuedActionId: uuid('created_queued_action_id'),
+    requestedByActorId: uuid('requested_by_actor_id')
+      .notNull()
+      .references(() => actors.id),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    index('plan_item_workflow_artifact_change_requests_workflow_created_idx').on(table.workflowId, table.createdAt),
+    index('plan_item_workflow_artifact_change_requests_revision_idx').on(table.artifactType, table.revisionId),
+  ],
+);
+
 export const execution_readiness_records = pgTable(
   'execution_readiness_records',
   {
@@ -190,6 +279,8 @@ export const execution_readiness_records = pgTable(
       .notNull()
       .references(() => actors.id),
     createdAt: timestampColumn('created_at').notNull(),
+    invalidatedAt: timestampColumn('invalidated_at'),
+    invalidatedReason: text('invalidated_reason'),
   },
   (table) => [
     index('execution_readiness_records_workflow_idx').on(table.workflowId),

@@ -13,6 +13,7 @@ import type {
   DevelopmentPlanItemRevision,
   ExecutionPlanRevision,
   ExecutionReadinessRecord,
+  PlanItemWorkflow,
   SpecRevision,
 } from '../../packages/domain/src';
 import {
@@ -198,28 +199,73 @@ export async function seedDevelopmentPlanItem(app: INestApplication, options: { 
 export async function startWorkflow(app: INestApplication, developmentPlanId: string, itemId: string) {
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const item = await repository.getDevelopmentPlanItem(itemId);
-  const plan = await repository.getDevelopmentPlan(developmentPlanId);
-  const fixtureIds = idsFor(plan?.id.slice(0, 8));
-  const actorId = item?.leader_actor_id ?? fixtureIds.actorTech;
+	  const plan = await repository.getDevelopmentPlan(developmentPlanId);
+	  const fixtureIds = idsFor(plan?.id.slice(0, 8));
+	  const actorId = item?.leader_actor_id ?? fixtureIds.actorTech;
+	  if (plan === undefined) {
+	    throw new Error(`Development Plan ${developmentPlanId} is missing`);
+	  }
 
-  return (
-    await request(app.getHttpServer())
-      .post(`/development-plans/${developmentPlanId}/items/${itemId}/workflow/start-brainstorming`)
-      .send({
-        actor_id: actorId,
-        runtime_profile_id: fixtureIds.runtimeProfile,
-        runtime_profile_revision_id: fixtureIds.runtimeProfileRevision,
-        credential_binding_id: fixtureIds.credentialBinding,
-        credential_binding_version_id: fixtureIds.credentialBindingVersion,
-        reason: 'Start Superpowers workflow.',
-      })
-      .expect(201)
-  ).body;
+	  return (
+	    await request(app.getHttpServer())
+	      .post(`/development-plans/${developmentPlanId}/items/${itemId}/workflow/start-brainstorming`)
+	      .send({
+	        actor_id: actorId,
+	        reason: 'Start Superpowers workflow.',
+	      })
+	      .expect(201)
+	  ).body;
+}
+
+export async function resolveSeededGenerationRuntimeBinding(
+  repository: DeliveryRepository,
+  projectId: string,
+  at = now,
+): Promise<{
+  runtime_profile_id: string;
+  runtime_profile_revision_id: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+}> {
+  const profileRevision = await repository.getActiveCodexRuntimeProfileRevision({
+    project_id: projectId,
+    target_kind: 'generation',
+    now: at,
+  });
+  if (profileRevision === undefined) {
+    throw new Error(`Generation runtime profile is missing for project ${projectId}`);
+  }
+  const [candidate] = (
+    await repository.listCodexCredentialBindingReadinessCandidates({
+      project_id: projectId,
+      runtime_profile_id: profileRevision.profile_id,
+      target_kind: 'generation',
+      now: at,
+    })
+  ).filter((value) => value.purpose === 'model_provider');
+  if (candidate === undefined) {
+    throw new Error(`Generation model credential binding is missing for project ${projectId}`);
+  }
+  const credential = await repository.getCodexCredentialBindingPublic(candidate.id);
+  if (credential?.active_version_id === undefined) {
+    throw new Error(`Generation model credential binding ${candidate.id} has no active version`);
+  }
+  return {
+    runtime_profile_id: profileRevision.profile_id,
+    runtime_profile_revision_id: profileRevision.id,
+    credential_binding_id: credential.id,
+    credential_binding_version_id: credential.active_version_id,
+  };
 }
 
 export async function seedWorkflow(app: INestApplication, options: { idPrefix?: string } = {}) {
   const seeded = await seedDevelopmentPlanItem(app, options);
-  const workflow = await startWorkflow(app, seeded.plan.id, seeded.item.id);
+  const started = await startWorkflow(app, seeded.plan.id, seeded.item.id);
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const workflow = await repository.getPlanItemWorkflow(started.id);
+  if (workflow === undefined) {
+    throw new Error(`Started workflow ${started.id} was not persisted`);
+  }
   return { ...seeded, workflow };
 }
 
@@ -257,6 +303,7 @@ export async function seedApprovedBoundaryWorkflow(app: INestApplication, option
 export async function seedBoundaryReviewWorkflow(app: INestApplication, options: { idPrefix?: string } = {}) {
   const seeded = await seedWorkflow(app, options);
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  await clearFixtureStartupQueuedActions(repository, seeded.workflow.id);
   const boundaryRevision = await seedBoundarySummaryRevisionForWorkflow(repository, seeded, { status: 'proposed' });
   const workflow = await repository.applyPlanItemWorkflowTransition({
     transition: {
@@ -270,8 +317,32 @@ export async function seedBoundaryReviewWorkflow(app: INestApplication, options:
       codex_session_id: seeded.workflow.active_codex_session_id,
       created_at: now,
     },
+    projection_patch: { active_boundary_summary_revision_id: boundaryRevision.id },
   });
   return { ...seeded, workflow, boundaryRevision };
+}
+
+async function clearFixtureStartupQueuedActions(repository: DeliveryRepository, workflowId: string): Promise<void> {
+  const activeActions = await repository.listActivePlanItemWorkflowQueuedActions(workflowId);
+  for (const action of activeActions) {
+    if (action.kind !== 'continue_brainstorming' || action.status !== 'queued') continue;
+    const { claimed } = await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+      workflow_id: workflowId,
+      action_id: action.id,
+      actor_id: action.created_by_actor_id,
+      idempotency_key: `fixture-clear-${action.id}`,
+      now,
+    });
+    if (claimed) {
+      await repository.terminalizePlanItemWorkflowQueuedAction({
+        workflow_id: workflowId,
+        action_id: action.id,
+        status: 'cancelled',
+        blocked_reason_code: 'fixture_manual_state_seed',
+        now,
+      });
+    }
+  }
 }
 
 export async function seedSpecReviewWorkflow(app: INestApplication, options: { idPrefix?: string } = {}) {
@@ -290,6 +361,7 @@ export async function seedSpecReviewWorkflow(app: INestApplication, options: { i
       codex_session_id: seeded.workflow.active_codex_session_id,
       created_at: now,
     },
+    projection_patch: { active_spec_doc_revision_id: specRevision.id },
   });
   return { ...seeded, workflow, specRevision };
 }
@@ -327,6 +399,7 @@ export async function seedWorkflowWithApprovedImplementationPlan(
       codex_session_id: implementationPlanQueuedWorkflow.active_codex_session_id,
       created_at: now,
     },
+    projection_patch: { active_implementation_plan_doc_revision_id: implementationPlanRevision.id },
   });
 
   return { ...seeded, workflow, implementationPlanRevision };
@@ -772,6 +845,7 @@ async function seedSpecRevisionForWorkflow(
     id: seeded.ids.spec,
     work_item_id: seeded.ids.sourceRequirement,
     development_plan_item_id: seeded.item.id,
+    development_plan_item_revision_id: seeded.item.revision_id,
     workflow_id: seeded.workflow.id,
     boundary_summary_id: seeded.ids.boundarySummary,
     entity_type: 'spec',
@@ -852,6 +926,7 @@ async function seedImplementationPlanRevisionForWorkflow(
     id: seeded.ids.implementationPlanRevision,
     execution_plan_id: seeded.ids.executionPlan,
     development_plan_item_id: seeded.item.id,
+    development_plan_item_revision_id: seeded.item.revision_id,
     workflow_id: seeded.workflow.id,
     codex_session_id: seeded.workflow.active_codex_session_id,
     codex_session_turn_id: turn.id,

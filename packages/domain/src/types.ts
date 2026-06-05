@@ -60,7 +60,9 @@ export type DomainErrorCode =
   | 'workflow_evidence_missing'
   | 'workflow_evidence_type_invalid'
   | 'workflow_evidence_not_owned'
+  | 'workflow_evidence_not_current'
   | 'workflow_actor_not_authorized'
+  | 'workflow_runtime_binding_unavailable'
   | 'workflow_active_session_missing'
   | 'workflow_active_session_conflict'
   | 'codex_session_lease_conflict'
@@ -81,7 +83,16 @@ export type DomainErrorCode =
   | 'codex_session_runner_unavailable'
   | 'codex_session_fork_invalid'
   | 'codex_generation_workload_unsupported'
-  | 'workflow_legacy_entrypoint_disabled';
+  | 'workflow_legacy_entrypoint_disabled'
+  | 'workflow_wave5_entrypoint_disabled'
+  | 'workflow_invalid_message_action'
+  | 'workflow_action_not_found'
+  | 'workflow_action_already_pending'
+  | 'workflow_action_not_runnable'
+  | 'workflow_action_not_active_session'
+  | 'workflow_execution_readiness_blocked'
+  | 'workflow_capsule_digest_mismatch'
+  | 'workflow_context_digest_mismatch';
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode;
@@ -225,6 +236,7 @@ export interface SpecRevision {
   spec_id: string;
   work_item_id: string;
   development_plan_item_id?: string;
+  development_plan_item_revision_id?: string;
   workflow_id?: string;
   codex_session_id?: string;
   codex_session_turn_id?: string;

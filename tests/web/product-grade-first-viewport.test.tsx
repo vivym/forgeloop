@@ -169,7 +169,7 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
     expect(document.body.textContent).not.toMatch(/planning input context|\brow\b|Work Item Owner|owner_actor_id|\bTask\b/);
   });
 
-  it('requires Development Plan Item gate routes to expose gate workspaces', async () => {
+  it('requires workflow-owned Development Plan Item routes to expose chat-first workflow workspaces', async () => {
     for (const route of [
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`,
@@ -177,17 +177,17 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
       const rendered = await renderRoute(route);
 
       expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-      expectFirstViewportContract(rendered, { pageFamily: 'gate-workspace', heading: developmentPlanItem.title });
-      expect(document.querySelector('[data-product-shell="plan-item-gate-workspace"]')).toBeInstanceOf(HTMLElement);
-      expect(document.querySelector('[data-gate-workspace][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      expectFirstViewportContract(rendered, { pageFamily: 'plan-item-workflow', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-product-shell="plan-item-workflow-workspace"]')).toBeInstanceOf(HTMLElement);
+      expect(document.querySelector('[data-plan-item-workflow-workspace][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(document.querySelector('[data-first-viewport]')).toBeNull();
-      expect(document.querySelector('[data-gate-workspace]')?.textContent).toMatch(/Gate progress|Current gate|Evidence side context|Execution supervision/i);
+      expect(document.querySelector('[data-plan-item-workflow-workspace]')?.textContent).toMatch(/Workflow timeline|Codex conversation|Context Preview/i);
       expect(document.body.textContent).not.toMatch(/Work Item Owner|owner_actor_id|\bTask\b|\/specs\/|\/plans\//);
       cleanup();
     }
   });
 
-  it('requires Spec and Implementation Plan Doc routes to expose document-review workspaces', async () => {
+  it('requires workflow-owned Spec and Implementation Plan Doc routes to focus the same chat-first workspace', async () => {
     for (const route of [
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/spec`,
       `/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/implementation-plan`,
@@ -195,10 +195,10 @@ describe('Task 6 owner: Development Plan and Plan Item route first-viewport cont
       const rendered = await renderRoute(route);
 
       expect(await rendered.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
-      expectFirstViewportContract(rendered, { pageFamily: 'document-review', heading: developmentPlanItem.title });
-      expect(document.querySelector('[data-document-surface][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
+      expectFirstViewportContract(rendered, { pageFamily: 'plan-item-workflow', heading: developmentPlanItem.title });
+      expect(document.querySelector('[data-plan-item-workflow-workspace][data-primary-work-surface]')).toBeInstanceOf(HTMLElement);
       expect(document.querySelector('[data-first-viewport]')).toBeNull();
-      expect(document.querySelector('[data-document-surface]')?.textContent).toMatch(/Spec|Implementation Plan Doc|Save/i);
+      expect(document.querySelector('[data-plan-item-workflow-workspace]')?.textContent).toMatch(/Spec Doc|Implementation Plan Doc|Codex conversation/i);
       cleanup();
     }
   });

@@ -267,7 +267,7 @@ describeIfDb('durable revision lookup', () => {
     expect(planRevisionResponse.body.id).toBe(planRevisionId);
   });
 
-  it('generates item-scoped Implementation Plan Doc drafts after restart', async () => {
+  it('rejects legacy item-scoped Implementation Plan Doc draft generation after restart', async () => {
     const firstApp = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(firstApp);
     const seed = await seedApprovedSpecItem(firstApp, workItem.id);
@@ -278,7 +278,7 @@ describeIfDb('durable revision lookup', () => {
     await request(secondApp.getHttpServer())
       .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorOwner })
-      .expect(201);
+      .expect(404);
   });
 
   it('generates packages after restart', async () => {
@@ -322,7 +322,7 @@ describeIfDb('durable revision lookup', () => {
     expect(planRevisionResponse.body.id).toBe(planRevisionId);
   });
 
-  it('returns 400 when approved spec current_revision_id is missing', async () => {
+  it('rejects legacy item-scoped Implementation Plan Doc generation before approved spec validation', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
     const seed = await seedApprovedSpecItem(app, workItem.id);
@@ -333,11 +333,11 @@ describeIfDb('durable revision lookup', () => {
     const response = await request(app.getHttpServer())
       .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorOwner })
-      .expect(400);
-    expect(response.body.message).toContain('approved_spec_not_current');
+      .expect(404);
+    expect(response.body.statusCode).toBe(404);
   });
 
-  it('returns 400 when the approved spec revision row is missing for item-scoped Implementation Plan Doc generation', async () => {
+  it('rejects legacy item-scoped Implementation Plan Doc generation before missing revision validation', async () => {
     const app = await createDurableApp();
     const { workItem } = await createProjectRepoWorkItem(app);
     const seed = await seedApprovedSpecItem(app, workItem.id);
@@ -351,8 +351,8 @@ describeIfDb('durable revision lookup', () => {
     const response = await request(app.getHttpServer())
       .post(`/development-plans/${seed.developmentPlan.id}/items/${seed.item.id}/implementation-plan/generate-draft`)
       .send({ actor_id: actorOwner })
-      .expect(400);
-    expect(response.body.message).toContain('approved_spec_revision_not_loaded');
+      .expect(404);
+    expect(response.body.statusCode).toBe(404);
   });
 
   it('returns 400 when approved plan current_revision_id is missing', async () => {

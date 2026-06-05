@@ -193,10 +193,12 @@ const methodReachesWorkflowGate = (methods: Map<string, string>, methodName: str
 const scanWorkflowOwnedPublicMutators = (rootDir: string): PublicWorkflowMutatorFinding[] =>
   workflowOwnedPublicMutatorControllers.flatMap(({ controllerFile, serviceFile, serviceProperty }) => {
     const controllerSource = readFileSync(join(rootDir, controllerFile), 'utf8');
+    const controllerMethods = serviceMethodsIn(controllerSource);
     const serviceMethods = serviceMethodsIn(readFileSync(join(rootDir, serviceFile), 'utf8'));
     return publicMutatorRoutesIn(controllerSource).flatMap((route) => {
       if (nonWorkflowStateMutatorRoutes.has(`${route.decorator} ${route.route}`)) return [];
       if (blockHasWorkflowGate(route.body)) return [];
+      if (methodReachesWorkflowGate(controllerMethods, route.method)) return [];
       const serviceMethod = serviceCallFromRoute(route.body, serviceProperty);
       if (serviceMethod === undefined) {
         return [
@@ -219,6 +221,28 @@ const scanWorkflowOwnedPublicMutators = (rootDir: string): PublicWorkflowMutator
       ];
     });
   });
+
+const publicRunPackageGuardInvariant = (rootDir: string): string[] => {
+  const source = readFileSync(join(rootDir, 'apps/control-plane-api/src/modules/run-control/run-control.service.ts'), 'utf8');
+  const methods = serviceMethodsIn(source);
+  const runPackageWithRepository = methods.get('runPackageWithRepository');
+  const publicGuard = methods.get('assertPublicRunPackageMutationAllowed');
+  const findings: string[] = [];
+  if (runPackageWithRepository === undefined || !runPackageWithRepository.includes('assertPublicRunPackageMutationAllowed')) {
+    findings.push('runPackageWithRepository does not call assertPublicRunPackageMutationAllowed');
+  }
+  if (publicGuard === undefined) {
+    findings.push('assertPublicRunPackageMutationAllowed is missing');
+    return findings;
+  }
+  if (!publicGuard.includes('workflow_legacy_entrypoint_disabled')) {
+    findings.push('public run-package guard does not emit workflow_legacy_entrypoint_disabled');
+  }
+  if (/\breturn\s*;/.test(publicGuard) || /activeWorkflow|development_plan_item_id|getActivePlanItemWorkflowByItem/.test(publicGuard)) {
+    findings.push('public run-package guard conditionally allows legacy package runs');
+  }
+  return findings;
+};
 
 describe('Codex runtime Superpowers no-baggage gate', () => {
   it('requires every allowlist entry to carry owner and reason', () => {
@@ -329,6 +353,157 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
           'await fetch("/initiatives/initiative-1/plan");',
         ]),
       );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('flags Wave 5 legacy workflow routes and session mutations outside queued actions', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-wave5-routes-'));
+    const forbiddenLines = [
+      'await fetch("/plan-item-workflows/workflow-1/spec/generate-draft");',
+      'await fetch("/plan-item-workflows/workflow-1/implementation-plan/generate-draft");',
+      'await fetch("/plan-item-workflows/workflow-1/execution/start");',
+      'await fetch("/development-plans/plan-1/items/item-1/execution/start");',
+      'await fetch("/plan-item-workflows/workflow-1/run-sessions/run-1/input");',
+      'await fetch("/plan-item-workflows/workflow-1/run-sessions/run-1/cancel");',
+      'await fetch("/plan-item-workflows/workflow-1/run-sessions/run-1/resume");',
+      'await fetch("/plan-item-workflows/workflow-1/transitions");',
+      'await fetch("/plan-item-workflows/workflow-1/spec/draft");',
+      'await fetch("/plan-item-workflows/workflow-1/spec-revisions/revision-1/submit");',
+      'await fetch("/plan-item-workflows/workflow-1/spec-revisions/revision-1/approve");',
+      'await fetch("/plan-item-workflows/workflow-1/request-spec-changes");',
+      'await fetch("/plan-item-workflows/workflow-1/block");',
+      'await fetch("/plan-item-workflows/workflow-1/archive");',
+      'await fetch("/plan-item-workflows/workflow-1/recover");',
+      'await fetch("/plan-item-workflows/workflow-1/codex-sessions/session-1/fork");',
+      'await fetch("/plan-item-workflows/workflow-1/codex-sessions/session-1/select-active-fork");',
+      'await fetch("/plan-item-workflows/workflow-1/codex-sessions/session-1/new-session");',
+      'await fetch("/plan-item-workflows/workflow-1/codex-sessions/session-1/abandon");',
+      'await fetch("/plan-item-workflows/workflow-1/codex-sessions/session-1/scavenge");',
+    ];
+    try {
+      const fixtureFile = 'apps/web/src/features/development-plans/plan-item-workflow-workspace.tsx';
+      mkdirSync(join(tempRoot, 'apps/web/src/features/development-plans'), { recursive: true });
+      writeFileSync(join(tempRoot, fixtureFile), forbiddenLines.join('\n'));
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: [fixtureFile],
+        allowlist: [],
+      });
+
+      expect(result.violations.map((violation) => violation.excerpt)).toEqual(forbiddenLines);
+      expect(result.violations.map((violation) => violation.pattern)).toEqual([
+        'legacy_workflow_direct_spec_generation',
+        'legacy_workflow_direct_plan_generation',
+        'legacy_workflow_direct_execution_start',
+        'legacy_workflow_direct_execution_start',
+        'legacy_workflow_run_session_control',
+        'legacy_workflow_run_session_control',
+        'legacy_workflow_run_session_control',
+        'wave5_forbidden_session_mutation',
+        'legacy_workflow_direct_spec_generation',
+        'legacy_workflow_direct_spec_generation',
+        'legacy_workflow_direct_spec_generation',
+        'wave5_forbidden_session_mutation',
+        'wave5_forbidden_session_mutation',
+        'wave5_forbidden_session_mutation',
+        'wave5_forbidden_session_mutation',
+        'wave5_forbidden_session_mutation',
+        'wave5_forbidden_session_mutation',
+        'wave5_forbidden_session_mutation',
+        'wave5_forbidden_session_mutation',
+        'wave5_forbidden_session_mutation',
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('flags public legacy disabled wrapper routes instead of accepting compatibility shells', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-disabled-wrapper-'));
+    try {
+      const fixtureFile = 'apps/control-plane-api/src/modules/spec-plan/spec-plan.controller.ts';
+      mkdirSync(join(tempRoot, 'apps/control-plane-api/src/modules/spec-plan'), { recursive: true });
+      writeFileSync(
+        join(tempRoot, fixtureFile),
+        [
+          "import { Controller, Post } from '@nestjs/common';",
+          '@Controller()',
+          'export class SpecPlanController {',
+          "  @Post('development-plans/:developmentPlanId/items/:itemId/spec/generate-draft')",
+          '  generateItemSpecDraft() {',
+          "    return this.legacyEntrypointDisabled('item-spec-generate-draft');",
+          '  }',
+          '  private legacyEntrypointDisabled(operation: string): never {',
+          "    throw new DomainError('workflow_legacy_entrypoint_disabled', operation);",
+          '  }',
+          '}',
+        ].join('\n'),
+      );
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: [fixtureFile],
+        allowlist: [],
+      });
+
+      expect(result.violations).toContainEqual(expect.objectContaining({
+        file: fixtureFile,
+        pattern: 'legacy_workflow_direct_spec_generation',
+      }));
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('flags composer generation actions and raw runtime refs on public UI surfaces', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-wave5-ui-'));
+    const forbiddenLines = [
+      "const badComposerAction = { action: 'generate_spec_doc' };",
+      "const badPlanAction = { action: 'generate_implementation_plan_doc' };",
+      "const badExecutionAction = { action: 'start_execution' };",
+      'const thread = workflow.codex_thread_id;',
+      'const activeSession = workflow.active_codex_session_id;',
+      'const session = workflow.codex_session_id;',
+      'const turn = workflow.codex_session_turn_id;',
+      'const selectedSession = workflow.selected_codex_session_id;',
+      'const capsule = workflow.output_capsule_id;',
+      'const artifact = "artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1";',
+      'const memory = workflow.memory_bundle_ref;',
+      'const transcript = workflow.prompt_transcript;',
+      'const localPath = "/Users/example/.codex/session.json";',
+      'type PublicWorkflowDto = CodexSessionSnapshot;',
+    ];
+    try {
+      const fixtureFile = 'apps/web/src/features/development-plans/plan-item-workflow-workspace.tsx';
+      mkdirSync(join(tempRoot, 'apps/web/src/features/development-plans'), { recursive: true });
+      writeFileSync(join(tempRoot, fixtureFile), forbiddenLines.join('\n'));
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: [fixtureFile],
+        allowlist: [],
+      });
+
+      expect(result.violations.map((violation) => violation.excerpt)).toEqual(forbiddenLines);
+      expect(result.violations.map((violation) => violation.pattern)).toEqual([
+        'workflow_composer_generation_action',
+        'workflow_composer_generation_action',
+        'workflow_composer_generation_action',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'legacy_codex_session_snapshot',
+      ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -586,6 +761,13 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
           '  startBoundaryBrainstorming() {',
           '    return this.service.startBoundaryBrainstorming();',
           '  }',
+          "  @Post('development-plans/:developmentPlanId/items/:itemId/boundary-brainstorming/restart')",
+          '  restartBoundaryBrainstorming() {',
+          "    return this.legacyEntrypointDisabled('boundary-brainstorming-restart');",
+          '  }',
+          '  private legacyEntrypointDisabled(operation: string): never {',
+          "    throw new DomainError('workflow_legacy_entrypoint_disabled', operation);",
+          '  }',
           '}',
         ].join('\n'),
       );
@@ -622,6 +804,40 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
     const violations = scanWorkflowOwnedPublicMutators(repoRoot);
 
     expect(violations).toEqual([]);
+  });
+
+  it('requires public execution-package run routes to fail closed instead of conditionally allowing legacy starts', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-run-package-fail-closed-'));
+    try {
+      const serviceDir = join(tempRoot, 'apps/control-plane-api/src/modules/run-control');
+      mkdirSync(serviceDir, { recursive: true });
+      writeFileSync(
+        join(serviceDir, 'run-control.service.ts'),
+        [
+          'export class RunControlService {',
+          '  async runPackageWithRepository(repository, packageId, dto, mode) {',
+          '    const executionPackage = await repository.getExecutionPackage(packageId);',
+          '    await this.assertPublicRunPackageMutationAllowed(repository, executionPackage, mode);',
+          '    return this.enqueueRunWithRepository(repository, executionPackage, dto);',
+          '  }',
+          '  private async assertPublicRunPackageMutationAllowed(repository, executionPackage, mode) {',
+          '    if (executionPackage.development_plan_item_id === undefined) return;',
+          '    const activeWorkflow = await repository.getActivePlanItemWorkflowByItem(executionPackage.development_plan_item_id);',
+          '    if (activeWorkflow === undefined) return;',
+          "    throw new DomainError('workflow_legacy_entrypoint_disabled', mode);",
+          '  }',
+          '}',
+        ].join('\n'),
+      );
+
+      expect(publicRunPackageGuardInvariant(tempRoot)).toEqual([
+        'public run-package guard conditionally allows legacy package runs',
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+
+    expect(publicRunPackageGuardInvariant(repoRoot)).toEqual([]);
   });
 
   it('does not expose runtime worker or lease identifiers in product generation public DTOs', () => {

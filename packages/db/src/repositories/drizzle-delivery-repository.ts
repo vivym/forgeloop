@@ -57,7 +57,9 @@ import type {
   Organization,
   Plan,
   PlanRevision,
+  PlanItemWorkflowMessage,
   PlanItemWorkflow,
+  PlanItemWorkflowQueuedAction,
   PlanItemWorkflowTransition,
   Project,
   ProjectRepo,
@@ -83,8 +85,8 @@ import type {
 } from '@forgeloop/domain';
 import type { ObjectRef } from '@forgeloop/contracts';
 import {
-  planItemWorkflowTransitionSchema,
-  workflowManualDecisionSchema,
+  internalPlanItemWorkflowTransitionSchema,
+  internalWorkflowManualDecisionSchema,
   workflowTransitionEvidenceObjectTypeSchema,
 } from '@forgeloop/contracts';
 import {
@@ -171,6 +173,9 @@ import {
   object_events,
   organizations,
   plan_revisions,
+  plan_item_workflow_artifact_change_requests,
+  plan_item_workflow_messages,
+  plan_item_workflow_queued_actions,
   plan_item_workflow_transitions,
   plan_item_workflows,
   plans,
@@ -206,6 +211,7 @@ import type {
   ClaimCodexLaunchTokenEnvelopeInput,
   ClaimCommandIdempotencyInput,
   ClaimExecutionPackageGenerationRunInput,
+  ClaimOrReplayPlanItemWorkflowQueuedActionRunInput,
   CompleteAutomationActionRunInput,
   CompleteExecutionPackageGenerationRunInput,
   CodexLaunchFenceSnapshot,
@@ -257,6 +263,7 @@ import type {
   MaterializeCodexLaunchLeaseInput,
   PendingWorkspaceBundleInput,
   PendingWorkspaceBundleReplayInput,
+  PlanItemWorkflowArtifactChangeRequest,
   PollCodexRuntimeJobsInput,
   DeliveryRepository,
   RecoverStaleCodexRuntimeJobsInput,
@@ -299,6 +306,7 @@ import type {
   RenewCodexSessionRunnerOwnerInput,
   SelectActiveCodexSessionForkInput,
   TerminalizeCodexSessionTurnInput,
+  TerminalizePlanItemWorkflowQueuedActionInput,
   WorkflowRepositoryEvidenceInput,
   BoundaryRoundRecord,
   AttachCodexSessionRunnerRuntimeJobInput,
@@ -1261,7 +1269,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       ...workflow,
       status: input.transition.to_status,
       ...this.nextWorkflowPreviousStatus(workflow, input.transition),
-      ...(input.projection_patch ?? {}),
+      ...this.applyPlanItemWorkflowProjectionPatch(input.projection_patch),
       updated_at: input.transition.created_at,
     };
     if (input.transition.from_status === 'blocked' && input.transition.to_status !== 'blocked') {
@@ -1288,7 +1296,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if ((await this.getWorkflowManualDecision(decision.id)) !== undefined) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Workflow manual decision ${decision.id} already exists`);
     }
-    if (!workflowManualDecisionSchema.safeParse(decision).success) {
+    if (!internalWorkflowManualDecisionSchema.safeParse(decision).success) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Workflow manual decision ${decision.id} payload is invalid`);
     }
     await this.assertWorkflowCodexSessionProvenance(decision.workflow_id, decision.codex_session_id, `Workflow manual decision ${decision.id}`);
@@ -1324,6 +1332,27 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getExecutionReadinessRecord(id: string): Promise<ExecutionReadinessRecord | undefined> {
     return this.getById(execution_readiness_records, execution_readiness_records.id, id);
+  }
+
+  async invalidateExecutionReadinessRecordsForWorkflow(input: {
+    workflow_id: string;
+    reason: string;
+    now: string;
+  }): Promise<number> {
+    const invalidated = await this.db
+      .update(execution_readiness_records)
+      .set({
+        invalidatedAt: input.now,
+        invalidatedReason: input.reason,
+      })
+      .where(
+        and(
+          eq(execution_readiness_records.workflowId, input.workflow_id),
+          isNull(execution_readiness_records.invalidatedAt),
+        ),
+      )
+      .returning({ id: execution_readiness_records.id });
+    return invalidated.length;
   }
 
   async getBoundarySummaryRevisionById(revisionId: string): Promise<BoundarySummaryRevision | undefined> {
@@ -1366,6 +1395,269 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         .some((namespace) => namespace === pullRequestUrl.namespace),
     );
     return matchedRepo === undefined ? undefined : { repository_id: matchedRepo.id, resolved_ref: evidence };
+  }
+
+  async createOrReplayPlanItemWorkflowQueuedAction(
+    action: PlanItemWorkflowQueuedAction,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const existing = await this.listActivePlanItemWorkflowQueuedActions(action.workflow_id);
+    const replay = existing.find((candidate) => candidate.idempotency_key === action.idempotency_key);
+    if (replay !== undefined) {
+      return replay;
+    }
+    if ((await this.getById(plan_item_workflow_queued_actions, plan_item_workflow_queued_actions.id, action.id)) !== undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow queued action ${action.id} already exists`,
+      );
+    }
+    await this.assertWorkflowCodexSessionProvenance(
+      action.workflow_id,
+      action.codex_session_id,
+      `Plan Item Workflow queued action ${action.id}`,
+    );
+    await this.db.insert(plan_item_workflow_queued_actions).values(toDbRecord(action, plan_item_workflow_queued_actions) as never);
+    return action;
+  }
+
+  async getPlanItemWorkflowQueuedAction(input: {
+    workflow_id: string;
+    action_id: string;
+  }): Promise<PlanItemWorkflowQueuedAction | undefined> {
+    const action = await this.getById<PlanItemWorkflowQueuedAction>(
+      plan_item_workflow_queued_actions,
+      plan_item_workflow_queued_actions.id,
+      input.action_id,
+    );
+    return action === undefined || action.workflow_id !== input.workflow_id ? undefined : action;
+  }
+
+  async listPlanItemWorkflowQueuedActions(workflowId: string): Promise<PlanItemWorkflowQueuedAction[]> {
+    return this.listWhere<PlanItemWorkflowQueuedAction>(
+      plan_item_workflow_queued_actions,
+      eq(plan_item_workflow_queued_actions.workflowId, workflowId),
+      [plan_item_workflow_queued_actions.createdAt, plan_item_workflow_queued_actions.id],
+    );
+  }
+
+  async listActivePlanItemWorkflowQueuedActions(workflowId: string): Promise<PlanItemWorkflowQueuedAction[]> {
+    return this.listWhere<PlanItemWorkflowQueuedAction>(
+      plan_item_workflow_queued_actions,
+      and(
+        eq(plan_item_workflow_queued_actions.workflowId, workflowId),
+        inArray(plan_item_workflow_queued_actions.status, ['queued', 'running']),
+      ),
+      [plan_item_workflow_queued_actions.createdAt, plan_item_workflow_queued_actions.id],
+    );
+  }
+
+  async claimOrReplayPlanItemWorkflowQueuedActionRun(
+    input: ClaimOrReplayPlanItemWorkflowQueuedActionRunInput,
+  ): Promise<{ action: PlanItemWorkflowQueuedAction; claimed: boolean }> {
+    const [updated] = await this.db
+      .update(plan_item_workflow_queued_actions)
+      .set({ status: 'running', updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(plan_item_workflow_queued_actions.id, input.action_id),
+          eq(plan_item_workflow_queued_actions.workflowId, input.workflow_id),
+          eq(plan_item_workflow_queued_actions.status, 'queued'),
+        ),
+      )
+      .returning();
+    if (updated !== undefined) {
+      return { action: fromDbRecord<PlanItemWorkflowQueuedAction>(updated), claimed: true };
+    }
+    const action = await this.getPlanItemWorkflowQueuedAction(input);
+    if (action === undefined) {
+      throw new DomainError(
+        'workflow_action_not_found',
+        `workflow_action_not_found: Plan Item Workflow queued action ${input.action_id} does not exist`,
+      );
+    }
+    if (action.status === 'stale') {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} is stale`,
+      );
+    }
+    return { action, claimed: false };
+  }
+
+  async terminalizePlanItemWorkflowQueuedAction(
+    input: TerminalizePlanItemWorkflowQueuedActionInput,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const patch = {
+      status: input.status,
+      codexSessionTurnId: input.codex_session_turn_id,
+      outputCapsuleId: input.output_capsule_id,
+      outputCapsuleDigest: input.output_capsule_digest,
+      outputCapsuleSequence: input.output_capsule_sequence,
+      codexThreadIdDigest: input.codex_thread_id_digest,
+      blockedReasonCode: input.blocked_reason_code,
+      updatedAt: input.now,
+    };
+    const [updated] = await this.db
+      .update(plan_item_workflow_queued_actions)
+      .set(patch as never)
+      .where(
+        and(
+          eq(plan_item_workflow_queued_actions.id, input.action_id),
+          eq(plan_item_workflow_queued_actions.workflowId, input.workflow_id),
+          eq(plan_item_workflow_queued_actions.status, 'running'),
+        ),
+      )
+      .returning();
+    if (updated === undefined) {
+      const existing = await this.getPlanItemWorkflowQueuedAction(input);
+      throw new DomainError(
+        existing === undefined ? 'workflow_action_not_found' : 'workflow_action_not_runnable',
+        existing === undefined
+          ? `workflow_action_not_found: Plan Item Workflow queued action ${input.action_id} does not exist`
+          : `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} is not running`,
+      );
+    }
+    return fromDbRecord<PlanItemWorkflowQueuedAction>(updated);
+  }
+
+  async attachPlanItemWorkflowQueuedActionTurn(input: {
+    workflow_id: string;
+    action_id: string;
+    codex_session_turn_id: string;
+    now: string;
+  }): Promise<PlanItemWorkflowQueuedAction> {
+    const action = await this.getPlanItemWorkflowQueuedAction(input);
+    if (action === undefined) {
+      throw new DomainError(
+        'workflow_action_not_found',
+        `workflow_action_not_found: Plan Item Workflow queued action ${input.action_id} does not exist`,
+      );
+    }
+    if (action.status !== 'running') {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} is not running`,
+      );
+    }
+    const turn = await this.getCodexSessionTurn(input.codex_session_turn_id);
+    if (turn === undefined || turn.workflow_id !== action.workflow_id || turn.codex_session_id !== action.codex_session_id) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Codex session turn ${input.codex_session_turn_id} does not belong to queued action ${input.action_id}`,
+      );
+    }
+    const [updated] = await this.db
+      .update(plan_item_workflow_queued_actions)
+      .set({ codexSessionTurnId: input.codex_session_turn_id, updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(plan_item_workflow_queued_actions.id, input.action_id),
+          eq(plan_item_workflow_queued_actions.workflowId, input.workflow_id),
+          eq(plan_item_workflow_queued_actions.status, 'running'),
+        ),
+      )
+      .returning();
+    if (updated === undefined) {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} is not running`,
+      );
+    }
+    return fromDbRecord<PlanItemWorkflowQueuedAction>(updated);
+  }
+
+  async markDependentPlanItemWorkflowQueuedActionsStale(input: {
+    workflow_id: string;
+    action_kinds: PlanItemWorkflowQueuedAction['kind'][];
+    reason: string;
+    now: string;
+  }): Promise<PlanItemWorkflowQueuedAction[]> {
+    const rows = await this.db
+      .update(plan_item_workflow_queued_actions)
+      .set({ status: 'stale', blockedReasonCode: input.reason, updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(plan_item_workflow_queued_actions.workflowId, input.workflow_id),
+          eq(plan_item_workflow_queued_actions.status, 'queued'),
+          inArray(plan_item_workflow_queued_actions.kind, input.action_kinds),
+        ),
+      )
+      .returning();
+    return rows
+      .map((row) => fromDbRecord<PlanItemWorkflowQueuedAction>(row))
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+  }
+
+  async savePlanItemWorkflowMessage(message: PlanItemWorkflowMessage): Promise<void> {
+    const existing = await this.getById(plan_item_workflow_messages, plan_item_workflow_messages.id, message.id);
+    if (existing !== undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow message ${message.id} already exists`,
+      );
+    }
+    await this.assertWorkflowCodexSessionProvenance(
+      message.workflow_id,
+      message.codex_session_id,
+      `Plan Item Workflow message ${message.id}`,
+    );
+    await this.db.insert(plan_item_workflow_messages).values(toDbRecord(message, plan_item_workflow_messages) as never);
+  }
+
+  async attachPlanItemWorkflowMessageQueuedAction(input: {
+    workflow_id: string;
+    message_id: string;
+    queued_action_id: string;
+  }): Promise<PlanItemWorkflowMessage> {
+    const action = await this.getPlanItemWorkflowQueuedAction({
+      workflow_id: input.workflow_id,
+      action_id: input.queued_action_id,
+    });
+    if (action === undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow queued action ${input.queued_action_id} was not found`,
+      );
+    }
+    const [updated] = await this.db
+      .update(plan_item_workflow_messages)
+      .set({ createdQueuedActionId: input.queued_action_id })
+      .where(and(eq(plan_item_workflow_messages.id, input.message_id), eq(plan_item_workflow_messages.workflowId, input.workflow_id)))
+      .returning();
+    if (updated === undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow message ${input.message_id} was not found`,
+      );
+    }
+    return fromDbRecord<PlanItemWorkflowMessage>(updated);
+  }
+
+  async listPlanItemWorkflowMessages(workflowId: string): Promise<PlanItemWorkflowMessage[]> {
+    return this.listWhere<PlanItemWorkflowMessage>(
+      plan_item_workflow_messages,
+      eq(plan_item_workflow_messages.workflowId, workflowId),
+      [plan_item_workflow_messages.createdAt, plan_item_workflow_messages.id],
+    );
+  }
+
+  async savePlanItemWorkflowArtifactChangeRequest(request: PlanItemWorkflowArtifactChangeRequest): Promise<void> {
+    const existing = await this.getById(plan_item_workflow_artifact_change_requests, plan_item_workflow_artifact_change_requests.id, request.id);
+    if (existing !== undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow artifact change request ${request.id} already exists`,
+      );
+    }
+    if ((await this.getPlanItemWorkflow(request.workflow_id)) === undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Plan Item Workflow ${request.workflow_id} does not exist`,
+      );
+    }
+    await this.db
+      .insert(plan_item_workflow_artifact_change_requests)
+      .values(toDbRecord(request, plan_item_workflow_artifact_change_requests) as never);
   }
 
   async getCodexSession(id: string): Promise<CodexSession | undefined> {
@@ -1493,6 +1785,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined> {
     return this.getById(codex_session_turns, codex_session_turns.id, id);
+  }
+
+  async listCodexSessionTurns(sessionId: string): Promise<CodexSessionTurn[]> {
+    return this.listWhere<CodexSessionTurn>(
+      codex_session_turns,
+      eq(codex_session_turns.codexSessionId, sessionId),
+      [codex_session_turns.createdAt, codex_session_turns.id],
+    );
   }
 
   async markCodexSessionRunnerOwner(input: MarkCodexSessionRunnerOwnerInput): Promise<CodexSession> {
@@ -2616,7 +2916,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       codex_session_id: previousActive.id,
       created_at: input.now,
     };
-    if (!workflowManualDecisionSchema.safeParse(manualDecision).success || !planItemWorkflowTransitionSchema.safeParse(transition).success) {
+    if (
+      !internalWorkflowManualDecisionSchema.safeParse(manualDecision).success ||
+      !internalPlanItemWorkflowTransitionSchema.safeParse(transition).success
+    ) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Fork selection transition ${input.transition_id} payload is invalid`);
     }
     assertWorkflowManualDecisionAllowedForTransition(manualDecision, {
@@ -2742,7 +3045,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if ((await this.getPlanItemWorkflowTransition(transition.id)) !== undefined) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} already exists`);
     }
-    if (!planItemWorkflowTransitionSchema.safeParse(transition).success) {
+    if (!internalPlanItemWorkflowTransitionSchema.safeParse(transition).success) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} payload is invalid`);
     }
     await this.assertWorkflowCodexSessionProvenance(transition.workflow_id, transition.codex_session_id, `Transition ${transition.id}`);
@@ -2776,28 +3079,70 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const transition = input.transition;
     const invalid =
       (patch.active_boundary_summary_revision_id !== undefined &&
-        (transition.from_status !== 'boundary_review' ||
-          transition.to_status !== 'spec_generation_queued' ||
-          transition.evidence_object_type !== 'boundary_summary_revision' ||
-          transition.evidence_object_id !== patch.active_boundary_summary_revision_id)) ||
+        patch.active_boundary_summary_revision_id !== null &&
+        !this.isBoundarySummaryProjectionPatchAllowed(transition, patch.active_boundary_summary_revision_id)) ||
       (patch.active_spec_doc_revision_id !== undefined &&
-        (transition.from_status !== 'spec_review' ||
-          transition.to_status !== 'implementation_plan_generation_queued' ||
-          transition.evidence_object_type !== 'spec_revision' ||
-          transition.evidence_object_id !== patch.active_spec_doc_revision_id)) ||
+        patch.active_spec_doc_revision_id !== null &&
+        !this.isSpecDocProjectionPatchAllowed(transition, patch.active_spec_doc_revision_id)) ||
       (patch.active_implementation_plan_doc_revision_id !== undefined &&
-        !(await this.isExecutionReadinessImplementationPlanProjectionPatchAllowed(
-          transition,
-          patch.active_implementation_plan_doc_revision_id,
-        ))) ||
+        patch.active_implementation_plan_doc_revision_id !== null &&
+        !(await this.isImplementationPlanProjectionPatchAllowed(transition, patch.active_implementation_plan_doc_revision_id))) ||
       (patch.execution_package_id !== undefined &&
-        (transition.from_status !== 'execution_ready' ||
-          transition.to_status !== 'execution_running' ||
-          transition.evidence_object_type !== 'execution_package' ||
-          transition.evidence_object_id !== patch.execution_package_id));
+        patch.execution_package_id !== null &&
+        !(await this.isExecutionPackageProjectionPatchAllowed(transition, patch.execution_package_id)));
     if (invalid) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} projection patch is invalid`);
     }
+  }
+
+  private isBoundarySummaryProjectionPatchAllowed(
+    transition: PlanItemWorkflowTransition,
+    activeBoundarySummaryRevisionId: string,
+  ): boolean {
+    if (transition.evidence_object_type !== 'boundary_summary_revision' || transition.evidence_object_id !== activeBoundarySummaryRevisionId) {
+      return false;
+    }
+    return (
+      (transition.from_status === 'brainstorming' && transition.to_status === 'boundary_review') ||
+      (transition.from_status === 'boundary_review' && transition.to_status === 'spec_generation_queued')
+    );
+  }
+
+  private isSpecDocProjectionPatchAllowed(
+    transition: PlanItemWorkflowTransition,
+    activeSpecRevisionId: string,
+  ): boolean {
+    if (transition.evidence_object_type !== 'spec_revision' || transition.evidence_object_id !== activeSpecRevisionId) {
+      return false;
+    }
+    return (
+      (transition.from_status === 'spec_generation_queued' && transition.to_status === 'spec_review') ||
+      (transition.from_status === 'spec_review' && transition.to_status === 'implementation_plan_generation_queued')
+    );
+  }
+
+  private async isImplementationPlanProjectionPatchAllowed(
+    transition: PlanItemWorkflowTransition,
+    activeImplementationPlanRevisionId: string,
+  ): Promise<boolean> {
+    if (
+      transition.evidence_object_type === 'implementation_plan_revision' &&
+      transition.evidence_object_id === activeImplementationPlanRevisionId &&
+      transition.from_status === 'implementation_plan_generation_queued' &&
+      transition.to_status === 'implementation_plan_review'
+    ) {
+      return true;
+    }
+    return this.isExecutionReadinessImplementationPlanProjectionPatchAllowed(transition, activeImplementationPlanRevisionId);
+  }
+
+  private applyPlanItemWorkflowProjectionPatch(
+    patch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): Partial<PlanItemWorkflow> {
+    if (patch === undefined) {
+      return {};
+    }
+    return Object.fromEntries(Object.entries(patch).map(([key, value]) => [key, value ?? undefined])) as Partial<PlanItemWorkflow>;
   }
 
   private async isExecutionReadinessImplementationPlanProjectionPatchAllowed(
@@ -2816,6 +3161,32 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       record?.approved_implementation_plan_revision_id === activeImplementationPlanRevisionId &&
       record.supporting_evidence.some((evidence) => evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId) &&
       transition.supporting_evidence?.some((evidence) => evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId) === true
+    );
+  }
+
+  private async isExecutionPackageProjectionPatchAllowed(
+    transition: PlanItemWorkflowTransition,
+    executionPackageId: string,
+  ): Promise<boolean> {
+    if (
+      transition.from_status === 'execution_ready' &&
+      transition.to_status === 'execution_running' &&
+      transition.evidence_object_type === 'execution_package' &&
+      transition.evidence_object_id === executionPackageId
+    ) {
+      return true;
+    }
+    if (
+      transition.from_status !== 'implementation_plan_review' ||
+      transition.to_status !== 'execution_ready' ||
+      transition.evidence_object_type !== 'execution_readiness_record'
+    ) {
+      return false;
+    }
+    const record = await this.getExecutionReadinessRecord(transition.evidence_object_id);
+    return (
+      record?.supporting_evidence.some((evidence) => evidence.object_type === 'execution_package' && evidence.object_id === executionPackageId) === true &&
+      transition.supporting_evidence?.some((evidence) => evidence.object_type === 'execution_package' && evidence.object_id === executionPackageId) === true
     );
   }
 
@@ -2957,9 +3328,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const hasTransitionPlanSupport =
       activeImplementationPlanRevisionId !== undefined &&
       transition.supporting_evidence?.some((evidence) => evidence.object_type === 'implementation_plan_revision' && evidence.object_id === activeImplementationPlanRevisionId) === true;
+    const executionPackageId = projectionPatch?.execution_package_id ?? workflow?.execution_package_id;
+    const hasReadinessPackageSupport =
+      executionPackageId === undefined ||
+      record?.supporting_evidence.some((evidence) => evidence.object_type === 'execution_package' && evidence.object_id === executionPackageId) === true;
+    const hasTransitionPackageSupport =
+      executionPackageId === undefined ||
+      transition.supporting_evidence?.some((evidence) => evidence.object_type === 'execution_package' && evidence.object_id === executionPackageId) === true;
     if (
       workflow === undefined ||
       record === undefined ||
+      record.invalidated_at !== undefined ||
       record.workflow_id !== transition.workflow_id ||
       record.development_plan_id !== workflow.development_plan_id ||
       record.development_plan_item_id !== workflow.development_plan_item_id ||
@@ -2970,7 +3349,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           record.approved_spec_revision_id !== workflow.active_spec_doc_revision_id ||
           record.approved_implementation_plan_revision_id !== activeImplementationPlanRevisionId ||
           !hasReadinessPlanSupport ||
-          !hasTransitionPlanSupport))
+          !hasTransitionPlanSupport ||
+          !hasReadinessPackageSupport ||
+          !hasTransitionPackageSupport))
     ) {
       throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Transition ${transition.id} execution readiness evidence is invalid`);
     }
@@ -6752,6 +7133,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   async getBrainstormingSession(id: string): Promise<BrainstormingSession | undefined> {
     return this.getById(brainstorming_sessions, brainstorming_sessions.id, id);
+  }
+
+  async listBrainstormingSessionsForWorkflow(workflowId: string): Promise<BrainstormingSession[]> {
+    return this.listWhere<BrainstormingSession>(brainstorming_sessions, eq(brainstorming_sessions.workflowId, workflowId), [
+      brainstorming_sessions.createdAt,
+      brainstorming_sessions.id,
+    ]);
   }
 
   async saveBoundaryRound(round: BoundaryRoundRecord): Promise<void> {

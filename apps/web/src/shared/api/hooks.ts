@@ -3,12 +3,14 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import {
   createForgeloopCommandApi,
-  type AnswerBrainstormingQuestionBody,
-  type ApproveBoundaryBody,
-  type RecordBrainstormingDecisionBody,
-  type RegenerateArtifactDraftBody,
+  type ApproveWorkflowArtifactRevisionBody,
+  type EvaluateWorkflowExecutionReadinessBody,
+  type RequestWorkflowArtifactChangesBody,
   type RevisionCompareQuery,
-  type StartBrainstormingSessionBody,
+  type RunQueuedWorkflowActionBody,
+  type StartPlanItemWorkflowBrainstormingBody,
+  type WorkflowArtifactType,
+  type WorkflowMessageCommandBody,
 } from './commands';
 import { createForgeloopQueryApi, type MyWorkQuery, type ProjectManagementListQuery } from './query';
 import {
@@ -20,7 +22,6 @@ import {
 } from './query-keys';
 import type {
   AcknowledgeReleaseTestAcceptanceBody,
-  ApproveArtifactBody,
   ApproveReleaseBody,
   CloseReleaseBody,
   CreateReleaseBody,
@@ -39,11 +40,9 @@ import type {
   ProductLaneId,
   ProductLaneQuery,
   ReleaseCommandBody,
-  RequestArtifactChangesBody,
   RequestReleaseChangesBody,
   ReviewDecisionBody,
   StartReleaseObservingBody,
-  SubmitForApprovalBody,
   UnlinkReleaseScopeBody,
 } from './types';
 
@@ -117,46 +116,16 @@ export function useDevelopmentPlanItemRevisionsQuery(developmentPlanId: string |
   });
 }
 
-export function useStartBrainstormingSessionMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
+export function useStartPlanItemWorkflowBrainstormingMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (body: StartBrainstormingSessionBody) =>
-      createCommandApi().startBrainstormingSession(
+    mutationFn: (body: StartPlanItemWorkflowBrainstormingBody) =>
+      createCommandApi().startPlanItemWorkflowBrainstorming(
         requiredId(input.developmentPlanId, 'developmentPlanId'),
         requiredId(input.itemId, 'itemId'),
         body,
       ),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useAnswerBrainstormingQuestionMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; sessionId: string | undefined }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: AnswerBrainstormingQuestionBody) =>
-      createCommandApi().answerBrainstormingQuestion(requiredId(input.sessionId, 'sessionId'), body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useRecordBrainstormingDecisionMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; sessionId: string | undefined }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: RecordBrainstormingDecisionBody) =>
-      createCommandApi().recordBrainstormingDecision(requiredId(input.sessionId, 'sessionId'), body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useApproveBoundaryMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; sessionId: string | undefined }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: ApproveBoundaryBody) =>
-      createCommandApi().approveBoundary(requiredId(input.sessionId, 'sessionId'), body),
     onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
@@ -437,12 +406,11 @@ export function useMarkPackageReadyMutation(packageId: string) {
 export function useRunPackageMutation(packageId: string) {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: (input: { actorId: string }) =>
-      createCommandApi().runPackage(packageId, input.actorId, {
-        execution_package_id: packageId,
-        executor_type: 'local_codex',
-      }),
+	return useMutation({
+	  mutationFn: (input: { actorId: string }) =>
+	    createCommandApi().runPackage(packageId, input.actorId, {
+	      executor_type: 'local_codex',
+	    }),
     onSuccess: () => invalidatePackageResources(queryClient, packageId),
   });
 }
@@ -450,13 +418,12 @@ export function useRunPackageMutation(packageId: string) {
 export function useRerunPackageMutation(packageId: string) {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: (input: { actorId: string; previousRunSessionId?: string }) =>
-      createCommandApi().rerunPackage(packageId, input.actorId, {
-        execution_package_id: packageId,
-        executor_type: 'local_codex',
-        ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
-      }),
+	return useMutation({
+	  mutationFn: (input: { actorId: string; previousRunSessionId?: string }) =>
+	    createCommandApi().rerunPackage(packageId, input.actorId, {
+	      executor_type: 'local_codex',
+	      ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
+	    }),
     onSuccess: () => invalidatePackageResources(queryClient, packageId),
   });
 }
@@ -464,12 +431,11 @@ export function useRerunPackageMutation(packageId: string) {
 export function useForceRerunPackageMutation(packageId: string) {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: (input: { actorId: string; reason: string; previousRunSessionId?: string }) =>
-      createCommandApi().forceRerunPackage(packageId, input.actorId, {
-        execution_package_id: packageId,
-        executor_type: 'local_codex',
-        force: true,
+	return useMutation({
+	  mutationFn: (input: { actorId: string; reason: string; previousRunSessionId?: string }) =>
+	    createCommandApi().forceRerunPackage(packageId, input.actorId, {
+	      executor_type: 'local_codex',
+	      force: true,
         force_reason: input.reason,
         ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
       }),
@@ -652,75 +618,58 @@ export function useCreateReleaseEvidenceMutation(releaseId: string) {
   return useReleaseCommandMutation(releaseId, (body: CreateReleaseEvidenceBody) => createCommandApi().createReleaseEvidence(releaseId, body));
 }
 
-export function useGenerateItemSpecDraftMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
+export function usePlanItemWorkflowCommandMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined; workflowId: string | undefined }) {
   const queryClient = useQueryClient();
+  const invalidate = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.planItemWorkflow(input.workflowId) }),
+      invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
+    ]);
 
-  return useMutation({
-    mutationFn: () =>
-      createCommandApi().generateItemSpecDraft(
-        requiredId(input.developmentPlanId, 'developmentPlanId'),
-        requiredId(input.itemId, 'itemId'),
-      ),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useGenerateItemImplementationPlanDraftMutation(input: { developmentPlanId: string | undefined; itemId: string | undefined }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: () =>
-      createCommandApi().generateItemImplementationPlanDraft(
-        requiredId(input.developmentPlanId, 'developmentPlanId'),
-        requiredId(input.itemId, 'itemId'),
-      ),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useSubmitItemSpecForApprovalMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: SubmitForApprovalBody) => createCommandApi().submitItemSpecForApproval(input.developmentPlanId, input.itemId, body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useApproveItemSpecMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approveItemSpec(input.developmentPlanId, input.itemId, body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useRequestItemSpecChangesMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: RequestArtifactChangesBody) => createCommandApi().requestItemSpecChanges(input.developmentPlanId, input.itemId, body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useRejectItemSpecMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: RequestArtifactChangesBody) => createCommandApi().rejectItemSpec(input.developmentPlanId, input.itemId, body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useRegenerateItemSpecDraftMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: RegenerateArtifactDraftBody) => createCommandApi().regenerateItemSpecDraft(input.developmentPlanId, input.itemId, body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
+  return {
+    recordMessage: useMutation({
+      mutationFn: (body: WorkflowMessageCommandBody) => createCommandApi().recordWorkflowMessage(requiredId(input.workflowId, 'workflowId'), body),
+      onSuccess: invalidate,
+    }),
+	    runQueuedAction: useMutation({
+	      mutationFn: (body: RunQueuedWorkflowActionBody & { action_id: string }) =>
+	        createCommandApi().runWorkflowQueuedAction(requiredId(input.workflowId, 'workflowId'), body.action_id, {
+	          actor_id: body.actor_id,
+	        }),
+	      onSuccess: invalidate,
+	    }),
+    approveArtifactRevision: useMutation({
+      mutationFn: (body: ApproveWorkflowArtifactRevisionBody & { artifact_type: WorkflowArtifactType; revision_id: string }) =>
+        createCommandApi().approveWorkflowArtifactRevision(
+          requiredId(input.workflowId, 'workflowId'),
+          body.artifact_type,
+          body.revision_id,
+          {
+            actor_id: body.actor_id,
+            ...(body.decision_markdown === undefined ? {} : { decision_markdown: body.decision_markdown }),
+          },
+        ),
+      onSuccess: invalidate,
+    }),
+    requestArtifactChanges: useMutation({
+      mutationFn: (body: RequestWorkflowArtifactChangesBody & { artifact_type: WorkflowArtifactType; revision_id: string }) =>
+        createCommandApi().requestWorkflowArtifactChanges(
+          requiredId(input.workflowId, 'workflowId'),
+          body.artifact_type,
+          body.revision_id,
+          {
+            actor_id: body.actor_id,
+            reason_markdown: body.reason_markdown,
+          },
+        ),
+      onSuccess: invalidate,
+    }),
+    evaluateReadiness: useMutation({
+      mutationFn: (body: EvaluateWorkflowExecutionReadinessBody) =>
+        createCommandApi().evaluateWorkflowExecutionReadiness(requiredId(input.workflowId, 'workflowId'), body),
+      onSuccess: invalidate,
+    }),
+  };
 }
 
 export function useCompareItemSpecRevisionsQuery(
@@ -735,59 +684,6 @@ export function useCompareItemSpecRevisionsQuery(
         requiredValue(input.query, 'query'),
       ),
     enabled: input.developmentPlanId !== undefined && input.itemId !== undefined && input.query !== undefined,
-  });
-}
-
-export function useSubmitItemImplementationPlanForApprovalMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: SubmitForApprovalBody) =>
-      createCommandApi().submitItemImplementationPlanForApproval(input.developmentPlanId, input.itemId, body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useApproveItemImplementationPlanMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: ApproveArtifactBody) => createCommandApi().approveItemImplementationPlan(input.developmentPlanId, input.itemId, body),
-    onSuccess: () =>
-      Promise.all([
-        invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-        invalidatePackageDeliveryCollections(queryClient),
-      ]),
-  });
-}
-
-export function useRequestItemImplementationPlanChangesMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: RequestArtifactChangesBody) =>
-      createCommandApi().requestItemImplementationPlanChanges(input.developmentPlanId, input.itemId, body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useRejectItemImplementationPlanMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: RequestArtifactChangesBody) =>
-      createCommandApi().rejectItemImplementationPlan(input.developmentPlanId, input.itemId, body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
-  });
-}
-
-export function useRegenerateItemImplementationPlanDraftMutation(input: { developmentPlanId: string; itemId: string }) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (body: RegenerateArtifactDraftBody) =>
-      createCommandApi().regenerateItemImplementationPlanDraft(input.developmentPlanId, input.itemId, body),
-    onSuccess: () => invalidateItemScopedArtifactResources(queryClient, input.developmentPlanId, input.itemId),
   });
 }
 
@@ -830,10 +726,7 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
         expected_package_version: command.expected_package_version,
       });
     case 'run_package':
-      return commandApi.runPackage(command.package_id, requiredActorId(input.actorId, 'actorId'), {
-        execution_package_id: command.package_id,
-        executor_type: 'local_codex',
-      });
+      throw new Error('Run package actions are not executable from the Wave 5 product action surface.');
     default: {
       const exhaustive: never = command;
       throw new Error(`Unsupported ProductAction command: ${JSON.stringify(exhaustive)}`);

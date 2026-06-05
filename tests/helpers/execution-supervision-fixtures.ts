@@ -16,6 +16,7 @@ import { transitionExecutionPackage } from '@forgeloop/domain';
 import { ControlPlaneRuntimeService } from '../../apps/control-plane-api/src/modules/core/control-plane-runtime.service';
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DEFAULT_SOURCE_MUTATION_POLICY, defaultPackagePolicyFields } from '../../apps/control-plane-api/src/modules/execution-packages/package-policy-fields';
+import { ExecutionsService } from '../../apps/control-plane-api/src/modules/executions/executions.service';
 import { seedItemScopedSpecPlan } from './item-scoped-artifact-fixtures';
 import { createWorkflowPolicyRepoRoot } from './runtime-policy-repo';
 
@@ -44,6 +45,23 @@ export type ApprovedExecutionPlanSeed = {
   executionPlanRevision: ExecutionPlanRevision;
   executionPackage?: ExecutionPackage;
 };
+
+export async function startExecutionInternally(
+  app: INestApplication,
+  developmentPlanId: string,
+  itemId: string,
+  actorId = executionActorDeveloper,
+): Promise<Execution> {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const executions = app.get(ExecutionsService);
+  return (
+    await repository.withDeliveryTransaction((transaction) =>
+      executions.startExecutionWithRepository(transaction, developmentPlanId, itemId, {
+        actor_id: actorId,
+      }),
+    )
+  ).execution;
+}
 
 export async function seedApprovedExecutionPlan(
   app: INestApplication,
@@ -246,12 +264,7 @@ async function seedRunnableExecutionPackage(
 
 export async function seedCompletedExecution(app: INestApplication): Promise<ApprovedExecutionPlanSeed & { execution: Execution }> {
   const seeded = await seedApprovedExecutionPlan(app);
-  const started = (
-    await request(app.getHttpServer())
-      .post(`/development-plans/${seeded.developmentPlan.id}/items/${seeded.item.id}/execution/start`)
-      .send({ actor_id: executionActorDeveloper })
-      .expect(201)
-  ).body as Execution;
+  const started = await startExecutionInternally(app, seeded.developmentPlan.id, seeded.item.id);
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
   const runtime = app.get(ControlPlaneRuntimeService);
   const execution: Execution = { ...started, status: 'completed', updated_at: runtime.now() };

@@ -1,57 +1,112 @@
 import { randomUUID } from 'node:crypto';
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
   assertPlanItemWorkflowTransitionAllowed,
+  assertQueuedActionCanRun,
+  assertWorkflowMessageAllowed,
   assertWorkflowActorAuthorized,
+  buildPlanItemWorkflowQueuedActionIdempotencyKey,
   codexCanonicalDigest,
-  codexSessionPublicProjection,
+  mapQueuedActionKindToTurnIntent,
+  planItemWorkflowPublicProjection,
   type BrainstormingSession,
+  type BoundaryAnswer,
+  type BoundaryDecision,
+  type BoundaryQuestion,
+  type BoundarySummary,
   type BoundarySummaryRevision,
   type CodexSession,
   type CodexSessionTurn,
+  type ContextManifest,
   type DevelopmentPlanItem,
+  type ExecutionPlanDocument,
   type ExecutionPlanRevision,
+  type ExecutionPackage,
+  type ExecutionReadinessRecord,
+  type Spec,
   type PlanItemWorkflow,
-  type RunSession,
+  type PlanItemWorkflowQueuedAction,
   type SpecRevision,
   type WorkflowPersistenceRefs,
   type WorkflowManualDecision,
+  transitionExecutionPackage,
+  validateExecutionPackage,
+  type CodexCredentialBindingPublic,
+  type CodexRuntimeProfileRevision,
 } from '@forgeloop/domain';
-import type { PlanItemWorkflowStatus, RunOperatorCommandResponse, WorkflowTransitionEvidenceObjectType } from '@forgeloop/contracts';
+import type { RequiredCheckSpec } from '@forgeloop/contracts';
+import type {
+  PlanItemWorkflowPublicDto,
+  PlanItemWorkflowReadiness,
+  PlanItemWorkflowQueuedActionKind,
+  PlanItemWorkflowStatus,
+  WorkflowTransitionEvidenceObjectType,
+} from '@forgeloop/contracts';
 import type { ApplyPlanItemWorkflowTransitionInput, DeliveryRepository } from '@forgeloop/db';
 
 import type { ActorContext } from '../auth/actor-context';
 import { BrainstormingService } from '../brainstorming/brainstorming.service';
 import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
-import type { RegenerateArtifactDraftCommandDto, RunControlDto, RunInputDto } from '../delivery/dto';
-import { ExecutionsService } from '../executions/executions.service';
-import { RunControlService } from '../run-control/run-control.service';
+import { executionPackageActorFields } from '../execution-packages/execution-package-actor-fields';
 import { SpecPlanService, type ProductGenerationScheduleResult } from '../spec-plan/spec-plan.service';
 import type {
-  ApproveImplementationPlanAndMarkExecutionReadyDto,
-  ForkCodexSessionBodyDto,
-  ManualDecisionBodyDto,
-  RequestWorkflowChangesDto,
-  SelectCodexSessionForkBodyDto,
+  ApproveWorkflowArtifactRevisionBodyDto,
+  EvaluateWorkflowExecutionReadinessBodyDto,
+  RequestWorkflowArtifactChangesBodyDto,
+  RunQueuedWorkflowActionBodyDto,
   StartBrainstormingWorkflowDto,
-  WorkflowActorCommandDto,
-  WorkflowBoundaryAnswerBodyDto,
-  WorkflowBoundaryContinueBodyDto,
-  WorkflowBoundaryDecisionBodyDto,
-  WorkflowBoundaryStartCommandDto,
-  WorkflowBoundarySummaryChangesBodyDto,
-  WorkflowDraftDocumentBodyDto,
-  WorkflowRevisionCommandDto,
-  WorkflowTransitionCommandDto,
+  WorkflowArtifactTypeDto,
+  WorkflowMessageCommandBodyDto,
 } from './plan-item-workflow.dto';
 
 type WorkflowAction = Parameters<typeof assertWorkflowActorAuthorized>[1];
 type TransitionCheckInput = Parameters<typeof assertPlanItemWorkflowTransitionAllowed>[0];
+type WorkflowTransitionCommandDto = {
+  actor_id: string;
+  to_status: PlanItemWorkflowStatus;
+  evidence_object_type: WorkflowTransitionEvidenceObjectType;
+  evidence_object_id: string;
+  reason?: string | undefined;
+  manual_decision_kind?: WorkflowManualDecision['kind'] | undefined;
+  codex_session_turn_id?: string | undefined;
+  evidence_digest?: string | undefined;
+  supporting_evidence?: Array<{
+    object_type: WorkflowTransitionEvidenceObjectType;
+    object_id: string;
+    digest?: string | undefined;
+  }> | undefined;
+};
+type ExecutionReadinessBlockerCode =
+  | 'boundary_summary_revision_missing'
+  | 'spec_doc_revision_missing'
+  | 'implementation_plan_doc_revision_missing'
+  | 'codex_session_missing'
+  | 'development_plan_item_revision_not_current'
+  | 'boundary_summary_revision_not_current'
+  | 'spec_doc_revision_not_current'
+  | 'implementation_plan_doc_revision_not_current'
+  | 'spec_doc_acceptance_criteria_missing'
+  | 'spec_doc_test_strategy_missing'
+  | 'spec_doc_testability_missing'
+  | 'implementation_plan_validation_strategy_missing'
+  | 'codex_session_not_ready'
+  | 'codex_session_capsule_lineage_missing'
+  | 'codex_session_latest_turn_missing'
+  | 'codex_session_latest_turn_not_succeeded'
+  | 'codex_session_latest_turn_output_mismatch'
+  | 'workflow_action_pending'
+  | 'run_session_exists'
+  | 'execution_package_boundary_missing';
+type ExecutionPackageBoundaryResult = {
+  readiness: ExecutionReadinessRecord;
+  executionPackage?: ExecutionPackage;
+};
 type PlanItemWorkflowChildContext = {
   workflow_id: string;
   codex_session_id: string;
   codex_session_turn_id?: string;
+  plan_item_workflow_action_id?: string;
 };
 type ManualDecisionTransitionInput = {
   actor_id: string;
@@ -71,6 +126,12 @@ type EvidenceValidationInput = {
   supporting?: boolean;
 };
 type PendingRuntimeGenerationKind = 'spec' | 'implementation_plan';
+type StartWorkflowRuntimeBinding = {
+  runtime_profile_id: string;
+  runtime_profile_revision_id: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+};
 
 @Injectable()
 export class PlanItemWorkflowService {
@@ -78,8 +139,6 @@ export class PlanItemWorkflowService {
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
     @Inject(BrainstormingService) private readonly brainstorming: BrainstormingService,
     @Inject(SpecPlanService) private readonly specPlan: SpecPlanService,
-    @Inject(ExecutionsService) private readonly executions: ExecutionsService,
-    @Inject(RunControlService) private readonly runControl: RunControlService,
   ) {}
 
   async startBrainstorming(developmentPlanId: string, itemId: string, dto: StartBrainstormingWorkflowDto) {
@@ -89,15 +148,16 @@ export class PlanItemWorkflowService {
         const item = await this.requirePlanItemBelongsToPlan(repository, developmentPlanId, itemId);
         const workItem = await repository.getWorkItem(item.source_ref.id);
         this.assertActorCanStartWorkflowItem(item, dto.actor_id, workItem?.driver_actor_id);
+        const runtimeBinding = await this.resolveActiveGenerationRuntimeBinding(repository, item, now);
         const created = await repository.createPlanItemWorkflowWithInitialSession({
           id: randomUUID(),
           codex_session_id: randomUUID(),
           development_plan_id: item.development_plan_id,
           development_plan_item_id: itemId,
-          runtime_profile_id: dto.runtime_profile_id,
-          runtime_profile_revision_id: dto.runtime_profile_revision_id,
-          credential_binding_id: dto.credential_binding_id,
-          credential_binding_version_id: dto.credential_binding_version_id,
+          runtime_profile_id: runtimeBinding.runtime_profile_id,
+          runtime_profile_revision_id: runtimeBinding.runtime_profile_revision_id,
+          credential_binding_id: runtimeBinding.credential_binding_id,
+          credential_binding_version_id: runtimeBinding.credential_binding_version_id,
           actor_id: dto.actor_id,
           now,
         });
@@ -105,7 +165,7 @@ export class PlanItemWorkflowService {
           actor_id: dto.actor_id,
           codex_session_id: created.session.id,
           manual_decision_kind: 'start_brainstorming',
-          reason: dto.reason,
+          reason: dto.reason ?? 'Start Plan Item workflow.',
           created_at: now,
         });
         const updated = await this.applyTransition(repository, created.workflow, {
@@ -114,139 +174,1061 @@ export class PlanItemWorkflowService {
           evidence_object_type: 'manual_decision',
           evidence_object_id: decision.id,
           manual_decision_kind: 'start_brainstorming',
-          reason: dto.reason,
+          reason: dto.reason ?? 'Start Plan Item workflow.',
         }, created.session.id, now);
 
-        return this.toPublicWorkflowDto(updated, created.session);
+        const queuedAction = await this.enqueueWorkflowAction(repository, updated, created.session, {
+          kind: 'continue_brainstorming',
+          actor_id: dto.actor_id,
+        });
+
+        return this.toPublicWorkflowDto(updated, created.session, [queuedAction]);
       }),
     );
   }
 
-  async transitionWorkflow(workflowId: string, dto: WorkflowTransitionCommandDto) {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        await this.assertActorCanMutateWorkflow(repository, workflow, dto.actor_id, this.actionForTransition(workflow.status, dto.to_status));
-        const session = await this.requireActiveSession(repository, workflow);
-        assertPlanItemWorkflowTransitionAllowed(this.transitionCheck({
-          from_status: workflow.status,
-          to_status: dto.to_status,
-          previous_status: workflow.previous_status,
-          evidence_object_type: dto.evidence_object_type,
-          manual_decision_kind: dto.manual_decision_kind,
-        }));
-        await this.validateTransitionEvidence(repository, workflow, dto);
-        this.assertGenericTransitionDoesNotBypassDocumentGate(workflow, dto);
-        const updated = await this.applyTransition(repository, workflow, dto, session.id, this.now());
-        return this.toPublicWorkflowDto(updated, session);
-      }),
-    );
-  }
+  private async resolveActiveGenerationRuntimeBinding(
+    repository: DeliveryRepository,
+    item: DevelopmentPlanItem,
+    now: string,
+    explicit?: StartWorkflowRuntimeBinding,
+  ): Promise<StartWorkflowRuntimeBinding> {
+    const plan = await repository.getDevelopmentPlan(item.development_plan_id);
+    if (plan === undefined) {
+      throw new DomainError('workflow_evidence_missing', `Development Plan ${item.development_plan_id} is missing`);
+    }
+    const profileRevision = await repository.getActiveCodexRuntimeProfileRevision({
+      project_id: plan.project_id,
+      target_kind: 'generation',
+      ...(explicit?.runtime_profile_id === undefined ? {} : { runtime_profile_id: explicit.runtime_profile_id }),
+      now,
+    });
+    if (profileRevision === undefined) {
+      throw new DomainError(
+        'workflow_runtime_binding_unavailable',
+        'workflow_runtime_binding_unavailable: Active generation runtime profile is unavailable',
+      );
+    }
+    if (explicit !== undefined && profileRevision.id !== explicit.runtime_profile_revision_id) {
+      throw new DomainError(
+        'workflow_runtime_binding_unavailable',
+        'workflow_runtime_binding_unavailable: Generation runtime profile revision fence was rejected',
+      );
+    }
 
-  async startBoundaryBrainstorming(workflowId: string, input: WorkflowBoundaryStartCommandDto) {
-    const childContextInput: Parameters<PlanItemWorkflowService['prepareWorkflowChildContext']>[2] = {
-      action: 'start_brainstorming',
-      intent: 'continue_brainstorming',
-      expectedStatus: 'brainstorming',
-      operation: 'boundary-brainstorming',
+    const credential = await this.resolveGenerationModelCredential(repository, {
+      project_id: plan.project_id,
+      profileRevision,
+      ...(explicit?.credential_binding_id === undefined ? {} : { credential_binding_id: explicit.credential_binding_id }),
+      now,
+    });
+    if (credential === undefined) {
+      throw new DomainError(
+        'workflow_runtime_binding_unavailable',
+        'workflow_runtime_binding_unavailable: Generation model credential binding is unavailable',
+      );
+    }
+    if (explicit !== undefined && credential.active_version_id !== explicit.credential_binding_version_id) {
+      throw new DomainError(
+        'workflow_runtime_binding_unavailable',
+        'workflow_runtime_binding_unavailable: Generation credential binding version fence was rejected',
+      );
+    }
+    if (credential.active_version_id === undefined) {
+      throw new DomainError(
+        'workflow_runtime_binding_unavailable',
+        'workflow_runtime_binding_unavailable: Generation credential binding active version is unavailable',
+      );
+    }
+    return {
+      runtime_profile_id: profileRevision.profile_id,
+      runtime_profile_revision_id: profileRevision.id,
+      credential_binding_id: credential.id,
+      credential_binding_version_id: credential.active_version_id,
     };
-    const { workflow, session, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, childContextInput);
-    const result = await this.brainstorming.startBoundaryBrainstorming({
-      development_plan_id: workflow.development_plan_id,
-      item_id: workflow.development_plan_item_id,
-      actor_id: input.actor_id,
-      leader_actor_id: input.leader_actor_id,
-      leader_delegate_actor_ids: input.leader_delegate_actor_ids,
-      initial_leader_context_markdown: input.initial_leader_context_markdown,
-      context,
-    });
-    return { ...result, workflow_id: workflow.id, codex_session_id: session.id, codex_session_turn_id: context.codex_session_turn_id };
   }
 
-  async answerBoundaryQuestion(workflowId: string, sessionId: string, input: WorkflowBoundaryAnswerBodyDto) {
-    const context = await this.prepareExistingBoundarySessionContext(workflowId, sessionId, input.actor_id, {
-      action: 'submit_document_gate',
-      intent: 'continue_brainstorming',
-      expectedStatus: 'brainstorming',
-      operation: 'boundary-answer',
+  private async resolveGenerationModelCredential(
+    repository: DeliveryRepository,
+    input: {
+      project_id: string;
+      profileRevision: CodexRuntimeProfileRevision;
+      credential_binding_id?: string;
+      now: string;
+    },
+  ): Promise<CodexCredentialBindingPublic | undefined> {
+    if (input.credential_binding_id !== undefined) {
+      const credential = await repository.getCodexCredentialBindingPublic(input.credential_binding_id);
+      if (
+        credential === undefined ||
+        credential.project_id !== input.project_id ||
+        credential.profile_id !== input.profileRevision.profile_id ||
+        credential.purpose !== 'model_provider' ||
+        credential.active_version_id === undefined ||
+        credential.active_payload_digest === undefined
+      ) {
+        return undefined;
+      }
+      return credential;
+    }
+    const candidates = await repository.listCodexCredentialBindingReadinessCandidates({
+      project_id: input.project_id,
+      runtime_profile_id: input.profileRevision.profile_id,
+      target_kind: 'generation',
+      now: input.now,
     });
-    return this.brainstorming.answerQuestion(sessionId, { ...input, context });
+    const candidate = candidates.find((value) => value.purpose === 'model_provider');
+    if (candidate === undefined) {
+      return undefined;
+    }
+    return this.resolveGenerationModelCredential(repository, {
+      project_id: input.project_id,
+      profileRevision: input.profileRevision,
+      credential_binding_id: candidate.id,
+      now: input.now,
+    });
   }
 
-  async recordBoundaryDecision(workflowId: string, sessionId: string, input: WorkflowBoundaryDecisionBodyDto) {
-    const context = await this.prepareExistingBoundarySessionContext(workflowId, sessionId, input.actor_id, {
-      action: 'submit_document_gate',
-      intent: 'continue_brainstorming',
-      expectedStatus: 'brainstorming',
-      operation: 'boundary-decision',
-    });
-    return this.brainstorming.recordDecision(sessionId, { ...input, context });
-  }
-
-  async continueBoundaryBrainstorming(workflowId: string, sessionId: string, input: WorkflowBoundaryContinueBodyDto) {
-    const context = await this.prepareExistingBoundarySessionContext(workflowId, sessionId, input.actor_id, {
-      action: 'submit_document_gate',
-      intent: 'continue_brainstorming',
-      expectedStatus: 'brainstorming',
-      operation: 'boundary-continue',
-    });
-    return this.brainstorming.continueBoundaryBrainstorming(sessionId, { ...input, context });
-  }
-
-  async requestBoundarySummaryChanges(
-    workflowId: string,
-    sessionId: string,
-    revisionId: string,
-    input: WorkflowBoundarySummaryChangesBodyDto,
-  ) {
-    const context = await this.prepareExistingBoundarySessionContext(workflowId, sessionId, input.actor_id, {
-      action: 'approve_document_gate',
-      intent: 'revise_boundary_summary',
-      expectedStatus: 'brainstorming',
-      operation: 'boundary-summary-request-changes',
-    });
-    return this.brainstorming.requestBoundarySummaryChanges(sessionId, revisionId, { ...input, context });
-  }
-
-  async submitBoundarySummary(workflowId: string, input: WorkflowRevisionCommandDto) {
+  async recordWorkflowMessage(workflowId: string, input: WorkflowMessageCommandBodyDto) {
     return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const workflow = await this.requireWorkflow(repository, workflowId);
         await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'submit_document_gate');
-        if (workflow.status !== 'brainstorming') {
-          throw new DomainError('workflow_invalid_transition', 'Boundary Summary submission requires brainstorming');
-        }
         const session = await this.requireActiveSession(repository, workflow);
-        const revision = await repository.getBoundarySummaryRevisionById(input.revision_id);
-        this.assertOwnedDocumentRevision(workflow, revision, 'Boundary Summary revision');
-        const updated = await this.applyTransition(
-          repository,
-          workflow,
-          {
-            actor_id: input.actor_id,
-            to_status: 'boundary_review',
-            evidence_object_type: 'boundary_summary_revision',
-            evidence_object_id: input.revision_id,
-            reason: input.reason,
-          },
-          session.id,
-          this.now(),
-        );
-        return this.toPublicWorkflowDto(updated, session);
+        const activeActions = await repository.listActivePlanItemWorkflowQueuedActions(workflow.id);
+        assertWorkflowMessageAllowed({
+          action: input.action,
+          workflow_status: workflow.status,
+          active_codex_session_id: session.id,
+          active_codex_action_count: activeActions.length,
+        });
+
+        const now = this.now();
+        const messageId = randomUUID();
+        const message = {
+          id: messageId,
+          workflow_id: workflow.id,
+          codex_session_id: session.id,
+          actor_id: input.actor_id,
+          action: input.action,
+          body_markdown: input.body_markdown,
+          ...(input.client_message_id === undefined ? {} : { client_message_id: input.client_message_id }),
+          created_at: now,
+        };
+        await repository.savePlanItemWorkflowMessage(message);
+        const queuedAction = await this.enqueueWorkflowAction(repository, workflow, session, {
+          kind: 'continue_brainstorming',
+          actor_id: input.actor_id,
+          created_from_message_id: messageId,
+        });
+        await repository.attachPlanItemWorkflowMessageQueuedAction({
+          workflow_id: workflow.id,
+          message_id: messageId,
+          queued_action_id: queuedAction.id,
+        });
+        return this.toPublicWorkflowDto(workflow, session, [queuedAction]);
       }),
     );
   }
 
-  async approveBoundary(workflowId: string, input: WorkflowRevisionCommandDto) {
+  async runQueuedWorkflowAction(workflowId: string, actionId: string, input: RunQueuedWorkflowActionBodyDto) {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'submit_document_gate');
+        const session = await this.requireActiveSession(repository, workflow);
+        const action = await repository.getPlanItemWorkflowQueuedAction({ workflow_id: workflow.id, action_id: actionId });
+        if (action === undefined) {
+          throw new DomainError('workflow_action_not_found', `workflow_action_not_found: Queued action ${actionId} was not found`);
+        }
+        if (action.status === 'stale') {
+          throw new DomainError(
+            'workflow_action_not_runnable',
+            `workflow_action_not_runnable: Queued action ${actionId} is stale`,
+          );
+        }
+        if (action.status !== 'queued') {
+          const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [action]);
+          return { workflow: publicWorkflow, queued_action: this.publicQueuedAction(publicWorkflow, action.id) };
+        }
+        assertQueuedActionCanRun({
+          action,
+          workflow_id: workflow.id,
+          active_codex_session_id: session.id,
+          ...(session.latest_capsule_digest === undefined ? {} : { latest_capsule_digest: session.latest_capsule_digest }),
+          context_preview_digest: this.contextPreviewDigest(workflow, session, action.kind),
+        });
+        const { action: queuedAction } = await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+          workflow_id: workflow.id,
+          action_id: action.id,
+          now: this.now(),
+        });
+        if (!queuedAction.codex_session_turn_id && queuedAction.status === 'running') {
+          const turn = await this.createWorkflowChildTurn(
+            repository,
+            workflow,
+            session,
+            input.actor_id,
+            mapQueuedActionKindToTurnIntent(queuedAction.kind),
+            `queued-action:${queuedAction.kind}:${queuedAction.id}`,
+          );
+          const actionWithTurn = await repository.attachPlanItemWorkflowQueuedActionTurn({
+            workflow_id: workflow.id,
+            action_id: queuedAction.id,
+            codex_session_turn_id: turn.id,
+            now: this.now(),
+          });
+          if (this.shouldUseRuntimeGenerationBridge()) {
+            await this.scheduleQueuedActionRuntimeGeneration(repository, workflow, session, actionWithTurn, turn, input.actor_id);
+            const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [actionWithTurn]);
+            return {
+              workflow: publicWorkflow,
+              queued_action: this.publicQueuedAction(publicWorkflow, actionWithTurn.id),
+            };
+          }
+          const handled = await this.runDeterministicQueuedActionHandler(
+            repository,
+            workflow,
+            session,
+            actionWithTurn,
+            turn,
+            input.actor_id,
+          );
+          const publicWorkflow = this.toPublicWorkflowDto(handled.workflow, handled.session, handled.queued_actions ?? [handled.action]);
+          return {
+            workflow: publicWorkflow,
+            queued_action: this.publicQueuedAction(publicWorkflow, handled.action.id),
+          };
+        }
+        const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [queuedAction]);
+        return { workflow: publicWorkflow, queued_action: this.publicQueuedAction(publicWorkflow, queuedAction.id) };
+      }),
+    );
+  }
+
+  private shouldUseRuntimeGenerationBridge(): boolean {
+    return (
+      process.env.FORGELOOP_PLAN_ITEM_WORKFLOW_GENERATION_MODE === 'runtime' ||
+      process.env.FORGELOOP_REAL_RUNTIME_ACCEPTANCE === '1'
+    );
+  }
+
+  private async scheduleQueuedActionRuntimeGeneration(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    action: PlanItemWorkflowQueuedAction,
+    turn: CodexSessionTurn,
+    actorId: string,
+  ): Promise<void> {
+    const context = {
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      codex_session_turn_id: turn.id,
+      plan_item_workflow_action_id: action.id,
+    };
+    switch (action.kind) {
+      case 'continue_brainstorming':
+      case 'generate_boundary_summary':
+      case 'revise_boundary_summary': {
+        const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+        const manifest = await this.ensureDeterministicContextManifest(repository, workflow, item, actorId);
+        const brainstormingSession = await this.ensureBrainstormingSessionForWorkflow(repository, workflow, item, manifest, actorId);
+        if (action.kind === 'revise_boundary_summary') {
+          const sourceRevisionId = action.source_revision_id ?? workflow.active_boundary_summary_revision_id;
+          if (sourceRevisionId === undefined) {
+            throw new DomainError('workflow_evidence_missing', 'Boundary Summary revision action requires a source revision');
+          }
+          const revision = await repository.getBoundarySummaryRevisionById(sourceRevisionId);
+          this.assertOwnedDocumentRevision(workflow, revision, 'Boundary Summary revision');
+          await this.brainstorming.requestBoundarySummaryChangesWithRepository(repository, brainstormingSession.id, sourceRevisionId, {
+            actor_id: actorId,
+            feedback_markdown: 'Revise the Boundary Summary according to the workflow change request.',
+            context,
+          });
+          return;
+        }
+        await this.brainstorming.continueBoundaryBrainstormingWithRepository(repository, brainstormingSession.id, {
+          actor_id: actorId,
+          leader_input_markdown:
+            action.kind === 'generate_boundary_summary'
+              ? 'Generate the Boundary Summary for review.'
+              : 'Continue the Boundary Brainstorming turn for this Plan Item Workflow.',
+          context,
+        });
+        return;
+      }
+      case 'generate_spec_doc':
+      case 'revise_spec_doc':
+        await this.specPlan.generateItemSpecRevisionRuntimeWithRepository(
+          repository,
+          workflow.development_plan_id,
+          workflow.development_plan_item_id,
+          { actor_id: actorId },
+          context,
+        );
+        return;
+      case 'generate_implementation_plan_doc':
+      case 'revise_implementation_plan_doc':
+        await this.specPlan.generateItemImplementationPlanRevisionRuntimeWithRepository(
+          repository,
+          workflow.development_plan_id,
+          workflow.development_plan_item_id,
+          { actor_id: actorId },
+          context,
+        );
+        return;
+    }
+  }
+
+  private blockQueuedWorkflowAction(
+    repository: DeliveryRepository,
+    workflowId: string,
+    actionId: string,
+    turnId: string,
+    reasonCode: string,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    return repository.terminalizePlanItemWorkflowQueuedAction({
+      workflow_id: workflowId,
+      action_id: actionId,
+      status: 'blocked',
+      codex_session_turn_id: turnId,
+      blocked_reason_code: reasonCode,
+      now: this.now(),
+    });
+  }
+
+  private async runDeterministicQueuedActionHandler(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    action: PlanItemWorkflowQueuedAction,
+    turn: CodexSessionTurn,
+    actorId: string,
+  ): Promise<{
+    workflow: PlanItemWorkflow;
+    session: CodexSession;
+    action: PlanItemWorkflowQueuedAction;
+    queued_actions?: PlanItemWorkflowQueuedAction[];
+  }> {
+    if (action.kind === 'continue_brainstorming') {
+      const terminal = await this.succeedDeterministicQueuedAction(repository, workflow, session, action, turn);
+      if (action.created_from_message_id === undefined) {
+        return { workflow, session: terminal.session, action: terminal.action };
+      }
+      const queueInput: Parameters<PlanItemWorkflowService['enqueueWorkflowAction']>[3] = {
+        kind: 'generate_boundary_summary',
+        actor_id: actorId,
+      };
+      queueInput.created_from_message_id = action.created_from_message_id;
+      const queuedBoundary = await this.enqueueWorkflowAction(repository, workflow, terminal.session, queueInput);
+      return { workflow, session: terminal.session, action: terminal.action, queued_actions: [terminal.action, queuedBoundary] };
+    }
+
+    if (action.kind === 'generate_boundary_summary' || action.kind === 'revise_boundary_summary') {
+      const revision = await this.writeDeterministicBoundarySummaryRevision(repository, workflow, action, turn, actorId);
+      const updated = await this.applyTransition(
+        repository,
+        workflow,
+        {
+          actor_id: actorId,
+          to_status: 'boundary_review',
+          evidence_object_type: 'boundary_summary_revision',
+          evidence_object_id: revision.id,
+          codex_session_turn_id: turn.id,
+          reason: `Deterministic ${action.kind} run completed.`,
+        },
+        session.id,
+        this.now(),
+        { active_boundary_summary_revision_id: revision.id },
+      );
+      const terminal = await this.succeedDeterministicQueuedAction(repository, updated, session, action, turn, {
+        output_object_type: 'boundary_summary_revision',
+        output_object_id: revision.id,
+      });
+      return { workflow: updated, session: terminal.session, action: terminal.action };
+    }
+
+    if (action.kind === 'generate_spec_doc' || action.kind === 'revise_spec_doc') {
+      const revision = await this.writeDeterministicSpecRevision(repository, workflow, action, turn, actorId);
+      const updated = await this.applyTransition(
+        repository,
+        workflow,
+        {
+          actor_id: actorId,
+          to_status: 'spec_review',
+          evidence_object_type: 'spec_revision',
+          evidence_object_id: revision.id,
+          codex_session_turn_id: turn.id,
+          reason: `Deterministic ${action.kind} run completed.`,
+        },
+        session.id,
+        this.now(),
+        { active_spec_doc_revision_id: revision.id },
+      );
+      const terminal = await this.succeedDeterministicQueuedAction(repository, updated, session, action, turn, {
+        output_object_type: 'spec_revision',
+        output_object_id: revision.id,
+      });
+      return { workflow: updated, session: terminal.session, action: terminal.action };
+    }
+
+    const revision = await this.writeDeterministicImplementationPlanRevision(repository, workflow, action, turn, actorId);
+    const updated = await this.applyTransition(
+      repository,
+      workflow,
+      {
+        actor_id: actorId,
+        to_status: 'implementation_plan_review',
+        evidence_object_type: 'implementation_plan_revision',
+        evidence_object_id: revision.id,
+        codex_session_turn_id: turn.id,
+        reason: `Deterministic ${action.kind} run completed.`,
+      },
+      session.id,
+      this.now(),
+      { active_implementation_plan_doc_revision_id: revision.id },
+    );
+    const terminal = await this.succeedDeterministicQueuedAction(repository, updated, session, action, turn, {
+      output_object_type: 'implementation_plan_revision',
+      output_object_id: revision.id,
+    });
+    return { workflow: updated, session: terminal.session, action: terminal.action };
+  }
+
+  private async succeedDeterministicQueuedAction(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    action: PlanItemWorkflowQueuedAction,
+    turn: CodexSessionTurn,
+    output: {
+      output_object_type?: WorkflowTransitionEvidenceObjectType;
+      output_object_id?: string;
+    } = {},
+  ): Promise<{ session: CodexSession; turn: CodexSessionTurn; action: PlanItemWorkflowQueuedAction }> {
+    const now = this.now();
+    const workerId = workflow.created_by_actor_id;
+    const workerSessionDigest = codexCanonicalDigest({ kind: 'deterministic_plan_item_workflow_worker', workflow_id: workflow.id });
+    const leaseTokenHash = codexCanonicalDigest({ kind: 'deterministic_plan_item_workflow_lease_token', action_id: action.id });
+    const lease = await repository.claimCodexSessionLease({
+      session_id: session.id,
+      workflow_id: workflow.id,
+      lease_id: randomUUID(),
+      lease_token_hash: leaseTokenHash,
+      worker_id: workerId,
+      worker_session_digest: workerSessionDigest,
+      ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+      now,
+      expires_at: new Date(Date.parse(now) + 60_000).toISOString(),
+    });
+    const latestActionSequence = (await repository.listPlanItemWorkflowQueuedActions(workflow.id)).reduce(
+      (maxSequence, candidate) => Math.max(maxSequence, candidate.output_capsule_sequence ?? 0),
+      0,
+    );
+    const capsule = this.deterministicOutputCapsule(
+      session,
+      turn.id,
+      action.id,
+      latestActionSequence + 1,
+      workflow.created_by_actor_id,
+      now,
+    );
+    const terminal = await repository.terminalizeCodexSessionTurn({
+      session_id: session.id,
+      turn_id: turn.id,
+      lease_id: lease.lease.id,
+      lease_token_hash: leaseTokenHash,
+      lease_epoch: lease.lease.lease_epoch,
+      worker_id: workerId,
+      worker_session_digest: workerSessionDigest,
+      status: 'succeeded',
+      ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+      output_capsule: capsule,
+      output_memory_bundle_ref: `artifact://plan-item-workflow/${workflow.id}/actions/${action.id}/memory`,
+      output_memory_bundle_digest: codexCanonicalDigest({ kind: 'deterministic_memory_bundle', action_id: action.id }),
+      output_environment_manifest_ref: `artifact://plan-item-workflow/${workflow.id}/actions/${action.id}/environment`,
+      output_environment_manifest_digest: codexCanonicalDigest({ kind: 'deterministic_environment_manifest', action_id: action.id }),
+      codex_thread_id: `deterministic-thread:${session.id}`,
+      codex_thread_id_digest: capsule.codex_thread_id_digest,
+      ...output,
+      now,
+    });
+    const terminalAction = await repository.terminalizePlanItemWorkflowQueuedAction({
+      workflow_id: workflow.id,
+      action_id: action.id,
+      status: 'succeeded',
+      codex_session_turn_id: turn.id,
+      output_capsule_id: capsule.id,
+      output_capsule_digest: capsule.digest,
+      output_capsule_sequence: capsule.sequence,
+      codex_thread_id_digest: capsule.codex_thread_id_digest,
+      now,
+    });
+    return { session: terminal.session, turn: terminal.turn, action: terminalAction };
+  }
+
+  private deterministicOutputCapsule(
+    session: CodexSession,
+    turnId: string,
+    actionId: string,
+    sequence: number,
+    actorId: string,
+    now: string,
+  ) {
+    const digestInput = { kind: 'deterministic_plan_item_workflow_capsule', session_id: session.id, turn_id: turnId, action_id: actionId };
+    const capsuleId = randomUUID();
+    return {
+      id: capsuleId,
+      codex_session_id: session.id,
+      created_from_turn_id: turnId,
+      sequence,
+      artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${session.id}/${capsuleId}`,
+      digest: codexCanonicalDigest(digestInput),
+      size_bytes: '0',
+      manifest_digest: codexCanonicalDigest({ ...digestInput, part: 'manifest' }),
+      thread_state_digest: codexCanonicalDigest({ ...digestInput, part: 'thread' }),
+      memory_state_digest: codexCanonicalDigest({ ...digestInput, part: 'memory' }),
+      environment_manifest_digest: codexCanonicalDigest({ ...digestInput, part: 'environment' }),
+      codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: `deterministic-thread:${session.id}` }),
+      codex_cli_version: 'deterministic-plan-item-workflow',
+      app_server_protocol_digest: codexCanonicalDigest({ ...digestInput, part: 'app_server_protocol' }),
+      runtime_profile_revision_id: session.runtime_profile_revision_id,
+      trusted_runtime_manifest_digest: codexCanonicalDigest({ ...digestInput, part: 'trusted_runtime' }),
+      credential_binding_lineage_digest: codexCanonicalDigest({ ...digestInput, part: 'credential_lineage' }),
+      created_by_actor_id: actorId,
+      created_at: now,
+    };
+  }
+
+  private async writeDeterministicBoundarySummaryRevision(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    action: PlanItemWorkflowQueuedAction,
+    turn: CodexSessionTurn,
+    actorId: string,
+  ): Promise<BoundarySummaryRevision> {
+    const now = this.now();
+    const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+    const manifest = await this.ensureDeterministicContextManifest(repository, workflow, item, actorId);
+    const session = await this.ensureBrainstormingSessionForWorkflow(repository, workflow, item, manifest, actorId);
+    const existingRounds = await repository.listBoundaryRounds(session.id);
+    const roundId = randomUUID();
+    await repository.saveBoundaryRound({
+      id: roundId,
+      session_id: session.id,
+      session_revision_id: session.revision_id,
+      round_number: existingRounds.length + 1,
+      trigger: action.kind === 'revise_boundary_summary' ? 'leader_revision_request' : 'summary_proposal',
+      ai_output_markdown: 'Deterministic Boundary Summary proposal generated from the workflow conversation.',
+      codex_session_turn_id: turn.id,
+      status: 'summary_proposed',
+      created_at: now,
+      updated_at: now,
+    });
+    const answerId = randomUUID();
+    const question: BoundaryQuestion = {
+      id: randomUUID(),
+      text: 'What is the approved deterministic workflow boundary?',
+      author_id: 'ai',
+      created_at: now,
+      status: 'answered',
+      required: true,
+      answered_by_answer_id: answerId,
+      round_id: roundId,
+    };
+    const answer: BoundaryAnswer = {
+      id: answerId,
+      question_id: question.id,
+      round_id: roundId,
+      text: 'The boundary is the Plan Item Workflow product loop through Execution Ready; execution itself is out of scope.',
+      actor_id: actorId,
+      actor_role: 'leader',
+      created_at: now,
+    };
+    const decision: BoundaryDecision = {
+      id: randomUUID(),
+      round_id: roundId,
+      text: 'Use queued action runs as the only Codex-producing entry point.',
+      actor_id: actorId,
+      actor_role: 'leader',
+      source: 'leader',
+      state: 'accepted',
+      rationale: 'This preserves one PlanItemWorkflow and one active CodexSession as the product loop.',
+      created_at: now,
+    };
+    await repository.saveBoundaryQuestion({ ...question, session_id: session.id, sequence: 1 });
+    await repository.saveBoundaryAnswer({ ...answer, session_id: session.id, sequence: 1 });
+    await repository.saveBoundaryDecision({ ...decision, session_id: session.id, sequence: 1 });
+
+    const summaryId = session.boundary_summary_id ?? randomUUID();
+    const revisions = await repository.listBoundarySummaryRevisions(summaryId);
+    const revisionId = randomUUID();
+    const summaryMarkdown = [
+      '# Boundary Summary',
+      '',
+      'The Plan Item Workflow owns Brainstorming, Spec Doc, Implementation Plan Doc, and Execution Ready evaluation.',
+      '',
+      'Execution worker handoff, RunSession creation, PRs, and code-review fix loops remain out of scope for this wave.',
+    ].join('\n');
+    if ((await repository.getBoundarySummary(summaryId)) === undefined) {
+      const summary: BoundarySummary = {
+        id: summaryId,
+        revision_id: revisionId,
+        brainstorming_session_id: session.id,
+        brainstorming_session_revision_id: session.revision_id,
+        development_plan_id: workflow.development_plan_id,
+        development_plan_item_id: workflow.development_plan_item_id,
+        development_plan_item_revision_id: item.revision_id,
+        source_ref: item.source_ref,
+        summary: summaryMarkdown,
+        created_at: now,
+        updated_at: now,
+      };
+      await repository.saveBoundarySummary(summary);
+    }
+    const revision: BoundarySummaryRevision = {
+      id: revisionId,
+      boundary_summary_id: summaryId,
+      session_id: session.id,
+      session_revision_id: session.revision_id,
+      source_round_id: roundId,
+      development_plan_id: workflow.development_plan_id,
+      development_plan_item_id: workflow.development_plan_item_id,
+      development_plan_item_revision_id: item.revision_id,
+      workflow_id: workflow.id,
+      codex_session_id: workflow.active_codex_session_id,
+      codex_session_turn_id: turn.id,
+      revision_number: revisions.length + 1,
+      status: 'proposed',
+      summary_markdown: summaryMarkdown,
+      confirmed_scope: ['PlanItemWorkflow chat-first product loop', 'Queued action generation gates', 'Execution Ready evaluation'],
+      confirmed_out_of_scope: ['Execution worker start', 'RunSession creation', 'PR and code review automation'],
+      accepted_assumptions: ['A deterministic fake runtime can validate the Wave 5 product loop locally.'],
+      open_risks: ['Real Codex runtime dispatch remains a credentialed dogfood path.'],
+      validation_expectations: ['API workflow tests pass', 'Dogfood script proves the queued loop'],
+      question_answer_snapshot: [{ question_id: question.id, answer_id: answer.id, text: answer.text }],
+      decision_snapshot: [{ decision_id: decision.id, text: decision.text, rationale: decision.rationale }],
+      context_manifest_id: manifest.id,
+      context_manifest_revision_id: manifest.revision_id,
+      created_at: now,
+    } as BoundarySummaryRevision;
+    await repository.saveBoundarySummaryRevision(revision);
+    await repository.saveBrainstormingSession({
+      ...session,
+      revision_id: randomUUID(),
+      status: 'summary_proposed',
+      current_round_id: roundId,
+      latest_summary_revision_id: revision.id,
+      questions: [question],
+      answers: [answer],
+      decisions: [decision],
+      approval_state: 'ready_for_approval',
+      boundary_summary_id: summaryId,
+      updated_at: now,
+    });
+    await repository.saveBoundarySummary({
+      id: summaryId,
+      revision_id: revision.id,
+      brainstorming_session_id: session.id,
+      brainstorming_session_revision_id: session.revision_id,
+      development_plan_id: workflow.development_plan_id,
+      development_plan_item_id: workflow.development_plan_item_id,
+      development_plan_item_revision_id: item.revision_id,
+      source_ref: item.source_ref,
+      summary: summaryMarkdown,
+      created_at: now,
+      updated_at: now,
+    });
+    return revision;
+  }
+
+  private async writeDeterministicSpecRevision(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    action: PlanItemWorkflowQueuedAction,
+    turn: CodexSessionTurn,
+    actorId: string,
+  ): Promise<SpecRevision> {
+    const now = this.now();
+    const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+    const activeSessionId = this.requireString(workflow.active_codex_session_id, 'Workflow active session is missing');
+    const workItem = await repository.getWorkItem(item.source_ref.id);
+    if (workItem === undefined) {
+      throw new DomainError('workflow_evidence_missing', 'Spec generation requires the source Work Item');
+    }
+    const manifest = await this.ensureDeterministicContextManifest(repository, workflow, item, actorId);
+    let boundarySummaryId: string;
+    let sourceBoundarySummaryRevisionId: string;
+    let existingSpec: Spec | undefined;
+    if (action.kind === 'revise_spec_doc') {
+      const sourceSpecRevisionId = action.source_revision_id ?? workflow.active_spec_doc_revision_id;
+      if (sourceSpecRevisionId === undefined) {
+        throw new DomainError('workflow_evidence_missing', 'Spec revision requires the requested Spec revision');
+      }
+      const sourceSpecRevision = await repository.getSpecRevision(sourceSpecRevisionId);
+      this.assertOwnedDocumentRevision(workflow, sourceSpecRevision, 'Spec revision');
+      boundarySummaryId = this.requireString(sourceSpecRevision?.boundary_summary_id, 'Spec revision is missing its Boundary Summary');
+      sourceBoundarySummaryRevisionId = this.requireString(
+        workflow.active_boundary_summary_revision_id,
+        'Spec revision requires the workflow Boundary Summary revision',
+      );
+      existingSpec = sourceSpecRevision === undefined ? undefined : await repository.getSpec(sourceSpecRevision.spec_id);
+      if (
+        existingSpec === undefined ||
+        existingSpec.workflow_id !== workflow.id ||
+        existingSpec.development_plan_item_id !== item.id
+      ) {
+        throw new DomainError('workflow_evidence_not_owned', 'Spec does not belong to this workflow/session');
+      }
+    } else {
+      const boundaryRevisionId = action.source_revision_id ?? workflow.active_boundary_summary_revision_id;
+      if (boundaryRevisionId === undefined) {
+        throw new DomainError('workflow_evidence_missing', 'Spec generation requires an approved Boundary Summary revision');
+      }
+      const boundaryRevision = await repository.getBoundarySummaryRevisionById(boundaryRevisionId);
+      this.assertOwnedDocumentRevision(workflow, boundaryRevision, 'Boundary Summary revision');
+      boundarySummaryId = this.requireString(boundaryRevision?.boundary_summary_id, 'Boundary Summary revision is missing');
+      sourceBoundarySummaryRevisionId = boundaryRevisionId;
+      existingSpec = await this.findWorkflowSpec(repository, workflow.id, item.id);
+    }
+    const spec: Spec =
+      existingSpec ??
+      {
+        id: randomUUID(),
+        work_item_id: workItem.id,
+        development_plan_item_id: item.id,
+        workflow_id: workflow.id,
+        boundary_summary_id: boundarySummaryId,
+        context_manifest_id: manifest.id,
+        entity_type: 'spec',
+        status: 'draft',
+        editing_state: 'idle',
+        gate_state: 'not_submitted',
+        resolution: 'none',
+        created_at: now,
+        updated_at: now,
+      };
+    const revisions = await repository.listSpecRevisions(spec.id);
+    const revision: SpecRevision = {
+      id: randomUUID(),
+      spec_id: spec.id,
+      work_item_id: workItem.id,
+      development_plan_item_id: item.id,
+      development_plan_item_revision_id: item.revision_id,
+      workflow_id: workflow.id,
+      codex_session_id: activeSessionId,
+      codex_session_turn_id: turn.id,
+      boundary_summary_id: boundarySummaryId,
+      context_manifest_id: manifest.id,
+      revision_number: revisions.length + 1,
+      summary: 'Deterministic Spec Doc for the Plan Item Workflow product loop.',
+      content: [
+        '# Spec Doc',
+        '',
+        'Implement the Plan Item Workflow as the only public Superpowers product loop entry point.',
+        '',
+        'Generated artifacts must stay attached to the same workflow and Codex session.',
+      ].join('\n'),
+      background: 'The product loop must align with Superpowers brainstorming -> spec -> plan semantics.',
+      goals: ['Generate workflow-owned artifacts through queued action runs only.'],
+      scope_in: ['PlanItemWorkflow queued action run', 'Artifact review gates', 'Execution readiness evaluation'],
+      scope_out: ['Execution worker start', 'RunSession creation'],
+      acceptance_criteria: ['Queued action run creates a Spec revision', 'Workflow moves to Spec review', 'No RunSession is created'],
+      risk_notes: ['Real runtime dispatch is separately dogfooded.'],
+      test_strategy_summary: 'Run API workflow tests and dogfood script.',
+      qa_owner_actor_id: item.reviewer_actor_id ?? actorId,
+      testability_note: 'QA validates the workflow reaches review without direct generation routes.',
+      structured_document: {
+        generated_by: 'deterministic_plan_item_workflow_queued_action',
+        action_id: action.id,
+        boundary_summary_revision_id: sourceBoundarySummaryRevisionId,
+      },
+      author_actor_id: actorId,
+      artifact_refs: [],
+      created_at: now,
+    };
+    await repository.saveSpec({ ...spec, status: 'in_review', gate_state: 'awaiting_approval', current_revision_id: revision.id, updated_at: now });
+    await repository.saveSpecRevision(revision);
+    await repository.saveWorkItem({ ...workItem, current_spec_id: spec.id, current_spec_revision_id: revision.id, updated_at: now });
+    await repository.saveDevelopmentPlanItem({ ...item, spec_status: 'in_review', updated_at: now });
+    return revision;
+  }
+
+  private async writeDeterministicImplementationPlanRevision(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    action: PlanItemWorkflowQueuedAction,
+    turn: CodexSessionTurn,
+    actorId: string,
+  ): Promise<ExecutionPlanRevision> {
+    const now = this.now();
+    const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+    const activeSessionId = this.requireString(workflow.active_codex_session_id, 'Workflow active session is missing');
+    let existingPlan: ExecutionPlanDocument | undefined;
+    let specRevisionId: string | undefined;
+    if (action.kind === 'revise_implementation_plan_doc') {
+      const sourcePlanRevisionId = action.source_revision_id ?? workflow.active_implementation_plan_doc_revision_id;
+      if (sourcePlanRevisionId === undefined) {
+        throw new DomainError('workflow_evidence_missing', 'Implementation Plan revision requires the requested Implementation Plan revision');
+      }
+      const sourcePlanRevision = await repository.getExecutionPlanRevision(sourcePlanRevisionId);
+      this.assertOwnedDocumentRevision(workflow, sourcePlanRevision, 'Implementation Plan revision');
+      specRevisionId = sourcePlanRevision?.based_on_spec_revision_id ?? workflow.active_spec_doc_revision_id;
+      existingPlan = sourcePlanRevision === undefined ? undefined : await repository.getExecutionPlan(sourcePlanRevision.execution_plan_id);
+      if (
+        existingPlan === undefined ||
+        existingPlan.workflow_id !== workflow.id ||
+        existingPlan.development_plan_item_id !== item.id
+      ) {
+        throw new DomainError('workflow_evidence_not_owned', 'Implementation Plan does not belong to this workflow/session');
+      }
+    } else {
+      specRevisionId = action.source_revision_id ?? workflow.active_spec_doc_revision_id;
+      existingPlan = (await repository.listExecutionPlansForDevelopmentPlanItem(item.id)).find(
+        (candidate) => candidate.workflow_id === workflow.id,
+      );
+    }
+    if (specRevisionId === undefined) {
+      throw new DomainError('workflow_evidence_missing', 'Implementation Plan generation requires an approved Spec revision');
+    }
+    const specRevision = await repository.getSpecRevision(specRevisionId);
+    this.assertOwnedDocumentRevision(workflow, specRevision, 'Spec revision');
+    const executionPlan: ExecutionPlanDocument =
+      existingPlan ??
+      {
+        id: randomUUID(),
+        development_plan_item_id: item.id,
+        workflow_id: workflow.id,
+        status: 'draft',
+        created_at: now,
+        updated_at: now,
+      };
+    const revisions = await repository.listExecutionPlanRevisions(executionPlan.id);
+    const revision: ExecutionPlanRevision = {
+      id: randomUUID(),
+      execution_plan_id: executionPlan.id,
+      development_plan_item_id: item.id,
+      development_plan_item_revision_id: item.revision_id,
+      workflow_id: workflow.id,
+      codex_session_id: activeSessionId,
+      codex_session_turn_id: turn.id,
+      based_on_spec_revision_id: specRevisionId,
+      revision_number: revisions.length + 1,
+      summary: 'Deterministic Implementation Plan Doc for the Plan Item Workflow product loop.',
+      content: [
+        '# Implementation Plan Doc',
+        '',
+        '1. Keep PlanItemWorkflow as the product source of truth.',
+        '2. Run generation only from durable queued actions.',
+        '3. Evaluate readiness without starting execution.',
+      ].join('\n'),
+      structured_document: {
+        generated_by: 'deterministic_plan_item_workflow_queued_action',
+        action_id: action.id,
+        based_on_spec_revision_id: specRevisionId,
+        validation_strategy: ['API workflow tests', 'dogfood script'],
+        allowed_paths: ['apps/control-plane-api', 'apps/web', 'packages/db', 'packages/domain'],
+        forbidden_paths: ['execution worker start', 'run session creation'],
+        required_checks: ['pnpm vitest run tests/api/plan-item-workflows.test.ts'],
+        handoff_criteria: ['Execution readiness evaluation reports ready only after approved artifacts and capsule lineage exist.'],
+      },
+      author_actor_id: actorId,
+      created_at: now,
+    };
+    await repository.saveExecutionPlan({ ...executionPlan, status: 'in_review', current_revision_id: revision.id, updated_at: now });
+    await repository.saveExecutionPlanRevision(revision);
+    await repository.appendObjectEvent({
+      id: randomUUID(),
+      object_type: 'development_plan_item',
+      object_id: item.id,
+      event_type: 'item_implementation_plan_draft_generated',
+      actor_id: actorId,
+      metadata: {
+        implementation_plan_id: executionPlan.id,
+        implementation_plan_revision_id: revision.id,
+        workflow_id: workflow.id,
+        codex_session_id: activeSessionId,
+      },
+      created_at: now,
+    });
+    await repository.saveDevelopmentPlanItem({ ...item, implementation_plan_status: 'in_review', updated_at: now });
+    return revision;
+  }
+
+  private async ensureDeterministicContextManifest(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    item: DevelopmentPlanItem,
+    actorId: string,
+  ): Promise<ContextManifest> {
+    const now = this.now();
+    const manifest: ContextManifest = {
+      id: randomUUID(),
+      revision_id: randomUUID(),
+      source_ref: item.source_ref,
+      development_plan_id: workflow.development_plan_id,
+      development_plan_item_id: item.id,
+      development_plan_item_revision_id: item.revision_id,
+      sources: [
+        { type: 'development_plan_item', ref: item.id, digest: item.revision_id },
+        { type: 'actor_guidance', ref: actorId, digest: `${actorId.length}` },
+      ],
+      generated_at: now,
+      runtime_identity: 'deterministic_plan_item_workflow_queued_action',
+      created_at: now,
+      updated_at: now,
+    };
+    await repository.saveContextManifest(manifest);
+    return manifest;
+  }
+
+  private async ensureBrainstormingSessionForWorkflow(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    item: DevelopmentPlanItem,
+    manifest: ContextManifest,
+    actorId: string,
+  ): Promise<BrainstormingSession> {
+    const existingRevisionId = workflow.active_boundary_summary_revision_id;
+    if (existingRevisionId !== undefined) {
+      const revision = await repository.getBoundarySummaryRevisionById(existingRevisionId);
+      const existingSessionId = revision === undefined ? undefined : this.boundarySummaryRevisionSessionId(revision);
+      const existing = existingSessionId === undefined ? undefined : await repository.getBrainstormingSession(existingSessionId);
+      if (existing !== undefined) return existing;
+    }
+    const now = this.now();
+    const activeSessionId = this.requireString(workflow.active_codex_session_id, 'Workflow active session is missing');
+    const session: BrainstormingSession = {
+      id: randomUUID(),
+      revision_id: randomUUID(),
+      source_ref: item.source_ref,
+      development_plan_id: workflow.development_plan_id,
+      development_plan_revision_id: workflow.development_plan_id,
+      development_plan_item_id: item.id,
+      development_plan_item_revision_id: item.revision_id,
+      context_manifest_id: manifest.id,
+      context_manifest_revision_id: manifest.revision_id,
+      leader_actor_id: actorId,
+      leader_delegate_actor_ids: [],
+      status: 'waiting_for_leader',
+      questions: [],
+      answers: [],
+      decisions: [],
+      approval_state: 'questions_open',
+      workflow_id: workflow.id,
+      codex_session_id: activeSessionId,
+      created_at: now,
+      updated_at: now,
+    };
+    await repository.saveBrainstormingSession(session);
+    return session;
+  }
+
+  private async findWorkflowSpec(repository: DeliveryRepository, workflowId: string, itemId: string): Promise<Spec | undefined> {
+    return (await repository.listSpecs()).find(
+      (candidate) => candidate.workflow_id === workflowId && candidate.development_plan_item_id === itemId,
+    );
+  }
+
+  async approveWorkflowArtifactRevision(
+    workflowId: string,
+    artifactType: WorkflowArtifactTypeDto,
+    revisionId: string,
+    input: ApproveWorkflowArtifactRevisionBodyDto,
+  ) {
+    if (artifactType === 'boundary-summary') {
+      return this.approveBoundaryArtifactRevision(workflowId, revisionId, input);
+    }
+    if (artifactType === 'spec-doc') {
+      return this.approveSpecArtifactRevision(workflowId, revisionId, input);
+    }
+    return this.approveImplementationPlanArtifactRevision(workflowId, revisionId, input);
+  }
+
+  async requestWorkflowArtifactChanges(
+    workflowId: string,
+    artifactType: WorkflowArtifactTypeDto,
+    revisionId: string,
+    input: RequestWorkflowArtifactChangesBodyDto,
+  ) {
+    return this.requestArtifactChangesWithCascade(workflowId, artifactType, revisionId, input);
+  }
+
+  async evaluateExecutionReadiness(workflowId: string, input: EvaluateWorkflowExecutionReadinessBodyDto) {
+    const result = await this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'approve_document_gate');
+        if (workflow.status !== 'implementation_plan_review') {
+          throw new DomainError('workflow_invalid_transition', 'Execution readiness evaluation requires implementation_plan_review');
+        }
+        const session = await this.requireActiveSession(repository, workflow);
+        const implementationPlanRevision = await this.requireApprovedImplementationPlanRevisionForReadiness(
+          repository,
+          workflow,
+        );
+        const workflowWithApprovedPlan: PlanItemWorkflow = {
+          ...workflow,
+          active_implementation_plan_doc_revision_id: implementationPlanRevision.id,
+        };
+        const { readiness, executionPackage } = await this.createExecutionReadinessRecordForApprovedPlan(
+          repository,
+          workflowWithApprovedPlan,
+          input.actor_id,
+        );
+        if (readiness.readiness_state !== 'ready') {
+          return {
+            blocked: true as const,
+            readiness,
+          };
+        }
+        const dto: WorkflowTransitionCommandDto = {
+          actor_id: input.actor_id,
+          to_status: 'execution_ready',
+          evidence_object_type: 'execution_readiness_record',
+          evidence_object_id: readiness.id,
+          supporting_evidence: [
+            { object_type: 'implementation_plan_revision', object_id: implementationPlanRevision.id },
+            ...(executionPackage === undefined
+              ? []
+              : [{ object_type: 'execution_package' as const, object_id: executionPackage.id }]),
+          ],
+          reason: input.rationale_markdown,
+        };
+        await this.validateTransitionEvidence(repository, workflowWithApprovedPlan, dto);
+        const updated = await this.applyTransition(repository, workflow, dto, session.id, this.now(), {
+          active_implementation_plan_doc_revision_id: implementationPlanRevision.id,
+          ...(executionPackage === undefined ? {} : { execution_package_id: executionPackage.id }),
+        });
+        return this.toPublicWorkflowDto(updated, session, [], {
+          readiness: this.readinessProjectionForRecord(readiness),
+        });
+      }),
+    );
+    if ('blocked' in result) {
+      throw new DomainError('workflow_execution_readiness_blocked', 'Execution readiness evaluation is blocked', {
+        blocker_codes: result.readiness.blocker_codes,
+        readiness: this.readinessProjectionForRecord(result.readiness),
+      });
+    }
+    return result;
+  }
+
+  private async approveBoundaryArtifactRevision(
+    workflowId: string,
+    revisionId: string,
+    input: ApproveWorkflowArtifactRevisionBodyDto,
+  ) {
     return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const workflow = await this.requireWorkflow(repository, workflowId);
         await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'approve_document_gate');
         if (workflow.status !== 'boundary_review') {
-          throw new DomainError('workflow_invalid_transition', 'Boundary approval requires boundary_review');
+          throw new DomainError('workflow_invalid_transition', 'Boundary Summary approval requires boundary_review');
         }
         const session = await this.requireActiveSession(repository, workflow);
-        const revision = await repository.getBoundarySummaryRevisionById(input.revision_id);
+        const revision = await repository.getBoundarySummaryRevisionById(revisionId);
         this.assertOwnedDocumentRevision(workflow, revision, 'Boundary Summary revision');
         if (revision === undefined) {
           throw new DomainError('workflow_evidence_not_owned', 'Boundary Summary revision does not belong to this workflow/session');
@@ -257,140 +1239,32 @@ export class PlanItemWorkflowService {
         }
         await this.brainstorming.approveBoundarySummaryRevisionWithRepository(repository, boundarySessionId, revision.id, {
           actor_id: input.actor_id,
-          ...(input.reason === undefined ? {} : { final_decision: input.reason }),
+          ...(input.decision_markdown === undefined ? {} : { final_decision: input.decision_markdown }),
         });
         const dto: WorkflowTransitionCommandDto = {
           actor_id: input.actor_id,
           to_status: 'spec_generation_queued',
           evidence_object_type: 'boundary_summary_revision',
-          evidence_object_id: input.revision_id,
-          reason: input.reason,
+          evidence_object_id: revision.id,
+          reason: input.decision_markdown,
         };
         await this.validateTransitionEvidence(repository, workflow, dto);
-        const updated = await this.applyTransition(
-          repository,
-          workflow,
-          dto,
-          session.id,
-          this.now(),
-        );
-        return this.toPublicWorkflowDto(updated, session);
+        const updated = await this.applyTransition(repository, workflow, dto, session.id, this.now());
+        const queuedAction = await this.enqueueWorkflowAction(repository, updated, session, {
+          kind: 'generate_spec_doc',
+          actor_id: input.actor_id,
+          source_revision_id: revision.id,
+        });
+        return this.toPublicWorkflowDto(updated, session, [queuedAction]);
       }),
     );
   }
 
-  async generateSpecRevision(workflowId: string, input: WorkflowActorCommandDto) {
-    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
-      action: 'submit_document_gate',
-      intent: 'draft_spec_doc',
-      expectedStatus: 'spec_generation_queued',
-      operation: 'spec-generate-draft',
-    });
-    return this.specPlan.generateItemSpecDraft(workflow.development_plan_id, workflow.development_plan_item_id, input, context);
-  }
-
-  async generateSpecRevisionRuntime(workflowId: string, input: WorkflowActorCommandDto) {
-    const replay = await this.replayPendingRuntimeGeneration(workflowId, input.actor_id, {
-      action: 'submit_document_gate',
-      expectedStatus: 'spec_generation_queued',
-      taskKind: 'spec',
-    });
-    if (replay !== undefined) {
-      return replay.result;
-    }
-    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
-      action: 'submit_document_gate',
-      intent: 'draft_spec_doc',
-      expectedStatus: 'spec_generation_queued',
-      operation: 'spec-runtime-generate',
-    });
-    return this.specPlan.generateItemSpecRevisionRuntime(
-      workflow.development_plan_id,
-      workflow.development_plan_item_id,
-      input,
-      context,
-    );
-  }
-
-  async regenerateSpecRevision(workflowId: string, input: RegenerateArtifactDraftCommandDto) {
-    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, this.requireActorId(input.actor_id), {
-      action: 'submit_document_gate',
-      intent: 'revise_spec_doc',
-      expectedStatus: 'spec_generation_queued',
-      operation: 'spec-regenerate-draft',
-    });
-    return this.specPlan.regenerateItemSpecDraft(
-      workflow.development_plan_id,
-      workflow.development_plan_item_id,
-      input,
-      context,
-    );
-  }
-
-  async saveSpecDraft(workflowId: string, input: WorkflowDraftDocumentBodyDto) {
-    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
-      action: 'submit_document_gate',
-      intent: 'revise_spec_doc',
-      expectedStatus: 'spec_generation_queued',
-      operation: 'spec-save-draft',
-    });
-    return this.specPlan.saveItemSpecDraft(
-      workflow.development_plan_id,
-      workflow.development_plan_item_id,
-      input.document,
-      context,
-    );
-  }
-
-  async submitSpecRevision(workflowId: string, input: WorkflowRevisionCommandDto) {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'submit_document_gate');
-        if (workflow.status !== 'spec_generation_queued') {
-          throw new DomainError('workflow_invalid_transition', 'Spec submission requires spec_generation_queued');
-        }
-        const draftRevision = await repository.getSpecRevision(input.revision_id);
-        this.assertOwnedDocumentRevision(workflow, draftRevision, 'Spec revision');
-        if (draftRevision === undefined) {
-          throw new DomainError('workflow_evidence_not_owned', 'Spec revision does not belong to this workflow/session');
-        }
-        const spec = await repository.getSpec(draftRevision.spec_id);
-        if (spec?.current_revision_id !== input.revision_id) {
-          throw new DomainError('workflow_evidence_not_owned', 'Submitted Spec revision is not current for this workflow');
-        }
-        const submitted = await this.specPlan.submitItemSpecForApprovalWithRepository(
-          repository,
-          workflow.development_plan_id,
-          workflow.development_plan_item_id,
-          input,
-        );
-        const revisionId = this.requireString(submitted.current_revision_id, 'Submitted Spec current revision is missing');
-        if (revisionId !== input.revision_id) {
-          throw new DomainError('workflow_evidence_not_owned', 'Submitted Spec current revision does not match route revision');
-        }
-        const revision = await repository.getSpecRevision(revisionId);
-        this.assertOwnedDocumentRevision(workflow, revision, 'Spec revision');
-        const session = await this.requireActiveSession(repository, workflow);
-        const updated = await this.applyTransition(
-          repository,
-          workflow,
-          {
-            actor_id: input.actor_id,
-            to_status: 'spec_review',
-            evidence_object_type: 'spec_revision',
-            evidence_object_id: revisionId,
-            reason: input.reason,
-          },
-          session.id,
-          this.now(),
-        );
-        return this.toPublicWorkflowDto(updated, session);
-      }),
-    );
-  }
-
-  async approveSpec(workflowId: string, input: WorkflowRevisionCommandDto) {
+  private async approveSpecArtifactRevision(
+    workflowId: string,
+    revisionId: string,
+    input: ApproveWorkflowArtifactRevisionBodyDto,
+  ) {
     return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const workflow = await this.requireWorkflow(repository, workflowId);
@@ -398,162 +1272,61 @@ export class PlanItemWorkflowService {
         if (workflow.status !== 'spec_review') {
           throw new DomainError('workflow_invalid_transition', 'Spec approval requires spec_review');
         }
-        const beforeRevision = await repository.getSpecRevision(input.revision_id);
+        const beforeRevision = await repository.getSpecRevision(revisionId);
         this.assertOwnedDocumentRevision(workflow, beforeRevision, 'Spec revision');
         if (beforeRevision === undefined) {
           throw new DomainError('workflow_evidence_not_owned', 'Spec revision does not belong to this workflow/session');
         }
         const spec = await repository.getSpec(beforeRevision.spec_id);
-        if (spec?.current_revision_id !== input.revision_id) {
+        if (spec?.current_revision_id !== revisionId) {
           throw new DomainError('workflow_evidence_not_owned', 'Approved Spec revision is not current for this workflow');
         }
-        await this.specPlan.approveItemSpecWithRepository(
-          repository,
-          workflow.development_plan_id,
-          workflow.development_plan_item_id,
-          input,
-        );
-        const approvedRevision = await repository.getSpecRevision(input.revision_id);
-        this.assertOwnedDocumentRevision(workflow, approvedRevision, 'Spec revision');
-        const session = await this.requireActiveSession(repository, workflow);
-        const updated = await this.applyTransition(
-          repository,
-          workflow,
-          {
-            actor_id: input.actor_id,
-            to_status: 'implementation_plan_generation_queued',
-            evidence_object_type: 'spec_revision',
-            evidence_object_id: input.revision_id,
-            reason: input.reason,
-          },
-          session.id,
-          this.now(),
-        );
-        return this.toPublicWorkflowDto(updated, session);
-      }),
-    );
-  }
-
-  async generateImplementationPlanRevision(workflowId: string, input: WorkflowActorCommandDto) {
-    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
-      action: 'submit_document_gate',
-      intent: 'draft_implementation_plan_doc',
-      expectedStatus: 'implementation_plan_generation_queued',
-      operation: 'implementation-plan-generate-draft',
-    });
-    return this.specPlan.generateItemImplementationPlanDraft(
-      workflow.development_plan_id,
-      workflow.development_plan_item_id,
-      input,
-      context,
-    );
-  }
-
-  async generateImplementationPlanRevisionRuntime(workflowId: string, input: WorkflowActorCommandDto) {
-    const replay = await this.replayPendingRuntimeGeneration(workflowId, input.actor_id, {
-      action: 'submit_document_gate',
-      expectedStatus: 'implementation_plan_generation_queued',
-      taskKind: 'implementation_plan',
-    });
-    if (replay !== undefined) {
-      return replay.result;
-    }
-    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
-      action: 'submit_document_gate',
-      intent: 'draft_implementation_plan_doc',
-      expectedStatus: 'implementation_plan_generation_queued',
-      operation: 'implementation-plan-runtime-generate',
-    });
-    return this.specPlan.generateItemImplementationPlanRevisionRuntime(
-      workflow.development_plan_id,
-      workflow.development_plan_item_id,
-      input,
-      context,
-    );
-  }
-
-  async regenerateImplementationPlanRevision(workflowId: string, input: RegenerateArtifactDraftCommandDto) {
-    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, this.requireActorId(input.actor_id), {
-      action: 'submit_document_gate',
-      intent: 'revise_implementation_plan_doc',
-      expectedStatus: 'implementation_plan_generation_queued',
-      operation: 'implementation-plan-regenerate-draft',
-    });
-    return this.specPlan.regenerateItemImplementationPlanDraft(
-      workflow.development_plan_id,
-      workflow.development_plan_item_id,
-      input,
-      context,
-    );
-  }
-
-  async saveImplementationPlanDraft(workflowId: string, input: WorkflowDraftDocumentBodyDto) {
-    const { workflow, context } = await this.prepareWorkflowChildContext(workflowId, input.actor_id, {
-      action: 'submit_document_gate',
-      intent: 'revise_implementation_plan_doc',
-      expectedStatus: 'implementation_plan_generation_queued',
-      operation: 'implementation-plan-save-draft',
-    });
-    return this.specPlan.saveItemImplementationPlanDraft(
-      workflow.development_plan_id,
-      workflow.development_plan_item_id,
-      input.document,
-      context,
-    );
-  }
-
-  async submitImplementationPlanRevision(workflowId: string, input: WorkflowRevisionCommandDto) {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'submit_document_gate');
-        if (workflow.status !== 'implementation_plan_generation_queued') {
-          throw new DomainError('workflow_invalid_transition', 'Implementation Plan submission requires implementation_plan_generation_queued');
-        }
-        const draftRevision = await repository.getExecutionPlanRevision(input.revision_id);
-        this.assertOwnedDocumentRevision(workflow, draftRevision, 'Implementation Plan revision');
-        if (draftRevision === undefined) {
+        if (spec.status === 'in_review') {
+          await this.specPlan.approveItemSpecWithRepository(
+            repository,
+            workflow.development_plan_id,
+            workflow.development_plan_item_id,
+            {
+              actor_id: input.actor_id,
+              ...(input.decision_markdown === undefined ? {} : { rationale: input.decision_markdown }),
+            },
+          );
+        } else if (
+          spec.status !== 'approved' ||
+          spec.approved_revision_id !== revisionId ||
+          spec.approved_by_actor_id === undefined ||
+          spec.approved_at === undefined
+        ) {
           throw new DomainError(
-            'workflow_evidence_not_owned',
-            'Implementation Plan revision does not belong to this workflow/session',
+            'workflow_evidence_type_invalid',
+            'Spec approval requires an in-review or current approved Spec revision',
           );
         }
-        const executionPlan = await repository.getExecutionPlan(draftRevision.execution_plan_id);
-        if (executionPlan?.current_revision_id !== input.revision_id) {
-          throw new DomainError('workflow_evidence_not_owned', 'Submitted Implementation Plan revision is not current for this workflow');
-        }
-        const submitted = await this.specPlan.submitItemImplementationPlanForApprovalWithRepository(
-          repository,
-          workflow.development_plan_id,
-          workflow.development_plan_item_id,
-          input,
-        );
-        const revisionId = this.requireString(submitted.current_revision_id, 'Submitted Implementation Plan current revision is missing');
-        if (revisionId !== input.revision_id) {
-          throw new DomainError('workflow_evidence_not_owned', 'Submitted Implementation Plan current revision does not match route revision');
-        }
-        const revision = await repository.getExecutionPlanRevision(revisionId);
-        this.assertOwnedDocumentRevision(workflow, revision, 'Implementation Plan revision');
         const session = await this.requireActiveSession(repository, workflow);
-        const updated = await this.applyTransition(
-          repository,
-          workflow,
-          {
-            actor_id: input.actor_id,
-            to_status: 'implementation_plan_review',
-            evidence_object_type: 'implementation_plan_revision',
-            evidence_object_id: revisionId,
-            reason: input.reason,
-          },
-          session.id,
-          this.now(),
-        );
-        return this.toPublicWorkflowDto(updated, session);
+        const dto: WorkflowTransitionCommandDto = {
+          actor_id: input.actor_id,
+          to_status: 'implementation_plan_generation_queued',
+          evidence_object_type: 'spec_revision',
+          evidence_object_id: revisionId,
+          reason: input.decision_markdown,
+        };
+        await this.validateTransitionEvidence(repository, workflow, dto);
+        const updated = await this.applyTransition(repository, workflow, dto, session.id, this.now());
+        const queuedAction = await this.enqueueWorkflowAction(repository, updated, session, {
+          kind: 'generate_implementation_plan_doc',
+          actor_id: input.actor_id,
+          source_revision_id: revisionId,
+        });
+        return this.toPublicWorkflowDto(updated, session, [queuedAction]);
       }),
     );
   }
 
-  async approveImplementationPlan(workflowId: string, input: WorkflowRevisionCommandDto) {
+  private async approveImplementationPlanArtifactRevision(
+    workflowId: string,
+    revisionId: string,
+    input: ApproveWorkflowArtifactRevisionBodyDto,
+  ) {
     return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const workflow = await this.requireWorkflow(repository, workflowId);
@@ -561,7 +1334,7 @@ export class PlanItemWorkflowService {
         if (workflow.status !== 'implementation_plan_review') {
           throw new DomainError('workflow_invalid_transition', 'Implementation Plan approval requires implementation_plan_review');
         }
-        const revision = await repository.getExecutionPlanRevision(input.revision_id);
+        const revision = await repository.getExecutionPlanRevision(revisionId);
         this.assertOwnedDocumentRevision(workflow, revision, 'Implementation Plan revision');
         if (revision === undefined) {
           throw new DomainError(
@@ -570,361 +1343,472 @@ export class PlanItemWorkflowService {
           );
         }
         const executionPlan = await repository.getExecutionPlan(revision.execution_plan_id);
-        if (executionPlan?.current_revision_id !== input.revision_id) {
+        if (executionPlan?.current_revision_id !== revisionId) {
           throw new DomainError('workflow_evidence_not_owned', 'Approved Implementation Plan revision is not current for this workflow');
         }
-        await this.specPlan.approveItemImplementationPlanWithRepository(
-          repository,
-          workflow.development_plan_id,
-          workflow.development_plan_item_id,
-          input,
-        );
-        return this.approveImplementationPlanAndMarkExecutionReadyWithRepository(repository, workflowId, {
-          actor_id: input.actor_id,
-          approved_implementation_plan_revision_id: input.revision_id,
-          reason: input.reason,
+        if (executionPlan.status === 'in_review') {
+          await this.specPlan.approveItemImplementationPlanDocumentOnlyWithRepository(
+            repository,
+            workflow.development_plan_id,
+            workflow.development_plan_item_id,
+            {
+              actor_id: input.actor_id,
+              ...(input.decision_markdown === undefined ? {} : { rationale: input.decision_markdown }),
+            },
+          );
+        } else if (
+          executionPlan.status !== 'approved' ||
+          executionPlan.approved_revision_id !== revisionId ||
+          executionPlan.approved_by_actor_id === undefined ||
+          executionPlan.approved_at === undefined
+        ) {
+          throw new DomainError(
+            'workflow_evidence_type_invalid',
+            'Implementation Plan approval requires an in-review or current approved Implementation Plan revision',
+          );
+        }
+        const session = await this.requireActiveSession(repository, workflow);
+        return this.toPublicWorkflowDto(workflow, session, [], {
+          readiness: this.notEvaluatedReadiness(true),
         });
       }),
     );
   }
 
-  async requestBoundaryChanges(workflowId: string, input: RequestWorkflowChangesDto) {
-    const transitionInput = this.manualDecisionInput({
-      actor_id: input.actor_id,
-      to_status: 'brainstorming',
-      manual_decision_kind: 'change_request',
-      reason: input.reason,
-    });
-    if (input.rejected_revision_id !== undefined) {
-      transitionInput.related_object_type = 'boundary_summary_revision';
-      transitionInput.related_object_id = input.rejected_revision_id;
-    }
-    return this.performManualDecisionTransition(workflowId, transitionInput);
-  }
-
-  async requestSpecChanges(workflowId: string, input: RequestWorkflowChangesDto) {
+  private async requestArtifactChangesWithCascade(
+    workflowId: string,
+    artifactType: WorkflowArtifactTypeDto,
+    revisionId: string,
+    input: RequestWorkflowArtifactChangesBodyDto,
+  ) {
     return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
       lockedRepository.withDeliveryTransaction(async (repository) => {
         const workflow = await this.requireWorkflow(repository, workflowId);
         await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'approve_document_gate');
         const session = await this.requireActiveSession(repository, workflow);
-        await this.specPlan.requestItemSpecChangesWithRepository(
-          repository,
-          workflow.development_plan_id,
-          workflow.development_plan_item_id,
-          { actor_id: input.actor_id, rationale: input.reason },
-          { workflow_id: workflow.id, codex_session_id: session.id },
-        );
-        const transitionInput = this.manualDecisionInput({
-          actor_id: input.actor_id,
-          to_status: 'spec_generation_queued',
-          manual_decision_kind: 'change_request',
-          reason: input.reason,
-        });
-        if (input.rejected_revision_id !== undefined) {
-          transitionInput.related_object_type = 'spec_revision';
-          transitionInput.related_object_id = input.rejected_revision_id;
-        }
-        return this.performManualDecisionTransitionWithRepository(repository, workflow, transitionInput);
-      }),
-    );
-  }
-
-  async requestImplementationPlanChanges(workflowId: string, input: RequestWorkflowChangesDto) {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'approve_document_gate');
-        const session = await this.requireActiveSession(repository, workflow);
-        await this.specPlan.requestItemImplementationPlanChangesWithRepository(
-          repository,
-          workflow.development_plan_id,
-          workflow.development_plan_item_id,
-          { actor_id: input.actor_id, rationale: input.reason },
-          { workflow_id: workflow.id, codex_session_id: session.id },
-        );
-        const transitionInput = this.manualDecisionInput({
-          actor_id: input.actor_id,
-          to_status: 'implementation_plan_generation_queued',
-          manual_decision_kind: 'change_request',
-          reason: input.reason,
-        });
-        if (input.rejected_revision_id !== undefined) {
-          transitionInput.related_object_type = 'implementation_plan_revision';
-          transitionInput.related_object_id = input.rejected_revision_id;
-        }
-        return this.performManualDecisionTransitionWithRepository(repository, workflow, transitionInput);
-      }),
-    );
-  }
-
-  async blockWorkflow(workflowId: string, input: ManualDecisionBodyDto) {
-    return this.performManualDecisionTransition(workflowId, {
-      actor_id: input.actor_id,
-      to_status: 'blocked',
-      manual_decision_kind: 'block',
-      reason: input.reason,
-    });
-  }
-
-  async recoverWorkflow(workflowId: string, input: ManualDecisionBodyDto) {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        if (
-          workflow.status !== 'blocked' ||
-          workflow.previous_status === undefined ||
-          workflow.previous_status === 'blocked' ||
-          workflow.previous_status === 'archived'
-        ) {
-          throw new DomainError('workflow_invalid_transition', 'Blocked workflow has no recoverable previous status');
-        }
-        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'recover');
-        return this.performManualDecisionTransitionWithRepository(repository, workflow, {
-          actor_id: input.actor_id,
-          to_status: workflow.previous_status,
-          manual_decision_kind: 'recover',
-          reason: input.reason,
-        });
-      }),
-    );
-  }
-
-  async archiveWorkflow(workflowId: string, input: ManualDecisionBodyDto) {
-    return this.performManualDecisionTransition(workflowId, {
-      actor_id: input.actor_id,
-      to_status: 'archived',
-      manual_decision_kind: 'archive',
-      reason: input.reason,
-    });
-  }
-
-  async approveImplementationPlanAndMarkExecutionReady(
-    workflowId: string,
-    input: ApproveImplementationPlanAndMarkExecutionReadyDto,
-  ) {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction((repository) =>
-        this.approveImplementationPlanAndMarkExecutionReadyWithRepository(repository, workflowId, input),
-      ),
-    );
-  }
-
-  async forkCodexSession(workflowId: string, sessionId: string, input: ForkCodexSessionBodyDto) {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'select_fork');
-        const parent = await repository.getCodexSession(sessionId);
-        if (parent === undefined || parent.owner_id !== workflow.id) {
-          throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot fork Codex session ${sessionId}`);
-        }
-        const fork = await repository.createCodexSessionFork({
-          id: randomUUID(),
+        await this.validateChangeRequestRevision(repository, workflow, artifactType, revisionId);
+        await this.assertNoConflictingWorkflowActionsForChangeRequest(repository, workflow.id, artifactType);
+        const changeRequestId = randomUUID();
+        await repository.savePlanItemWorkflowArtifactChangeRequest({
+          id: changeRequestId,
           workflow_id: workflow.id,
-          parent_session_id: sessionId,
-          ...(input.forked_from_turn_id === undefined ? {} : { forked_from_turn_id: input.forked_from_turn_id }),
-          ...(input.forked_from_capsule_id === undefined ? {} : { forked_from_capsule_id: input.forked_from_capsule_id }),
-          fork_reason: input.reason,
-          created_by_actor_id: input.actor_id,
+          artifact_type: artifactType,
+          revision_id: revisionId,
+          reason_markdown: input.reason_markdown,
+          requested_by_actor_id: input.actor_id,
+          created_at: this.now(),
+        });
+        await this.applyArtifactChangeRequestSideEffects(repository, workflow, artifactType, revisionId, input);
+        await repository.invalidateExecutionReadinessRecordsForWorkflow({
+          workflow_id: workflow.id,
+          reason: 'artifact_change_requested',
           now: this.now(),
         });
-        return codexSessionPublicProjection(fork);
-      }),
-    );
-  }
-
-  async selectActiveCodexSessionFork(
-    workflowId: string,
-    sessionId: string,
-    input: SelectCodexSessionForkBodyDto,
-  ) {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'select_fork');
-        const selected = await repository.getCodexSession(sessionId);
-        if (selected === undefined || selected.owner_id !== workflow.id) {
-          throw new DomainError('codex_session_fork_invalid', `codex_session_fork_invalid: Cannot select Codex session fork ${sessionId}`);
-        }
-        const result = await repository.selectActiveCodexSessionFork({
+        await this.archiveExecutionReadyPackageEvidenceForChangeRequest(repository, workflow);
+        await repository.markDependentPlanItemWorkflowQueuedActionsStale({
           workflow_id: workflow.id,
-          selected_codex_session_id: sessionId,
-          manual_decision_id: randomUUID(),
-          transition_id: randomUUID(),
-          actor_id: input.actor_id,
-          reason: input.reason,
+          action_kinds: this.dependentActionKindsForChangeRequest(artifactType),
+          reason: 'artifact_change_requested',
           now: this.now(),
         });
-        return this.toPublicWorkflowDto(result.workflow, result.selectedSession);
-      }),
-    );
-  }
-
-  async startExecution(workflowId: string, input: WorkflowActorCommandDto) {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'start_execution');
-        if (workflow.status !== 'execution_ready') {
-          throw new DomainError('workflow_invalid_transition', 'Execution start requires execution_ready');
-        }
-        const session = await this.requireActiveSession(repository, workflow);
-        const turn = await this.createWorkflowChildTurn(repository, workflow, session, input.actor_id, 'execute_plan', 'execution-start');
-        const result = await this.executions.startExecutionWithRepository(
-          repository,
-          workflow.development_plan_id,
-          workflow.development_plan_item_id,
-          { actor_id: input.actor_id },
-          {
-            workflowId: workflow.id,
-            codexSessionId: session.id,
-            codexSessionTurnId: turn.id,
-          },
+        const transitionInput = this.changeRequestTransitionForArtifact(
+          artifactType,
+          revisionId,
+          input.actor_id,
+          input.reason_markdown,
         );
-        const dto: WorkflowTransitionCommandDto = {
+        const { updated } = await this.performManualDecisionTransitionRecordWithRepository(
+          repository,
+          workflow,
+          transitionInput,
+          this.workflowProjectionPatchAfterChangeRequest(artifactType),
+        );
+        const queuedAction = await this.enqueueWorkflowAction(repository, updated, session, {
+          kind: this.revisionActionKindForChangeRequest(artifactType),
           actor_id: input.actor_id,
-          to_status: 'execution_running',
-          evidence_object_type: 'execution_package',
-          evidence_object_id: result.executionPackage.id,
-          codex_session_turn_id: turn.id,
-          supporting_evidence: [{ object_type: 'run_session', object_id: result.runSessionId }],
-        };
-        await this.validateTransitionEvidence(repository, workflow, dto);
-        const updated = await this.applyTransition(repository, workflow, dto, session.id, this.now());
-        return this.toPublicWorkflowDto(updated, session);
+          source_revision_id: revisionId,
+          change_request_id: changeRequestId,
+        });
+        return this.toPublicWorkflowDto(updated, session, [queuedAction]);
       }),
     );
   }
 
-  sendRunInput(
-    workflowId: string,
-    runSessionId: string,
-    input: RunInputDto,
-    actorContext: ActorContext = {},
-  ): Promise<RunOperatorCommandResponse> {
-    return this.withWorkflowRunSessionCommand(workflowId, runSessionId, actorContext, (workflow) =>
-      this.runControl.createRunInputCommand(runSessionId, input, actorContext, workflow.id),
-    );
-  }
-
-  cancelRun(
-    workflowId: string,
-    runSessionId: string,
-    input: RunControlDto,
-    actorContext: ActorContext = {},
-  ): Promise<RunOperatorCommandResponse> {
-    return this.withWorkflowRunSessionCommand(workflowId, runSessionId, actorContext, (workflow) =>
-      this.runControl.createRunCancelCommand(runSessionId, input, actorContext, workflow.id),
-    );
-  }
-
-  resumeRun(
-    workflowId: string,
-    runSessionId: string,
-    input: RunControlDto,
-    actorContext: ActorContext = {},
-  ): Promise<RunOperatorCommandResponse> {
-    return this.withWorkflowRunSessionCommand(workflowId, runSessionId, actorContext, (workflow) =>
-      this.runControl.createRunResumeCommand(runSessionId, input, actorContext, workflow.id),
-    );
-  }
-
-  private async withWorkflowRunSessionCommand<T>(
-    workflowId: string,
-    runSessionId: string,
-    actorContext: ActorContext,
-    run: (workflow: PlanItemWorkflow, runSession: RunSession) => Promise<T>,
-  ): Promise<T> {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        const runSession = await repository.getRunSession(runSessionId);
-        if (
-          runSession === undefined ||
-          runSession.workflow_id !== workflow.id ||
-          runSession.codex_session_id !== workflow.active_codex_session_id
-        ) {
-          throw new NotFoundException(`RunSession ${runSessionId} not found`);
-        }
-        if (actorContext.authenticatedActorId !== undefined) {
-          await this.assertActorCanMutateWorkflow(repository, workflow, actorContext.authenticatedActorId, 'start_execution');
-        }
-        return run(workflow, runSession);
-      }),
-    );
-  }
-
-  private async approveImplementationPlanAndMarkExecutionReadyWithRepository(
+  private async archiveExecutionReadyPackageEvidenceForChangeRequest(
     repository: DeliveryRepository,
-    workflowId: string,
-    input: ApproveImplementationPlanAndMarkExecutionReadyDto,
-  ) {
-    const workflow = await this.requireWorkflow(repository, workflowId);
-    await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'approve_document_gate');
-    if (workflow.status !== 'implementation_plan_review') {
-      throw new DomainError('workflow_invalid_transition', 'Implementation Plan approval requires implementation_plan_review');
+    workflow: PlanItemWorkflow,
+  ): Promise<void> {
+    if (workflow.execution_package_id === undefined) {
+      return;
     }
-    const revision = await repository.getExecutionPlanRevision(input.approved_implementation_plan_revision_id);
-    if (!this.isOwnedExecutionPlanRevision(workflow, revision)) {
+    const executionPackage = await repository.getExecutionPackage(workflow.execution_package_id);
+    if (
+      executionPackage === undefined ||
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.development_plan_item_id !== workflow.development_plan_item_id ||
+      executionPackage.current_run_session_id !== undefined ||
+      executionPackage.last_run_session_id !== undefined ||
+      executionPackage.deleted_at !== undefined ||
+      executionPackage.phase === 'archived'
+    ) {
+      return;
+    }
+    const now = this.now();
+    await repository.saveExecutionPackage({
+      ...executionPackage,
+      phase: 'archived',
+      activity_state: 'idle',
+      archived_at: now,
+      updated_at: now,
+    });
+  }
+
+  private async enqueueWorkflowAction(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    input: {
+      kind: PlanItemWorkflowQueuedActionKind;
+      actor_id: string;
+      source_revision_id?: string;
+      change_request_id?: string;
+      created_from_message_id?: string;
+    },
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const now = this.now();
+    const contextPreviewDigest = this.contextPreviewDigest(workflow, session, input.kind);
+    const action: PlanItemWorkflowQueuedAction = {
+      id: randomUUID(),
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      kind: input.kind,
+      status: 'queued',
+      ...(input.source_revision_id === undefined ? {} : { source_revision_id: input.source_revision_id }),
+      ...(input.change_request_id === undefined ? {} : { change_request_id: input.change_request_id }),
+      ...(input.created_from_message_id === undefined ? {} : { created_from_message_id: input.created_from_message_id }),
+      ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+      context_preview_digest: contextPreviewDigest,
+      idempotency_key: buildPlanItemWorkflowQueuedActionIdempotencyKey({
+        workflow_id: workflow.id,
+        kind: input.kind,
+        ...(input.source_revision_id === undefined ? {} : { source_revision_id: input.source_revision_id }),
+        ...(input.change_request_id === undefined ? {} : { change_request_id: input.change_request_id }),
+        context_preview_digest: contextPreviewDigest,
+        ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+      }),
+      created_by_actor_id: input.actor_id,
+      created_at: now,
+      updated_at: now,
+    };
+    return repository.createOrReplayPlanItemWorkflowQueuedAction(action);
+  }
+
+  private async validateChangeRequestRevision(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    artifactType: WorkflowArtifactTypeDto,
+    revisionId: string,
+  ) {
+    if (artifactType === 'boundary-summary') {
+      const revision = await repository.getBoundarySummaryRevisionById(revisionId);
+      this.assertOwnedDocumentRevision(workflow, revision, 'Boundary Summary revision');
+      this.assertCurrentArtifactRevision(workflow.active_boundary_summary_revision_id, revisionId, 'Boundary Summary revision');
+      if (revision === undefined) {
+        throw new DomainError('workflow_evidence_not_owned', 'Boundary Summary revision does not belong to this workflow/session');
+      }
+      const boundarySummary = await repository.getBoundarySummary(revision.boundary_summary_id);
+      if (boundarySummary?.revision_id !== revisionId) {
+        throw new DomainError(
+          'workflow_evidence_not_current',
+          'Boundary Summary revision is not current for its artifact',
+          { current_revision_id: boundarySummary?.revision_id ?? null, requested_revision_id: revisionId },
+        );
+      }
+      return;
+    }
+    if (artifactType === 'spec-doc') {
+      const revision = await repository.getSpecRevision(revisionId);
+      this.assertOwnedDocumentRevision(workflow, revision, 'Spec revision');
+      this.assertCurrentArtifactRevision(workflow.active_spec_doc_revision_id, revisionId, 'Spec revision');
+      if (revision === undefined) {
+        throw new DomainError('workflow_evidence_not_owned', 'Spec revision does not belong to this workflow/session');
+      }
+      const spec = await repository.getSpec(revision.spec_id);
+      if (spec?.current_revision_id !== revisionId) {
+        throw new DomainError(
+          'workflow_evidence_not_current',
+          'Spec revision is not current for its artifact',
+          { current_revision_id: spec?.current_revision_id ?? null, requested_revision_id: revisionId },
+        );
+      }
+      return;
+    }
+    const revision = await repository.getExecutionPlanRevision(revisionId);
+    this.assertOwnedDocumentRevision(workflow, revision, 'Implementation Plan revision');
+    this.assertCurrentArtifactRevision(workflow.active_implementation_plan_doc_revision_id, revisionId, 'Implementation Plan revision');
+    if (revision === undefined) {
+      throw new DomainError('workflow_evidence_not_owned', 'Implementation Plan revision does not belong to this workflow/session');
+    }
+    const executionPlan = await repository.getExecutionPlan(revision.execution_plan_id);
+    if (executionPlan?.current_revision_id !== revisionId) {
       throw new DomainError(
-        'workflow_evidence_not_owned',
-        'Approved Implementation Plan revision does not belong to this workflow/session',
+        'workflow_evidence_not_current',
+        'Implementation Plan revision is not current for its artifact',
+        { current_revision_id: executionPlan?.current_revision_id ?? null, requested_revision_id: revisionId },
       );
+    }
+  }
+
+  private async applyArtifactChangeRequestSideEffects(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    artifactType: WorkflowArtifactTypeDto,
+    revisionId: string,
+    input: RequestWorkflowArtifactChangesBodyDto,
+  ) {
+    if (artifactType === 'boundary-summary') {
+      await this.requestBoundarySummaryChangesWithRepository(repository, workflow, revisionId, input);
+      return;
+    }
+    if (artifactType === 'spec-doc') {
+      await this.requestWorkflowSpecChangesWithRepository(repository, workflow, revisionId);
+      return;
+    }
+    await this.requestWorkflowImplementationPlanChangesWithRepository(repository, workflow, revisionId);
+  }
+
+  private async requestWorkflowSpecChangesWithRepository(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    revisionId: string,
+  ): Promise<void> {
+    const revision = await repository.getSpecRevision(revisionId);
+    this.assertOwnedDocumentRevision(workflow, revision, 'Spec revision');
+    this.assertCurrentArtifactRevision(workflow.active_spec_doc_revision_id, revisionId, 'Spec revision');
+    if (revision === undefined) {
+      throw new DomainError('workflow_evidence_not_owned', 'Spec revision does not belong to this workflow/session');
+    }
+    const spec = await repository.getSpec(revision.spec_id);
+    if (spec === undefined || spec.workflow_id !== workflow.id || spec.development_plan_item_id !== workflow.development_plan_item_id) {
+      throw new DomainError('workflow_evidence_not_owned', 'Spec does not belong to this workflow/session');
+    }
+    await repository.saveSpec({
+      ...spec,
+      status: 'draft',
+      editing_state: 'idle',
+      gate_state: 'changes_requested',
+      resolution: 'none',
+      updated_at: this.now(),
+    });
+    const item = await repository.getDevelopmentPlanItem(workflow.development_plan_item_id);
+    if (item !== undefined) {
+      await repository.saveDevelopmentPlanItem({
+        ...item,
+        spec_status: 'changes_requested',
+        implementation_plan_status: 'missing',
+        next_action: 'revise_spec',
+        updated_at: this.now(),
+      });
+    }
+  }
+
+  private async requestWorkflowImplementationPlanChangesWithRepository(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    revisionId: string,
+  ): Promise<void> {
+    const revision = await repository.getExecutionPlanRevision(revisionId);
+    this.assertOwnedDocumentRevision(workflow, revision, 'Implementation Plan revision');
+    this.assertCurrentArtifactRevision(workflow.active_implementation_plan_doc_revision_id, revisionId, 'Implementation Plan revision');
+    if (revision === undefined) {
+      throw new DomainError('workflow_evidence_not_owned', 'Implementation Plan revision does not belong to this workflow/session');
     }
     const executionPlan = await repository.getExecutionPlan(revision.execution_plan_id);
     if (
-      executionPlan?.approved_revision_id !== revision.id ||
-      executionPlan.approved_at === undefined ||
-      executionPlan.approved_by_actor_id === undefined
+      executionPlan === undefined ||
+      executionPlan.workflow_id !== workflow.id ||
+      executionPlan.development_plan_item_id !== workflow.development_plan_item_id
     ) {
+      throw new DomainError('workflow_evidence_not_owned', 'Implementation Plan does not belong to this workflow/session');
+    }
+    await repository.saveExecutionPlan({
+      ...executionPlan,
+      status: 'changes_requested',
+      updated_at: this.now(),
+    });
+    const item = await repository.getDevelopmentPlanItem(workflow.development_plan_item_id);
+    if (item !== undefined) {
+      await repository.saveDevelopmentPlanItem({
+        ...item,
+        implementation_plan_status: 'changes_requested',
+        next_action: 'revise_implementation_plan',
+        updated_at: this.now(),
+      });
+    }
+  }
+
+  private async requestBoundarySummaryChangesWithRepository(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    revisionId: string,
+    input: RequestWorkflowArtifactChangesBodyDto,
+  ) {
+    const revision = await repository.getBoundarySummaryRevisionById(revisionId);
+    this.assertOwnedDocumentRevision(workflow, revision, 'Boundary Summary revision');
+    if (revision === undefined) {
+      throw new DomainError('workflow_evidence_not_owned', 'Boundary Summary revision does not belong to this workflow/session');
+    }
+    this.assertCurrentArtifactRevision(workflow.active_boundary_summary_revision_id, revisionId, 'Boundary Summary revision');
+    const sessionId = this.boundarySummaryRevisionSessionId(revision);
+    if (sessionId === undefined) {
+      throw new DomainError('workflow_evidence_missing', 'Boundary Summary revision session is missing');
+    }
+    const session = await repository.getBrainstormingSession(sessionId);
+    if (
+      session === undefined ||
+      session.workflow_id !== workflow.id ||
+      session.codex_session_id !== workflow.active_codex_session_id ||
+      session.development_plan_item_id !== workflow.development_plan_item_id
+    ) {
+      throw new DomainError('workflow_evidence_not_owned', 'Boundary Summary session does not belong to this workflow/session');
+    }
+    const now = this.now();
+    await repository.updateBoundarySummaryRevision({
+      ...revision,
+      status: 'superseded',
+    } as BoundarySummaryRevision);
+    await repository.saveBrainstormingSession({
+      ...session,
+      revision_id: randomUUID(),
+      status: 'changes_requested',
+      approval_state: 'changes_requested',
+      updated_at: now,
+    });
+  }
+
+  private changeRequestTransitionForArtifact(
+    artifactType: WorkflowArtifactTypeDto,
+    revisionId: string,
+    actorId: string,
+    reason: string,
+  ): ManualDecisionTransitionInput {
+    if (artifactType === 'boundary-summary') {
+      return this.manualDecisionInput({
+        actor_id: actorId,
+        to_status: 'brainstorming',
+        manual_decision_kind: 'change_request',
+        reason,
+        related_object_type: 'boundary_summary_revision',
+        related_object_id: revisionId,
+      });
+    }
+    if (artifactType === 'spec-doc') {
+      return this.manualDecisionInput({
+        actor_id: actorId,
+        to_status: 'spec_generation_queued',
+        manual_decision_kind: 'change_request',
+        reason,
+        related_object_type: 'spec_revision',
+        related_object_id: revisionId,
+      });
+    }
+    return this.manualDecisionInput({
+      actor_id: actorId,
+      to_status: 'implementation_plan_generation_queued',
+      manual_decision_kind: 'change_request',
+      reason,
+      related_object_type: 'implementation_plan_revision',
+      related_object_id: revisionId,
+    });
+  }
+
+  private dependentActionKindsForChangeRequest(artifactType: WorkflowArtifactTypeDto): PlanItemWorkflowQueuedActionKind[] {
+    if (artifactType === 'boundary-summary') {
+      return ['generate_spec_doc', 'revise_spec_doc', 'generate_implementation_plan_doc', 'revise_implementation_plan_doc'];
+    }
+    if (artifactType === 'spec-doc') {
+      return ['generate_implementation_plan_doc', 'revise_implementation_plan_doc'];
+    }
+    return ['revise_implementation_plan_doc'];
+  }
+
+  private revisionActionKindForChangeRequest(artifactType: WorkflowArtifactTypeDto): PlanItemWorkflowQueuedActionKind {
+    if (artifactType === 'boundary-summary') return 'revise_boundary_summary';
+    if (artifactType === 'spec-doc') return 'revise_spec_doc';
+    return 'revise_implementation_plan_doc';
+  }
+
+  private workflowProjectionPatchAfterChangeRequest(
+    artifactType: WorkflowArtifactTypeDto,
+  ): ApplyPlanItemWorkflowTransitionInput['projection_patch'] {
+    if (artifactType === 'boundary-summary') {
+      return {
+        active_boundary_summary_revision_id: null,
+        active_spec_doc_revision_id: null,
+        active_implementation_plan_doc_revision_id: null,
+        execution_package_id: null,
+      };
+    }
+    if (artifactType === 'spec-doc') {
+      return {
+        active_spec_doc_revision_id: null,
+        active_implementation_plan_doc_revision_id: null,
+        execution_package_id: null,
+      };
+    }
+    return {
+      active_implementation_plan_doc_revision_id: null,
+      execution_package_id: null,
+    };
+  }
+
+  private async assertNoConflictingWorkflowActionsForChangeRequest(
+    repository: DeliveryRepository,
+    workflowId: string,
+    artifactType: WorkflowArtifactTypeDto,
+  ) {
+    const activeActions = await repository.listActivePlanItemWorkflowQueuedActions(workflowId);
+    if (artifactType === 'implementation-plan-doc') {
+      const pendingAction = activeActions.find((action) => action.status === 'queued' || action.status === 'running');
+      if (pendingAction !== undefined) {
+        throw new DomainError(
+          'workflow_action_already_pending',
+          `workflow_action_already_pending: Queued action ${pendingAction.id} is ${pendingAction.status}`,
+        );
+      }
+      return;
+    }
+    const dependentKinds = new Set(this.dependentActionKindsForChangeRequest(artifactType));
+    const pendingAction = activeActions.find(
+      (action) =>
+        action.status === 'running' ||
+        (action.status === 'queued' && !dependentKinds.has(action.kind)),
+    );
+    if (pendingAction !== undefined) {
       throw new DomainError(
-        'workflow_evidence_not_owned',
-        'Implementation Plan revision is not approved for execution readiness',
+        'workflow_action_already_pending',
+        `workflow_action_already_pending: Queued action ${pendingAction.id} is ${pendingAction.status}`,
       );
     }
-    if (
-      workflow.active_boundary_summary_revision_id === undefined ||
-      workflow.active_spec_doc_revision_id === undefined ||
-      workflow.active_codex_session_id === undefined
-    ) {
-      throw new DomainError('workflow_evidence_type_invalid', 'Execution readiness requires active approved document revisions');
-    }
+  }
 
-    await this.specPlan.projectItemApprovedImplementationPlanForExecutionWithRepository(
-      repository,
-      workflow.development_plan_id,
-      workflow.development_plan_item_id,
-      {
-        actor_id: input.actor_id,
-        approved_implementation_plan_revision_id: revision.id,
-        reason: input.reason,
-      },
-    );
-
-    const workflowWithApprovedPlan: PlanItemWorkflow = {
-      ...workflow,
-      active_implementation_plan_doc_revision_id: revision.id,
-    };
-    const readiness = await this.createExecutionReadinessRecordForApprovedPlan(
-      repository,
-      workflowWithApprovedPlan,
-      input.actor_id,
-    );
-    const dto: WorkflowTransitionCommandDto = {
-      actor_id: input.actor_id,
-      to_status: 'execution_ready',
-      evidence_object_type: 'execution_readiness_record',
-      evidence_object_id: readiness.id,
-      supporting_evidence: [{ object_type: 'implementation_plan_revision', object_id: revision.id }],
-      reason: input.reason,
-    };
-    await this.validateTransitionEvidence(repository, workflowWithApprovedPlan, dto);
-    const updated = await this.applyTransition(repository, workflow, dto, workflow.active_codex_session_id, this.now(), {
-      active_implementation_plan_doc_revision_id: revision.id,
+  private contextPreviewDigest(
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    actionKind: PlanItemWorkflowQueuedActionKind,
+  ): string {
+    return codexCanonicalDigest({
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      development_plan_id: workflow.development_plan_id,
+      development_plan_item_id: workflow.development_plan_item_id,
+      workflow_status: workflow.status,
+      active_boundary_summary_revision_id: workflow.active_boundary_summary_revision_id ?? null,
+      active_spec_doc_revision_id: workflow.active_spec_doc_revision_id ?? null,
+      active_implementation_plan_doc_revision_id: workflow.active_implementation_plan_doc_revision_id ?? null,
+      latest_capsule_digest: session.latest_capsule_digest ?? null,
+      action_kind: actionKind,
     });
-    const session = await this.requireActiveSession(repository, updated);
-    return this.toPublicWorkflowDto(updated, session);
   }
 
   private async performManualDecisionTransition(
@@ -950,6 +1834,16 @@ export class PlanItemWorkflowService {
     workflow: PlanItemWorkflow,
     input: ManualDecisionTransitionInput,
   ) {
+    const { updated, session } = await this.performManualDecisionTransitionRecordWithRepository(repository, workflow, input);
+    return this.toPublicWorkflowDto(updated, session);
+  }
+
+  private async performManualDecisionTransitionRecordWithRepository(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    input: ManualDecisionTransitionInput,
+    projectionPatch?: ApplyPlanItemWorkflowTransitionInput['projection_patch'],
+  ): Promise<{ updated: PlanItemWorkflow; session: CodexSession }> {
     const session = await this.requireActiveSession(repository, workflow);
     const now = this.now();
     const decision = await this.createManualDecision(repository, workflow, {
@@ -966,8 +1860,8 @@ export class PlanItemWorkflowService {
       reason: input.reason,
     };
     await this.validateTransitionEvidence(repository, workflow, dto);
-    const updated = await this.applyTransition(repository, workflow, dto, session.id, now);
-    return this.toPublicWorkflowDto(updated, session);
+    const updated = await this.applyTransition(repository, workflow, dto, session.id, now, projectionPatch);
+    return { updated, session };
   }
 
   private async createManualDecision(
@@ -1002,82 +1896,6 @@ export class PlanItemWorkflowService {
     }
     await repository.saveWorkflowManualDecision(decision);
     return decision;
-  }
-
-  private assertGenericTransitionDoesNotBypassDocumentGate(
-    workflow: PlanItemWorkflow,
-    dto: WorkflowTransitionCommandDto,
-  ): void {
-    const bypassesDedicatedDocumentRoute =
-      (workflow.status === 'brainstorming' &&
-        dto.to_status === 'boundary_review' &&
-        dto.evidence_object_type === 'boundary_summary_revision') ||
-      (workflow.status === 'boundary_review' &&
-        dto.to_status === 'spec_generation_queued' &&
-        dto.evidence_object_type === 'boundary_summary_revision') ||
-      (workflow.status === 'spec_generation_queued' &&
-        dto.to_status === 'spec_review' &&
-        dto.evidence_object_type === 'spec_revision') ||
-      (workflow.status === 'spec_review' &&
-        dto.to_status === 'implementation_plan_generation_queued' &&
-        dto.evidence_object_type === 'spec_revision') ||
-      (workflow.status === 'implementation_plan_generation_queued' &&
-        dto.to_status === 'implementation_plan_review' &&
-        dto.evidence_object_type === 'implementation_plan_revision') ||
-      (workflow.status === 'implementation_plan_review' &&
-        dto.to_status === 'execution_ready' &&
-        dto.evidence_object_type === 'execution_readiness_record');
-    if (bypassesDedicatedDocumentRoute) {
-      throw new DomainError(
-        'workflow_invalid_transition',
-        'workflow_invalid_transition: Document gate transitions must use the dedicated PlanItemWorkflow document routes',
-      );
-    }
-  }
-
-  private async replayPendingRuntimeGeneration(
-    workflowId: string,
-    actorId: string,
-    input: {
-      action: WorkflowAction;
-      expectedStatus: PlanItemWorkflowStatus;
-      taskKind: PendingRuntimeGenerationKind;
-    },
-  ): Promise<{ result: ProductGenerationScheduleResult } | undefined> {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        if (workflow.status !== input.expectedStatus) {
-          return undefined;
-        }
-        await this.assertActorCanMutateWorkflow(repository, workflow, actorId, input.action);
-        const session = await this.requireActiveSession(repository, workflow);
-        const context = {
-          workflow_id: workflow.id,
-          codex_session_id: session.id,
-        };
-        const result =
-          input.taskKind === 'spec'
-            ? await this.specPlan.replayScheduledItemSpecRevisionRuntimeWithRepository(
-                repository,
-                workflow.development_plan_id,
-                workflow.development_plan_item_id,
-                { actor_id: actorId },
-                context,
-              )
-            : await this.specPlan.replayScheduledItemImplementationPlanRevisionRuntimeWithRepository(
-                repository,
-                workflow.development_plan_id,
-                workflow.development_plan_item_id,
-                { actor_id: actorId },
-                context,
-              );
-        if (result !== undefined) {
-          return { result };
-        }
-        return undefined;
-      }),
-    );
   }
 
   private transitionCheck(input: {
@@ -1143,7 +1961,17 @@ export class PlanItemWorkflowService {
     repository: DeliveryRepository,
     workflow: PlanItemWorkflow,
     actorId: string,
-  ) {
+  ): Promise<ExecutionPackageBoundaryResult> {
+    const blockers: ExecutionReadinessBlockerCode[] = [];
+    const addBlocker = (code: ExecutionReadinessBlockerCode): void => {
+      if (!blockers.includes(code)) blockers.push(code);
+    };
+
+    if (workflow.active_boundary_summary_revision_id === undefined) addBlocker('boundary_summary_revision_missing');
+    if (workflow.active_spec_doc_revision_id === undefined) addBlocker('spec_doc_revision_missing');
+    if (workflow.active_implementation_plan_doc_revision_id === undefined) addBlocker('implementation_plan_doc_revision_missing');
+    if (workflow.active_codex_session_id === undefined) addBlocker('codex_session_missing');
+
     if (
       workflow.active_boundary_summary_revision_id === undefined ||
       workflow.active_spec_doc_revision_id === undefined ||
@@ -1152,7 +1980,131 @@ export class PlanItemWorkflowService {
     ) {
       throw new DomainError('workflow_evidence_type_invalid', 'Execution readiness requires active approved document revisions');
     }
+
+    const boundaryRevision = await repository.getBoundarySummaryRevisionById(workflow.active_boundary_summary_revision_id);
+    const specRevision = await repository.getSpecRevision(workflow.active_spec_doc_revision_id);
     const implementationPlanRevision = await repository.getExecutionPlanRevision(workflow.active_implementation_plan_doc_revision_id);
+    const session = await repository.getCodexSession(workflow.active_codex_session_id);
+    const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+
+    if (!this.isOwnedDocumentRevision(workflow, boundaryRevision)) addBlocker('boundary_summary_revision_not_current');
+    if (!this.isOwnedDocumentRevision(workflow, specRevision)) addBlocker('spec_doc_revision_not_current');
+    if (!this.isOwnedExecutionPlanRevision(workflow, implementationPlanRevision)) {
+      addBlocker('implementation_plan_doc_revision_not_current');
+    }
+    if (
+      !(await this.artifactsMatchCurrentPlanItemPlanningContent(repository, item, [
+        boundaryRevision?.development_plan_item_revision_id,
+        specRevision?.development_plan_item_revision_id,
+        implementationPlanRevision?.development_plan_item_revision_id,
+      ]))
+    ) {
+      addBlocker('development_plan_item_revision_not_current');
+    }
+
+    if (boundaryRevision !== undefined) {
+      const boundarySummary = await repository.getBoundarySummary(boundaryRevision.boundary_summary_id);
+      if (
+        boundarySummary?.revision_id !== boundaryRevision.id ||
+        boundaryRevision.approved_by_actor_id === undefined ||
+        boundaryRevision.approved_at === undefined
+      ) {
+        addBlocker('boundary_summary_revision_not_current');
+      }
+    }
+
+    if (specRevision !== undefined) {
+      const spec = await repository.getSpec(specRevision.spec_id);
+      if (
+        spec?.current_revision_id !== specRevision.id ||
+        spec.approved_revision_id !== specRevision.id ||
+        spec.approved_by_actor_id === undefined ||
+        spec.approved_at === undefined
+      ) {
+        addBlocker('spec_doc_revision_not_current');
+      }
+      if (specRevision.acceptance_criteria.length === 0) addBlocker('spec_doc_acceptance_criteria_missing');
+      if (specRevision.test_strategy_summary.trim().length === 0) addBlocker('spec_doc_test_strategy_missing');
+      if (
+        specRevision.qa_owner_actor_id === undefined ||
+        specRevision.testability_note === undefined ||
+        specRevision.testability_note.trim().length === 0
+      ) {
+        addBlocker('spec_doc_testability_missing');
+      }
+    }
+
+    if (implementationPlanRevision !== undefined) {
+      const executionPlan = await repository.getExecutionPlan(implementationPlanRevision.execution_plan_id);
+      if (
+        executionPlan?.current_revision_id !== implementationPlanRevision.id ||
+        executionPlan.approved_revision_id !== implementationPlanRevision.id ||
+        executionPlan.approved_by_actor_id === undefined ||
+        executionPlan.approved_at === undefined ||
+        implementationPlanRevision.based_on_spec_revision_id !== workflow.active_spec_doc_revision_id
+      ) {
+        addBlocker('implementation_plan_doc_revision_not_current');
+      }
+      if (!this.implementationPlanRevisionHasReadinessEvidence(implementationPlanRevision)) {
+        addBlocker('implementation_plan_validation_strategy_missing');
+      }
+    }
+
+    if (session === undefined) {
+      addBlocker('codex_session_missing');
+    } else {
+      if (session.role !== 'active' || session.status !== 'idle' || session.active_lease_id !== undefined) {
+        addBlocker('codex_session_not_ready');
+      }
+      if (session.latest_capsule_id === undefined || session.latest_capsule_digest === undefined || session.latest_turn_id === undefined) {
+        addBlocker('codex_session_capsule_lineage_missing');
+      }
+      const latestTurn = session.latest_turn_id === undefined ? undefined : await repository.getCodexSessionTurn(session.latest_turn_id);
+      if (latestTurn === undefined) {
+        addBlocker('codex_session_latest_turn_missing');
+      } else {
+        if (latestTurn.workflow_id !== workflow.id || latestTurn.codex_session_id !== session.id || latestTurn.status !== 'succeeded') {
+          addBlocker('codex_session_latest_turn_not_succeeded');
+        }
+        if (
+          latestTurn.output_capsule_id === undefined ||
+          latestTurn.output_capsule_digest === undefined ||
+          latestTurn.output_capsule_id !== session.latest_capsule_id ||
+          latestTurn.output_capsule_digest !== session.latest_capsule_digest ||
+          implementationPlanRevision?.codex_session_turn_id !== latestTurn.id
+        ) {
+          addBlocker('codex_session_latest_turn_output_mismatch');
+        }
+      }
+    }
+
+    const activeActions = await repository.listActivePlanItemWorkflowQueuedActions(workflow.id);
+    if (activeActions.length > 0) addBlocker('workflow_action_pending');
+
+    const runSessions = await repository.listRunSessions();
+    if (
+      runSessions.some(
+        (runSession) => runSession.workflow_id === workflow.id || runSession.codex_session_id === workflow.active_codex_session_id,
+      )
+    ) {
+      addBlocker('run_session_exists');
+    }
+
+    let executionPackage: ExecutionPackage | undefined;
+    if (blockers.length === 0) {
+      try {
+        executionPackage = await this.ensureExecutionPackageBoundaryForReadiness(
+          repository,
+          workflow,
+          implementationPlanRevision,
+          specRevision,
+          actorId,
+        );
+      } catch {
+        addBlocker('execution_package_boundary_missing');
+      }
+    }
+
     const record = {
       id: randomUUID(),
       workflow_id: workflow.id,
@@ -1165,19 +2117,327 @@ export class PlanItemWorkflowService {
       ...(implementationPlanRevision?.codex_session_turn_id === undefined
         ? {}
         : { codex_session_turn_id: implementationPlanRevision.codex_session_turn_id }),
-      readiness_state: 'ready' as const,
-      blocker_codes: [],
+      readiness_state: blockers.length === 0 ? 'ready' as const : 'not_ready' as const,
+      blocker_codes: blockers,
       supporting_evidence: [
         {
           object_type: 'implementation_plan_revision' as const,
           object_id: workflow.active_implementation_plan_doc_revision_id,
         },
+        ...(executionPackage === undefined
+          ? []
+          : [
+              {
+                object_type: 'execution_package' as const,
+                object_id: executionPackage.id,
+              },
+            ]),
       ],
       created_by_actor_id: actorId,
       created_at: this.now(),
     };
     await repository.saveExecutionReadinessRecord(record);
-    return record;
+    return { readiness: record, ...(executionPackage === undefined ? {} : { executionPackage }) };
+  }
+
+  private implementationPlanRevisionHasReadinessEvidence(revision: ExecutionPlanRevision): boolean {
+    const structuredDocument = revision.structured_document;
+    if (structuredDocument === undefined) {
+      const content = revision.content.toLowerCase();
+      return content.includes('validation') && content.includes('handoff');
+    }
+    const hasNonEmptyStringArray = (key: string) => {
+      const value = structuredDocument[key];
+      return Array.isArray(value) && value.some((entry) => typeof entry === 'string' && entry.trim().length > 0);
+    };
+    return (
+      hasNonEmptyStringArray('validation_strategy') &&
+      (hasNonEmptyStringArray('required_checks') || this.requiredChecksFromStructuredDocument(structuredDocument) !== undefined) &&
+      hasNonEmptyStringArray('handoff_criteria')
+    );
+  }
+
+  private async artifactsMatchCurrentPlanItemPlanningContent(
+    repository: DeliveryRepository,
+    item: DevelopmentPlanItem,
+    artifactPlanItemRevisionIds: Array<string | undefined>,
+  ): Promise<boolean> {
+    const revisions = await repository.listDevelopmentPlanItemRevisions(item.id);
+    for (const revisionId of artifactPlanItemRevisionIds) {
+      if (revisionId === undefined) return false;
+      const revision = revisions.find((candidate) => candidate.id === revisionId);
+      if (revision === undefined) return false;
+      if (this.planItemPlanningContentDigest(revision.snapshot) !== this.planItemPlanningContentDigest(item)) return false;
+    }
+    return true;
+  }
+
+  private planItemPlanningContentDigest(item: DevelopmentPlanItem): string {
+    return codexCanonicalDigest({
+      source_ref: item.source_ref,
+      title: item.title,
+      summary: item.summary,
+      driver_actor_id: item.driver_actor_id,
+      responsible_role: item.responsible_role,
+      reviewer_actor_id: item.reviewer_actor_id,
+      leader_actor_id: item.leader_actor_id,
+      leader_delegate_actor_ids: item.leader_delegate_actor_ids,
+      risk: item.risk,
+      dependency_hints: item.dependency_hints,
+      affected_surfaces: item.affected_surfaces,
+      release_impact: item.release_impact,
+    });
+  }
+
+  private async ensureExecutionPackageBoundaryForReadiness(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    implementationPlanRevision: ExecutionPlanRevision | undefined,
+    specRevision: SpecRevision | undefined,
+    actorId: string,
+  ): Promise<ExecutionPackage> {
+    if (implementationPlanRevision === undefined || specRevision === undefined) {
+      throw new DomainError('workflow_evidence_missing', 'Execution readiness requires approved Spec and Implementation Plan revisions');
+    }
+    const codexSessionId = workflow.active_codex_session_id;
+    if (codexSessionId === undefined) {
+      throw new DomainError('workflow_evidence_missing', 'Execution readiness requires an active Codex Session');
+    }
+    const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+    const workItem = await repository.getWorkItem(item.source_ref.id);
+    if (workItem === undefined) {
+      throw new DomainError('workflow_evidence_missing', 'Execution readiness requires the Plan Item source Work Item');
+    }
+    const project = await repository.getProject(workItem.project_id);
+    if (project === undefined) {
+      throw new DomainError('workflow_evidence_missing', 'Execution readiness requires the source Work Item project');
+    }
+    const repo = (await repository.listProjectRepos(project.id)).find((candidate) => candidate.status === 'active');
+    if (repo === undefined) {
+      throw new DomainError('workflow_evidence_missing', 'Execution readiness requires an active project repository');
+    }
+    const spec = await repository.getSpec(specRevision.spec_id);
+    if (
+      spec === undefined ||
+      spec.workflow_id !== workflow.id ||
+      spec.development_plan_item_id !== workflow.development_plan_item_id
+    ) {
+      throw new DomainError('workflow_evidence_not_owned', 'Execution readiness Spec does not belong to this workflow');
+    }
+    const executionPlan = await repository.getExecutionPlan(implementationPlanRevision.execution_plan_id);
+    if (
+      executionPlan === undefined ||
+      executionPlan.workflow_id !== workflow.id ||
+      executionPlan.development_plan_item_id !== workflow.development_plan_item_id
+    ) {
+      throw new DomainError('workflow_evidence_not_owned', 'Execution readiness Implementation Plan does not belong to this workflow');
+    }
+    const existing =
+      workflow.execution_package_id === undefined ? undefined : await repository.getExecutionPackage(workflow.execution_package_id);
+    if (
+      existing !== undefined &&
+      existing.development_plan_item_id === workflow.development_plan_item_id &&
+      existing.workflow_id === workflow.id &&
+      existing.codex_session_id === codexSessionId &&
+      existing.spec_revision_id === specRevision.id &&
+      existing.execution_plan_id === executionPlan.id &&
+      existing.execution_plan_revision_id === implementationPlanRevision.id &&
+      existing.phase === 'draft' &&
+      existing.activity_state === 'idle' &&
+      existing.gate_state === 'not_submitted' &&
+      existing.current_run_session_id === undefined &&
+      existing.last_run_session_id === undefined
+    ) {
+      return existing;
+    }
+
+    const policy = this.packageBoundaryPolicyForReadiness(item, implementationPlanRevision);
+    const packageAssigneeActorId = item.driver_actor_id ?? workItem.driver_actor_id ?? actorId;
+    const packageActorFields = executionPackageActorFields({
+      assignee_actor_id: packageAssigneeActorId,
+      reviewer_actor_id: item.reviewer_actor_id ?? item.leader_actor_id ?? actorId,
+      qa_owner_actor_id: specRevision.qa_owner_actor_id ?? item.reviewer_actor_id ?? actorId,
+    });
+    const createdAt = this.now();
+    const generated = transitionExecutionPackage(undefined, {
+      type: 'generate_package',
+      id: randomUUID(),
+      work_item_id: workItem.id,
+      spec_id: spec.id,
+      spec_revision_id: specRevision.id,
+      plan_id: executionPlan.id,
+      plan_revision_id: implementationPlanRevision.id,
+      project_id: project.id,
+      repo_id: repo.repo_id,
+      objective: policy.objective,
+      ...packageActorFields,
+      required_checks: policy.required_checks,
+      required_artifact_kinds: ['execution_summary'],
+      allowed_paths: policy.allowed_paths,
+      forbidden_paths: policy.forbidden_paths,
+      source_mutation_policy: 'path_policy_scoped',
+      at: createdAt,
+    });
+    const executionPackage: ExecutionPackage = {
+      ...generated,
+      development_plan_item_id: item.id,
+      workflow_id: workflow.id,
+      codex_session_id: codexSessionId,
+      ...(implementationPlanRevision.codex_session_turn_id === undefined
+        ? {}
+        : { codex_session_turn_id: implementationPlanRevision.codex_session_turn_id }),
+      execution_plan_id: executionPlan.id,
+      execution_plan_revision_id: implementationPlanRevision.id,
+      execution_package_set_id: `plan-item-workflow-readiness:${item.id}:${implementationPlanRevision.id}`,
+      generation_key: 'plan-item-workflow-readiness',
+      package_key: 'default-boundary-package',
+      sequence: 0,
+      manifest_digest: codexCanonicalDigest({
+        workflow_id: workflow.id,
+        implementation_plan_revision_id: implementationPlanRevision.id,
+        spec_revision_id: specRevision.id,
+      }),
+      required_test_gates: [],
+    };
+    validateExecutionPackage(project, executionPackage);
+    await repository.saveExecutionPackage(executionPackage);
+    return executionPackage;
+  }
+
+  private packageBoundaryPolicyForReadiness(
+    item: DevelopmentPlanItem,
+    revision: ExecutionPlanRevision,
+  ): Pick<ExecutionPackage, 'objective' | 'required_checks' | 'allowed_paths' | 'forbidden_paths'> {
+    const structuredDocument = revision.structured_document;
+    const requiredChecks = this.requiredChecksFromStructuredDocument(structuredDocument) ?? [
+      {
+        check_id: 'focused',
+        display_name: 'Focused verification',
+        command: 'pnpm test',
+        timeout_seconds: 120,
+        blocks_review: true,
+      },
+    ];
+    const allowedPaths = this.stringArrayStructuredField(structuredDocument, 'allowed_paths') ?? this.allowedPathsFromAffectedSurfaces(item);
+    const forbiddenPaths = this.stringArrayStructuredField(structuredDocument, 'forbidden_paths') ?? ['.git/**'];
+    return {
+      objective: revision.summary.trim().length > 0 ? revision.summary : `Execution boundary for Plan Item ${item.id}`,
+      required_checks: requiredChecks,
+      allowed_paths: allowedPaths,
+      forbidden_paths: forbiddenPaths,
+    };
+  }
+
+  private requiredChecksFromStructuredDocument(structuredDocument: Record<string, unknown> | undefined): RequiredCheckSpec[] | undefined {
+    const value = structuredDocument?.required_checks;
+    if (!Array.isArray(value)) return undefined;
+    const checks: RequiredCheckSpec[] = [];
+    for (const entry of value) {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return undefined;
+      const record = entry as Record<string, unknown>;
+      const checkId = typeof record.check_id === 'string' ? record.check_id.trim() : '';
+      const command = typeof record.command === 'string' ? record.command.trim() : '';
+      if (checkId.length === 0 || command.length === 0) return undefined;
+      checks.push({
+        check_id: checkId,
+        display_name: typeof record.display_name === 'string' && record.display_name.trim().length > 0
+          ? record.display_name.trim()
+          : checkId,
+        command,
+        timeout_seconds: Number.isInteger(record.timeout_seconds) && Number(record.timeout_seconds) > 0
+          ? Number(record.timeout_seconds)
+          : 120,
+        blocks_review: typeof record.blocks_review === 'boolean' ? record.blocks_review : true,
+      });
+    }
+    return checks.length === 0 ? undefined : checks;
+  }
+
+  private stringArrayStructuredField(structuredDocument: Record<string, unknown> | undefined, key: string): string[] | undefined {
+    const value = structuredDocument?.[key];
+    if (!Array.isArray(value)) return undefined;
+    const entries = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => entry.trim());
+    return entries.length === 0 ? undefined : entries;
+  }
+
+  private allowedPathsFromAffectedSurfaces(item: DevelopmentPlanItem): string[] {
+    const mapped = item.affected_surfaces.flatMap((surface) => this.allowedPathsForAffectedSurface(surface));
+    return [...new Set([...mapped, 'tests/**'])];
+  }
+
+  private allowedPathsForAffectedSurface(surface: string): string[] {
+    const normalized = surface.trim().replace(/^\/+/, '');
+    if (normalized.length === 0) return [];
+    if (normalized.includes('/') || normalized.includes('*') || /\.[a-z0-9]+$/i.test(normalized)) {
+      return [normalized.includes('*') || /\.[a-z0-9]+$/i.test(normalized) ? normalized : `${normalized.replace(/\/+$/, '')}/**`];
+    }
+    const aliases: Record<string, string[]> = {
+      'control-plane-api': ['apps/control-plane-api/**'],
+      api: ['apps/control-plane-api/**'],
+      web: ['apps/web/**'],
+      db: ['packages/db/**'],
+      domain: ['packages/domain/**'],
+      contracts: ['packages/contracts/**'],
+      scripts: ['scripts/**'],
+    };
+    return aliases[normalized] ?? [`${normalized}/**`];
+  }
+
+  private async requireApprovedImplementationPlanRevisionForReadiness(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+  ): Promise<ExecutionPlanRevision> {
+    const plans = await repository.listExecutionPlansForDevelopmentPlanItem(workflow.development_plan_item_id);
+    const approvedPlans = plans
+      .filter((plan) => plan.workflow_id === workflow.id && plan.status === 'approved' && plan.approved_revision_id !== undefined)
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id));
+    const plan = approvedPlans[0];
+    if (plan === undefined || plan.approved_revision_id === undefined) {
+      throw new DomainError('workflow_evidence_type_invalid', 'Execution readiness requires an approved Implementation Plan revision');
+    }
+    const revision = await repository.getExecutionPlanRevision(plan.approved_revision_id);
+    if (!this.isOwnedExecutionPlanRevision(workflow, revision)) {
+      throw new DomainError(
+        'workflow_evidence_not_owned',
+        'Approved Implementation Plan revision does not belong to this workflow/session',
+      );
+    }
+    if (
+      plan.current_revision_id !== revision.id ||
+      plan.approved_by_actor_id === undefined ||
+      plan.approved_at === undefined ||
+      revision.based_on_spec_revision_id !== workflow.active_spec_doc_revision_id
+    ) {
+      throw new DomainError('workflow_evidence_type_invalid', 'Execution readiness requires current approved document revisions');
+    }
+    return revision;
+  }
+
+  private readinessProjectionForRecord(record: ExecutionReadinessRecord): PlanItemWorkflowReadiness {
+    return {
+      state: record.readiness_state === 'ready' ? 'ready' : 'blocked',
+      can_evaluate: record.readiness_state !== 'ready',
+      blocker_codes: record.blocker_codes,
+      evaluated_at: record.created_at,
+      evidence_digest: codexCanonicalDigest({
+        execution_readiness_record_id: record.id,
+        workflow_id: record.workflow_id,
+        approved_boundary_summary_revision_id: record.approved_boundary_summary_revision_id,
+        approved_spec_revision_id: record.approved_spec_revision_id,
+        approved_implementation_plan_revision_id: record.approved_implementation_plan_revision_id,
+        readiness_state: record.readiness_state,
+        blocker_codes: record.blocker_codes,
+      }),
+    };
+  }
+
+  private notEvaluatedReadiness(canEvaluate: boolean): PlanItemWorkflowReadiness {
+    return {
+      state: 'not_evaluated',
+      can_evaluate: canEvaluate,
+      blocker_codes: [],
+    };
   }
 
   private async applyTransition(
@@ -1311,8 +2571,16 @@ export class PlanItemWorkflowService {
       }
       case 'execution_readiness_record': {
         const record = await repository.getExecutionReadinessRecord(evidence.object_id);
+        const executionPackageSupport = record?.supporting_evidence.find(
+          (supporting) => supporting.object_type === 'execution_package',
+        );
+        const executionPackage =
+          executionPackageSupport === undefined ? undefined : await repository.getExecutionPackage(executionPackageSupport.object_id);
         if (
           record === undefined ||
+          executionPackageSupport === undefined ||
+          executionPackage === undefined ||
+          record.invalidated_at !== undefined ||
           record.workflow_id !== workflow.id ||
           record.development_plan_id !== workflow.development_plan_id ||
           record.development_plan_item_id !== workflow.development_plan_item_id ||
@@ -1325,7 +2593,15 @@ export class PlanItemWorkflowService {
             (supporting) =>
               supporting.object_type === 'implementation_plan_revision' &&
               supporting.object_id === workflow.active_implementation_plan_doc_revision_id,
-          )
+          ) ||
+          executionPackage.development_plan_item_id !== workflow.development_plan_item_id ||
+          executionPackage.workflow_id !== workflow.id ||
+          executionPackage.codex_session_id !== workflow.active_codex_session_id ||
+          executionPackage.phase !== 'draft' ||
+          executionPackage.activity_state !== 'idle' ||
+          executionPackage.gate_state !== 'not_submitted' ||
+          executionPackage.current_run_session_id !== undefined ||
+          executionPackage.last_run_session_id !== undefined
         ) {
           throw new DomainError('workflow_evidence_not_owned', 'Execution readiness evidence is not ready for this workflow');
         }
@@ -1342,10 +2618,14 @@ export class PlanItemWorkflowService {
       case 'spec_revision': {
         const revision = await repository.getSpecRevision(evidence.object_id);
         this.assertOwnedDocumentRevision(workflow, revision, 'Spec revision');
+        const spec = revision === undefined ? undefined : await repository.getSpec(revision.spec_id);
         if (
           !evidence.supporting &&
           evidence.to_status === 'implementation_plan_generation_queued' &&
-          this.recordApprovedAt(revision) === undefined
+          (spec === undefined ||
+            spec.approved_revision_id !== revision?.id ||
+            spec.approved_at === undefined ||
+            spec.approved_by_actor_id === undefined)
         ) {
           throw new DomainError('workflow_evidence_type_invalid', 'Spec approval requires an approved Spec revision');
         }
@@ -1445,6 +2725,16 @@ export class PlanItemWorkflowService {
     }
   }
 
+  private assertCurrentArtifactRevision(activeRevisionId: string | undefined, revisionId: string, label: string) {
+    if (activeRevisionId !== revisionId) {
+      throw new DomainError(
+        'workflow_evidence_not_current',
+        `${label} is not the workflow current active revision`,
+        { active_revision_id: activeRevisionId ?? null, requested_revision_id: revisionId },
+      );
+    }
+  }
+
   private isOwnedDocumentRevision(
     workflow: PlanItemWorkflow,
     revision: BoundarySummaryRevision | SpecRevision | ExecutionPlanRevision | undefined,
@@ -1486,88 +2776,6 @@ export class PlanItemWorkflowService {
       throw new DomainError('workflow_active_session_missing', `Active Codex Session ${workflow.active_codex_session_id} does not exist`);
     }
     return session;
-  }
-
-  private async prepareWorkflowChildContext(
-    workflowId: string,
-    actorId: string,
-    input: {
-      action: WorkflowAction;
-      intent: CodexSessionTurn['intent'];
-      expectedStatus: PlanItemWorkflowStatus;
-      operation: string;
-    },
-  ): Promise<{ workflow: PlanItemWorkflow; session: CodexSession; context: PlanItemWorkflowChildContext }> {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        if (workflow.status !== input.expectedStatus) {
-          throw new DomainError(
-            'workflow_invalid_transition',
-            `${input.operation} requires workflow status ${input.expectedStatus}`,
-          );
-        }
-        if (input.operation === 'boundary-brainstorming' && input.action === 'start_brainstorming') {
-          await this.assertActorCanStartBoundaryBrainstorming(repository, workflow, actorId);
-        } else {
-          await this.assertActorCanMutateWorkflow(repository, workflow, actorId, input.action);
-        }
-        const session = await this.requireActiveSession(repository, workflow);
-        const turn = await this.createWorkflowChildTurn(repository, workflow, session, actorId, input.intent, input.operation);
-        return {
-          workflow,
-          session,
-          context: {
-            workflow_id: workflow.id,
-            codex_session_id: session.id,
-            codex_session_turn_id: turn.id,
-          },
-        };
-      }),
-    );
-  }
-
-  private async prepareExistingBoundarySessionContext(
-    workflowId: string,
-    sessionId: string,
-    actorId: string,
-    input: {
-      action: WorkflowAction;
-      intent: CodexSessionTurn['intent'];
-      expectedStatus: PlanItemWorkflowStatus;
-      operation: string;
-    },
-  ): Promise<PlanItemWorkflowChildContext> {
-    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
-      lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
-        if (workflow.status !== input.expectedStatus) {
-          throw new DomainError(
-            'workflow_invalid_transition',
-            `${input.operation} requires workflow status ${input.expectedStatus}`,
-          );
-        }
-        const session = await this.requireActiveSession(repository, workflow);
-        const brainstormingSession = await repository.getBrainstormingSession(sessionId);
-        if (
-          brainstormingSession === undefined ||
-          brainstormingSession.workflow_id !== workflow.id ||
-          brainstormingSession.codex_session_id !== session.id ||
-          brainstormingSession.development_plan_item_id !== workflow.development_plan_item_id
-        ) {
-          throw new DomainError('workflow_evidence_not_owned', 'Boundary Brainstorming Session does not belong to this workflow/session');
-        }
-        if (!this.workflowBoundaryActorCanMutateSession(brainstormingSession, actorId)) {
-          await this.assertActorCanMutateWorkflow(repository, workflow, actorId, input.action);
-        }
-        const turn = await this.createWorkflowChildTurn(repository, workflow, session, actorId, input.intent, input.operation);
-        return {
-          workflow_id: workflow.id,
-          codex_session_id: session.id,
-          codex_session_turn_id: turn.id,
-        };
-      }),
-    );
   }
 
   private async createWorkflowChildTurn(
@@ -1669,13 +2877,6 @@ export class PlanItemWorkflowService {
     return output;
   }
 
-  private workflowBoundaryActorCanMutateSession(
-    session: Pick<BrainstormingSession, 'id' | 'leader_actor_id' | 'leader_delegate_actor_ids'>,
-    actorId: string,
-  ) {
-    return session.leader_actor_id === actorId || (session.leader_delegate_actor_ids ?? []).includes(actorId);
-  }
-
   private actionForTransition(from: PlanItemWorkflowStatus, to: PlanItemWorkflowStatus): WorkflowAction {
     if (to === 'blocked') return 'block';
     if (from === 'blocked') return 'recover';
@@ -1715,21 +2916,43 @@ export class PlanItemWorkflowService {
     return value;
   }
 
-  private toPublicWorkflowDto(workflow: PlanItemWorkflow, session: CodexSession) {
-    return {
-      id: workflow.id,
-      development_plan_id: workflow.development_plan_id,
-      development_plan_item_id: workflow.development_plan_item_id,
-      status: workflow.status,
-      active_codex_session_id: session.id,
-      active_boundary_summary_revision_id: workflow.active_boundary_summary_revision_id,
-      active_spec_doc_revision_id: workflow.active_spec_doc_revision_id,
-      active_implementation_plan_doc_revision_id: workflow.active_implementation_plan_doc_revision_id,
-      execution_package_id: workflow.execution_package_id,
-      session: codexSessionPublicProjection(session),
-      created_at: workflow.created_at,
-      updated_at: workflow.updated_at,
-    };
+  private toPublicWorkflowDto(
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    queuedActions: readonly PlanItemWorkflowQueuedAction[] = [],
+    options: {
+      readiness?: PlanItemWorkflowReadiness;
+      blockers?: Parameters<typeof planItemWorkflowPublicProjection>[0]['blockers'];
+    } = {},
+  ) {
+    return planItemWorkflowPublicProjection({
+      workflow,
+      session,
+      queued_actions: queuedActions,
+      context_preview: {
+        digest: this.contextPreviewDigest(workflow, session, 'continue_brainstorming'),
+        ...(session.latest_capsule_digest === undefined ? {} : { capsule_digest: session.latest_capsule_digest }),
+        ...(workflow.active_boundary_summary_revision_id === undefined
+          ? {}
+          : { boundary_summary_revision_id: workflow.active_boundary_summary_revision_id }),
+        ...(workflow.active_spec_doc_revision_id === undefined ? {} : { spec_doc_revision_id: workflow.active_spec_doc_revision_id }),
+        ...(workflow.active_implementation_plan_doc_revision_id === undefined
+          ? {}
+          : { implementation_plan_doc_revision_id: workflow.active_implementation_plan_doc_revision_id }),
+        queued_action_count: queuedActions.length,
+        updated_at: workflow.updated_at,
+      },
+      ...(options.readiness === undefined ? {} : { readiness: options.readiness }),
+      ...(options.blockers === undefined ? {} : { blockers: options.blockers }),
+    });
+  }
+
+  private publicQueuedAction(workflow: PlanItemWorkflowPublicDto, actionId: string) {
+    const action = workflow.queued_actions.find((candidate) => candidate.id === actionId);
+    if (action === undefined) {
+      throw new DomainError('workflow_action_not_found', `workflow_action_not_found: Queued action ${actionId} is not visible`);
+    }
+    return action;
   }
 
   private now() {

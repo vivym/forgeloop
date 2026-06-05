@@ -1,10 +1,15 @@
+import { createHash } from 'node:crypto';
 import type {
   CodexSessionLeaseStatus,
   CodexSessionRole,
   CodexSessionStatus,
   CodexSessionTurnIntent,
   CodexSessionTurnStatus,
+  PlanItemWorkflowPublicDto,
+  PlanItemWorkflowQueuedActionKind,
+  PlanItemWorkflowQueuedActionStatus,
   PlanItemWorkflowStatus,
+  WorkflowMessageAction,
   WorkflowManualDecisionKind,
   WorkflowTransitionEvidenceObjectType,
 } from '@forgeloop/contracts';
@@ -80,6 +85,41 @@ export interface WorkflowManualDecision {
   created_at: IsoDateTime;
 }
 
+export interface PlanItemWorkflowQueuedAction {
+  id: string;
+  workflow_id: string;
+  codex_session_id: string;
+  kind: PlanItemWorkflowQueuedActionKind;
+  status: PlanItemWorkflowQueuedActionStatus;
+  source_revision_id?: string;
+  change_request_id?: string;
+  created_from_message_id?: string;
+  expected_input_capsule_digest?: string;
+  context_preview_digest: string;
+  idempotency_key: string;
+  codex_session_turn_id?: string;
+  output_capsule_id?: string;
+  output_capsule_digest?: string;
+  output_capsule_sequence?: number;
+  codex_thread_id_digest?: string;
+  blocked_reason_code?: string;
+  created_by_actor_id: string;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export interface PlanItemWorkflowMessage {
+  id: string;
+  workflow_id: string;
+  codex_session_id: string;
+  actor_id: string;
+  action: WorkflowMessageAction;
+  body_markdown: string;
+  created_queued_action_id?: string;
+  client_message_id?: string;
+  created_at: IsoDateTime;
+}
+
 export interface ExecutionReadinessRecord {
   id: string;
   workflow_id: string;
@@ -95,6 +135,8 @@ export interface ExecutionReadinessRecord {
   supporting_evidence: TransitionSupportingEvidence[];
   created_by_actor_id: string;
   created_at: IsoDateTime;
+  invalidated_at?: IsoDateTime;
+  invalidated_reason?: string;
 }
 
 export interface CodexSession {
@@ -238,11 +280,20 @@ const exactTransitions = new Set<string>([
   'brainstorming->boundary_review|boundary_summary_revision|',
   'boundary_review->brainstorming|manual_decision|change_request',
   'boundary_review->spec_generation_queued|boundary_summary_revision|',
+  'spec_generation_queued->brainstorming|manual_decision|change_request',
   'spec_generation_queued->spec_review|spec_revision|',
+  'spec_review->brainstorming|manual_decision|change_request',
   'spec_review->spec_generation_queued|manual_decision|change_request',
   'spec_review->implementation_plan_generation_queued|spec_revision|',
+  'implementation_plan_generation_queued->brainstorming|manual_decision|change_request',
+  'implementation_plan_generation_queued->spec_generation_queued|manual_decision|change_request',
   'implementation_plan_generation_queued->implementation_plan_review|implementation_plan_revision|',
+  'implementation_plan_review->brainstorming|manual_decision|change_request',
+  'implementation_plan_review->spec_generation_queued|manual_decision|change_request',
   'implementation_plan_review->implementation_plan_generation_queued|manual_decision|change_request',
+  'execution_ready->brainstorming|manual_decision|change_request',
+  'execution_ready->spec_generation_queued|manual_decision|change_request',
+  'execution_ready->implementation_plan_generation_queued|manual_decision|change_request',
   'implementation_plan_review->execution_ready|execution_readiness_record|',
   'execution_ready->execution_running|execution_package|',
   'execution_running->code_review|run_session|',
@@ -255,6 +306,9 @@ const exactTransitions = new Set<string>([
 
 const transitionKey = (input: TransitionCheck) =>
   `${input.from_status}->${input.to_status}|${input.evidence_object_type}|${input.manual_decision_kind ?? ''}`;
+
+const workflowError = (code: ConstructorParameters<typeof DomainError>[0], message: string = code, details?: Record<string, unknown>): DomainError =>
+  new DomainError(code, `${code}: ${message}`, details);
 
 export const assertPlanItemWorkflowTransitionAllowed = (input: TransitionCheck): void => {
   if (exactTransitions.has(transitionKey(input))) return;
@@ -347,13 +401,199 @@ const codexSessionContinuityState = (status: CodexSessionStatus): 'ready' | 'run
 };
 
 export const codexSessionPublicProjection = (session: CodexSession) => ({
-  id: session.id,
   status: session.status,
   role: session.role,
   continuity_state: codexSessionContinuityState(session.status),
   can_continue: session.status === 'idle' && session.role === 'active',
   ...(session.latest_turn_id === undefined ? {} : { last_turn_at: session.updated_at }),
   ...(session.status === 'blocked' ? { blocked_reason_code: 'codex_session_blocked' } : {}),
+});
+
+export const mapQueuedActionKindToTurnIntent = (kind: PlanItemWorkflowQueuedActionKind): CodexSessionTurnIntent => {
+  switch (kind) {
+    case 'continue_brainstorming':
+      return 'continue_brainstorming';
+    case 'generate_boundary_summary':
+      return 'draft_boundary_summary';
+    case 'revise_boundary_summary':
+      return 'revise_boundary_summary';
+    case 'generate_spec_doc':
+      return 'draft_spec_doc';
+    case 'revise_spec_doc':
+      return 'revise_spec_doc';
+    case 'generate_implementation_plan_doc':
+      return 'draft_implementation_plan_doc';
+    case 'revise_implementation_plan_doc':
+      return 'revise_implementation_plan_doc';
+  }
+};
+
+const workflowMessageActions = new Set<WorkflowMessageAction>(['answer_boundary_question', 'continue_ai']);
+
+export const assertWorkflowMessageAllowed = (input: {
+  action: string;
+  workflow_status: PlanItemWorkflowStatus;
+  active_codex_session_id?: string;
+  active_codex_action_count: number;
+}): void => {
+  if (!workflowMessageActions.has(input.action as WorkflowMessageAction)) {
+    throw workflowError('workflow_invalid_message_action', `Invalid workflow message action ${input.action}`);
+  }
+
+  if (input.workflow_status !== 'brainstorming') {
+    throw workflowError('workflow_invalid_message_action', `Workflow message action ${input.action} is only valid during brainstorming.`);
+  }
+
+  if (input.active_codex_action_count > 0) {
+    throw workflowError('workflow_action_already_pending', 'A queued or running workflow action already exists.');
+  }
+
+  if (input.active_codex_session_id === undefined || input.active_codex_session_id.trim() === '') {
+    throw workflowError('workflow_action_not_active_session', 'Workflow message requires an active Codex session.');
+  }
+};
+
+export const assertQueuedActionCanRun = (input: {
+  action: Pick<
+    PlanItemWorkflowQueuedAction,
+    | 'id'
+    | 'workflow_id'
+    | 'codex_session_id'
+    | 'kind'
+    | 'status'
+    | 'expected_input_capsule_digest'
+    | 'context_preview_digest'
+  >;
+  workflow_id: string;
+  active_codex_session_id?: string;
+  latest_capsule_digest?: string;
+  context_preview_digest: string;
+}): void => {
+  if (input.action.workflow_id !== input.workflow_id) {
+    throw workflowError('workflow_action_not_runnable', 'Queued action does not belong to the workflow.', {
+      action_id: input.action.id,
+      workflow_id: input.workflow_id,
+    });
+  }
+
+  if (
+    input.active_codex_session_id === undefined ||
+    input.action.codex_session_id !== input.active_codex_session_id
+  ) {
+    throw workflowError('workflow_action_not_active_session', 'Queued action does not target the active Codex session.', {
+      action_id: input.action.id,
+      active_codex_session_id: input.active_codex_session_id,
+    });
+  }
+
+  if (input.action.status !== 'queued') {
+    throw workflowError('workflow_action_not_runnable', 'Queued action is not in queued status.', {
+      action_id: input.action.id,
+      status: input.action.status,
+    });
+  }
+
+  if (
+    input.action.expected_input_capsule_digest !== undefined &&
+    input.action.expected_input_capsule_digest !== input.latest_capsule_digest
+  ) {
+    throw workflowError('workflow_capsule_digest_mismatch', 'Queued action input capsule digest is stale.', {
+      action_id: input.action.id,
+      expected_input_capsule_digest: input.action.expected_input_capsule_digest,
+      latest_capsule_digest: input.latest_capsule_digest,
+    });
+  }
+
+  if (input.action.context_preview_digest !== input.context_preview_digest) {
+    throw workflowError('workflow_context_digest_mismatch', 'Queued action context preview digest is stale.', {
+      action_id: input.action.id,
+      expected_context_preview_digest: input.action.context_preview_digest,
+      context_preview_digest: input.context_preview_digest,
+    });
+  }
+};
+
+export const buildPlanItemWorkflowQueuedActionIdempotencyKey = (input: {
+  workflow_id: string;
+  kind: PlanItemWorkflowQueuedActionKind;
+  source_revision_id?: string;
+  change_request_id?: string;
+  context_preview_digest: string;
+  expected_input_capsule_digest?: string;
+}): string => {
+  const scopedInput = {
+    workflow_id: input.workflow_id,
+    kind: input.kind,
+    source_revision_id: input.source_revision_id ?? null,
+    change_request_id: input.change_request_id ?? null,
+    context_preview_digest: input.context_preview_digest,
+    expected_input_capsule_digest: input.expected_input_capsule_digest ?? null,
+  };
+  return `sha256:${createHash('sha256').update(JSON.stringify(scopedInput)).digest('hex')}`;
+};
+
+export const planItemWorkflowPublicProjection = (input: {
+  workflow: Pick<
+    PlanItemWorkflow,
+    | 'id'
+    | 'development_plan_id'
+    | 'development_plan_item_id'
+    | 'status'
+	    | 'active_codex_session_id'
+	    | 'active_boundary_summary_revision_id'
+	    | 'active_spec_doc_revision_id'
+	    | 'active_implementation_plan_doc_revision_id'
+	    | 'created_at'
+	    | 'updated_at'
+  >;
+  session: CodexSession;
+  queued_actions?: readonly PlanItemWorkflowQueuedAction[];
+  timeline_events?: PlanItemWorkflowPublicDto['timeline_events'];
+  context_preview?: PlanItemWorkflowPublicDto['context_preview'];
+  readiness?: PlanItemWorkflowPublicDto['readiness'];
+  blockers?: PlanItemWorkflowPublicDto['blockers'];
+}): PlanItemWorkflowPublicDto => ({
+  id: input.workflow.id,
+  development_plan_id: input.workflow.development_plan_id,
+  development_plan_item_id: input.workflow.development_plan_item_id,
+  status: input.workflow.status,
+  ...(input.workflow.active_boundary_summary_revision_id === undefined
+    ? {}
+    : { active_boundary_summary_revision_id: input.workflow.active_boundary_summary_revision_id }),
+  ...(input.workflow.active_spec_doc_revision_id === undefined
+    ? {}
+    : { active_spec_doc_revision_id: input.workflow.active_spec_doc_revision_id }),
+  ...(input.workflow.active_implementation_plan_doc_revision_id === undefined
+    ? {}
+    : { active_implementation_plan_doc_revision_id: input.workflow.active_implementation_plan_doc_revision_id }),
+  session: codexSessionPublicProjection(input.session),
+  queued_actions: (input.queued_actions ?? []).map((action) => ({
+    id: action.id,
+    workflow_id: action.workflow_id,
+    kind: action.kind,
+    status: action.status,
+    ...(action.source_revision_id === undefined ? {} : { source_revision_id: action.source_revision_id }),
+    ...(action.change_request_id === undefined ? {} : { change_request_id: action.change_request_id }),
+    ...(action.created_from_message_id === undefined ? {} : { created_from_message_id: action.created_from_message_id }),
+    ...(action.expected_input_capsule_digest === undefined
+      ? {}
+      : { expected_input_capsule_digest: action.expected_input_capsule_digest }),
+    context_preview_digest: action.context_preview_digest,
+    idempotency_key: action.idempotency_key,
+    ...(action.output_capsule_digest === undefined ? {} : { output_capsule_digest: action.output_capsule_digest }),
+    ...(action.output_capsule_sequence === undefined ? {} : { output_capsule_sequence: action.output_capsule_sequence }),
+    ...(action.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: action.codex_thread_id_digest }),
+    ...(action.blocked_reason_code === undefined ? {} : { blocked_reason_code: action.blocked_reason_code }),
+    created_by_actor_id: action.created_by_actor_id,
+    created_at: action.created_at,
+    updated_at: action.updated_at,
+  })),
+  timeline_events: input.timeline_events ?? [],
+  ...(input.context_preview === undefined ? {} : { context_preview: input.context_preview }),
+  ...(input.readiness === undefined ? {} : { readiness: input.readiness }),
+  blockers: input.blockers ?? [],
+  created_at: input.workflow.created_at,
+  updated_at: input.workflow.updated_at,
 });
 
 export const assertWorkflowActorAuthorized = (

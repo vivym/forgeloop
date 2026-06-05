@@ -9,13 +9,13 @@ import {
   useBoundarySummaryRevisionsQuery,
   useDevelopmentPlanItemQuery,
   useDevelopmentPlanItemRevisionsQuery,
+  useStartPlanItemWorkflowBrainstormingMutation,
 } from '../../shared/api/hooks';
 import { queryKeys } from '../../shared/api/query-keys';
 import type { ProductObjectRef, SpecRevision } from '../../shared/api/types';
 import { useActorContext } from '../../shared/context/actor-context';
 import { CompactMetadata, DocumentReviewLayout, PlanItemGateWorkspace as SharedPlanItemGateWorkspace, ProductPage, Section } from '../../shared/layout';
-import { ForgeMarkdownEditor, InlineNotice, StatusPill } from '../../shared/ui';
-import { BrainstormingPanel } from '../brainstorming/brainstorming-panel';
+import { Button, ForgeMarkdownEditor, InlineNotice, StatusPill } from '../../shared/ui';
 import {
   BoundarySummaryRevisionHistory,
   PlanItemGateSummary,
@@ -27,13 +27,7 @@ import {
   type PlanItemGateModel,
 } from './plan-item-gates';
 import { itemHref } from './development-plan-table';
-
-type BrainstormingSession = {
-  id: string;
-  approval_state?: string;
-  questions?: Array<{ id: string; text: string; status?: string }>;
-  decisions?: Array<{ id: string; text: string; rationale?: string }>;
-};
+import { PlanItemWorkflowWorkspace } from './plan-item-workflow-workspace';
 
 export function DevelopmentPlanItemDetailRoute() {
   return <DevelopmentPlanItemSurface focus="overview" />;
@@ -62,10 +56,9 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
   const boundaryRevisionsQuery = useBoundarySummaryRevisionsQuery(boundarySummaryId);
   const revisions = (revisionsQuery.data ?? []) as DevelopmentPlanItemRevision[];
   const boundaryRevisions = ((boundaryRevisionsQuery.data ?? itemWithRoutePlan?.boundary_summary_revisions ?? []) as BoundarySummaryRevision[]);
-  const session = brainstormingSessionFor(itemWithRoutePlan);
   const gates = itemWithRoutePlan === undefined ? [] : planItemGateModels(itemWithRoutePlan);
   const currentGateId = itemWithRoutePlan === undefined ? undefined : currentGateIdFor(itemWithRoutePlan, focus);
-  const pageFamily = pageFamilyForFocus(focus);
+  const pageFamily = itemWithRoutePlan?.plan_item_workflow !== undefined ? 'plan-item-workflow' : pageFamilyForFocus(focus);
   const routeChrome = (evidenceExecutionId?: string) => (
     <ItemRouteChrome
       {...(evidenceExecutionId === undefined ? {} : { evidenceExecutionId })}
@@ -93,7 +86,6 @@ function DevelopmentPlanItemSurface({ focus }: { focus: DevelopmentPlanItemFocus
           itemId={itemId}
           revisions={revisions}
           routeChrome={routeChrome}
-          session={session}
         />
       ) : (
         <SharedPlanItemGateWorkspace workspace={routeChrome()} />
@@ -142,7 +134,6 @@ function DevelopmentPlanItemFocusedLayout({
   itemId,
   revisions,
   routeChrome,
-  session,
 }: {
   boundaryRevisions: BoundarySummaryRevision[];
   currentGateId: PlanItemGateModel['id'] | undefined;
@@ -153,7 +144,6 @@ function DevelopmentPlanItemFocusedLayout({
   itemId: string | undefined;
   revisions: DevelopmentPlanItemRevision[];
   routeChrome: (evidenceExecutionId?: string) => ReactNode;
-  session: BrainstormingSession | undefined;
 }) {
   const gateRail = <PlanItemGateRail currentGateId={currentGateId} gates={gates} />;
   const evidenceRail = (
@@ -165,6 +155,17 @@ function DevelopmentPlanItemFocusedLayout({
       revisions={revisions}
     />
   );
+
+  if (item.plan_item_workflow !== undefined) {
+    return (
+      <PlanItemWorkflowWorkspace
+        boundaryRevisions={boundaryRevisions}
+        focus={focus}
+        item={item}
+        routeChrome={routeChrome()}
+      />
+    );
+  }
 
   if (focus === 'spec' || focus === 'implementation-plan') {
     return (
@@ -189,7 +190,6 @@ function DevelopmentPlanItemFocusedLayout({
             focus={focus}
             item={item}
             itemId={itemId}
-            session={session}
           />
           <RevisionDrawer boundaryRevisions={boundaryRevisions} revisions={revisions} />
         </div>
@@ -529,18 +529,16 @@ function ActiveGateBody({
   focus,
   item,
   itemId,
-  session,
 }: {
   developmentPlanId: string | undefined;
   focus: DevelopmentPlanItemFocus;
   item: DevelopmentPlanItemProjection;
   itemId: string | undefined;
-  session: BrainstormingSession | undefined;
 }) {
   return (
     <div data-active-gate-body="" data-testid="active-gate-workspace">
       <div data-testid="full-gate-body">
-        {renderGateBody(focus, { developmentPlanId, item, itemId, session })}
+        {renderGateBody(focus, { developmentPlanId, item, itemId })}
       </div>
     </div>
   );
@@ -552,7 +550,6 @@ function renderGateBody(
     developmentPlanId: string | undefined;
     item: DevelopmentPlanItemProjection;
     itemId: string | undefined;
-    session: BrainstormingSession | undefined;
   },
 ): ReactNode {
   switch (body) {
@@ -561,7 +558,7 @@ function renderGateBody(
         <div className="grid gap-4">
           <PlanItemGateSummary item={context.item} />
           {!isCompleteStatus(context.item.boundary_status) ? (
-            <BrainstormingPanel developmentPlanId={context.developmentPlanId} itemId={context.itemId} session={context.session} />
+            <PlanItemWorkflowStartPanel developmentPlanId={context.developmentPlanId} itemId={context.itemId} />
           ) : null}
         </div>
       );
@@ -584,6 +581,34 @@ function renderGateBody(
         </Section>
       );
   }
+}
+
+function PlanItemWorkflowStartPanel({
+  developmentPlanId,
+  itemId,
+}: {
+  developmentPlanId: string | undefined;
+  itemId: string | undefined;
+}) {
+  const { actorId } = useActorContext();
+  const startWorkflow = useStartPlanItemWorkflowBrainstormingMutation({ developmentPlanId, itemId });
+
+  return (
+    <Section title="Plan Item workflow">
+      <div className="grid gap-3">
+        <p className="text-sm text-text-secondary">
+          Start the Superpowers workflow from this Plan Item, then continue through the workflow conversation.
+        </p>
+        <Button
+          disabled={developmentPlanId === undefined || itemId === undefined || startWorkflow.isPending}
+          onClick={() => void startWorkflow.mutateAsync({ actor_id: actorId })}
+          type="button"
+        >
+          Start Plan Item workflow
+        </Button>
+      </div>
+    </Section>
+  );
 }
 
 function ArtifactList({ items, empty }: { items: Array<{ id: string; title?: string; status?: string }>; empty: string }) {
@@ -786,17 +811,6 @@ function executionFor(item: DevelopmentPlanItemProjection, executionId?: string)
 
 function firstBoundaryRevision(item: DevelopmentPlanItemProjection | undefined): BoundarySummaryRevision | undefined {
   return item?.boundary_summary_revisions?.[0];
-}
-
-function brainstormingSessionFor(item: DevelopmentPlanItemProjection | undefined): BrainstormingSession | undefined {
-  const revision = firstBoundaryRevision(item);
-  if (revision?.brainstorming_session_id === undefined) return undefined;
-  return {
-    id: revision.brainstorming_session_id,
-    ...(item?.boundary_status === undefined ? {} : { approval_state: item.boundary_status }),
-    questions: [{ id: 'boundary-question', text: 'Which source and code boundaries are in scope?' }],
-    decisions: (revision.summary_markdown ?? revision.summary) === undefined ? [] : [{ id: revision.id, text: revision.summary_markdown ?? revision.summary ?? '' }],
-  };
 }
 
 function normalizeItemPlanRef(

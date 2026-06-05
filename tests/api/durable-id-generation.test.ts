@@ -139,17 +139,6 @@ describe('durable delivery object IDs', () => {
       .set(ownerHeaders)
       .send({ actor_id: ownerActorId, expected_package_version: executionPackage.version })
       .expect(201);
-    const run = (
-      await request(server)
-        .post(`/execution-packages/${executionPackage.id}/run`)
-        .set(ownerHeaders)
-        .send({
-          executor_type: 'mock',
-          workflow_only: true,
-        })
-        .expect(201)
-    ).body;
-
     for (const id of [
       project.id,
       workItem.id,
@@ -158,9 +147,21 @@ describe('durable delivery object IDs', () => {
       plan!.id,
       planRevision!.id,
       executionPackage.id,
-      run.run_session_id,
     ]) {
       expect(id).toMatch(uuidPattern);
     }
+
+    await request(server)
+      .post(`/execution-packages/${executionPackage.id}/run`)
+      .set(ownerHeaders)
+      .send({
+        executor_type: 'mock',
+        workflow_only: true,
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+      });
+    expect(await repository.listRunSessionsForPackage(executionPackage.id)).toEqual([]);
   });
 });

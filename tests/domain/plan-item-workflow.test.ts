@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertQueuedActionCanRun,
   assertPlanItemWorkflowTransitionAllowed,
   assertWorkflowManualDecisionAllowedForTransition,
+  assertWorkflowMessageAllowed,
+  buildPlanItemWorkflowQueuedActionIdempotencyKey,
   codexSessionPublicProjection,
+  mapQueuedActionKindToTurnIntent,
   planItemWorkflowStatusValues,
   type CodexRuntimeCapsule,
   type CodexSession,
@@ -266,7 +270,6 @@ describe('plan item workflow domain', () => {
         },
       ),
     ).toEqual({
-      id: 'session-1',
       status: 'idle',
       role: 'active',
       continuity_state: 'ready',
@@ -289,5 +292,81 @@ describe('plan item workflow domain', () => {
 
   it('exports the expected status set', () => {
     expect(planItemWorkflowStatusValues satisfies readonly PlanItemWorkflowStatus[]).toContain('implementation_plan_review');
+  });
+
+  it('maps Wave 5 queued action kinds to Codex turn intents', () => {
+    expect(mapQueuedActionKindToTurnIntent('continue_brainstorming')).toBe('continue_brainstorming');
+    expect(mapQueuedActionKindToTurnIntent('generate_boundary_summary')).toBe('draft_boundary_summary');
+    expect(mapQueuedActionKindToTurnIntent('generate_spec_doc')).toBe('draft_spec_doc');
+    expect(mapQueuedActionKindToTurnIntent('generate_implementation_plan_doc')).toBe('draft_implementation_plan_doc');
+  });
+
+  it('blocks messages while a Codex action is queued or running', () => {
+    expect(() =>
+      assertWorkflowMessageAllowed({
+        action: 'continue_ai',
+        workflow_status: 'brainstorming',
+        active_codex_session_id: 'session-1',
+        active_codex_action_count: 1,
+      }),
+    ).toThrow(/workflow_action_already_pending/);
+  });
+
+  it('limits workflow messages to brainstorming status', () => {
+    expect(() =>
+      assertWorkflowMessageAllowed({
+        action: 'continue_ai',
+        workflow_status: 'spec_review',
+        active_codex_session_id: 'session-1',
+        active_codex_action_count: 0,
+      }),
+    ).toThrow(/workflow_invalid_message_action/);
+  });
+
+  it('requires action/session/digest match before a queued action can run', () => {
+    expect(() =>
+      assertQueuedActionCanRun({
+        action: {
+          id: 'action-1',
+          workflow_id: 'workflow-1',
+          codex_session_id: 'session-1',
+          kind: 'generate_spec_doc',
+          status: 'queued',
+          expected_input_capsule_digest: `sha256:${'a'.repeat(64)}`,
+          context_preview_digest: `sha256:${'b'.repeat(64)}`,
+        },
+        workflow_id: 'workflow-1',
+        active_codex_session_id: 'session-1',
+        latest_capsule_digest: `sha256:${'x'.repeat(64)}`,
+        context_preview_digest: `sha256:${'b'.repeat(64)}`,
+      }),
+    ).toThrow(/workflow_capsule_digest_mismatch/);
+  });
+
+  it('builds queued action idempotency key from every scoped input', () => {
+    const first = buildPlanItemWorkflowQueuedActionIdempotencyKey({
+      workflow_id: 'workflow-1',
+      kind: 'generate_spec_doc',
+      source_revision_id: 'boundary-revision-1',
+      context_preview_digest: `sha256:${'b'.repeat(64)}`,
+      expected_input_capsule_digest: `sha256:${'a'.repeat(64)}`,
+    });
+    const changedSource = buildPlanItemWorkflowQueuedActionIdempotencyKey({
+      workflow_id: 'workflow-1',
+      kind: 'generate_spec_doc',
+      source_revision_id: 'boundary-revision-2',
+      context_preview_digest: `sha256:${'b'.repeat(64)}`,
+      expected_input_capsule_digest: `sha256:${'a'.repeat(64)}`,
+    });
+    const changedCapsule = buildPlanItemWorkflowQueuedActionIdempotencyKey({
+      workflow_id: 'workflow-1',
+      kind: 'generate_spec_doc',
+      source_revision_id: 'boundary-revision-1',
+      context_preview_digest: `sha256:${'b'.repeat(64)}`,
+      expected_input_capsule_digest: `sha256:${'9'.repeat(64)}`,
+    });
+
+    expect(first).not.toBe(changedSource);
+    expect(first).not.toBe(changedCapsule);
   });
 });

@@ -823,17 +823,10 @@ export class RunControlService {
   }
 
   private async assertPublicRunPackageMutationAllowed(
-    repository: DeliveryRepository,
+    _repository: DeliveryRepository,
     executionPackage: ExecutionPackage,
     mode: 'run' | 'rerun' | 'force_rerun',
   ): Promise<void> {
-    if (executionPackage.development_plan_item_id === undefined) {
-      return;
-    }
-    const activeWorkflow = await repository.getActivePlanItemWorkflowByItem(executionPackage.development_plan_item_id);
-    if (activeWorkflow === undefined) {
-      return;
-    }
     throw new DomainError(
       'workflow_legacy_entrypoint_disabled',
       `workflow_legacy_entrypoint_disabled: Execution Package ${executionPackage.id} ${mode} must use PlanItemWorkflowService`,

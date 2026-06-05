@@ -11,7 +11,7 @@ import {
 } from '../../apps/web/src/features/product-surfaces/role-lens';
 
 describe('AI-native web API client contract', () => {
-  it('exposes AI-native command and query methods without product Task or direct Spec/Plan commands', () => {
+  it('exposes AI-native workflow commands without product Task or direct Spec/Plan commands', () => {
     const commands = createForgeloopCommandApi();
     const query = createForgeloopQueryApi();
 
@@ -19,10 +19,12 @@ describe('AI-native web API client contract', () => {
       'generateDevelopmentPlanDraft',
       'regenerateDevelopmentPlanDraft',
       'linkPlanningInputToDevelopmentPlan',
-      'generateItemSpecDraft',
-      'regenerateItemSpecDraft',
-      'generateItemImplementationPlanDraft',
-      'startItemExecution',
+      'startPlanItemWorkflowBrainstorming',
+      'recordWorkflowMessage',
+      'runWorkflowQueuedAction',
+      'approveWorkflowArtifactRevision',
+      'requestWorkflowArtifactChanges',
+      'evaluateWorkflowExecutionReadiness',
       'markExecutionReadyForCodeReview',
       'acceptQaHandoff',
     ]) {
@@ -44,6 +46,15 @@ describe('AI-native web API client contract', () => {
     expect(commands).not.toHaveProperty('createTask');
     expect(commands).not.toHaveProperty('createSpec');
     expect(commands).not.toHaveProperty('createPlan');
+    expect(commands).not.toHaveProperty('generateItemSpecDraft');
+    expect(commands).not.toHaveProperty('regenerateItemSpecDraft');
+    expect(commands).not.toHaveProperty('generateItemImplementationPlanDraft');
+    expect(commands).not.toHaveProperty('regenerateItemImplementationPlanDraft');
+    expect(commands).not.toHaveProperty('startItemExecution');
+    expect(commands).not.toHaveProperty('startBrainstormingSession');
+    expect(commands).not.toHaveProperty('answerBrainstormingQuestion');
+    expect(commands).not.toHaveProperty('recordBrainstormingDecision');
+    expect(commands).not.toHaveProperty('approveBoundary');
   });
 
   it('strictly parses typed Requirement projections without client-side business fallbacks', async () => {
@@ -164,5 +175,35 @@ describe('AI-native web API client contract', () => {
       driver_actor_id: 'actor-product',
       execution_owner_actor_id: 'actor-dev',
     });
+  });
+
+  it('returns the queued-action workflow run envelope', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          workflow: { id: 'workflow-1', status: 'spec_review' },
+          queued_action: { id: 'action-1', workflow_id: 'workflow-1', status: 'running' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const commands = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await expect(
+      commands.runWorkflowQueuedAction('workflow-1', 'action-1', { actor_id: 'actor-tech' }),
+    ).resolves.toMatchObject({
+      workflow: { id: 'workflow-1', status: 'spec_review' },
+      queued_action: { id: 'action-1', workflow_id: 'workflow-1', status: 'running' },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.local/plan-item-workflows/workflow-1/actions/action-1/run',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ actor_id: 'actor-tech' }),
+        headers: expect.objectContaining({
+          'X-Forgeloop-Actor-Id': 'actor-tech',
+        }),
+      }),
+    );
   });
 });

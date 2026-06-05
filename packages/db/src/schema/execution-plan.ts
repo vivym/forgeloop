@@ -3,7 +3,7 @@ import type { ExecutionPlanDocument, ExecutionPlanRevision } from '@forgeloop/do
 
 import { timestampColumn } from './_shared';
 import { actors } from './actor';
-import { development_plan_items } from './development-plan';
+import { development_plan_item_revisions, development_plan_items } from './development-plan';
 import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
 import { spec_revisions } from './spec';
 
@@ -32,6 +32,7 @@ export const execution_plan_revisions = pgTable(
     developmentPlanItemId: uuid('development_plan_item_id')
       .notNull()
       .references(() => development_plan_items.id),
+    developmentPlanItemRevisionId: uuid('development_plan_item_revision_id').references(() => development_plan_item_revisions.id),
     workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
     codexSessionId: uuid('codex_session_id').references(() => codex_sessions.id),
     codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),

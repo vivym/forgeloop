@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const nonEmpty = z.string().trim().min(1);
 const isoDateTime = z.string().datetime();
+const safeDigest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
 export const planItemWorkflowStatusSchema = z.enum([
   'not_started',
@@ -73,6 +74,64 @@ export type CodexSessionTurnStatus = z.infer<typeof codexSessionTurnStatusSchema
 export const codexSessionLeaseStatusSchema = z.enum(['active', 'released', 'expired', 'fenced', 'stale']);
 export type CodexSessionLeaseStatus = z.infer<typeof codexSessionLeaseStatusSchema>;
 
+export const planItemWorkflowQueuedActionKindSchema = z.enum([
+  'continue_brainstorming',
+  'generate_boundary_summary',
+  'revise_boundary_summary',
+  'generate_spec_doc',
+  'revise_spec_doc',
+  'generate_implementation_plan_doc',
+  'revise_implementation_plan_doc',
+]);
+export type PlanItemWorkflowQueuedActionKind = z.infer<typeof planItemWorkflowQueuedActionKindSchema>;
+
+export const planItemWorkflowQueuedActionStatusSchema = z.enum([
+  'queued',
+  'running',
+  'succeeded',
+  'failed',
+  'blocked',
+  'cancelled',
+  'stale',
+]);
+export type PlanItemWorkflowQueuedActionStatus = z.infer<typeof planItemWorkflowQueuedActionStatusSchema>;
+
+export const workflowMessageActionSchema = z.enum(['answer_boundary_question', 'continue_ai']);
+export type WorkflowMessageAction = z.infer<typeof workflowMessageActionSchema>;
+
+export const workflowMessageCommandSchema = z
+  .object({
+    actor_id: nonEmpty,
+    action: workflowMessageActionSchema,
+    body_markdown: nonEmpty,
+    client_message_id: nonEmpty.optional(),
+  })
+  .strict();
+export type WorkflowMessageCommand = z.infer<typeof workflowMessageCommandSchema>;
+
+export const planItemWorkflowQueuedActionSchema = z
+  .object({
+    id: nonEmpty,
+    workflow_id: nonEmpty,
+    kind: planItemWorkflowQueuedActionKindSchema,
+    status: planItemWorkflowQueuedActionStatusSchema,
+    source_revision_id: nonEmpty.optional(),
+    change_request_id: nonEmpty.optional(),
+    created_from_message_id: nonEmpty.optional(),
+    expected_input_capsule_digest: safeDigest.optional(),
+    context_preview_digest: safeDigest,
+    idempotency_key: safeDigest,
+    output_capsule_digest: safeDigest.optional(),
+    output_capsule_sequence: z.number().int().nonnegative().optional(),
+    codex_thread_id_digest: safeDigest.optional(),
+    blocked_reason_code: nonEmpty.optional(),
+    created_by_actor_id: nonEmpty,
+    created_at: isoDateTime,
+    updated_at: isoDateTime,
+  })
+  .strict();
+export type PlanItemWorkflowQueuedAction = z.infer<typeof planItemWorkflowQueuedActionSchema>;
+
 export const transitionSupportingEvidenceSchema = z
   .object({
     object_type: workflowTransitionEvidenceObjectTypeSchema,
@@ -93,25 +152,56 @@ export const planItemWorkflowTransitionSchema = z
     evidence_object_id: nonEmpty,
     evidence_digest: nonEmpty.optional(),
     supporting_evidence: z.array(transitionSupportingEvidenceSchema).optional(),
-    codex_session_id: nonEmpty,
-    codex_session_turn_id: nonEmpty.optional(),
     created_at: isoDateTime,
   })
   .strict();
 export type PlanItemWorkflowTransition = z.infer<typeof planItemWorkflowTransitionSchema>;
 
-export const workflowManualDecisionSchema = z
+export const internalPlanItemWorkflowTransitionSchema = planItemWorkflowTransitionSchema
+  .extend({
+    codex_session_id: nonEmpty,
+    codex_session_turn_id: nonEmpty.optional(),
+  })
+  .strict();
+export type InternalPlanItemWorkflowTransition = z.infer<typeof internalPlanItemWorkflowTransitionSchema>;
+
+const workflowManualDecisionBaseSchema = z
   .object({
     id: nonEmpty,
     workflow_id: nonEmpty,
-    codex_session_id: nonEmpty,
     kind: workflowManualDecisionKindSchema,
     reason: nonEmpty,
-    selected_codex_session_id: nonEmpty.optional(),
     related_object_type: workflowTransitionEvidenceObjectTypeSchema.optional(),
     related_object_id: nonEmpty.optional(),
     created_by_actor_id: nonEmpty,
     created_at: isoDateTime,
+  })
+  .strict();
+
+export const workflowManualDecisionSchema = workflowManualDecisionBaseSchema
+  .superRefine((decision, ctx) => {
+    if (decision.kind === 'fork_select') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['kind'],
+        message: 'fork_select is internal runtime evidence and is not public-safe',
+      });
+    }
+
+    if ((decision.related_object_type === undefined) !== (decision.related_object_id === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['related_object_id'],
+        message: 'related_object_type and related_object_id must be provided together',
+      });
+    }
+  });
+export type WorkflowManualDecision = z.infer<typeof workflowManualDecisionSchema>;
+
+export const internalWorkflowManualDecisionSchema = workflowManualDecisionBaseSchema
+  .extend({
+    codex_session_id: nonEmpty,
+    selected_codex_session_id: nonEmpty.optional(),
   })
   .strict()
   .superRefine((decision, ctx) => {
@@ -130,20 +220,11 @@ export const workflowManualDecisionSchema = z
         message: 'selected_codex_session_id is only allowed for fork_select',
       });
     }
-
-    if ((decision.related_object_type === undefined) !== (decision.related_object_id === undefined)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['related_object_id'],
-        message: 'related_object_type and related_object_id must be provided together',
-      });
-    }
   });
-export type WorkflowManualDecision = z.infer<typeof workflowManualDecisionSchema>;
+export type InternalWorkflowManualDecision = z.infer<typeof internalWorkflowManualDecisionSchema>;
 
 export const codexSessionPublicDtoSchema = z
   .object({
-    id: nonEmpty,
     status: codexSessionStatusSchema,
     role: codexSessionRoleSchema,
     continuity_state: z.enum(['ready', 'running', 'blocked', 'stale']),
@@ -154,18 +235,77 @@ export const codexSessionPublicDtoSchema = z
   .strict();
 export type CodexSessionPublicDto = z.infer<typeof codexSessionPublicDtoSchema>;
 
+export const planItemWorkflowTimelineEventSchema = z
+  .object({
+    id: nonEmpty,
+    workflow_id: nonEmpty.optional(),
+    event_type: nonEmpty,
+    status: nonEmpty.optional(),
+    body_markdown: nonEmpty.optional(),
+    actor_id: nonEmpty.optional(),
+    object_type: workflowTransitionEvidenceObjectTypeSchema.optional(),
+    object_id: nonEmpty.optional(),
+    object_digest: safeDigest.optional(),
+    queued_action_id: nonEmpty.optional(),
+    queued_action_kind: planItemWorkflowQueuedActionKindSchema.optional(),
+    queued_action_status: planItemWorkflowQueuedActionStatusSchema.optional(),
+    created_at: isoDateTime,
+  })
+  .strict();
+export type PlanItemWorkflowTimelineEvent = z.infer<typeof planItemWorkflowTimelineEventSchema>;
+
+export const planItemWorkflowContextPreviewSchema = z
+  .object({
+    digest: safeDigest,
+    capsule_digest: safeDigest.optional(),
+    boundary_summary_revision_id: nonEmpty.optional(),
+    spec_doc_revision_id: nonEmpty.optional(),
+    implementation_plan_doc_revision_id: nonEmpty.optional(),
+    message_count: z.number().int().nonnegative().optional(),
+    queued_action_count: z.number().int().nonnegative().optional(),
+    updated_at: isoDateTime.optional(),
+  })
+  .strict();
+export type PlanItemWorkflowContextPreview = z.infer<typeof planItemWorkflowContextPreviewSchema>;
+
+export const planItemWorkflowReadinessSchema = z
+  .object({
+    state: z.enum(['not_evaluated', 'ready', 'blocked', 'stale']),
+    can_evaluate: z.boolean(),
+    blocker_codes: z.array(nonEmpty).default([]),
+    evaluated_at: isoDateTime.optional(),
+    evidence_digest: safeDigest.optional(),
+  })
+  .strict();
+export type PlanItemWorkflowReadiness = z.infer<typeof planItemWorkflowReadinessSchema>;
+
+export const planItemWorkflowBlockerSchema = z
+  .object({
+    code: nonEmpty,
+    status: z.enum(['active', 'resolved', 'stale']).optional(),
+    related_object_type: workflowTransitionEvidenceObjectTypeSchema.optional(),
+    related_object_id: nonEmpty.optional(),
+    evidence_digest: safeDigest.optional(),
+    created_at: isoDateTime.optional(),
+  })
+  .strict();
+export type PlanItemWorkflowBlocker = z.infer<typeof planItemWorkflowBlockerSchema>;
+
 export const planItemWorkflowPublicDtoSchema = z
   .object({
     id: nonEmpty,
     development_plan_id: nonEmpty,
     development_plan_item_id: nonEmpty,
     status: planItemWorkflowStatusSchema,
-    active_codex_session_id: nonEmpty,
     active_boundary_summary_revision_id: nonEmpty.optional(),
     active_spec_doc_revision_id: nonEmpty.optional(),
     active_implementation_plan_doc_revision_id: nonEmpty.optional(),
-    execution_package_id: nonEmpty.optional(),
     session: codexSessionPublicDtoSchema,
+    queued_actions: z.array(planItemWorkflowQueuedActionSchema).default([]),
+    timeline_events: z.array(planItemWorkflowTimelineEventSchema).default([]),
+    context_preview: planItemWorkflowContextPreviewSchema.optional(),
+    readiness: planItemWorkflowReadinessSchema.optional(),
+    blockers: z.array(planItemWorkflowBlockerSchema).default([]),
     created_at: isoDateTime,
     updated_at: isoDateTime,
   })

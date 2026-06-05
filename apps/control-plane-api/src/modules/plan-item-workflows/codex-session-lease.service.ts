@@ -15,7 +15,7 @@ import type {
   CreateCodexRuntimeCapsuleDto,
   RenewCodexSessionLeaseDto,
   TerminalizeCodexSessionTurnDto,
-} from './plan-item-workflow.dto';
+} from './internal-codex-session.dto';
 
 const staleTerminalizationCodes = new Set([
   'codex_session_lease_conflict',

@@ -19,15 +19,18 @@ const defaultDogfoodEnv = (reportPath: string): NodeJS.ProcessEnv => {
     FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: _strictEnabled,
     FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE: _dangerousMode,
     FORGELOOP_REPO_PATH: _repoPath,
+    FORGELOOP_REQUIRE_TRUSTED_ACTOR_SIGNATURE: _requireTrustedActorSignature,
     ...env
   } = process.env;
   void _databaseUrl;
   void _strictEnabled;
   void _dangerousMode;
   void _repoPath;
+  void _requireTrustedActorSignature;
 
   return {
     ...env,
+    NODE_ENV: 'test',
     FORGELOOP_WORK_ITEM_DOGFOOD_REPORT_PATH: reportPath,
   };
 };
@@ -230,34 +233,22 @@ const strictInput = (...bundles: ReturnType<typeof qualifyingBundle>[]) => ({
 
 describe('delivery dogfood work items script', () => {
   it(
-    'creates the three Delivery dogfood Work Items and writes a completion report',
+    'fails closed because the legacy package-run dogfood path is disabled in Wave 5',
     async () => {
       const outputDir = await mkdtemp(join(tmpdir(), 'forgeloop-work-item-dogfood-'));
       const reportPath = join(outputDir, 'report.md');
 
       try {
-        await execFile('pnpm', ['dogfood:delivery:work-items'], {
-          cwd: process.cwd(),
-          env: defaultDogfoodEnv(reportPath),
-          maxBuffer: 1024 * 1024 * 10,
-          timeout: 30_000,
+        await expect(
+          execFile('pnpm', ['dogfood:delivery:work-items'], {
+            cwd: process.cwd(),
+            env: defaultDogfoodEnv(reportPath),
+            maxBuffer: 1024 * 1024 * 10,
+            timeout: 30_000,
+          }),
+        ).rejects.toMatchObject({
+          stderr: expect.stringContaining('workflow_legacy_entrypoint_disabled'),
         });
-
-        const report = await readFile(reportPath, 'utf8');
-        expect(report).toContain('Remote CI gate');
-        expect(report).toContain('Durable verification gaps');
-        expect(report).toContain('Browser Run Console walkthrough');
-        expect(report).toContain('Source commit:');
-        expect(report).toMatch(/Source tree before report write: (clean|dirty)/);
-        expect(report).toContain('Report scope: workflow dogfood only');
-        expect(report).toContain('changes_requested -> rerun -> approve');
-        expect(report).toContain('object_event');
-        expect(report).toContain('status_history');
-        expect(report).toContain('Strict local_codex acceptance: disabled');
-        expect(report).toContain('strict runbook acceptance is not complete in this run');
-        expect(report).toContain('real local Codex acceptance is opt-in');
-        expect(report).toContain('executor_type');
-        expect(report).toContain('workflow_only');
       } finally {
         await rm(outputDir, { recursive: true, force: true });
       }

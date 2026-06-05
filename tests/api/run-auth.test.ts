@@ -21,7 +21,11 @@ import {
 } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
 import type { InMemoryDeliveryRepository } from '../../packages/db/src';
-import { seedAppWithRunSession, seedReadyExecutionPackage } from '../helpers/delivery-runtime-fixtures';
+import {
+  seedAppWithRunSession,
+  seedReadyExecutionPackage,
+  seedReadyExecutionPackageRunSession,
+} from '../helpers/delivery-runtime-fixtures';
 
 const actorHeaderName = 'X-Forgeloop-Actor-Id';
 const actorOwner = 'actor-owner';
@@ -53,14 +57,9 @@ const startDurableRun = async (
   app: INestApplication,
 ): Promise<{ executionPackageId: string; runSessionId: string }> => {
   const repo = app.get(DELIVERY_REPOSITORY) as InMemoryDeliveryRepository;
-  const executionPackage = await seedReadyExecutionPackage(repo);
-  const response = await request(app.getHttpServer())
-    .post(`/execution-packages/${executionPackage.id}/run`)
-    .set(actorHeaderName, actorOwner)
-    .send({ workflow_only: true })
-    .expect(201);
+  const { executionPackage, runSession } = await seedReadyExecutionPackageRunSession(repo, { durabilityMode: 'durable' });
 
-  return { executionPackageId: executionPackage.id, runSessionId: response.body.run_session_id as string };
+  return { executionPackageId: executionPackage.id, runSessionId: runSession.id };
 };
 
 const expectSseFirstEvent = async (
@@ -146,7 +145,10 @@ describe('durable run actor auth', () => {
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(actorHeaderName, actorOwner)
       .send({ workflow_only: true })
-      .expect(201);
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+      });
   });
 
   it('uses authenticated viewer context for durable event backfill', async () => {

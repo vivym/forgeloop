@@ -104,17 +104,35 @@ describe('Forgeloop web API client', () => {
     const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
     await api.listReleases({ project_id: 'project with spaces' });
-    await api.approveItemSpec('development-plan-1', 'development-plan-item-1', { actor_id: 'actor-reviewer' });
+    await api.approveWorkflowArtifactRevision('workflow-1', 'spec_doc', 'spec-revision-1', { actor_id: 'actor-reviewer' });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://api.local/releases?project_id=project+with+spaces', {
       method: 'GET',
       headers: { 'content-type': 'application/json' },
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/development-plans/development-plan-1/items/development-plan-item-1/spec/approve', {
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://api.local/plan-item-workflows/workflow-1/artifacts/spec-doc/revisions/spec-revision-1/approve', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-reviewer', 'X-Forgeloop-Actor-Class': 'human_admin' },
       body: JSON.stringify({ actor_id: 'actor-reviewer' }),
     });
+  });
+
+  it('starts Plan Item workflows with product-level body only', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'workflow-1' }), { status: 201 }));
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await api.startPlanItemWorkflowBrainstorming('plan-1', 'item-1', { actor_id: 'actor-tech' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.local/development-plans/plan-1/items/item-1/workflow/start-brainstorming',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-tech', 'X-Forgeloop-Actor-Class': 'human_admin' },
+        body: JSON.stringify({ actor_id: 'actor-tech' }),
+      },
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty('runtime_profile_id');
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty('credential_binding_id');
   });
 
   it('fetches evidence chains with an optional focused review packet', async () => {
@@ -209,7 +227,7 @@ describe('Forgeloop web API client', () => {
     );
     const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
-    await expect(api.approveItemSpec('development-plan-1', 'development-plan-item-1', {})).rejects.toMatchObject({
+    await expect(api.approveWorkflowArtifactRevision('workflow-1', 'spec_doc', 'spec-revision-1', {} as any)).rejects.toMatchObject({
       name: 'ForgeloopApiError',
       message: 'Spec is not awaiting approval',
       status: 400,

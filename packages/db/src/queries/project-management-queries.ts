@@ -8,6 +8,8 @@ import type {
   MyWorkQueueItem,
   ObjectRef,
   ProductObjectRef,
+  PlanItemWorkflowReadiness,
+  PlanItemWorkflowTimelineEvent,
   ProductSafeDisabledReason,
   ReleaseReadinessDetail,
   RequirementDetail,
@@ -37,6 +39,7 @@ import type {
   Attachment,
   WorkItem,
 } from '@forgeloop/domain';
+import { codexCanonicalDigest, planItemWorkflowPublicProjection } from '@forgeloop/domain';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
 
@@ -480,6 +483,7 @@ export async function getDevelopmentPlanItemProjection(
     qaHandoffs,
     executionPackages,
     releases,
+    workflow,
   ] = await Promise.all([
     repository.listDevelopmentPlanItemRevisions(item.id),
     listBoundarySummaryRevisionsForItem(repository, item.id),
@@ -490,6 +494,7 @@ export async function getDevelopmentPlanItemProjection(
     listQaHandoffsForProject(repository, plan.project_id),
     repository.listExecutionPackages(plan.project_id),
     repository.listReleases(plan.project_id),
+    repository.getActivePlanItemWorkflowByItem(item.id),
   ]);
   const releaseEvidence = (await Promise.all(releases.map((release) => repository.listReleaseEvidences(release.id)))).flat();
   const runtimeBoundary = planItemRuntimeBoundary(item, executionPlans, executionPackages);
@@ -531,6 +536,7 @@ export async function getDevelopmentPlanItemProjection(
       .map(({ handoff }) => qaHandoffQueueRow(plan, item, handoff)),
     runtime_boundary: runtimeBoundary,
     release_context: planItemReleaseContext(item, runtimeBoundary, executionPackages, releases, releaseEvidence),
+    ...(workflow === undefined ? {} : { plan_item_workflow: await planItemWorkflowProjection(repository, workflow.id) }),
     compare_links: {
       item_revisions_href: `/development-plans/${plan.id}/items/${item.id}/revisions/compare`,
       boundary_summary_revisions_href: boundaryRevisionCandidates[0]
@@ -540,6 +546,104 @@ export async function getDevelopmentPlanItemProjection(
     href: `/development-plans/${plan.id}/items/${item.id}`,
     updated_at: item.updated_at,
   };
+}
+
+async function planItemWorkflowProjection(repository: DeliveryRepository, workflowId: string) {
+  const workflow = await repository.getPlanItemWorkflow(workflowId);
+  if (workflow === undefined) return undefined;
+  if (workflow.active_codex_session_id === undefined) return undefined;
+  const [session, queuedActions, allActions, messages] = await Promise.all([
+    repository.getCodexSession(workflow.active_codex_session_id),
+    repository.listActivePlanItemWorkflowQueuedActions(workflow.id),
+    repository.listPlanItemWorkflowQueuedActions(workflow.id),
+    repository.listPlanItemWorkflowMessages(workflow.id),
+  ]);
+  if (session === undefined) return undefined;
+
+  const timeline_events: PlanItemWorkflowTimelineEvent[] = [
+    ...messages.map((message) => ({
+      id: `message-${message.id}`,
+      workflow_id: workflow.id,
+      event_type: `message.${message.action}`,
+      status: 'recorded',
+      body_markdown: message.body_markdown,
+      actor_id: message.actor_id,
+      created_at: message.created_at,
+    })),
+    ...allActions.map((action) => ({
+      id: `queued-action-${action.id}`,
+      workflow_id: workflow.id,
+      event_type: 'queued_action',
+      status: action.status,
+      actor_id: action.created_by_actor_id,
+      queued_action_id: action.id,
+      queued_action_kind: action.kind,
+      queued_action_status: action.status,
+      created_at: action.created_at,
+    })),
+  ].sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+
+  return planItemWorkflowPublicProjection({
+    workflow,
+    session,
+    queued_actions: queuedActions,
+    timeline_events,
+    readiness: await planItemWorkflowReadinessProjection(repository, workflow),
+    context_preview: {
+      digest: queuedActions[0]?.context_preview_digest ?? `sha256:${'0'.repeat(64)}`,
+      ...(session.latest_capsule_digest === undefined ? {} : { capsule_digest: session.latest_capsule_digest }),
+      ...(workflow.active_boundary_summary_revision_id === undefined
+        ? {}
+        : { boundary_summary_revision_id: workflow.active_boundary_summary_revision_id }),
+      ...(workflow.active_spec_doc_revision_id === undefined ? {} : { spec_doc_revision_id: workflow.active_spec_doc_revision_id }),
+      ...(workflow.active_implementation_plan_doc_revision_id === undefined
+        ? {}
+        : { implementation_plan_doc_revision_id: workflow.active_implementation_plan_doc_revision_id }),
+      message_count: messages.length,
+      queued_action_count: queuedActions.length,
+      updated_at: workflow.updated_at,
+    },
+  });
+}
+
+async function planItemWorkflowReadinessProjection(
+  repository: DeliveryRepository,
+  workflow: NonNullable<Awaited<ReturnType<DeliveryRepository['getPlanItemWorkflow']>>>,
+): Promise<PlanItemWorkflowReadiness | undefined> {
+  const transitions = await repository.listPlanItemWorkflowTransitions(workflow.id);
+  const latestReadinessTransition = transitions
+    .filter((transition) => transition.evidence_object_type === 'execution_readiness_record')
+    .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id))[0];
+  if (latestReadinessTransition !== undefined) {
+    const record = await repository.getExecutionReadinessRecord(latestReadinessTransition.evidence_object_id);
+    if (record !== undefined && record.invalidated_at === undefined) {
+      return {
+        state: record.readiness_state === 'ready' ? 'ready' : 'blocked',
+        can_evaluate: record.readiness_state !== 'ready',
+        blocker_codes: record.blocker_codes,
+        evaluated_at: record.created_at,
+        evidence_digest: codexCanonicalDigest({
+          execution_readiness_record_id: record.id,
+          workflow_id: record.workflow_id,
+          approved_boundary_summary_revision_id: record.approved_boundary_summary_revision_id,
+          approved_spec_revision_id: record.approved_spec_revision_id,
+          approved_implementation_plan_revision_id: record.approved_implementation_plan_revision_id,
+          readiness_state: record.readiness_state,
+          blocker_codes: record.blocker_codes,
+        }),
+      };
+    }
+  }
+
+  if (
+    workflow.status === 'implementation_plan_review' &&
+    workflow.active_boundary_summary_revision_id !== undefined &&
+    workflow.active_spec_doc_revision_id !== undefined &&
+    workflow.active_implementation_plan_doc_revision_id !== undefined
+  ) {
+    return { state: 'not_evaluated', can_evaluate: true, blocker_codes: [] };
+  }
+  return undefined;
 }
 
 export async function listSpecsExecutionPlans(
