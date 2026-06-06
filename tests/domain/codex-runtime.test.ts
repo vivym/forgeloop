@@ -42,6 +42,7 @@ import {
   type CodexNetworkAllowlistRule,
   type CodexRunExecutionRuntimeJobResult,
   type CodexRunExecutionWorkloadV1,
+  type CodexWorkflowRunExecutionWorkloadV1,
   type CodexRuntimeJob,
   type CodexRuntimeJobStatus,
   type CodexRuntimeProfile,
@@ -74,6 +75,7 @@ type ExportedCodexRuntimeContracts = {
   generationResult: CodexGenerationRuntimeJobResult;
   workspaceBundle: WorkspaceBundleV1;
   runExecutionWorkload: CodexRunExecutionWorkloadV1;
+  workflowRunExecutionWorkload: CodexWorkflowRunExecutionWorkloadV1;
   runExecutionResult: CodexRunExecutionRuntimeJobResult;
 };
 
@@ -85,6 +87,11 @@ const digestC = `sha256:${'c'.repeat(64)}`;
 const generatedPayload = { schema_version: 'generated_payload.test.v1', value: 'ok' };
 const generatedPayloadDigest = codexCanonicalDigest(generatedPayload);
 const generatedPayloadArtifactByteDigest = `sha256:${'9'.repeat(64)}`;
+const workflowRunExecutionThreadDigest = codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' });
+const workflowRunExecutionOtherThreadDigest = codexCanonicalDigest({
+  kind: 'codex_app_server_thread_id',
+  thread_id: 'thread-2',
+});
 
 const workflowRunExecutionWorkload = {
   schema_version: 'codex_run_execution_workload.v1',
@@ -122,7 +129,7 @@ const workflowRunExecutionWorkload = {
     continuation: {
       kind: 'resume_thread',
       codex_thread_id: 'thread-1',
-      codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+      codex_thread_id_digest: workflowRunExecutionThreadDigest,
     },
   },
   codex_session_terminalization: {
@@ -139,7 +146,7 @@ const workflowRunExecutionWorkload = {
     input_environment_manifest_digest: digestC,
     expected_input_capsule_digest: digestA,
   },
-} satisfies CodexRunExecutionWorkloadV1;
+} satisfies CodexWorkflowRunExecutionWorkloadV1;
 
 const expectedWorkflowRunExecutionContinuation = {
   codex_session_id: 'session-1',
@@ -153,6 +160,7 @@ const expectedWorkflowRunExecutionContinuation = {
   lease_epoch: 2,
   worker_id: 'worker-1',
   worker_session_digest: digestC,
+  codex_thread_id_digest: workflowRunExecutionThreadDigest,
 };
 
 const runtimeEvidence = (overrides: Partial<CodexDockerRuntimeEvidence> = {}): CodexDockerRuntimeEvidence => ({
@@ -534,22 +542,26 @@ describe('codex runtime domain contracts', () => {
   it('validates workflow-owned run-execution workloads with runtime continuity fields', () => {
     expect(validateCodexRunExecutionWorkload(workflowRunExecutionWorkload)).toEqual(workflowRunExecutionWorkload);
 
-    expect(() =>
-      validateCodexRunExecutionWorkload({
-        ...workflowRunExecutionWorkload,
-        codex_session_runtime_context: undefined,
-      }),
-    ).toThrow();
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkload({
+          ...workflowRunExecutionWorkload,
+          codex_session_runtime_context: undefined,
+        }),
+      'codex_generation_workload_unsupported',
+    );
 
-    expect(() =>
-      validateCodexRunExecutionWorkload({
-        ...workflowRunExecutionWorkload,
-        codex_session_runtime_context: {
-          ...workflowRunExecutionWorkload.codex_session_runtime_context,
-          continuation: { kind: 'start_thread' },
-        },
-      }),
-    ).toThrow();
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkload({
+          ...workflowRunExecutionWorkload,
+          codex_session_runtime_context: {
+            ...workflowRunExecutionWorkload.codex_session_runtime_context,
+            continuation: { kind: 'start_thread' },
+          },
+        }),
+      'codex_generation_workload_unsupported',
+    );
   });
 
   it('validates workflow-owned run-execution workload continuity against active session and worker expectations', () => {
@@ -560,57 +572,74 @@ describe('codex runtime domain contracts', () => {
       ),
     ).toEqual(workflowRunExecutionWorkload);
 
-    expect(() =>
-      validateCodexRunExecutionWorkloadContinuity(
-        {
-          ...workflowRunExecutionWorkload,
-          codex_session_terminalization: {
-            ...workflowRunExecutionWorkload.codex_session_terminalization,
-            input_memory_bundle_digest: digestA,
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(
+          {
+            ...workflowRunExecutionWorkload,
+            codex_session_terminalization: {
+              ...workflowRunExecutionWorkload.codex_session_terminalization,
+              input_memory_bundle_digest: digestA,
+            },
           },
-        },
-        expectedWorkflowRunExecutionContinuation,
-      ),
-    ).toThrow();
+          expectedWorkflowRunExecutionContinuation,
+        ),
+      'codex_generation_workload_unsupported',
+    );
 
-    expect(() =>
-      validateCodexRunExecutionWorkloadContinuity(
-        {
-          ...workflowRunExecutionWorkload,
-          codex_session_terminalization: {
-            ...workflowRunExecutionWorkload.codex_session_terminalization,
-            input_environment_manifest_digest: digestA,
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(
+          {
+            ...workflowRunExecutionWorkload,
+            codex_session_terminalization: {
+              ...workflowRunExecutionWorkload.codex_session_terminalization,
+              input_environment_manifest_digest: digestA,
+            },
           },
-        },
-        expectedWorkflowRunExecutionContinuation,
-      ),
-    ).toThrow();
+          expectedWorkflowRunExecutionContinuation,
+        ),
+      'codex_generation_workload_unsupported',
+    );
 
-    expect(() =>
-      validateCodexRunExecutionWorkloadContinuity(
-        {
-          ...workflowRunExecutionWorkload,
-          codex_session_runtime_context: {
-            ...workflowRunExecutionWorkload.codex_session_runtime_context,
-            lease_epoch: 3,
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(
+          {
+            ...workflowRunExecutionWorkload,
+            codex_session_runtime_context: {
+              ...workflowRunExecutionWorkload.codex_session_runtime_context,
+              lease_epoch: 3,
+            },
           },
-        },
-        expectedWorkflowRunExecutionContinuation,
-      ),
-    ).toThrow();
+          expectedWorkflowRunExecutionContinuation,
+        ),
+      'codex_generation_workload_unsupported',
+    );
 
-    expect(() =>
-      validateCodexRunExecutionWorkloadContinuity(
-        {
-          ...workflowRunExecutionWorkload,
-          codex_session_runtime_context: {
-            ...workflowRunExecutionWorkload.codex_session_runtime_context,
-            worker_session_digest: digestA,
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(
+          {
+            ...workflowRunExecutionWorkload,
+            codex_session_runtime_context: {
+              ...workflowRunExecutionWorkload.codex_session_runtime_context,
+              worker_session_digest: digestA,
+            },
           },
-        },
-        expectedWorkflowRunExecutionContinuation,
-      ),
-    ).toThrow();
+          expectedWorkflowRunExecutionContinuation,
+        ),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          codex_thread_id_digest: workflowRunExecutionOtherThreadDigest,
+        }),
+      'codex_generation_workload_unsupported',
+    );
   });
 
   it('keeps generic public safety strict for public route-looking local paths', () => {

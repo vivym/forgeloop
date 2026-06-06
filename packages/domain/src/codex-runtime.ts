@@ -494,6 +494,32 @@ export interface CodexRunExecutionWorkloadV1 {
   codex_session_terminalization?: CodexSessionTerminalizationV1;
 }
 
+export type CodexWorkflowRunExecutionRuntimeContextV1 = CodexSessionRuntimeContextV1 & {
+  expected_input_capsule_digest: string;
+  turn_group_status: 'complete';
+  continuation: Extract<CodexThreadContinuationV1, { kind: 'resume_thread' }>;
+};
+
+export type CodexWorkflowRunExecutionTerminalizationV1 = CodexSessionTerminalizationV1 & {
+  expected_input_capsule_digest: string;
+  input_capsule_id: string;
+  input_capsule_ref: string;
+  input_capsule_digest: string;
+  input_memory_bundle_ref: string;
+  input_memory_bundle_digest: string;
+  input_environment_manifest_ref: string;
+  input_environment_manifest_digest: string;
+};
+
+export interface CodexWorkflowRunExecutionWorkloadV1 extends CodexRunExecutionWorkloadV1 {
+  plan_item_workflow_id: string;
+  development_plan_id: string;
+  development_plan_item_id: string;
+  workspace_acquisition_json: CodexRunExecutionWorkspaceAcquisitionV1;
+  codex_session_runtime_context: CodexWorkflowRunExecutionRuntimeContextV1;
+  codex_session_terminalization: CodexWorkflowRunExecutionTerminalizationV1;
+}
+
 export interface CodexRunExecutionExpectedContinuation {
   codex_session_id: string;
   codex_session_turn_id: string;
@@ -506,6 +532,7 @@ export interface CodexRunExecutionExpectedContinuation {
   lease_epoch: number;
   worker_id: string;
   worker_session_digest: string;
+  codex_thread_id_digest: string;
 }
 
 export interface CodexGenerationRuntimeJobResult {
@@ -955,7 +982,7 @@ const requireRunExecutionWorkspaceAcquisition = (value: unknown): CodexRunExecut
   };
 };
 
-const requireRunExecutionTerminalization = (value: unknown): CodexSessionTerminalizationV1 => {
+const requireRunExecutionTerminalization = (value: unknown): CodexWorkflowRunExecutionTerminalizationV1 => {
   if (!isPlainObject(value) || value.schema_version !== 'codex_session_terminalization.v1') {
     throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: session terminalization is unsupported.');
   }
@@ -988,7 +1015,7 @@ const assertRunExecutionContinuityMatches = (actual: unknown, expected: unknown,
   }
 };
 
-export const validateCodexRunExecutionWorkload = (value: unknown): CodexRunExecutionWorkloadV1 => {
+export const validateCodexRunExecutionWorkload = (value: unknown): CodexWorkflowRunExecutionWorkloadV1 => {
   if (!isPlainObject(value) || value.schema_version !== 'codex_run_execution_workload.v1') {
     throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: run-execution workload is unsupported.');
   }
@@ -1027,25 +1054,31 @@ export const validateCodexRunExecutionWorkload = (value: unknown): CodexRunExecu
     );
   }
 
+  const workflowRuntimeContext: CodexWorkflowRunExecutionRuntimeContextV1 = {
+    ...runtimeContext,
+    expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest,
+    turn_group_status: runtimeContext.turn_group_status,
+    continuation: runtimeContext.continuation,
+  };
   const terminalization = requireRunExecutionTerminalization(value.codex_session_terminalization);
   assertRunExecutionContinuityMatches(
     terminalization.codex_session_id,
-    runtimeContext.codex_session_id,
+    workflowRuntimeContext.codex_session_id,
     'codex_session_id',
   );
   assertRunExecutionContinuityMatches(
     terminalization.codex_session_turn_id,
-    runtimeContext.codex_session_turn_id,
+    workflowRuntimeContext.codex_session_turn_id,
     'codex_session_turn_id',
   );
   assertRunExecutionContinuityMatches(
     terminalization.expected_input_capsule_digest,
-    runtimeContext.expected_input_capsule_digest,
+    workflowRuntimeContext.expected_input_capsule_digest,
     'expected_input_capsule_digest',
   );
   assertRunExecutionContinuityMatches(
     terminalization.input_capsule_digest,
-    runtimeContext.expected_input_capsule_digest,
+    workflowRuntimeContext.expected_input_capsule_digest,
     'input_capsule_digest',
   );
 
@@ -1072,7 +1105,7 @@ export const validateCodexRunExecutionWorkload = (value: unknown): CodexRunExecu
     created_at: requireRunExecutionWorkloadString(value, 'created_at'),
     expires_at: requireRunExecutionWorkloadString(value, 'expires_at'),
     workspace_acquisition_json: requireRunExecutionWorkspaceAcquisition(value.workspace_acquisition_json),
-    codex_session_runtime_context: runtimeContext,
+    codex_session_runtime_context: workflowRuntimeContext,
     codex_session_terminalization: terminalization,
   };
 };
@@ -1080,13 +1113,10 @@ export const validateCodexRunExecutionWorkload = (value: unknown): CodexRunExecu
 export const validateCodexRunExecutionWorkloadContinuity = (
   workload: unknown,
   expectedContinuation: CodexRunExecutionExpectedContinuation,
-): CodexRunExecutionWorkloadV1 => {
+): CodexWorkflowRunExecutionWorkloadV1 => {
   const validated = validateCodexRunExecutionWorkload(workload);
   const runtimeContext = validated.codex_session_runtime_context;
   const terminalization = validated.codex_session_terminalization;
-  if (runtimeContext === undefined || terminalization === undefined) {
-    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: run-execution continuity is required.');
-  }
 
   assertRunExecutionContinuityMatches(runtimeContext.codex_session_id, expectedContinuation.codex_session_id, 'codex_session_id');
   assertRunExecutionContinuityMatches(
@@ -1126,6 +1156,11 @@ export const validateCodexRunExecutionWorkloadContinuity = (
     runtimeContext.worker_session_digest,
     expectedContinuation.worker_session_digest,
     'worker_session_digest',
+  );
+  assertRunExecutionContinuityMatches(
+    runtimeContext.continuation.codex_thread_id_digest,
+    expectedContinuation.codex_thread_id_digest,
+    'codex_thread_id_digest',
   );
 
   return validated;
