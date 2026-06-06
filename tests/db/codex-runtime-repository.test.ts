@@ -1902,6 +1902,24 @@ describe('codex runtime repository behavior', () => {
     });
   });
 
+  it.each([
+    ['workflow_id' as const],
+    ['codex_session_id' as const],
+    ['codex_session_turn_id' as const],
+  ])('rejects workflow-owned run-execution create when first-class %s lineage is missing', async (field) => {
+    const repository = createRepository(createEnvelopeSealer());
+    const input = await workflowRunExecutionRuntimeJobInput(repository);
+    const missingLineageInput = { ...input };
+    delete missingLineageInput[field];
+
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(missingLineageInput),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
   it('rejects active workflow-owned run-execution jobs for a Codex session that already has one active job', async () => {
     const { repository } = await createWorkflowRuntimeJobWithCapturedToken();
     await repository.releaseRunWorkerLease(

@@ -292,6 +292,7 @@ import type {
   TombstoneInternalArtifactObjectInput,
   TerminalizeWorkflowExecutionInput,
   TerminalizeWorkflowExecutionResult,
+  WorkflowExecutionRunSessionUpdate,
   TerminalizeCodexLaunchLeaseInput,
   TraceArtifactRefRecord,
   TraceEventRecord,
@@ -480,13 +481,13 @@ const isWorkflowRunExecutionWorkload = (inputJson: Record<string, unknown>): boo
   inputJson.schema_version === 'codex_run_execution_workload.v1';
 
 const isWorkflowRunExecutionJob = (job: CodexRuntimeJob): boolean =>
-  job.target_kind === 'run_execution' && job.workflow_id !== undefined && isWorkflowRunExecutionWorkload(job.input_json);
+  job.target_kind === 'run_execution' && isWorkflowRunExecutionWorkload(job.input_json);
 
 const createWorkflowRunExecutionLineageMatches = (input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): boolean => {
-  if (input.target.target_kind !== 'run_execution' || input.workflow_id === undefined || !isWorkflowRunExecutionWorkload(input.input_json)) {
+  if (input.target.target_kind !== 'run_execution' || !isWorkflowRunExecutionWorkload(input.input_json)) {
     return true;
   }
-  if (input.codex_session_id === undefined || input.codex_session_turn_id === undefined) {
+  if (input.workflow_id === undefined || input.codex_session_id === undefined || input.codex_session_turn_id === undefined) {
     return false;
   }
   try {
@@ -509,7 +510,7 @@ const workflowRunExecutionJobLineageMatches = (job: CodexRuntimeJob): boolean =>
   if (!isWorkflowRunExecutionJob(job)) {
     return true;
   }
-  if (job.codex_session_id === undefined || job.codex_session_turn_id === undefined) {
+  if (job.workflow_id === undefined || job.codex_session_id === undefined || job.codex_session_turn_id === undefined) {
     return false;
   }
   try {
@@ -535,6 +536,37 @@ const assertWorkflowRunExecutionJobLineageMatches = (
 ): void => {
   if (job !== undefined && !workflowRunExecutionJobLineageMatches(job)) {
     throw codexDenied(code, message);
+  }
+};
+
+const workflowExecutionRunStatusForTerminalStatus = (
+  terminalStatus: NonNullable<CodexRuntimeJob['terminal_status']>,
+): WorkflowExecutionRunSessionUpdate['status'] => {
+  switch (terminalStatus) {
+    case 'succeeded':
+      return 'succeeded';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Workflow execution terminal status ${terminalStatus} is unsupported`,
+      );
+  }
+};
+
+const assertWorkflowExecutionTerminalizationStatusMatches = (input: TerminalizeWorkflowExecutionInput): void => {
+  const terminalStatus = input.runtime_job_terminalization.terminal_status;
+  if (
+    input.codex_session_turn_terminalization.status !== terminalStatus ||
+    input.run_session_update.status !== workflowExecutionRunStatusForTerminalStatus(terminalStatus)
+  ) {
+    throw new DomainError(
+      'codex_session_stale_terminalization',
+      `codex_session_stale_terminalization: Workflow execution ${input.workflow_id} terminalization status is inconsistent`,
+    );
   }
 };
 
@@ -2827,6 +2859,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async terminalizeWorkflowExecutionUnlocked(input: TerminalizeWorkflowExecutionInput): Promise<TerminalizeWorkflowExecutionResult> {
+    assertWorkflowExecutionTerminalizationStatusMatches(input);
     const workflow = await this.getPlanItemWorkflow(input.workflow_id);
     const runSession = await this.getRunSession(input.run_session_id);
     const runtimeJob = await this.getCodexRuntimeJob({ runtime_job_id: input.runtime_job_id });
@@ -2950,6 +2983,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       lease.worker_id !== sessionInput.worker_id ||
       lease.worker_session_digest !== sessionInput.worker_session_digest ||
       lease.lease_epoch !== sessionInput.lease_epoch ||
+      lease.expires_at <= sessionInput.now ||
       session.lease_epoch !== sessionInput.lease_epoch ||
       (session.latest_capsule_digest ?? null) !== (sessionInput.expected_input_capsule_digest ?? null) ||
       (turn.expected_input_capsule_digest ?? null) !== (sessionInput.expected_input_capsule_digest ?? null)

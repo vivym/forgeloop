@@ -4759,6 +4759,87 @@ describe('Plan Item Workflow repository', () => {
     await expect(repository.getCodexRuntimeCapsule('capsule-execution-output')).resolves.toBeUndefined();
   });
 
+  it('records stale workflow execution terminalization evidence when the session lease is expired', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const seeded = await seedWorkflowExecutionRunning(repository);
+    const staleInput = workflowExecutionTerminalizationInput(seeded, 'succeeded');
+    const attempted = {
+      ...staleInput,
+      codex_session_turn_terminalization: {
+        ...staleInput.codex_session_turn_terminalization,
+        now: runtimeExpiresAt,
+      },
+      runtime_job_terminalization: {
+        ...staleInput.runtime_job_terminalization,
+        now: runtimeExpiresAt,
+      },
+      run_session_update: {
+        ...staleInput.run_session_update,
+        finished_at: runtimeExpiresAt,
+        updated_at: runtimeExpiresAt,
+      },
+      workflow_transition: {
+        ...staleInput.workflow_transition,
+        created_at: runtimeExpiresAt,
+      },
+      stale_attempt: {
+        ...staleInput.stale_attempt,
+        id: 'stale-workflow-execution-expired-lease',
+        created_at: runtimeExpiresAt,
+        failure_code: 'codex_session_stale_terminalization',
+      },
+    };
+
+    const result = await repository.terminalizeWorkflowExecution(attempted);
+
+    expect(result).toMatchObject({
+      stale: true,
+      stale_attempt: { id: 'stale-workflow-execution-expired-lease' },
+    });
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts('session-1')).resolves.toEqual([
+      expect.objectContaining({ id: 'stale-workflow-execution-expired-lease' }),
+    ]);
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({ status: 'execution_running' });
+    await expect(repository.getRunSession(seeded.runtime.input.target.target_id)).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: seeded.runtime.input.runtime_job_id })).resolves.toMatchObject({
+      status: 'running',
+    });
+  });
+
+  it('rejects workflow execution terminalization when runtime, turn, and run statuses diverge', async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const seeded = await seedWorkflowExecutionRunning(repository);
+    const inconsistent = workflowExecutionTerminalizationInput(seeded, 'failed');
+
+    await expect(
+      repository.terminalizeWorkflowExecution({
+        ...inconsistent,
+        codex_session_turn_terminalization: {
+          ...inconsistent.codex_session_turn_terminalization,
+          status: 'succeeded',
+          output_capsule: {
+            ...runtimeCapsuleInput,
+            id: 'capsule-inconsistent-output',
+            sequence: 1,
+            artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-inconsistent-output',
+            digest: 'sha256:capsule-inconsistent-output',
+            created_from_turn_id: 'turn-1',
+          },
+          ...outputContinuationInput({ turnId: 'turn-1', suffix: 'inconsistent-output' }),
+        },
+        run_session_update: {
+          ...inconsistent.run_session_update,
+          status: 'succeeded',
+        },
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_session_stale_terminalization',
+    });
+    await expect(repository.getPlanItemWorkflow('workflow-1')).resolves.toMatchObject({ status: 'execution_running' });
+    await expect(repository.getRunSession(seeded.runtime.input.target.target_id)).resolves.toMatchObject({ status: 'running' });
+  });
+
   it('rejects successful terminalization without an output capsule before mutation', async () => {
     const repository = new InMemoryDeliveryRepository();
     await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
