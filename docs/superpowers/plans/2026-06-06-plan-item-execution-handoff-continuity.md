@@ -48,7 +48,7 @@ Out of scope:
 
 - Modify `packages/domain/src/codex-runtime.ts`
   - Extend `CodexRunExecutionWorkloadV1` with workflow/session continuity fields or a strictly validated companion envelope.
-  - Extend `CodexRunExecutionRuntimeJobResult` with output capsule, memory bundle, memory delta, environment manifest, execution turn id, and thread digest evidence.
+  - Extend `CodexRunExecutionRuntimeJobResult` with the existing generation-style `codex_session_thread`, `output_capsule`, memory bundle, memory delta, environment manifest, and execution turn evidence.
   - Add validators that reject workflow-owned run execution without continuity fields, capsule digest equality, and output capsule evidence.
 - Modify `packages/domain/src/plan-item-workflow.ts`
   - Add helper predicates for execution start, execution terminalization, and blocked/code-review transitions if they are not already reusable.
@@ -66,14 +66,14 @@ Out of scope:
 ### Database And Repository
 
 - Modify `packages/db/src/schema/run-session.ts`
-  - Add a session-level active execution uniqueness invariant if current package-level uniqueness is insufficient.
+  - Add a session-level active execution uniqueness invariant keyed by `codex_session_id`.
 - Modify `packages/db/src/schema/codex-runtime.ts`
-  - Add partial unique/index support for active workflow-owned `run_execution` jobs by `codex_session_id` if needed.
+  - Add partial unique/index support for active workflow-owned `run_execution` jobs by `codex_session_id`.
 - Add a migration under `packages/db/migrations/`
   - Add partial unique index or constraints for active execution per `codex_session_id`.
   - Add partial non-null/check constraints for workflow-owned execution package, run session, and runtime job lineage where feasible.
 - Modify `packages/db/src/repositories/delivery-repository.ts`
-  - Add repository methods for workflow execution start, runtime job lineage matching, active execution lookup, and guarded terminalization if existing methods cannot express the spec.
+  - Add explicit repository methods for workflow execution start, runtime job lineage matching, active execution lookup, guarded worker claim/materialization, and guarded workflow execution terminalization.
 - Modify `packages/db/src/repositories/in-memory-delivery-repository.ts`
   - Implement the same constraints and compare-and-set semantics for tests.
 - Modify `packages/db/src/repositories/drizzle-delivery-repository.ts`
@@ -93,7 +93,7 @@ Out of scope:
   - Add `POST /plan-item-workflows/:workflowId/execution/start`.
 - Modify `apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts`
   - Add `startExecution`.
-  - Validate `execution_ready`, actor authorization, approved current Spec/Implementation Plan revisions, current Plan Item revision, readiness record, active session, safe latest capsule, runtime binding, package reuse predicates, and duplicate-start idempotency.
+  - Validate `execution_ready`, actor authorization, workflow-owned approved current Spec/Implementation Plan revisions, current Plan Item revision, readiness record, active session, safe latest capsule, runtime binding, full package reuse predicates, and duplicate-start idempotency.
   - Create execution turn, run session, workspace bundle, runtime job, audit event, and workflow transition in one transaction.
 - Modify `apps/control-plane-api/src/modules/execution-packages/execution-package.service.ts`
   - Add strict workflow execution package reuse predicates.
@@ -109,9 +109,12 @@ Out of scope:
   - On success, atomically terminalize runtime job, run session, execution turn, latest capsule/memory/environment refs, and workflow status.
   - On failure/cancellation, atomically terminalize failure state and transition workflow to `blocked` only when lease/capsule/workflow predicates match.
 - Modify `apps/control-plane-api/src/modules/audit/audit-writer.service.ts`
-  - Add or reuse immutable audit write for workflow execution start.
+  - Add or reuse immutable audit write for workflow execution start, including repo binding and credential binding identifiers.
 - Modify `apps/control-plane-api/src/modules/query/public-run-session-projection.ts`
   - Redact worker-only workload fields from public/admin/generic runtime projections.
+- Modify `apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts`
+  - Ensure `pollRuntimeJobs`, `acceptRuntimeJob`, `claimRuntimeJobEnvelope`, `getRuntimeJobWorkload`, `materializeRuntimeJob`, `startRuntimeJob`, and `terminalizeRuntimeJob` fail closed for workflow-owned jobs whose first-class lineage diverges from trusted workload lineage.
+  - Use the same public-safe runtime job serializer for normal responses, debug/admin projections, and diagnostic objects.
 - Modify `tests/api/plan-item-workflows.test.ts`
   - Add API tests for the workflow execution start command.
 - Modify `tests/api/codex-runtime-control-plane.test.ts`
@@ -123,6 +126,7 @@ Out of scope:
 
 - Modify `packages/codex-worker-runtime/src/remote-worker-client.ts`
   - Require workflow-owned run-execution workload continuity fields.
+  - Treat server-side lineage rejection during poll, accept, envelope claim, workload fetch, materialization, or start as a hard fail-closed outcome and never continue to restore, Docker startup, or `resumeRun` after a mismatch.
   - Restore the input capsule before Docker app-server startup.
   - Validate input capsule, memory bundle, environment manifest, worker, lease, and thread digest continuity before Docker startup.
   - Use `driver.resumeRun` for `continuation.kind = resume_thread`.
@@ -187,6 +191,7 @@ Out of scope:
 - Missing or inconsistent `codex_session_runtime_context` and `codex_session_terminalization` are hard validation failures for workflow-owned run execution.
 - Runtime failure and cancellation terminalization must use the same guarded predicates as successful terminalization.
 - Public DTOs and default admin/operator diagnostics must never expose raw thread ids, capsule refs, memory refs, environment refs, local filesystem paths, lease tokens, credential metadata, auth materialization, or raw worker payloads.
+- Logs, debug serializers, error diagnostics, and generic runtime-job serializers must use the same redaction boundary as public/admin projections.
 - Use TDD. Write failing tests first for each task.
 - Commit after each task when targeted tests pass.
 
@@ -278,6 +283,76 @@ expect(() =>
 ).toThrow();
 ```
 
+Add pure continuity validation tests with an expected active-session/worker snapshot:
+
+```ts
+const expectedContinuation = {
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'turn-execution-1',
+  input_capsule_digest: digestA,
+  input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
+  input_memory_bundle_digest: digestB,
+  input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+  input_environment_manifest_digest: digestC,
+  lease_id: 'lease-1',
+  lease_epoch: 2,
+  worker_id: 'worker-1',
+  worker_session_digest: digestC,
+};
+
+expect(validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, expectedContinuation)).toEqual(
+  workflowRunExecutionWorkload,
+);
+expect(() =>
+  validateCodexRunExecutionWorkloadContinuity(
+    {
+      ...workflowRunExecutionWorkload,
+      codex_session_terminalization: {
+        ...workflowRunExecutionWorkload.codex_session_terminalization,
+        input_memory_bundle_digest: digestA,
+      },
+    },
+    expectedContinuation,
+  ),
+).toThrow();
+expect(() =>
+  validateCodexRunExecutionWorkloadContinuity(
+    {
+      ...workflowRunExecutionWorkload,
+      codex_session_terminalization: {
+        ...workflowRunExecutionWorkload.codex_session_terminalization,
+        input_environment_manifest_digest: digestA,
+      },
+    },
+    expectedContinuation,
+  ),
+).toThrow();
+expect(() =>
+  validateCodexRunExecutionWorkloadContinuity(
+    {
+      ...workflowRunExecutionWorkload,
+      codex_session_runtime_context: {
+        ...workflowRunExecutionWorkload.codex_session_runtime_context,
+        lease_epoch: 3,
+      },
+    },
+    expectedContinuation,
+  ),
+).toThrow();
+expect(() =>
+  validateCodexRunExecutionWorkloadContinuity(
+    {
+      ...workflowRunExecutionWorkload,
+      codex_session_runtime_context: {
+        ...workflowRunExecutionWorkload.codex_session_runtime_context,
+        worker_session_digest: digestA,
+      },
+    },
+    expectedContinuation,
+  ),
+).toThrow();
+```
+
 - [ ] **Step 2: Run the failing tests**
 
 Run:
@@ -294,12 +369,14 @@ In `packages/domain/src/codex-runtime.ts`:
 
 - add `plan_item_workflow_id`, `development_plan_id`, `development_plan_item_id`, `workspace_acquisition_json`, `codex_session_runtime_context`, and `codex_session_terminalization` to `CodexRunExecutionWorkloadV1`;
 - export `validateCodexRunExecutionWorkload`;
+- export a pure `validateCodexRunExecutionWorkloadContinuity(workload, expectedContinuation)` helper for worker/control-plane code that has the active session, memory, environment, lease, and worker expectations;
 - reuse `validateCodexSessionRuntimeContext`;
 - add strict key sets for run-execution workload continuity fields;
 - require `continuation.kind === 'resume_thread'`;
 - require `turn_group_status === 'complete'`;
 - require matching `codex_session_id`, `codex_session_turn_id`, and expected/input capsule digests across context and terminalization;
 - require input memory and environment refs/digests.
+- require `validateCodexRunExecutionWorkloadContinuity` to fail when input memory bundle ref/digest, input environment manifest ref/digest, lease id, lease epoch, worker id, or worker session digest differs from the expected active-session/worker snapshot.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -341,10 +418,32 @@ const workflowRunExecutionResult = {
   changed_files: ['README.md'],
   check_results: [],
   execution_artifacts: [],
-  output_capsule_id: 'capsule-2',
-  output_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
-  output_capsule_digest: digestA,
-  output_capsule_manifest_digest: digestB,
+  codex_session_thread: {
+    codex_thread_id: 'thread-1',
+    codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+    app_server_turn_id: 'turn-app-server-1',
+  },
+  output_capsule: {
+    id: 'capsule-2',
+    codex_session_id: 'session-1',
+    created_from_turn_id: 'turn-execution-1',
+    sequence: 2,
+    artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+    digest: digestA,
+    size_bytes: '1024',
+    manifest_digest: digestB,
+    thread_state_digest: digestC,
+    memory_state_digest: digestA,
+    environment_manifest_digest: digestB,
+    codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+    codex_cli_version: '0.1.0',
+    app_server_protocol_digest: digestC,
+    runtime_profile_revision_id: 'profile-revision-1',
+    trusted_runtime_manifest_digest: digestA,
+    credential_binding_lineage_digest: digestB,
+    created_by_actor_id: 'actor-tech',
+    created_at: '2026-06-06T00:05:00.000Z',
+  },
   output_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-2',
   output_memory_bundle_digest: digestC,
   memory_delta_artifact_ref: 'artifact://internal/codex_memory_delta/codex_session/session-1/delta-2',
@@ -352,7 +451,6 @@ const workflowRunExecutionResult = {
   output_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-2',
   output_environment_manifest_digest: digestB,
   codex_session_turn_id: 'turn-execution-1',
-  codex_thread_id_digest: digestC,
   public_summary: 'Execution completed.',
 } satisfies CodexRunExecutionRuntimeJobResult;
 ```
@@ -364,7 +462,7 @@ expect(validateCodexRuntimeJobTerminalResult(workflowRunExecutionResult)).toEqua
 expect(() =>
   validateCodexRuntimeJobTerminalResult({
     ...workflowRunExecutionResult,
-    output_capsule_digest: undefined,
+    output_capsule: undefined,
   }),
 ).toThrow();
 expect(() =>
@@ -389,13 +487,15 @@ Expected: FAIL because the run-execution result validator currently does not req
 
 In `packages/domain/src/codex-runtime.ts`:
 
-- add `output_capsule_id`, `output_capsule_ref`, `output_capsule_digest`, `output_capsule_manifest_digest`;
+- add generation-style `codex_session_thread` and `output_capsule` support to `CodexRunExecutionRuntimeJobResult`;
 - add `output_memory_bundle_ref`, `output_memory_bundle_digest`;
 - add `memory_delta_artifact_ref`, `memory_delta_digest`;
 - add `output_environment_manifest_ref`, `output_environment_manifest_digest`;
-- add `codex_session_turn_id` and `codex_thread_id_digest`;
+- add `codex_session_turn_id`;
 - update `codexRunExecutionRuntimeJobResultKeys`;
-- validate artifact refs with existing internal artifact helpers;
+- reuse `requireCodexSessionThreadTerminalEvidence`, `requireCodexRuntimeCapsuleTerminalEvidence`, and existing internal artifact helpers instead of creating a second flat capsule evidence shape;
+- require `output_capsule.digest` and `output_capsule.manifest_digest`;
+- require `codex_session_thread.codex_thread_id_digest === output_capsule.codex_thread_id_digest`;
 - require memory delta ref/digest together.
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -446,7 +546,7 @@ it.each(repositoryCases)('rejects two active execution runs for one CodexSession
 
 Use existing fixture helpers where possible. If no `repositoryCases` helper exists, mirror the existing in-memory/Drizzle pattern in the file.
 
-- [ ] **Step 2: Write failing runtime job lineage tests**
+- [ ] **Step 2: Write failing runtime job lineage and worker claim/materialization tests**
 
 In `tests/db/codex-runtime-repository.test.ts`, add:
 
@@ -466,6 +566,47 @@ await expect(
   }),
 ).rejects.toMatchObject({ code: 'codex_runtime_job_unavailable' });
 ```
+
+Add the same divergence fixture to every worker-facing repository entrypoint that can make the job runnable or expose its trusted workload:
+
+```ts
+const corruptWorkflowJob = await seedQueuedWorkflowRunExecutionRuntimeJob({
+  workflow_id: 'workflow-1',
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'turn-1',
+  input_json: validWorkflowRunExecutionWorkload({
+    plan_item_workflow_id: 'workflow-1',
+    codex_session_id: 'session-1',
+    codex_session_turn_id: 'different-turn',
+  }),
+});
+
+await expect(
+  repository.pollCodexRuntimeJobs(validWorkerPoll({ target_kinds: ['run_execution'] })),
+).resolves.toEqual([]);
+
+await expect(
+  repository.acceptCodexRuntimeJob(validWorkerAccept({ runtime_job_id: corruptWorkflowJob.id })),
+).rejects.toMatchObject({ code: 'codex_runtime_job_unavailable' });
+
+await expect(
+  repository.claimCodexLaunchTokenEnvelope(validEnvelopeClaim({ runtime_job_id: corruptWorkflowJob.id })),
+).rejects.toMatchObject({ code: 'codex_launch_lease_denied' });
+
+await expect(
+  repository.getCodexRuntimeJobWorkload(validWorkerWorkloadRead({ runtime_job_id: corruptWorkflowJob.id })),
+).rejects.toMatchObject({ code: 'codex_runtime_job_unavailable' });
+
+await expect(
+  repository.materializeCodexRuntimeJob(validWorkerMaterialize({ runtime_job_id: corruptWorkflowJob.id })),
+).rejects.toMatchObject({ code: 'codex_launch_materialization_denied' });
+
+await expect(
+  repository.startCodexRuntimeJob(validWorkerStart({ runtime_job_id: corruptWorkflowJob.id })),
+).rejects.toMatchObject({ code: 'codex_runtime_job_unavailable' });
+```
+
+Use existing worker fixture helpers where possible. The invariant is that enqueue/replay, poll, accept, envelope claim, workload fetch, materialization, start, and terminalization all reject or hide a workflow-owned `run_execution` job when `CodexRuntimeJob.workflow_id/codex_session_id/codex_session_turn_id` differ from `input_json.plan_item_workflow_id/codex_session_id/codex_session_turn_id`.
 
 - [ ] **Step 3: Write failing terminalization stale tests**
 
@@ -514,6 +655,7 @@ In `packages/db/src/repositories/in-memory-delivery-repository.ts`:
 - reject active run sessions with duplicate `codex_session_id`;
 - reject active `run_execution` runtime jobs with duplicate `codex_session_id`;
 - reject runtime job create/replay when first-class lineage differs from `input_json`;
+- reject or hide mismatched workflow-owned runtime jobs during `pollCodexRuntimeJobs`, `acceptCodexRuntimeJob`, `claimCodexLaunchTokenEnvelope`, `getCodexRuntimeJobWorkload`, `materializeCodexRuntimeJob`, and `startCodexRuntimeJob`;
 - implement a guarded workflow execution terminalization primitive for success/failure/cancellation with identical lease/input capsule/turn/run/job/workflow predicates;
 - ensure the primitive updates runtime job, run session, execution turn, latest capsule/memory/environment refs, and workflow status in one atomic operation or records stale evidence without mutating active state.
 
@@ -524,6 +666,7 @@ In `packages/db/src/repositories/drizzle-delivery-repository.ts`:
 - mirror the in-memory guards before insert/update;
 - rely on DB indexes for race protection;
 - convert unique violations into `DomainError('workflow_execution_already_running', ...)` or existing public-safe runtime error codes;
+- apply the same first-class-vs-workload lineage guard inside the worker poll/accept/envelope/workload/materialize/start queries so corrupt rows cannot be claimed or materialized before terminalization;
 - implement the same guarded workflow execution terminalization primitive in one transaction with conditional updates.
 
 - [ ] **Step 8: Run tests**
@@ -574,10 +717,16 @@ Add separate cases for:
 - stale Plan Item revision;
 - missing approved Spec Doc;
 - missing approved Implementation Plan Doc;
+- approved Spec Doc revision not owned by the workflow;
+- approved Implementation Plan Doc revision not owned by the workflow;
 - not-ready `ExecutionReadinessRecord`;
 - missing latest capsule;
 - unauthorized actor;
-- credential binding mismatch.
+- cross-tenant workflow access;
+- cross-workflow Plan Item or Development Plan linkage;
+- cross-plan-item start attempt;
+- cross-repo or repo-binding mismatch;
+- credential binding mismatch or actor unauthorized for the execution credential binding.
 
 - [ ] **Step 2: Write failing API tests for successful start**
 
@@ -623,6 +772,7 @@ Add separate cases for:
 
 - same-lineage duplicate requests with different HTTP retries returning the existing active execution projection;
 - mismatched package/session/capsule/revision duplicate requests returning `409` or `422` with a public-safe code;
+- stale `ExecutionPackage` reuse attempts where any of these differ: approved Spec Doc revision id, approved Implementation Plan Doc revision id, Plan Item revision id, readiness record id, package policy digest, workspace manifest digest, immutable package provenance turn, package version, active run lineage, or terminalization-gap state;
 - two concurrent `Start execution` requests, using `Promise.allSettled`, creating exactly one active `RunSession`, one execution `CodexSessionTurn`, and one `CodexRuntimeJob`;
 - terminal runtime job with complete run/session/workflow terminalization returning the completed lineage projection;
 - terminal runtime job with incomplete run/session/workflow terminalization either safely terminalizing or returning a recovery-required blocker without creating new execution lineage.
@@ -636,6 +786,9 @@ expect(startAuditEvent).toMatchObject({
   actor_id: 'actor-tech',
   workflow_id: 'workflow-1',
   plan_item_id: 'item-1',
+  repo_binding_id: 'repo-binding-1',
+  credential_binding_id: 'credential-binding-1',
+  credential_binding_version_id: 'credential-binding-version-1',
   codex_session_id: 'session-1',
   codex_session_turn_id: expect.any(String),
   run_session_id: expect.any(String),
@@ -647,6 +800,7 @@ expect(startAuditEvent).toMatchObject({
 expect(JSON.stringify(startAuditEvent)).not.toContain('codex_thread_id":"');
 expect(JSON.stringify(startAuditEvent)).not.toContain('artifact://internal');
 expect(JSON.stringify(startAuditEvent)).not.toContain('lease-token');
+expect(JSON.stringify(startAuditEvent)).not.toContain('auth_json');
 ```
 
 - [ ] **Step 5: Write failing API tests for workflow-owned terminalization**
@@ -665,7 +819,7 @@ await request(app.getHttpServer())
 expect(await repository.getRunSession(runSessionId)).toMatchObject({ status: 'succeeded' });
 expect(await repository.getCodexSessionTurn(executionTurnId)).toMatchObject({ status: 'succeeded' });
 expect(await repository.getPlanItemWorkflow(workflowId)).toMatchObject({ status: 'code_review' });
-expect((await repository.getCodexSession(sessionId))?.latest_capsule_digest).toBe(workflowRunExecutionResult.output_capsule_digest);
+expect((await repository.getCodexSession(sessionId))?.latest_capsule_digest).toBe(workflowRunExecutionResult.output_capsule.digest);
 ```
 
 Add separate cases for:
@@ -689,6 +843,17 @@ expect(response.body.execution_run_summary.codex_thread_id_digest).toMatch(/^sha
 ```
 
 Also add a direct projection test for `public-run-session-projection.ts` proving generic/public/admin-safe projections use explicit allowlisted fields and never serialize raw runtime job `input_json`, raw capsule refs, raw memory refs, raw environment refs, lease tokens, credential metadata, auth materialization, app-server payloads, or local filesystem paths.
+
+Add diagnostic redaction tests around the actual runtime-job serializer/debug helpers used by `CodexRuntimeService`:
+
+```ts
+expect(JSON.stringify(publicRuntimeJob(corruptOrSensitiveRuntimeJob))).not.toContain('thread-raw');
+expect(JSON.stringify(publicRuntimeJob(corruptOrSensitiveRuntimeJob))).not.toContain('lease-token-secret');
+expect(JSON.stringify(publicRuntimeJob(corruptOrSensitiveRuntimeJob))).not.toContain('auth_json');
+expect(JSON.stringify(publicRuntimeJob(corruptOrSensitiveRuntimeJob))).not.toContain('/Users/');
+```
+
+If the helpers are not exported, cover them through `GET /internal/codex-runtime/runtime-jobs/:jobId`, worker poll responses, recovery summaries, and any debug/admin endpoint that returns runtime job diagnostics. The tests must prove logs/debug/admin serializers do not bypass the projection redaction boundary.
 
 - [ ] **Step 7: Run the failing API tests**
 
@@ -732,18 +897,18 @@ In `PlanItemWorkflowService.startExecution`:
 - acquire `withObjectLock('plan-item-workflow:${workflowId}')`;
 - run inside `withDeliveryTransaction`;
 - require workflow status `execution_ready`;
-- call existing actor authorization helper with an execution action;
+- call existing actor authorization helper with an execution action and require access to the workflow tenant, Plan Item, repo binding, and execution credential binding;
 - require active session and latest capsule;
 - reject session already running or already owned by a runner;
-- validate approved current Spec Doc and Implementation Plan Doc revisions;
-- validate current Plan Item revision;
-- load ready current `ExecutionReadinessRecord`;
-- create or strictly reuse `ExecutionPackage` through `ExecutionPackageService`;
+- validate approved current Spec Doc and Implementation Plan Doc revisions and require both approved revisions to belong to this workflow;
+- validate current Development Plan, Plan Item, and Plan Item revision belong to this workflow and repo binding;
+- load ready current `ExecutionReadinessRecord` for this workflow/revision set;
+- create or strictly reuse `ExecutionPackage` through `ExecutionPackageService` only when all reuse predicates match: workflow id, session id, repo binding id, credential binding id/version, approved Spec Doc revision id, approved Implementation Plan Doc revision id, Plan Item revision id, readiness record id, package policy digest, workspace manifest digest, immutable package provenance turn, package version, and absence of mismatched active-run or terminalization-gap lineage;
 - create `CodexSessionTurn` with `intent: 'execute_plan'`;
 - create `RunSession` with workflow/session/execution turn lineage;
 - create or bind workspace bundle;
 - create `CodexRuntimeJob` with first-class lineage and matching workload lineage;
-- write immutable audit event before job is claimable;
+- write immutable audit event before job is claimable, including `repo_binding_id`, credential binding id/version, and digest-only continuity evidence;
 - transition workflow `execution_ready -> execution_running` with `execution_package` or `run_session` evidence;
 - return public workflow projection.
 
@@ -754,7 +919,8 @@ Add helper behavior:
 - if workflow is already `execution_running` and existing active run lineage matches the same package/version/capsule/session, return existing projection;
 - if runtime job terminalization is complete, return completed lineage projection;
 - if runtime job is terminal but run/session/workflow projection is incomplete, call safe idempotent terminalizer or return recovery-required blocker;
-- reject mismatched package/session/capsule/revision duplicate starts.
+- reject mismatched package/session/capsule/revision duplicate starts;
+- reject reuse when readiness record id, package policy digest, workspace manifest digest, immutable package provenance turn, or active-run/terminalization-gap lineage differs from the current workflow-approved inputs.
 
 - [ ] **Step 11: Implement workflow-owned runtime terminalization integration**
 
@@ -763,7 +929,7 @@ In `apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts`:
 - before the generic `repository.terminalizeCodexRuntimeJob` path mutates the runtime job, load the runtime job/workload and detect `runtimeJob.target_kind === 'run_execution'` with `workflow_id`, `codex_session_id`, and `codex_session_turn_id`;
 - validate `terminal_result_json` as `CodexRunExecutionRuntimeJobResult` for successful workflow-owned execution;
 - call the guarded workflow execution terminalization primitive from Task 3, passing the worker session token, replay protection, launch lease id, terminal status, reason code, terminal idempotency key, request digest, and terminal result so runtime job terminalization and workflow/session/run/turn terminalization happen in the same repository transaction;
-- on success, pass output capsule, output memory bundle, memory delta, output environment manifest, execution turn id, thread digest, run session id, runtime job id, and workflow id into that same terminalizer;
+- on success, pass `terminal_result_json.output_capsule`, `terminal_result_json.codex_session_thread`, output memory bundle, memory delta, output environment manifest, execution turn id, run session id, runtime job id, and workflow id into that same terminalizer;
 - on runtime failure/cancellation, call the same guarded primitive with failure/cancellation status and public-safe reason code;
 - convert stale terminalization into stale evidence without mutating workflow/run/turn/latest capsule state;
 - keep generation and non-workflow runtime terminalization behavior on the existing generic path.
@@ -775,6 +941,8 @@ In `apps/control-plane-api/src/modules/query/public-run-session-projection.ts` a
 - replace runtime-job-input passthrough with explicit allowlisted summary fields;
 - expose only digest-level continuity evidence, run/session/package ids, status, timestamps, changed files allowed by policy, check summaries, and artifact kinds;
 - remove raw `codex_thread_id`, capsule refs, memory refs, environment refs, lease tokens, credential metadata, auth materialization, app-server payloads, and local paths from default public/admin/generic projections;
+- apply the same redaction helper to debug serializers, recovery summaries, worker poll public metadata, runtime-job status endpoints, and any logger/audit payload builder that serializes runtime job input/result data;
+- keep raw runtime workload logging disabled by default; if a trusted-worker diagnostic log is necessary, log only digest ids and public-safe blocker codes;
 - keep trusted worker endpoints unchanged only where worker authentication requires raw internal payloads.
 
 - [ ] **Step 13: Run API tests**
@@ -809,7 +977,7 @@ git commit -m "feat: add workflow execution start command"
 
 - [ ] **Step 1: Write failing legacy route tests**
 
-Add tests proving workflow-owned execution packages cannot run through legacy routes:
+Add tests proving no public execution package can start execution through legacy routes:
 
 ```ts
 for (const route of ['run', 'rerun', 'force-rerun']) {
@@ -817,13 +985,19 @@ for (const route of ['run', 'rerun', 'force-rerun']) {
     .post(`/execution-packages/${workflowOwnedPackageId}/${route}`)
     .send({ requested_by_actor_id: 'actor-tech' })
     .expect(410)
-    .expect(({ body }) => expect(body.code).toBe('workflow_legacy_entrypoint_disabled'));
+    .expect(({ body }) => expect(body.code).toBe('legacy_execution_entrypoint_disabled'));
+
+  await request(app.getHttpServer())
+    .post(`/execution-packages/${nonWorkflowPackageId}/${route}`)
+    .send({ requested_by_actor_id: 'actor-tech' })
+    .expect(410)
+    .expect(({ body }) => expect(body.code).toBe('legacy_execution_entrypoint_disabled'));
 }
 ```
 
-Also test that non-workflow legacy packages either remain read-only/test-only or fail according to the chosen product policy.
+If an internal test-only helper still needs to enqueue a non-product run for fixture setup, it must live under a clearly trusted internal/test-only surface and must not be reachable from public UI/API commands.
 
-Add tests or no-baggage fixture cases proving the following forbidden public mutation roots cannot start workflow-owned execution and do not forward to `startExecution`:
+Add tests or no-baggage fixture cases proving the following forbidden public mutation roots cannot start execution and do not forward to `startExecution`:
 
 - Source Document shortcuts;
 - Spec Doc shortcuts;
@@ -848,7 +1022,8 @@ Expected: FAIL because routes still enqueue runs.
 
 In `ExecutionPackageRunsController` or `RunControlService.assertPublicRunPackageMutationAllowed`:
 
-- if package has `workflow_id`, throw `GoneException` or `UnprocessableEntityException` with `workflow_legacy_entrypoint_disabled`;
+- for public `execution-packages/:packageId/run`, `/rerun`, and `/force-rerun`, always throw `GoneException` or `UnprocessableEntityException` with `legacy_execution_entrypoint_disabled`, regardless of whether the package has `workflow_id`;
+- move any indispensable non-product fixture execution path to a trusted internal/test-only command that is not mounted in public API modules and is blocked in production;
 - do not forward legacy routes to `startExecution`;
 - keep read-only run/session projections intact.
 
@@ -856,7 +1031,7 @@ In `ExecutionPackageRunsController` or `RunControlService.assertPublicRunPackage
 
 In web files:
 
-- remove buttons that call execution package `run/rerun/force-rerun` for workflow-owned Plan Items;
+- remove all buttons that call execution package `run/rerun/force-rerun`;
 - ensure `Start execution` calls only `POST /plan-item-workflows/:workflowId/execution/start`;
 - update labels to avoid Execution Package as a mutation root.
 
@@ -947,12 +1122,18 @@ Add cases for:
 
 - missing `codex_session_runtime_context`;
 - `continuation.kind = start_thread`;
+- first-class runtime job lineage differing from workload lineage after workload fetch;
+- lineage rejection from accept, envelope claim, workload fetch, materialization, or start;
 - capsule digest mismatch;
+- input memory bundle ref or digest mismatch;
+- input environment manifest ref or digest mismatch;
+- lease id or lease epoch mismatch;
+- worker id or worker session digest mismatch;
 - thread digest mismatch;
 - restore failure;
 - `resumeRun` failure.
 
-Each should terminalize failed with a public-safe blocker and should not call `startRun`.
+Each should terminalize failed with a public-safe blocker where a job has already been accepted, or return `{ processed: 0 }` when the server correctly hides the corrupt job during poll. None of these cases may call `startRun`, `resumeRun`, capsule restore, Docker startup, workspace download, or launch materialization after a lineage mismatch is detected.
 
 - [ ] **Step 4: Run failing worker tests**
 
@@ -969,6 +1150,12 @@ Expected: FAIL because current run-execution path starts Docker without capsule 
 In `remote-worker-client.ts`:
 
 - validate workload with `validateCodexRunExecutionWorkload`;
+- build the expected continuation snapshot from the accepted runtime job, workload, materialized launch lease, active fence, and worker session;
+- call `validateCodexRunExecutionWorkloadContinuity` before capsule restore and before Docker startup so stale memory bundle refs/digests, environment manifest refs/digests, lease id/epoch, worker id, or worker session digest cannot proceed into execution;
+- after poll and before accept, reject any workflow-owned `run_execution` job whose public metadata contradicts the target kind, runtime job id, input digest, launch lease id, or any digest-level lineage fields exposed by the server;
+- after workload fetch, compare first-class runtime job public metadata against the trusted workload lineage before capsule restore;
+- after accept, envelope claim, materialization, and start responses, re-check runtime job id, workflow id, session id, execution turn id, run session id, execution package id, input digest, launch lease id, worker id, and accepted worker session digest before moving to the next phase;
+- fail closed with a public-safe blocker and stop before capsule restore/Docker startup when any server response indicates a stale/corrupt workflow-owned job;
 - parse `codex_session_terminalization` before Docker startup;
 - require capsule manager for workflow-owned run execution;
 - restore input capsule into fresh `CODEX_HOME`;
@@ -995,7 +1182,7 @@ After successful execution:
 
 - package new Codex runtime capsule;
 - upload output memory bundle and environment manifest evidence;
-- include `output_capsule_id/ref/digest/manifest_digest`, memory refs/digests, memory delta refs/digests, environment refs/digests, execution turn id, and thread digest in terminal result.
+- include generation-style `output_capsule`, `codex_session_thread`, memory refs/digests, memory delta refs/digests, environment refs/digests, and execution turn id in terminal result.
 
 - [ ] **Step 8: Run worker tests**
 
@@ -1187,10 +1374,11 @@ Run:
 ```bash
 pnpm vitest run tests/smoke/plan-item-execution-handoff-dogfood-script.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
 pnpm dogfood:plan-item-execution-handoff
+pnpm dogfood:plan-item-execution-handoff:real
 pnpm check:codex-runtime-superpowers-no-baggage
 ```
 
-Expected: PASS.
+Expected: PASS. If `pnpm dogfood:plan-item-execution-handoff:real` prints a credential/runtime skip locally, that is allowed for developer convenience but must be recorded as non-acceptance evidence. Acceptance evidence requires this command to complete a real same-session `run_execution` handoff.
 
 - [ ] **Step 8: Run final verification**
 
@@ -1198,12 +1386,15 @@ Run:
 
 ```bash
 pnpm vitest run tests/domain/codex-runtime.test.ts tests/db/plan-item-workflow-repository.test.ts tests/db/codex-runtime-repository.test.ts tests/api/plan-item-workflows.test.ts tests/codex-worker-runtime/remote-worker-client.test.ts tests/web/development-plan-routes.test.tsx tests/smoke/plan-item-execution-handoff-dogfood-script.test.ts --pool=forks --no-file-parallelism --maxWorkers=1
+pnpm dogfood:plan-item-execution-handoff
+pnpm dogfood:plan-item-execution-handoff:real
+pnpm check:codex-runtime-superpowers-no-baggage
 pnpm test
 pnpm build
 git diff --check
 ```
 
-Expected: all pass.
+Expected: all pass. A skipped real-runtime dogfood run is not final acceptance evidence.
 
 - [ ] **Step 9: Commit**
 
