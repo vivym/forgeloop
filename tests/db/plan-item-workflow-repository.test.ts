@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 
+import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   codexCanonicalDigest,
@@ -31,6 +32,7 @@ import {
   createDbClient,
   DrizzleDeliveryRepository,
   InMemoryDeliveryRepository,
+  plan_item_workflows,
   type AttachCodexSessionRunnerRuntimeJobInput,
   type CodexLaunchLease,
   type DeliveryRepository,
@@ -80,6 +82,11 @@ const expectDomainErrorCode = async (action: () => Promise<unknown>, code: strin
 };
 
 const createDrizzleWorkflowRepository = async () => {
+  const { repository } = await createDrizzleWorkflowRepositoryWithDb();
+  return repository;
+};
+
+const createDrizzleWorkflowRepositoryWithDb = async () => {
   if (drizzleDatabaseUrl === undefined) {
     throw new Error('Expected FORGELOOP_TEST_DATABASE_URL or FORGELOOP_DATABASE_URL');
   }
@@ -88,7 +95,7 @@ const createDrizzleWorkflowRepository = async () => {
   activePools.push(pool);
   const repository = new DrizzleDeliveryRepository(db);
   await seedDrizzleWorkflowParents(repository);
-  return repository;
+  return { db, repository };
 };
 
 const baseWorkflowInput = {
@@ -732,6 +739,7 @@ const seedRuntimeWorker = async (
     docker_image_digests?: readonly string[];
     network_policy_digests?: readonly string[];
     network_provider_config_digests?: readonly string[];
+    created_by_actor_id?: string;
     lease_count?: number;
     max_concurrency?: number;
   } = {},
@@ -758,7 +766,7 @@ const seedRuntimeWorker = async (
       network_policy_digests: networkPolicyDigests,
       network_provider_config_digests: networkProviderConfigDigests,
     },
-    created_by_actor_id: 'actor-admin',
+    created_by_actor_id: overrides.created_by_actor_id ?? 'actor-admin',
     created_at: now,
     expires_at: runtimeExpiresAt,
   });
@@ -808,14 +816,6 @@ const createAcceptedSessionRuntimeJob = async (
   repository: DeliveryRepository,
   overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> = {},
 ) => {
-  const { profile, revision } = runtimeProfileRevision();
-  const { binding, version, secretPayload } = runtimeCredential({ profile_id: profile.id });
-  await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
-  await repository.createCodexCredentialBindingWithVersion({
-    binding,
-    version,
-    secret_payload_json: secretPayload,
-  });
   const runtimeJobId = overrides.runtime_job_id ?? 'attached-runtime-job-1';
   const runSessionId = runtimeJobId === 'attached-runtime-job-1' ? 'runtime-run-session-1' : `runtime-run-session-${runtimeJobId}`;
   const bundleId = runtimeJobId === 'attached-runtime-job-1' ? 'attached-pending-bundle-1' : `attached-pending-bundle-${runtimeJobId}`;
@@ -829,16 +829,71 @@ const createAcceptedSessionRuntimeJob = async (
       : testUuid(`pending-bundle:${runtimeJobId}`);
   const runWorkerLeaseToken = `run-worker-token-${runtimeJobId}`;
   const target = overrides.target ?? runExecutionTarget({ target_id: runSessionId });
+  const usesDrizzleUuidFixture = overrides.workflow_id === uuidFixture.workflowId;
+  const profileId =
+    overrides.runtime_profile_revision_id === undefined ? undefined : testUuid(`runtime-profile:${overrides.runtime_profile_revision_id}`);
+  const profileCreatedByActorId = usesDrizzleUuidFixture ? uuidFixture.actorTechId : undefined;
+  const { profile, revision } = runtimeProfileRevision({
+    ...(overrides.runtime_profile_revision_id === undefined ? {} : { id: overrides.runtime_profile_revision_id }),
+    ...(profileId === undefined ? {} : { profile_id: profileId }),
+    ...(profileCreatedByActorId === undefined ? {} : { created_by_actor_id: profileCreatedByActorId }),
+    allowed_scopes: [{ project_id: target.project_id, ...(target.repo_id === undefined ? {} : { repo_id: target.repo_id }) }],
+  });
+  const { binding, version, secretPayload } = runtimeCredential(
+    {
+      ...(overrides.credential_binding_id === undefined ? {} : { id: overrides.credential_binding_id }),
+      profile_id: profile.id,
+      project_id: target.project_id,
+      ...(target.repo_id === undefined ? {} : { repo_id: target.repo_id }),
+      ...(profileCreatedByActorId === undefined ? {} : { created_by_actor_id: profileCreatedByActorId }),
+    },
+    {
+      ...(overrides.credential_binding_version_id === undefined ? {} : { id: overrides.credential_binding_version_id }),
+      ...(profileCreatedByActorId === undefined ? {} : { created_by_actor_id: profileCreatedByActorId }),
+    },
+  );
+  await repository.createCodexRuntimeProfileWithRevision({ profile, revision });
+  await repository.createCodexCredentialBindingWithVersion({
+    binding,
+    version,
+    secret_payload_json: secretPayload,
+  });
   const isWorkflowExecutionWorkload = overrides.input_json?.schema_version === 'codex_run_execution_workload.v1';
   const run = runSession({
     id: target.target_id,
     execution_package_id: overrides.execution_package_id ?? 'execution-package-1',
+    ...(overrides.workflow_id === undefined ? {} : { workflow_id: overrides.workflow_id }),
+    ...(overrides.codex_session_id === undefined ? {} : { codex_session_id: overrides.codex_session_id }),
+    ...(overrides.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: overrides.codex_session_turn_id }),
+    ...(usesDrizzleUuidFixture ? { requested_by_actor_id: uuidFixture.actorTechId } : {}),
   });
   if (!isWorkflowExecutionWorkload) {
     delete run.codex_session_id;
     delete run.codex_session_turn_id;
   }
-  await repository.saveExecutionPackage(executionPackage({ id: run.execution_package_id }));
+  await repository.saveExecutionPackage(executionPackage({
+    id: run.execution_package_id,
+    ...(usesDrizzleUuidFixture
+      ? {
+          work_item_id: uuidFixture.developmentPlanItemId,
+          development_plan_item_id: uuidFixture.developmentPlanItemId,
+          workflow_id: uuidFixture.workflowId,
+          codex_session_id: uuidFixture.sessionId,
+          codex_session_turn_id: uuidFixture.turnId,
+          spec_id: uuidFixture.specId,
+          spec_revision_id: uuidFixture.specRevisionId,
+          plan_id: uuidFixture.developmentPlanId,
+          plan_revision_id: uuidFixture.executionPlanRevisionId,
+          execution_plan_id: uuidFixture.executionPlanId,
+          execution_plan_revision_id: uuidFixture.executionPlanRevisionId,
+          project_id: uuidFixture.projectId,
+          repo_id: 'repo-drizzle',
+          owner_actor_id: uuidFixture.actorTechId,
+          reviewer_actor_id: uuidFixture.actorProductId,
+          qa_owner_actor_id: uuidFixture.actorProductId,
+        }
+      : {}),
+  }));
   await repository.saveRunSession(run);
   const runWorkerLease = await repository.claimRunWorkerLease({
     run_session_id: run.id,
@@ -907,7 +962,15 @@ const createAcceptedSessionRuntimeJob = async (
       ? reusableWorker
       : (
           await seedRuntimeWorker(repository, {
+            ...(overrides.worker_id === undefined ? {} : { worker_id: overrides.worker_id }),
+            ...(usesDrizzleUuidFixture
+              ? {
+                  bootstrap_token_id: testUuid(`bootstrap-token:${overrides.worker_id ?? 'worker-1'}`),
+                  created_by_actor_id: uuidFixture.actorTechId,
+                }
+              : {}),
             capabilities: [target.target_kind],
+            allowedScopes: [{ project_id: target.project_id, ...(target.repo_id === undefined ? {} : { repo_id: target.repo_id }) }],
             docker_image_digests: [revision.docker_image_digest],
             network_policy_digests: [codexCanonicalDigest(revision.network_policy)],
             network_provider_config_digests: [dockerProxyConfig().provider_config_digest],
@@ -1735,6 +1798,164 @@ const seedWorkflowExecutionRunning = async (repository: InMemoryDeliveryReposito
   const runtimeJob = await startSessionRuntimeJob(repository, runtime.input, 'start-workflow-terminalization');
 
   return { claimedSessionLease, runtime, runtimeJob };
+};
+
+const seedDrizzleWorkflowExecutionRunning = async (
+  repository: DeliveryRepository,
+  db: Awaited<ReturnType<typeof createDrizzleWorkflowRepositoryWithDb>>['db'],
+) => {
+  await repository.createPlanItemWorkflowWithInitialSession(drizzleWorkflowInput);
+  await repository.createCodexSessionTurn(drizzleTurnInput);
+  const packageId = testUuid('drizzle-workflow-execution-package');
+  const runSessionId = testUuid('drizzle-workflow-run-session');
+  const runtimeJobId = testUuid('drizzle-workflow-runtime-job');
+  const launchLeaseId = testUuid('drizzle-workflow-launch-lease');
+  const envelopeId = testUuid('drizzle-workflow-envelope');
+  const workerId = testUuid('drizzle-workflow-runtime-worker');
+  const claimedSessionLease = await repository.claimCodexSessionLease({
+    ...drizzleLeaseInput,
+    worker_id: workerId,
+    worker_session_digest: tokenHash('session-token-1'),
+    expires_at: runtimeExpiresAt,
+  });
+  const runtime = await createAcceptedSessionRuntimeJob(repository, {
+    runtime_job_id: runtimeJobId,
+    launch_lease_id: launchLeaseId,
+    envelope_id: envelopeId,
+    job_request_id: 'drizzle-workflow-runtime-job-request',
+    target: runExecutionTarget({
+      target_id: runSessionId,
+      project_id: uuidFixture.projectId,
+      repo_id: 'repo-drizzle',
+    }),
+    execution_package_id: packageId,
+    workflow_id: uuidFixture.workflowId,
+    codex_session_id: uuidFixture.sessionId,
+    codex_session_turn_id: uuidFixture.turnId,
+    runtime_profile_revision_id: uuidFixture.runtimeProfileRevisionId,
+    credential_binding_id: uuidFixture.credentialBindingId,
+    credential_binding_version_id: uuidFixture.credentialBindingVersionId,
+    worker_id: workerId,
+    input_json: workflowRunExecutionWorkload({
+      runtime_job_id: runtimeJobId,
+      workflow_id: uuidFixture.workflowId,
+      codex_session_id: uuidFixture.sessionId,
+      codex_session_turn_id: uuidFixture.turnId,
+      run_session_id: runSessionId,
+      execution_package_id: packageId,
+    }),
+    input_digest: tokenHash('drizzle-workflow-run-execution-runtime-input'),
+  });
+  await claimSessionRuntimeJobEnvelope(repository, runtime.input, 'claim-drizzle-workflow-terminalization');
+  await materializeSessionRuntimeJob(repository, runtime.input, 'materialize-drizzle-workflow-terminalization');
+  const runtimeJob = await startSessionRuntimeJob(repository, runtime.input, 'start-drizzle-workflow-terminalization');
+  await db
+    .update(plan_item_workflows)
+    .set({ status: 'execution_running', executionPackageId: packageId, updatedAt: later })
+    .where(eq(plan_item_workflows.id, uuidFixture.workflowId));
+
+  return { claimedSessionLease, packageId, runSessionId, runtime, runtimeJob };
+};
+
+const drizzleWorkflowExecutionTerminalizationInput = (
+  seeded: Awaited<ReturnType<typeof seedDrizzleWorkflowExecutionRunning>>,
+  terminalStatus: 'succeeded' | 'failed' | 'cancelled' = 'succeeded',
+) => {
+  const isSuccess = terminalStatus === 'succeeded';
+  const terminalizedAt = '2026-05-31T00:10:00.000Z';
+  const outputCapsule = {
+    ...drizzleRuntimeCapsuleInput,
+    id: testUuid('drizzle-workflow-output-capsule'),
+    sequence: 1,
+    artifact_ref: `artifact://internal/codex_runtime_capsule/codex_session/${uuidFixture.sessionId}/${testUuid('drizzle-workflow-output-capsule')}`,
+    digest: 'sha256:drizzle-workflow-output-capsule',
+    manifest_digest: 'sha256:drizzle-workflow-output-manifest',
+    thread_state_digest: 'sha256:drizzle-workflow-output-thread',
+    memory_state_digest: 'sha256:drizzle-workflow-output-memory',
+    environment_manifest_digest: 'sha256:drizzle-workflow-output-env',
+    app_server_protocol_digest: 'sha256:drizzle-workflow-output-app-server',
+    trusted_runtime_manifest_digest: 'sha256:drizzle-workflow-output-trusted-runtime',
+    credential_binding_lineage_digest: 'sha256:drizzle-workflow-output-credential-lineage',
+    created_from_turn_id: uuidFixture.turnId,
+    created_at: terminalizedAt,
+  };
+
+  return {
+    workflow_id: uuidFixture.workflowId,
+    codex_session_id: uuidFixture.sessionId,
+    codex_session_turn_id: uuidFixture.turnId,
+    run_session_id: seeded.runSessionId,
+    runtime_job_id: seeded.runtime.input.runtime_job_id,
+    expected_workflow_status: 'execution_running' as const,
+    expected_run_session_status: 'running' as const,
+    expected_run_session_updated_at: now,
+    runtime_job_terminalization: {
+      runtime_job_id: seeded.runtime.input.runtime_job_id,
+      launch_lease_id: seeded.runtime.input.launch_lease_id,
+      worker_id: seeded.runtime.input.worker_id,
+      worker_session_token: 'session-token-1',
+      nonce: `terminalize-drizzle-workflow-execution-${terminalStatus}`,
+      nonce_timestamp: terminalizedAt,
+      terminal_status: terminalStatus,
+      reason_code: isSuccess ? 'completed' : terminalStatus === 'cancelled' ? 'user_cancelled' : 'runtime_failed',
+      terminal_result_json: isSuccess
+        ? runExecutionTerminalResult({
+            execution_package_id: seeded.packageId,
+            run_session_id: seeded.runSessionId,
+          })
+        : undefined,
+      idempotency_key: `terminalize-drizzle-workflow-execution-${terminalStatus}`,
+      request_digest: tokenHash(`terminalize-drizzle-workflow-execution-${terminalStatus}`),
+      now: terminalizedAt,
+    },
+    codex_session_turn_terminalization: {
+      session_id: uuidFixture.sessionId,
+      turn_id: uuidFixture.turnId,
+      lease_id: seeded.claimedSessionLease.lease.id,
+      lease_token_hash: seeded.claimedSessionLease.lease.lease_token_hash,
+      lease_epoch: seeded.claimedSessionLease.lease.lease_epoch,
+      worker_id: seeded.claimedSessionLease.lease.worker_id,
+      worker_session_digest: seeded.claimedSessionLease.lease.worker_session_digest,
+      status: terminalStatus,
+      expected_input_capsule_digest: undefined,
+      ...(isSuccess
+        ? {
+            output_capsule: outputCapsule,
+            ...outputContinuationInput({ sessionId: uuidFixture.sessionId, turnId: uuidFixture.turnId, suffix: 'drizzle-execution-output' }),
+            codex_thread_id: 'thread-drizzle',
+            codex_thread_id_digest: 'sha256:thread-drizzle',
+          }
+        : { failure_code: terminalStatus === 'cancelled' ? 'user_cancelled' : 'runtime_failed' }),
+      now: terminalizedAt,
+    },
+    run_session_update: {
+      status: terminalStatus === 'succeeded' ? 'succeeded' as const : terminalStatus,
+      summary: isSuccess ? 'Execution completed.' : undefined,
+      failure_kind: terminalStatus === 'failed' ? 'executor_error' as const : undefined,
+      failure_reason: terminalStatus === 'failed' ? 'Runtime failed.' : terminalStatus === 'cancelled' ? 'Execution cancelled.' : undefined,
+      finished_at: terminalizedAt,
+      updated_at: terminalizedAt,
+    },
+    workflow_transition: {
+      id: testUuid(`drizzle-workflow-execution-transition-${terminalStatus}`),
+      actor_id: uuidFixture.actorTechId,
+      reason: isSuccess ? 'Execution completed.' : 'Execution stopped before code review.',
+      created_at: terminalizedAt,
+    },
+    stale_attempt: {
+      id: testUuid(`drizzle-stale-workflow-execution-${terminalStatus}`),
+      codex_session_id: uuidFixture.sessionId,
+      codex_session_turn_id: uuidFixture.turnId,
+      lease_id: seeded.claimedSessionLease.lease.id,
+      lease_epoch: seeded.claimedSessionLease.lease.lease_epoch,
+      worker_id: seeded.claimedSessionLease.lease.worker_id,
+      worker_session_digest: seeded.claimedSessionLease.lease.worker_session_digest,
+      expected_input_capsule_digest: undefined,
+      attempted_output_capsule_digest: isSuccess ? outputCapsule.digest : undefined,
+      failure_code: 'codex_session_stale_terminalization',
+      created_at: terminalizedAt,
+    },
+  };
 };
 
 const workflowExecutionTerminalizationInput = (
@@ -7406,6 +7627,74 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       name: 'DomainError',
       code: 'workflow_execution_already_running',
     });
+  });
+
+  drizzleTest('terminalizes successful workflow execution atomically across Drizzle runtime job, run, session turn, capsule, and workflow', async () => {
+    const { db, repository } = await createDrizzleWorkflowRepositoryWithDb();
+    const seeded = await seedDrizzleWorkflowExecutionRunning(repository, db);
+
+    const terminalized = await repository.terminalizeWorkflowExecution(
+      drizzleWorkflowExecutionTerminalizationInput(seeded, 'succeeded'),
+    );
+
+    expect(terminalized).toMatchObject({
+      stale: false,
+      runtime_job: { id: seeded.runtime.input.runtime_job_id, status: 'terminal', terminal_status: 'succeeded' },
+      run_session: { id: seeded.runSessionId, status: 'succeeded', finished_at: '2026-05-31T00:10:00.000Z' },
+      session: {
+        id: uuidFixture.sessionId,
+        status: 'idle',
+        latest_capsule_id: testUuid('drizzle-workflow-output-capsule'),
+        latest_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${uuidFixture.sessionId}/memory-drizzle-execution-output`,
+        latest_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${uuidFixture.sessionId}/environment-drizzle-execution-output`,
+      },
+      turn: { id: uuidFixture.turnId, status: 'succeeded', output_capsule_id: testUuid('drizzle-workflow-output-capsule') },
+      workflow: { id: uuidFixture.workflowId, status: 'code_review' },
+    });
+    await expect(repository.getCodexRuntimeCapsule(testUuid('drizzle-workflow-output-capsule'))).resolves.toMatchObject({
+      id: testUuid('drizzle-workflow-output-capsule'),
+      created_from_turn_id: uuidFixture.turnId,
+    });
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts(uuidFixture.sessionId)).resolves.toEqual([]);
+  });
+
+  drizzleTest('records stale Drizzle workflow execution terminalization without mutating active state', async () => {
+    const { db, repository } = await createDrizzleWorkflowRepositoryWithDb();
+    const seeded = await seedDrizzleWorkflowExecutionRunning(repository, db);
+    const staleInput = drizzleWorkflowExecutionTerminalizationInput(seeded, 'succeeded');
+    const attempted = {
+      ...staleInput,
+      codex_session_turn_terminalization: {
+        ...staleInput.codex_session_turn_terminalization,
+        lease_epoch: seeded.claimedSessionLease.lease.lease_epoch + 1,
+      },
+      stale_attempt: {
+        ...staleInput.stale_attempt,
+        id: testUuid('drizzle-stale-workflow-execution-lease-epoch'),
+        lease_epoch: seeded.claimedSessionLease.lease.lease_epoch + 1,
+      },
+    };
+
+    const result = await repository.terminalizeWorkflowExecution(attempted);
+
+    expect(result).toMatchObject({
+      stale: true,
+      stale_attempt: { id: testUuid('drizzle-stale-workflow-execution-lease-epoch'), lease_epoch: 2 },
+    });
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts(uuidFixture.sessionId)).resolves.toEqual([
+      expect.objectContaining({ id: testUuid('drizzle-stale-workflow-execution-lease-epoch'), lease_epoch: 2 }),
+    ]);
+    await expect(repository.getPlanItemWorkflow(uuidFixture.workflowId)).resolves.toMatchObject({ status: 'execution_running' });
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: seeded.runtime.input.runtime_job_id })).resolves.toMatchObject({
+      status: 'running',
+    });
+    await expect(repository.getRunSession(seeded.runSessionId)).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexSession(uuidFixture.sessionId)).resolves.toMatchObject({
+      status: 'running',
+      active_lease_id: seeded.claimedSessionLease.lease.id,
+    });
+    await expect(repository.getCodexSessionTurn(uuidFixture.turnId)).resolves.toMatchObject({ status: 'running' });
+    await expect(repository.getCodexRuntimeCapsule(testUuid('drizzle-workflow-output-capsule'))).resolves.toBeUndefined();
   });
 
   drizzleTest('persists, renews, and clears session-bound runner ownership', async () => {

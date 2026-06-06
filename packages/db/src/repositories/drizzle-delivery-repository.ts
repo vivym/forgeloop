@@ -2889,8 +2889,35 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       ...(nextWorkflowStatus === 'blocked' ? { previous_status: workflow.status } : {}),
       updated_at: input.workflow_transition.created_at,
     };
-    await this.db.update(run_sessions).set(toDbRecord(updatedRunSession, run_sessions) as never).where(eq(run_sessions.id, updatedRunSession.id));
-    await this.db.update(plan_item_workflows).set(toDbRecord(updatedWorkflow, plan_item_workflows) as never).where(eq(plan_item_workflows.id, updatedWorkflow.id));
+    const runSessionPredicates = [
+      eq(run_sessions.id, updatedRunSession.id),
+      eq(run_sessions.status, input.expected_run_session_status),
+      ...(input.expected_run_session_updated_at === undefined
+        ? []
+        : [eq(run_sessions.updatedAt, input.expected_run_session_updated_at)]),
+    ];
+    const [runSessionRow] = await this.db
+      .update(run_sessions)
+      .set(toDbRecord(updatedRunSession, run_sessions) as never)
+      .where(and(...runSessionPredicates))
+      .returning();
+    const [workflowRow] = await this.db
+      .update(plan_item_workflows)
+      .set(toDbRecord(updatedWorkflow, plan_item_workflows) as never)
+      .where(
+        and(
+          eq(plan_item_workflows.id, updatedWorkflow.id),
+          eq(plan_item_workflows.status, input.expected_workflow_status),
+          eq(plan_item_workflows.activeCodexSessionId, input.codex_session_id),
+        ),
+      )
+      .returning();
+    if (runSessionRow === undefined || workflowRow === undefined) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Workflow execution ${input.workflow_id} terminalization is stale`,
+      );
+    }
     return {
       stale: false,
       runtime_job: terminalRuntimeJob,
