@@ -574,6 +574,69 @@ describe('codex runtime domain contracts', () => {
 
     expectDomainErrorCode(
       () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          codex_session_id: 'session-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          codex_session_turn_id: 'turn-execution-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          input_capsule_digest: digestB,
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          lease_id: 'lease-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          worker_id: 'worker-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
         validateCodexRunExecutionWorkloadContinuity(
           {
             ...workflowRunExecutionWorkload,
