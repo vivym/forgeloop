@@ -7697,6 +7697,33 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
     await expect(repository.getCodexRuntimeCapsule(testUuid('drizzle-workflow-output-capsule'))).resolves.toBeUndefined();
   });
 
+  drizzleTest.each([
+    ['failed' as const, 'failed' as const],
+    ['cancelled' as const, 'cancelled' as const],
+  ])('terminalizes %s Drizzle workflow execution into blocked state without latest continuation refs', async (terminalStatus, runStatus) => {
+    const { db, repository } = await createDrizzleWorkflowRepositoryWithDb();
+    const seeded = await seedDrizzleWorkflowExecutionRunning(repository, db);
+
+    const terminalized = await repository.terminalizeWorkflowExecution(
+      drizzleWorkflowExecutionTerminalizationInput(seeded, terminalStatus),
+    );
+
+    expect(terminalized).toMatchObject({
+      stale: false,
+      runtime_job: { id: seeded.runtime.input.runtime_job_id, status: 'terminal', terminal_status: terminalStatus },
+      run_session: { id: seeded.runSessionId, status: runStatus, finished_at: '2026-05-31T00:10:00.000Z' },
+      session: { id: uuidFixture.sessionId, status: 'blocked' },
+      turn: { id: uuidFixture.turnId, status: terminalStatus },
+      workflow: { id: uuidFixture.workflowId, status: 'blocked' },
+    });
+    const session = await repository.getCodexSession(uuidFixture.sessionId);
+    expect(session?.latest_capsule_id).toBeUndefined();
+    expect(session?.latest_capsule_digest).toBeUndefined();
+    expect(session?.latest_memory_bundle_ref).toBeUndefined();
+    expect(session?.latest_environment_manifest_ref).toBeUndefined();
+    await expect(repository.getCodexRuntimeCapsule(testUuid('drizzle-workflow-output-capsule'))).resolves.toBeUndefined();
+  });
+
   drizzleTest('persists, renews, and clears session-bound runner ownership', async () => {
     const repository = await createDrizzleWorkflowRepository();
     await repository.createPlanItemWorkflowWithInitialSession(drizzleWorkflowInput);
