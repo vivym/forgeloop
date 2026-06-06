@@ -423,7 +423,15 @@ const codexRunExecutionWorkloadKeys = new Set([
   'codex_session_terminalization',
 ]);
 
-const codexRunExecutionWorkspaceAcquisitionKeys = new Set(['manifest_digest', 'size_bytes']);
+const codexRunExecutionWorkspaceAcquisitionKeys = new Set([
+  'schema_version',
+  'bundle_id',
+  'archive_ref',
+  'archive_digest',
+  'manifest_digest',
+  'size_bytes',
+  'expires_at',
+]);
 const codexRunExecutionResumeThreadContinuationKeys = new Set([
   'kind',
   'codex_thread_id',
@@ -465,8 +473,13 @@ export interface CodexSessionTerminalizationV1 {
 }
 
 export interface CodexRunExecutionWorkspaceAcquisitionV1 {
+  schema_version: 'workspace_bundle_acquisition.v1';
+  bundle_id: string;
+  archive_ref: string;
+  archive_digest: string;
   manifest_digest: string;
   size_bytes: number;
+  expires_at: string;
 }
 
 export interface CodexRunExecutionWorkloadV1 {
@@ -1001,13 +1014,18 @@ const requireRunExecutionWorkloadInteger = (input: Record<string, unknown>, fiel
 };
 
 const requireRunExecutionWorkspaceAcquisition = (value: unknown): CodexRunExecutionWorkspaceAcquisitionV1 => {
-  if (!isPlainObject(value)) {
+  if (!isPlainObject(value) || value.schema_version !== 'workspace_bundle_acquisition.v1') {
     throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: workspace_acquisition_json is required.');
   }
   assertRunExecutionWorkloadKeys(value, codexRunExecutionWorkspaceAcquisitionKeys, 'workspace_acquisition_json');
   return {
+    schema_version: 'workspace_bundle_acquisition.v1',
+    bundle_id: requireRunExecutionWorkloadString(value, 'bundle_id'),
+    archive_ref: requireRunExecutionWorkloadString(value, 'archive_ref'),
+    archive_digest: requireRunExecutionWorkloadDigest(value, 'archive_digest'),
     manifest_digest: requireRunExecutionWorkloadDigest(value, 'manifest_digest'),
     size_bytes: requireRunExecutionWorkloadInteger(value, 'size_bytes'),
+    expires_at: requireRunExecutionWorkloadString(value, 'expires_at'),
   };
 };
 
@@ -1111,6 +1129,12 @@ export const validateCodexRunExecutionWorkload = (value: unknown): CodexWorkflow
     'input_capsule_digest',
   );
 
+  const workspaceBundleId = requireRunExecutionWorkloadString(value, 'workspace_bundle_id');
+  const workspaceBundleDigest = requireRunExecutionWorkloadDigest(value, 'workspace_bundle_digest');
+  const workspaceAcquisition = requireRunExecutionWorkspaceAcquisition(value.workspace_acquisition_json);
+  assertRunExecutionContinuityMatches(workspaceAcquisition.bundle_id, workspaceBundleId, 'workspace_bundle_id');
+  assertRunExecutionContinuityMatches(workspaceAcquisition.archive_digest, workspaceBundleDigest, 'workspace_bundle_digest');
+
   return {
     schema_version: 'codex_run_execution_workload.v1',
     runtime_job_id: requireRunExecutionWorkloadString(value, 'runtime_job_id'),
@@ -1120,8 +1144,8 @@ export const validateCodexRunExecutionWorkload = (value: unknown): CodexWorkflow
     run_session_id: requireRunExecutionWorkloadString(value, 'run_session_id'),
     execution_package_id: requireRunExecutionWorkloadString(value, 'execution_package_id'),
     execution_package_version: executionPackageVersion,
-    workspace_bundle_id: requireRunExecutionWorkloadString(value, 'workspace_bundle_id'),
-    workspace_bundle_digest: requireRunExecutionWorkloadDigest(value, 'workspace_bundle_digest'),
+    workspace_bundle_id: workspaceBundleId,
+    workspace_bundle_digest: workspaceBundleDigest,
     package_prompt_ref: requireRunExecutionWorkloadString(value, 'package_prompt_ref'),
     package_prompt_digest: requireRunExecutionWorkloadDigest(value, 'package_prompt_digest'),
     execution_context_ref: requireRunExecutionWorkloadString(value, 'execution_context_ref'),
@@ -1133,7 +1157,7 @@ export const validateCodexRunExecutionWorkload = (value: unknown): CodexWorkflow
     output_schema_version: 'codex_run_execution_result.v1',
     created_at: requireRunExecutionWorkloadString(value, 'created_at'),
     expires_at: requireRunExecutionWorkloadString(value, 'expires_at'),
-    workspace_acquisition_json: requireRunExecutionWorkspaceAcquisition(value.workspace_acquisition_json),
+    workspace_acquisition_json: workspaceAcquisition,
     codex_session_runtime_context: workflowRuntimeContext,
     codex_session_terminalization: terminalization,
   };
@@ -2027,10 +2051,35 @@ const isCodexWorkloadWithTrustedTerminalization = (input: unknown): input is Rec
   codexWorkloadSchemasWithTrustedTerminalization.has(input.schema_version) &&
   input.codex_session_terminalization !== undefined;
 
+const trustedCodexWorkloadPublicSafetyView = (input: Record<string, unknown>): Record<string, unknown> => {
+  const trustedInput = Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'codex_session_terminalization'));
+  const runtimeContext = trustedInput.codex_session_runtime_context;
+  if (!isPlainObject(runtimeContext) || !isPlainObject(runtimeContext.continuation)) {
+    const workspaceAcquisition = trustedInput.workspace_acquisition_json;
+    if (isPlainObject(workspaceAcquisition)) {
+      trustedInput.workspace_acquisition_json = Object.fromEntries(
+        Object.entries(workspaceAcquisition).filter(([key]) => key !== 'archive_ref'),
+      );
+    }
+    return trustedInput;
+  }
+  trustedInput.codex_session_runtime_context = {
+    ...runtimeContext,
+    continuation: Object.fromEntries(
+      Object.entries(runtimeContext.continuation).filter(([key]) => key !== 'codex_thread_id'),
+    ),
+  };
+  const workspaceAcquisition = trustedInput.workspace_acquisition_json;
+  if (isPlainObject(workspaceAcquisition)) {
+    trustedInput.workspace_acquisition_json = Object.fromEntries(
+      Object.entries(workspaceAcquisition).filter(([key]) => key !== 'archive_ref'),
+    );
+  }
+  return trustedInput;
+};
+
 export const codexRuntimeJobInputDigest = (input: unknown): string => {
-  const trustedInput = isCodexWorkloadWithTrustedTerminalization(input)
-    ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'codex_session_terminalization'))
-    : input;
+  const trustedInput = isCodexWorkloadWithTrustedTerminalization(input) ? trustedCodexWorkloadPublicSafetyView(input) : input;
   assertCodexRuntimePublicSafeValue(trustedInput, 'job input');
   return codexCanonicalDigest(input);
 };

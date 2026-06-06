@@ -279,6 +279,24 @@ export const planItemWorkflowReadinessSchema = z
   .strict();
 export type PlanItemWorkflowReadiness = z.infer<typeof planItemWorkflowReadinessSchema>;
 
+export const planItemWorkflowExecutionRunSummarySchema = z
+  .object({
+    run_session_id: nonEmpty,
+    execution_package_id: nonEmpty,
+    runtime_job_id: nonEmpty.optional(),
+    codex_session_turn_id: nonEmpty.optional(),
+    status: nonEmpty,
+    execution_package_version: z.number().int().nonnegative().optional(),
+    input_capsule_digest: safeDigest.optional(),
+    workspace_bundle_digest: safeDigest.optional(),
+    codex_thread_id_digest: safeDigest.optional(),
+    started_at: isoDateTime.optional(),
+    updated_at: isoDateTime.optional(),
+    finished_at: isoDateTime.optional(),
+  })
+  .strict();
+export type PlanItemWorkflowExecutionRunSummary = z.infer<typeof planItemWorkflowExecutionRunSummarySchema>;
+
 export const planItemWorkflowBlockerSchema = z
   .object({
     code: nonEmpty,
@@ -305,6 +323,7 @@ export const planItemWorkflowPublicDtoSchema = z
     timeline_events: z.array(planItemWorkflowTimelineEventSchema).default([]),
     context_preview: planItemWorkflowContextPreviewSchema.optional(),
     readiness: planItemWorkflowReadinessSchema.optional(),
+    execution_run_summary: planItemWorkflowExecutionRunSummarySchema.optional(),
     blockers: z.array(planItemWorkflowBlockerSchema).default([]),
     created_at: isoDateTime,
     updated_at: isoDateTime,

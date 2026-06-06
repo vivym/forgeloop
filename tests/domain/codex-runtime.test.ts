@@ -116,8 +116,13 @@ const workflowRunExecutionWorkload = {
   created_at: '2026-06-06T00:00:00.000Z',
   expires_at: '2026-06-06T00:10:00.000Z',
   workspace_acquisition_json: {
+    schema_version: 'workspace_bundle_acquisition.v1',
+    bundle_id: 'workspace-bundle-1',
+    archive_ref: 'artifact://internal/workspace_bundle/run_session/run-session-1/workspace-bundle-1',
+    archive_digest: digestA,
     manifest_digest: digestB,
     size_bytes: 128,
+    expires_at: '2026-06-06T00:10:00.000Z',
   },
   codex_session_runtime_context: {
     schema_version: 'codex_session_runtime_context.v1',

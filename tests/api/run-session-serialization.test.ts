@@ -138,13 +138,14 @@ describe('run session public serialization', () => {
     expect(serialized.runtime_metadata).toMatchObject({
       runtime_profile_id: 'profile-1',
       runtime_profile_revision_id: 'profile-rev-1',
-      credential_binding_id: 'credential-1',
-      credential_binding_version_id: 'credential-v1',
-      launch_lease_id: 'lease-1',
-      worker_id: 'worker-1',
       app_server_attempted: true,
       selected_execution_mode: 'app_server',
     });
+    expect(serialized.runtime_metadata).not.toHaveProperty('credential_binding_id');
+    expect(serialized.runtime_metadata).not.toHaveProperty('credential_binding_version_id');
+    expect(serialized.runtime_metadata).not.toHaveProperty('credential_payload_digest');
+    expect(serialized.runtime_metadata).not.toHaveProperty('launch_lease_id');
+    expect(serialized.runtime_metadata).not.toHaveProperty('worker_id');
     expect(serialized.runtime_metadata).not.toHaveProperty('app_server_endpoint');
     expect(serialized.runtime_metadata).not.toHaveProperty('workspace_path');
     expect(serialized.runtime_metadata).not.toHaveProperty('source_repo_path');
@@ -152,6 +153,10 @@ describe('run session public serialization', () => {
     expect(serialized.runtime_metadata).not.toHaveProperty('source_repo_before_dirty_fingerprint');
     expect(JSON.stringify(serialized)).not.toContain('/Users/viv');
     expect(JSON.stringify(serialized)).not.toContain('codex.sock');
+    expect(JSON.stringify(serialized)).not.toContain('credential-1');
+    expect(JSON.stringify(serialized)).not.toContain('credential-v1');
+    expect(JSON.stringify(serialized)).not.toContain('lease-1');
+    expect(JSON.stringify(serialized)).not.toContain('worker-1');
   });
 
   it('drops malformed Dockerized runtime evidence instead of projecting unsafe values', () => {

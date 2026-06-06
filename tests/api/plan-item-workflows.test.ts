@@ -10,10 +10,13 @@ import type { DeliveryRepository } from '../../packages/db/src';
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
+  codexRuntimeNetworkPolicyDigest,
+  codexRuntimeProfileRevisionDigest,
   type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
   type CodexRuntimeCapsule,
   type CodexRuntimeJob,
+  type CodexRuntimeProfileRevision,
 } from '../../packages/domain/src';
 import {
   idsFor,
@@ -39,16 +42,16 @@ describe('Plan Item Workflow API', () => {
     await app.close();
   });
 
-	  it('start brainstorming creates workflow, active session, and queued continuation without creating a turn', async () => {
-	    const { plan, item, ids: fixtureIds } = await seedDevelopmentPlanItem(app, { idPrefix: '51515151' });
-	    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-	    const response = await request(app.getHttpServer())
-	      .post(`/development-plans/${plan.id}/items/${item.id}/workflow/start-brainstorming`)
-	      .send({
-	        actor_id: fixtureIds.actorTech,
-	        reason: 'Start workflow.',
-	      })
-	      .expect(201);
+  it('start brainstorming creates workflow, active session, and queued continuation without creating a turn', async () => {
+    const { plan, item, ids: fixtureIds } = await seedDevelopmentPlanItem(app, { idPrefix: '51515151' });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const response = await request(app.getHttpServer())
+      .post(`/development-plans/${plan.id}/items/${item.id}/workflow/start-brainstorming`)
+      .send({
+        actor_id: fixtureIds.actorTech,
+        reason: 'Start workflow.',
+      })
+      .expect(201);
 
     expect(response.body.status).toBe('brainstorming');
     expect(response.body.queued_actions).toEqual([
@@ -75,28 +78,28 @@ describe('Plan Item Workflow API', () => {
 
     expect(response.body.status).toBe('brainstorming');
     const workflow = await repository.getActivePlanItemWorkflowByItem(item.id);
-	    const session = await repository.getCodexSession(workflow!.active_codex_session_id!);
-	    expect(session).toMatchObject(runtimeBinding);
-	  });
+    const session = await repository.getCodexSession(workflow!.active_codex_session_id!);
+    expect(session).toMatchObject(runtimeBinding);
+  });
 
-	  it('rejects raw runtime binding identifiers on the public start brainstorming DTO', async () => {
-	    const { plan, item, ids: fixtureIds } = await seedDevelopmentPlanItem(app, { idPrefix: '51515153' });
-	    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
-	    const developmentPlan = await repository.getDevelopmentPlan(plan.id);
-	    const runtimeBinding = await resolveSeededGenerationRuntimeBinding(repository, developmentPlan!.project_id);
+  it('rejects raw runtime binding identifiers on the public start brainstorming DTO', async () => {
+    const { plan, item, ids: fixtureIds } = await seedDevelopmentPlanItem(app, { idPrefix: '51515153' });
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const developmentPlan = await repository.getDevelopmentPlan(plan.id);
+    const runtimeBinding = await resolveSeededGenerationRuntimeBinding(repository, developmentPlan!.project_id);
 
-	    await request(app.getHttpServer())
-	      .post(`/development-plans/${plan.id}/items/${item.id}/workflow/start-brainstorming`)
-	      .send({
-	        actor_id: fixtureIds.actorTech,
-	        ...runtimeBinding,
-	      })
-	      .expect(400);
+    await request(app.getHttpServer())
+      .post(`/development-plans/${plan.id}/items/${item.id}/workflow/start-brainstorming`)
+      .send({
+        actor_id: fixtureIds.actorTech,
+        ...runtimeBinding,
+      })
+      .expect(400);
 
-	    await expect(repository.getActivePlanItemWorkflowByItem(item.id)).resolves.toBeUndefined();
-	  });
+    await expect(repository.getActivePlanItemWorkflowByItem(item.id)).resolves.toBeUndefined();
+  });
 
-	  it('/messages records human input and creates queued continuation without claiming a lease', async () => {
+  it('/messages records human input and creates queued continuation without claiming a lease', async () => {
     const seeded = await seedWorkflow(app, { idPrefix: '52525252' });
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
     await claimStartupActionForMessageTest(repository, seeded.workflow.id);
@@ -634,6 +637,434 @@ describe('Plan Item Workflow API', () => {
     await expect(repository.listRunSessions()).resolves.toHaveLength(0);
   });
 
+  it('rejects execution start unless the workflow is execution_ready', async () => {
+    const seeded = await seedWorkflowWithApprovedImplementationPlan(app, { idPrefix: '56565651' });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-1' })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_invalid_transition');
+      });
+  });
+
+  it('starts workflow-owned execution exactly once and returns only digest-level continuity evidence', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565652');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech, {
+      environment: 'local_dogfood',
+    });
+
+    const first = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-1' })
+      .expect(201);
+
+    expect(first.body).toMatchObject({
+      status: 'execution_running',
+      session: expect.objectContaining({ continuity_state: 'running' }),
+      execution_run_summary: {
+        run_session_id: expect.any(String),
+        execution_package_id: expect.any(String),
+        runtime_job_id: expect.any(String),
+        codex_session_turn_id: expect.any(String),
+        input_capsule_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        codex_thread_id_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      },
+    });
+    expect(JSON.stringify(first.body)).not.toContain('codex_thread_id":"');
+    expect(JSON.stringify(first.body)).not.toContain('artifact://internal');
+    expect(JSON.stringify(first.body)).not.toContain('lease-token');
+
+    const second = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-1' })
+      .expect(200);
+
+    expect(second.body.execution_run_summary).toEqual(first.body.execution_run_summary);
+    const runSessions = await repository.listRunSessions();
+    const workflowRuns = runSessions.filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(1);
+    expect(workflowRuns[0]).toMatchObject({
+      id: first.body.execution_run_summary.run_session_id,
+      status: 'queued',
+      runtime_metadata: {
+        environment: 'local_dogfood',
+        credential_binding_id: expect.any(String),
+        credential_binding_version_id: expect.any(String),
+      },
+    });
+    const activeSession = await repository.getCodexSession(seeded.workflow.active_codex_session_id!);
+    expect(activeSession?.credential_binding_id).not.toBe(workflowRuns[0]?.runtime_metadata?.credential_binding_id);
+    const turns = await repository.listCodexSessionTurns(seeded.workflow.active_codex_session_id!);
+    expect(turns.filter((turn) => turn.intent === 'execute_plan')).toHaveLength(1);
+    const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: first.body.execution_run_summary.runtime_job_id });
+    expect(runtimeJob).toMatchObject({
+      target_kind: 'run_execution',
+      workflow_id: seeded.workflow.id,
+      codex_session_id: seeded.workflow.active_codex_session_id,
+      codex_session_turn_id: first.body.execution_run_summary.codex_session_turn_id,
+    });
+    expect(runtimeJob?.input_json).toMatchObject({
+      plan_item_workflow_id: seeded.workflow.id,
+      codex_session_runtime_context: {
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id_digest: first.body.execution_run_summary.codex_thread_id_digest,
+        },
+      },
+    });
+
+    const events = await repository.listTraceEventsForSubject('plan_item_workflow', seeded.workflow.id);
+    const startAuditEvent = events.find((event) => event.event_type === 'workflow_execution_started');
+    expect(startAuditEvent?.payload).toMatchObject({
+      workflow_id: seeded.workflow.id,
+      plan_item_id: seeded.item.id,
+      repo_binding_id: seeded.ids.repo,
+      codex_session_id: seeded.workflow.active_codex_session_id,
+      codex_session_turn_id: first.body.execution_run_summary.codex_session_turn_id,
+      run_session_id: first.body.execution_run_summary.run_session_id,
+      runtime_job_id: first.body.execution_run_summary.runtime_job_id,
+      input_capsule_digest: first.body.execution_run_summary.input_capsule_digest,
+      codex_thread_id_digest: first.body.execution_run_summary.codex_thread_id_digest,
+    });
+    expect(startAuditEvent?.payload.credential_binding_id).toBe(workflowRuns[0]?.runtime_metadata?.credential_binding_id);
+    expect(startAuditEvent?.payload.credential_binding_version_id).toBe(
+      workflowRuns[0]?.runtime_metadata?.credential_binding_version_id,
+    );
+    expect(startAuditEvent?.payload).not.toMatchObject({
+      credential_binding_id: activeSession?.credential_binding_id,
+      credential_binding_version_id: activeSession?.credential_binding_version_id,
+    });
+    expect(JSON.stringify(startAuditEvent)).not.toContain('codex_thread_id":"');
+    expect(JSON.stringify(startAuditEvent)).not.toContain('artifact://internal');
+    expect(JSON.stringify(startAuditEvent)).not.toContain('lease-token');
+    expect(JSON.stringify(startAuditEvent)).not.toContain('auth_json');
+  });
+
+  it('prefers repo-scoped run execution credentials over project-wide fallback credentials', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565665');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech);
+    const projectWideCredential = await createRunExecutionCredentialBinding(repository, {
+      projectId: seeded.ids.project,
+      actorId: seeded.ids.actorTech,
+      suffix: 'project-wide-fallback',
+    });
+
+    const response = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-repo-scoped-credential' })
+      .expect(201);
+
+    const runSession = await repository.getRunSession(response.body.execution_run_summary.run_session_id);
+    expect(runSession?.runtime_metadata?.credential_binding_id).toBe(
+      stableUuid({ kind: 'plan-item-workflow-run-credential-binding', projectId: seeded.ids.project }),
+    );
+    expect(runSession?.runtime_metadata?.credential_binding_id).not.toBe(projectWideCredential.credentialBindingId);
+  });
+
+  it('fails closed when run execution credential selection has multiple same-priority candidates', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565666');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech);
+    await createRunExecutionCredentialBinding(repository, {
+      projectId: seeded.ids.project,
+      repoId: readyExecutionPackage!.repo_id,
+      actorId: seeded.ids.actorTech,
+      suffix: 'duplicate-repo-scoped',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-ambiguous-credential' })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_runtime_binding_unavailable');
+      });
+
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_ready' });
+    const workflowRuns = (await repository.listRunSessions()).filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(0);
+    const turns = await repository.listCodexSessionTurns(seeded.workflow.active_codex_session_id!);
+    expect(turns.filter((turn) => turn.intent === 'execute_plan')).toHaveLength(0);
+  });
+
+  it('rejects duplicate execution start when the existing runtime job is no longer active', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565657');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech);
+
+    const started = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-terminal-gap' })
+      .expect(201);
+
+    const runtimeJobId = started.body.execution_run_summary.runtime_job_id;
+    const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
+    if (runtimeJob === undefined) throw new Error('Expected runtime job');
+    const privateRepository = repository as unknown as {
+      codexRuntimeJobs: Map<string, { job: unknown }>;
+    };
+    const privateRecord = privateRepository.codexRuntimeJobs.get(runtimeJobId);
+    if (privateRecord === undefined) throw new Error('Expected private runtime job record');
+    privateRepository.codexRuntimeJobs.set(runtimeJobId, {
+      ...privateRecord,
+      job: {
+        ...runtimeJob,
+        status: 'terminal',
+        terminal_status: 'failed',
+        terminal_at: '2026-06-03T02:20:00.000Z',
+        updated_at: '2026-06-03T02:20:00.000Z',
+      },
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-terminal-gap-retry' })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_recovery_required');
+      });
+
+    const workflowRuns = (await repository.listRunSessions()).filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(1);
+    const turns = await repository.listCodexSessionTurns(seeded.workflow.active_codex_session_id!);
+    expect(turns.filter((turn) => turn.intent === 'execute_plan')).toHaveLength(1);
+  });
+
+  it('rejects execution start when active session memory continuity input is missing', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565653');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech);
+
+    const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id!);
+    expect(session?.latest_memory_bundle_ref).toEqual(expect.any(String));
+    expect(session?.latest_environment_manifest_ref).toEqual(expect.any(String));
+    (repository as unknown as { codexSessions: Map<string, unknown> }).codexSessions.set(session!.id, {
+      ...session!,
+      latest_memory_bundle_ref: undefined,
+      updated_at: new Date().toISOString(),
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-missing-continuity' })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_evidence_missing');
+      });
+
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_ready' });
+    const workflowRuns = (await repository.listRunSessions()).filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(0);
+    const turns = await repository.listCodexSessionTurns(seeded.workflow.active_codex_session_id!);
+    expect(turns.filter((turn) => turn.intent === 'execute_plan')).toHaveLength(0);
+    const events = await repository.listTraceEventsForSubject('plan_item_workflow', seeded.workflow.id);
+    expect(events.some((event) => event.event_type === 'workflow_execution_started')).toBe(false);
+  });
+
+  it('rejects execution start when active session environment continuity input is missing', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565654');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech);
+
+    const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id!);
+    expect(session?.latest_memory_bundle_ref).toEqual(expect.any(String));
+    expect(session?.latest_environment_manifest_ref).toEqual(expect.any(String));
+    (repository as unknown as { codexSessions: Map<string, unknown> }).codexSessions.set(session!.id, {
+      ...session!,
+      latest_environment_manifest_ref: undefined,
+      updated_at: new Date().toISOString(),
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-missing-env-continuity' })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_evidence_missing');
+      });
+
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_ready' });
+    const workflowRuns = (await repository.listRunSessions()).filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(0);
+    const turns = await repository.listCodexSessionTurns(seeded.workflow.active_codex_session_id!);
+    expect(turns.filter((turn) => turn.intent === 'execute_plan')).toHaveLength(0);
+    const events = await repository.listTraceEventsForSubject('plan_item_workflow', seeded.workflow.id);
+    expect(events.some((event) => event.event_type === 'workflow_execution_started')).toBe(false);
+  });
+
+  it('rejects execution start when the approved Implementation Plan lacks Codex turn provenance', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565662');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const implementationPlanRevision = await repository.getExecutionPlanRevision(seeded.implementationPlanRevisionId);
+    if (implementationPlanRevision === undefined) throw new Error('Expected Implementation Plan revision');
+    const { codex_session_turn_id: _droppedProvenanceTurn, ...revisionWithoutProvenanceTurn } = implementationPlanRevision;
+    (repository as unknown as { executionPlanRevisions: Map<string, unknown> }).executionPlanRevisions.set(
+      implementationPlanRevision.id,
+      revisionWithoutProvenanceTurn,
+    );
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech);
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-missing-package-provenance-turn' })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_evidence_not_owned');
+      });
+
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_ready' });
+    const workflowRuns = (await repository.listRunSessions()).filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(0);
+  });
+
+  it('rejects execution start when the approved Implementation Plan has blank Codex turn provenance', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565663');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const implementationPlanRevision = await repository.getExecutionPlanRevision(seeded.implementationPlanRevisionId);
+    if (implementationPlanRevision === undefined) throw new Error('Expected Implementation Plan revision');
+    (repository as unknown as { executionPlanRevisions: Map<string, unknown> }).executionPlanRevisions.set(implementationPlanRevision.id, {
+      ...implementationPlanRevision,
+      codex_session_turn_id: '   ',
+    });
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech);
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-blank-package-provenance-turn' })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_evidence_not_owned');
+      });
+
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_ready' });
+    const workflowRuns = (await repository.listRunSessions()).filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(0);
+  });
+
+  it('rejects execution start when Implementation Plan Codex turn provenance belongs to another workflow', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565664');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const implementationPlanRevision = await repository.getExecutionPlanRevision(seeded.implementationPlanRevisionId);
+    if (readyWorkflow === undefined || implementationPlanRevision === undefined) throw new Error('Expected ready workflow and plan revision');
+    const provenanceTurn = await repository.getCodexSessionTurn(implementationPlanRevision.codex_session_turn_id!);
+    if (provenanceTurn === undefined) throw new Error('Expected Implementation Plan provenance turn');
+    (repository as unknown as { codexSessionTurns: Map<string, unknown> }).codexSessionTurns.set(provenanceTurn.id, {
+      ...provenanceTurn,
+      workflow_id: '56565664-1111-4111-8111-111111111798',
+    });
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech);
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-cross-workflow-package-provenance-turn' })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_evidence_not_owned');
+      });
+
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_ready' });
+    const workflowRuns = (await repository.listRunSessions()).filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(0);
+  });
+
+  it('rejects execution start when Plan Item planning content changed after readiness', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565655');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech);
+
+    const currentItem = await repository.getDevelopmentPlanItem(seeded.item.id);
+    if (currentItem === undefined) throw new Error('Expected seeded Plan Item');
+    const nextRevisionId = `${currentItem.revision_id.slice(0, -1)}8`;
+    const revisedItem = {
+      ...currentItem,
+      revision_id: nextRevisionId,
+      summary: `${currentItem.summary} Updated after readiness.`,
+      updated_at: '2026-06-03T02:00:00.000Z',
+    };
+    await repository.saveDevelopmentPlanItem(revisedItem);
+    await repository.saveDevelopmentPlanItemRevision({
+      id: nextRevisionId,
+      development_plan_item_id: revisedItem.id,
+      development_plan_id: revisedItem.development_plan_id,
+      revision_number: 2,
+      snapshot: revisedItem,
+      change_reason: 'regression_plan_item_revision_id_changed',
+      edited_by_actor_id: seeded.ids.actorTech,
+      created_at: '2026-06-03T02:00:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-stale-item-revision' })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_readiness_blocked');
+        expect(body.details.blocker_codes).toContain('development_plan_item_revision_not_current');
+      });
+
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_ready' });
+    const workflowRuns = (await repository.listRunSessions()).filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(0);
+    const turns = await repository.listCodexSessionTurns(seeded.workflow.active_codex_session_id!);
+    expect(turns.filter((turn) => turn.intent === 'execute_plan')).toHaveLength(0);
+    const events = await repository.listTraceEventsForSubject('plan_item_workflow', seeded.workflow.id);
+    expect(events.some((event) => event.event_type === 'workflow_execution_started')).toBe(false);
+  });
+
+  it('rejects execution start when the ready package policy was mutated after readiness', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565656');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    if (readyExecutionPackage === undefined) throw new Error('Expected ready Execution Package');
+    await repository.saveExecutionPackage({
+      ...readyExecutionPackage,
+      allowed_paths: [...readyExecutionPackage.allowed_paths, 'unexpected/**'],
+      updated_at: '2026-06-03T02:10:00.000Z',
+    });
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage.repo_id, seeded.ids.actorTech);
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-mutated-package-policy' })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_evidence_not_owned');
+      });
+
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_ready' });
+    const workflowRuns = (await repository.listRunSessions()).filter((runSession) => runSession.workflow_id === seeded.workflow.id);
+    expect(workflowRuns).toHaveLength(0);
+    const turns = await repository.listCodexSessionTurns(seeded.workflow.active_codex_session_id!);
+    expect(turns.filter((turn) => turn.intent === 'execute_plan')).toHaveLength(0);
+    const events = await repository.listTraceEventsForSubject('plan_item_workflow', seeded.workflow.id);
+    expect(events.some((event) => event.event_type === 'workflow_execution_started')).toBe(false);
+  });
+
   it('stales dependent queued actions when requesting Spec Doc changes', async () => {
     const seeded = await seedSpecReviewWorkflow(app, { idPrefix: '55555558' });
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -950,7 +1381,6 @@ describe('Plan Item Workflow API', () => {
     ['post', '/plan-item-workflows/:workflowId/approve-implementation-plan-and-mark-execution-ready'],
     ['post', '/plan-item-workflows/:workflowId/codex-sessions/:sessionId/fork'],
     ['post', '/plan-item-workflows/:workflowId/codex-sessions/:sessionId/select-active-fork'],
-    ['post', '/plan-item-workflows/:workflowId/execution/start'],
     ['post', '/plan-item-workflows/:workflowId/run-sessions/:runSessionId/input'],
     ['post', '/plan-item-workflows/:workflowId/run-sessions/:runSessionId/cancel'],
     ['post', '/plan-item-workflows/:workflowId/run-sessions/:runSessionId/resume'],
@@ -1298,4 +1728,210 @@ function stableUuid(input: Record<string, unknown>): string {
   const hex = codexCanonicalDigest(input).slice('sha256:'.length);
   const variant = ((Number.parseInt(hex[16] ?? '0', 16) & 0x3) | 0x8).toString(16);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+async function seedRunExecutionRuntime(
+  repository: DeliveryRepository,
+  projectId: string,
+  repoId: string,
+  actorId: string,
+  options: { environment?: 'test' | 'local_dogfood' } = {},
+) {
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.parse(now) + 60 * 60_000).toISOString();
+  const environment = options.environment ?? 'test';
+  const networkPolicy = { mode: 'disabled' as const };
+  const profileId = stableUuid({ kind: 'plan-item-workflow-run-profile', projectId });
+  const profileRevisionId = stableUuid({ kind: 'plan-item-workflow-run-profile-revision', projectId });
+  const credentialBindingId = stableUuid({ kind: 'plan-item-workflow-run-credential-binding', projectId });
+  const credentialVersionId = stableUuid({ kind: 'plan-item-workflow-run-credential-version', projectId });
+  const workerId = stableUuid({ kind: 'plan-item-workflow-run-worker', projectId });
+  const dockerImageDigest = codexCanonicalDigest({ label: 'plan-item-workflow-run-docker-image' });
+  const networkPolicyDigest = codexRuntimeNetworkPolicyDigest(networkPolicy);
+  const codexConfigToml = 'approval_policy = "never"\n';
+  const revisionWithoutDigest = {
+    id: profileRevisionId,
+    profile_id: profileId,
+    revision_number: 1,
+    status: 'active' as const,
+    environment,
+    docker_image: 'ghcr.io/forgeloop/codex-worker:test',
+    docker_image_digest: dockerImageDigest,
+    target_kind: 'run_execution' as const,
+    source_access_mode: 'path_policy_scoped' as const,
+    codex_config_toml: codexConfigToml,
+    codex_config_digest: codexCanonicalDigest(codexConfigToml),
+    expected_effective_config_digest: codexCanonicalDigest({ label: 'plan-item-workflow-run-effective-config' }),
+    effective_config_assertions: {
+      target_kind: 'run_execution' as const,
+      approval_policy: 'never' as const,
+      sandbox_type: 'danger-full-access' as const,
+      writable_roots_policy: 'task_workspace_only' as const,
+    },
+    app_server_required: true,
+    allowed_driver_kind: 'app_server' as const,
+    network_policy: networkPolicy,
+    resource_limits: {
+      cpu_ms: 300_000,
+      memory_mb: 1024,
+      pids: 256,
+      fds: 1024,
+      workspace_bytes: 10_000_000,
+      artifact_bytes: 1_048_576,
+      timeout_ms: 300_000,
+      output_limit_bytes: 1_048_576,
+      run_output_limit_bytes: 1_048_576,
+    },
+    docker_policy: {
+      network_disabled: true,
+      app_server_only: true,
+      rootless: true,
+      read_only_rootfs: true,
+      no_new_privileges: true,
+      drop_capabilities: ['ALL'] as const,
+    },
+    allowed_scopes: [{ project_id: projectId, repo_id: repoId }],
+    profile_digest: 'placeholder',
+    created_by_actor_id: actorId,
+    created_at: now,
+  } satisfies CodexRuntimeProfileRevision;
+  const revision = { ...revisionWithoutDigest, profile_digest: codexRuntimeProfileRevisionDigest(revisionWithoutDigest) };
+  await repository.createCodexRuntimeProfileWithRevision({
+    profile: {
+      id: profileId,
+      name: 'Plan Item Workflow run execution test profile',
+      environment,
+      target_kind: 'run_execution',
+      active_revision_id: profileRevisionId,
+      created_by_actor_id: actorId,
+      created_at: now,
+      updated_at: now,
+    },
+    revision,
+  });
+  const secretPayload = { auth: { api_key: 'test-run-api-key' } };
+  await repository.createCodexCredentialBindingWithVersion({
+    binding: {
+      id: credentialBindingId,
+      profile_id: profileId,
+      project_id: projectId,
+      repo_id: repoId,
+      provider: 'unsafe_db',
+      purpose: 'model_provider',
+      active_version_id: credentialVersionId,
+      created_by_actor_id: actorId,
+      created_at: now,
+      updated_at: now,
+    },
+    version: {
+      id: credentialVersionId,
+      binding_id: credentialBindingId,
+      version_number: 1,
+      status: 'active',
+      payload_digest: codexCredentialPayloadDigest(secretPayload),
+      created_by_actor_id: actorId,
+      created_at: now,
+    },
+    secret_payload_json: secretPayload,
+  });
+  await repository.createCodexWorkerBootstrapToken({
+    id: stableUuid({ kind: 'plan-item-workflow-run-bootstrap', projectId }),
+    worker_identity: `plan-item-workflow-run-worker-${projectId}`,
+    bootstrap_token_hash: codexCredentialPayloadDigest(`plan-item-workflow-run-bootstrap-${projectId}`),
+    bootstrap_token_version: 1,
+    status: 'active',
+    allowed_scopes_json: [{ project_id: projectId, repo_id: repoId }],
+    allowed_capabilities_json: {
+      target_kinds: ['run_execution'],
+      docker_image_digests: [dockerImageDigest],
+      network_policy_digests: [networkPolicyDigest],
+    },
+    created_by_actor_id: actorId,
+    created_at: now,
+    expires_at: expiresAt,
+  });
+  await repository.upsertCodexWorkerRegistration({
+    worker_id: workerId,
+    worker_identity: `plan-item-workflow-run-worker-${projectId}`,
+    version: 'test-worker',
+    bootstrap_token_hash: codexCredentialPayloadDigest(`plan-item-workflow-run-bootstrap-${projectId}`),
+    bootstrap_token_version: 1,
+    session_token: `plan-item-workflow-run-session-${projectId}`,
+    session_expires_at: expiresAt,
+    status: 'online',
+    control_channel_status: 'connected',
+    allowed_scopes: [{ project_id: projectId, repo_id: repoId }],
+    capabilities: ['run_execution'],
+    docker_image_digests: [dockerImageDigest],
+    network_policy_digests: [networkPolicyDigest],
+    host_worker_uid: 501,
+    host_worker_gid: 20,
+    lease_count: 0,
+    max_concurrency: 100,
+    session_public_key_id: `plan-item-workflow-run-session-key-${projectId}`,
+    session_public_key_algorithm: 'x25519',
+    session_public_key_material: 'base64-public-key-material',
+    session_public_key_expires_at: expiresAt,
+    now,
+  });
+  await repository.heartbeatCodexWorker({
+    worker_id: workerId,
+    session_token: `plan-item-workflow-run-session-${projectId}`,
+    nonce: `plan-item-workflow-run-heartbeat-${projectId}`,
+    nonce_timestamp: now,
+    status: 'online',
+    control_channel_status: 'connected',
+    active_lease_count: 0,
+    capabilities: ['run_execution'],
+    now,
+  });
+}
+
+async function createRunExecutionCredentialBinding(
+  repository: DeliveryRepository,
+  input: {
+    projectId: string;
+    repoId?: string;
+    actorId: string;
+    suffix: string;
+  },
+): Promise<{ credentialBindingId: string; credentialVersionId: string }> {
+  const now = new Date().toISOString();
+  const profileId = stableUuid({ kind: 'plan-item-workflow-run-profile', projectId: input.projectId });
+  const credentialBindingId = stableUuid({
+    kind: 'plan-item-workflow-run-extra-credential-binding',
+    projectId: input.projectId,
+    suffix: input.suffix,
+  });
+  const credentialVersionId = stableUuid({
+    kind: 'plan-item-workflow-run-extra-credential-version',
+    projectId: input.projectId,
+    suffix: input.suffix,
+  });
+  const secretPayload = { auth: { api_key: `test-run-api-key-${input.suffix}` } };
+  await repository.createCodexCredentialBindingWithVersion({
+    binding: {
+      id: credentialBindingId,
+      profile_id: profileId,
+      project_id: input.projectId,
+      ...(input.repoId === undefined ? {} : { repo_id: input.repoId }),
+      provider: 'unsafe_db',
+      purpose: 'model_provider',
+      active_version_id: credentialVersionId,
+      created_by_actor_id: input.actorId,
+      created_at: now,
+      updated_at: now,
+    },
+    version: {
+      id: credentialVersionId,
+      binding_id: credentialBindingId,
+      version_number: 1,
+      status: 'active',
+      payload_digest: codexCredentialPayloadDigest(secretPayload),
+      created_by_actor_id: input.actorId,
+      created_at: now,
+    },
+    secret_payload_json: secretPayload,
+  });
+  return { credentialBindingId, credentialVersionId };
 }

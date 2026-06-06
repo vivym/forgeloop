@@ -13,6 +13,7 @@ const conflictDomainErrorCodes = new Set<DomainErrorCode>([
   'workflow_action_already_pending',
   'workflow_action_not_runnable',
   'workflow_execution_readiness_blocked',
+  'workflow_execution_recovery_required',
   'workflow_evidence_not_current',
   'workflow_context_digest_mismatch',
   'workflow_capsule_digest_mismatch',

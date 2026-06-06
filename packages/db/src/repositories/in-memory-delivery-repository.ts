@@ -1323,7 +1323,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         const activeVersion = this.codexCredentialBindingVersions.get(binding.active_version_id)?.version;
         return activeVersion?.status === 'active';
       })
-      .map((binding) => ({ id: binding.id, purpose: binding.purpose }));
+      .map((binding) => ({
+        id: binding.id,
+        purpose: binding.purpose,
+        ...(binding.repo_id === undefined ? {} : { repo_id: binding.repo_id }),
+      }));
   }
 
   async getCodexWorkerReadinessDiagnostic(
@@ -2476,12 +2480,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (
       activeLease === undefined ||
       runSession === undefined ||
-      runSession.execution_package_id !== input.execution_package_id ||
-      activeLease.id !== input.run_worker_lease_id ||
-      activeLease.status !== 'active' ||
-      activeLease.expires_at <= input.created_at ||
-      input.internal_artifact_object_id === undefined
-    ) {
+	      runSession.execution_package_id !== input.execution_package_id ||
+	      activeLease.id !== input.run_worker_lease_id ||
+	      activeLease.status !== 'active' ||
+	      activeLease.expires_at <= input.created_at ||
+	      (input.internal_artifact_object_id === undefined && archiveBytes === undefined)
+	    ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle fence was rejected.');
     }
     const archiveBytesBase64 = archiveBytes?.toString('base64');
@@ -2722,6 +2726,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async terminalizeCodexRuntimeJob(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    this.assertAndRecordCodexRuntimeJobTerminalizationWorkerProof(input);
+    return this.terminalizeCodexRuntimeJobAfterWorkerProof(input);
+  }
+
+  private assertAndRecordCodexRuntimeJobTerminalizationWorkerProof(input: TerminalizeCodexRuntimeJobInput): void {
     const session = this.assertCodexRuntimeJobWorkerSession(
       input.runtime_job_id,
       input.worker_id,
@@ -2741,6 +2750,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.replay_protection,
       session.session_epoch,
     );
+  }
+
+  private terminalizeCodexRuntimeJobAfterWorkerProof(input: TerminalizeCodexRuntimeJobInput): CodexRuntimeJob {
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     const leaseRecord = this.codexLaunchLeases.get(input.launch_lease_id);
     if (
@@ -5230,12 +5242,14 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         );
       }
 
+      this.assertAndRecordCodexRuntimeJobTerminalizationWorkerProof(input.runtime_job_terminalization);
+
       if (this.workflowExecutionSessionTerminalizationIsStale(input)) {
         await this.saveStaleCodexSessionTerminalizationAttempt(input.stale_attempt);
         return { stale: true, stale_attempt: clone(input.stale_attempt) };
       }
 
-      const runtimeJob = await this.terminalizeCodexRuntimeJob(input.runtime_job_terminalization);
+      const runtimeJob = this.terminalizeCodexRuntimeJobAfterWorkerProof(input.runtime_job_terminalization);
       const { session, turn } = await this.terminalizeCodexSessionTurn(input.codex_session_turn_terminalization);
       const terminalResult = runtimeJob.terminal_result_json;
       const terminalChangedFiles = Array.isArray(terminalResult?.changed_files) ? terminalResult.changed_files : runSession.changed_files;

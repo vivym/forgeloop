@@ -2888,12 +2888,14 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       );
     }
 
+    await this.assertAndRecordCodexRuntimeJobTerminalizationWorkerProof(input.runtime_job_terminalization);
+
     if (await this.workflowExecutionSessionTerminalizationIsStale(input)) {
       await this.saveStaleCodexSessionTerminalizationAttempt(input.stale_attempt);
       return { stale: true, stale_attempt: input.stale_attempt };
     }
 
-    const terminalRuntimeJob = await this.terminalizeCodexRuntimeJob(input.runtime_job_terminalization);
+    const terminalRuntimeJob = await this.terminalizeCodexRuntimeJobAfterWorkerProof(input.runtime_job_terminalization);
     const { session, turn } = await this.terminalizeCodexSessionTurn(input.codex_session_turn_terminalization);
     const terminalResult = terminalRuntimeJob.terminal_result_json;
     const updatedRunSession: RunSession = {
@@ -4180,7 +4182,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           profileTargetKind === input.target_kind &&
           versionStatus === 'active',
       )
-      .map(({ binding }) => ({ id: binding.id, purpose: binding.purpose }));
+      .map(({ binding }) => ({
+        id: binding.id,
+        purpose: binding.purpose,
+        ...(binding.repo_id === undefined ? {} : { repo_id: binding.repo_id }),
+      }));
   }
 
   async getCodexWorkerReadinessDiagnostic(
@@ -4936,12 +4942,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (
       lease === undefined ||
       runSession === undefined ||
-      runSession.execution_package_id !== input.execution_package_id ||
-      lease.id !== input.run_worker_lease_id ||
-      lease.status !== 'active' ||
-      lease.expires_at <= input.created_at ||
-      input.internal_artifact_object_id === undefined ||
-      (archiveBytes !== undefined &&
+	      runSession.execution_package_id !== input.execution_package_id ||
+	      lease.id !== input.run_worker_lease_id ||
+	      lease.status !== 'active' ||
+	      lease.expires_at <= input.created_at ||
+	      (input.internal_artifact_object_id === undefined && archiveBytes === undefined) ||
+	      (archiveBytes !== undefined &&
         (archiveBytes.toString('base64') !== input.archive_bytes_base64 ||
           archiveBytes.byteLength !== input.size_bytes ||
           rawSha256(archiveBytes) !== input.archive_digest)) ||
@@ -5800,6 +5806,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async terminalizeCodexRuntimeJobUnlocked(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    await this.assertAndRecordCodexRuntimeJobTerminalizationWorkerProof(input);
+    return this.terminalizeCodexRuntimeJobAfterWorkerProof(input);
+  }
+
+  private async assertAndRecordCodexRuntimeJobTerminalizationWorkerProof(input: TerminalizeCodexRuntimeJobInput): Promise<void> {
     const session = await this.assertCodexRuntimeJobWorkerSession(
       input.runtime_job_id,
       input.worker_id,
@@ -5819,6 +5830,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       input.replay_protection,
       session.session_epoch,
     );
+  }
+
+  private async terminalizeCodexRuntimeJobAfterWorkerProof(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
     const bundle = await this.lockCodexRuntimeJobBundle(input.runtime_job_id);
     if (
       bundle.job === undefined ||

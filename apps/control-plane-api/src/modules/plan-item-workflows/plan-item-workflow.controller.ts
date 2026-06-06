@@ -1,4 +1,4 @@
-import { Body, Controller, Inject, Param, Post } from '@nestjs/common';
+import { Body, Controller, Inject, Param, Post, Res } from '@nestjs/common';
 
 import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import {
@@ -8,16 +8,22 @@ import {
   requestWorkflowArtifactChangesBodySchema,
   runQueuedWorkflowActionBodySchema,
   startBrainstormingWorkflowSchema,
+  startWorkflowExecutionBodySchema,
   workflowMessageCommandBodySchema,
   type ApproveWorkflowArtifactRevisionBodyDto,
   type EvaluateWorkflowExecutionReadinessBodyDto,
   type RequestWorkflowArtifactChangesBodyDto,
   type RunQueuedWorkflowActionBodyDto,
   type StartBrainstormingWorkflowDto,
+  type StartWorkflowExecutionBodyDto,
   type WorkflowArtifactTypeDto,
   type WorkflowMessageCommandBodyDto,
 } from './plan-item-workflow.dto';
 import { PlanItemWorkflowService } from './plan-item-workflow.service';
+
+type StatusResponse = {
+  status(statusCode: number): StatusResponse;
+};
 
 @Controller()
 export class PlanItemWorkflowController {
@@ -75,5 +81,17 @@ export class PlanItemWorkflowController {
     @Body(new ZodValidationPipe(evaluateWorkflowExecutionReadinessBodySchema)) body: EvaluateWorkflowExecutionReadinessBodyDto,
   ) {
     return this.service.evaluateExecutionReadiness(workflowId, body);
+  }
+
+  @Post('plan-item-workflows/:workflowId/execution/start')
+  startExecution(
+    @Param('workflowId') workflowId: string,
+    @Body(new ZodValidationPipe(startWorkflowExecutionBodySchema)) body: StartWorkflowExecutionBodyDto,
+    @Res({ passthrough: true }) response: StatusResponse,
+  ) {
+    return this.service.startExecution(workflowId, body).then((result) => {
+      response.status(result.status_code);
+      return result.workflow;
+    });
   }
 }

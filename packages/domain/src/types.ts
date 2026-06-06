@@ -66,6 +66,7 @@ export type DomainErrorCode =
   | 'workflow_active_session_missing'
   | 'workflow_active_session_conflict'
   | 'workflow_execution_already_running'
+  | 'workflow_execution_recovery_required'
   | 'codex_session_lease_conflict'
   | 'codex_session_lease_expired'
   | 'codex_session_stale_terminalization'
