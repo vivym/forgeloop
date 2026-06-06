@@ -38,5 +38,10 @@ export const run_sessions = pgTable(
     uniqueIndex('run_sessions_one_active_per_package')
       .on(table.executionPackageId)
       .where(sql`${table.status} in ('queued','running','waiting_for_input','stalled','resuming','cancel_requested')`),
+    uniqueIndex('run_sessions_one_active_execution_per_codex_session')
+      .on(table.codexSessionId)
+      .where(
+        sql`${table.codexSessionId} is not null and ${table.status} in ('queued','running','waiting_for_input','stalled','resuming','cancel_requested')`,
+      ),
   ],
 );

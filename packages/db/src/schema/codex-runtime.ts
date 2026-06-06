@@ -337,6 +337,11 @@ export const codex_runtime_jobs = pgTable(
       table.targetId,
       table.launchAttempt,
     ),
+    uniqueIndex('codex_runtime_jobs_one_active_run_execution_per_codex_session')
+      .on(table.codexSessionId)
+      .where(
+        sql`${table.targetKind} = 'run_execution' and ${table.codexSessionId} is not null and ${table.status} in ('queued','accepted','materializing','running')`,
+      ),
     index('codex_runtime_jobs_worker_status_idx').on(table.workerId, table.status),
     index('codex_runtime_jobs_recovery_idx').on(table.status, table.expiresAt, table.lastEventAt),
   ],
