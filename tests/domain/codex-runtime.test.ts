@@ -542,6 +542,9 @@ describe('codex runtime domain contracts', () => {
   it('validates workflow-owned run-execution workloads with runtime continuity fields', () => {
     expect(validateCodexRunExecutionWorkload(workflowRunExecutionWorkload)).toEqual(workflowRunExecutionWorkload);
 
+    expect(() => codexRuntimeJobInputDigest(workflowRunExecutionWorkload)).not.toThrow();
+    expect(codexRuntimeJobInputDigest(workflowRunExecutionWorkload)).toBe(codexCanonicalDigest(workflowRunExecutionWorkload));
+
     expectDomainErrorCode(
       () =>
         validateCodexRunExecutionWorkload({

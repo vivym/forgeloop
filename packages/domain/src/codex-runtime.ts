@@ -1987,11 +1987,21 @@ export const assertCodexRuntimePublicSafeValue = (input: unknown, label: string)
   assertCodexRuntimePublicSafeRecord(input, label, []);
 };
 
+const codexWorkloadSchemasWithTrustedTerminalization = new Set([
+  'codex_generation_workload.v1',
+  'codex_run_execution_workload.v1',
+]);
+
+const isCodexWorkloadWithTrustedTerminalization = (input: unknown): input is Record<string, unknown> =>
+  isPlainObject(input) &&
+  typeof input.schema_version === 'string' &&
+  codexWorkloadSchemasWithTrustedTerminalization.has(input.schema_version) &&
+  input.codex_session_terminalization !== undefined;
+
 export const codexRuntimeJobInputDigest = (input: unknown): string => {
-  const trustedInput =
-    isPlainObject(input) && input.schema_version === 'codex_generation_workload.v1' && input.codex_session_terminalization !== undefined
-      ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'codex_session_terminalization'))
-      : input;
+  const trustedInput = isCodexWorkloadWithTrustedTerminalization(input)
+    ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'codex_session_terminalization'))
+    : input;
   assertCodexRuntimePublicSafeValue(trustedInput, 'job input');
   return codexCanonicalDigest(input);
 };
