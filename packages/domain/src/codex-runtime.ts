@@ -610,6 +610,24 @@ export interface CodexRunExecutionRuntimeJobResult {
     digest?: string;
     internal_ref?: string;
   }>;
+  codex_session_thread?: {
+    codex_thread_id: string;
+    codex_thread_id_digest: string;
+    app_server_turn_id?: string;
+  };
+  output_capsule?: CodexRuntimeCapsule;
+  output_memory_bundle_ref?: string;
+  output_memory_bundle_digest?: string;
+  memory_delta_artifact_ref?: string;
+  memory_delta_digest?: string;
+  output_environment_manifest_ref?: string;
+  output_environment_manifest_digest?: string;
+  codex_session_turn_id?: string;
+  runtime_evidence?: CodexDockerRuntimeEvidence;
+  public_summary: string;
+}
+
+export interface CodexWorkflowRunExecutionRuntimeJobResult extends CodexRunExecutionRuntimeJobResult {
   codex_session_thread: {
     codex_thread_id: string;
     codex_thread_id_digest: string;
@@ -623,8 +641,6 @@ export interface CodexRunExecutionRuntimeJobResult {
   output_environment_manifest_ref: string;
   output_environment_manifest_digest: string;
   codex_session_turn_id: string;
-  runtime_evidence?: CodexDockerRuntimeEvidence;
-  public_summary: string;
 }
 
 export interface CodexLaunchMaterialization {
@@ -2728,7 +2744,7 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   return input as unknown as CodexGenerationRuntimeJobResult;
 };
 
-const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>): CodexRunExecutionRuntimeJobResult => {
+const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>): CodexWorkflowRunExecutionRuntimeJobResult => {
   assertCodexRuntimeResultKeys(input, codexRunExecutionRuntimeJobResultKeys, 'run-execution result');
   if (input.task_kind !== 'run_execution') {
     throw unsafeCodexRuntimePublicValue('Codex run-execution terminal result task_kind is invalid.');
@@ -2788,7 +2804,7 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
     validateCodexDockerRuntimeEvidence(normalizedInput.runtime_evidence);
   }
   requireCodexRuntimeResultString(normalizedInput, 'public_summary');
-  return normalizedInput as unknown as CodexRunExecutionRuntimeJobResult;
+  return normalizedInput as unknown as CodexWorkflowRunExecutionRuntimeJobResult;
 };
 
 export const validateCodexRuntimeJobArtifactIntake = (input: {
@@ -2902,7 +2918,7 @@ export const codexLaunchTokenEnvelopeDigest = (input: CodexLaunchTokenEnvelopeDi
 
 export const validateCodexRuntimeJobTerminalResult = (
   input: unknown,
-): CodexGenerationRuntimeJobResult | CodexRunExecutionRuntimeJobResult => {
+): CodexGenerationRuntimeJobResult | CodexWorkflowRunExecutionRuntimeJobResult => {
   if (!isPlainObject(input)) {
     throw unsafeCodexRuntimePublicValue('Codex runtime terminal result must be an object.');
   }

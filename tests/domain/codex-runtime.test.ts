@@ -41,6 +41,7 @@ import {
   type CodexLaunchTokenEnvelope,
   type CodexNetworkAllowlistRule,
   type CodexRunExecutionRuntimeJobResult,
+  type CodexWorkflowRunExecutionRuntimeJobResult,
   type CodexRunExecutionWorkloadV1,
   type CodexWorkflowRunExecutionWorkloadV1,
   type CodexRuntimeJob,
@@ -77,6 +78,7 @@ type ExportedCodexRuntimeContracts = {
   runExecutionWorkload: CodexRunExecutionWorkloadV1;
   workflowRunExecutionWorkload: CodexWorkflowRunExecutionWorkloadV1;
   runExecutionResult: CodexRunExecutionRuntimeJobResult;
+  workflowRunExecutionResult: CodexWorkflowRunExecutionRuntimeJobResult;
 };
 
 const assertCodexRuntimeTypeExports = <T extends ExportedCodexRuntimeContracts>() => undefined;
@@ -199,7 +201,7 @@ const workflowRunExecutionTerminalEvidence = () =>
     output_environment_manifest_digest: digestB,
     codex_session_turn_id: 'turn-execution-1',
   }) satisfies Pick<
-    CodexRunExecutionRuntimeJobResult,
+    CodexWorkflowRunExecutionRuntimeJobResult,
     | 'codex_session_thread'
     | 'output_capsule'
     | 'output_memory_bundle_ref'
@@ -1430,7 +1432,7 @@ describe('codex runtime domain contracts', () => {
       output_environment_manifest_digest: digestB,
       codex_session_turn_id: 'turn-execution-1',
       public_summary: 'Execution completed.',
-    } satisfies CodexRunExecutionRuntimeJobResult;
+    } satisfies CodexWorkflowRunExecutionRuntimeJobResult;
 
     const expectRunExecutionTerminalEvidenceError = (result: unknown) =>
       expectDomainErrorCode(() => validateCodexRuntimeJobTerminalResult(result), 'codex_docker_runtime_evidence_unsafe');
