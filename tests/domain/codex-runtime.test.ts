@@ -20,6 +20,8 @@ import {
   redactCodexLaunchMaterialization,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeJobArtifactIntake,
+  validateCodexRunExecutionWorkload,
+  validateCodexRunExecutionWorkloadContinuity,
   validateCodexSessionRuntimeContext,
   validateCodexDockerNetworkProxyConfig,
   validateCodexDockerRuntimeEvidence,
@@ -83,6 +85,75 @@ const digestC = `sha256:${'c'.repeat(64)}`;
 const generatedPayload = { schema_version: 'generated_payload.test.v1', value: 'ok' };
 const generatedPayloadDigest = codexCanonicalDigest(generatedPayload);
 const generatedPayloadArtifactByteDigest = `sha256:${'9'.repeat(64)}`;
+
+const workflowRunExecutionWorkload = {
+  schema_version: 'codex_run_execution_workload.v1',
+  runtime_job_id: 'runtime-job-1',
+  plan_item_workflow_id: 'workflow-1',
+  development_plan_id: 'development-plan-1',
+  development_plan_item_id: 'item-1',
+  run_session_id: 'run-session-1',
+  execution_package_id: 'execution-package-1',
+  execution_package_version: 1,
+  workspace_bundle_id: 'workspace-bundle-1',
+  workspace_bundle_digest: digestA,
+  package_prompt_ref: 'artifact://codex-runtime-jobs/runtime-job-1/prompt',
+  package_prompt_digest: digestB,
+  execution_context_ref: 'artifact://codex-runtime-jobs/runtime-job-1/context',
+  execution_context_digest: digestC,
+  path_policy_digest: digestA,
+  output_schema_version: 'codex_run_execution_result.v1',
+  created_at: '2026-06-06T00:00:00.000Z',
+  expires_at: '2026-06-06T00:10:00.000Z',
+  workspace_acquisition_json: {
+    manifest_digest: digestB,
+    size_bytes: 128,
+  },
+  codex_session_runtime_context: {
+    schema_version: 'codex_session_runtime_context.v1',
+    codex_session_id: 'session-1',
+    codex_session_turn_id: 'turn-execution-1',
+    lease_id: 'lease-1',
+    lease_epoch: 2,
+    worker_id: 'worker-1',
+    worker_session_digest: digestC,
+    expected_input_capsule_digest: digestA,
+    turn_group_status: 'complete',
+    continuation: {
+      kind: 'resume_thread',
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+    },
+  },
+  codex_session_terminalization: {
+    schema_version: 'codex_session_terminalization.v1',
+    lease_token: 'lease-token-secret',
+    codex_session_id: 'session-1',
+    codex_session_turn_id: 'turn-execution-1',
+    input_capsule_id: 'capsule-1',
+    input_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
+    input_capsule_digest: digestA,
+    input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
+    input_memory_bundle_digest: digestB,
+    input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+    input_environment_manifest_digest: digestC,
+    expected_input_capsule_digest: digestA,
+  },
+} satisfies CodexRunExecutionWorkloadV1;
+
+const expectedWorkflowRunExecutionContinuation = {
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'turn-execution-1',
+  input_capsule_digest: digestA,
+  input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
+  input_memory_bundle_digest: digestB,
+  input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+  input_environment_manifest_digest: digestC,
+  lease_id: 'lease-1',
+  lease_epoch: 2,
+  worker_id: 'worker-1',
+  worker_session_digest: digestC,
+};
 
 const runtimeEvidence = (overrides: Partial<CodexDockerRuntimeEvidence> = {}): CodexDockerRuntimeEvidence => ({
   runtime_profile_id: 'profile-1',
@@ -458,6 +529,88 @@ describe('codex runtime domain contracts', () => {
         }),
       'codex_session_thread_binding_partial',
     );
+  });
+
+  it('validates workflow-owned run-execution workloads with runtime continuity fields', () => {
+    expect(validateCodexRunExecutionWorkload(workflowRunExecutionWorkload)).toEqual(workflowRunExecutionWorkload);
+
+    expect(() =>
+      validateCodexRunExecutionWorkload({
+        ...workflowRunExecutionWorkload,
+        codex_session_runtime_context: undefined,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      validateCodexRunExecutionWorkload({
+        ...workflowRunExecutionWorkload,
+        codex_session_runtime_context: {
+          ...workflowRunExecutionWorkload.codex_session_runtime_context,
+          continuation: { kind: 'start_thread' },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('validates workflow-owned run-execution workload continuity against active session and worker expectations', () => {
+    expect(
+      validateCodexRunExecutionWorkloadContinuity(
+        workflowRunExecutionWorkload,
+        expectedWorkflowRunExecutionContinuation,
+      ),
+    ).toEqual(workflowRunExecutionWorkload);
+
+    expect(() =>
+      validateCodexRunExecutionWorkloadContinuity(
+        {
+          ...workflowRunExecutionWorkload,
+          codex_session_terminalization: {
+            ...workflowRunExecutionWorkload.codex_session_terminalization,
+            input_memory_bundle_digest: digestA,
+          },
+        },
+        expectedWorkflowRunExecutionContinuation,
+      ),
+    ).toThrow();
+
+    expect(() =>
+      validateCodexRunExecutionWorkloadContinuity(
+        {
+          ...workflowRunExecutionWorkload,
+          codex_session_terminalization: {
+            ...workflowRunExecutionWorkload.codex_session_terminalization,
+            input_environment_manifest_digest: digestA,
+          },
+        },
+        expectedWorkflowRunExecutionContinuation,
+      ),
+    ).toThrow();
+
+    expect(() =>
+      validateCodexRunExecutionWorkloadContinuity(
+        {
+          ...workflowRunExecutionWorkload,
+          codex_session_runtime_context: {
+            ...workflowRunExecutionWorkload.codex_session_runtime_context,
+            lease_epoch: 3,
+          },
+        },
+        expectedWorkflowRunExecutionContinuation,
+      ),
+    ).toThrow();
+
+    expect(() =>
+      validateCodexRunExecutionWorkloadContinuity(
+        {
+          ...workflowRunExecutionWorkload,
+          codex_session_runtime_context: {
+            ...workflowRunExecutionWorkload.codex_session_runtime_context,
+            worker_session_digest: digestA,
+          },
+        },
+        expectedWorkflowRunExecutionContinuation,
+      ),
+    ).toThrow();
   });
 
   it('keeps generic public safety strict for public route-looking local paths', () => {

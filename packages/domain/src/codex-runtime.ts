@@ -398,6 +398,55 @@ const codexSessionRuntimeContextKeys = new Set([
   'continuation',
 ]);
 
+const codexRunExecutionWorkloadKeys = new Set([
+  'schema_version',
+  'runtime_job_id',
+  'plan_item_workflow_id',
+  'development_plan_id',
+  'development_plan_item_id',
+  'run_session_id',
+  'execution_package_id',
+  'execution_package_version',
+  'workspace_bundle_id',
+  'workspace_bundle_digest',
+  'package_prompt_ref',
+  'package_prompt_digest',
+  'execution_context_ref',
+  'execution_context_digest',
+  'path_policy_digest',
+  'required_checks_digest',
+  'output_schema_version',
+  'created_at',
+  'expires_at',
+  'workspace_acquisition_json',
+  'codex_session_runtime_context',
+  'codex_session_terminalization',
+]);
+
+const codexRunExecutionWorkspaceAcquisitionKeys = new Set(['manifest_digest', 'size_bytes']);
+const codexRunExecutionResumeThreadContinuationKeys = new Set([
+  'kind',
+  'codex_thread_id',
+  'codex_thread_id_digest',
+]);
+
+const codexSessionTerminalizationKeys = new Set([
+  'schema_version',
+  'lease_token',
+  'codex_session_id',
+  'codex_session_turn_id',
+  'expected_input_capsule_digest',
+  'input_capsule_id',
+  'input_capsule_digest',
+  'input_capsule_ref',
+  'base_memory_bundle_ref',
+  'base_memory_bundle_digest',
+  'input_memory_bundle_ref',
+  'input_memory_bundle_digest',
+  'input_environment_manifest_ref',
+  'input_environment_manifest_digest',
+]);
+
 export interface CodexSessionTerminalizationV1 {
   schema_version: 'codex_session_terminalization.v1';
   lease_token: string;
@@ -415,9 +464,17 @@ export interface CodexSessionTerminalizationV1 {
   input_environment_manifest_digest?: string;
 }
 
+export interface CodexRunExecutionWorkspaceAcquisitionV1 {
+  manifest_digest: string;
+  size_bytes: number;
+}
+
 export interface CodexRunExecutionWorkloadV1 {
   schema_version: 'codex_run_execution_workload.v1';
   runtime_job_id: string;
+  plan_item_workflow_id?: string;
+  development_plan_id?: string;
+  development_plan_item_id?: string;
   run_session_id: string;
   execution_package_id: string;
   execution_package_version: number;
@@ -432,6 +489,23 @@ export interface CodexRunExecutionWorkloadV1 {
   output_schema_version: string;
   created_at: string;
   expires_at: string;
+  workspace_acquisition_json?: CodexRunExecutionWorkspaceAcquisitionV1;
+  codex_session_runtime_context?: CodexSessionRuntimeContextV1;
+  codex_session_terminalization?: CodexSessionTerminalizationV1;
+}
+
+export interface CodexRunExecutionExpectedContinuation {
+  codex_session_id: string;
+  codex_session_turn_id: string;
+  input_capsule_digest: string;
+  input_memory_bundle_ref: string;
+  input_memory_bundle_digest: string;
+  input_environment_manifest_ref: string;
+  input_environment_manifest_digest: string;
+  lease_id: string;
+  lease_epoch: number;
+  worker_id: string;
+  worker_session_digest: string;
 }
 
 export interface CodexGenerationRuntimeJobResult {
@@ -836,6 +910,225 @@ export const validateCodexSessionRuntimeContext = (value: unknown): CodexSession
     turn_group_status: value.turn_group_status,
     continuation: parsedContinuation,
   };
+};
+
+const assertRunExecutionWorkloadKeys = (input: Record<string, unknown>, allowedKeys: ReadonlySet<string>, label: string): void => {
+  for (const key of Object.keys(input)) {
+    if (!allowedKeys.has(key)) {
+      throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${label} field ${key} is unsupported.`);
+    }
+  }
+};
+
+const requireRunExecutionWorkloadString = (input: Record<string, unknown>, field: string): string => {
+  const value = input[field];
+  if (!isNonEmptyString(value)) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${field} is required.`);
+  }
+  return value;
+};
+
+const requireRunExecutionWorkloadDigest = (input: Record<string, unknown>, field: string): string => {
+  const value = requireRunExecutionWorkloadString(input, field);
+  if (!isSha256Digest(value)) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${field} must be a sha256 digest.`);
+  }
+  return value;
+};
+
+const requireRunExecutionWorkloadInteger = (input: Record<string, unknown>, field: string): number => {
+  const value = input[field];
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${field} must be a non-negative integer.`);
+  }
+  return value;
+};
+
+const requireRunExecutionWorkspaceAcquisition = (value: unknown): CodexRunExecutionWorkspaceAcquisitionV1 => {
+  if (!isPlainObject(value)) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: workspace_acquisition_json is required.');
+  }
+  assertRunExecutionWorkloadKeys(value, codexRunExecutionWorkspaceAcquisitionKeys, 'workspace_acquisition_json');
+  return {
+    manifest_digest: requireRunExecutionWorkloadDigest(value, 'manifest_digest'),
+    size_bytes: requireRunExecutionWorkloadInteger(value, 'size_bytes'),
+  };
+};
+
+const requireRunExecutionTerminalization = (value: unknown): CodexSessionTerminalizationV1 => {
+  if (!isPlainObject(value) || value.schema_version !== 'codex_session_terminalization.v1') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: session terminalization is unsupported.');
+  }
+  assertRunExecutionWorkloadKeys(value, codexSessionTerminalizationKeys, 'codex_session_terminalization');
+  return {
+    schema_version: 'codex_session_terminalization.v1',
+    lease_token: requireRunExecutionWorkloadString(value, 'lease_token'),
+    codex_session_id: requireRunExecutionWorkloadString(value, 'codex_session_id'),
+    codex_session_turn_id: requireRunExecutionWorkloadString(value, 'codex_session_turn_id'),
+    expected_input_capsule_digest: requireRunExecutionWorkloadDigest(value, 'expected_input_capsule_digest'),
+    input_capsule_id: requireRunExecutionWorkloadString(value, 'input_capsule_id'),
+    input_capsule_ref: requireRunExecutionWorkloadString(value, 'input_capsule_ref'),
+    input_capsule_digest: requireRunExecutionWorkloadDigest(value, 'input_capsule_digest'),
+    ...(value.base_memory_bundle_ref === undefined
+      ? {}
+      : { base_memory_bundle_ref: requireRunExecutionWorkloadString(value, 'base_memory_bundle_ref') }),
+    ...(value.base_memory_bundle_digest === undefined
+      ? {}
+      : { base_memory_bundle_digest: requireRunExecutionWorkloadDigest(value, 'base_memory_bundle_digest') }),
+    input_memory_bundle_ref: requireRunExecutionWorkloadString(value, 'input_memory_bundle_ref'),
+    input_memory_bundle_digest: requireRunExecutionWorkloadDigest(value, 'input_memory_bundle_digest'),
+    input_environment_manifest_ref: requireRunExecutionWorkloadString(value, 'input_environment_manifest_ref'),
+    input_environment_manifest_digest: requireRunExecutionWorkloadDigest(value, 'input_environment_manifest_digest'),
+  };
+};
+
+const assertRunExecutionContinuityMatches = (actual: unknown, expected: unknown, label: string): void => {
+  if (actual !== expected) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${label} does not match.`);
+  }
+};
+
+export const validateCodexRunExecutionWorkload = (value: unknown): CodexRunExecutionWorkloadV1 => {
+  if (!isPlainObject(value) || value.schema_version !== 'codex_run_execution_workload.v1') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: run-execution workload is unsupported.');
+  }
+  assertRunExecutionWorkloadKeys(value, codexRunExecutionWorkloadKeys, 'run-execution workload');
+
+  if (value.output_schema_version !== 'codex_run_execution_result.v1') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: output_schema_version is unsupported.');
+  }
+  const executionPackageVersion = requireRunExecutionWorkloadInteger(value, 'execution_package_version');
+  if (executionPackageVersion <= 0) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: execution_package_version must be positive.');
+  }
+
+  const rawRuntimeContext = value.codex_session_runtime_context;
+  if (!isPlainObject(rawRuntimeContext)) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: codex_session_runtime_context is required.');
+  }
+  if (!isPlainObject(rawRuntimeContext.continuation)) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: continuation is required.');
+  }
+  assertRunExecutionWorkloadKeys(
+    rawRuntimeContext.continuation,
+    codexRunExecutionResumeThreadContinuationKeys,
+    'codex_session_runtime_context.continuation',
+  );
+  const runtimeContext = validateCodexSessionRuntimeContext(rawRuntimeContext);
+  if (runtimeContext.turn_group_status !== 'complete') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: turn_group_status must be complete.');
+  }
+  if (runtimeContext.continuation.kind !== 'resume_thread') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: continuation must resume an existing thread.');
+  }
+  if (!isSha256Digest(runtimeContext.expected_input_capsule_digest)) {
+    throw unsupportedGenerationWorkload(
+      'codex_generation_workload_unsupported: expected_input_capsule_digest must be a sha256 digest.',
+    );
+  }
+
+  const terminalization = requireRunExecutionTerminalization(value.codex_session_terminalization);
+  assertRunExecutionContinuityMatches(
+    terminalization.codex_session_id,
+    runtimeContext.codex_session_id,
+    'codex_session_id',
+  );
+  assertRunExecutionContinuityMatches(
+    terminalization.codex_session_turn_id,
+    runtimeContext.codex_session_turn_id,
+    'codex_session_turn_id',
+  );
+  assertRunExecutionContinuityMatches(
+    terminalization.expected_input_capsule_digest,
+    runtimeContext.expected_input_capsule_digest,
+    'expected_input_capsule_digest',
+  );
+  assertRunExecutionContinuityMatches(
+    terminalization.input_capsule_digest,
+    runtimeContext.expected_input_capsule_digest,
+    'input_capsule_digest',
+  );
+
+  return {
+    schema_version: 'codex_run_execution_workload.v1',
+    runtime_job_id: requireRunExecutionWorkloadString(value, 'runtime_job_id'),
+    plan_item_workflow_id: requireRunExecutionWorkloadString(value, 'plan_item_workflow_id'),
+    development_plan_id: requireRunExecutionWorkloadString(value, 'development_plan_id'),
+    development_plan_item_id: requireRunExecutionWorkloadString(value, 'development_plan_item_id'),
+    run_session_id: requireRunExecutionWorkloadString(value, 'run_session_id'),
+    execution_package_id: requireRunExecutionWorkloadString(value, 'execution_package_id'),
+    execution_package_version: executionPackageVersion,
+    workspace_bundle_id: requireRunExecutionWorkloadString(value, 'workspace_bundle_id'),
+    workspace_bundle_digest: requireRunExecutionWorkloadDigest(value, 'workspace_bundle_digest'),
+    package_prompt_ref: requireRunExecutionWorkloadString(value, 'package_prompt_ref'),
+    package_prompt_digest: requireRunExecutionWorkloadDigest(value, 'package_prompt_digest'),
+    execution_context_ref: requireRunExecutionWorkloadString(value, 'execution_context_ref'),
+    execution_context_digest: requireRunExecutionWorkloadDigest(value, 'execution_context_digest'),
+    path_policy_digest: requireRunExecutionWorkloadDigest(value, 'path_policy_digest'),
+    ...(value.required_checks_digest === undefined
+      ? {}
+      : { required_checks_digest: requireRunExecutionWorkloadDigest(value, 'required_checks_digest') }),
+    output_schema_version: 'codex_run_execution_result.v1',
+    created_at: requireRunExecutionWorkloadString(value, 'created_at'),
+    expires_at: requireRunExecutionWorkloadString(value, 'expires_at'),
+    workspace_acquisition_json: requireRunExecutionWorkspaceAcquisition(value.workspace_acquisition_json),
+    codex_session_runtime_context: runtimeContext,
+    codex_session_terminalization: terminalization,
+  };
+};
+
+export const validateCodexRunExecutionWorkloadContinuity = (
+  workload: unknown,
+  expectedContinuation: CodexRunExecutionExpectedContinuation,
+): CodexRunExecutionWorkloadV1 => {
+  const validated = validateCodexRunExecutionWorkload(workload);
+  const runtimeContext = validated.codex_session_runtime_context;
+  const terminalization = validated.codex_session_terminalization;
+  if (runtimeContext === undefined || terminalization === undefined) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: run-execution continuity is required.');
+  }
+
+  assertRunExecutionContinuityMatches(runtimeContext.codex_session_id, expectedContinuation.codex_session_id, 'codex_session_id');
+  assertRunExecutionContinuityMatches(
+    runtimeContext.codex_session_turn_id,
+    expectedContinuation.codex_session_turn_id,
+    'codex_session_turn_id',
+  );
+  assertRunExecutionContinuityMatches(
+    terminalization.input_capsule_digest,
+    expectedContinuation.input_capsule_digest,
+    'input_capsule_digest',
+  );
+  assertRunExecutionContinuityMatches(
+    terminalization.input_memory_bundle_ref,
+    expectedContinuation.input_memory_bundle_ref,
+    'input_memory_bundle_ref',
+  );
+  assertRunExecutionContinuityMatches(
+    terminalization.input_memory_bundle_digest,
+    expectedContinuation.input_memory_bundle_digest,
+    'input_memory_bundle_digest',
+  );
+  assertRunExecutionContinuityMatches(
+    terminalization.input_environment_manifest_ref,
+    expectedContinuation.input_environment_manifest_ref,
+    'input_environment_manifest_ref',
+  );
+  assertRunExecutionContinuityMatches(
+    terminalization.input_environment_manifest_digest,
+    expectedContinuation.input_environment_manifest_digest,
+    'input_environment_manifest_digest',
+  );
+  assertRunExecutionContinuityMatches(runtimeContext.lease_id, expectedContinuation.lease_id, 'lease_id');
+  assertRunExecutionContinuityMatches(runtimeContext.lease_epoch, expectedContinuation.lease_epoch, 'lease_epoch');
+  assertRunExecutionContinuityMatches(runtimeContext.worker_id, expectedContinuation.worker_id, 'worker_id');
+  assertRunExecutionContinuityMatches(
+    runtimeContext.worker_session_digest,
+    expectedContinuation.worker_session_digest,
+    'worker_session_digest',
+  );
+
+  return validated;
 };
 
 const isRawPathEndpointOrContainerId = (value: string): boolean =>
