@@ -1622,6 +1622,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
             job.id !== input.runtime_job_id &&
             job.target_kind === 'run_execution' &&
             job.codex_session_id === input.codex_session_id &&
+            isWorkflowRunExecutionJob(job) &&
             (job.status === 'queued' || job.status === 'accepted' || job.status === 'materializing' || job.status === 'running'),
         );
       if (activeJob !== undefined) {
@@ -2570,6 +2571,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       leaseRecord === undefined ||
       pending === undefined ||
       artifact === undefined ||
+      !workflowRunExecutionJobLineageMatches(record.job) ||
       record.job.worker_id !== input.worker_id ||
       record.job.target_kind !== 'run_execution' ||
       (record.job.status !== 'accepted' && record.job.status !== 'materializing') ||
@@ -5166,7 +5168,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async terminalizeWorkflowExecution(input: TerminalizeWorkflowExecutionInput): Promise<TerminalizeWorkflowExecutionResult> {
-    return this.objectLocks.withLock(`workflow-execution-terminalize:${input.workflow_id}`, async () => {
+    return this.objectLocks.withLocks([`plan-item-workflow:${input.workflow_id}`, `workflow-execution-terminalize:${input.workflow_id}`], async () => {
       const workflow = this.planItemWorkflows.get(input.workflow_id);
       const runSession = this.runSessions.get(input.run_session_id);
       const runtimeRecord = this.codexRuntimeJobs.get(input.runtime_job_id);

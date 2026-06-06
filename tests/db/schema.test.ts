@@ -894,6 +894,10 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(hasUniqueIndex(codex_runtime_jobs, 'codex_runtime_jobs_one_active_run_execution_per_codex_session', [
       'codex_session_id',
     ])).toBe(true);
+    const executionHandoffMigration = readFileSync('packages/db/migrations/0004_plan_item_execution_handoff.sql', 'utf8');
+    expect(executionHandoffMigration).toContain(
+      `"input_json"->>'schema_version' = 'codex_run_execution_workload.v1'`,
+    );
     const targetAttemptColumns = uniqueIndexColumns(codex_runtime_jobs, 'codex_runtime_jobs_target_attempt_idx');
     expect(targetAttemptColumns.map((indexColumn) => (indexColumn as { name?: string }).name)).toEqual([
       'project_id',

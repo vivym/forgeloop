@@ -1978,6 +1978,27 @@ describe('codex runtime repository behavior', () => {
     });
   });
 
+  it('fails closed on corrupt workflow-owned run-execution jobs during workspace bundle download', async () => {
+    const { repository, input } = await createWorkflowRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository, input.runtime_job_id);
+    corruptStoredWorkflowRuntimeJobLineage(repository, input.runtime_job_id);
+
+    await expect(
+      repository.getWorkspaceBundleDownloadForRuntimeJob({
+        runtime_job_id: input.runtime_job_id,
+        bundle_id: input.pending_workspace_bundle!.bundle_id,
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'download-corrupt-workflow-runtime-job',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
   it('fails closed on corrupt workflow-owned run-execution jobs during envelope claim, materialization, and start', async () => {
     const { repository, input, launchToken } = await createWorkflowRuntimeJobWithCapturedToken();
     await acceptRuntimeJob(repository, input.runtime_job_id);

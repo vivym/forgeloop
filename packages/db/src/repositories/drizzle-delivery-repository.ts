@@ -538,6 +538,19 @@ const assertWorkflowRunExecutionJobLineageMatches = (
   }
 };
 
+const isUniqueConstraintViolation = (error: unknown, constraintName: string): boolean => {
+  if (!isRecord(error)) {
+    return false;
+  }
+  if (
+    error.code === '23505' &&
+    (error.constraint === constraintName || (typeof error.message === 'string' && error.message.includes(constraintName)))
+  ) {
+    return true;
+  }
+  return isUniqueConstraintViolation(error.cause, constraintName);
+};
+
 const canMaterializeDirectly = (job: CodexRuntimeJob): boolean =>
   !isCodexSessionResumeRuntimeJobInput(job.input_json) || isWorkflowRunExecutionJob(job);
 
@@ -2808,7 +2821,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   async terminalizeWorkflowExecution(input: TerminalizeWorkflowExecutionInput): Promise<TerminalizeWorkflowExecutionResult> {
-    return this.withObjectLock(`workflow-execution-terminalize:${input.workflow_id}`, async (repository) =>
+    return this.withAdvisoryLocks([`plan-item-workflow:${input.workflow_id}`, `workflow-execution-terminalize:${input.workflow_id}`], async (repository) =>
       (repository as DrizzleDeliveryRepository).terminalizeWorkflowExecutionUnlocked(input),
     );
   }
@@ -5073,6 +5086,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       lease === undefined ||
       pending === undefined ||
       artifact === undefined ||
+      !workflowRunExecutionJobLineageMatches(runtimeJobFromDbRecord(job)) ||
       job.worker_id !== input.worker_id ||
       job.target_kind !== 'run_execution' ||
       (job.status !== 'accepted' && job.status !== 'materializing') ||
@@ -5954,6 +5968,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
           and(
             eq(codex_runtime_jobs.targetKind, 'run_execution'),
             eq(codex_runtime_jobs.codexSessionId, input.codex_session_id),
+            sql`${codex_runtime_jobs.inputJson}->>'schema_version' = 'codex_run_execution_workload.v1'`,
             inArray(codex_runtime_jobs.status, ['queued', 'accepted', 'materializing', 'running']),
           ),
         )
@@ -8241,7 +8256,17 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         }
       }
     }
-    await this.upsert(run_sessions, run_sessions.id, runSession);
+    try {
+      await this.upsert(run_sessions, run_sessions.id, runSession);
+    } catch (error) {
+      if (runSession.codex_session_id !== undefined && isUniqueConstraintViolation(error, 'run_sessions_one_active_execution_per_codex_session')) {
+        throw new DomainError(
+          'workflow_execution_already_running',
+          `workflow_execution_already_running: Codex session ${runSession.codex_session_id} already has an active run`,
+        );
+      }
+      throw error;
+    }
   }
 
   async getRunSession(runSessionId: string): Promise<RunSession | undefined> {
