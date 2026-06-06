@@ -27,6 +27,7 @@ import {
   validateCodexDockerRuntimeEvidence,
   validateCodexEffectiveConfigAssertions,
   validateCodexRuntimeProfileRevision,
+  validateCodexWorkflowRunExecutionRuntimeJobResult,
   type CodexDockerRuntimeEvidence,
   type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
@@ -230,6 +231,23 @@ const runtimeEvidence = (overrides: Partial<CodexDockerRuntimeEvidence> = {}): C
   selected_execution_mode: 'app_server',
   ...overrides,
 });
+
+const baseRunExecutionTerminalResult = (overrides: Partial<CodexRunExecutionRuntimeJobResult> = {}) =>
+  ({
+    task_kind: 'run_execution',
+    output_schema_version: 'codex_run_execution_result.v1',
+    execution_package_id: 'execution-package-1',
+    execution_package_version: 1,
+    run_session_id: 'run-session-1',
+    workspace_bundle_digest: digestA,
+    workspace_bundle_manifest_digest: digestB,
+    mounted_task_workspace_digest: digestC,
+    changed_files: ['README.md'],
+    check_results: [],
+    execution_artifacts: [],
+    public_summary: 'Execution completed.',
+    ...overrides,
+  }) satisfies CodexRunExecutionRuntimeJobResult;
 
 class NonJsonFixture {
   constructor(readonly value: string) {}
@@ -1385,6 +1403,19 @@ describe('codex runtime domain contracts', () => {
     expectDomainErrorCode(() => validateCodexRuntimeJobTerminalResult(result), 'codex_docker_runtime_evidence_unsafe');
   });
 
+  it('allows generic run-execution terminal results without continuation evidence', () => {
+    const runExecutionResult = baseRunExecutionTerminalResult();
+
+    expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
+  });
+
+  it('rejects generic run-execution terminal results in the strict workflow validator', () => {
+    expectDomainErrorCode(
+      () => validateCodexWorkflowRunExecutionRuntimeJobResult(baseRunExecutionTerminalResult()),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
   it('requires workflow run-execution terminal continuation evidence', () => {
     const workflowRunExecutionResult = {
       task_kind: 'run_execution',
@@ -1438,6 +1469,7 @@ describe('codex runtime domain contracts', () => {
       expectDomainErrorCode(() => validateCodexRuntimeJobTerminalResult(result), 'codex_docker_runtime_evidence_unsafe');
 
     expect(validateCodexRuntimeJobTerminalResult(workflowRunExecutionResult)).toEqual(workflowRunExecutionResult);
+    expect(validateCodexWorkflowRunExecutionRuntimeJobResult(workflowRunExecutionResult)).toEqual(workflowRunExecutionResult);
     expectRunExecutionTerminalEvidenceError({
       ...workflowRunExecutionResult,
       output_capsule: undefined,

@@ -2231,6 +2231,17 @@ const generatedExecutionPlanRevisionKeys = new Set([
 const generatedExecutionPlanRequiredCheckKeys = new Set(['check_id', 'command', 'timeout_seconds', 'blocks_review']);
 const codexRunExecutionPatchArtifactKeys = new Set(['content_type', 'digest', 'internal_ref']);
 const codexRunExecutionCheckResultKeys = new Set(['name', 'status', 'summary', 'output_digest', 'output_internal_ref']);
+const codexRunExecutionContinuationEvidenceFields = [
+  'codex_session_thread',
+  'output_capsule',
+  'output_memory_bundle_ref',
+  'output_memory_bundle_digest',
+  'memory_delta_artifact_ref',
+  'memory_delta_digest',
+  'output_environment_manifest_ref',
+  'output_environment_manifest_digest',
+  'codex_session_turn_id',
+] as const;
 const codexRunExecutionRuntimeJobResultKeys = new Set([
   'task_kind',
   'output_schema_version',
@@ -2244,15 +2255,7 @@ const codexRunExecutionRuntimeJobResultKeys = new Set([
   'patch_artifact',
   'check_results',
   'execution_artifacts',
-  'codex_session_thread',
-  'output_capsule',
-  'output_memory_bundle_ref',
-  'output_memory_bundle_digest',
-  'memory_delta_artifact_ref',
-  'memory_delta_digest',
-  'output_environment_manifest_ref',
-  'output_environment_manifest_digest',
-  'codex_session_turn_id',
+  ...codexRunExecutionContinuationEvidenceFields,
   'runtime_evidence',
   'public_summary',
 ]);
@@ -2744,7 +2747,10 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   return input as unknown as CodexGenerationRuntimeJobResult;
 };
 
-const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>): CodexWorkflowRunExecutionRuntimeJobResult => {
+const hasCodexRunExecutionContinuationEvidence = (input: Record<string, unknown>): boolean =>
+  codexRunExecutionContinuationEvidenceFields.some((field) => Object.prototype.hasOwnProperty.call(input, field));
+
+const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>): CodexRunExecutionRuntimeJobResult => {
   assertCodexRuntimeResultKeys(input, codexRunExecutionRuntimeJobResultKeys, 'run-execution result');
   if (input.task_kind !== 'run_execution') {
     throw unsafeCodexRuntimePublicValue('Codex run-execution terminal result task_kind is invalid.');
@@ -2798,12 +2804,19 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
   requireCodexRuntimeResultArray(normalizedInput, 'execution_artifacts').forEach((artifact) =>
     requireCodexRuntimeArtifact(artifact, 'execution_artifacts'),
   );
-  requireCodexRuntimeTerminalContinuationEvidence(normalizedInput);
-  requireCodexRuntimeResultString(normalizedInput, 'codex_session_turn_id');
   if (normalizedInput.runtime_evidence !== undefined) {
     validateCodexDockerRuntimeEvidence(normalizedInput.runtime_evidence);
   }
   requireCodexRuntimeResultString(normalizedInput, 'public_summary');
+  return normalizedInput as unknown as CodexRunExecutionRuntimeJobResult;
+};
+
+const requireCodexWorkflowRunExecutionRuntimeJobResult = (
+  input: Record<string, unknown>,
+): CodexWorkflowRunExecutionRuntimeJobResult => {
+  const normalizedInput = requireCodexRunExecutionRuntimeJobResult(input) as unknown as Record<string, unknown>;
+  requireCodexRuntimeTerminalContinuationEvidence(normalizedInput);
+  requireCodexRuntimeResultString(normalizedInput, 'codex_session_turn_id');
   return normalizedInput as unknown as CodexWorkflowRunExecutionRuntimeJobResult;
 };
 
@@ -2916,16 +2929,9 @@ export const codexLaunchTokenEnvelopeDigest = (input: CodexLaunchTokenEnvelopeDi
   });
 };
 
-export const validateCodexRuntimeJobTerminalResult = (
-  input: unknown,
-): CodexGenerationRuntimeJobResult | CodexWorkflowRunExecutionRuntimeJobResult => {
-  if (!isPlainObject(input)) {
-    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result must be an object.');
-  }
-  const result =
-    input.task_kind === 'run_execution'
-      ? requireCodexRunExecutionRuntimeJobResult(input)
-      : requireCodexGenerationRuntimeJobResult(input);
+const assertCodexRuntimeJobTerminalResultPublicSafe = (
+  result: CodexGenerationRuntimeJobResult | CodexRunExecutionRuntimeJobResult,
+): void => {
   const resultRecord = result as unknown as Record<string, unknown>;
   const omittedPublicSafeKeys = new Set<string>([
     ...(resultRecord.runtime_evidence !== undefined ? ['runtime_evidence'] : []),
@@ -2942,6 +2948,32 @@ export const validateCodexRuntimeJobTerminalResult = (
     allowRunExecutionChangedFiles: resultRecord.task_kind === 'run_execution',
     rejectLegacyCodexRuntimeJobArtifactRefs: true,
   });
+};
+
+export const validateCodexWorkflowRunExecutionRuntimeJobResult = (
+  input: unknown,
+): CodexWorkflowRunExecutionRuntimeJobResult => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result must be an object.');
+  }
+  const result = requireCodexWorkflowRunExecutionRuntimeJobResult(input);
+  assertCodexRuntimeJobTerminalResultPublicSafe(result);
+  return result;
+};
+
+export const validateCodexRuntimeJobTerminalResult = (
+  input: unknown,
+): CodexGenerationRuntimeJobResult | CodexRunExecutionRuntimeJobResult => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue('Codex runtime terminal result must be an object.');
+  }
+  const result =
+    input.task_kind === 'run_execution'
+      ? hasCodexRunExecutionContinuationEvidence(input)
+        ? requireCodexWorkflowRunExecutionRuntimeJobResult(input)
+        : requireCodexRunExecutionRuntimeJobResult(input)
+      : requireCodexGenerationRuntimeJobResult(input);
+  assertCodexRuntimeJobTerminalResultPublicSafe(result);
   return result;
 };
 
