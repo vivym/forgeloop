@@ -610,6 +610,19 @@ export interface CodexRunExecutionRuntimeJobResult {
     digest?: string;
     internal_ref?: string;
   }>;
+  codex_session_thread: {
+    codex_thread_id: string;
+    codex_thread_id_digest: string;
+    app_server_turn_id?: string;
+  };
+  output_capsule: CodexRuntimeCapsule;
+  output_memory_bundle_ref: string;
+  output_memory_bundle_digest: string;
+  memory_delta_artifact_ref?: string;
+  memory_delta_digest?: string;
+  output_environment_manifest_ref: string;
+  output_environment_manifest_digest: string;
+  codex_session_turn_id: string;
   runtime_evidence?: CodexDockerRuntimeEvidence;
   public_summary: string;
 }
@@ -2215,6 +2228,15 @@ const codexRunExecutionRuntimeJobResultKeys = new Set([
   'patch_artifact',
   'check_results',
   'execution_artifacts',
+  'codex_session_thread',
+  'output_capsule',
+  'output_memory_bundle_ref',
+  'output_memory_bundle_digest',
+  'memory_delta_artifact_ref',
+  'memory_delta_digest',
+  'output_environment_manifest_ref',
+  'output_environment_manifest_digest',
+  'codex_session_turn_id',
   'runtime_evidence',
   'public_summary',
 ]);
@@ -2354,6 +2376,34 @@ const requireCodexRuntimeCapsuleTerminalEvidence = (input: unknown): CodexRuntim
     throw unsafeCodexRuntimePublicValue('Codex runtime terminal result field output_capsule created_at must be an ISO datetime string.');
   }
   return input as unknown as CodexRuntimeCapsule;
+};
+
+const requireCodexRuntimeTerminalContinuationEvidence = (
+  input: Record<string, unknown>,
+): { codexSessionThread: Record<string, unknown>; outputCapsule: CodexRuntimeCapsule } => {
+  const codexSessionThread = requireCodexSessionThreadTerminalEvidence(input.codex_session_thread);
+  const outputCapsule = requireCodexRuntimeCapsuleTerminalEvidence(input.output_capsule);
+  if (codexSessionThread.codex_thread_id_digest !== outputCapsule.codex_thread_id_digest) {
+    throw unsafeCodexRuntimePublicValue(
+      'Codex runtime terminal result codex_session_thread digest must match output_capsule codex_thread_id_digest.',
+    );
+  }
+  requireCodexSessionArtifactRef(input, 'output_memory_bundle_ref', 'codex_memory_bundle');
+  requireCodexRuntimeResultDigest(input, 'output_memory_bundle_digest');
+  requireCodexSessionArtifactRef(input, 'output_environment_manifest_ref', 'codex_environment_manifest');
+  requireCodexRuntimeResultDigest(input, 'output_environment_manifest_digest');
+  const hasMemoryDeltaRef = input.memory_delta_artifact_ref !== undefined;
+  const hasMemoryDeltaDigest = input.memory_delta_digest !== undefined;
+  if (hasMemoryDeltaRef !== hasMemoryDeltaDigest) {
+    throw unsafeCodexRuntimePublicValue(
+      'Codex runtime terminal result memory_delta_artifact_ref and memory_delta_digest must be provided together.',
+    );
+  }
+  if (hasMemoryDeltaRef) {
+    requireCodexSessionArtifactRef(input, 'memory_delta_artifact_ref', 'codex_memory_delta');
+    requireCodexRuntimeResultDigest(input, 'memory_delta_digest');
+  }
+  return { codexSessionThread, outputCapsule };
 };
 
 const runtimePayloadRawMaterialPattern =
@@ -2732,6 +2782,8 @@ const requireCodexRunExecutionRuntimeJobResult = (input: Record<string, unknown>
   requireCodexRuntimeResultArray(normalizedInput, 'execution_artifacts').forEach((artifact) =>
     requireCodexRuntimeArtifact(artifact, 'execution_artifacts'),
   );
+  requireCodexRuntimeTerminalContinuationEvidence(normalizedInput);
+  requireCodexRuntimeResultString(normalizedInput, 'codex_session_turn_id');
   if (normalizedInput.runtime_evidence !== undefined) {
     validateCodexDockerRuntimeEvidence(normalizedInput.runtime_evidence);
   }
