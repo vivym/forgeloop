@@ -1432,19 +1432,77 @@ describe('codex runtime domain contracts', () => {
       public_summary: 'Execution completed.',
     } satisfies CodexRunExecutionRuntimeJobResult;
 
+    const expectRunExecutionTerminalEvidenceError = (result: unknown) =>
+      expectDomainErrorCode(() => validateCodexRuntimeJobTerminalResult(result), 'codex_docker_runtime_evidence_unsafe');
+
     expect(validateCodexRuntimeJobTerminalResult(workflowRunExecutionResult)).toEqual(workflowRunExecutionResult);
-    expect(() =>
-      validateCodexRuntimeJobTerminalResult({
-        ...workflowRunExecutionResult,
-        output_capsule: undefined,
-      }),
-    ).toThrow();
-    expect(() =>
-      validateCodexRuntimeJobTerminalResult({
-        ...workflowRunExecutionResult,
-        output_memory_bundle_ref: undefined,
-      }),
-    ).toThrow();
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: undefined,
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_memory_bundle_ref: undefined,
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        digest: undefined,
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        digest: 'not-a-digest',
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        manifest_digest: undefined,
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        manifest_digest: 'not-a-digest',
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        codex_thread_id_digest: workflowRunExecutionOtherThreadDigest,
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      memory_delta_digest: undefined,
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      memory_delta_artifact_ref: undefined,
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/run_session/run-session-1/memory-2',
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      memory_delta_artifact_ref: 'artifact://internal/codex_memory_delta/run_session/run-session-1/delta-2',
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/run_session/run-session-1/env-2',
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      codex_session_turn_id: undefined,
+    });
   });
 
   it('allows public-safe run-execution terminal result changed files and display summaries', () => {
