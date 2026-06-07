@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertAbandonNewSessionTransitionAllowed,
   assertQueuedActionCanRun,
   assertPlanItemWorkflowTransitionAllowed,
   assertWorkflowManualDecisionAllowedForTransition,
   assertWorkflowMessageAllowed,
   buildPlanItemWorkflowQueuedActionIdempotencyKey,
   codexSessionPublicProjection,
+  isSameStatusWorkflowEventActionKind,
   mapQueuedActionKindToTurnIntent,
+  planItemWorkflowPublicProjection,
   planItemWorkflowStatusValues,
   type CodexRuntimeCapsule,
   type CodexSession,
@@ -299,6 +302,127 @@ describe('plan item workflow domain', () => {
     expect(mapQueuedActionKindToTurnIntent('generate_boundary_summary')).toBe('draft_boundary_summary');
     expect(mapQueuedActionKindToTurnIntent('generate_spec_doc')).toBe('draft_spec_doc');
     expect(mapQueuedActionKindToTurnIntent('generate_implementation_plan_doc')).toBe('draft_implementation_plan_doc');
+  });
+
+  it('maps Wave 7 queued action kinds to Codex turn intents', () => {
+    expect(mapQueuedActionKindToTurnIntent('continue_execution')).toBe('continue_execution');
+    expect(mapQueuedActionKindToTurnIntent('respond_to_review')).toBe('address_review_feedback');
+    expect(mapQueuedActionKindToTurnIntent('request_fix')).toBe('fix_review_feedback');
+    expect(isSameStatusWorkflowEventActionKind('continue_execution')).toBe(true);
+    expect(isSameStatusWorkflowEventActionKind('respond_to_review')).toBe(true);
+    expect(isSameStatusWorkflowEventActionKind('request_fix')).toBe(false);
+  });
+
+  it('does not allow same-status review actions through workflow transitions', () => {
+    expect(() =>
+      assertPlanItemWorkflowTransitionAllowed({
+        from_status: 'code_review',
+        to_status: 'code_review',
+        evidence_object_type: 'review_response',
+      }),
+    ).toThrow(/workflow_invalid_transition/);
+  });
+
+  it('allows abandon_new_session only from blocked to deterministic fallback targets', () => {
+    expect(() =>
+      assertAbandonNewSessionTransitionAllowed({
+        from_status: 'blocked',
+        to_status: 'code_review',
+        manual_decision_kind: 'abandon_new_session',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertAbandonNewSessionTransitionAllowed({
+        from_status: 'code_review',
+        to_status: 'code_review',
+        manual_decision_kind: 'abandon_new_session',
+      }),
+    ).toThrow(/workflow_invalid_transition/);
+    expect(() =>
+      assertAbandonNewSessionTransitionAllowed({
+        from_status: 'blocked',
+        to_status: 'archived',
+        manual_decision_kind: 'abandon_new_session',
+      }),
+    ).toThrow(/workflow_invalid_transition/);
+  });
+
+  it('projects attempt history and recovery options without raw runtime refs', () => {
+    const projected = planItemWorkflowPublicProjection({
+      workflow: {
+        id: 'workflow-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+        status: 'code_review',
+        active_codex_session_id: 'session-1',
+        created_at: '2026-06-07T00:00:00.000Z',
+        updated_at: '2026-06-07T00:04:00.000Z',
+      },
+      session: baseSession({
+        latest_capsule_id: 'capsule-1',
+        latest_capsule_digest: `sha256:${'a'.repeat(64)}`,
+        runner_worker_id: 'worker-1',
+      }),
+      attempt_history: [
+        {
+          run_session_id: 'run-1',
+          attempt_kind: 'review_fix',
+          previous_run_session_id: 'run-0',
+          previous_review_packet_id: 'review-packet-1',
+          status: 'running',
+          continuation_events: [],
+          created_at: '2026-06-07T00:01:00.000Z',
+          updated_at: '2026-06-07T00:02:00.000Z',
+        },
+      ],
+      latest_review_response: {
+        id: 'review-response-1',
+        review_packet_id: 'review-packet-1',
+        previous_run_session_id: 'run-0',
+        status: 'succeeded',
+        created_at: '2026-06-07T00:03:00.000Z',
+      },
+      recovery_options: [
+        {
+          action_id: 'abandon_new_session',
+          enabled: false,
+          blocker_code: 'workflow_execution_writer_still_active',
+          warning_copy: 'The current writer can still terminalize.',
+          required_confirmation_kind: 'typed_phrase',
+        },
+      ],
+    });
+
+    expect(projected.attempt_history[0]?.previous_run_session_id).toBe('run-0');
+    expect(projected.latest_review_response?.id).toBe('review-response-1');
+    expect(projected.recovery_options[0]?.action_id).toBe('abandon_new_session');
+    expect(JSON.stringify(projected)).not.toContain('worker-1');
+    expect(JSON.stringify(projected)).not.toContain('capsule-1');
+    expect(() =>
+      planItemWorkflowPublicProjection({
+        workflow: {
+          id: 'workflow-1',
+          development_plan_id: 'plan-1',
+          development_plan_item_id: 'item-1',
+          status: 'code_review',
+          active_codex_session_id: 'session-1',
+          created_at: '2026-06-07T00:00:00.000Z',
+          updated_at: '2026-06-07T00:04:00.000Z',
+        },
+        session: baseSession(),
+        attempt_history: [
+          {
+            run_session_id: 'run-1',
+            attempt_kind: 'first_execution',
+            status: 'succeeded',
+            continuation_events: [],
+            created_at: '2026-06-07T00:01:00.000Z',
+            updated_at: '2026-06-07T00:02:00.000Z',
+            codex_thread_id: 'raw-thread',
+          } as never,
+        ],
+      }),
+    ).toThrow();
   });
 
   it('blocks messages while a Codex action is queued or running', () => {

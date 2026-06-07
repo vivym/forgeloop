@@ -30,6 +30,7 @@ export const workflowTransitionEvidenceObjectTypeSchema = z.enum([
   'execution_package',
   'run_session',
   'review_packet',
+  'review_response',
   'internal_artifact',
   'commit',
   'pull_request',
@@ -44,6 +45,7 @@ export const workflowManualDecisionKindSchema = z.enum([
   'recover',
   'archive',
   'fork_select',
+  'abandon_new_session',
   'override',
 ]);
 export type WorkflowManualDecisionKind = z.infer<typeof workflowManualDecisionKindSchema>;
@@ -65,6 +67,7 @@ export const codexSessionTurnIntentSchema = z.enum([
   'execute_plan',
   'continue_execution',
   'address_review_feedback',
+  'fix_review_feedback',
 ]);
 export type CodexSessionTurnIntent = z.infer<typeof codexSessionTurnIntentSchema>;
 
@@ -82,6 +85,9 @@ export const planItemWorkflowQueuedActionKindSchema = z.enum([
   'revise_spec_doc',
   'generate_implementation_plan_doc',
   'revise_implementation_plan_doc',
+  'continue_execution',
+  'respond_to_review',
+  'request_fix',
 ]);
 export type PlanItemWorkflowQueuedActionKind = z.infer<typeof planItemWorkflowQueuedActionKindSchema>;
 
@@ -294,6 +300,51 @@ export const planItemWorkflowExecutionRunSummarySchema = z
   .strict();
 export type PlanItemWorkflowExecutionRunSummary = z.infer<typeof planItemWorkflowExecutionRunSummarySchema>;
 
+export const planItemWorkflowContinuationEventSchema = z
+  .object({
+    queued_action_id: nonEmpty,
+    continuation_kind: z.enum(['existing_job_input', 'replay_current_continuation', 'relaunch_after_fencing']),
+    created_at: isoDateTime,
+  })
+  .strict();
+export type PlanItemWorkflowContinuationEvent = z.infer<typeof planItemWorkflowContinuationEventSchema>;
+
+export const planItemWorkflowAttemptHistorySchema = z
+  .object({
+    run_session_id: nonEmpty,
+    attempt_kind: z.enum(['first_execution', 'review_fix']),
+    previous_run_session_id: nonEmpty.optional(),
+    previous_review_packet_id: nonEmpty.optional(),
+    status: nonEmpty,
+    continuation_events: z.array(planItemWorkflowContinuationEventSchema).default([]),
+    created_at: isoDateTime,
+    updated_at: isoDateTime,
+  })
+  .strict();
+export type PlanItemWorkflowAttemptHistory = z.infer<typeof planItemWorkflowAttemptHistorySchema>;
+
+export const planItemWorkflowLatestReviewResponseSchema = z
+  .object({
+    id: nonEmpty,
+    review_packet_id: nonEmpty,
+    previous_run_session_id: nonEmpty,
+    status: z.enum(['queued', 'running', 'succeeded', 'failed', 'blocked']),
+    created_at: isoDateTime,
+  })
+  .strict();
+export type PlanItemWorkflowLatestReviewResponse = z.infer<typeof planItemWorkflowLatestReviewResponseSchema>;
+
+export const planItemWorkflowRecoveryOptionSchema = z
+  .object({
+    action_id: z.enum(['continue_same_session', 'abandon_new_session', 'archive_workflow', 'fork_unavailable']),
+    enabled: z.boolean(),
+    blocker_code: nonEmpty.optional(),
+    warning_copy: nonEmpty.optional(),
+    required_confirmation_kind: z.enum(['none', 'typed_phrase', 'confirmation_token']),
+  })
+  .strict();
+export type PlanItemWorkflowRecoveryOption = z.infer<typeof planItemWorkflowRecoveryOptionSchema>;
+
 export const planItemWorkflowBlockerSchema = z
   .object({
     code: nonEmpty,
@@ -321,9 +372,77 @@ export const planItemWorkflowPublicDtoSchema = z
     context_preview: planItemWorkflowContextPreviewSchema.optional(),
     readiness: planItemWorkflowReadinessSchema.optional(),
     execution_run_summary: planItemWorkflowExecutionRunSummarySchema.optional(),
+    attempt_history: z.array(planItemWorkflowAttemptHistorySchema).default([]),
+    latest_review_response: planItemWorkflowLatestReviewResponseSchema.optional(),
+    recovery_options: z.array(planItemWorkflowRecoveryOptionSchema).default([]),
     blockers: z.array(planItemWorkflowBlockerSchema).default([]),
     created_at: isoDateTime,
     updated_at: isoDateTime,
   })
   .strict();
 export type PlanItemWorkflowPublicDto = z.infer<typeof planItemWorkflowPublicDtoSchema>;
+
+export const continueWorkflowExecutionBodySchema = z
+  .object({
+    actor_id: nonEmpty,
+    idempotency_key: nonEmpty.optional(),
+    input_markdown: nonEmpty.optional(),
+    cancel_recovery_decision: z.literal('recover_instead_of_accept_cancel').optional(),
+    cancel_recovery_confirmation_phrase: z.literal('recover cancelled execution').optional(),
+  })
+  .strict()
+  .superRefine((body, ctx) => {
+    if ((body.cancel_recovery_decision === undefined) !== (body.cancel_recovery_confirmation_phrase === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['cancel_recovery_confirmation_phrase'],
+        message: 'cancel recovery decision and confirmation phrase must be provided together',
+      });
+    }
+  });
+export type ContinueWorkflowExecutionBody = z.infer<typeof continueWorkflowExecutionBodySchema>;
+export type ContinueWorkflowExecutionBodyDto = ContinueWorkflowExecutionBody;
+
+export const respondToWorkflowReviewBodySchema = z
+  .object({
+    actor_id: nonEmpty,
+    idempotency_key: nonEmpty.optional(),
+    expected_review_packet_id: nonEmpty,
+    expected_review_packet_digest: safeDigest,
+    response_prompt_markdown: nonEmpty.optional(),
+  })
+  .strict();
+export type RespondToWorkflowReviewBody = z.infer<typeof respondToWorkflowReviewBodySchema>;
+export type RespondToWorkflowReviewBodyDto = RespondToWorkflowReviewBody;
+
+export const requestWorkflowReviewFixBodySchema = z
+  .object({
+    actor_id: nonEmpty,
+    idempotency_key: nonEmpty.optional(),
+    expected_review_packet_id: nonEmpty,
+    expected_review_packet_digest: safeDigest,
+    fix_instruction_markdown: nonEmpty.optional(),
+  })
+  .strict();
+export type RequestWorkflowReviewFixBody = z.infer<typeof requestWorkflowReviewFixBodySchema>;
+export type RequestWorkflowReviewFixBodyDto = RequestWorkflowReviewFixBody;
+
+export const abandonWorkflowSessionBodySchema = z
+  .object({
+    actor_id: nonEmpty,
+    idempotency_key: nonEmpty.optional(),
+    next_action: z.enum([
+      'code_review',
+      'execution_ready',
+      'implementation_plan_review',
+      'implementation_plan_generation_queued',
+      'spec_review',
+      'spec_generation_queued',
+      'brainstorming',
+    ]),
+    confirmation_phrase: z.literal('abandon current session and start new session'),
+    reason: nonEmpty,
+  })
+  .strict();
+export type AbandonWorkflowSessionBody = z.infer<typeof abandonWorkflowSessionBodySchema>;
+export type AbandonWorkflowSessionBodyDto = AbandonWorkflowSessionBody;

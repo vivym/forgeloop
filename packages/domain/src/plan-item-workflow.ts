@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import {
+  planItemWorkflowAttemptHistorySchema,
+  planItemWorkflowLatestReviewResponseSchema,
+  planItemWorkflowRecoveryOptionSchema,
+} from '@forgeloop/contracts';
 import type {
   CodexSessionLeaseStatus,
   CodexSessionRole,
@@ -137,6 +142,65 @@ export interface ExecutionReadinessRecord {
   created_at: IsoDateTime;
   invalidated_at?: IsoDateTime;
   invalidated_reason?: string;
+}
+
+export interface ReviewPacketEvidenceRef {
+  id: string;
+  review_packet_id: string;
+  workflow_id: string;
+  ref_kind:
+    | 'github_comment_url'
+    | 'github_thread_url'
+    | 'markdown_excerpt'
+    | 'image_attachment'
+    | 'internal_artifact'
+    | 'check_log_summary';
+  display_text: string;
+  url?: string;
+  internal_object_ref?: string;
+  digest: string;
+  created_by_actor_id: string;
+  created_at: IsoDateTime;
+}
+
+export interface ReviewResponse {
+  id: string;
+  workflow_id: string;
+  codex_session_id: string;
+  codex_session_turn_id: string;
+  review_packet_id: string;
+  previous_run_session_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'blocked';
+  content_digest?: string;
+  rendered_markdown_artifact_ref?: string;
+  created_by_actor_id: string;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export interface RunSessionAttemptLineage {
+  run_session_id: string;
+  workflow_id: string;
+  codex_session_id: string;
+  attempt_kind: 'first_execution' | 'review_fix';
+  previous_run_session_id?: string;
+  previous_review_packet_id?: string;
+  review_response_id?: string;
+  created_by_actor_id: string;
+  created_at: IsoDateTime;
+}
+
+export interface ExecutionContinuationLineage {
+  id: string;
+  workflow_id: string;
+  run_session_id: string;
+  codex_session_id: string;
+  queued_action_id: string;
+  continuation_kind: 'existing_job_input' | 'replay_current_continuation' | 'relaunch_after_fencing';
+  previous_runtime_job_id?: string;
+  new_runtime_job_id?: string;
+  created_by_actor_id: string;
+  created_at: IsoDateTime;
 }
 
 export interface CodexSession {
@@ -356,6 +420,35 @@ export const assertPlanItemWorkflowTransitionAllowed = (input: TransitionCheck):
   throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Invalid workflow transition ${transitionKey(input)}`);
 };
 
+const abandonNewSessionFallbackTargets = new Set<PlanItemWorkflowStatus>([
+  'code_review',
+  'execution_ready',
+  'implementation_plan_review',
+  'implementation_plan_generation_queued',
+  'spec_review',
+  'spec_generation_queued',
+  'brainstorming',
+]);
+
+export const assertAbandonNewSessionTransitionAllowed = (input: {
+  from_status: PlanItemWorkflowStatus;
+  to_status: PlanItemWorkflowStatus;
+  manual_decision_kind: WorkflowManualDecisionKind;
+}): void => {
+  if (
+    input.manual_decision_kind === 'abandon_new_session' &&
+    input.from_status === 'blocked' &&
+    abandonNewSessionFallbackTargets.has(input.to_status)
+  ) {
+    return;
+  }
+
+  throw new DomainError(
+    'workflow_invalid_transition',
+    `workflow_invalid_transition: Invalid abandon_new_session transition ${input.from_status}->${input.to_status}`,
+  );
+};
+
 export const assertWorkflowManualDecisionAllowedForTransition = (
   decision: WorkflowManualDecision,
   transition: Pick<TransitionCheck, 'from_status' | 'to_status' | 'previous_status'>,
@@ -425,8 +518,17 @@ export const mapQueuedActionKindToTurnIntent = (kind: PlanItemWorkflowQueuedActi
       return 'draft_implementation_plan_doc';
     case 'revise_implementation_plan_doc':
       return 'revise_implementation_plan_doc';
+    case 'continue_execution':
+      return 'continue_execution';
+    case 'respond_to_review':
+      return 'address_review_feedback';
+    case 'request_fix':
+      return 'fix_review_feedback';
   }
 };
+
+export const isSameStatusWorkflowEventActionKind = (kind: PlanItemWorkflowQueuedActionKind): boolean =>
+  kind === 'continue_execution' || kind === 'respond_to_review';
 
 const workflowMessageActions = new Set<WorkflowMessageAction>(['answer_boundary_question', 'continue_ai']);
 
@@ -552,6 +654,9 @@ export const planItemWorkflowPublicProjection = (input: {
   context_preview?: PlanItemWorkflowPublicDto['context_preview'];
   readiness?: PlanItemWorkflowPublicDto['readiness'];
   execution_run_summary?: PlanItemWorkflowPublicDto['execution_run_summary'];
+  attempt_history?: PlanItemWorkflowPublicDto['attempt_history'];
+  latest_review_response?: PlanItemWorkflowPublicDto['latest_review_response'];
+  recovery_options?: PlanItemWorkflowPublicDto['recovery_options'];
   blockers?: PlanItemWorkflowPublicDto['blockers'];
 }): PlanItemWorkflowPublicDto => ({
   id: input.workflow.id,
@@ -593,6 +698,11 @@ export const planItemWorkflowPublicProjection = (input: {
   ...(input.context_preview === undefined ? {} : { context_preview: input.context_preview }),
   ...(input.readiness === undefined ? {} : { readiness: input.readiness }),
   ...(input.execution_run_summary === undefined ? {} : { execution_run_summary: input.execution_run_summary }),
+  attempt_history: (input.attempt_history ?? []).map((attempt) => planItemWorkflowAttemptHistorySchema.parse(attempt)),
+  ...(input.latest_review_response === undefined
+    ? {}
+    : { latest_review_response: planItemWorkflowLatestReviewResponseSchema.parse(input.latest_review_response) }),
+  recovery_options: (input.recovery_options ?? []).map((option) => planItemWorkflowRecoveryOptionSchema.parse(option)),
   blockers: input.blockers ?? [],
   created_at: input.workflow.created_at,
   updated_at: input.workflow.updated_at,
