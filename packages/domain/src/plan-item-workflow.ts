@@ -551,6 +551,7 @@ export const planItemWorkflowPublicProjection = (input: {
   timeline_events?: PlanItemWorkflowPublicDto['timeline_events'];
   context_preview?: PlanItemWorkflowPublicDto['context_preview'];
   readiness?: PlanItemWorkflowPublicDto['readiness'];
+  execution_run_summary?: PlanItemWorkflowPublicDto['execution_run_summary'];
   blockers?: PlanItemWorkflowPublicDto['blockers'];
 }): PlanItemWorkflowPublicDto => ({
   id: input.workflow.id,
@@ -591,6 +592,7 @@ export const planItemWorkflowPublicProjection = (input: {
   timeline_events: input.timeline_events ?? [],
   ...(input.context_preview === undefined ? {} : { context_preview: input.context_preview }),
   ...(input.readiness === undefined ? {} : { readiness: input.readiness }),
+  ...(input.execution_run_summary === undefined ? {} : { execution_run_summary: input.execution_run_summary }),
   blockers: input.blockers ?? [],
   created_at: input.workflow.created_at,
   updated_at: input.workflow.updated_at,

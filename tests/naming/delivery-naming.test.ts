@@ -179,6 +179,7 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^apps\/control-plane-api\/src\/modules\/core\/product-workspace-preview-seed\.ts$/,
     /^apps\/control-plane-api\/src\/modules\/execution-packages\//,
     /^apps\/control-plane-api\/src\/modules\/automation\//,
+    /^apps\/control-plane-api\/src\/modules\/plan-item-workflows\//,
     /^apps\/control-plane-api\/src\/modules\/run-control\//,
     /^apps\/control-plane-api\/src\/modules\/delivery\/dto\.ts$/,
     /^apps\/web\/src\/features\/execution-packages\//,
@@ -233,6 +234,8 @@ const allowedWorkItemOwnerActorIdReference = (rel: string, context: string): boo
     /^tests\/api\/(?:product-lanes|project-management-query|query-module|work-items)\.test\.ts$/,
     /^tests\/domain\/states\.test\.ts$/,
     /^tests\/web\/(?:api|api-hooks|product-lanes-route|work-item-intake-form|work-item-product-route)\.test\.tsx?$/,
+    /^tests\/web\/development-plan-routes\.test\.tsx$/,
+    /^tests\/smoke\/plan-item-execution-handoff-dogfood-script\.test\.ts$/,
   ];
   const projectOwnerContext =
     /\bProject\b|\bprojects\b|\/projects|records\.project|seed\.project|project\.owner_actor_id|columnType\(projects|hasForeignKey\(projects|repo_ids|object_type: 'project'|project_created/.test(

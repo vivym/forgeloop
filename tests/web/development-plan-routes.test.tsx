@@ -552,6 +552,102 @@ describe('Development Plan routes', () => {
     await waitFor(() => expect(itemFetchCount).toBeGreaterThan(1));
   });
 
+  it('starts workflow execution only from the execution-ready Plan Item workspace', async () => {
+    const user = userEvent.setup();
+    const posted: unknown[] = [];
+    let itemFetchCount = 0;
+    const readyWorkflow = workflowProjectionFixture({
+      status: 'execution_ready',
+      queued_actions: [],
+      timeline_events: [],
+      readiness: { state: 'ready', can_evaluate: false, blocker_codes: [] },
+      blockers: [],
+    });
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, {
+      actorId: 'actor-tech',
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: () => {
+          itemFetchCount += 1;
+          return itemOverride(
+            {
+              boundary_status: 'approved',
+              spec_status: 'approved',
+              implementation_plan_status: 'approved',
+              execution_status: 'not_started',
+            },
+            { item: { plan_item_workflow: readyWorkflow } },
+          );
+        },
+        'POST /plan-item-workflows/workflow-product-workspace-preview/execution/start': ({ init }) => {
+          const body = parseRequestBody(init);
+          posted.push(body);
+          return {
+            ...readyWorkflow,
+            status: 'execution_running',
+            session: { ...readyWorkflow.session, status: 'running', continuity_state: 'running' },
+            execution_run_summary: workflowExecutionRunSummaryFixture({ status: 'running' }),
+          };
+        },
+      },
+    });
+
+    const startButton = await screen.findByRole('button', { name: /^start execution$/i });
+    expectButtonEnabled(startButton);
+    await user.click(startButton);
+
+    expect(posted).toEqual([expect.objectContaining({ actor_id: 'actor-tech' })]);
+    expect(posted[0]).not.toEqual(expect.objectContaining({ owner_actor_id: expect.anything() }));
+    await waitFor(() => expect(itemFetchCount).toBeGreaterThan(1));
+    expect(document.body.textContent).not.toMatch(/execution-packages\/.*\/run|force-rerun|owner_actor_id/i);
+  });
+
+  it('renders workflow execution supervision from public-safe run summary only', async () => {
+    const runningWorkflow = workflowProjectionFixture({
+      status: 'execution_running',
+      queued_actions: [],
+      timeline_events: [],
+      readiness: { state: 'ready', can_evaluate: false, blocker_codes: [] },
+      blockers: [],
+      session: {
+        status: 'running',
+        role: 'active',
+        continuity_state: 'running',
+        can_continue: true,
+        last_turn_at: '2026-05-18T00:25:00.000Z',
+      },
+      execution_run_summary: workflowExecutionRunSummaryFixture({
+        run_session_id: 'run-session-visible',
+        input_capsule_digest: `sha256:${'1'.repeat(64)}`,
+        workspace_bundle_digest: `sha256:${'2'.repeat(64)}`,
+        codex_thread_id_digest: `sha256:${'3'.repeat(64)}`,
+        status: 'running',
+      }),
+    });
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, {
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
+          {
+            boundary_status: 'approved',
+            spec_status: 'approved',
+            implementation_plan_status: 'approved',
+            execution_status: 'running',
+          },
+          { item: { plan_item_workflow: runningWorkflow } },
+        ),
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+    const supervision = screen.getByRole('region', { name: /execution supervision/i });
+    expect(supervision.textContent).toMatch(/execution running|running/i);
+    expect(supervision.textContent).toContain('run-session-visible');
+    expect(supervision.textContent).toContain(`sha256:${'1'.repeat(64)}`);
+    expect(supervision.textContent).toContain(`sha256:${'2'.repeat(64)}`);
+    expect(supervision.textContent).toContain(`sha256:${'3'.repeat(64)}`);
+    expect(supervision.textContent).not.toMatch(/thread-raw|artifact:\/\/internal|\/Users\/|lease|worker_id|credential|execution-package-hidden|runtime-job-hidden|turn-hidden/i);
+    expect(document.body.textContent).not.toMatch(/thread-raw|artifact:\/\/internal|\/Users\/|lease-token|worker_id|credential/i);
+  });
+
   it('disables artifact review and readiness actions outside their workflow stages with public reasons', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, {
@@ -1045,6 +1141,20 @@ function workflowProjectionFixture(overrides: Record<string, unknown> = {}) {
     ],
     created_at: '2026-05-18T00:20:00.000Z',
     updated_at: '2026-05-18T00:24:00.000Z',
+    ...overrides,
+  };
+}
+
+function workflowExecutionRunSummaryFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    run_session_id: 'run-session-1',
+    status: 'running',
+    execution_package_version: 7,
+    input_capsule_digest: `sha256:${'a'.repeat(64)}`,
+    workspace_bundle_digest: `sha256:${'b'.repeat(64)}`,
+    codex_thread_id_digest: `sha256:${'c'.repeat(64)}`,
+    started_at: '2026-05-18T00:25:00.000Z',
+    updated_at: '2026-05-18T00:26:00.000Z',
     ...overrides,
   };
 }

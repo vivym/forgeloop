@@ -40,10 +40,6 @@ export interface MarkPackageReadyActionInput extends WorkItemCommandInput {
   expectedPackageVersion: number;
 }
 
-export interface RunPackageActionInput extends WorkItemCommandInput {
-  packageId: string;
-}
-
 type WorkItemScopeRef = Extract<ObjectRef, { type: 'initiative' | 'requirement' | 'bug' | 'tech_debt' }>;
 
 const optionalActionFields = (input: ProductActionBaseInput) => ({
@@ -130,19 +126,5 @@ export const markPackageReadyAction = (input: MarkPackageReadyActionInput): Prod
       scope_ref: input.scopeRef,
       package_id: input.packageId,
       expected_package_version: input.expectedPackageVersion,
-    },
-  });
-
-export const runPackageAction = (input: RunPackageActionInput): ProductAction =>
-  productActionSchema.parse({
-    ...actionBase(input),
-    kind: 'command',
-    ...(input.target === undefined ? {} : { target: input.target }),
-    command: {
-      type: 'run_package',
-      object_type: 'execution_package',
-      object_id: input.packageId,
-      scope_ref: input.scopeRef,
-      package_id: input.packageId,
     },
   });

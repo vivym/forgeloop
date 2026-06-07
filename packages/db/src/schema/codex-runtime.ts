@@ -337,6 +337,11 @@ export const codex_runtime_jobs = pgTable(
       table.targetId,
       table.launchAttempt,
     ),
+    uniqueIndex('codex_runtime_jobs_one_active_run_execution_per_codex_session')
+      .on(table.codexSessionId)
+      .where(
+        sql`${table.targetKind} = 'run_execution' and ${table.codexSessionId} is not null and ${table.inputJson}->>'schema_version' = 'codex_run_execution_workload.v1' and ${table.status} in ('queued','accepted','materializing','running')`,
+      ),
     index('codex_runtime_jobs_worker_status_idx').on(table.workerId, table.status),
     index('codex_runtime_jobs_recovery_idx').on(table.status, table.expiresAt, table.lastEventAt),
   ],
@@ -416,7 +421,6 @@ export const codex_pending_workspace_bundles = pgTable(
     internalArtifactObjectId: uuid('internal_artifact_object_id').references(() => internal_artifact_objects.id),
     archiveDigest: text('archive_digest').notNull(),
     manifestDigest: text('manifest_digest').notNull(),
-    archiveBytesBase64: text('archive_bytes_base64'),
     sizeBytes: integer('size_bytes').notNull(),
     workspaceAcquisitionDigest: text('workspace_acquisition_digest').notNull(),
     workspaceAcquisitionJson: jsonb('workspace_acquisition_json').$type<Record<string, unknown>>().notNull(),

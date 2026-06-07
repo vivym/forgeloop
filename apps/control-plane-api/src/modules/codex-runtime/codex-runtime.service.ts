@@ -22,14 +22,18 @@ import {
   runtimeArtifactUploadProofPayload,
   validateCodexLaunchTargetKind,
   validateCodexDockerRuntimeEvidence,
+  validateCodexRunExecutionWorkload,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
+  validateCodexWorkflowRunExecutionRuntimeJobResult,
   type AutomationActionRun,
   type CodexGenerationWorkloadV1,
   type CodexCredentialBinding,
   type CodexCredentialBindingVersion,
   type CodexGenerationRuntimeJobResult,
   type CodexRunExecutionRuntimeJobResult,
+  type CodexWorkflowRunExecutionRuntimeJobResult,
+  type CodexWorkflowRunExecutionWorkloadV1,
   DomainError,
   type CodexLaunchLease,
   type CodexLaunchTarget,
@@ -287,8 +291,6 @@ type PublicRuntimeJob = Pick<
   | 'target_kind'
   | 'project_id'
   | 'repo_id'
-  | 'worker_id'
-  | 'launch_lease_id'
   | 'launch_attempt'
   | 'status'
   | 'input_digest'
@@ -310,7 +312,7 @@ type PublicRuntimeJob = Pick<
     schema_version?: unknown;
     output_schema_version?: unknown;
   };
-  terminal_result_json?: CodexGenerationRuntimeJobResult | CodexRunExecutionRuntimeJobResult;
+  terminal_result_json?: Record<string, unknown>;
   workspace_acquisition?: {
     workspace_acquisition_digest: string;
     schema_version?: unknown;
@@ -327,6 +329,14 @@ const workerReplayProtection = (method: 'GET' | 'POST', path: string, bodyDigest
   body_digest: bodyDigest,
 });
 
+const randomUuid = (): string => {
+  const bytes = randomBytes(16);
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -337,6 +347,24 @@ const publicRuntimeJobTerminalResult = (
     return undefined;
   }
   const terminalResult = validateCodexRuntimeJobTerminalResult(result);
+  const publicRuntimeEvidence = (runtimeEvidence: unknown): Record<string, unknown> => {
+    const {
+      credential_binding_id: _credentialBindingId,
+      credential_binding_version_id: _credentialBindingVersionId,
+      credential_payload_digest: _credentialPayloadDigest,
+      launch_lease_id: _launchLeaseId,
+      worker_id: _workerId,
+      ...publicEvidence
+    } = validateCodexDockerRuntimeEvidence(runtimeEvidence);
+    return publicEvidence;
+  };
+  const redactRuntimeEvidence = (publicResult: Record<string, unknown>): Record<string, unknown> =>
+    publicResult.runtime_evidence === undefined
+      ? publicResult
+      : {
+          ...publicResult,
+          runtime_evidence: publicRuntimeEvidence(publicResult.runtime_evidence),
+        };
   if (
     'codex_session_thread' in terminalResult ||
     'output_capsule' in terminalResult ||
@@ -355,9 +383,9 @@ const publicRuntimeJobTerminalResult = (
       output_environment_manifest_digest: _trustedOutputEnvironmentManifestDigest,
       ...publicResult
     } = terminalResult;
-    return publicResult;
+    return redactRuntimeEvidence(publicResult as Record<string, unknown>);
   }
-  return terminalResult;
+  return redactRuntimeEvidence(terminalResult as unknown as Record<string, unknown>);
 };
 
 const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
@@ -369,8 +397,6 @@ const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
     target_kind: job.target_kind,
     project_id: job.project_id,
     ...(job.repo_id === undefined ? {} : { repo_id: job.repo_id }),
-    worker_id: job.worker_id,
-    launch_lease_id: job.launch_lease_id,
     launch_attempt: job.launch_attempt,
     status: job.status,
     input_digest: job.input_digest,
@@ -405,8 +431,11 @@ const publicRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob => {
   };
 };
 
-const workerRuntimeJob = (job: CodexRuntimeJob): PublicRuntimeJob & Pick<CodexRuntimeJob, 'workspace_acquisition_json'> => ({
+const workerRuntimeJob = (
+  job: CodexRuntimeJob,
+): PublicRuntimeJob & Pick<CodexRuntimeJob, 'launch_lease_id' | 'workspace_acquisition_json'> => ({
   ...publicRuntimeJob(job),
+  launch_lease_id: job.launch_lease_id,
   ...(job.target_kind === 'run_execution' && job.workspace_acquisition_json !== undefined
     ? { workspace_acquisition_json: job.workspace_acquisition_json }
     : {}),
@@ -416,10 +445,17 @@ const publicEnvelopeMetadata = (envelope: CodexLaunchTokenEnvelope | undefined) 
   envelope === undefined
     ? undefined
     : {
+        envelope_digest: envelope.envelope_digest,
+        status: envelope.status,
+        expires_at: envelope.expires_at,
+        created_at: envelope.created_at,
+      };
+
+const workerEnvelopeMetadata = (envelope: CodexLaunchTokenEnvelope | undefined) =>
+  envelope === undefined
+    ? undefined
+    : {
         id: envelope.id,
-        runtime_job_id: envelope.runtime_job_id,
-        launch_lease_id: envelope.launch_lease_id,
-        worker_id: envelope.worker_id,
         envelope_digest: envelope.envelope_digest,
         status: envelope.status,
         expires_at: envelope.expires_at,
@@ -427,11 +463,8 @@ const publicEnvelopeMetadata = (envelope: CodexLaunchTokenEnvelope | undefined) 
       };
 
 const publicLaunchLeaseStatus = (lease: CodexLaunchLease) => ({
-  id: lease.id,
-  target: lease.target,
+  launch_lease_digest: codexCanonicalDigest({ kind: 'codex_launch_lease', launch_lease_id: lease.id }),
   launch_attempt: lease.launch_attempt,
-  profile_revision_id: lease.profile_revision_id,
-  ...(lease.worker_id === undefined ? {} : { worker_id: lease.worker_id }),
   status: lease.status,
   created_at: lease.created_at,
   expires_at: lease.expires_at,
@@ -439,7 +472,42 @@ const publicLaunchLeaseStatus = (lease: CodexLaunchLease) => ({
   ...(lease.terminal_at === undefined ? {} : { terminal_at: lease.terminal_at }),
   ...(lease.revoked_at === undefined ? {} : { revoked_at: lease.revoked_at }),
   ...(lease.terminal_reason_code === undefined ? {} : { terminal_reason_code: lease.terminal_reason_code }),
-  ...(lease.terminal_runtime_job_id === undefined ? {} : { terminal_runtime_job_id: lease.terminal_runtime_job_id }),
+});
+
+const publicRecoveredRuntimeJobEvidence = (job: {
+  id: string;
+  target_type: CodexRuntimeJob['target_type'];
+  target_id: string;
+  target_kind: CodexRuntimeJob['target_kind'];
+  project_id: string;
+  repo_id?: string;
+  status: CodexRuntimeJob['status'];
+  terminal_status?: CodexRuntimeJob['terminal_status'];
+  terminal_reason_code?: string;
+  terminal_at?: string;
+  updated_at: string;
+}) => ({
+  id: job.id,
+  target_type: job.target_type,
+  target_id: job.target_id,
+  target_kind: job.target_kind,
+  project_id: job.project_id,
+  ...(job.repo_id === undefined ? {} : { repo_id: job.repo_id }),
+  status: job.status,
+  ...(job.terminal_status === undefined ? {} : { terminal_status: job.terminal_status }),
+  ...(job.terminal_reason_code === undefined ? {} : { terminal_reason_code: job.terminal_reason_code }),
+  ...(job.terminal_at === undefined ? {} : { terminal_at: job.terminal_at }),
+  updated_at: job.updated_at,
+});
+
+const publicRecoveredLaunchLeaseEvidence = (lease: {
+  id: string;
+  status: CodexLaunchLease['status'];
+  terminal_reason_code?: string;
+}) => ({
+  launch_lease_digest: codexCanonicalDigest({ kind: 'codex_launch_lease', launch_lease_id: lease.id }),
+  status: lease.status,
+  ...(lease.terminal_reason_code === undefined ? {} : { terminal_reason_code: lease.terminal_reason_code }),
 });
 
 const actorScopeMatchesTarget = (automationScope: string, projectId: string, repoId?: string): boolean => {
@@ -651,13 +719,18 @@ export class CodexRuntimeService {
     });
   }
 
-  recoverStaleWorkers(input: RecoverStaleCodexWorkersDto) {
-    return this.repository.recoverStaleCodexWorkerLeases({
+  async recoverStaleWorkers(input: RecoverStaleCodexWorkersDto) {
+    const recovered = await this.repository.recoverStaleCodexWorkerLeases({
       stale_before: input.stale_before,
       now: input.now ?? nowIso(),
       ...(input.worker_id === undefined ? {} : { worker_id: input.worker_id }),
       reason_code: input.reason_code,
     });
+    return {
+      recovered_launch_leases: recovered.recovered_launch_leases.map(publicLaunchLeaseStatus),
+      automation_action_transitions: recovered.automation_action_transitions,
+      run_session_transitions: recovered.run_session_transitions,
+    };
   }
 
   async registerWorker(input: RegisterCodexWorkerDto) {
@@ -755,6 +828,12 @@ export class CodexRuntimeService {
 
   async createRuntimeJob(input: CreateCodexRuntimeJobDto) {
     validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
+    if (input.target.target_kind === 'run_execution') {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        'codex_runtime_job_unavailable: Run execution runtime jobs must be created through Plan Item Workflow execution start.',
+      );
+    }
     const now = nowIso();
     const credential = await this.repository.getCodexCredentialBindingPublic(input.credential_binding_id);
     if (
@@ -885,13 +964,17 @@ export class CodexRuntimeService {
     return { runtime_job: publicRuntimeJob(runtimeJob) };
   }
 
-  recoverStaleRuntimeJobs(input: RecoverStaleCodexRuntimeJobsDto) {
-    return this.repository.recoverStaleCodexRuntimeJobs({
+  async recoverStaleRuntimeJobs(input: RecoverStaleCodexRuntimeJobsDto) {
+    const recovered = await this.repository.recoverStaleCodexRuntimeJobs({
       stale_before: input.stale_before,
       now: input.now ?? nowIso(),
       ...(input.worker_id === undefined ? {} : { worker_id: input.worker_id }),
       reason_code: input.reason_code,
     });
+    return {
+      recovered_runtime_jobs: recovered.recovered_runtime_jobs.map(publicRecoveredRuntimeJobEvidence),
+      recovered_launch_leases: recovered.recovered_launch_leases.map(publicRecoveredLaunchLeaseEvidence),
+    };
   }
 
   async getLaunchLeasePublicStatus(leaseId: string) {
@@ -948,7 +1031,7 @@ export class CodexRuntimeService {
     const rows = await Promise.all(
       runtimeJobs.map(async (runtimeJob) => ({
         runtime_job: workerRuntimeJob(runtimeJob),
-        envelope: publicEnvelopeMetadata(await this.repository.getCodexRuntimeJobEnvelope({ runtime_job_id: runtimeJob.id })),
+        envelope: workerEnvelopeMetadata(await this.repository.getCodexRuntimeJobEnvelope({ runtime_job_id: runtimeJob.id })),
       })),
     );
     return { runtime_jobs: rows, heartbeat_interval_ms: 15_000, control_poll_interval_ms: 2_000 };
@@ -1287,13 +1370,7 @@ export class CodexRuntimeService {
       now,
     });
     if (download.internal_artifact_object_id === undefined) {
-      if (download.archive_bytes_base64 === undefined) {
-        throw new BadRequestException('Workspace bundle bytes were rejected');
-      }
-      return {
-        ...download,
-        bytes: Buffer.from(download.archive_bytes_base64, 'base64'),
-      };
+      throw new BadRequestException('Workspace bundle artifact object is required');
     }
     const stored = await this.internalArtifacts.getObject(download.archive_ref);
     if (
@@ -1346,6 +1423,16 @@ export class CodexRuntimeService {
       terminalResult = validateCodexRuntimeJobTerminalResult(input.terminal_result_json);
       collectCodexRuntimeJobTerminalArtifactRefs(input.terminal_result_json);
     }
+    const preTerminalRuntimeJob = await this.requireWorkerRuntimeJob(workerId, jobId);
+    if (this.isWorkflowOwnedRunExecutionRuntimeJob(preTerminalRuntimeJob)) {
+      return this.terminalizeWorkflowOwnedRunExecutionRuntimeJob({
+        runtimeJob: preTerminalRuntimeJob,
+        workerId,
+        jobId,
+        input,
+        now,
+      });
+    }
     const runtimeJob = await this.repository.terminalizeCodexRuntimeJob({
       runtime_job_id: jobId,
       launch_lease_id: input.launch_lease_id,
@@ -1392,6 +1479,221 @@ export class CodexRuntimeService {
       });
     }
     return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  private async terminalizeWorkflowOwnedRunExecutionRuntimeJob(input: {
+    runtimeJob: CodexRuntimeJob;
+    workerId: string;
+    jobId: string;
+    input: TerminalizeCodexRuntimeJobDto;
+    now: string;
+  }) {
+    const workload = validateCodexRunExecutionWorkload(input.runtimeJob.input_json);
+    this.assertWorkflowRunExecutionRuntimeLineage(input.runtimeJob, workload);
+    const runtimeContext = workload.codex_session_runtime_context;
+    const terminalization = workload.codex_session_terminalization;
+    const runSession = await this.repository.getRunSession(workload.run_session_id);
+    const workflow = await this.repository.getPlanItemWorkflow(workload.plan_item_workflow_id);
+    if (
+      runSession === undefined ||
+      workflow === undefined ||
+      workflow.status !== 'execution_running' ||
+      runSession.workflow_id !== workflow.id ||
+      runSession.codex_session_id !== runtimeContext.codex_session_id ||
+      runSession.codex_session_turn_id !== runtimeContext.codex_session_turn_id
+    ) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Workflow execution ${workload.plan_item_workflow_id} terminalization is stale`,
+      );
+    }
+
+    const workflowResult =
+      input.input.terminal_status === 'succeeded'
+        ? validateCodexWorkflowRunExecutionRuntimeJobResult(input.input.terminal_result_json)
+        : undefined;
+    if (workflowResult !== undefined) {
+      this.assertWorkflowRunExecutionTerminalResultLineage(workload, workflowResult);
+    }
+    if (input.input.terminal_status === 'expired') {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Workflow execution ${workflow.id} terminalization status expired is recovery-owned`,
+      );
+    }
+    const turnStatus = input.input.terminal_status === 'cancelled' ? 'cancelled' : input.input.terminal_status === 'succeeded' ? 'succeeded' : 'failed';
+    const runStatus =
+      input.input.terminal_status === 'succeeded'
+        ? 'succeeded'
+        : input.input.terminal_status === 'cancelled'
+          ? 'cancelled'
+          : 'failed';
+    const failureReason =
+      input.input.terminal_status === 'succeeded'
+        ? undefined
+        : input.input.terminal_status === 'cancelled'
+          ? `Execution cancelled: ${input.input.reason_code}`
+          : `Execution failed: ${input.input.reason_code}`;
+    const terminalized = await this.repository.terminalizeWorkflowExecution({
+      workflow_id: workflow.id,
+      codex_session_id: runtimeContext.codex_session_id,
+      codex_session_turn_id: runtimeContext.codex_session_turn_id,
+      run_session_id: runSession.id,
+      runtime_job_id: input.runtimeJob.id,
+      expected_workflow_status: 'execution_running',
+      expected_run_session_status: runSession.status,
+      expected_run_session_updated_at: runSession.updated_at,
+      runtime_job_terminalization: {
+        runtime_job_id: input.jobId,
+        launch_lease_id: input.input.launch_lease_id,
+        worker_id: input.workerId,
+        worker_session_token: input.input.worker_session_token,
+        nonce: input.input.nonce,
+        nonce_timestamp: input.input.nonce_timestamp,
+        terminal_status: input.input.terminal_status,
+        reason_code: input.input.reason_code,
+        ...(input.input.terminal_result_json === undefined ? {} : { terminal_result_json: input.input.terminal_result_json }),
+        idempotency_key: input.input.terminal_idempotency_key,
+        request_digest: input.input.body_digest,
+        replay_protection: workerReplayProtection(
+          'POST',
+          `/internal/codex-workers/${input.workerId}/runtime-jobs/${input.jobId}/terminal`,
+          input.input.body_digest,
+        ),
+        now: input.now,
+      },
+      codex_session_turn_terminalization: {
+        session_id: runtimeContext.codex_session_id,
+        turn_id: runtimeContext.codex_session_turn_id,
+        lease_id: terminalization.codex_session_lease_id,
+        lease_token_hash: codexCredentialPayloadDigest(terminalization.lease_token),
+        lease_epoch: terminalization.codex_session_lease_epoch,
+        worker_id: terminalization.codex_session_worker_id,
+        worker_session_digest: terminalization.codex_session_worker_session_digest,
+        status: turnStatus,
+        expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest,
+        input_capsule_id: terminalization.input_capsule_id,
+        input_capsule_digest: terminalization.input_capsule_digest,
+        ...(terminalization.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: terminalization.base_memory_bundle_ref }),
+        ...(terminalization.base_memory_bundle_digest === undefined
+          ? {}
+          : { base_memory_bundle_digest: terminalization.base_memory_bundle_digest }),
+        ...(terminalization.input_memory_bundle_ref === undefined ? {} : { input_memory_bundle_ref: terminalization.input_memory_bundle_ref }),
+        ...(terminalization.input_memory_bundle_digest === undefined
+          ? {}
+          : { input_memory_bundle_digest: terminalization.input_memory_bundle_digest }),
+        ...(terminalization.input_environment_manifest_ref === undefined
+          ? {}
+          : { input_environment_manifest_ref: terminalization.input_environment_manifest_ref }),
+        ...(terminalization.input_environment_manifest_digest === undefined
+          ? {}
+          : { input_environment_manifest_digest: terminalization.input_environment_manifest_digest }),
+        ...(workflowResult === undefined
+          ? { failure_code: input.input.reason_code }
+          : {
+              output_capsule: workflowResult.output_capsule,
+              output_memory_bundle_ref: workflowResult.output_memory_bundle_ref,
+              output_memory_bundle_digest: workflowResult.output_memory_bundle_digest,
+              ...(workflowResult.memory_delta_artifact_ref === undefined
+                ? {}
+                : { memory_delta_artifact_ref: workflowResult.memory_delta_artifact_ref }),
+              ...(workflowResult.memory_delta_digest === undefined ? {} : { memory_delta_digest: workflowResult.memory_delta_digest }),
+              output_environment_manifest_ref: workflowResult.output_environment_manifest_ref,
+              output_environment_manifest_digest: workflowResult.output_environment_manifest_digest,
+              app_server_thread_binding_required: true,
+              codex_thread_id: workflowResult.codex_session_thread.codex_thread_id,
+              codex_thread_id_digest: workflowResult.codex_session_thread.codex_thread_id_digest,
+            }),
+        now: input.now,
+      },
+      run_session_update: {
+        status: runStatus,
+        ...(workflowResult === undefined ? {} : { summary: workflowResult.public_summary }),
+        ...(input.input.terminal_status === 'failed' ? { failure_kind: 'executor_error' as const } : {}),
+        ...(failureReason === undefined ? {} : { failure_reason: failureReason }),
+        finished_at: input.now,
+        updated_at: input.now,
+      },
+      workflow_transition: {
+        id: randomUuid(),
+        actor_id: runSession.requested_by_actor_id,
+        ...(workflowResult?.public_summary !== undefined
+          ? { reason: workflowResult.public_summary }
+          : failureReason === undefined
+            ? {}
+            : { reason: failureReason }),
+        created_at: input.now,
+      },
+      stale_attempt: {
+        id: randomUuid(),
+        codex_session_id: runtimeContext.codex_session_id,
+        codex_session_turn_id: runtimeContext.codex_session_turn_id,
+        lease_id: terminalization.codex_session_lease_id,
+        lease_epoch: terminalization.codex_session_lease_epoch,
+        worker_id: terminalization.codex_session_worker_id,
+        worker_session_digest: terminalization.codex_session_worker_session_digest,
+        expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest,
+        ...(workflowResult?.output_capsule.digest === undefined
+          ? {}
+          : { attempted_output_capsule_digest: workflowResult.output_capsule.digest }),
+        failure_code: 'codex_session_stale_terminalization',
+        created_at: input.now,
+      },
+    });
+    const runtimeJob =
+      terminalized.stale === false
+        ? terminalized.runtime_job
+        : (await this.repository.getCodexRuntimeJob({ runtime_job_id: input.runtimeJob.id })) ?? input.runtimeJob;
+    return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  private isWorkflowOwnedRunExecutionRuntimeJob(runtimeJob: CodexRuntimeJob): boolean {
+    return (
+      runtimeJob.target_type === 'run_session' &&
+      runtimeJob.target_kind === 'run_execution' &&
+      runtimeJob.workflow_id !== undefined &&
+      runtimeJob.codex_session_id !== undefined &&
+      runtimeJob.codex_session_turn_id !== undefined
+    );
+  }
+
+  private assertWorkflowRunExecutionRuntimeLineage(
+    runtimeJob: CodexRuntimeJob,
+    workload: CodexWorkflowRunExecutionWorkloadV1,
+  ): void {
+    if (
+      runtimeJob.workflow_id !== workload.plan_item_workflow_id ||
+      runtimeJob.codex_session_id !== workload.codex_session_runtime_context.codex_session_id ||
+      runtimeJob.codex_session_turn_id !== workload.codex_session_runtime_context.codex_session_turn_id ||
+      runtimeJob.target_id !== workload.run_session_id ||
+      runtimeJob.id !== workload.runtime_job_id
+    ) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Runtime job ${runtimeJob.id} workflow lineage diverged`,
+      );
+    }
+  }
+
+  private assertWorkflowRunExecutionTerminalResultLineage(
+    workload: CodexWorkflowRunExecutionWorkloadV1,
+    terminalResult: CodexWorkflowRunExecutionRuntimeJobResult,
+  ): void {
+    if (
+      terminalResult.execution_package_id !== workload.execution_package_id ||
+      terminalResult.execution_package_version !== workload.execution_package_version ||
+      terminalResult.run_session_id !== workload.run_session_id ||
+      terminalResult.workspace_bundle_digest !== workload.workspace_bundle_digest ||
+      terminalResult.workspace_bundle_manifest_digest !== workload.workspace_acquisition_json.manifest_digest ||
+      terminalResult.codex_session_turn_id !== workload.codex_session_runtime_context.codex_session_turn_id ||
+      terminalResult.codex_session_thread.codex_thread_id_digest !== workload.codex_session_runtime_context.continuation.codex_thread_id_digest ||
+      terminalResult.codex_session_thread.codex_thread_id !== workload.codex_session_runtime_context.continuation.codex_thread_id
+    ) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Workflow execution ${workload.plan_item_workflow_id} terminal result lineage diverged`,
+      );
+    }
   }
 
   private async failProductGenerationActionRunForRuntimeTerminal(input: {
@@ -1467,15 +1769,19 @@ export class CodexRuntimeService {
         `codex_session_stale_terminalization: Runtime job ${input.runtimeJob.id} CodexSession terminalization refs are invalid`,
       );
     }
+    const terminalizationLeaseId = terminalization.codex_session_lease_id ?? runtimeContext.lease_id;
+    const terminalizationLeaseEpoch = terminalization.codex_session_lease_epoch ?? runtimeContext.lease_epoch;
+    const terminalizationWorkerId = terminalization.codex_session_worker_id ?? runtimeContext.worker_id;
+    const terminalizationWorkerSessionDigest = terminalization.codex_session_worker_session_digest ?? runtimeContext.worker_session_digest;
     try {
       await this.repository.terminalizeCodexSessionTurn({
         session_id: runtimeContext.codex_session_id,
         turn_id: runtimeContext.codex_session_turn_id,
-        lease_id: runtimeContext.lease_id,
+        lease_id: terminalizationLeaseId,
         lease_token_hash: codexCredentialPayloadDigest(terminalization.lease_token),
-        lease_epoch: runtimeContext.lease_epoch,
-        worker_id: runtimeContext.worker_id,
-        worker_session_digest: runtimeContext.worker_session_digest,
+        lease_epoch: terminalizationLeaseEpoch,
+        worker_id: terminalizationWorkerId,
+        worker_session_digest: terminalizationWorkerSessionDigest,
         status: input.terminalStatus === 'cancelled' ? 'cancelled' : 'failed',
         ...(runtimeContext.expected_input_capsule_digest === undefined
           ? {}

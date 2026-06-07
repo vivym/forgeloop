@@ -38,7 +38,15 @@ const publicDockerRuntimeEvidence = (runtimeMetadata: PublicRuntimeMetadata): Pa
     return metadata;
   }, {});
   try {
-    return validateCodexDockerRuntimeEvidence(candidate) as unknown as Partial<PublicRuntimeMetadata>;
+    const {
+      credential_binding_id: _credentialBindingId,
+      credential_binding_version_id: _credentialBindingVersionId,
+      credential_payload_digest: _credentialPayloadDigest,
+      launch_lease_id: _launchLeaseId,
+      worker_id: _workerId,
+      ...publicEvidence
+    } = validateCodexDockerRuntimeEvidence(candidate);
+    return publicEvidence as unknown as Partial<PublicRuntimeMetadata>;
   } catch {
     return {};
   }
@@ -70,16 +78,14 @@ const serializePublicRuntimeMetadata = (
     return undefined;
   }
 
-  const hasWorkerLeaseMetadata =
-    runtimeMetadata.worker_lease_status !== undefined ||
-    runtimeMetadata.worker_lease_heartbeat_at !== undefined ||
-    runtimeMetadata.worker_lease_expires_at !== undefined;
   const publicMetadata: Partial<PublicRuntimeMetadata> = {
     durability_mode: runtimeMetadata.durability_mode,
     ...(runtimeMetadata.driver_kind === undefined ? {} : { driver_kind: runtimeMetadata.driver_kind }),
     ...(runtimeMetadata.driver_status === undefined ? {} : { driver_status: runtimeMetadata.driver_status }),
     ...publicDockerRuntimeEvidence(runtimeMetadata),
-    ...(hasWorkerLeaseMetadata && runtimeMetadata.worker_id !== undefined ? { worker_id: runtimeMetadata.worker_id } : {}),
+    ...(runtimeMetadata.worker_lease_status === undefined || runtimeMetadata.worker_id === undefined
+      ? {}
+      : { worker_id: runtimeMetadata.worker_id }),
     ...(runtimeMetadata.worker_lease_status === undefined ? {} : { worker_lease_status: runtimeMetadata.worker_lease_status }),
     ...(runtimeMetadata.worker_lease_heartbeat_at === undefined
       ? {}

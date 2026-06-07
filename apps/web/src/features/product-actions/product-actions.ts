@@ -68,11 +68,7 @@ function commandActionToManagerDrillDown(action: ProductCommandAction): ProductN
 
 export function sanitizeProductActionsForDisplay(actions: readonly ProductAction[], activeLane?: ProductLaneId) {
   if (activeLane !== 'manager') {
-    return sortProductActions(actions.flatMap((action): ProductAction[] => {
-      if (action.kind !== 'command' || action.command.type !== 'run_package') return [action];
-      const drillDown = commandActionToManagerDrillDown(action);
-      return drillDown === undefined ? [] : [drillDown];
-    }));
+    return sortProductActions(actions);
   }
 
   const managerSafeActions = actions.flatMap((action): ProductAction[] => {

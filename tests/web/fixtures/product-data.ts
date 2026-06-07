@@ -1440,21 +1440,14 @@ export const productActionFixtures = {
       href: `/board?lane=reviewer&project_id=${projectId}`,
     },
   },
-  commandTargetFollowUp: {
-    id: 'run-fixture-package',
+  executionGateNavigation: {
+    id: 'open-fixture-execution-gate',
     lane_id: 'execution-owner',
     priority: 'primary',
-    label: 'Run package',
-    description: 'Run the package and keep the package detail available as the follow-up target.',
+    label: 'Open execution gate',
+    description: 'Open the workflow-owned execution gate for this package.',
     enabled: true,
-    kind: 'command',
-    command: {
-      type: 'run_package',
-      object_type: 'execution_package',
-      object_id: executionPackage.id,
-      scope_ref: { type: 'requirement', id: workItem.id },
-      package_id: executionPackage.id,
-    },
+    kind: 'navigate',
     target: {
       kind: 'object',
       object_type: 'execution',
@@ -1650,20 +1643,6 @@ export const initiativeWithoutPackagesCockpitFixture: WorkItemCockpitResponse = 
   }),
 };
 
-const managerCommandAction = {
-  ...productActionFixtures.commandTargetFollowUp,
-  id: 'manager-bad-run-command',
-  command: {
-    ...productActionFixtures.commandTargetFollowUp.command,
-    scope_ref: { type: 'requirement', id: workItem.id },
-  },
-} satisfies ProductAction;
-
-export const cockpitFixtureWithManagerCommandAction: WorkItemCockpitResponse = baseCockpitFixture(
-  workItem as WorkItemCockpitResponse['item'],
-  deliveryReadiness(workItem as WorkItemCockpitResponse['item'], [managerCommandAction], 'manager'),
-);
-
 const degradedExecutionBlocker = {
   id: 'run-sessions-degraded',
   code: 'run_sessions_unavailable',
@@ -1766,7 +1745,7 @@ export const functionalLaneItems = [
     resolution: executionPackage.resolution,
     risk: workItem.risk,
     updated_at: executionPackage.updated_at,
-    actions: [productActionFixtures.commandTargetFollowUp, productActionFixtures.disabled],
+    actions: [productActionFixtures.executionGateNavigation, productActionFixtures.disabled],
   },
   {
     id: 'reviewer-fixture',

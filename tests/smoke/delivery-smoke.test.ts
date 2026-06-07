@@ -149,9 +149,9 @@ const expectPublicPackageRunDisabled = async (
     .post(`/execution-packages/${executionPackageId}/${path}`)
     .set(ownerHeaders)
     .send({ workflow_only: true, ...body })
-    .expect(409);
+    .expect(410);
   expect(response.body).toMatchObject({
-    code: 'workflow_legacy_entrypoint_disabled',
+    code: 'legacy_execution_entrypoint_disabled',
   });
 };
 

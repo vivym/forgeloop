@@ -29,6 +29,13 @@
       "when": 1780523033612,
       "tag": "0003_plan_item_workflow_revision_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780788000000,
+      "tag": "0004_plan_item_execution_handoff",
+      "breakpoints": true
     }
   ]
 }

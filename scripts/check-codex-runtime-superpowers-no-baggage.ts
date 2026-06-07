@@ -9,9 +9,14 @@ export type CodexRuntimeSuperpowersBaggagePattern =
   | 'legacy_workflow_direct_spec_generation'
   | 'legacy_workflow_direct_plan_generation'
   | 'legacy_workflow_direct_execution_start'
+  | 'legacy_public_execution_package_start'
+  | 'legacy_public_execution_start_root'
   | 'legacy_workflow_run_session_control'
   | 'wave5_forbidden_session_mutation'
   | 'workflow_composer_generation_action'
+  | 'public_owner_actor_alias'
+  | 'execution_package_start_root_label'
+  | 'legacy_inline_workspace_bundle_bytes'
   | 'public_raw_codex_runtime_ref'
   | 'raw_runtime_route'
   | 'host_codex_home'
@@ -61,6 +66,7 @@ const defaultScanFiles = [
   'apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts',
   'apps/control-plane-api/src/modules/codex-runtime/product-generation-runtime-scheduler.service.ts',
   'apps/control-plane-api/src/modules/run-control/run-control.module.ts',
+  'packages/contracts/src/api.ts',
   'packages/codex-runtime/src/payloads.ts',
   'packages/codex-runtime/src/runtime.ts',
   'packages/codex-runtime/src/types.ts',
@@ -136,6 +142,12 @@ const wave5WorkflowProductFiles = new Set([
   'apps/web/src/shared/api/query-keys.ts',
   'apps/web/src/shared/api/types.ts',
   'tests/web/fixtures/product-api-mock.ts',
+]);
+const planItemExecutionStartPublicFiles = new Set([
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts',
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.controller.ts',
+  'apps/web/src/features/development-plans/plan-item-workflow-workspace.tsx',
+  'apps/web/src/shared/api/commands.ts',
 ]);
 
 export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
@@ -322,6 +334,12 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
   },
   {
     file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_inline_workspace_bundle_bytes',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches retired inline workspace bundle bytes.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
     pattern: 'legacy_workflow_direct_spec_generation',
     owner: 'negative-test',
     reason: 'Negative test fixture proves the strict gate catches Wave 5 direct Spec Doc routes.',
@@ -337,6 +355,12 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     pattern: 'legacy_workflow_direct_execution_start',
     owner: 'negative-test',
     reason: 'Negative test fixture proves the strict gate catches Wave 5 direct execution start routes.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_public_execution_package_start',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches retired public execution package start calls.',
   },
   {
     file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
@@ -420,6 +444,18 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     reason: 'The guard must name the forbidden legacy Work Item route pattern it scans for.',
   },
   {
+    file: 'scripts/check-codex-runtime-superpowers-no-baggage.ts',
+    pattern: 'legacy_public_execution_package_start',
+    owner: 'internal-runtime-storage',
+    reason: 'The guard must name the retired public execution package start patterns it scans for.',
+  },
+  {
+    file: 'scripts/check-codex-runtime-superpowers-no-baggage.ts',
+    pattern: 'legacy_inline_workspace_bundle_bytes',
+    owner: 'internal-runtime-storage',
+    reason: 'The guard must name the retired inline workspace bundle byte field it scans for.',
+  },
+  {
     file: 'scripts/codex-runtime-superpowers-dogfood.ts',
     pattern: 'host_codex_home',
     owner: 'internal-runtime-storage',
@@ -460,6 +496,20 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
   legacy_workflow_direct_execution_start: [
     /\/?(?:plan-item-workflows\/[^"'`\s]+|development-plans\/[^"'`\s]+\/items\/[^"'`\s]+)\/execution\/start(?:\/|\b)/,
   ],
+  legacy_public_execution_package_start: [
+    /\/?execution-packages\/[^"'`\s]+\/(?:run|rerun|force-rerun)(?:\/|\b)/,
+    /\b(?:runPackage|rerunPackage|forceRerunPackage)\b/,
+    /\btype:\s*z\.literal\(\s*['"](?:run_package|rerun_package|force_rerun_package)['"]/,
+    /\b(?:type|command):\s*['"](?:run_package|rerun_package|force_rerun_package)['"]/,
+    /["']dogfood:(?:delivery(?::(?:durable|local-codex|work-items))?|release-flow(?::strict)?)["']\s*:/,
+    /['"]dogfood:(?:delivery(?::(?:durable|local-codex|work-items))?|release-flow(?::strict)?)['"]/,
+    /\bscripts\/(?:delivery-(?:dogfood|durable-dogfood|local-codex-dogfood|dogfood-work-items)|release-flow(?:-strict)?-dogfood)\.ts\b/,
+  ],
+  legacy_public_execution_start_root: [
+    /\/(?:requirements|initiatives|bugs|tech-debt|sources?|specs?|implementation-plans|work-items|development-plan-items|tasks?)\/[^"'`\s]+\/execution\/start(?:\/|\b)/,
+    /\b(?:Source|Spec|Implementation Plan|generic Work Item|DevelopmentPlanItem|Task)\b.*\bexecution\/start\b/i,
+    /\bstartExecutionFrom(?:Source|Spec|ImplementationPlan|WorkItem|DevelopmentPlanItem|Task)\b/,
+  ],
   legacy_workflow_run_session_control: [
     /\/?(?:plan-item-workflows\/[^"'`\s]+\/)?run-sessions\/[^"'`\s]+\/(?:input|cancel|resume)(?:\/|\b)/,
   ],
@@ -472,6 +522,15 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
     /\baction:\s*['"](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)['"]/,
     /<option\s+value=["'](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)["']/,
     /\bWorkflowMessageAction\b.*\b(?:generate_spec_doc|generate_implementation_plan_doc|start_execution)\b/,
+  ],
+  public_owner_actor_alias: [
+    /\bowner_actor_id\b/,
+  ],
+  execution_package_start_root_label: [
+    /\bStart from Execution Package\b/i,
+  ],
+  legacy_inline_workspace_bundle_bytes: [
+    /\barchive_bytes_base64\b/,
   ],
   public_raw_codex_runtime_ref: [
     /\bcodex_thread_id\b(?!_digest)/,
@@ -529,23 +588,38 @@ const fileExtension = (file: string): string => {
   return dot < 0 ? '' : file.slice(dot);
 };
 
-const isIgnoredHistoricalPath = (file: string, pattern: CodexRuntimeSuperpowersBaggagePattern): boolean =>
-  file.includes('/node_modules/') ||
-  ([
-    'legacy_workflow_direct_spec_generation',
-    'legacy_workflow_direct_plan_generation',
-    'legacy_workflow_direct_execution_start',
-    'legacy_workflow_run_session_control',
-    'wave5_forbidden_session_mutation',
-    'workflow_composer_generation_action',
-    'public_raw_codex_runtime_ref',
-  ].includes(pattern) &&
-    !wave5WorkflowProductFiles.has(file)) ||
-  (pattern !== 'legacy_codex_session_snapshot' &&
+const isIgnoredHistoricalPath = (
+  file: string,
+  pattern: CodexRuntimeSuperpowersBaggagePattern,
+  activePackageScriptFiles: Set<string>,
+): boolean => {
+  if (file.includes('/node_modules/')) {
+    return true;
+  }
+  if (pattern === 'legacy_public_execution_package_start' && activePackageScriptFiles.has(file)) {
+    return false;
+  }
+  if (pattern === 'public_owner_actor_alias' && !planItemExecutionStartPublicFiles.has(file)) {
+    return true;
+  }
+  const isWave5ProductPatternOutsideWave5Files =
+    [
+      'legacy_workflow_direct_spec_generation',
+      'legacy_workflow_direct_plan_generation',
+      'legacy_workflow_direct_execution_start',
+      'legacy_workflow_run_session_control',
+      'wave5_forbidden_session_mutation',
+      'workflow_composer_generation_action',
+      'public_raw_codex_runtime_ref',
+    ].includes(pattern) && !wave5WorkflowProductFiles.has(file);
+  const isHistoricalSupportPath =
+    pattern !== 'legacy_codex_session_snapshot' &&
     (ignoredHistoricalPathFragments.some((fragment) => file === fragment || file.includes(fragment)) ||
       (file.startsWith('scripts/') && !activeStrictScripts.has(file)) ||
       (file.startsWith('tests/') && !activeTask8Tests.has(file)) ||
-      (file.startsWith('docs/superpowers/reports/') && !file.includes('codex-runtime-superpowers'))));
+      (file.startsWith('docs/superpowers/reports/') && !file.includes('codex-runtime-superpowers')));
+  return isWave5ProductPatternOutsideWave5Files || isHistoricalSupportPath;
+};
 
 const collectFilesUnder = (rootDir: string, relativePath: string): string[] => {
   const absolutePath = join(rootDir, relativePath);
@@ -562,6 +636,24 @@ const collectFilesUnder = (rootDir: string, relativePath: string): string[] => {
   return readdirSync(absolutePath)
     .flatMap((entry) => collectFilesUnder(rootDir, join(relativePath, entry)))
     .filter((file) => !file.includes('/node_modules/'));
+};
+
+const packageScriptFilesFor = (rootDir: string): string[] => {
+  const packageJsonPath = join(rootDir, 'package.json');
+  if (!existsSync(packageJsonPath)) {
+    return [];
+  }
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { scripts?: Record<string, unknown> };
+  const scripts = packageJson.scripts ?? {};
+  const files = new Set<string>();
+  for (const value of Object.values(scripts)) {
+    if (typeof value !== 'string') continue;
+    const matches = value.matchAll(/\b((?:scripts|apps|packages|tests)\/[^"'`\s]+?\.(?:ts|tsx|js|mjs|cjs))\b/g);
+    for (const match of matches) {
+      files.add(relative(rootDir, resolve(rootDir, match[1])));
+    }
+  }
+  return [...files].filter((file) => scanExtensions.has(fileExtension(file)));
 };
 
 const isAllowed = (input: {
@@ -585,11 +677,20 @@ const isAllowed = (input: {
     input.file === 'apps/web/src/shared/api/commands.ts' &&
     input.line.includes('const itemImplementationPlanPath')) ||
   (input.pattern === 'legacy_workflow_direct_execution_start' &&
+    input.file === 'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.controller.ts' &&
+    /@Post\('plan-item-workflows\/:workflowId\/execution\/start'\)/.test(input.line)) ||
+  (input.pattern === 'legacy_workflow_direct_execution_start' &&
     input.file === 'apps/control-plane-api/src/modules/executions/executions.service.ts' &&
     input.line.includes('workflow_legacy_entrypoint_disabled')) ||
   (input.pattern === 'legacy_workflow_direct_execution_start' &&
     input.file === 'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts' &&
     /assertActorCanMutateWorkflow|manual_decision_kind|workflow_legacy_entrypoint_disabled/.test(input.line)) ||
+  (input.pattern === 'legacy_public_execution_package_start' &&
+    input.file === 'apps/control-plane-api/src/modules/run-control/execution-package-runs.controller.ts' &&
+    /@Post\('execution-packages\/:packageId\/(?:run|rerun|force-rerun)'\)/.test(input.line)) ||
+  (input.pattern === 'legacy_codex_session_snapshot' &&
+    (input.file === 'scripts/plan-item-execution-handoff-dogfood.ts' ||
+      input.file === 'tests/smoke/plan-item-execution-handoff-dogfood-script.test.ts')) ||
   (input.pattern === 'wave5_forbidden_session_mutation' &&
     input.file === 'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts' &&
     /assertActorCanMutateWorkflow|manual_decision_kind|workflow_invalid_transition/.test(input.line)) ||
@@ -633,8 +734,11 @@ const patternsForFile = (
   file: string,
 ): Array<[CodexRuntimeSuperpowersBaggagePattern, RegExp[]]> => {
   const patterns = Object.entries(baggagePatterns) as Array<[CodexRuntimeSuperpowersBaggagePattern, RegExp[]]>;
+  if (file === 'packages/contracts/src/api.ts') {
+    return patterns;
+  }
   if (legacyCodexSessionSnapshotScanRoots.some((root) => file === root || file.startsWith(`${root}/`))) {
-    return patterns.filter(([pattern]) => pattern === 'legacy_codex_session_snapshot');
+    return patterns.filter(([pattern]) => pattern === 'legacy_codex_session_snapshot' || pattern === 'legacy_inline_workspace_bundle_bytes');
   }
   return patterns;
 };
@@ -643,6 +747,7 @@ const scanFile = (input: {
   rootDir: string;
   file: string;
   allowlist: AllowedMatch[];
+  activePackageScriptFiles: Set<string>;
 }): CodexRuntimeSuperpowersNoBaggageViolation[] => {
   const absolutePath = join(input.rootDir, input.file);
   if (!existsSync(absolutePath)) {
@@ -653,8 +758,17 @@ const scanFile = (input: {
   const lines = content.split(/\r?\n/);
   const violations: CodexRuntimeSuperpowersNoBaggageViolation[] = [];
   for (const [lineIndex, line] of lines.entries()) {
+    const shouldUseStartRootPattern =
+      baggagePatterns.legacy_public_execution_start_root.some((expression) => expression.test(line)) &&
+      !baggagePatterns.legacy_public_execution_package_start.some((expression) => expression.test(line));
     for (const [pattern, expressions] of patternsForFile(input.file)) {
-      if (isIgnoredHistoricalPath(input.file, pattern)) {
+      if (
+        shouldUseStartRootPattern &&
+        (pattern === 'legacy_work_items_route' || pattern === 'raw_runtime_route')
+      ) {
+        continue;
+      }
+      if (isIgnoredHistoricalPath(input.file, pattern, input.activePackageScriptFiles)) {
         continue;
       }
       if (expressions.some((expression) => expression.test(line))) {
@@ -678,8 +792,10 @@ export const scanCodexRuntimeSuperpowersNoBaggage = (input: {
   allowlist?: AllowedMatch[];
 }): CodexRuntimeSuperpowersNoBaggageScanResult => {
   const rootDir = resolve(input.rootDir ?? process.cwd());
+  const activePackageScriptFiles = new Set(packageScriptFilesFor(rootDir));
   const defaultFiles = [
     ...defaultScanFiles,
+    ...activePackageScriptFiles,
     ...defaultScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot)),
     ...legacyCodexSessionSnapshotScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot)),
   ];
@@ -689,7 +805,7 @@ export const scanCodexRuntimeSuperpowersNoBaggage = (input: {
     ),
   ).sort();
   const allowlist = input.allowlist ?? codexRuntimeSuperpowersNoBaggageAllowlist;
-  const violations = files.flatMap((file) => scanFile({ rootDir, file, allowlist }));
+  const violations = files.flatMap((file) => scanFile({ rootDir, file, allowlist, activePackageScriptFiles }));
   return { ok: violations.length === 0, violations };
 };
 

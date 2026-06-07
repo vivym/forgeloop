@@ -30,14 +30,26 @@ export type WorkflowConversationEventModel = {
   queuedActionStatus?: string;
 };
 
+export type WorkflowExecutionRunSummaryModel = {
+  digestRows: Array<{ label: string; value: string }>;
+  runSessionId: string;
+  status: string;
+  executionPackageVersion?: number;
+  finishedAt?: string;
+  startedAt?: string;
+  updatedAt?: string;
+};
+
 export type PlanItemWorkflowWorkspaceModel = {
   artifacts: WorkflowArtifactModel[];
   blockers: string[];
   canEvaluateReadiness: boolean;
+  canStartExecution: boolean;
   composerDisabledReason?: string;
   contextPreview: Array<{ label: string; value: string }>;
   conversationEvents: WorkflowConversationEventModel[];
   defaultArtifact?: WorkflowArtifactModel;
+  executionRunSummary?: WorkflowExecutionRunSummaryModel;
   readinessDisabledReason?: string;
   readinessState: string;
   roleLens: Array<{ id: WorkflowRoleLens; label: string; selected: boolean }>;
@@ -67,19 +79,23 @@ export function toPlanItemWorkflowWorkspaceModel(input: {
   const artifacts = artifactDrawerModel(input.item, workflow, input.boundaryRevisions);
   const composerDisabledReason = hasRunningAction(workflow) ? 'A generation action is already queued or running.' : undefined;
   const defaultArtifact = artifacts.find((artifact) => artifact.revisionId !== undefined) ?? artifacts[0];
+  const { execution_run_summary: hiddenRunSummary, ...workflowForUi } = workflow;
+  const executionRunSummary = executionRunSummaryModel(hiddenRunSummary);
   const model: PlanItemWorkflowWorkspaceModel = {
     artifacts,
     blockers: workflow.blockers.map((blocker) => blocker.code),
     canEvaluateReadiness: workflow.readiness?.can_evaluate ?? false,
+    canStartExecution: workflow.status === 'execution_ready',
     ...(composerDisabledReason === undefined ? {} : { composerDisabledReason }),
     contextPreview: contextPreviewModel(input.item, workflow),
     conversationEvents: conversationEvents(workflow),
     ...(defaultArtifact === undefined ? {} : { defaultArtifact }),
+    ...(executionRunSummary === undefined ? {} : { executionRunSummary }),
     ...optionalReadinessDisabledReason(workflow),
     readinessState: workflow.readiness?.state ?? 'not_evaluated',
     roleLens: roleLensModel(input.roleLens),
     stages: timelineStages(input.item, workflow, input.roleLens),
-    workflow,
+    workflow: workflowForUi,
   };
   assertNoRawRuntimeFieldsForUi(model);
   return model;
@@ -220,6 +236,27 @@ export function contextPreviewModel(item: DevelopmentPlanItemProjection, workflo
   ];
 }
 
+export function executionRunSummaryModel(
+  summary: PlanItemWorkflowPublicDto['execution_run_summary'],
+): WorkflowExecutionRunSummaryModel | undefined {
+  if (summary === undefined) return undefined;
+  const digestRows = [
+    optionalDigestRow('Input capsule digest', summary.input_capsule_digest),
+    optionalDigestRow('Workspace bundle digest', summary.workspace_bundle_digest),
+    optionalDigestRow('Thread digest', summary.codex_thread_id_digest),
+  ].filter((row): row is { label: string; value: string } => row !== undefined);
+
+  return {
+    digestRows,
+    runSessionId: summary.run_session_id,
+    status: summary.status,
+    ...(summary.execution_package_version === undefined ? {} : { executionPackageVersion: summary.execution_package_version }),
+    ...(summary.finished_at === undefined ? {} : { finishedAt: summary.finished_at }),
+    ...(summary.started_at === undefined ? {} : { startedAt: summary.started_at }),
+    ...(summary.updated_at === undefined ? {} : { updatedAt: summary.updated_at }),
+  };
+}
+
 export function roleLensModel(selected: WorkflowRoleLens) {
   return [
     { id: 'product' as const, label: 'Product', selected: selected === 'product' },
@@ -227,6 +264,10 @@ export function roleLensModel(selected: WorkflowRoleLens) {
     { id: 'developer' as const, label: 'Developer', selected: selected === 'developer' },
     { id: 'qa' as const, label: 'QA', selected: selected === 'qa' },
   ];
+}
+
+function optionalDigestRow(label: string, value: string | undefined) {
+  return value === undefined ? undefined : { label, value };
 }
 
 export function assertNoRawRuntimeFieldsForUi(model: PlanItemWorkflowWorkspaceModel): void {

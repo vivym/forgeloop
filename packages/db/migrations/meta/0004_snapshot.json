@@ -1,6 +1,6 @@
 {
-  "id": "aca7561f-2583-44d7-9b89-ec69c537ab22",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "d4d1e482-b3ee-4938-8a2a-b9d7929fbb5c",
+  "prevId": "099b131b-6942-4880-9b22-5f7513b81ee1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -699,6 +699,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "development_plan_item_revision_id": {
+          "name": "development_plan_item_revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "workflow_id": {
           "name": "workflow_id",
           "type": "uuid",
@@ -816,6 +822,19 @@
       },
       "indexes": {},
       "foreignKeys": {
+        "spec_revisions_development_plan_item_revision_id_development_plan_item_revisions_id_fk": {
+          "name": "spec_revisions_development_plan_item_revision_id_development_plan_item_revisions_id_fk",
+          "tableFrom": "spec_revisions",
+          "tableTo": "development_plan_item_revisions",
+          "columnsFrom": [
+            "development_plan_item_revision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "spec_revisions_workflow_id_plan_item_workflows_id_fk": {
           "name": "spec_revisions_workflow_id_plan_item_workflows_id_fk",
           "tableFrom": "spec_revisions",
@@ -3396,6 +3415,18 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "invalidated_at": {
+          "name": "invalidated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "invalidated_reason": {
+          "name": "invalidated_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -3529,6 +3560,544 @@
         "execution_readiness_records_created_by_actor_id_actors_id_fk": {
           "name": "execution_readiness_records_created_by_actor_id_actors_id_fk",
           "tableFrom": "execution_readiness_records",
+          "tableTo": "actors",
+          "columnsFrom": [
+            "created_by_actor_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.plan_item_workflow_artifact_change_requests": {
+      "name": "plan_item_workflow_artifact_change_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workflow_id": {
+          "name": "workflow_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_type": {
+          "name": "artifact_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_id": {
+          "name": "revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason_markdown": {
+          "name": "reason_markdown",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_queued_action_id": {
+          "name": "created_queued_action_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "requested_by_actor_id": {
+          "name": "requested_by_actor_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "plan_item_workflow_artifact_change_requests_workflow_created_idx": {
+          "name": "plan_item_workflow_artifact_change_requests_workflow_created_idx",
+          "columns": [
+            {
+              "expression": "workflow_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "plan_item_workflow_artifact_change_requests_revision_idx": {
+          "name": "plan_item_workflow_artifact_change_requests_revision_idx",
+          "columns": [
+            {
+              "expression": "artifact_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "revision_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "plan_item_workflow_artifact_change_requests_workflow_id_plan_item_workflows_id_fk": {
+          "name": "plan_item_workflow_artifact_change_requests_workflow_id_plan_item_workflows_id_fk",
+          "tableFrom": "plan_item_workflow_artifact_change_requests",
+          "tableTo": "plan_item_workflows",
+          "columnsFrom": [
+            "workflow_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "plan_item_workflow_artifact_change_requests_requested_by_actor_id_actors_id_fk": {
+          "name": "plan_item_workflow_artifact_change_requests_requested_by_actor_id_actors_id_fk",
+          "tableFrom": "plan_item_workflow_artifact_change_requests",
+          "tableTo": "actors",
+          "columnsFrom": [
+            "requested_by_actor_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.plan_item_workflow_messages": {
+      "name": "plan_item_workflow_messages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workflow_id": {
+          "name": "workflow_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "codex_session_id": {
+          "name": "codex_session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "body_markdown": {
+          "name": "body_markdown",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_queued_action_id": {
+          "name": "created_queued_action_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "client_message_id": {
+          "name": "client_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "plan_item_workflow_messages_workflow_created_idx": {
+          "name": "plan_item_workflow_messages_workflow_created_idx",
+          "columns": [
+            {
+              "expression": "workflow_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "plan_item_workflow_messages_session_idx": {
+          "name": "plan_item_workflow_messages_session_idx",
+          "columns": [
+            {
+              "expression": "codex_session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "plan_item_workflow_messages_workflow_id_plan_item_workflows_id_fk": {
+          "name": "plan_item_workflow_messages_workflow_id_plan_item_workflows_id_fk",
+          "tableFrom": "plan_item_workflow_messages",
+          "tableTo": "plan_item_workflows",
+          "columnsFrom": [
+            "workflow_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "plan_item_workflow_messages_codex_session_id_codex_sessions_id_fk": {
+          "name": "plan_item_workflow_messages_codex_session_id_codex_sessions_id_fk",
+          "tableFrom": "plan_item_workflow_messages",
+          "tableTo": "codex_sessions",
+          "columnsFrom": [
+            "codex_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "plan_item_workflow_messages_actor_id_actors_id_fk": {
+          "name": "plan_item_workflow_messages_actor_id_actors_id_fk",
+          "tableFrom": "plan_item_workflow_messages",
+          "tableTo": "actors",
+          "columnsFrom": [
+            "actor_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.plan_item_workflow_queued_actions": {
+      "name": "plan_item_workflow_queued_actions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workflow_id": {
+          "name": "workflow_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "codex_session_id": {
+          "name": "codex_session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_revision_id": {
+          "name": "source_revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "change_request_id": {
+          "name": "change_request_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_from_message_id": {
+          "name": "created_from_message_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expected_input_capsule_digest": {
+          "name": "expected_input_capsule_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "context_preview_digest": {
+          "name": "context_preview_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "codex_session_turn_id": {
+          "name": "codex_session_turn_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_capsule_id": {
+          "name": "output_capsule_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_capsule_digest": {
+          "name": "output_capsule_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_capsule_sequence": {
+          "name": "output_capsule_sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "codex_thread_id_digest": {
+          "name": "codex_thread_id_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "blocked_reason_code": {
+          "name": "blocked_reason_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by_actor_id": {
+          "name": "created_by_actor_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "plan_item_workflow_queued_actions_workflow_status_idx": {
+          "name": "plan_item_workflow_queued_actions_workflow_status_idx",
+          "columns": [
+            {
+              "expression": "workflow_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "plan_item_workflow_queued_actions_session_idx": {
+          "name": "plan_item_workflow_queued_actions_session_idx",
+          "columns": [
+            {
+              "expression": "codex_session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "plan_item_workflow_queued_actions_turn_idx": {
+          "name": "plan_item_workflow_queued_actions_turn_idx",
+          "columns": [
+            {
+              "expression": "codex_session_turn_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "plan_item_workflow_queued_actions_active_idempotency_idx": {
+          "name": "plan_item_workflow_queued_actions_active_idempotency_idx",
+          "columns": [
+            {
+              "expression": "workflow_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"plan_item_workflow_queued_actions\".\"status\" in ('queued', 'running')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "plan_item_workflow_queued_actions_workflow_id_plan_item_workflows_id_fk": {
+          "name": "plan_item_workflow_queued_actions_workflow_id_plan_item_workflows_id_fk",
+          "tableFrom": "plan_item_workflow_queued_actions",
+          "tableTo": "plan_item_workflows",
+          "columnsFrom": [
+            "workflow_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "plan_item_workflow_queued_actions_codex_session_id_codex_sessions_id_fk": {
+          "name": "plan_item_workflow_queued_actions_codex_session_id_codex_sessions_id_fk",
+          "tableFrom": "plan_item_workflow_queued_actions",
+          "tableTo": "codex_sessions",
+          "columnsFrom": [
+            "codex_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "plan_item_workflow_queued_actions_created_from_message_id_plan_item_workflow_messages_id_fk": {
+          "name": "plan_item_workflow_queued_actions_created_from_message_id_plan_item_workflow_messages_id_fk",
+          "tableFrom": "plan_item_workflow_queued_actions",
+          "tableTo": "plan_item_workflow_messages",
+          "columnsFrom": [
+            "created_from_message_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "plan_item_workflow_queued_actions_created_by_actor_id_actors_id_fk": {
+          "name": "plan_item_workflow_queued_actions_created_by_actor_id_actors_id_fk",
+          "tableFrom": "plan_item_workflow_queued_actions",
           "tableTo": "actors",
           "columnsFrom": [
             "created_by_actor_id"
@@ -5319,6 +5888,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "development_plan_item_revision_id": {
+          "name": "development_plan_item_revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "workflow_id": {
           "name": "workflow_id",
           "type": "uuid",
@@ -5423,6 +5998,19 @@
           "tableTo": "development_plan_items",
           "columnsFrom": [
             "development_plan_item_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "execution_plan_revisions_development_plan_item_revision_id_development_plan_item_revisions_id_fk": {
+          "name": "execution_plan_revisions_development_plan_item_revision_id_development_plan_item_revisions_id_fk",
+          "tableFrom": "execution_plan_revisions",
+          "tableTo": "development_plan_item_revisions",
+          "columnsFrom": [
+            "development_plan_item_revision_id"
           ],
           "columnsTo": [
             "id"

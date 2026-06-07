@@ -1324,7 +1324,6 @@ CREATE TABLE "codex_pending_workspace_bundles" (
 	"internal_artifact_object_id" uuid,
 	"archive_digest" text NOT NULL,
 	"manifest_digest" text NOT NULL,
-	"archive_bytes_base64" text,
 	"size_bytes" integer NOT NULL,
 	"workspace_acquisition_digest" text NOT NULL,
 	"workspace_acquisition_json" jsonb NOT NULL,

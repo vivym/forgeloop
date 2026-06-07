@@ -132,10 +132,10 @@ describe('control-plane local_codex routing', () => {
       .post(`/execution-packages/${packageId}/run`)
       .set(ownerHeaders)
       .send({ executor_type: 'local_codex', workflow_only: false })
-      .expect(409);
+      .expect(410);
 
     expect(response.body).toMatchObject({
-      code: 'workflow_legacy_entrypoint_disabled',
+      code: 'legacy_execution_entrypoint_disabled',
     });
     expect(response.body).not.toHaveProperty('run_session_id');
     expect(response.body).not.toHaveProperty('workflow_result');
@@ -152,10 +152,10 @@ describe('control-plane local_codex routing', () => {
       .post(`/execution-packages/${packageId}/run`)
       .set(ownerHeaders)
       .send({ executor_type: 'local_codex', workflow_only: true })
-      .expect(409);
+      .expect(410);
 
     expect(response.body).toMatchObject({
-      code: 'workflow_legacy_entrypoint_disabled',
+      code: 'legacy_execution_entrypoint_disabled',
     });
     expect(response.body).not.toHaveProperty('run_session_id');
     expect(response.body).not.toHaveProperty('workflow_result');

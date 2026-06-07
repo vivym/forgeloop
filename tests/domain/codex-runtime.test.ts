@@ -20,11 +20,14 @@ import {
   redactCodexLaunchMaterialization,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeJobArtifactIntake,
+  validateCodexRunExecutionWorkload,
+  validateCodexRunExecutionWorkloadContinuity,
   validateCodexSessionRuntimeContext,
   validateCodexDockerNetworkProxyConfig,
   validateCodexDockerRuntimeEvidence,
   validateCodexEffectiveConfigAssertions,
   validateCodexRuntimeProfileRevision,
+  validateCodexWorkflowRunExecutionRuntimeJobResult,
   type CodexDockerRuntimeEvidence,
   type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
@@ -39,7 +42,9 @@ import {
   type CodexLaunchTokenEnvelope,
   type CodexNetworkAllowlistRule,
   type CodexRunExecutionRuntimeJobResult,
+  type CodexWorkflowRunExecutionRuntimeJobResult,
   type CodexRunExecutionWorkloadV1,
+  type CodexWorkflowRunExecutionWorkloadV1,
   type CodexRuntimeJob,
   type CodexRuntimeJobStatus,
   type CodexRuntimeProfile,
@@ -72,7 +77,9 @@ type ExportedCodexRuntimeContracts = {
   generationResult: CodexGenerationRuntimeJobResult;
   workspaceBundle: WorkspaceBundleV1;
   runExecutionWorkload: CodexRunExecutionWorkloadV1;
+  workflowRunExecutionWorkload: CodexWorkflowRunExecutionWorkloadV1;
   runExecutionResult: CodexRunExecutionRuntimeJobResult;
+  workflowRunExecutionResult: CodexWorkflowRunExecutionRuntimeJobResult;
 };
 
 const assertCodexRuntimeTypeExports = <T extends ExportedCodexRuntimeContracts>() => undefined;
@@ -83,6 +90,138 @@ const digestC = `sha256:${'c'.repeat(64)}`;
 const generatedPayload = { schema_version: 'generated_payload.test.v1', value: 'ok' };
 const generatedPayloadDigest = codexCanonicalDigest(generatedPayload);
 const generatedPayloadArtifactByteDigest = `sha256:${'9'.repeat(64)}`;
+const workflowRunExecutionThreadDigest = codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' });
+const workflowRunExecutionOtherThreadDigest = codexCanonicalDigest({
+  kind: 'codex_app_server_thread_id',
+  thread_id: 'thread-2',
+});
+
+const workflowRunExecutionWorkload = {
+  schema_version: 'codex_run_execution_workload.v1',
+  runtime_job_id: 'runtime-job-1',
+  plan_item_workflow_id: 'workflow-1',
+  development_plan_id: 'development-plan-1',
+  development_plan_item_id: 'item-1',
+  run_session_id: 'run-session-1',
+  execution_package_id: 'execution-package-1',
+  execution_package_version: 1,
+  workspace_bundle_id: 'workspace-bundle-1',
+  workspace_bundle_digest: digestA,
+  package_prompt_ref: 'artifact://codex-runtime-jobs/runtime-job-1/prompt',
+  package_prompt_digest: digestB,
+  execution_context_ref: 'artifact://codex-runtime-jobs/runtime-job-1/context',
+  execution_context_digest: digestC,
+  path_policy_digest: digestA,
+  output_schema_version: 'codex_run_execution_result.v1',
+  created_at: '2026-06-06T00:00:00.000Z',
+  expires_at: '2026-06-06T00:10:00.000Z',
+  workspace_acquisition_json: {
+    schema_version: 'workspace_bundle_acquisition.v1',
+    bundle_id: 'workspace-bundle-1',
+    archive_ref: 'artifact://internal/workspace_bundle/run_session/run-session-1/workspace-bundle-1',
+    archive_digest: digestA,
+    manifest_digest: digestB,
+    size_bytes: 128,
+    expires_at: '2026-06-06T00:10:00.000Z',
+  },
+  codex_session_runtime_context: {
+	    schema_version: 'codex_session_runtime_context.v1',
+	    codex_session_id: 'session-1',
+	    codex_session_turn_id: 'turn-execution-1',
+	    lease_id: 'launch-lease-1',
+	    lease_epoch: 2,
+	    worker_id: 'worker-1',
+	    worker_session_digest: digestC,
+    expected_input_capsule_digest: digestA,
+    turn_group_status: 'complete',
+    continuation: {
+      kind: 'resume_thread',
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: workflowRunExecutionThreadDigest,
+    },
+  },
+	  codex_session_terminalization: {
+	    schema_version: 'codex_session_terminalization.v1',
+	    lease_token: 'lease-token-secret',
+	    codex_session_lease_id: 'session-lease-1',
+	    codex_session_lease_epoch: 2,
+	    codex_session_worker_id: 'worker-1',
+	    codex_session_worker_session_digest: digestC,
+	    codex_session_id: 'session-1',
+	    codex_session_turn_id: 'turn-execution-1',
+	    input_capsule_id: 'capsule-1',
+    input_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
+    input_capsule_digest: digestA,
+    input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
+    input_memory_bundle_digest: digestB,
+    input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+    input_environment_manifest_digest: digestC,
+    expected_input_capsule_digest: digestA,
+  },
+} satisfies CodexWorkflowRunExecutionWorkloadV1;
+
+const expectedWorkflowRunExecutionContinuation = {
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'turn-execution-1',
+  input_capsule_digest: digestA,
+  input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
+	  input_memory_bundle_digest: digestB,
+	  input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+	  input_environment_manifest_digest: digestC,
+	  lease_id: 'launch-lease-1',
+	  lease_epoch: 2,
+	  worker_id: 'worker-1',
+	  worker_session_digest: digestC,
+  codex_thread_id_digest: workflowRunExecutionThreadDigest,
+};
+
+const workflowRunExecutionTerminalEvidence = () =>
+  ({
+    codex_session_thread: {
+      codex_thread_id: 'thread-1',
+      codex_thread_id_digest: workflowRunExecutionThreadDigest,
+      app_server_turn_id: 'turn-app-server-1',
+    },
+    output_capsule: {
+      id: 'capsule-2',
+      codex_session_id: 'session-1',
+      created_from_turn_id: 'turn-execution-1',
+      sequence: 2,
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+      digest: digestA,
+      size_bytes: '1024',
+      manifest_digest: digestB,
+      thread_state_digest: digestC,
+      memory_state_digest: digestA,
+      environment_manifest_digest: digestB,
+      codex_thread_id_digest: workflowRunExecutionThreadDigest,
+      codex_cli_version: '0.1.0',
+      app_server_protocol_digest: digestC,
+      runtime_profile_revision_id: 'profile-revision-1',
+      trusted_runtime_manifest_digest: digestA,
+      credential_binding_lineage_digest: digestB,
+      created_by_actor_id: 'actor-tech',
+      created_at: '2026-06-06T00:05:00.000Z',
+    },
+    output_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-2',
+    output_memory_bundle_digest: digestC,
+    memory_delta_artifact_ref: 'artifact://internal/codex_memory_delta/codex_session/session-1/delta-2',
+    memory_delta_digest: digestA,
+    output_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-2',
+    output_environment_manifest_digest: digestB,
+    codex_session_turn_id: 'turn-execution-1',
+  }) satisfies Pick<
+    CodexWorkflowRunExecutionRuntimeJobResult,
+    | 'codex_session_thread'
+    | 'output_capsule'
+    | 'output_memory_bundle_ref'
+    | 'output_memory_bundle_digest'
+    | 'memory_delta_artifact_ref'
+    | 'memory_delta_digest'
+    | 'output_environment_manifest_ref'
+    | 'output_environment_manifest_digest'
+    | 'codex_session_turn_id'
+  >;
 
 const runtimeEvidence = (overrides: Partial<CodexDockerRuntimeEvidence> = {}): CodexDockerRuntimeEvidence => ({
   runtime_profile_id: 'profile-1',
@@ -101,6 +240,23 @@ const runtimeEvidence = (overrides: Partial<CodexDockerRuntimeEvidence> = {}): C
   selected_execution_mode: 'app_server',
   ...overrides,
 });
+
+const baseRunExecutionTerminalResult = (overrides: Partial<CodexRunExecutionRuntimeJobResult> = {}) =>
+  ({
+    task_kind: 'run_execution',
+    output_schema_version: 'codex_run_execution_result.v1',
+    execution_package_id: 'execution-package-1',
+    execution_package_version: 1,
+    run_session_id: 'run-session-1',
+    workspace_bundle_digest: digestA,
+    workspace_bundle_manifest_digest: digestB,
+    mounted_task_workspace_digest: digestC,
+    changed_files: ['README.md'],
+    check_results: [],
+    execution_artifacts: [],
+    public_summary: 'Execution completed.',
+    ...overrides,
+  }) satisfies CodexRunExecutionRuntimeJobResult;
 
 class NonJsonFixture {
   constructor(readonly value: string) {}
@@ -457,6 +613,187 @@ describe('codex runtime domain contracts', () => {
           },
         }),
       'codex_session_thread_binding_partial',
+    );
+  });
+
+  it('validates workflow-owned run-execution workloads with runtime continuity fields', () => {
+    expect(validateCodexRunExecutionWorkload(workflowRunExecutionWorkload)).toEqual(workflowRunExecutionWorkload);
+
+    expect(() => codexRuntimeJobInputDigest(workflowRunExecutionWorkload)).not.toThrow();
+    expect(codexRuntimeJobInputDigest(workflowRunExecutionWorkload)).toBe(codexCanonicalDigest(workflowRunExecutionWorkload));
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkload({
+          ...workflowRunExecutionWorkload,
+          codex_session_runtime_context: undefined,
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+	    expectDomainErrorCode(
+	      () =>
+	        validateCodexRunExecutionWorkload({
+	          ...workflowRunExecutionWorkload,
+	          codex_session_runtime_context: {
+            ...workflowRunExecutionWorkload.codex_session_runtime_context,
+            continuation: { kind: 'start_thread' },
+          },
+	        }),
+	      'codex_generation_workload_unsupported',
+	    );
+
+	    expectDomainErrorCode(
+	      () =>
+	        validateCodexRunExecutionWorkload({
+	          ...workflowRunExecutionWorkload,
+	          codex_session_terminalization: {
+	            ...workflowRunExecutionWorkload.codex_session_terminalization,
+	            codex_session_lease_id: undefined,
+	          },
+	        }),
+	      'codex_generation_workload_unsupported',
+	    );
+	  });
+
+  it('validates workflow-owned run-execution workload continuity against active session and worker expectations', () => {
+    expect(
+      validateCodexRunExecutionWorkloadContinuity(
+        workflowRunExecutionWorkload,
+        expectedWorkflowRunExecutionContinuation,
+      ),
+    ).toEqual(workflowRunExecutionWorkload);
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          codex_session_id: 'session-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          codex_session_turn_id: 'turn-execution-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          input_capsule_digest: digestB,
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          lease_id: 'lease-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          worker_id: 'worker-2',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(
+          {
+            ...workflowRunExecutionWorkload,
+            codex_session_terminalization: {
+              ...workflowRunExecutionWorkload.codex_session_terminalization,
+              input_memory_bundle_digest: digestA,
+            },
+          },
+          expectedWorkflowRunExecutionContinuation,
+        ),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(
+          {
+            ...workflowRunExecutionWorkload,
+            codex_session_terminalization: {
+              ...workflowRunExecutionWorkload.codex_session_terminalization,
+              input_environment_manifest_digest: digestA,
+            },
+          },
+          expectedWorkflowRunExecutionContinuation,
+        ),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(
+          {
+            ...workflowRunExecutionWorkload,
+            codex_session_runtime_context: {
+              ...workflowRunExecutionWorkload.codex_session_runtime_context,
+              lease_epoch: 3,
+            },
+          },
+          expectedWorkflowRunExecutionContinuation,
+        ),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(
+          {
+            ...workflowRunExecutionWorkload,
+            codex_session_runtime_context: {
+              ...workflowRunExecutionWorkload.codex_session_runtime_context,
+              worker_session_digest: digestA,
+            },
+          },
+          expectedWorkflowRunExecutionContinuation,
+        ),
+      'codex_generation_workload_unsupported',
+    );
+
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkloadContinuity(workflowRunExecutionWorkload, {
+          ...expectedWorkflowRunExecutionContinuation,
+          codex_thread_id_digest: workflowRunExecutionOtherThreadDigest,
+        }),
+      'codex_generation_workload_unsupported',
     );
   });
 
@@ -1087,6 +1424,142 @@ describe('codex runtime domain contracts', () => {
     expectDomainErrorCode(() => validateCodexRuntimeJobTerminalResult(result), 'codex_docker_runtime_evidence_unsafe');
   });
 
+  it('allows generic run-execution terminal results without continuation evidence', () => {
+    const runExecutionResult = baseRunExecutionTerminalResult();
+
+    expect(validateCodexRuntimeJobTerminalResult(runExecutionResult)).toEqual(runExecutionResult);
+  });
+
+  it('rejects generic run-execution terminal results in the strict workflow validator', () => {
+    expectDomainErrorCode(
+      () => validateCodexWorkflowRunExecutionRuntimeJobResult(baseRunExecutionTerminalResult()),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+  });
+
+  it('requires workflow run-execution terminal continuation evidence', () => {
+    const workflowRunExecutionResult = {
+      task_kind: 'run_execution',
+      output_schema_version: 'codex_run_execution_result.v1',
+      execution_package_id: 'execution-package-1',
+      execution_package_version: 1,
+      run_session_id: 'run-session-1',
+      workspace_bundle_digest: digestA,
+      workspace_bundle_manifest_digest: digestB,
+      mounted_task_workspace_digest: digestC,
+      changed_files: ['README.md'],
+      check_results: [],
+      execution_artifacts: [],
+      codex_session_thread: {
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+        app_server_turn_id: 'turn-app-server-1',
+      },
+      output_capsule: {
+        id: 'capsule-2',
+        codex_session_id: 'session-1',
+        created_from_turn_id: 'turn-execution-1',
+        sequence: 2,
+        artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-2',
+        digest: digestA,
+        size_bytes: '1024',
+        manifest_digest: digestB,
+        thread_state_digest: digestC,
+        memory_state_digest: digestA,
+        environment_manifest_digest: digestB,
+        codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+        codex_cli_version: '0.1.0',
+        app_server_protocol_digest: digestC,
+        runtime_profile_revision_id: 'profile-revision-1',
+        trusted_runtime_manifest_digest: digestA,
+        credential_binding_lineage_digest: digestB,
+        created_by_actor_id: 'actor-tech',
+        created_at: '2026-06-06T00:05:00.000Z',
+      },
+      output_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-2',
+      output_memory_bundle_digest: digestC,
+      memory_delta_artifact_ref: 'artifact://internal/codex_memory_delta/codex_session/session-1/delta-2',
+      memory_delta_digest: digestA,
+      output_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-2',
+      output_environment_manifest_digest: digestB,
+      codex_session_turn_id: 'turn-execution-1',
+      public_summary: 'Execution completed.',
+    } satisfies CodexWorkflowRunExecutionRuntimeJobResult;
+
+    const expectRunExecutionTerminalEvidenceError = (result: unknown) =>
+      expectDomainErrorCode(() => validateCodexRuntimeJobTerminalResult(result), 'codex_docker_runtime_evidence_unsafe');
+
+    expect(validateCodexRuntimeJobTerminalResult(workflowRunExecutionResult)).toEqual(workflowRunExecutionResult);
+    expect(validateCodexWorkflowRunExecutionRuntimeJobResult(workflowRunExecutionResult)).toEqual(workflowRunExecutionResult);
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: undefined,
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_memory_bundle_ref: undefined,
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        digest: undefined,
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        digest: 'not-a-digest',
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        manifest_digest: undefined,
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        manifest_digest: 'not-a-digest',
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_capsule: {
+        ...workflowRunExecutionResult.output_capsule,
+        codex_thread_id_digest: workflowRunExecutionOtherThreadDigest,
+      },
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      memory_delta_digest: undefined,
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      memory_delta_artifact_ref: undefined,
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/run_session/run-session-1/memory-2',
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      memory_delta_artifact_ref: 'artifact://internal/codex_memory_delta/run_session/run-session-1/delta-2',
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      output_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/run_session/run-session-1/env-2',
+    });
+    expectRunExecutionTerminalEvidenceError({
+      ...workflowRunExecutionResult,
+      codex_session_turn_id: undefined,
+    });
+  });
+
   it('allows public-safe run-execution terminal result changed files and display summaries', () => {
     const runExecutionResult = {
       task_kind: 'run_execution',
@@ -1145,6 +1618,7 @@ describe('codex runtime domain contracts', () => {
           internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/junit',
         },
       ],
+      ...workflowRunExecutionTerminalEvidence(),
       public_summary: `Checks:3 passed; Result:passed after updating Dockerfile.dev and vite.config.mts with digest ${digestA}.`,
     } satisfies CodexRunExecutionRuntimeJobResult;
 
@@ -1173,6 +1647,7 @@ describe('codex runtime domain contracts', () => {
             internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
           },
         ],
+        ...workflowRunExecutionTerminalEvidence(),
         public_summary: 'ok',
       }),
     ).not.toThrow();
@@ -1193,6 +1668,7 @@ describe('codex runtime domain contracts', () => {
           changed_files: [],
           check_results: [],
           execution_artifacts: [],
+          ...workflowRunExecutionTerminalEvidence(),
           public_summary:
             'Stored output at artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
         }),
@@ -1223,6 +1699,7 @@ describe('codex runtime domain contracts', () => {
               internal_ref: 'artifact://codex-runtime-jobs/runtime-job-1/artifacts/artifact-1',
             },
           ],
+          ...workflowRunExecutionTerminalEvidence(),
           public_summary: 'ok',
         }),
       'codex_docker_runtime_evidence_unsafe',
@@ -1249,6 +1726,7 @@ describe('codex runtime domain contracts', () => {
           },
           check_results: [],
           execution_artifacts: [],
+          ...workflowRunExecutionTerminalEvidence(),
           public_summary: 'ok',
         }),
       'codex_docker_runtime_evidence_unsafe',
@@ -1275,6 +1753,7 @@ describe('codex runtime domain contracts', () => {
           },
           check_results: [],
           execution_artifacts: [],
+          ...workflowRunExecutionTerminalEvidence(),
           public_summary: 'ok',
         }),
       'codex_docker_runtime_evidence_unsafe',
@@ -1304,6 +1783,7 @@ describe('codex runtime domain contracts', () => {
             },
           ],
           execution_artifacts: [],
+          ...workflowRunExecutionTerminalEvidence(),
           public_summary: 'ok',
         }),
       'codex_docker_runtime_evidence_unsafe',
@@ -1333,6 +1813,7 @@ describe('codex runtime domain contracts', () => {
             },
           ],
           execution_artifacts: [],
+          ...workflowRunExecutionTerminalEvidence(),
           public_summary: 'ok',
         }),
       'codex_docker_runtime_evidence_unsafe',
@@ -1362,6 +1843,7 @@ describe('codex runtime domain contracts', () => {
               internal_ref: 'artifact://internal/raw_metadata/codex_runtime_job/runtime-job-1/artifact-1',
             },
           ],
+          ...workflowRunExecutionTerminalEvidence(),
           public_summary: 'ok',
         }),
       'codex_docker_runtime_evidence_unsafe',
@@ -1403,6 +1885,7 @@ describe('codex runtime domain contracts', () => {
       changed_files: ['docs/runtime-report.md'],
       check_results: [],
       execution_artifacts: [],
+      ...workflowRunExecutionTerminalEvidence(),
       runtime_evidence: runtimeEvidence(),
       public_summary: 'Run execution completed with public-safe app-server evidence.',
     } as unknown as CodexRunExecutionRuntimeJobResult;
@@ -1422,6 +1905,7 @@ describe('codex runtime domain contracts', () => {
       changed_files: ['docs/runtime-report.md'],
       check_results: [],
       execution_artifacts: [],
+      ...workflowRunExecutionTerminalEvidence(),
       runtime_evidence: runtimeEvidence(),
       public_summary: 'Run execution completed with public-safe app-server evidence.',
     };
@@ -1445,6 +1929,7 @@ describe('codex runtime domain contracts', () => {
       changed_files: [],
       check_results: [],
       execution_artifacts: [],
+      ...workflowRunExecutionTerminalEvidence(),
       runtime_evidence: runtimeEvidence({
         selected_execution_mode: 'cli_fallback' as CodexDockerRuntimeEvidence['selected_execution_mode'],
       }),
@@ -1469,6 +1954,7 @@ describe('codex runtime domain contracts', () => {
       changed_files: [],
       check_results: [],
       execution_artifacts: [],
+      ...workflowRunExecutionTerminalEvidence(),
       public_summary: 'Endpoint: /api/items',
     } satisfies CodexRunExecutionRuntimeJobResult;
 

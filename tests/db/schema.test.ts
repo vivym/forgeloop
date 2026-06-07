@@ -732,6 +732,9 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(automation_action_runs, 'workflow_id')).toBe('PgUUID');
     expect(columnType(codex_runtime_jobs, 'codex_session_turn_id')).toBe('PgUUID');
     expect(columnType(run_sessions, 'codex_session_turn_id')).toBe('PgUUID');
+    expect(hasUniqueIndex(run_sessions, 'run_sessions_one_active_execution_per_codex_session', ['codex_session_id'])).toBe(
+      true,
+    );
   });
 
   it('uses UUID ids for aggregate tables and text ids for runtime protocol tables', () => {
@@ -888,6 +891,13 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(columnType(codex_pending_workspace_bundles, 'runWorkerLeaseId')).toBe('PgText');
 
     expect(hasUniqueIndex(codex_runtime_jobs, 'codex_runtime_jobs_job_request_idx', ['job_request_id'])).toBe(true);
+    expect(hasUniqueIndex(codex_runtime_jobs, 'codex_runtime_jobs_one_active_run_execution_per_codex_session', [
+      'codex_session_id',
+    ])).toBe(true);
+    const executionHandoffMigration = readFileSync('packages/db/migrations/0004_plan_item_execution_handoff.sql', 'utf8');
+    expect(executionHandoffMigration).toContain(
+      `"input_json"->>'schema_version' = 'codex_run_execution_workload.v1'`,
+    );
     const targetAttemptColumns = uniqueIndexColumns(codex_runtime_jobs, 'codex_runtime_jobs_target_attempt_idx');
     expect(targetAttemptColumns.map((indexColumn) => (indexColumn as { name?: string }).name)).toEqual([
       'project_id',

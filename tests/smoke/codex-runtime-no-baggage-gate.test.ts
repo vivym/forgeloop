@@ -106,7 +106,7 @@ type PublicMutatorRoute = {
   body: string;
 };
 
-const workflowGateMarkers = ['PlanItemWorkflowService', 'workflow_legacy_entrypoint_disabled'];
+const workflowGateMarkers = ['PlanItemWorkflowService', 'workflow_legacy_entrypoint_disabled', 'legacy_execution_entrypoint_disabled'];
 const mutatorDecoratorPattern = /@(Post|Patch|Put|Delete)\('([^']+)'\)\s*(?:\n\s*(?:@[A-Za-z][^\n]*\n\s*)*)?([A-Za-z0-9_]+)\s*\(/g;
 const nonWorkflowStateMutatorRoutes = new Set(['Post run-sessions/:runSessionId/events/stream-token']);
 
@@ -225,21 +225,18 @@ const scanWorkflowOwnedPublicMutators = (rootDir: string): PublicWorkflowMutator
 const publicRunPackageGuardInvariant = (rootDir: string): string[] => {
   const source = readFileSync(join(rootDir, 'apps/control-plane-api/src/modules/run-control/run-control.service.ts'), 'utf8');
   const methods = serviceMethodsIn(source);
-  const runPackageWithRepository = methods.get('runPackageWithRepository');
-  const publicGuard = methods.get('assertPublicRunPackageMutationAllowed');
+  const publicTombstone = methods.get('legacyExecutionEntrypointDisabled');
   const findings: string[] = [];
-  if (runPackageWithRepository === undefined || !runPackageWithRepository.includes('assertPublicRunPackageMutationAllowed')) {
-    findings.push('runPackageWithRepository does not call assertPublicRunPackageMutationAllowed');
+  for (const legacyMethod of ['runPackage', 'runPackageWithRepository', 'runPackageReplacementContext', 'assertPublicRunPackageMutationAllowed']) {
+    if (methods.has(legacyMethod)) {
+      findings.push(`${legacyMethod} legacy execution package start helper is still present`);
+    }
   }
-  if (publicGuard === undefined) {
-    findings.push('assertPublicRunPackageMutationAllowed is missing');
-    return findings;
+  if (publicTombstone === undefined || !publicTombstone.includes('legacy_execution_entrypoint_disabled')) {
+    findings.push('retired public execution package tombstone does not emit legacy_execution_entrypoint_disabled');
   }
-  if (!publicGuard.includes('workflow_legacy_entrypoint_disabled')) {
-    findings.push('public run-package guard does not emit workflow_legacy_entrypoint_disabled');
-  }
-  if (/\breturn\s*;/.test(publicGuard) || /activeWorkflow|development_plan_item_id|getActivePlanItemWorkflowByItem/.test(publicGuard)) {
-    findings.push('public run-package guard conditionally allows legacy package runs');
+  if (/activeWorkflow|development_plan_item_id|getActivePlanItemWorkflowByItem|enqueueRunWithRepository\([^)]*dto/.test(source)) {
+    findings.push('retired public execution package code conditionally allows legacy starts');
   }
   return findings;
 };
@@ -416,6 +413,140 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
         'wave5_forbidden_session_mutation',
         'wave5_forbidden_session_mutation',
       ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('flags retired public execution package start calls and helpers', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-run-package-starts-'));
+    const forbiddenLines = [
+      'await fetch("/execution-packages/package-1/run");',
+      'await fetch("/execution-packages/package-1/rerun");',
+      'await fetch("/execution-packages/package-1/force-rerun");',
+      'createCommandApi().runPackage("package-1", actorId, {});',
+      'createCommandApi().rerunPackage("package-1", actorId, {});',
+      'createCommandApi().forceRerunPackage("package-1", actorId, {});',
+      "const command = { type: 'run_package', package_id: 'package-1' };",
+    ];
+    try {
+      const fixtureFile = 'apps/web/src/shared/api/commands.ts';
+      mkdirSync(join(tempRoot, 'apps/web/src/shared/api'), { recursive: true });
+      writeFileSync(join(tempRoot, fixtureFile), forbiddenLines.join('\n'));
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: [fixtureFile],
+        allowlist: [],
+      });
+
+      expect(result.violations.map((violation) => violation.excerpt)).toEqual(forbiddenLines);
+      expect(result.violations.map((violation) => violation.pattern)).toEqual(
+        forbiddenLines.map(() => 'legacy_public_execution_package_start'),
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('flags retired public execution package commands in public contracts', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-contract-run-package-'));
+    try {
+      const fixtureFile = 'packages/contracts/src/api.ts';
+      mkdirSync(join(tempRoot, 'packages/contracts/src'), { recursive: true });
+      writeFileSync(
+        join(tempRoot, fixtureFile),
+        [
+          "const runPackageCommandSchema = z.object({ type: z.literal('run_package') });",
+          "const command = { command: 'force_rerun_package', path: '/execution-packages/:packageId/force-rerun' };",
+        ].join('\n'),
+      );
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: [fixtureFile],
+        allowlist: [],
+      });
+
+      expect(result.violations.map((violation) => violation.pattern)).toEqual([
+        'legacy_public_execution_package_start',
+        'legacy_public_execution_package_start',
+      ]);
+      expect(result.violations.map((violation) => violation.excerpt)).toEqual([
+        "const runPackageCommandSchema = z.object({ type: z.literal('run_package') });",
+        "const command = { command: 'force_rerun_package', path: '/execution-packages/:packageId/force-rerun' };",
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('flags package scripts that re-expose retired package-run dogfood paths', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-package-dogfood-'));
+    const forbiddenScripts = {
+      'dogfood:delivery': 'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/delivery-dogfood.ts',
+      'dogfood:delivery:durable': 'tsx scripts/delivery-durable-dogfood.ts',
+      'dogfood:delivery:local-codex':
+        'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/delivery-local-codex-dogfood.ts',
+      'dogfood:delivery:work-items':
+        'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/delivery-dogfood-work-items.ts',
+      'dogfood:release-flow': 'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/release-flow-dogfood.ts',
+      'dogfood:release-flow:strict':
+        'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/release-flow-strict-dogfood.ts',
+    };
+    try {
+      writeFileSync(join(tempRoot, 'package.json'), JSON.stringify({ scripts: forbiddenScripts }, undefined, 2));
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: ['package.json'],
+        allowlist: [],
+      });
+
+      expect(result.violations.map((violation) => violation.pattern)).toEqual(
+        Object.keys(forbiddenScripts).map(() => 'legacy_public_execution_package_start'),
+      );
+      expect(result.violations.map((violation) => violation.excerpt)).toEqual(
+        Object.entries(forbiddenScripts).map(([scriptName, scriptCommand], index, entries) => {
+          const suffix = index === entries.length - 1 ? '' : ',';
+          return `"${scriptName}": "${scriptCommand}"${suffix}`;
+        }),
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('scans active package-script targets for retired package-run calls even with new script names', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-active-script-target-'));
+    try {
+      mkdirSync(join(tempRoot, 'scripts'), { recursive: true });
+      writeFileSync(
+        join(tempRoot, 'package.json'),
+        JSON.stringify(
+          {
+            scripts: {
+              'dogfood:workflow-regression': 'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/workflow-regression.ts',
+            },
+          },
+          undefined,
+          2,
+        ),
+      );
+      writeFileSync(join(tempRoot, 'scripts/workflow-regression.ts'), 'await fetch("/execution-packages/package-1/run");\n');
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        allowlist: [],
+      });
+
+      expect(result.violations).toContainEqual(
+        expect.objectContaining({
+          file: 'scripts/workflow-regression.ts',
+          pattern: 'legacy_public_execution_package_start',
+          excerpt: 'await fetch("/execution-packages/package-1/run");',
+        }),
+      );
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -831,7 +962,10 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
       );
 
       expect(publicRunPackageGuardInvariant(tempRoot)).toEqual([
-        'public run-package guard conditionally allows legacy package runs',
+        'runPackageWithRepository legacy execution package start helper is still present',
+        'assertPublicRunPackageMutationAllowed legacy execution package start helper is still present',
+        'retired public execution package tombstone does not emit legacy_execution_entrypoint_disabled',
+        'retired public execution package code conditionally allows legacy starts',
       ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });

@@ -193,7 +193,7 @@ export async function seedDevelopmentPlanItem(app: INestApplication, options: { 
   };
   await repository.saveDevelopmentPlanItemRevision(itemRevision);
 
-  return { ids: fixtureIds, plan: { id: fixtureIds.plan }, item: { id: fixtureIds.item } };
+  return { ids: fixtureIds, plan: { id: fixtureIds.plan }, item: { id: fixtureIds.item, revision_id: fixtureIds.itemRevision } };
 }
 
 export async function startWorkflow(app: INestApplication, developmentPlanId: string, itemId: string) {
@@ -826,6 +826,157 @@ async function seedBoundaryGenerationRuntime(repository: DeliveryRepository, pro
   process.env.FORGELOOP_AUTOMATION_TEST_NOW = new Date(Date.parse(workerNow) + 90_000).toISOString();
 }
 
+export async function seedRunExecutionRuntime(repository: DeliveryRepository, projectId: string, repoId: string, actorId: string) {
+  const workerNow = new Date().toISOString();
+  const expiresAt = new Date(Date.parse(workerNow) + 60 * 60_000).toISOString();
+  const networkPolicy = { mode: 'disabled' as const };
+  const profileId = stableUuid({ kind: 'plan-item-workflow-run-profile', projectId });
+  const profileRevisionId = stableUuid({ kind: 'plan-item-workflow-run-profile-revision', projectId });
+  const credentialBindingId = stableUuid({ kind: 'plan-item-workflow-run-credential-binding', projectId });
+  const credentialVersionId = stableUuid({ kind: 'plan-item-workflow-run-credential-version', projectId });
+  const workerId = stableUuid({ kind: 'plan-item-workflow-run-worker', projectId });
+  const dockerImageDigest = codexCanonicalDigest({ label: 'plan-item-workflow-run-docker-image' });
+  const networkPolicyDigest = codexRuntimeNetworkPolicyDigest(networkPolicy);
+  const codexConfigToml = 'approval_policy = "never"\n';
+  const revisionWithoutDigest = {
+    id: profileRevisionId,
+    profile_id: profileId,
+    revision_number: 1,
+    status: 'active' as const,
+    environment: 'test' as const,
+    docker_image: 'ghcr.io/forgeloop/codex-worker:test',
+    docker_image_digest: dockerImageDigest,
+    target_kind: 'run_execution' as const,
+    source_access_mode: 'path_policy_scoped' as const,
+    codex_config_toml: codexConfigToml,
+    codex_config_digest: codexCanonicalDigest(codexConfigToml),
+    expected_effective_config_digest: codexCanonicalDigest({ label: 'plan-item-workflow-run-effective-config' }),
+    effective_config_assertions: {
+      target_kind: 'run_execution' as const,
+      approval_policy: 'never' as const,
+      sandbox_type: 'danger-full-access' as const,
+      writable_roots_policy: 'task_workspace_only' as const,
+    },
+    app_server_required: true,
+    allowed_driver_kind: 'app_server' as const,
+    network_policy: networkPolicy,
+    resource_limits: {
+      cpu_ms: 300_000,
+      memory_mb: 1024,
+      pids: 256,
+      fds: 1024,
+      workspace_bytes: 10_000_000,
+      artifact_bytes: 1_048_576,
+      timeout_ms: 300_000,
+      output_limit_bytes: 1_048_576,
+      run_output_limit_bytes: 1_048_576,
+    },
+    docker_policy: {
+      network_disabled: true,
+      app_server_only: true,
+      rootless: true,
+      read_only_rootfs: true,
+      no_new_privileges: true,
+      drop_capabilities: ['ALL'] as const,
+    },
+    allowed_scopes: [{ project_id: projectId, repo_id: repoId }],
+    profile_digest: 'placeholder',
+    created_by_actor_id: actorId,
+    created_at: workerNow,
+  } satisfies CodexRuntimeProfileRevision;
+  const revision = { ...revisionWithoutDigest, profile_digest: codexRuntimeProfileRevisionDigest(revisionWithoutDigest) };
+  await repository.createCodexRuntimeProfileWithRevision({
+    profile: {
+      id: profileId,
+      name: 'Plan Item Workflow run execution test profile',
+      environment: 'test',
+      target_kind: 'run_execution',
+      active_revision_id: profileRevisionId,
+      created_by_actor_id: actorId,
+      created_at: workerNow,
+      updated_at: workerNow,
+    },
+    revision,
+  });
+  const secretPayload = { auth: { api_key: 'test-run-api-key' } };
+  await repository.createCodexCredentialBindingWithVersion({
+    binding: {
+      id: credentialBindingId,
+      profile_id: profileId,
+      project_id: projectId,
+      repo_id: repoId,
+      provider: 'unsafe_db',
+      purpose: 'model_provider',
+      active_version_id: credentialVersionId,
+      created_by_actor_id: actorId,
+      created_at: workerNow,
+      updated_at: workerNow,
+    },
+    version: {
+      id: credentialVersionId,
+      binding_id: credentialBindingId,
+      version_number: 1,
+      status: 'active',
+      payload_digest: codexCredentialPayloadDigest(secretPayload),
+      created_by_actor_id: actorId,
+      created_at: workerNow,
+    },
+    secret_payload_json: secretPayload,
+  });
+  await repository.createCodexWorkerBootstrapToken({
+    id: stableUuid({ kind: 'plan-item-workflow-run-bootstrap', projectId }),
+    worker_identity: `plan-item-workflow-run-worker-${projectId}`,
+    bootstrap_token_hash: codexCredentialPayloadDigest(`plan-item-workflow-run-bootstrap-${projectId}`),
+    bootstrap_token_version: 1,
+    status: 'active',
+    allowed_scopes_json: [{ project_id: projectId, repo_id: repoId }],
+    allowed_capabilities_json: {
+      target_kinds: ['run_execution'],
+      docker_image_digests: [dockerImageDigest],
+      network_policy_digests: [networkPolicyDigest],
+    },
+    created_by_actor_id: actorId,
+    created_at: workerNow,
+    expires_at: expiresAt,
+  });
+  await repository.upsertCodexWorkerRegistration({
+    worker_id: workerId,
+    worker_identity: `plan-item-workflow-run-worker-${projectId}`,
+    version: 'test-worker',
+    bootstrap_token_hash: codexCredentialPayloadDigest(`plan-item-workflow-run-bootstrap-${projectId}`),
+    bootstrap_token_version: 1,
+    session_token: `plan-item-workflow-run-session-${projectId}`,
+    session_expires_at: expiresAt,
+    status: 'online',
+    control_channel_status: 'connected',
+    allowed_scopes: [{ project_id: projectId, repo_id: repoId }],
+    capabilities: ['run_execution'],
+    docker_image_digests: [dockerImageDigest],
+    network_policy_digests: [networkPolicyDigest],
+    host_worker_uid: 501,
+    host_worker_gid: 20,
+    lease_count: 0,
+    max_concurrency: 100,
+    session_public_key_id: `plan-item-workflow-run-session-key-${projectId}`,
+    session_public_key_algorithm: 'x25519',
+    session_public_key_material: 'base64-public-key-material',
+    session_public_key_expires_at: expiresAt,
+    now: workerNow,
+  });
+  await repository.heartbeatCodexWorker({
+    worker_id: workerId,
+    session_token: `plan-item-workflow-run-session-${projectId}`,
+    nonce: `plan-item-workflow-run-heartbeat-${projectId}`,
+    nonce_timestamp: workerNow,
+    status: 'online',
+    control_channel_status: 'connected',
+    active_lease_count: 0,
+    capabilities: ['run_execution'],
+    now: workerNow,
+  });
+  process.env.FORGELOOP_AUTOMATION_TEST_NOW = new Date(Date.parse(workerNow) + 90_000).toISOString();
+}
+
 function stableUuid(input: Record<string, unknown>): string {
   const hex = codexCanonicalDigest(input).slice('sha256:'.length);
   const variant = ((Number.parseInt(hex[16] ?? '0', 16) & 0x3) | 0x8).toString(16);
@@ -865,6 +1016,7 @@ async function seedSpecRevisionForWorkflow(
     spec_id: seeded.ids.spec,
     work_item_id: seeded.ids.sourceRequirement,
     development_plan_item_id: seeded.item.id,
+    development_plan_item_revision_id: seeded.item.revision_id,
     workflow_id: seeded.workflow.id,
     codex_session_id: seeded.workflow.active_codex_session_id,
     codex_session_turn_id: turn.id,
@@ -934,7 +1086,19 @@ async function seedImplementationPlanRevisionForWorkflow(
     revision_number: 1,
     summary: 'Approved implementation plan.',
     content: 'Implementation plan content.',
-    structured_document: { steps: ['implement workflow transition service'] },
+    structured_document: {
+      steps: ['implement workflow transition service'],
+      validation_strategy: ['Focused API tests', 'deterministic handoff dogfood'],
+      required_checks: [
+        {
+          check_id: 'deterministic-handoff-dogfood',
+          command: 'pnpm dogfood:plan-item-execution-handoff',
+          timeout_seconds: 120,
+          blocks_review: true,
+        },
+      ],
+      handoff_criteria: ['Worker resumes the same Codex thread and terminalizes a new capsule.'],
+    },
     author_actor_id: seeded.ids.actorTech,
     created_at: now,
     approved_at: now,

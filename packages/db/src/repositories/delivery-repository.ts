@@ -192,6 +192,7 @@ export interface ListCodexCredentialBindingReadinessCandidatesInput {
 export interface CodexCredentialBindingReadinessCandidate {
   id: string;
   purpose: CodexCredentialBinding['purpose'];
+  repo_id?: string;
 }
 
 export type CodexWorkerReadinessDiagnostic =
@@ -572,7 +573,6 @@ export interface PendingWorkspaceBundleReplayInput extends PendingWorkspaceBundl
   id: string;
   run_session_id: string;
   execution_package_id: string;
-  archive_bytes_base64?: string;
   request_digest: string;
   created_at: string;
 }
@@ -776,7 +776,6 @@ export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
 
 export interface WorkspaceBundleDownloadForRuntimeJob {
   bundle_id: string;
-  archive_bytes_base64?: string;
   archive_ref: string;
   internal_artifact_object_id?: string;
   archive_digest: string;
@@ -841,6 +840,53 @@ export interface TerminalizeCodexRuntimeJobInput {
   replay_protection: CodexWorkerReplayProtectionInput;
   now: string;
 }
+
+export interface WorkflowExecutionRunSessionUpdate {
+  status: RunSession['status'];
+  summary?: string;
+  failure_kind?: RunSession['failure_kind'];
+  failure_reason?: string;
+  finished_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowExecutionTransitionInput {
+  id: string;
+  actor_id: string;
+  reason?: string;
+  created_at: string;
+}
+
+export interface TerminalizeWorkflowExecutionInput {
+  workflow_id: string;
+  codex_session_id: string;
+  codex_session_turn_id: string;
+  run_session_id: string;
+  runtime_job_id: string;
+  expected_workflow_status: PlanItemWorkflow['status'];
+  expected_run_session_status: RunSession['status'];
+  expected_run_session_updated_at?: string;
+  runtime_job_terminalization: TerminalizeCodexRuntimeJobInput;
+  codex_session_turn_terminalization: TerminalizeCodexSessionTurnInput;
+  run_session_update: WorkflowExecutionRunSessionUpdate;
+  workflow_transition: WorkflowExecutionTransitionInput;
+  stale_attempt: CodexSessionStaleTerminalizationAttempt;
+}
+
+export type TerminalizeWorkflowExecutionResult =
+  | {
+      stale: false;
+      runtime_job: CodexRuntimeJob;
+      run_session: RunSession;
+      execution_package: ExecutionPackage;
+      session: CodexSession;
+      turn: CodexSessionTurn;
+      workflow: PlanItemWorkflow;
+    }
+  | {
+      stale: true;
+      stale_attempt: CodexSessionStaleTerminalizationAttempt;
+    };
 
 export interface RecoverStaleCodexRuntimeJobsInput {
   stale_before: string;
@@ -1649,6 +1695,7 @@ export interface DeliveryRepository {
   terminalizeCodexSessionTurn(
     input: TerminalizeCodexSessionTurnInput,
   ): Promise<{ session: CodexSession; turn: CodexSessionTurn }>;
+  terminalizeWorkflowExecution(input: TerminalizeWorkflowExecutionInput): Promise<TerminalizeWorkflowExecutionResult>;
   markCodexSessionRunnerOwner(input: MarkCodexSessionRunnerOwnerInput): Promise<CodexSession>;
   clearCodexSessionRunnerOwner(input: ClearCodexSessionRunnerOwnerInput): Promise<CodexSession>;
   renewCodexSessionRunnerOwner(input: RenewCodexSessionRunnerOwnerInput): Promise<CodexSession>;

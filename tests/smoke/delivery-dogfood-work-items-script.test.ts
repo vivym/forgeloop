@@ -1,8 +1,5 @@
-import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
 import type { ArtifactKind } from '@forgeloop/contracts';
 import type { ExecutionPackage, ReviewPacket, RunSession, WorkItem } from '@forgeloop/domain';
@@ -10,30 +7,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { InMemoryDeliveryRepository } from '../../packages/db/src';
 import * as dogfoodWorkItemsScript from '../../scripts/delivery-dogfood-work-items';
-
-const execFile = promisify(execFileCallback);
-
-const defaultDogfoodEnv = (reportPath: string): NodeJS.ProcessEnv => {
-  const {
-    FORGELOOP_DATABASE_URL: _databaseUrl,
-    FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD: _strictEnabled,
-    FORGELOOP_LOCAL_CODEX_DOGFOOD_CONFIRM_DANGEROUS_MODE: _dangerousMode,
-    FORGELOOP_REPO_PATH: _repoPath,
-    FORGELOOP_REQUIRE_TRUSTED_ACTOR_SIGNATURE: _requireTrustedActorSignature,
-    ...env
-  } = process.env;
-  void _databaseUrl;
-  void _strictEnabled;
-  void _dangerousMode;
-  void _repoPath;
-  void _requireTrustedActorSignature;
-
-  return {
-    ...env,
-    NODE_ENV: 'test',
-    FORGELOOP_WORK_ITEM_DOGFOOD_REPORT_PATH: reportPath,
-  };
-};
 
 const at = '2026-05-08T00:00:00.000Z';
 const requiredArtifactKinds: ArtifactKind[] = [
@@ -232,29 +205,11 @@ const strictInput = (...bundles: ReturnType<typeof qualifyingBundle>[]) => ({
 });
 
 describe('delivery dogfood work items script', () => {
-  it(
-    'fails closed because the legacy package-run dogfood path is disabled in Wave 5',
-    async () => {
-      const outputDir = await mkdtemp(join(tmpdir(), 'forgeloop-work-item-dogfood-'));
-      const reportPath = join(outputDir, 'report.md');
+  it('does not expose the retired package-run Work Items dogfood command from package scripts', async () => {
+    const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as { scripts: Record<string, string> };
 
-      try {
-        await expect(
-          execFile('pnpm', ['dogfood:delivery:work-items'], {
-            cwd: process.cwd(),
-            env: defaultDogfoodEnv(reportPath),
-            maxBuffer: 1024 * 1024 * 10,
-            timeout: 30_000,
-          }),
-        ).rejects.toMatchObject({
-          stderr: expect.stringContaining('workflow_legacy_entrypoint_disabled'),
-        });
-      } finally {
-        await rm(outputDir, { recursive: true, force: true });
-      }
-    },
-    45_000,
-  );
+    expect(packageJson.scripts).not.toHaveProperty('dogfood:delivery:work-items');
+  });
 
   it('waits longer than the old five-second window for a persisted Review Packet', async () => {
     vi.useFakeTimers();

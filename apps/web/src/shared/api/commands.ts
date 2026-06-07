@@ -38,7 +38,6 @@ import type {
   RunEventStream,
   RunEventStreamHandlers,
   RunOperatorCommandResponse,
-  RunPackageBody,
   RunSession,
   RunQueuedWorkflowActionResponse,
   BugDetail,
@@ -176,6 +175,12 @@ export type RegenerateDevelopmentPlanDraftBody = RegenerateArtifactDraftBody;
 
 export interface StartPlanItemWorkflowBrainstormingBody {
   actor_id: string;
+}
+
+export interface StartPlanItemWorkflowExecutionBody {
+  actor_id: string;
+  idempotency_key?: string;
+  rationale_markdown?: string;
 }
 
 export interface ReadyForCodeReviewBody extends ActorCommandBody {
@@ -524,6 +529,12 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         body,
         ...actorRequest(body.actor_id),
       }),
+    startPlanItemWorkflowExecution: (workflowId: string, body: StartPlanItemWorkflowExecutionBody) =>
+      request<PlanItemWorkflowPublicDto>(`/plan-item-workflows/${encodeURIComponent(workflowId)}/execution/start`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
 
     continueExecution: (executionId: string, body: ActorCommandBody) =>
       request<Execution>(`/executions/${encodeURIComponent(executionId)}/continue`, {
@@ -593,25 +604,6 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    runPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
-      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/run`, {
-        method: 'POST',
-        body,
-        actorId,
-      }),
-    rerunPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
-      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/rerun`, {
-        method: 'POST',
-        body,
-        actorId,
-      }),
-    forceRerunPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
-      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/force-rerun`, {
-        method: 'POST',
-        body,
-        actorId,
-      }),
-
     getRunSession: (runSessionId: string) => request<RunSession>(`/run-sessions/${encodeURIComponent(runSessionId)}`),
     listRunEvents: async (runSessionId: string, options: { after?: string; actorId: string }) =>
       request<RunEventListResponse>(

@@ -22,19 +22,13 @@ import {
   releaseControlResponseSchema,
   releaseEvidenceSchema,
   releaseSchema,
-  forceRerunPackageRequestSchema,
-  forceRerunPackageResponseSchema,
   approveReleaseRequestSchema,
   requestReviewChangesRequestSchema,
-  rerunPackageRequestSchema,
-  rerunPackageResponseSchema,
   linkReleaseObjectRequestSchema,
   publicReleaseSummarySchema,
   releaseBlockerCodes,
   reviewPacketDecisions,
   reviewDecisionPayloadSchema,
-  runPackageRequestSchema,
-  runPackageResponseSchema,
   runSpecSchema,
   selfReviewResultSchema,
   releaseCockpitResponseSchema,
@@ -125,24 +119,6 @@ describe('delivery loop contracts', () => {
 
   const validCommandInventory = {
     commands: [
-      {
-        command: 'run_package',
-        method: 'POST',
-        path: '/execution-packages/:packageId/run',
-        description: 'Run an execution package.',
-      },
-      {
-        command: 'rerun_package',
-        method: 'POST',
-        path: '/execution-packages/:packageId/rerun',
-        description: 'Rerun an execution package with review context.',
-      },
-      {
-        command: 'force_rerun_package',
-        method: 'POST',
-        path: '/execution-packages/:packageId/force-rerun',
-        description: 'Force rerun an execution package after manual approval.',
-      },
       {
         command: 'approve_review_packet',
         method: 'POST',
@@ -1257,106 +1233,35 @@ describe('delivery loop contracts', () => {
     const parsed = commandInventoryResponseSchema.parse(validCommandInventory);
 
     expect(parsed.commands.map((item) => item.command)).toEqual([
-      'run_package',
-      'rerun_package',
-      'force_rerun_package',
       'approve_review_packet',
       'request_review_changes',
     ]);
     expect(parsed.commands.map((item) => item.path)).toEqual([
-      '/execution-packages/:packageId/run',
-      '/execution-packages/:packageId/rerun',
-      '/execution-packages/:packageId/force-rerun',
       '/review-packets/:reviewPacketId/approve',
       '/review-packets/:reviewPacketId/request-changes',
     ]);
   });
 
-  it('parses the run package request DTO', () => {
-    const parsed = runPackageRequestSchema.parse({
-      execution_package_id: 'exec-package-1',
-      requested_by_actor_id: 'actor-1',
-      executor_type: 'local_codex',
-      idempotency_key: 'run-package-1',
-    });
-
-    expect(parsed.workflow_only).toBe(false);
-    expect(parsed.executor_type).toBe('local_codex');
-  });
-
-  it('parses the rerun package request DTO', () => {
-    const parsed = rerunPackageRequestSchema.parse({
-      execution_package_id: 'exec-package-1',
-      previous_run_session_id: 'run-session-1',
-      review_packet_id: 'review-packet-1',
-      requested_changes_context: [validRequestedChange],
-      requested_by_actor_id: 'actor-1',
-      workflow_only: true,
-    });
-
-    expect(parsed.requested_changes_context).toHaveLength(1);
-    expect(parsed.workflow_only).toBe(true);
-  });
-
-  it('parses the force-rerun package request DTO', () => {
-    const parsed = forceRerunPackageRequestSchema.parse({
-      execution_package_id: 'exec-package-1',
-      previous_run_session_id: 'run-session-1',
-      requested_by_actor_id: 'actor-1',
-      force_reason: 'Reviewer approved a manual rerun after transient executor failure.',
-    });
-
-    expect(parsed.force).toBe(true);
-    expect(parsed.requested_changes_context).toEqual([]);
-  });
-
-  it('parses async accepted run package response DTOs', () => {
-    const run = runPackageResponseSchema.parse({
-      execution_package_id: 'exec-package-1',
-      run_session_id: 'run-session-1',
-      status: 'accepted',
-    });
-
-    const rerun = rerunPackageResponseSchema.parse({
-      execution_package_id: 'exec-package-1',
-      run_session_id: 'run-session-2',
-      status: 'accepted',
-    });
-
-    const forceRerun = forceRerunPackageResponseSchema.parse({
-      execution_package_id: 'exec-package-1',
-      run_session_id: 'run-session-3',
-      status: 'accepted',
-    });
-
-    expect([run.status, rerun.status, forceRerun.status]).toEqual(['accepted', 'accepted', 'accepted']);
-    expect([run.run_session_id, rerun.run_session_id, forceRerun.run_session_id]).toEqual([
-      'run-session-1',
-      'run-session-2',
-      'run-session-3',
-    ]);
-  });
-
-  it('rejects accepted run package responses without run sessions', () => {
-    expect(
-      runPackageResponseSchema.safeParse({
-        execution_package_id: 'exec-package-1',
-        status: 'accepted',
-      }).success,
-    ).toBe(false);
-  });
-
-  it('rejects workflow results on accepted run package responses', () => {
-    expect(
-      runPackageResponseSchema.safeParse({
-        execution_package_id: 'exec-package-1',
-        run_session_id: 'run-session-1',
-        status: 'accepted',
-        workflow_result: {
-          status: 'succeeded',
-        },
-      }).success,
-    ).toBe(false);
+  it('rejects legacy public execution package command inventory entries', () => {
+    for (const [command, path] of [
+      ['run_package', '/execution-packages/:packageId/run'],
+      ['rerun_package', '/execution-packages/:packageId/rerun'],
+      ['force_rerun_package', '/execution-packages/:packageId/force-rerun'],
+    ] as const) {
+      expect(
+        commandInventoryResponseSchema.safeParse({
+          commands: [
+            ...validCommandInventory.commands,
+            {
+              command,
+              method: 'POST',
+              path,
+              description: 'Legacy public execution package start command.',
+            },
+          ],
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('parses a failed self-review result', () => {
@@ -1610,7 +1515,7 @@ describe('delivery loop contracts', () => {
     ).toBe(false);
   });
 
-  it('rejects invalid API command names and force reruns without a reason', () => {
+  it('rejects invalid and retired API command names', () => {
     expect(
       commandInventoryResponseSchema.safeParse({
         commands: [
@@ -1625,10 +1530,16 @@ describe('delivery loop contracts', () => {
     ).toBe(false);
 
     expect(
-      forceRerunPackageRequestSchema.safeParse({
-        execution_package_id: 'exec-package-1',
-        previous_run_session_id: 'run-session-1',
-        requested_by_actor_id: 'actor-1',
+      commandInventoryResponseSchema.safeParse({
+        commands: [
+          ...validCommandInventory.commands,
+          {
+            command: 'force_rerun_package',
+            method: 'POST',
+            path: '/execution-packages/:packageId/force-rerun',
+            description: 'Retired public execution package command.',
+          },
+        ],
       }).success,
     ).toBe(false);
   });

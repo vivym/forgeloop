@@ -437,7 +437,7 @@ describe('product lane projections', () => {
       .expect(200);
   });
 
-  it('disables Product Lane run package actions when local Codex runtime readiness is blocked', async () => {
+  it('exposes execution gate navigation instead of Product Lane run package commands', async () => {
     const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
 
@@ -451,16 +451,17 @@ describe('product lane projections', () => {
           candidate.object.type === 'execution' && candidate.object.id === (executionPackage.execution_id ?? executionPackage.id),
       );
       const action = item?.actions.find(
-        (candidate: { kind: string; command?: { type: string } }) =>
-          candidate.kind === 'command' && candidate.command?.type === 'run_package',
+        (candidate: { kind: string; target?: { object_type?: string } }) =>
+          candidate.kind === 'navigate' && candidate.target?.object_type === 'execution',
       );
 
       expect(action).toMatchObject({
-        enabled: false,
-        disabled_reason: 'A local Codex run execution profile must be active for this package scope.',
-        blocked_reason: 'A local Codex run execution profile must be active for this package scope.',
-        command: expect.objectContaining({ type: 'run_package', package_id: executionPackage.id }),
+        kind: 'navigate',
+        enabled: true,
+        label: 'Open execution gate',
+        target: expect.objectContaining({ object_type: 'execution' }),
       });
+      expect(JSON.stringify(item)).not.toContain('run_package');
       expect(JSON.stringify(action)).not.toContain('sha256:');
       expect(JSON.stringify(action)).not.toContain('/workspace');
       expect(JSON.stringify(action)).not.toContain('codex_config');
@@ -647,8 +648,9 @@ describe('product lane projections', () => {
           object: { type: 'execution', id: upstreamPackage.execution_id ?? upstreamPackage.id },
           actions: expect.arrayContaining([
             expect.objectContaining({
-              kind: 'command',
-              command: expect.objectContaining({ type: 'run_package', package_id: upstreamPackage.id }),
+              kind: 'navigate',
+              label: 'Open execution gate',
+              target: expect.objectContaining({ object_type: 'execution' }),
             }),
           ]),
         }),

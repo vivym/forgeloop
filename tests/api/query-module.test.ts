@@ -255,20 +255,21 @@ describe('query module', () => {
       (candidate: { object: { type: string; id: string } }) =>
         candidate.object.type === 'execution' && candidate.object.id === executionPackage.id,
     );
-    const runAction = executionItem?.actions.find(
-      (candidate: { kind: string; command?: { type: string } }) =>
-        candidate.kind === 'command' && candidate.command?.type === 'run_package',
+    const executionGateAction = executionItem?.actions.find(
+      (candidate: { kind: string; target?: { object_type?: string } }) =>
+        candidate.kind === 'navigate' && candidate.target?.object_type === 'execution',
     );
-    expect(runAction).toMatchObject({ enabled: true });
+    expect(executionGateAction).toMatchObject({ enabled: true, label: 'Open execution gate' });
 
     const serialized = JSON.stringify(lane.body);
+    expect(serialized).not.toContain('run_package');
     expect(serialized).not.toContain(profile.profile_id);
     expect(serialized).not.toContain(configuredBinding.bindingId);
     expect(serialized).not.toContain('runtime_profile_id');
     expect(serialized).not.toContain('credential_binding_id');
   });
 
-  it('uses runtime readiness blockers to disable Product Lane run package actions', async () => {
+  it('uses execution gate navigation instead of Product Lane run package actions', async () => {
     const { app, repo } = await track(createTestApp());
     const executionPackage = await seedReadyLocalCodexExecutionPackage(repo);
 
@@ -280,16 +281,17 @@ describe('query module', () => {
         candidate.object.type === 'execution' && candidate.object.id === executionPackage.id,
     );
     const action = item?.actions.find(
-      (candidate: { kind: string; command?: { type: string } }) =>
-        candidate.kind === 'command' && candidate.command?.type === 'run_package',
+      (candidate: { kind: string; target?: { object_type?: string } }) =>
+        candidate.kind === 'navigate' && candidate.target?.object_type === 'execution',
     );
 
     expect(action).toMatchObject({
-      enabled: false,
-      disabled_reason: 'A local Codex run execution profile must be active for this package scope.',
-      blocked_reason: 'A local Codex run execution profile must be active for this package scope.',
-      command: expect.objectContaining({ type: 'run_package', package_id: executionPackage.id }),
+      kind: 'navigate',
+      enabled: true,
+      label: 'Open execution gate',
+      target: expect.objectContaining({ object_type: 'execution' }),
     });
+    expect(JSON.stringify(item)).not.toContain('run_package');
     expect(JSON.stringify(action)).not.toContain('sha256:');
     expect(JSON.stringify(action)).not.toContain('/workspace');
     expect(JSON.stringify(action)).not.toContain('codex_config');

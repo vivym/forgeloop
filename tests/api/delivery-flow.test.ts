@@ -668,9 +668,9 @@ describe('delivery control plane API', () => {
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(ownerHeaders)
       .send({ workflow_only: true })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
         expect(body).not.toHaveProperty('run_session_id');
         expect(body).not.toHaveProperty('workflow_result');
       });
@@ -718,7 +718,7 @@ describe('delivery control plane API', () => {
     } finally {
       await stopProcess(runtime.child);
     }
-  });
+  }, 15_000);
 
   it('updates an existing project repo binding for the same repo id instead of appending a stale path', async () => {
     const server = app.getHttpServer();
@@ -949,9 +949,9 @@ describe('delivery control plane API', () => {
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/run`)
       .send({ workflow_only: true })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
       });
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/run`)
@@ -962,13 +962,19 @@ describe('delivery control plane API', () => {
         force: true,
         force_reason: 'Plain run must reject rerun-only fields.',
       })
-      .expect(400);
+      .expect(410)
+      .expect(({ body }) => {
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
+      });
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/rerun`)
       .set(ownerHeaders)
       .send({ workflow_only: true })
-      .expect(400);
+      .expect(410)
+      .expect(({ body }) => {
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
+      });
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/rerun`)
       .set(ownerHeaders)
@@ -978,21 +984,27 @@ describe('delivery control plane API', () => {
         force_reason: 'Rerun must reject force-only fields.',
         workflow_only: true,
       })
-      .expect(400);
+      .expect(410)
+      .expect(({ body }) => {
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
+      });
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/rerun`)
       .set(ownerHeaders)
       .send({ previous_run_session_id: 'run-session-seeded', workflow_only: true })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
       });
 
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
       .set(ownerHeaders)
       .send({ previous_run_session_id: 'run-session-seeded', workflow_only: true })
-      .expect(400);
+      .expect(410)
+      .expect(({ body }) => {
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
+      });
     await request(server)
       .post(`/execution-packages/${executionPackage.id}/force-rerun`)
       .set(ownerHeaders)
@@ -1002,9 +1014,9 @@ describe('delivery control plane API', () => {
         force_reason: 'Stale run id.',
         workflow_only: true,
       })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
       });
     expect(await repository.listRunSessionsForPackage(executionPackage.id)).toEqual([]);
     expect(await repository.listTraceEventsForSubject('execution_package', executionPackage.id)).toEqual([]);
@@ -1031,9 +1043,9 @@ describe('delivery control plane API', () => {
         force_reason: 'Reviewer is not the owner.',
         workflow_only: true,
       })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
       });
 
     await request(server)
@@ -1045,9 +1057,9 @@ describe('delivery control plane API', () => {
         force_reason: 'Owner wants a fresh run before review.',
         workflow_only: true,
       })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
       });
 
     expect((await request(server).get(`/review-packets/${reviewPacket.id}`).expect(200)).body).toMatchObject({
@@ -1081,9 +1093,9 @@ describe('delivery control plane API', () => {
         force_reason: 'Owner wants a fresh run before review.',
         workflow_only: true,
       })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
       });
 
     expect(repository.operations).toEqual([]);

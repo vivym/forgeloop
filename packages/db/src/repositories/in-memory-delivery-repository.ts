@@ -110,12 +110,14 @@ import {
   validateCodexLaunchTargetKind,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
+  validateCodexRunExecutionWorkload,
   validateCodexSessionRuntimeContext,
   isActiveRunSessionStatus,
   parseInternalArtifactRef,
   isOpenReviewPacketStatus,
   isWorkItemAutomationTerminal,
   normalizeAutomationCapabilities,
+  transitionExecutionPackage,
 } from '@forgeloop/domain';
 
 import type {
@@ -210,6 +212,9 @@ import type {
   StartCodexRuntimeJobInput,
   TerminalizeCodexRuntimeJobInput,
   TombstoneInternalArtifactObjectInput,
+  TerminalizeWorkflowExecutionInput,
+  TerminalizeWorkflowExecutionResult,
+  WorkflowExecutionRunSessionUpdate,
   TerminalizeCodexLaunchLeaseInput,
   TerminalizeCodexSessionTurnInput,
   TerminalizePlanItemWorkflowQueuedActionInput,
@@ -397,6 +402,102 @@ const isCodexSessionResumeRuntimeJobInput = (inputJson: Record<string, unknown>)
   const continuation = context.continuation;
   return isRecord(continuation) && continuation.kind === 'resume_thread';
 };
+
+const isWorkflowRunExecutionWorkload = (inputJson: Record<string, unknown>): boolean =>
+  inputJson.schema_version === 'codex_run_execution_workload.v1';
+
+const isWorkflowRunExecutionJob = (job: CodexRuntimeJob): boolean =>
+  job.target_kind === 'run_execution' && isWorkflowRunExecutionWorkload(job.input_json);
+
+const createWorkflowRunExecutionLineageMatches = (input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): boolean => {
+  if (input.target.target_kind !== 'run_execution' || !isWorkflowRunExecutionWorkload(input.input_json)) {
+    return true;
+  }
+  if (input.workflow_id === undefined || input.codex_session_id === undefined || input.codex_session_turn_id === undefined) {
+    return false;
+  }
+  try {
+    const workload = validateCodexRunExecutionWorkload(input.input_json);
+    return (
+      workload.runtime_job_id === input.runtime_job_id &&
+      workload.plan_item_workflow_id === input.workflow_id &&
+      workload.run_session_id === input.target.target_id &&
+      workload.codex_session_runtime_context.codex_session_id === input.codex_session_id &&
+      workload.codex_session_runtime_context.codex_session_turn_id === input.codex_session_turn_id &&
+      workload.codex_session_terminalization.codex_session_id === input.codex_session_id &&
+      workload.codex_session_terminalization.codex_session_turn_id === input.codex_session_turn_id
+    );
+  } catch {
+    return false;
+  }
+};
+
+const workflowRunExecutionJobLineageMatches = (job: CodexRuntimeJob): boolean => {
+  if (!isWorkflowRunExecutionJob(job)) {
+    return true;
+  }
+  if (job.workflow_id === undefined || job.codex_session_id === undefined || job.codex_session_turn_id === undefined) {
+    return false;
+  }
+  try {
+    const workload = validateCodexRunExecutionWorkload(job.input_json);
+    return (
+      workload.runtime_job_id === job.id &&
+      workload.plan_item_workflow_id === job.workflow_id &&
+      workload.run_session_id === job.target_id &&
+      workload.codex_session_runtime_context.codex_session_id === job.codex_session_id &&
+      workload.codex_session_runtime_context.codex_session_turn_id === job.codex_session_turn_id &&
+      workload.codex_session_terminalization.codex_session_id === job.codex_session_id &&
+      workload.codex_session_terminalization.codex_session_turn_id === job.codex_session_turn_id
+    );
+  } catch {
+    return false;
+  }
+};
+
+const assertWorkflowRunExecutionJobLineageMatches = (
+  job: CodexRuntimeJob | undefined,
+  code: DomainErrorType['code'] = 'codex_runtime_job_unavailable',
+  message = 'Codex runtime job lineage was denied.',
+): void => {
+  if (job !== undefined && !workflowRunExecutionJobLineageMatches(job)) {
+    throw codexDenied(code, message);
+  }
+};
+
+const workflowExecutionRunStatusForTerminalStatus = (
+  terminalStatus: NonNullable<CodexRuntimeJob['terminal_status']>,
+): WorkflowExecutionRunSessionUpdate['status'] => {
+  switch (terminalStatus) {
+    case 'succeeded':
+      return 'succeeded';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Workflow execution terminal status ${terminalStatus} is unsupported`,
+      );
+  }
+};
+
+const assertWorkflowExecutionTerminalizationStatusMatches = (input: TerminalizeWorkflowExecutionInput): void => {
+  const terminalStatus = input.runtime_job_terminalization.terminal_status;
+  if (
+    input.codex_session_turn_terminalization.status !== terminalStatus ||
+    input.run_session_update.status !== workflowExecutionRunStatusForTerminalStatus(terminalStatus)
+  ) {
+    throw new DomainError(
+      'codex_session_stale_terminalization',
+      `codex_session_stale_terminalization: Workflow execution ${input.workflow_id} terminalization status is inconsistent`,
+    );
+  }
+};
+
+const canMaterializeDirectly = (job: CodexRuntimeJob): boolean =>
+  !isCodexSessionResumeRuntimeJobInput(job.input_json) || isWorkflowRunExecutionJob(job);
 
 const shouldKeepCodexSessionRunnerLeaseOpen = (job: CodexRuntimeJob, terminalStatus: string): boolean => {
   if (terminalStatus !== 'succeeded' || job.codex_session_id === undefined || job.codex_session_turn_id === undefined) {
@@ -616,7 +717,6 @@ interface CodexPendingWorkspaceBundlePrivateRecord extends PendingWorkspaceBundl
   id: string;
   run_session_id: string;
   execution_package_id: string;
-  archive_bytes_base64?: string;
   request_digest: string;
   runtime_job_id?: string;
   status: 'pending' | 'bound';
@@ -1090,39 +1190,39 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     };
   }
 
-	async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
-		const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
-		let credential =
-			input.credential_binding_id === undefined
-				? undefined
-				: this.getScopedCodexCredentialBindingPublic({
-					credential_binding_id: input.credential_binding_id,
-					target_kind: input.target_kind,
-					...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
-					project_id: input.project_id,
-					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-					now: input.now,
-				});
-		if (credential === undefined && input.credential_binding_id === undefined && profileRevision !== undefined) {
-			const candidates = await this.listCodexCredentialBindingReadinessCandidates({
-				project_id: input.project_id,
-				...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-				runtime_profile_id: profileRevision.profile_id,
-				target_kind: input.target_kind,
-				now: input.now,
-			});
-			const modelProviderCandidate = candidates.filter((candidate) => candidate.purpose === 'model_provider');
-			if (modelProviderCandidate.length === 1) {
-				credential = this.getScopedCodexCredentialBindingPublic({
-					credential_binding_id: modelProviderCandidate[0]!.id,
-					target_kind: input.target_kind,
-					runtime_profile_id: profileRevision.profile_id,
-					project_id: input.project_id,
-					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-					now: input.now,
-				});
-			}
-		}
+  async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
+    const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
+    let credential =
+      input.credential_binding_id === undefined
+        ? undefined
+        : this.getScopedCodexCredentialBindingPublic({
+          credential_binding_id: input.credential_binding_id,
+          target_kind: input.target_kind,
+          ...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
+          project_id: input.project_id,
+          ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+          now: input.now,
+        });
+    if (credential === undefined && input.credential_binding_id === undefined && profileRevision !== undefined) {
+      const candidates = await this.listCodexCredentialBindingReadinessCandidates({
+        project_id: input.project_id,
+        ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+        runtime_profile_id: profileRevision.profile_id,
+        target_kind: input.target_kind,
+        now: input.now,
+      });
+      const modelProviderCandidate = candidates.filter((candidate) => candidate.purpose === 'model_provider');
+      if (modelProviderCandidate.length === 1) {
+        credential = this.getScopedCodexCredentialBindingPublic({
+          credential_binding_id: modelProviderCandidate[0]!.id,
+          target_kind: input.target_kind,
+          runtime_profile_id: profileRevision.profile_id,
+          project_id: input.project_id,
+          ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+          now: input.now,
+        });
+      }
+    }
     const profileNetworkPolicy = profileRevision === undefined ? undefined : normalizeCodexRuntimeNetworkPolicy(profileRevision.network_policy);
     const worker =
       profileRevision !== undefined && profileNetworkPolicy !== undefined
@@ -1223,7 +1323,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         const activeVersion = this.codexCredentialBindingVersions.get(binding.active_version_id)?.version;
         return activeVersion?.status === 'active';
       })
-      .map((binding) => ({ id: binding.id, purpose: binding.purpose }));
+      .map((binding) => ({
+        id: binding.id,
+        purpose: binding.purpose,
+        ...(binding.repo_id === undefined ? {} : { repo_id: binding.repo_id }),
+      }));
   }
 
   async getCodexWorkerReadinessDiagnostic(
@@ -1511,6 +1615,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
   ): Promise<CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeResult> {
     validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
+    if (!createWorkflowRunExecutionLineageMatches(input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workflow execution lineage was rejected.');
+    }
 
     const replayByRequestId = this.codexRuntimeJobRequestIds.get(input.job_request_id);
     if (replayByRequestId !== undefined) {
@@ -1538,6 +1645,25 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
     if (!this.codexRuntimeJobHasRequiredLaunchFence(input)) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job launch fence was incomplete.');
+    }
+    if (
+      input.target.target_kind === 'run_execution' &&
+      input.codex_session_id !== undefined &&
+      isWorkflowRunExecutionWorkload(input.input_json)
+    ) {
+      const activeJob = valuesFor(this.codexRuntimeJobs)
+        .map((record) => record.job)
+        .find(
+          (job) =>
+            job.id !== input.runtime_job_id &&
+            job.target_kind === 'run_execution' &&
+            job.codex_session_id === input.codex_session_id &&
+            isWorkflowRunExecutionJob(job) &&
+            (job.status === 'queued' || job.status === 'accepted' || job.status === 'materializing' || job.status === 'running'),
+        );
+      if (activeJob !== undefined) {
+        throw codexDenied('codex_runtime_job_unavailable', 'Runtime job active workflow execution fence was rejected.');
+      }
     }
 
     const profileRevision = this.codexRuntimeProfileRevisions.get(input.runtime_profile_revision_id);
@@ -1752,6 +1878,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (
       record === undefined ||
       leaseRecord === undefined ||
+      !workflowRunExecutionJobLineageMatches(record.job) ||
       record.job.worker_id !== input.worker_id ||
       (record.job.status !== 'accepted' && record.job.status !== 'materializing') ||
       record.job.cancel_requested_at !== undefined ||
@@ -1785,6 +1912,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
           job.worker_id === input.worker_id &&
           job.status === 'queued' &&
           job.expires_at > input.now &&
+          workflowRunExecutionJobLineageMatches(job) &&
           (input.target_kinds === undefined || input.target_kinds.includes(job.target_kind)),
       )
       .sort((left, right) => left.created_at.localeCompare(right.created_at))
@@ -1809,6 +1937,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       record === undefined ||
       lease === undefined ||
       envelope === undefined ||
+      !workflowRunExecutionJobLineageMatches(record.job) ||
       record.job.worker_id !== input.worker_id ||
       record.job.expires_at <= input.now ||
       lease.lease.status !== 'active' ||
@@ -1877,6 +2006,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     const envelope = this.codexLaunchTokenEnvelopes.get(input.envelope_id);
     const lease = record === undefined ? undefined : this.codexLaunchLeases.get(record.job.launch_lease_id);
+    assertWorkflowRunExecutionJobLineageMatches(
+      record?.job,
+      'codex_launch_lease_denied',
+      'Codex launch token envelope lineage was denied.',
+    );
     if (
       record === undefined ||
       envelope === undefined ||
@@ -1968,12 +2102,17 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_launch_materialization_denied', 'Codex runtime job materialization was denied.');
     }
-    if (isCodexSessionResumeRuntimeJobInput(record.job.input_json)) {
+    if (!canMaterializeDirectly(record.job)) {
       throw codexDenied(
         'codex_session_runner_unavailable',
         'codex_session_runner_unavailable: Codex session resume jobs must attach to the session runner.',
       );
     }
+    assertWorkflowRunExecutionJobLineageMatches(
+      record.job,
+      'codex_launch_materialization_denied',
+      'Codex runtime job materialization lineage was denied.',
+    );
     if (record.job.status === 'materializing' || record.job.status === 'running') {
       if (
         record.job.materialization_request_id === input.materialization_request_id &&
@@ -2046,12 +2185,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job start was denied.');
     }
-    if (isCodexSessionResumeRuntimeJobInput(record.job.input_json)) {
+    if (!canMaterializeDirectly(record.job)) {
       throw codexDenied(
         'codex_session_runner_unavailable',
         'codex_session_runner_unavailable: Codex session resume jobs must attach to the session runner.',
       );
     }
+    assertWorkflowRunExecutionJobLineageMatches(record.job, 'codex_runtime_job_unavailable', 'Codex runtime job start lineage was denied.');
     if (record.job.status === 'running') {
       if (
         record.job.start_idempotency_key === input.idempotency_key &&
@@ -2333,27 +2473,20 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   async createPendingWorkspaceBundleArtifact(input: CreatePendingWorkspaceBundleArtifactInput): Promise<void> {
     const activeLease = this.runWorkerLeases.get(input.run_session_id);
     const runSession = this.runSessions.get(input.run_session_id);
-    const archiveBytes =
-      input.archive_bytes_base64 === undefined ? undefined : Buffer.from(input.archive_bytes_base64, 'base64');
     const object =
       input.internal_artifact_object_id === undefined ? undefined : this.internalArtifactObjects.get(input.internal_artifact_object_id);
     if (
       activeLease === undefined ||
       runSession === undefined ||
-      runSession.execution_package_id !== input.execution_package_id ||
-      activeLease.id !== input.run_worker_lease_id ||
-      activeLease.status !== 'active' ||
-      activeLease.expires_at <= input.created_at ||
-      input.internal_artifact_object_id === undefined
-    ) {
+        runSession.execution_package_id !== input.execution_package_id ||
+        activeLease.id !== input.run_worker_lease_id ||
+        activeLease.status !== 'active' ||
+        activeLease.expires_at <= input.created_at ||
+        input.internal_artifact_object_id === undefined
+      ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle fence was rejected.');
     }
-    const archiveBytesBase64 = archiveBytes?.toString('base64');
     if (
-      (archiveBytes !== undefined &&
-        (archiveBytesBase64 !== input.archive_bytes_base64 ||
-          archiveBytes.byteLength !== input.size_bytes ||
-          rawSha256(archiveBytes) !== input.archive_digest)) ||
       input.expires_at <= input.created_at ||
       input.pending_artifact_ref !==
         `artifact://internal/workspace_bundle/run_session/${input.run_session_id}/${input.bundle_id}` ||
@@ -2393,7 +2526,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       run_worker_lease_id: input.run_worker_lease_id,
       run_session_id: input.run_session_id,
       execution_package_id: input.execution_package_id,
-      ...(input.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: input.archive_bytes_base64 }),
       size_bytes: input.size_bytes,
       workspace_acquisition_digest: input.workspace_acquisition_digest,
       workspace_acquisition_json: clone(input.workspace_acquisition_json),
@@ -2426,8 +2558,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         existing.size_bytes === input.size_bytes &&
         existing.expires_at === input.expires_at &&
         existing.workspace_acquisition_digest === input.workspace_acquisition_digest &&
-        valuesEqual(existing.workspace_acquisition_json, input.workspace_acquisition_json) &&
-        existing.archive_bytes_base64 === input.archive_bytes_base64
+        valuesEqual(existing.workspace_acquisition_json, input.workspace_acquisition_json)
       ) {
         return;
       }
@@ -2467,6 +2598,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       leaseRecord === undefined ||
       pending === undefined ||
       artifact === undefined ||
+      !workflowRunExecutionJobLineageMatches(record.job) ||
       record.job.worker_id !== input.worker_id ||
       record.job.target_kind !== 'run_execution' ||
       (record.job.status !== 'accepted' && record.job.status !== 'materializing') ||
@@ -2493,19 +2625,8 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle download was denied.');
     }
-    if (pending.archive_bytes_base64 !== undefined) {
-      const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
-      if (
-        archiveBytes.byteLength !== pending.size_bytes ||
-        rawSha256(archiveBytes) !== pending.archive_digest ||
-        workspaceBundleArchiveManifestDigest(archiveBytes) !== pending.manifest_digest
-      ) {
-        throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
-      }
-    }
     return {
       bundle_id: pending.bundle_id,
-      ...(pending.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: pending.archive_bytes_base64 }),
       archive_ref: pending.pending_artifact_ref,
       ...(pending.internal_artifact_object_id === undefined
         ? {}
@@ -2585,6 +2706,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async terminalizeCodexRuntimeJob(input: TerminalizeCodexRuntimeJobInput): Promise<CodexRuntimeJob> {
+    this.assertAndRecordCodexRuntimeJobTerminalizationWorkerProof(input);
+    return this.terminalizeCodexRuntimeJobAfterWorkerProof(input);
+  }
+
+  private assertAndRecordCodexRuntimeJobTerminalizationWorkerProof(input: TerminalizeCodexRuntimeJobInput): void {
     const session = this.assertCodexRuntimeJobWorkerSession(
       input.runtime_job_id,
       input.worker_id,
@@ -2604,11 +2730,15 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       input.replay_protection,
       session.session_epoch,
     );
+  }
+
+  private terminalizeCodexRuntimeJobAfterWorkerProof(input: TerminalizeCodexRuntimeJobInput): CodexRuntimeJob {
     const record = this.codexRuntimeJobs.get(input.runtime_job_id);
     const leaseRecord = this.codexLaunchLeases.get(input.launch_lease_id);
     if (
       record === undefined ||
       leaseRecord === undefined ||
+      !workflowRunExecutionJobLineageMatches(record.job) ||
       record.job.launch_lease_id !== input.launch_lease_id ||
       record.job.worker_id !== input.worker_id ||
       leaseRecord.lease.worker_id !== input.worker_id
@@ -5061,6 +5191,132 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return { session: clone(updatedSession), turn: clone(updatedTurn) };
   }
 
+  async terminalizeWorkflowExecution(input: TerminalizeWorkflowExecutionInput): Promise<TerminalizeWorkflowExecutionResult> {
+    return this.objectLocks.withLocks([`plan-item-workflow:${input.workflow_id}`, `workflow-execution-terminalize:${input.workflow_id}`], async () => {
+      assertWorkflowExecutionTerminalizationStatusMatches(input);
+      const workflow = this.planItemWorkflows.get(input.workflow_id);
+      const runSession = this.runSessions.get(input.run_session_id);
+      const runtimeRecord = this.codexRuntimeJobs.get(input.runtime_job_id);
+      const executionPackage = runSession === undefined ? undefined : this.executionPackages.get(runSession.execution_package_id);
+      if (
+        workflow === undefined ||
+        runSession === undefined ||
+        runtimeRecord === undefined ||
+        executionPackage === undefined ||
+        workflow.status !== input.expected_workflow_status ||
+        runSession.status !== input.expected_run_session_status ||
+        (input.expected_run_session_updated_at !== undefined && runSession.updated_at !== input.expected_run_session_updated_at) ||
+        workflow.active_codex_session_id !== input.codex_session_id ||
+        runSession.workflow_id !== input.workflow_id ||
+        runSession.codex_session_id !== input.codex_session_id ||
+        runSession.codex_session_turn_id !== input.codex_session_turn_id ||
+        runtimeRecord.job.workflow_id !== input.workflow_id ||
+        runtimeRecord.job.codex_session_id !== input.codex_session_id ||
+        runtimeRecord.job.codex_session_turn_id !== input.codex_session_turn_id ||
+        runtimeRecord.job.target_id !== input.run_session_id ||
+        runtimeRecord.job.id !== input.runtime_job_terminalization.runtime_job_id ||
+        runtimeRecord.job.launch_lease_id !== input.runtime_job_terminalization.launch_lease_id ||
+        executionPackage.id !== runSession.execution_package_id ||
+        !workflowRunExecutionJobLineageMatches(runtimeRecord.job)
+      ) {
+        throw new DomainError(
+          'codex_session_stale_terminalization',
+          `codex_session_stale_terminalization: Workflow execution ${input.workflow_id} terminalization is stale`,
+        );
+      }
+
+      this.assertAndRecordCodexRuntimeJobTerminalizationWorkerProof(input.runtime_job_terminalization);
+
+      if (this.workflowExecutionSessionTerminalizationIsStale(input)) {
+        await this.saveStaleCodexSessionTerminalizationAttempt(input.stale_attempt);
+        return { stale: true, stale_attempt: clone(input.stale_attempt) };
+      }
+
+      const runtimeJob = this.terminalizeCodexRuntimeJobAfterWorkerProof(input.runtime_job_terminalization);
+      const { session, turn } = await this.terminalizeCodexSessionTurn(input.codex_session_turn_terminalization);
+      const terminalResult = runtimeJob.terminal_result_json;
+      const terminalChangedFiles = Array.isArray(terminalResult?.changed_files) ? terminalResult.changed_files : runSession.changed_files;
+      const terminalCheckResults = Array.isArray(terminalResult?.check_results) ? terminalResult.check_results : runSession.check_results;
+      const terminalArtifacts = Array.isArray(terminalResult?.execution_artifacts)
+        ? terminalResult.execution_artifacts
+        : runSession.artifacts;
+      const updatedRunSession: RunSession = {
+        ...clone(runSession),
+        status: input.run_session_update.status,
+        changed_files: clone(terminalChangedFiles as RunSession['changed_files']),
+        check_results: clone(terminalCheckResults as RunSession['check_results']),
+        artifacts: clone(terminalArtifacts as RunSession['artifacts']),
+        ...(input.run_session_update.summary === undefined ? {} : { summary: input.run_session_update.summary }),
+        ...(input.run_session_update.failure_kind === undefined ? {} : { failure_kind: input.run_session_update.failure_kind }),
+        ...(input.run_session_update.failure_reason === undefined ? {} : { failure_reason: input.run_session_update.failure_reason }),
+        finished_at: input.run_session_update.finished_at,
+        updated_at: input.run_session_update.updated_at,
+      };
+      const nextWorkflowStatus: PlanItemWorkflow['status'] =
+        input.runtime_job_terminalization.terminal_status === 'succeeded' ? 'code_review' : 'blocked';
+      const updatedWorkflow: PlanItemWorkflow = {
+        ...clone(workflow),
+        status: nextWorkflowStatus,
+        ...(nextWorkflowStatus === 'blocked' ? { previous_status: workflow.status } : {}),
+        updated_at: input.workflow_transition.created_at,
+      };
+      const updatedExecutionPackage = transitionExecutionPackage(
+        executionPackage,
+        input.runtime_job_terminalization.terminal_status === 'succeeded'
+          ? {
+              type: 'execution_succeeded',
+              at: input.workflow_transition.created_at,
+            }
+          : {
+              type: 'execution_failed_blocked',
+              blocked_reason: input.run_session_update.failure_reason ?? input.runtime_job_terminalization.terminal_status,
+              at: input.workflow_transition.created_at,
+            },
+      );
+      this.runSessions.set(updatedRunSession.id, clone(updatedRunSession));
+      this.executionPackages.set(updatedExecutionPackage.id, clone(updatedExecutionPackage));
+      this.planItemWorkflows.set(updatedWorkflow.id, clone(updatedWorkflow));
+      return {
+        stale: false,
+        runtime_job: clone(runtimeJob),
+        run_session: clone(updatedRunSession),
+        execution_package: clone(updatedExecutionPackage),
+        session,
+        turn,
+        workflow: clone(updatedWorkflow),
+      };
+    });
+  }
+
+  private workflowExecutionSessionTerminalizationIsStale(input: TerminalizeWorkflowExecutionInput): boolean {
+    const sessionInput = input.codex_session_turn_terminalization;
+    const session = this.codexSessions.get(sessionInput.session_id);
+    const turn = this.codexSessionTurns.get(sessionInput.turn_id);
+    const lease = this.codexSessionLeases.get(sessionInput.lease_id);
+    return (
+      session === undefined ||
+      turn === undefined ||
+      lease === undefined ||
+      session.id !== input.codex_session_id ||
+      turn.id !== input.codex_session_turn_id ||
+      turn.codex_session_id !== session.id ||
+      session.latest_turn_id !== turn.id ||
+      session.latest_turn_digest !== turn.input_digest ||
+      turn.status !== 'running' ||
+      lease.codex_session_id !== session.id ||
+      session.active_lease_id !== lease.id ||
+      lease.status !== 'active' ||
+      lease.lease_token_hash !== sessionInput.lease_token_hash ||
+      lease.worker_id !== sessionInput.worker_id ||
+      lease.worker_session_digest !== sessionInput.worker_session_digest ||
+      lease.lease_epoch !== sessionInput.lease_epoch ||
+      lease.expires_at <= sessionInput.now ||
+      session.lease_epoch !== sessionInput.lease_epoch ||
+      (session.latest_capsule_digest ?? null) !== (sessionInput.expected_input_capsule_digest ?? null) ||
+      (turn.expected_input_capsule_digest ?? null) !== (sessionInput.expected_input_capsule_digest ?? null)
+    );
+  }
+
   async createCodexSessionFork(input: CreateCodexSessionForkInput): Promise<CodexSession> {
     const workflow = this.planItemWorkflows.get(input.workflow_id);
     const parent = this.codexSessions.get(input.parent_session_id);
@@ -6385,6 +6641,22 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
           'INVALID_TRANSITION',
           `Package ${runSession.execution_package_id} already has active run ${existingActive.id}`,
         );
+      }
+      if (runSession.codex_session_id !== undefined) {
+        const existingActiveForSession = valuesFor(this.runSessions)
+          .filter(
+            (candidate) =>
+              candidate.id !== runSession.id &&
+              candidate.codex_session_id === runSession.codex_session_id &&
+              isActiveRunSessionStatus(candidate.status),
+          )
+          .sort(byCreatedAt)[0];
+        if (existingActiveForSession !== undefined) {
+          throw new DomainError(
+            'workflow_execution_already_running',
+            `workflow_execution_already_running: Codex session ${runSession.codex_session_id} already has active run ${existingActiveForSession.id}`,
+          );
+        }
       }
     }
     this.runSessions.set(runSession.id, clone(runSession));
@@ -8649,7 +8921,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       stored.internal_artifact_object_id === input.internal_artifact_object_id &&
       stored.archive_digest === input.archive_digest &&
       stored.manifest_digest === input.manifest_digest &&
-      stored.archive_bytes_base64 === input.archive_bytes_base64 &&
       stored.run_worker_lease_id === input.run_worker_lease_id &&
       stored.size_bytes === input.size_bytes &&
       stored.workspace_acquisition_digest === input.workspace_acquisition_digest &&
@@ -8999,7 +9270,6 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       existing.internal_artifact_object_id === pending.internal_artifact_object_id &&
       existing.archive_digest === pending.archive_digest &&
       existing.manifest_digest === pending.manifest_digest &&
-      existing.archive_bytes_base64 === pending.archive_bytes_base64 &&
       existing.run_worker_lease_id === pending.run_worker_lease_id &&
       existing.size_bytes === pending.size_bytes &&
       existing.expires_at === pending.expires_at &&

@@ -61,6 +61,7 @@ const runtimeMetadata = {
 
 const tokenHash = (token: string) => codexCredentialPayloadDigest(token);
 const bytesDigest = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+const fixtureDigest = (char: string) => `sha256:${char.repeat(64)}`;
 const workspaceBundleArchiveFixture = (input: { bundle_id: string; created_at?: string; files?: Record<string, string> }) => {
   const files = Object.entries(input.files ?? { 'README.md': 'workspace bundle fixture\n' }).map(([path, content]) => {
     const bytes = Buffer.from(content, 'utf8');
@@ -263,6 +264,9 @@ const generationTarget = (overrides: Partial<CodexLaunchTarget> = {}): CodexLaun
 const runSession = (overrides: Partial<RunSession> = {}): RunSession => ({
   id: overrides.id ?? 'run-session-1',
   execution_package_id: overrides.execution_package_id ?? 'execution-package-1',
+  ...(overrides.workflow_id === undefined ? {} : { workflow_id: overrides.workflow_id }),
+  ...(overrides.codex_session_id === undefined ? {} : { codex_session_id: overrides.codex_session_id }),
+  ...(overrides.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: overrides.codex_session_turn_id }),
   requested_by_actor_id: overrides.requested_by_actor_id ?? 'actor-owner',
   status: overrides.status ?? 'running',
   changed_files: overrides.changed_files ?? [],
@@ -285,6 +289,10 @@ const runSession = (overrides: Partial<RunSession> = {}): RunSession => ({
 const executionPackage = (overrides: Partial<ExecutionPackage> = {}): ExecutionPackage => ({
   id: overrides.id ?? 'execution-package-1',
   work_item_id: overrides.work_item_id ?? 'work-item-1',
+  ...(overrides.development_plan_item_id === undefined ? {} : { development_plan_item_id: overrides.development_plan_item_id }),
+  ...(overrides.workflow_id === undefined ? {} : { workflow_id: overrides.workflow_id }),
+  ...(overrides.codex_session_id === undefined ? {} : { codex_session_id: overrides.codex_session_id }),
+  ...(overrides.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: overrides.codex_session_turn_id }),
   spec_id: overrides.spec_id ?? 'spec-1',
   spec_revision_id: overrides.spec_revision_id ?? 'spec-revision-1',
   plan_id: overrides.plan_id ?? 'plan-1',
@@ -641,6 +649,291 @@ const runtimeJobInput = async (
     now,
     ...overrides,
   };
+};
+
+const workflowRunExecutionWorkload = (
+  overrides: {
+    runtime_job_id?: string;
+    workflow_id?: string;
+    codex_session_id?: string;
+    codex_session_turn_id?: string;
+    run_session_id?: string;
+    execution_package_id?: string;
+    execution_package_version?: number;
+    workspace_bundle_id?: string;
+    workspace_bundle_digest?: string;
+    workspace_acquisition_json?: Record<string, unknown>;
+    launch_lease_id?: string;
+    runtime_worker_id?: string;
+    runtime_worker_session_digest?: string;
+    codex_session_lease_id?: string;
+    codex_session_lease_epoch?: number;
+    codex_session_worker_id?: string;
+    codex_session_worker_session_digest?: string;
+  } = {},
+): Record<string, unknown> => {
+  const runtimeJobId = overrides.runtime_job_id ?? 'workflow-runtime-job-1';
+  const workflowId = overrides.workflow_id ?? 'workflow-1';
+  const codexSessionId = overrides.codex_session_id ?? 'session-1';
+  const codexSessionTurnId = overrides.codex_session_turn_id ?? 'turn-1';
+  const workspaceBundleId = overrides.workspace_bundle_id ?? 'workflow-workspace-bundle-1';
+  const workspaceBundleDigest = overrides.workspace_bundle_digest ?? fixtureDigest('4');
+  const inputCapsuleDigest = fixtureDigest('1');
+  const inputMemoryDigest = fixtureDigest('2');
+  const inputEnvironmentDigest = fixtureDigest('3');
+
+  return {
+    schema_version: 'codex_run_execution_workload.v1',
+    runtime_job_id: runtimeJobId,
+    plan_item_workflow_id: workflowId,
+    development_plan_id: 'development-plan-1',
+    development_plan_item_id: 'item-1',
+    run_session_id: overrides.run_session_id ?? 'workflow-run-session-1',
+    execution_package_id: overrides.execution_package_id ?? 'workflow-execution-package-1',
+    execution_package_version: overrides.execution_package_version ?? 1,
+    workspace_bundle_id: workspaceBundleId,
+    workspace_bundle_digest: workspaceBundleDigest,
+    package_prompt_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/prompt`,
+    package_prompt_digest: fixtureDigest('5'),
+    execution_context_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/context`,
+    execution_context_digest: fixtureDigest('6'),
+    path_policy_digest: fixtureDigest('7'),
+    output_schema_version: 'codex_run_execution_result.v1',
+    created_at: now,
+    expires_at: expiresAt,
+    workspace_acquisition_json:
+      overrides.workspace_acquisition_json ??
+      {
+        schema_version: 'workspace_bundle_acquisition.v1',
+        bundle_id: workspaceBundleId,
+        archive_ref: `artifact://internal/workspace_bundle/run_session/${
+          overrides.run_session_id ?? 'workflow-run-session-1'
+        }/${workspaceBundleId}`,
+        archive_digest: workspaceBundleDigest,
+        manifest_digest: fixtureDigest('8'),
+        size_bytes: 128,
+        expires_at: expiresAt,
+      },
+    codex_session_runtime_context: {
+      schema_version: 'codex_session_runtime_context.v1',
+      codex_session_id: codexSessionId,
+      codex_session_turn_id: codexSessionTurnId,
+      lease_id: overrides.launch_lease_id ?? `workflow-launch-lease-${runtimeJobId}`,
+      lease_epoch: 1,
+      worker_id: overrides.runtime_worker_id ?? 'worker-1',
+      worker_session_digest: overrides.runtime_worker_session_digest ?? tokenHash('session-token-1'),
+      expected_input_capsule_digest: inputCapsuleDigest,
+      turn_group_status: 'complete',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+      },
+    },
+    codex_session_terminalization: {
+      schema_version: 'codex_session_terminalization.v1',
+      lease_token: 'lease-token-secret',
+      codex_session_lease_id: overrides.codex_session_lease_id ?? 'lease-1',
+      codex_session_lease_epoch: overrides.codex_session_lease_epoch ?? 1,
+      codex_session_worker_id: overrides.codex_session_worker_id ?? 'worker-1',
+      codex_session_worker_session_digest:
+        overrides.codex_session_worker_session_digest ?? tokenHash('workflow-terminalization-session-token'),
+      codex_session_id: codexSessionId,
+      codex_session_turn_id: codexSessionTurnId,
+      expected_input_capsule_digest: inputCapsuleDigest,
+      input_capsule_id: 'capsule-1',
+      input_capsule_ref: `artifact://internal/codex_runtime_capsule/codex_session/${codexSessionId}/capsule-1`,
+      input_capsule_digest: inputCapsuleDigest,
+      input_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${codexSessionId}/memory-1`,
+      input_memory_bundle_digest: inputMemoryDigest,
+      input_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${codexSessionId}/env-1`,
+      input_environment_manifest_digest: inputEnvironmentDigest,
+    },
+  };
+};
+
+const workflowRuntimeJobRecords = (repository: DeliveryRepository): Map<string, { job: { input_json: Record<string, unknown> } }> =>
+  (repository as unknown as { codexRuntimeJobs: Map<string, { job: { input_json: Record<string, unknown> } }> }).codexRuntimeJobs;
+
+const corruptStoredWorkflowRuntimeJobLineage = (
+  repository: DeliveryRepository,
+  runtimeJobId: string,
+  corruptTurnId = 'turn-different',
+) => {
+  const records = workflowRuntimeJobRecords(repository);
+  const record = records.get(runtimeJobId);
+  if (record === undefined) {
+    throw new Error(`Expected runtime job ${runtimeJobId}`);
+  }
+  records.set(runtimeJobId, {
+    ...record,
+    job: {
+      ...record.job,
+      input_json: workflowRunExecutionWorkload({
+        runtime_job_id: runtimeJobId,
+        codex_session_turn_id: corruptTurnId,
+      }),
+    },
+  });
+};
+
+const workflowRunExecutionRuntimeJobInput = async (
+  repository: DeliveryRepository,
+  overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> = {},
+) => {
+  const runtimeJobId = overrides.runtime_job_id ?? 'workflow-runtime-job-1';
+  const runSessionId = overrides.target?.target_id ?? 'workflow-run-session-1';
+  const executionPackageId = overrides.execution_package_id ?? 'workflow-execution-package-1';
+  const launchLeaseId = overrides.launch_lease_id ?? `workflow-launch-lease-${runtimeJobId}`;
+  const runtimeWorkerId = overrides.worker_id ?? 'worker-1';
+  const runtimeWorkerSessionDigest = tokenHash('session-token-1');
+  const archiveFixture = workspaceBundleArchiveFixture({ bundle_id: `pending-bundle-${runtimeJobId}` });
+  const run = runSession({
+    id: runSessionId,
+    execution_package_id: executionPackageId,
+    workflow_id: overrides.workflow_id ?? 'workflow-1',
+    codex_session_id: overrides.codex_session_id ?? 'session-1',
+    codex_session_turn_id: overrides.codex_session_turn_id ?? 'turn-1',
+  });
+  await repository.saveExecutionPackage({
+    ...executionPackage({ id: executionPackageId }),
+    workflow_id: run.workflow_id,
+    codex_session_id: run.codex_session_id,
+    codex_session_turn_id: run.codex_session_turn_id,
+    development_plan_item_id: 'item-1',
+  });
+  await repository.saveRunSession(run);
+  const runWorkerLeaseToken = `run-worker-token-${runtimeJobId}`;
+  const runWorkerLease = await repository.claimRunWorkerLease({
+    run_session_id: run.id,
+    worker_id: `run-worker-${runtimeJobId}`,
+    lease_token: runWorkerLeaseToken,
+    now,
+    expires_at: expiresAt,
+  });
+  const workspaceAcquisitionJson = {
+    schema_version: 'workspace_bundle_acquisition.v1',
+    bundle_id: `pending-bundle-${runtimeJobId}`,
+    archive_ref: `artifact://internal/workspace_bundle/run_session/${run.id}/pending-bundle-${runtimeJobId}`,
+    archive_digest: archiveFixture.archive_digest,
+    manifest_digest: archiveFixture.manifest_digest,
+    size_bytes: archiveFixture.archive.byteLength,
+    expires_at: later,
+  };
+  const pendingBundle = {
+    bundle_id: workspaceAcquisitionJson.bundle_id,
+    pending_artifact_ref: workspaceAcquisitionJson.archive_ref,
+    internal_artifact_object_id: `artifact-object-${runtimeJobId}`,
+    archive_digest: workspaceAcquisitionJson.archive_digest,
+    manifest_digest: workspaceAcquisitionJson.manifest_digest,
+    run_worker_lease_id: runWorkerLease.id,
+    size_bytes: archiveFixture.archive.byteLength,
+    workspace_acquisition_digest: codexWorkspaceAcquisitionDigest(workspaceAcquisitionJson)!,
+    workspace_acquisition_json: workspaceAcquisitionJson,
+    expires_at: later,
+  };
+  await createInternalArtifactObject(repository, {
+    id: pendingBundle.internal_artifact_object_id,
+    artifact_id: pendingBundle.bundle_id,
+    ref: pendingBundle.pending_artifact_ref,
+    kind: 'workspace_bundle',
+    owner_type: 'run_session',
+    owner_id: run.id,
+    size_bytes: pendingBundle.size_bytes,
+    digest: pendingBundle.archive_digest,
+    metadata_json: {
+      manifest_digest: pendingBundle.manifest_digest,
+      execution_package_id: run.execution_package_id,
+      run_worker_lease_id: runWorkerLease.id,
+    },
+  });
+  const pendingWorkspaceBundle = {
+    ...pendingBundle,
+    id: `pending-bundle-row-${runtimeJobId}`,
+    run_session_id: run.id,
+    execution_package_id: run.execution_package_id,
+    request_digest: tokenHash(`pending-workspace-request-${runtimeJobId}`),
+    created_at: now,
+  };
+  await repository.createPendingWorkspaceBundleArtifact(pendingWorkspaceBundle);
+  const baseInputJson = (overrides.input_json ??
+    workflowRunExecutionWorkload({
+      runtime_job_id: runtimeJobId,
+      workflow_id: run.workflow_id,
+      codex_session_id: run.codex_session_id,
+      codex_session_turn_id: run.codex_session_turn_id,
+      run_session_id: run.id,
+      execution_package_id: run.execution_package_id,
+      workspace_bundle_id: pendingWorkspaceBundle.bundle_id,
+      workspace_bundle_digest: pendingWorkspaceBundle.archive_digest,
+      workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+      launch_lease_id: launchLeaseId,
+      runtime_worker_id: runtimeWorkerId,
+      runtime_worker_session_digest: runtimeWorkerSessionDigest,
+    })) as Record<string, unknown>;
+  const inputJson = {
+    ...baseInputJson,
+    codex_session_runtime_context: {
+      ...((baseInputJson.codex_session_runtime_context as Record<string, unknown> | undefined) ?? {}),
+      lease_id: launchLeaseId,
+      worker_id: runtimeWorkerId,
+      worker_session_digest: runtimeWorkerSessionDigest,
+    },
+    workspace_bundle_id: pendingWorkspaceBundle.bundle_id,
+    workspace_bundle_digest: pendingWorkspaceBundle.archive_digest,
+    workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+  };
+
+  return runtimeJobInput(
+    repository,
+    {
+      runtime_job_id: runtimeJobId,
+      launch_lease_id: launchLeaseId,
+      envelope_id: overrides.envelope_id ?? `workflow-envelope-${runtimeJobId}`,
+      job_request_id: overrides.job_request_id ?? `workflow-job-request-${runtimeJobId}`,
+      target: generationTarget({
+        target_type: 'run_session',
+        target_kind: 'run_execution',
+        target_id: run.id,
+      }),
+      action_type: undefined,
+      action_attempt: undefined,
+      action_claim_token_hash: undefined,
+      precondition_fingerprint: undefined,
+      execution_package_id: run.execution_package_id,
+      run_worker_lease_id: runWorkerLease.id,
+      run_worker_lease_token_hash: tokenHash(runWorkerLeaseToken),
+      run_session_status: run.status,
+      run_session_updated_at: run.updated_at,
+      execution_package_version: 1,
+      workflow_id: run.workflow_id,
+      codex_session_id: run.codex_session_id,
+      codex_session_turn_id: run.codex_session_turn_id,
+      input_json: inputJson,
+      input_digest: tokenHash(`workflow-runtime-input-${runtimeJobId}`),
+      workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+      workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
+      pending_workspace_bundle: pendingWorkspaceBundle,
+      ...overrides,
+      launch_lease_id: launchLeaseId,
+      input_json: inputJson,
+    },
+    { capabilities: ['run_execution'], ...(overrides.worker_id === undefined ? {} : { worker_id: overrides.worker_id }) },
+  );
+};
+
+const createWorkflowRuntimeJobWithCapturedToken = async (
+  overrides: Partial<Parameters<DeliveryRepository['createOrReplayCodexRuntimeJobWithLeaseAndEnvelope']>[0]> = {},
+) => {
+  const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+  const repository = createRepository(createEnvelopeSealer(sealerCalls));
+  const input = await workflowRunExecutionRuntimeJobInput(repository, overrides);
+  const created = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+  const launchToken = sealerCalls[0]?.plaintext_launch_token;
+  if (launchToken === undefined) {
+    throw new Error('expected workflow runtime job sealer to capture launch token');
+  }
+  return { repository, input, created, launchToken, sealerCalls };
 };
 
 const runtimeJobArtifactBindings = (repository: DeliveryRepository): Map<string, Record<string, unknown>> =>
@@ -1642,6 +1935,251 @@ describe('codex runtime repository behavior', () => {
     ]) {
       expect(typeof repository[method]).toBe('function');
     }
+  });
+
+  it('rejects workflow-owned run-execution create when first-class lineage diverges from trusted workload lineage', async () => {
+    const repository = createRepository(createEnvelopeSealer());
+    const input = await workflowRunExecutionRuntimeJobInput(repository, {
+      codex_session_turn_id: 'turn-first-class',
+      input_json: workflowRunExecutionWorkload({
+        codex_session_turn_id: 'turn-different',
+      }),
+    });
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it.each([
+    ['workflow_id' as const],
+    ['codex_session_id' as const],
+    ['codex_session_turn_id' as const],
+  ])('rejects workflow-owned run-execution create when first-class %s lineage is missing', async (field) => {
+    const repository = createRepository(createEnvelopeSealer());
+    const input = await workflowRunExecutionRuntimeJobInput(repository);
+    const missingLineageInput = { ...input };
+    delete missingLineageInput[field];
+
+    await expect(
+      repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(missingLineageInput),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('rejects active workflow-owned run-execution jobs for a Codex session that already has one active job', async () => {
+    const { repository } = await createWorkflowRuntimeJobWithCapturedToken();
+    await repository.releaseRunWorkerLease(
+      'workflow-run-session-1',
+      'run-worker-workflow-runtime-job-1',
+      'run-worker-token-workflow-runtime-job-1',
+      now,
+    );
+    const duplicateInput = await workflowRunExecutionRuntimeJobInput(repository, {
+      runtime_job_id: 'workflow-runtime-job-duplicate',
+      launch_lease_id: 'workflow-launch-lease-duplicate',
+      envelope_id: 'workflow-envelope-duplicate',
+      job_request_id: 'workflow-job-request-duplicate',
+      launch_attempt: 2,
+      worker_id: 'worker-duplicate',
+      target: generationTarget({
+        target_type: 'run_session',
+        target_kind: 'run_execution',
+        target_id: 'workflow-run-session-1',
+      }),
+      execution_package_id: 'workflow-execution-package-1',
+      input_json: workflowRunExecutionWorkload({
+        runtime_job_id: 'workflow-runtime-job-duplicate',
+        run_session_id: 'workflow-run-session-1',
+        execution_package_id: 'workflow-execution-package-1',
+      }),
+    });
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(duplicateInput)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('hides corrupt workflow-owned run-execution jobs from worker poll', async () => {
+    const { repository, input } = await createWorkflowRuntimeJobWithCapturedToken();
+    corruptStoredWorkflowRuntimeJobLineage(repository, input.runtime_job_id);
+
+    await expect(
+      repository.pollCodexRuntimeJobs({
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'poll-corrupt-workflow-runtime-job',
+        nonce_timestamp: later,
+        target_kinds: ['run_execution'],
+        limit: 10,
+        now: later,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it('fails closed on corrupt workflow-owned run-execution jobs during worker accept and workload read', async () => {
+    const { repository, input } = await createWorkflowRuntimeJobWithCapturedToken();
+    corruptStoredWorkflowRuntimeJobLineage(repository, input.runtime_job_id);
+
+    await expect(acceptRuntimeJob(repository, input.runtime_job_id)).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+    await expect(
+      repository.getCodexRuntimeJobWorkload({
+        runtime_job_id: input.runtime_job_id,
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'workload-corrupt-workflow-runtime-job',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('fails closed on corrupt workflow-owned run-execution jobs during workspace bundle download', async () => {
+    const { repository, input } = await createWorkflowRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository, input.runtime_job_id);
+    corruptStoredWorkflowRuntimeJobLineage(repository, input.runtime_job_id);
+
+    await expect(
+      repository.getWorkspaceBundleDownloadForRuntimeJob({
+        runtime_job_id: input.runtime_job_id,
+        bundle_id: input.pending_workspace_bundle!.bundle_id,
+        worker_id: 'worker-1',
+        worker_session_token: 'session-token-1',
+        nonce: 'download-corrupt-workflow-runtime-job',
+        nonce_timestamp: later,
+        now: later,
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+  });
+
+  it('fails closed on corrupt workflow-owned run-execution jobs during envelope claim, materialization, and start', async () => {
+    const { repository, input, launchToken } = await createWorkflowRuntimeJobWithCapturedToken();
+    await acceptRuntimeJob(repository, input.runtime_job_id);
+    corruptStoredWorkflowRuntimeJobLineage(repository, input.runtime_job_id);
+
+    await expect(
+      claimRuntimeJobEnvelope(repository, input.runtime_job_id, input.envelope_id, {
+        nonce: 'claim-corrupt-workflow-runtime-job',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_lease_denied',
+    });
+
+    const materializing = await createWorkflowRuntimeJobWithCapturedToken({
+      runtime_job_id: 'workflow-runtime-job-materialize-corrupt',
+      launch_lease_id: 'workflow-launch-lease-materialize-corrupt',
+      envelope_id: 'workflow-envelope-materialize-corrupt',
+      job_request_id: 'workflow-job-request-materialize-corrupt',
+      target: generationTarget({
+        target_type: 'run_session',
+        target_kind: 'run_execution',
+        target_id: 'workflow-run-session-materialize-corrupt',
+      }),
+      execution_package_id: 'workflow-execution-package-materialize-corrupt',
+      codex_session_id: 'session-materialize-corrupt',
+      codex_session_turn_id: 'turn-materialize-corrupt',
+      input_json: workflowRunExecutionWorkload({
+        runtime_job_id: 'workflow-runtime-job-materialize-corrupt',
+        codex_session_id: 'session-materialize-corrupt',
+        codex_session_turn_id: 'turn-materialize-corrupt',
+        run_session_id: 'workflow-run-session-materialize-corrupt',
+        execution_package_id: 'workflow-execution-package-materialize-corrupt',
+      }),
+    });
+    await acceptRuntimeJob(materializing.repository, materializing.input.runtime_job_id);
+    await claimRuntimeJobEnvelope(
+      materializing.repository,
+      materializing.input.runtime_job_id,
+      materializing.input.envelope_id,
+      { nonce: 'claim-before-materialize-corrupt-workflow-runtime-job' },
+    );
+    corruptStoredWorkflowRuntimeJobLineage(materializing.repository, materializing.input.runtime_job_id);
+    await expect(
+      materializeRuntimeJob(
+        materializing.repository,
+        materializing.launchToken,
+        materializing.input.runtime_job_id,
+        materializing.input.launch_lease_id,
+        {
+          nonce: 'materialize-corrupt-workflow-runtime-job',
+          active_fence: {
+            run_worker_lease_id: materializing.input.run_worker_lease_id,
+            run_worker_lease_token_hash: materializing.input.run_worker_lease_token_hash,
+            run_session_status: materializing.input.run_session_status,
+            run_session_updated_at: materializing.input.run_session_updated_at,
+            execution_package_version: materializing.input.execution_package_version,
+          },
+        },
+      ),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_launch_materialization_denied',
+    });
+
+    const running = await createWorkflowRuntimeJobWithCapturedToken({
+      runtime_job_id: 'workflow-runtime-job-start-corrupt',
+      launch_lease_id: 'workflow-launch-lease-start-corrupt',
+      envelope_id: 'workflow-envelope-start-corrupt',
+      job_request_id: 'workflow-job-request-start-corrupt',
+      target: generationTarget({
+        target_type: 'run_session',
+        target_kind: 'run_execution',
+        target_id: 'workflow-run-session-start-corrupt',
+      }),
+      execution_package_id: 'workflow-execution-package-start-corrupt',
+      codex_session_id: 'session-start-corrupt',
+      codex_session_turn_id: 'turn-start-corrupt',
+      input_json: workflowRunExecutionWorkload({
+        runtime_job_id: 'workflow-runtime-job-start-corrupt',
+        codex_session_id: 'session-start-corrupt',
+        codex_session_turn_id: 'turn-start-corrupt',
+        run_session_id: 'workflow-run-session-start-corrupt',
+        execution_package_id: 'workflow-execution-package-start-corrupt',
+      }),
+    });
+    await acceptRuntimeJob(running.repository, running.input.runtime_job_id);
+    await claimRuntimeJobEnvelope(running.repository, running.input.runtime_job_id, running.input.envelope_id, {
+      nonce: 'claim-before-start-corrupt-workflow-runtime-job',
+    });
+    await materializeRuntimeJob(running.repository, running.launchToken, running.input.runtime_job_id, running.input.launch_lease_id, {
+      nonce: 'materialize-before-start-corrupt-workflow-runtime-job',
+      active_fence: {
+        run_worker_lease_id: running.input.run_worker_lease_id,
+        run_worker_lease_token_hash: running.input.run_worker_lease_token_hash,
+        run_session_status: running.input.run_session_status,
+        run_session_updated_at: running.input.run_session_updated_at,
+        execution_package_version: running.input.execution_package_version,
+      },
+    });
+    corruptStoredWorkflowRuntimeJobLineage(running.repository, running.input.runtime_job_id);
+    await expect(
+      startRuntimeJob(running.repository, running.input.runtime_job_id, {
+        nonce: 'start-corrupt-workflow-runtime-job',
+      }),
+    ).rejects.toMatchObject<Partial<DomainError>>({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+
+    expect(launchToken).toBeDefined();
   });
 
   it('polls only queued runtime jobs assigned to the worker and validates worker session nonces', async () => {
@@ -3948,8 +4486,7 @@ describe('codex runtime repository behavior', () => {
       expires_at: expiresAt,
     };
 
-    await expect(
-      repository.createPendingWorkspaceBundleArtifact({
+    const legacyInlineBytesBundle = {
         id: '99999999-9999-4999-8999-999999999999',
         bundle_id: workspaceAcquisitionJson.bundle_id,
         run_session_id: run.id,
@@ -3965,7 +4502,10 @@ describe('codex runtime repository behavior', () => {
         expires_at: expiresAt,
         request_digest: tokenHash('pending-workspace-request-byte-only'),
         created_at: now,
-      }),
+      } as Parameters<DeliveryRepository['createPendingWorkspaceBundleArtifact']>[0] & { archive_bytes_base64: string };
+
+    await expect(
+      repository.createPendingWorkspaceBundleArtifact(legacyInlineBytesBundle),
     ).rejects.toMatchObject<Partial<DomainError>>({
       name: 'DomainError',
       code: 'codex_runtime_job_unavailable',

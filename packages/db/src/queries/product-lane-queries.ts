@@ -16,17 +16,11 @@ import { isOpenReviewPacketStatus } from '@forgeloop/domain';
 
 import type { DeliveryRepository } from '../repositories/delivery-repository';
 import {
-  type DeliveryRunReadinessRuntimeSelection,
-  deliveryRunReadinessDisabledReason,
-  deriveDeliveryRunReadiness,
-} from './delivery-runtime-readiness';
-import {
   generatePackagesAction,
   laneTarget,
   markPackageReadyAction,
   navigateAction,
   objectTarget,
-  runPackageAction,
   workItemScopeRef,
 } from './product-action-builders';
 import {
@@ -44,7 +38,7 @@ import {
 
 export interface ProductLaneQueryOptions {
   now?: string;
-  runtime_selection?: DeliveryRunReadinessRuntimeSelection;
+  runtime_selection?: unknown;
 }
 
 const staleAfterMs = 7 * 24 * 60 * 60 * 1000;
@@ -280,15 +274,14 @@ const packageItem = (
   }
 
   if (executionPackage.phase === 'ready' && executionPackage.gate_state === 'not_submitted') {
+    const target = objectTarget('execution', executionObjectId, packageHref ?? '/executions');
     actions.unshift(
-      runPackageAction({
-        id: `run-package-${executionPackage.id}`,
+      navigateAction({
+        id: `open-execution-gate-${executionPackage.id}`,
         laneId,
         priority: 'primary',
-        label: 'Run package',
-        scopeRef: workItemScopeRef(workItem),
-        packageId: executionPackage.id,
-        ...(packageHref === undefined ? {} : { target: objectTarget('execution', executionObjectId, packageHref) }),
+        label: 'Open execution gate',
+        target,
       }),
     );
   }
@@ -648,83 +641,16 @@ const buildManagerLane = async (
   });
 };
 
-type ProductLaneAction = ProductLaneResponse['items'][number]['actions'][number];
-
-const isRunPackageAction = (
-  action: ProductLaneAction,
-): action is ProductLaneAction & { kind: 'command'; command: { type: 'run_package'; package_id: string } } =>
-  action.kind === 'command' && action.command.type === 'run_package';
-
-const gateVisibleRunPackageActions = async (
-  repository: DeliveryRepository,
-  response: ProductLaneResponse,
-  options: ProductLaneQueryOptions,
-): Promise<ProductLaneResponse> => {
-  const packageIds = uniqueStrings(
-    response.items.flatMap((item) =>
-      item.actions.flatMap((action) => (isRunPackageAction(action) ? [action.command.package_id] : [])),
-    ),
-  );
-  if (packageIds.length === 0) {
-    return response;
-  }
-
-  const readinessNow = options.now ?? new Date().toISOString();
-  const disabledReasons = new Map(
-    await Promise.all(
-      packageIds.map(async (packageId) => {
-        const executionPackage = await repository.getExecutionPackage(packageId);
-        return [
-          packageId,
-          executionPackage === undefined
-            ? undefined
-            : deliveryRunReadinessDisabledReason(
-                await deriveDeliveryRunReadiness(repository, {
-                  executionPackage,
-                  now: readinessNow,
-                  ...(options.runtime_selection === undefined ? {} : { runtime_selection: options.runtime_selection }),
-                }),
-              ),
-        ] as const;
-      }),
-    ),
-  );
-
-  return productLaneResponseSchema.parse({
-    ...response,
-    items: response.items.map((item) => ({
-      ...item,
-      actions: item.actions.map((action) => {
-        if (!isRunPackageAction(action)) {
-          return action;
-        }
-        const disabledReason = disabledReasons.get(action.command.package_id);
-        return disabledReason === undefined
-          ? action
-          : {
-              ...action,
-              enabled: false,
-              disabled_reason: disabledReason,
-              blocked_reason: disabledReason,
-            };
-      }),
-    })),
-  });
-};
-
 export async function getProductLane(
   repository: DeliveryRepository,
   laneId: ProductLaneId,
   filters: ParsedProductLaneFilters,
   options: ProductLaneQueryOptions = {},
 ): Promise<ProductLaneResponse> {
+  void options;
   if (laneId === 'manager') {
     return buildManagerLane(repository, filters);
   }
   const items = await loadProductLaneCandidates(repository, laneId, filters);
-  return gateVisibleRunPackageActions(
-    repository,
-    productLaneResponseSchema.parse(buildProductLaneResponse(laneId, items, filters)),
-    options,
-  );
+  return productLaneResponseSchema.parse(buildProductLaneResponse(laneId, items, filters));
 }

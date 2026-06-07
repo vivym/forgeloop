@@ -60,4 +60,13 @@ export const evaluateWorkflowExecutionReadinessBodySchema = z
   .strict();
 export type EvaluateWorkflowExecutionReadinessBodyDto = z.infer<typeof evaluateWorkflowExecutionReadinessBodySchema>;
 
+export const startWorkflowExecutionBodySchema = z
+  .object({
+    actor_id: nonEmpty,
+    idempotency_key: nonEmpty.optional(),
+    rationale_markdown: nonEmpty.optional(),
+  })
+  .strict();
+export type StartWorkflowExecutionBodyDto = z.infer<typeof startWorkflowExecutionBodySchema>;
+
 export { codexSessionPublicDtoSchema, planItemWorkflowPublicDtoSchema };

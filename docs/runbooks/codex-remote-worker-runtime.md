@@ -121,9 +121,9 @@ The report must include the Boundary AI turn count, follow-up-path coverage, sum
 
 Operator note: Set `FORGELOOP_ARTIFACT_STORE_ROOT` to a private local directory owned by the control-plane process. Runtime job artifacts and pending workspace bundles are stored as `artifact://internal/...` refs; product Attachments are not used for these internal bytes.
 
-## Run Execution Dogfood
+## Workflow Execution Dogfood
 
-The run execution dogfood path uses a pending workspace bundle created by the run-worker after it holds an active run-worker lease. The remote worker downloads the accepted bundle, materializes the launch lease, starts Codex app-server in Docker, uploads patch/check/review artifacts, and terminalizes the runtime job. Existing run-worker finalization remains the only writer for RunSession and ReviewPacket state.
+The run execution dogfood path starts from the Plan Item Workflow command path. The remote worker restores the latest Codex runtime capsule, resumes the same Codex thread, starts Codex app-server in Docker, uploads public-safe evidence, and terminalizes through workflow-owned session and runtime-job lineage guards.
 
 Use:
 
@@ -133,8 +133,8 @@ FORGELOOP_CODEX_RUN_EXECUTION_RUNTIME_PROFILE_ID=... \
 FORGELOOP_CODEX_RUN_EXECUTION_CREDENTIAL_BINDING_ID=... \
 FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_WAIT_TIMEOUT_MS=600000 \
 FORGELOOP_CODEX_REMOTE_RUNTIME_JOB_POLL_INTERVAL_MS=1000 \
-FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 \
-pnpm dogfood:delivery:local-codex
+FORGELOOP_REAL_RUNTIME_ACCEPTANCE=1 \
+pnpm dogfood:plan-item-workflow-product-loop:real
 ```
 
 Direct host config/auth, raw app-server endpoints, raw container ids, local refs, and absolute paths do not count as strict remote success.

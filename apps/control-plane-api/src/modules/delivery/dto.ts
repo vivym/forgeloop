@@ -1,8 +1,6 @@
 import {
   artifactKindSchema,
   artifactRefSchema,
-  type ExecutorType,
-  executorTypeSchema,
   createWorkItemRequestSchema,
   jsonObjectSchema,
   patchWorkItemRequestSchema,
@@ -108,34 +106,6 @@ export const revisionCompareQuerySchema = z
   })
   .strict();
 export type RevisionCompareQueryDto = z.infer<typeof revisionCompareQuerySchema>;
-
-const runPackageBaseSchema = z.object({
-  execution_package_id: nonEmptyString.optional(),
-  executor_type: executorTypeSchema.optional(),
-  workflow_only: z.boolean().optional(),
-});
-
-export const runPackageSchema = runPackageBaseSchema.strict();
-export const rerunPackageSchema = runPackageBaseSchema
-  .extend({
-    previous_run_session_id: nonEmptyString,
-  })
-  .strict();
-export const forceRerunPackageSchema = runPackageBaseSchema
-  .extend({
-    previous_run_session_id: nonEmptyString,
-    force: z.literal(true),
-    force_reason: nonEmptyString,
-  })
-  .strict();
-export type RunPackageDto = {
-  execution_package_id?: string;
-  executor_type?: ExecutorType;
-  workflow_only?: boolean;
-  previous_run_session_id?: string;
-  force?: true;
-  force_reason?: string;
-};
 
 export const runInputSchema = z
   .object({
