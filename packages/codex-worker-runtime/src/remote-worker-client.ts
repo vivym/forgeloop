@@ -10,12 +10,16 @@ import {
   type CodexDockerRuntimeEvidence,
   type CodexGenerationWorkloadV1,
   type CodexLaunchMaterialization,
+  type CodexRunExecutionExpectedContinuation,
   type CodexRunExecutionRuntimeJobResult,
   type CodexRunExecutionWorkloadV1,
+  type CodexWorkflowRunExecutionWorkloadV1,
   type CodexLaunchTokenEnvelope,
   type CodexRuntimeJob,
   type CodexRuntimeTargetKind,
   type CodexRuntimeScope,
+  validateCodexRunExecutionWorkload,
+  validateCodexRunExecutionWorkloadContinuity,
   validateCodexSessionRuntimeContext,
   validateCodexRuntimeJobTerminalResult,
 } from '@forgeloop/domain';
@@ -51,9 +55,11 @@ type RunExecutionResultDraft = {
   public_summary: string;
 };
 
+type RunExecutionPollJob = Pick<CodexRuntimeJob, 'id' | 'target_kind' | 'project_id' | 'repo_id' | 'launch_lease_id'> &
+  Partial<CodexRuntimeJob>;
+
 type RuntimeJobPollItem = {
-  runtime_job: Pick<CodexRuntimeJob, 'id' | 'target_kind' | 'project_id' | 'repo_id' | 'launch_lease_id'> &
-    Partial<CodexRuntimeJob>;
+  runtime_job: RunExecutionPollJob;
   envelope?: { id?: string };
 };
 
@@ -129,7 +135,7 @@ export interface RemoteWorkerCapsulePackageInput {
   expectedInputCapsuleDigest?: string;
   materialization: CodexLaunchMaterialization;
   status: 'succeeded' | 'failed' | 'cancelled';
-  generationResult: CodexGenerationResult<Record<string, unknown>>;
+  generationResult: Pick<CodexGenerationResult<Record<string, unknown>>, 'codexThread' | 'publicSummary'>;
   runtimeEvidence: CodexDockerRuntimeEvidence;
 }
 
@@ -141,6 +147,7 @@ export interface RemoteWorkerCapsuleManager {
 }
 
 type RemoteLauncher = Pick<DockerizedCodexAppServerLauncher, 'startFromMaterialization'>;
+type RemoteLauncherStartOptions = NonNullable<Parameters<RemoteLauncher['startFromMaterialization']>[1]>;
 type AppServerSession = Awaited<ReturnType<RemoteLauncher['startFromMaterialization']>>;
 type GenerationRunner = {
   sessionId?: string;
@@ -212,13 +219,16 @@ interface WorkerSession {
 }
 
 type RunExecutionFailureStage =
+  | 'run_execution_continuity_validation'
   | 'workspace_bundle_acquisition'
   | 'launch_materialization'
+  | 'run_execution_capsule_restore'
   | 'docker_app_server_startup'
   | 'runtime_job_start'
   | 'app_server_started_event'
   | 'run_execution_driver_terminal'
   | 'run_execution_control_poll'
+  | 'run_execution_capsule_packaging'
   | 'run_execution_result_collection'
   | 'run_execution_artifact_upload';
 
@@ -645,10 +655,45 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     });
   };
 
-  const launcherCapsuleRestoreOptions = (
-    workload: CodexGenerationWorkloadV1,
+  const packageRunExecutionOutputCapsule = async (
+    appServerSession: AppServerSession,
     materialization: CodexLaunchMaterialization,
-  ): Parameters<RemoteLauncher['startFromMaterialization']>[1] => {
+    workload: CodexWorkflowRunExecutionWorkloadV1,
+    terminal: Extract<CodexDriverStreamItem, { kind: 'terminal' }>,
+  ): Promise<GenerationOutputCapsulePackageResult> => {
+    if (options.capsuleManager === undefined) {
+      throw new Error('codex_runtime_capsule_missing');
+    }
+    const hookInput = appServerSession.capsuleHookInput;
+    if (hookInput === undefined) {
+      throw new Error('codex_runtime_capsule_missing');
+    }
+    return options.capsuleManager.package({
+      codexHomeHostPath: hookInput.codexHomeHostPath,
+      artifactHostPath: hookInput.artifactHostPath,
+      codexSessionId: workload.codex_session_terminalization.codex_session_id,
+      codexSessionTurnId: workload.codex_session_terminalization.codex_session_turn_id,
+      expectedInputCapsuleDigest: workload.codex_session_terminalization.expected_input_capsule_digest,
+      materialization,
+      status: terminal.status,
+      generationResult: {
+        codexThread: {
+          codex_thread_id: workload.codex_session_runtime_context.continuation.codex_thread_id,
+          codex_thread_id_digest: workload.codex_session_runtime_context.continuation.codex_thread_id_digest,
+          ...(typeof terminal.runtimeMetadata?.active_turn_id === 'string'
+            ? { app_server_turn_id: terminal.runtimeMetadata.active_turn_id }
+            : {}),
+        },
+        publicSummary: terminal.summary,
+      },
+      runtimeEvidence: appServerSession.publicEvidence,
+    });
+  };
+
+  const launcherCapsuleRestoreOptions = (
+    workload: Pick<CodexGenerationWorkloadV1, 'codex_session_runtime_context' | 'codex_session_terminalization'>,
+    materialization: CodexLaunchMaterialization,
+  ): RemoteLauncherStartOptions => {
     const terminalization = parseCodexSessionTerminalization(workload.codex_session_terminalization);
     if (terminalization === undefined) {
       return {};
@@ -754,22 +799,6 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     const job = item.runtime_job;
     const sessionDigest = codexCredentialPayloadDigest(workerSession.token);
     const publicKeyId = workerSession.keyPair.keyId;
-    await options.controlPlaneClient.acceptRuntimeJob(options.workerId, job.id, {
-      ...workerProof(workerSession),
-      accept_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'accept' }),
-      accepted_worker_session_digest: sessionDigest,
-      accepted_session_public_key_id: publicKeyId,
-      accepted_session_epoch: workerSession.epoch,
-    });
-
-    const control = await getControl(workerSession, job);
-    if (control.cancel_requested === true) {
-      await terminalize(workerSession, job, {
-        terminal_status: 'cancelled',
-        reason_code: 'codex_runtime_job_cancelled',
-      });
-      return;
-    }
 
     let appServerSession: Awaited<ReturnType<RemoteLauncher['startFromMaterialization']>> | undefined;
     let driver: CodexSessionDriver | undefined;
@@ -778,9 +807,38 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     const failureDiagnostic: RuntimeFailureDiagnostic = {
       runtime_target_kind: 'run_execution',
       app_server_started: false,
-      failure_stage: 'launch_materialization',
+      failure_stage: 'run_execution_continuity_validation',
     };
     try {
+      assertRunExecutionPolledJobLineage(job);
+      const polledJob: RunExecutionLineageJob = {
+        ...job,
+        accepted_worker_session_digest: sessionDigest,
+        accepted_session_epoch: workerSession.epoch,
+      };
+      let acceptedJob = polledJob;
+      const acceptedResponse = await options.controlPlaneClient.acceptRuntimeJob(options.workerId, job.id, {
+        ...workerProof(workerSession),
+        accept_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'accept' }),
+        accepted_worker_session_digest: sessionDigest,
+        accepted_session_public_key_id: publicKeyId,
+        accepted_session_epoch: workerSession.epoch,
+      });
+      acceptedJob = {
+        ...acceptedJob,
+        ...requiredRuntimeJobResponse(acceptedResponse),
+      } as RunExecutionLineageJob;
+      assertRunExecutionAcceptedJobLineage(polledJob, acceptedJob);
+
+      const control = await getControl(workerSession, acceptedJob);
+      if (control.cancel_requested === true) {
+        await terminalize(workerSession, acceptedJob, {
+          terminal_status: 'cancelled',
+          reason_code: 'codex_runtime_job_cancelled',
+        });
+        return;
+      }
+
       const claimed = await options.controlPlaneClient.claimLaunchTokenEnvelope?.(options.workerId, job.id, {
         ...workerProof(workerSession),
         envelope_id: item.envelope?.id,
@@ -790,50 +848,78 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         accepted_session_epoch: workerSession.epoch,
       });
       const envelope = requiredEnvelope(claimed);
+      assertRunExecutionEnvelopeLineage(envelope, acceptedJob);
       const launchToken = await decryptCodexLaunchTokenEnvelope({
         envelope,
         privateKeyHandle: workerSession.keyPair.privateKeyHandle,
       });
+      failureDiagnostic.failure_stage = 'run_execution_continuity_validation';
       const workloadResponse = requiredRunExecutionWorkload(
-        await options.controlPlaneClient.fetchRuntimeJobWorkload?.(options.workerId, job.id, workerProof(workerSession)),
+        await options.controlPlaneClient.fetchRuntimeJobWorkload?.(options.workerId, acceptedJob.id, workerProof(workerSession)),
       );
-      const acquisition = requiredWorkspaceBundleAcquisition(job, workloadResponse.workload);
+      const expectedContinuation = runExecutionExpectedContinuation(options.workerId, workerSession, acceptedJob, workloadResponse.workload);
+      assertRunExecutionContinuity(workloadResponse.workload, expectedContinuation);
+      assertRunExecutionLineage(acceptedJob, workloadResponse.workload);
+      const acquisition = requiredWorkspaceBundleAcquisition(acceptedJob, workloadResponse.workload);
       failureDiagnostic.failure_stage = 'workspace_bundle_acquisition';
-      workspace = await acquireRunExecutionWorkspaceBundle(workerSession, job, workloadResponse.workload, acquisition);
+      workspace = await acquireRunExecutionWorkspaceBundle(workerSession, acceptedJob, workloadResponse.workload, acquisition);
       const workloadPayload = await resolveRunExecutionWorkloadPayload(workloadResponse, workspace);
+      assertRunExecutionContinuity(workloadPayload.workload, expectedContinuation);
       if (options.controlPlaneClient.materializeRuntimeJob === undefined) {
         throw new Error('codex_control_plane_method_missing:materializeRuntimeJob');
       }
-      await throwIfCancelled(workerSession, job);
+      await throwIfCancelled(workerSession, acceptedJob);
       failureDiagnostic.failure_stage = 'launch_materialization';
-      const materialization = await options.controlPlaneClient.materializeRuntimeJob(options.workerId, job.id, {
+      const materialization = await options.controlPlaneClient.materializeRuntimeJob(options.workerId, acceptedJob.id, {
         ...workerProof(workerSession),
-        launch_lease_id: job.launch_lease_id,
+        launch_lease_id: acceptedJob.launch_lease_id,
         launch_token: launchToken,
-        materialization_request_id: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'materialize' }),
+        materialization_request_id: codexCanonicalDigest({ runtime_job_id: acceptedJob.id, operation: 'materialize' }),
         accepted_worker_session_digest: sessionDigest,
         accepted_session_public_key_id: publicKeyId,
         accepted_session_epoch: workerSession.epoch,
       });
-      await throwIfCancelled(workerSession, job);
-      failureDiagnostic.failure_stage = 'docker_app_server_startup';
-      appServerSession = await options.launcher.startFromMaterialization(materialization, {
+      assertRunExecutionMaterializationLineage(materialization, workloadResponse.workload, expectedContinuation);
+      await throwIfCancelled(workerSession, acceptedJob);
+      failureDiagnostic.failure_stage = 'run_execution_capsule_restore';
+      const runExecutionCapsuleOptions = launcherCapsuleRestoreOptions(workloadResponse.workload, materialization);
+      const guardedRestoreOptions: RemoteLauncherStartOptions = {
+        ...runExecutionCapsuleOptions,
+        ...(runExecutionCapsuleOptions.beforeAppServerStart === undefined
+          ? {}
+          : {
+              beforeAppServerStart: async (paths) => {
+                failureDiagnostic.failure_stage = 'run_execution_capsule_restore';
+                await runExecutionCapsuleOptions.beforeAppServerStart?.(paths);
+                failureDiagnostic.failure_stage = 'docker_app_server_startup';
+              },
+            }),
+        ...(runExecutionCapsuleOptions.afterAppServerStart === undefined
+          ? {}
+          : {
+              afterAppServerStart: async (paths) => {
+                failureDiagnostic.failure_stage = 'docker_app_server_startup';
+                await runExecutionCapsuleOptions.afterAppServerStart?.(paths);
+              },
+            }),
         workerSessionToken: workerSession.token,
         terminalizeLaunchLeaseOnClose: false,
         originalWorkspacePath: workspace.workspacePath,
         taskWorkspaceDigest: workspace.mounted_workspace_digest,
         taskWorkspaceRoot: workspace.jobRoot,
-      });
-      await throwIfCancelled(workerSession, job);
+      };
+      appServerSession = await options.launcher.startFromMaterialization(materialization, guardedRestoreOptions);
+      failureDiagnostic.failure_stage = 'docker_app_server_startup';
+      await throwIfCancelled(workerSession, acceptedJob);
       if (options.controlPlaneClient.startRuntimeJob === undefined) {
         throw new Error('codex_control_plane_method_missing:startRuntimeJob');
       }
       failureDiagnostic.app_server_started = true;
       failureDiagnostic.runtime_evidence_digest = codexCanonicalDigest(appServerSession.publicEvidence);
       failureDiagnostic.failure_stage = 'runtime_job_start';
-      await options.controlPlaneClient.startRuntimeJob(options.workerId, job.id, {
+      const startedResponse = await options.controlPlaneClient.startRuntimeJob(options.workerId, acceptedJob.id, {
         ...workerProof(workerSession),
-        start_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'start' }),
+        start_idempotency_key: codexCanonicalDigest({ runtime_job_id: acceptedJob.id, operation: 'start' }),
         runtime_evidence_digest: failureDiagnostic.runtime_evidence_digest,
         launch_materialization_digest: codexCanonicalDigest({
           lease_id: materialization.lease_id,
@@ -841,16 +927,19 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
           materialized_at: materialization.materialized_at,
         }),
       });
+      const startedJob = { ...acceptedJob, ...requiredRuntimeJobResponse(startedResponse) } as RunExecutionLineageJob;
+      assertRunExecutionLineage(startedJob, workloadResponse.workload);
       failureDiagnostic.failure_stage = 'app_server_started_event';
-      await options.controlPlaneClient.appendRuntimeJobEvent?.(options.workerId, job.id, {
+      await options.controlPlaneClient.appendRuntimeJobEvent?.(options.workerId, acceptedJob.id, {
         ...workerProof(workerSession),
-        event_id: codexCanonicalDigest({ runtime_job_id: job.id, event: 'app_server_started' }),
-        event_idempotency_key: codexCanonicalDigest({ runtime_job_id: job.id, operation: 'event', event: 'app_server_started' }),
+        event_id: codexCanonicalDigest({ runtime_job_id: acceptedJob.id, event: 'app_server_started' }),
+        event_idempotency_key: codexCanonicalDigest({ runtime_job_id: acceptedJob.id, operation: 'event', event: 'app_server_started' }),
         event_type: 'app_server_started',
         event_payload_json: { runtime_evidence_digest: failureDiagnostic.runtime_evidence_digest },
         event_payload_digest: codexCanonicalDigest({ runtime_evidence_digest: failureDiagnostic.runtime_evidence_digest }),
       });
 
+      failureDiagnostic.failure_stage = 'run_execution_driver_terminal';
       driver =
         options.runExecutionDriverFactory?.({
           workload: workloadResponse.workload,
@@ -864,8 +953,10 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
           { workerIdentity: options.workerIdentity },
           { dockerSession: appServerSession },
         );
-      failureDiagnostic.failure_stage = 'run_execution_driver_terminal';
-      const terminal = await runRunExecutionWithControl(workerSession, job, driver, {
+      if (driver.kind !== 'app_server') {
+        throw new Error('codex_app_server_resume_failed');
+      }
+      const terminal = await runRunExecutionWithControl(workerSession, startedJob, driver, {
         runSpec: runSpecWithPackagePrompt(workloadPayload.runSpec, workloadPayload.packagePrompt),
         workspacePath: appServerSession.containerWorkspacePath ?? workspace.workspacePath,
         runtimeMetadata: {
@@ -873,6 +964,7 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
           recovery_attempt_count: 0,
           effective_dangerous_mode: 'confirmed',
           worker_id: options.workerId,
+          codex_thread_id: workloadResponse.workload.codex_session_runtime_context.continuation.codex_thread_id,
           driver_kind: 'app_server',
           driver_status: 'active',
           app_server_attempted: true,
@@ -894,6 +986,9 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         failureDiagnostic.failure_subcode = runExecutionTerminalFailureSubcode(terminal);
         throw new Error(terminal.status === 'cancelled' ? 'codex_runtime_job_cancelled' : 'codex_app_server_unavailable');
       }
+      assertRunExecutionTerminalThreadContinuity(terminal, workloadResponse.workload);
+      failureDiagnostic.failure_stage = 'run_execution_capsule_packaging';
+      const outputCapsule = await packageRunExecutionOutputCapsule(appServerSession, materialization, workloadResponse.workload, terminal);
       failureDiagnostic.failure_stage = 'run_execution_result_collection';
       const resultDraft = await collectRunExecutionResult({
         workload: workloadResponse.workload,
@@ -906,17 +1001,19 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       }, workspace);
       const terminalResult = await runExecutionRuntimeJobTerminalResult(
         workerSession,
-        job,
+        startedJob,
         workloadResponse.workload,
         workspace,
         resultDraft,
         appServerSession.publicEvidence,
+        outputCapsule,
+        terminal,
       );
       validateCodexRuntimeJobTerminalResult(terminalResult as unknown as Record<string, unknown>);
       await driver.close?.();
       driver = undefined;
       successTerminalAttempted = true;
-      await terminalizeWithRetry(workerSession, job, {
+      await terminalizeWithRetry(workerSession, startedJob, {
         terminal_status: 'succeeded',
         reason_code: 'codex_runtime_job_succeeded',
         terminal_result_json: terminalResult as unknown as Record<string, unknown>,
@@ -1034,10 +1131,12 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
   const runExecutionRuntimeJobTerminalResult = async (
     workerSession: WorkerSession,
     job: Pick<CodexRuntimeJob, 'id'>,
-    workload: CodexRunExecutionWorkloadV1,
+    workload: CodexWorkflowRunExecutionWorkloadV1,
     workspace: WorkspaceBundleUnpackResult,
     draft: RunExecutionResultDraft,
     runtimeEvidence: CodexDockerRuntimeEvidence,
+    outputCapsule: GenerationOutputCapsulePackageResult,
+    terminal: Extract<CodexDriverStreamItem, { kind: 'terminal' }>,
   ): Promise<CodexRunExecutionRuntimeJobResult> => {
     const changedFiles =
       draft.patch === undefined
@@ -1109,6 +1208,23 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       ...(patchArtifact === undefined ? {} : { patch_artifact: patchArtifact }),
       check_results: draft.check_results,
       execution_artifacts: draft.execution_artifacts,
+      codex_session_thread: {
+        codex_thread_id: workload.codex_session_runtime_context.continuation.codex_thread_id,
+        codex_thread_id_digest: workload.codex_session_runtime_context.continuation.codex_thread_id_digest,
+        ...(typeof terminal.runtimeMetadata?.active_turn_id === 'string'
+          ? { app_server_turn_id: terminal.runtimeMetadata.active_turn_id }
+          : {}),
+      },
+      output_capsule: outputCapsule.capsule,
+      output_memory_bundle_ref: outputCapsule.outputMemoryBundleRef,
+      output_memory_bundle_digest: outputCapsule.outputMemoryBundleDigest,
+      ...(outputCapsule.memoryDeltaArtifactRef === undefined
+        ? {}
+        : { memory_delta_artifact_ref: outputCapsule.memoryDeltaArtifactRef }),
+      ...(outputCapsule.memoryDeltaDigest === undefined ? {} : { memory_delta_digest: outputCapsule.memoryDeltaDigest }),
+      output_environment_manifest_ref: outputCapsule.outputEnvironmentManifestRef,
+      output_environment_manifest_digest: outputCapsule.outputEnvironmentManifestDigest,
+      codex_session_turn_id: workload.codex_session_runtime_context.codex_session_turn_id,
       runtime_evidence: runtimeEvidence,
       public_summary: draft.public_summary,
     };
@@ -1122,12 +1238,15 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
     driver: CodexSessionDriver,
     input: CodexDriverStartInput,
   ): Promise<Extract<CodexDriverStreamItem, { kind: 'terminal' }>> => {
+    if (input.runtimeMetadata?.codex_thread_id === undefined) {
+      throw new Error('codex_app_server_resume_failed');
+    }
     let completed = false;
     let stopWaiting: (() => void) | undefined;
     let cancellationDetected = false;
     let controlFailed = false;
     const runPromise = (async () => {
-      for await (const item of driver.startRun(input)) {
+      for await (const item of driver.resumeRun(input)) {
         if (item.kind === 'terminal') {
           return item;
         }
@@ -1630,7 +1749,7 @@ type FetchedGenerationWorkload = {
 };
 
 type FetchedRunExecutionWorkload = {
-  workload: CodexRunExecutionWorkloadV1;
+  workload: CodexWorkflowRunExecutionWorkloadV1;
   packagePrompt?: string;
   executionContext?: Record<string, unknown>;
   runSpec?: CodexDriverStartInput['runSpec'];
@@ -1643,8 +1762,173 @@ type WorkspaceBundleAcquisition = {
   size_bytes: number;
 };
 
+type RunExecutionLineageJob = Pick<
+  CodexRuntimeJob,
+  | 'id'
+  | 'project_id'
+  | 'repo_id'
+  | 'target_kind'
+  | 'target_id'
+  | 'launch_lease_id'
+  | 'input_digest'
+  | 'input_json'
+  | 'worker_id'
+  | 'workflow_id'
+  | 'codex_session_id'
+  | 'codex_session_turn_id'
+  | 'accepted_worker_session_digest'
+  | 'accepted_session_epoch'
+> &
+  Partial<CodexRuntimeJob>;
+
 const remoteRunExecutionPromptPath = '.forgeloop/codex-runtime/package-prompt.txt';
 const remoteRunExecutionContextPath = '.forgeloop/codex-runtime/execution-context.json';
+
+const runExecutionExpectedContinuation = (
+  workerId: string,
+  workerSession: WorkerSession,
+  job: RunExecutionLineageJob,
+  workload: CodexWorkflowRunExecutionWorkloadV1,
+): CodexRunExecutionExpectedContinuation => ({
+  codex_session_id: requiredJobString(job, 'codex_session_id'),
+  codex_session_turn_id: requiredJobString(job, 'codex_session_turn_id'),
+  input_capsule_digest: workload.codex_session_terminalization.input_capsule_digest,
+  input_memory_bundle_ref: workload.codex_session_terminalization.input_memory_bundle_ref,
+  input_memory_bundle_digest: workload.codex_session_terminalization.input_memory_bundle_digest,
+  input_environment_manifest_ref: workload.codex_session_terminalization.input_environment_manifest_ref,
+  input_environment_manifest_digest: workload.codex_session_terminalization.input_environment_manifest_digest,
+  lease_id: job.launch_lease_id,
+  lease_epoch: job.accepted_session_epoch ?? workerSession.epoch,
+  worker_id: workerId,
+  worker_session_digest: job.accepted_worker_session_digest ?? codexCredentialPayloadDigest(workerSession.token),
+  codex_thread_id_digest: workload.codex_session_runtime_context.continuation.codex_thread_id_digest,
+});
+
+const requiredJobString = (job: RunExecutionLineageJob, key: 'codex_session_id' | 'codex_session_turn_id'): string => {
+  const value = job[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  return value;
+};
+
+const requiredRuntimeJobResponse = (response: unknown): Record<string, unknown> => {
+  if (!isRecord(response) || !isRecord(response.runtime_job)) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+  return response.runtime_job;
+};
+
+function assertRunExecutionPolledJobLineage(job: RunExecutionPollJob): asserts job is RunExecutionLineageJob {
+  if (
+    job.target_kind !== 'run_execution' ||
+    typeof job.target_id !== 'string' ||
+    job.target_id.length === 0 ||
+    typeof job.workflow_id !== 'string' ||
+    job.workflow_id.length === 0 ||
+    typeof job.codex_session_id !== 'string' ||
+    job.codex_session_id.length === 0 ||
+    typeof job.codex_session_turn_id !== 'string' ||
+    job.codex_session_turn_id.length === 0 ||
+    typeof job.launch_lease_id !== 'string' ||
+    job.launch_lease_id.length === 0 ||
+    typeof job.worker_id !== 'string' ||
+    job.worker_id.length === 0 ||
+    typeof job.input_digest !== 'string' ||
+    job.input_digest.length === 0 ||
+    !isRecord(job.input_json)
+  ) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+}
+
+const assertRunExecutionAcceptedJobLineage = (polledJob: RunExecutionLineageJob, acceptedJob: RunExecutionLineageJob): void => {
+  assertRunExecutionPolledJobLineage(acceptedJob);
+  if (
+    acceptedJob.id !== polledJob.id ||
+    acceptedJob.target_kind !== polledJob.target_kind ||
+    acceptedJob.target_id !== polledJob.target_id ||
+    acceptedJob.workflow_id !== polledJob.workflow_id ||
+    acceptedJob.codex_session_id !== polledJob.codex_session_id ||
+    acceptedJob.codex_session_turn_id !== polledJob.codex_session_turn_id ||
+    acceptedJob.launch_lease_id !== polledJob.launch_lease_id ||
+    acceptedJob.worker_id !== polledJob.worker_id ||
+    acceptedJob.input_digest !== polledJob.input_digest
+  ) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+};
+
+const assertRunExecutionLineage = (job: RunExecutionLineageJob, workload: CodexWorkflowRunExecutionWorkloadV1): void => {
+  if (
+    job.id !== workload.runtime_job_id ||
+    job.target_kind !== 'run_execution' ||
+    job.target_id !== workload.run_session_id ||
+    job.workflow_id !== workload.plan_item_workflow_id ||
+    job.codex_session_id !== workload.codex_session_runtime_context.codex_session_id ||
+    job.codex_session_turn_id !== workload.codex_session_runtime_context.codex_session_turn_id ||
+    job.launch_lease_id !== workload.codex_session_runtime_context.lease_id ||
+    job.worker_id !== workload.codex_session_runtime_context.worker_id ||
+    job.input_digest !== codexCanonicalDigest(workload)
+  ) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+};
+
+const assertRunExecutionContinuity = (
+  workload: CodexWorkflowRunExecutionWorkloadV1,
+  expectedContinuation: CodexRunExecutionExpectedContinuation,
+): void => {
+  try {
+    validateCodexRunExecutionWorkloadContinuity(workload, expectedContinuation);
+  } catch {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+};
+
+const assertRunExecutionMaterializationLineage = (
+  materialization: CodexLaunchMaterialization,
+  workload: CodexWorkflowRunExecutionWorkloadV1,
+  expectedContinuation: CodexRunExecutionExpectedContinuation,
+): void => {
+  if (
+    materialization.lease_id !== expectedContinuation.lease_id ||
+    materialization.launch_target.target_type !== 'run_session' ||
+    materialization.launch_target.target_kind !== 'run_execution' ||
+    materialization.launch_target.target_id !== workload.run_session_id
+  ) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+};
+
+const assertRunExecutionEnvelopeLineage = (
+  envelope: CodexLaunchTokenEnvelope,
+  job: RunExecutionLineageJob,
+): void => {
+  if (
+    envelope.runtime_job_id !== job.id ||
+    envelope.launch_lease_id !== job.launch_lease_id ||
+    envelope.worker_id !== job.worker_id
+  ) {
+    throw new Error('codex_runtime_job_unavailable');
+  }
+};
+
+const assertRunExecutionTerminalThreadContinuity = (
+  terminal: Extract<CodexDriverStreamItem, { kind: 'terminal' }>,
+  workload: CodexWorkflowRunExecutionWorkloadV1,
+): void => {
+  const terminalThreadId = terminal.runtimeMetadata?.codex_thread_id;
+  if (
+    typeof terminalThreadId !== 'string' ||
+    terminalThreadId.length === 0 ||
+    terminalThreadId !== workload.codex_session_runtime_context.continuation.codex_thread_id ||
+    codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: terminalThreadId }) !==
+      workload.codex_session_runtime_context.continuation.codex_thread_id_digest
+  ) {
+    throw new Error('codex_app_server_resume_failed');
+  }
+};
 
 const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkload => {
   if (!isRecord(response) || !isRecord(response.workload)) {
@@ -1909,23 +2193,15 @@ const requiredRunExecutionWorkload = (response: unknown): FetchedRunExecutionWor
   if (!isRecord(response) || !isRecord(response.workload)) {
     throw new Error('codex_runtime_job_unavailable');
   }
-  const workload = response.workload;
-  if (
-    workload.schema_version !== 'codex_run_execution_workload.v1' ||
-    typeof workload.runtime_job_id !== 'string' ||
-    typeof workload.run_session_id !== 'string' ||
-    typeof workload.execution_package_id !== 'string' ||
-    !Number.isInteger(workload.execution_package_version) ||
-    typeof workload.workspace_bundle_id !== 'string' ||
-    typeof workload.workspace_bundle_digest !== 'string' ||
-    typeof workload.package_prompt_digest !== 'string' ||
-    typeof workload.execution_context_digest !== 'string'
-  ) {
+  let typedWorkload: CodexWorkflowRunExecutionWorkloadV1;
+  try {
+    typedWorkload = validateCodexRunExecutionWorkload(response.workload);
+  } catch {
     throw new Error('codex_runtime_job_unavailable');
   }
-  const typedWorkload = workload as unknown as CodexRunExecutionWorkloadV1;
-  const packagePrompt = typeof response.package_prompt === 'string' ? response.package_prompt : workload.package_prompt;
-  const executionContext = isRecord(response.execution_context_json) ? response.execution_context_json : workload.execution_context_json;
+  const responseWorkload = response.workload;
+  const packagePrompt = typeof response.package_prompt === 'string' ? response.package_prompt : responseWorkload.package_prompt;
+  const executionContext = isRecord(response.execution_context_json) ? response.execution_context_json : responseWorkload.execution_context_json;
   if (typeof packagePrompt === 'string' || isRecord(executionContext)) {
     return validateRunExecutionWorkloadPayload(typedWorkload, packagePrompt, executionContext);
   }
@@ -1933,7 +2209,7 @@ const requiredRunExecutionWorkload = (response: unknown): FetchedRunExecutionWor
 };
 
 const validateRunExecutionWorkloadPayload = (
-  workload: CodexRunExecutionWorkloadV1,
+  workload: CodexWorkflowRunExecutionWorkloadV1,
   packagePrompt: unknown,
   executionContext: unknown,
 ): Required<FetchedRunExecutionWorkload> => {
@@ -2180,6 +2456,15 @@ const runExecutionFailureSubcode = (error: unknown, stage?: RuntimeFailureDiagno
     return workspaceBundleSubcode;
   }
   const publicCode = publicErrorCode(error);
+  if (publicCode === 'codex_app_server_resume_failed') {
+    return 'app_server_resume_failed';
+  }
+  if (stage === 'run_execution_continuity_validation' || stage === 'launch_materialization') {
+    return 'run_execution_continuity_mismatch';
+  }
+  if (stage === 'run_execution_capsule_restore') {
+    return publicCode === 'codex_runtime_capsule_missing' ? 'runtime_capsule_missing' : 'runtime_capsule_restore_failed';
+  }
   if (publicCode === 'codex_app_server_unavailable' && stage === 'runtime_job_start') {
     return 'runtime_job_start_unavailable';
   }
