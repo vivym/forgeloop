@@ -663,29 +663,39 @@ const workflowRunExecutionWorkload = (
     workspace_bundle_id?: string;
     workspace_bundle_digest?: string;
     workspace_acquisition_json?: Record<string, unknown>;
+    launch_lease_id?: string;
+    runtime_worker_id?: string;
+    runtime_worker_session_digest?: string;
+    codex_session_lease_id?: string;
+    codex_session_lease_epoch?: number;
+    codex_session_worker_id?: string;
+    codex_session_worker_session_digest?: string;
   } = {},
 ): Record<string, unknown> => {
+  const runtimeJobId = overrides.runtime_job_id ?? 'workflow-runtime-job-1';
   const workflowId = overrides.workflow_id ?? 'workflow-1';
   const codexSessionId = overrides.codex_session_id ?? 'session-1';
   const codexSessionTurnId = overrides.codex_session_turn_id ?? 'turn-1';
+  const workspaceBundleId = overrides.workspace_bundle_id ?? 'workflow-workspace-bundle-1';
+  const workspaceBundleDigest = overrides.workspace_bundle_digest ?? fixtureDigest('4');
   const inputCapsuleDigest = fixtureDigest('1');
   const inputMemoryDigest = fixtureDigest('2');
   const inputEnvironmentDigest = fixtureDigest('3');
 
   return {
     schema_version: 'codex_run_execution_workload.v1',
-    runtime_job_id: overrides.runtime_job_id ?? 'workflow-runtime-job-1',
+    runtime_job_id: runtimeJobId,
     plan_item_workflow_id: workflowId,
     development_plan_id: 'development-plan-1',
     development_plan_item_id: 'item-1',
     run_session_id: overrides.run_session_id ?? 'workflow-run-session-1',
     execution_package_id: overrides.execution_package_id ?? 'workflow-execution-package-1',
     execution_package_version: overrides.execution_package_version ?? 1,
-    workspace_bundle_id: overrides.workspace_bundle_id ?? 'workflow-workspace-bundle-1',
-    workspace_bundle_digest: overrides.workspace_bundle_digest ?? fixtureDigest('4'),
-    package_prompt_ref: 'artifact://codex-runtime-jobs/workflow-runtime-job-1/prompt',
+    workspace_bundle_id: workspaceBundleId,
+    workspace_bundle_digest: workspaceBundleDigest,
+    package_prompt_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/prompt`,
     package_prompt_digest: fixtureDigest('5'),
-    execution_context_ref: 'artifact://codex-runtime-jobs/workflow-runtime-job-1/context',
+    execution_context_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/context`,
     execution_context_digest: fixtureDigest('6'),
     path_policy_digest: fixtureDigest('7'),
     output_schema_version: 'codex_run_execution_result.v1',
@@ -695,9 +705,11 @@ const workflowRunExecutionWorkload = (
       overrides.workspace_acquisition_json ??
       {
         schema_version: 'workspace_bundle_acquisition.v1',
-        bundle_id: overrides.workspace_bundle_id ?? 'workflow-workspace-bundle-1',
-        archive_ref: 'artifact://internal/workspace_bundle/run_session/workflow-run-session-1/workflow-workspace-bundle-1',
-        archive_digest: overrides.workspace_bundle_digest ?? fixtureDigest('4'),
+        bundle_id: workspaceBundleId,
+        archive_ref: `artifact://internal/workspace_bundle/run_session/${
+          overrides.run_session_id ?? 'workflow-run-session-1'
+        }/${workspaceBundleId}`,
+        archive_digest: workspaceBundleDigest,
         manifest_digest: fixtureDigest('8'),
         size_bytes: 128,
         expires_at: expiresAt,
@@ -706,10 +718,10 @@ const workflowRunExecutionWorkload = (
       schema_version: 'codex_session_runtime_context.v1',
       codex_session_id: codexSessionId,
       codex_session_turn_id: codexSessionTurnId,
-      lease_id: 'lease-1',
+      lease_id: overrides.launch_lease_id ?? `workflow-launch-lease-${runtimeJobId}`,
       lease_epoch: 1,
-      worker_id: 'worker-1',
-      worker_session_digest: tokenHash('session-token-1'),
+      worker_id: overrides.runtime_worker_id ?? 'worker-1',
+      worker_session_digest: overrides.runtime_worker_session_digest ?? tokenHash('session-token-1'),
       expected_input_capsule_digest: inputCapsuleDigest,
       turn_group_status: 'complete',
       continuation: {
@@ -721,6 +733,11 @@ const workflowRunExecutionWorkload = (
     codex_session_terminalization: {
       schema_version: 'codex_session_terminalization.v1',
       lease_token: 'lease-token-secret',
+      codex_session_lease_id: overrides.codex_session_lease_id ?? 'lease-1',
+      codex_session_lease_epoch: overrides.codex_session_lease_epoch ?? 1,
+      codex_session_worker_id: overrides.codex_session_worker_id ?? 'worker-1',
+      codex_session_worker_session_digest:
+        overrides.codex_session_worker_session_digest ?? tokenHash('workflow-terminalization-session-token'),
       codex_session_id: codexSessionId,
       codex_session_turn_id: codexSessionTurnId,
       expected_input_capsule_digest: inputCapsuleDigest,
@@ -767,6 +784,9 @@ const workflowRunExecutionRuntimeJobInput = async (
   const runtimeJobId = overrides.runtime_job_id ?? 'workflow-runtime-job-1';
   const runSessionId = overrides.target?.target_id ?? 'workflow-run-session-1';
   const executionPackageId = overrides.execution_package_id ?? 'workflow-execution-package-1';
+  const launchLeaseId = overrides.launch_lease_id ?? `workflow-launch-lease-${runtimeJobId}`;
+  const runtimeWorkerId = overrides.worker_id ?? 'worker-1';
+  const runtimeWorkerSessionDigest = tokenHash('session-token-1');
   const archiveFixture = workspaceBundleArchiveFixture({ bundle_id: `pending-bundle-${runtimeJobId}` });
   const run = runSession({
     id: runSessionId,
@@ -836,12 +856,39 @@ const workflowRunExecutionRuntimeJobInput = async (
     created_at: now,
   };
   await repository.createPendingWorkspaceBundleArtifact(pendingWorkspaceBundle);
+  const baseInputJson = (overrides.input_json ??
+    workflowRunExecutionWorkload({
+      runtime_job_id: runtimeJobId,
+      workflow_id: run.workflow_id,
+      codex_session_id: run.codex_session_id,
+      codex_session_turn_id: run.codex_session_turn_id,
+      run_session_id: run.id,
+      execution_package_id: run.execution_package_id,
+      workspace_bundle_id: pendingWorkspaceBundle.bundle_id,
+      workspace_bundle_digest: pendingWorkspaceBundle.archive_digest,
+      workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+      launch_lease_id: launchLeaseId,
+      runtime_worker_id: runtimeWorkerId,
+      runtime_worker_session_digest: runtimeWorkerSessionDigest,
+    })) as Record<string, unknown>;
+  const inputJson = {
+    ...baseInputJson,
+    codex_session_runtime_context: {
+      ...((baseInputJson.codex_session_runtime_context as Record<string, unknown> | undefined) ?? {}),
+      lease_id: launchLeaseId,
+      worker_id: runtimeWorkerId,
+      worker_session_digest: runtimeWorkerSessionDigest,
+    },
+    workspace_bundle_id: pendingWorkspaceBundle.bundle_id,
+    workspace_bundle_digest: pendingWorkspaceBundle.archive_digest,
+    workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+  };
 
   return runtimeJobInput(
     repository,
     {
       runtime_job_id: runtimeJobId,
-      launch_lease_id: overrides.launch_lease_id ?? `workflow-launch-lease-${runtimeJobId}`,
+      launch_lease_id: launchLeaseId,
       envelope_id: overrides.envelope_id ?? `workflow-envelope-${runtimeJobId}`,
       job_request_id: overrides.job_request_id ?? `workflow-job-request-${runtimeJobId}`,
       target: generationTarget({
@@ -862,22 +909,14 @@ const workflowRunExecutionRuntimeJobInput = async (
       workflow_id: run.workflow_id,
       codex_session_id: run.codex_session_id,
       codex_session_turn_id: run.codex_session_turn_id,
-      input_json: workflowRunExecutionWorkload({
-        runtime_job_id: runtimeJobId,
-        workflow_id: run.workflow_id,
-        codex_session_id: run.codex_session_id,
-        codex_session_turn_id: run.codex_session_turn_id,
-        run_session_id: run.id,
-        execution_package_id: run.execution_package_id,
-        workspace_bundle_id: pendingWorkspaceBundle.bundle_id,
-        workspace_bundle_digest: pendingWorkspaceBundle.archive_digest,
-        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
-      }),
+      input_json: inputJson,
       input_digest: tokenHash(`workflow-runtime-input-${runtimeJobId}`),
       workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
       workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
       pending_workspace_bundle: pendingWorkspaceBundle,
       ...overrides,
+      launch_lease_id: launchLeaseId,
+      input_json: inputJson,
     },
     { capabilities: ['run_execution'], ...(overrides.worker_id === undefined ? {} : { worker_id: overrides.worker_id }) },
   );
