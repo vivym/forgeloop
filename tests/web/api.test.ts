@@ -283,17 +283,12 @@ describe('Forgeloop web API client', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://api.local/run-sessions/run-1/events?after=0000000000', expect.any(Object));
   });
 
-  it('propagates actor ids as headers to package run commands without body actor fields', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
-    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+  it('does not expose legacy public execution package start commands', () => {
+    const api = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: vi.fn() });
 
-    await api.runPackage('package-1', 'actor-owner', { workflow_only: true });
-
-    expect(fetchMock).toHaveBeenCalledWith('http://api.local/execution-packages/package-1/run', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Forgeloop-Actor-Id': 'actor-owner', 'X-Forgeloop-Actor-Class': 'human_admin' },
-      body: JSON.stringify({ workflow_only: true }),
-    });
+    expect((api as Record<string, unknown>).runPackage).toBeUndefined();
+    expect((api as Record<string, unknown>).rerunPackage).toBeUndefined();
+    expect((api as Record<string, unknown>).forceRerunPackage).toBeUndefined();
   });
 
   it('rejects run event helpers before sending requests without an actor id', async () => {

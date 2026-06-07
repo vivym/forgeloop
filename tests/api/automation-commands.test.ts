@@ -2941,10 +2941,10 @@ describe('automation command boundaries', () => {
         .send({ workflow_only: true }),
     ]);
 
-    expect(results.map((result) => (result.status === 'fulfilled' ? result.value.status : 500)).sort()).toEqual([409, 409]);
+    expect(results.map((result) => (result.status === 'fulfilled' ? result.value.status : 500)).sort()).toEqual([410, 410]);
     expect(
       results.map((result) => (result.status === 'fulfilled' ? result.value.body.code : undefined)),
-    ).toEqual(['workflow_legacy_entrypoint_disabled', 'workflow_legacy_entrypoint_disabled']);
+    ).toEqual(['legacy_execution_entrypoint_disabled', 'legacy_execution_entrypoint_disabled']);
     expect(repository.maxActiveRunChecksInFlight).toBe(0);
     expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(0);
   });
@@ -3504,9 +3504,9 @@ describe('automation command boundaries', () => {
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(humanAdminHeaders)
       .send({ workflow_only: true })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
       });
     expect(await repository.listRunSessionsForPackage(executionPackage.id)).toHaveLength(0);
   });

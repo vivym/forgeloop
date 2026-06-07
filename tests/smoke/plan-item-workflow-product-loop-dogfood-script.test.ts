@@ -107,6 +107,16 @@ describe('Plan Item workflow product-loop dogfood scripts', () => {
 
     expect(packageJson.scripts['dogfood:plan-item-workflow-product-loop']).toContain('plan-item-workflow-product-loop-dogfood.ts');
     expect(packageJson.scripts['dogfood:plan-item-workflow-product-loop:real']).toContain('plan-item-workflow-product-loop-real-dogfood.ts');
+    for (const retiredScript of [
+      'dogfood:delivery',
+      'dogfood:delivery:durable',
+      'dogfood:delivery:local-codex',
+      'dogfood:delivery:work-items',
+      'dogfood:release-flow',
+      'dogfood:release-flow:strict',
+    ]) {
+      expect(packageJson.scripts).not.toHaveProperty(retiredScript);
+    }
   });
 
   it('fake dogfood drives real workflow API and repository evidence for the full Wave 5 loop', async () => {

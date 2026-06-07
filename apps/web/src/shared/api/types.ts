@@ -439,14 +439,6 @@ export interface MarkPackageReadyBody extends ActorCommandBody {
   expected_package_version: number;
 }
 
-export interface RunPackageBody {
-  executor_type?: ExecutorType;
-  workflow_only?: boolean;
-  previous_run_session_id?: string;
-  force?: true;
-  force_reason?: string;
-}
-
 export interface ReviewDecisionBody {
   summary: string;
   reviewed_by_actor_id: string;

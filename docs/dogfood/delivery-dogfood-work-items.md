@@ -2,15 +2,15 @@
 
 This runbook defines the first three real ForgeLoop Delivery dogfood Work Items. The goal is to validate the product loop, not to maximize feature volume.
 
-Run the batch with:
+The legacy batch command is retired. Validate the current workflow-owned product loop with:
 
 ```bash
-pnpm dogfood:delivery:work-items
+pnpm dogfood:plan-item-workflow-product-loop
 ```
 
-The script writes the latest completion evidence to `docs/superpowers/reports/delivery-dogfood-work-items-completion.md`.
-By default the command stays deterministic and runs all three Work Items with `executor_type: mock` and `workflow_only=true`.
-Set `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1` to opt in to strict local Codex acceptance.
+The historical completion evidence remains at `docs/superpowers/reports/delivery-dogfood-work-items-completion.md`.
+The current deterministic command drives the Plan Item Workflow path through Brainstorming, Spec Doc, Implementation Plan Doc, and Execution Ready gates without using package-run public entrypoints.
+Set `FORGELOOP_REAL_RUNTIME_ACCEPTANCE=1` with `pnpm dogfood:plan-item-workflow-product-loop:real` to opt in to real runtime acceptance.
 
 ## Batch Acceptance
 
@@ -33,7 +33,7 @@ The batch must include:
 
 Default mode explicitly reports `Strict local_codex acceptance: disabled`; that deterministic run validates the workflow path but does not complete strict runbook acceptance. Strict mode is enabled only when `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1`.
 
-Strict mode is complete only when at least two Work Items satisfy the Work Item-level Strict Success Contract:
+Historical strict mode was complete only when at least two Work Items satisfied the Work Item-level Strict Success Contract:
 
 - Every Execution Package on the Work Item is complete according to `deriveWorkItemCompletion(...).done`.
 - The current RunSession is `executor_type: local_codex`, `workflow_only=false`, and `status: succeeded`.
@@ -94,16 +94,16 @@ The allowlist must not include application, package, script, spec, plan, or sour
 
 **Suggested Spec scope:**
 
-- Start local durable dependencies through Docker Compose.
+- Start local durable dependencies through Docker Compose when persistent storage verification is needed.
 - Run Drizzle schema push against Postgres.
-- Run durable dogfood with `pnpm dogfood:delivery:durable`.
-- Record durable pass/fail evidence in the verification report.
+- Run `pnpm dogfood:plan-item-workflow-product-loop`.
+- Record workflow-owned product-loop pass/fail evidence in the verification report.
 
 **Suggested Plan checkpoints:**
 
 - Confirm Docker services are healthy.
 - Run `pnpm db:push`.
-- Run `pnpm dogfood:delivery:durable`.
+- Run `pnpm dogfood:plan-item-workflow-product-loop`.
 - Update `docs/superpowers/reports/delivery-loop-verification.md`.
 
 **Review focus:**
@@ -129,15 +129,15 @@ The allowlist must not include application, package, script, spec, plan, or sour
 **Suggested Spec scope:**
 
 - Run the web app against the control-plane API.
-- Execute the browser Run Console E2E path.
+- Execute the workflow-owned Plan Item product-loop dogfood path.
 - Capture any visual/text-overflow concerns as follow-up items.
 - Keep this Work Item `workflow_only=true` so it cannot be mistaken for real code evidence.
 
 **Suggested Plan checkpoints:**
 
-- Start API and web services.
-- Run `pnpm e2e:run-console`.
-- Inspect desktop and narrow viewport screenshots or Playwright traces when available.
+- Start API and web services when visual verification is needed.
+- Run `pnpm dogfood:plan-item-workflow-product-loop`.
+- Inspect the Plan Item workflow workspace at desktop and narrow viewports when browser evidence is needed.
 - Record browser verification status in the delivery verification report.
 
 **Review focus:**

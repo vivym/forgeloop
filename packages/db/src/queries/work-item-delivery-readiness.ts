@@ -37,7 +37,6 @@ import {
   navigateAction,
   objectTarget,
   routeTarget,
-  runPackageAction,
   workItemScopeRef,
 } from './product-action-builders';
 import { deliveryRunReadinessDisabledReason } from './delivery-runtime-readiness';
@@ -1112,17 +1111,16 @@ const actionForLane = (
     if (firstPackage !== undefined && firstRun === undefined && firstPackage.phase === 'ready') {
       const disabledReason = deliveryRunReadinessDisabledReason(input.packageRunReadinessByPackageId?.get(firstPackage.id));
       const packageTarget = taskPackageTarget(firstPackage);
+      const target = packageTarget ?? objectTarget('execution', executionObjectIdForPackage(firstPackage), '/executions');
       return [
-        runPackageAction({
-          id: `run-package-${firstPackage.id}`,
+        navigateAction({
+          id: `open-execution-gate-${firstPackage.id}`,
           laneId,
           priority: 'primary',
-          label: 'Start execution',
+          label: 'Open execution gate',
           enabled: disabledReason === undefined,
           ...(disabledReason === undefined ? {} : { disabledReason, blockedReason: disabledReason }),
-          scopeRef: workItemScopeRef(input.workItem),
-          packageId: firstPackage.id,
-          ...(packageTarget === undefined ? {} : { target: packageTarget }),
+          target,
         }),
       ];
     }

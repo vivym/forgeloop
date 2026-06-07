@@ -355,18 +355,24 @@ describe('ProductAction contracts', () => {
         package_id: 'pkg_1',
         expected_package_version: 3,
       },
-      {
-        type: 'run_package',
-        object_type: 'execution_package',
-        object_id: 'pkg_1',
-        scope_ref: { type: 'requirement', id: 'wi_1' },
-        package_id: 'pkg_1',
-      },
     ] as const;
 
     for (const command of commands) {
       expect(productActionSchema.safeParse({ ...validCommandAction, command }).success).toBe(true);
     }
+
+    expect(
+      productActionSchema.safeParse({
+        ...validCommandAction,
+        command: {
+          type: 'run_package',
+          object_type: 'execution_package',
+          object_id: 'pkg_1',
+          scope_ref: { type: 'requirement', id: 'wi_1' },
+          package_id: 'pkg_1',
+        },
+      }).success,
+    ).toBe(false);
 
     expect(
       productActionSchema.safeParse({

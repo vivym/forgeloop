@@ -139,15 +139,18 @@ describe('durable run actor auth', () => {
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .send({ requested_by_actor_id: actorOwner, workflow_only: true })
-      .expect(400);
+      .expect(410)
+      .expect(({ body }) => {
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
+      });
 
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(actorHeaderName, actorOwner)
       .send({ workflow_only: true })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
       });
   });
 

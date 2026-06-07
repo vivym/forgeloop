@@ -403,46 +403,6 @@ export function useMarkPackageReadyMutation(packageId: string) {
   });
 }
 
-export function useRunPackageMutation(packageId: string) {
-  const queryClient = useQueryClient();
-
-	return useMutation({
-	  mutationFn: (input: { actorId: string }) =>
-	    createCommandApi().runPackage(packageId, input.actorId, {
-	      executor_type: 'local_codex',
-	    }),
-    onSuccess: () => invalidatePackageResources(queryClient, packageId),
-  });
-}
-
-export function useRerunPackageMutation(packageId: string) {
-  const queryClient = useQueryClient();
-
-	return useMutation({
-	  mutationFn: (input: { actorId: string; previousRunSessionId?: string }) =>
-	    createCommandApi().rerunPackage(packageId, input.actorId, {
-	      executor_type: 'local_codex',
-	      ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
-	    }),
-    onSuccess: () => invalidatePackageResources(queryClient, packageId),
-  });
-}
-
-export function useForceRerunPackageMutation(packageId: string) {
-  const queryClient = useQueryClient();
-
-	return useMutation({
-	  mutationFn: (input: { actorId: string; reason: string; previousRunSessionId?: string }) =>
-	    createCommandApi().forceRerunPackage(packageId, input.actorId, {
-	      executor_type: 'local_codex',
-	      force: true,
-        force_reason: input.reason,
-        ...(input.previousRunSessionId === undefined ? {} : { previous_run_session_id: input.previousRunSessionId }),
-      }),
-    onSuccess: () => invalidatePackageResources(queryClient, packageId),
-  });
-}
-
 export function useSendRunInputMutation(runSessionId: string) {
   const queryClient = useQueryClient();
 
@@ -725,8 +685,6 @@ function executeProductCommand(action: ProductCommandAction, input: ProductActio
         actor_id: requiredActorId(input.actorId, 'actorId'),
         expected_package_version: command.expected_package_version,
       });
-    case 'run_package':
-      throw new Error('Run package actions are not executable from the Wave 5 product action surface.');
     default: {
       const exhaustive: never = command;
       throw new Error(`Unsupported ProductAction command: ${JSON.stringify(exhaustive)}`);
@@ -747,7 +705,6 @@ function invalidateCommandDerivedResources(queryClient: QueryClient, command: Pr
     case 'generate_packages':
       return invalidatePackageDeliveryCollections(queryClient);
     case 'mark_package_ready':
-    case 'run_package':
       return invalidatePackageResources(queryClient, command.package_id);
     default: {
       const exhaustive: never = command;

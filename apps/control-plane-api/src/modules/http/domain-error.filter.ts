@@ -7,6 +7,10 @@ const forbiddenDomainErrorCodes = new Set<DomainErrorCode>([
   'workflow_actor_not_authorized',
 ]);
 
+const goneDomainErrorCodes = new Set<DomainErrorCode>([
+  'legacy_execution_entrypoint_disabled',
+]);
+
 const conflictDomainErrorCodes = new Set<DomainErrorCode>([
   'workflow_legacy_entrypoint_disabled',
   'workflow_wave5_entrypoint_disabled',
@@ -34,14 +38,23 @@ export class DomainErrorFilter implements ExceptionFilter<DomainError> {
     }>();
     const statusCode = forbiddenDomainErrorCodes.has(error.code)
       ? HttpStatus.FORBIDDEN
-      : conflictDomainErrorCodes.has(error.code)
-        ? HttpStatus.CONFLICT
-        : HttpStatus.BAD_REQUEST;
+      : goneDomainErrorCodes.has(error.code)
+        ? HttpStatus.GONE
+        : conflictDomainErrorCodes.has(error.code)
+          ? HttpStatus.CONFLICT
+          : HttpStatus.BAD_REQUEST;
 
     response.status(statusCode).json({
       statusCode,
       message: error.message,
-      error: statusCode === HttpStatus.FORBIDDEN ? 'Forbidden' : statusCode === HttpStatus.CONFLICT ? 'Conflict' : 'Bad Request',
+      error:
+        statusCode === HttpStatus.FORBIDDEN
+          ? 'Forbidden'
+          : statusCode === HttpStatus.GONE
+            ? 'Gone'
+            : statusCode === HttpStatus.CONFLICT
+              ? 'Conflict'
+              : 'Bad Request',
       code: error.code,
       ...(error.details !== undefined ? { details: error.details } : {}),
     });

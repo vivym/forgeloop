@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { artifactKindSchema, executorTypeSchema, jsonObjectSchema } from './executor.js';
+import { artifactKindSchema, jsonObjectSchema } from './executor.js';
 import {
   reviewDecisionSchema,
   requestedChangeSchema,
@@ -24,9 +24,6 @@ declare const URL: {
 const isoDateTimeSchema = z.string().datetime();
 
 const commandNames = [
-  'run_package',
-  'rerun_package',
-  'force_rerun_package',
   'approve_review_packet',
   'request_review_changes',
 ] as const;
@@ -35,9 +32,6 @@ export const commandNameSchema = z.enum(commandNames);
 export type CommandName = z.infer<typeof commandNameSchema>;
 
 const commandInventoryPaths: Record<CommandName, string> = {
-  run_package: '/execution-packages/:packageId/run',
-  rerun_package: '/execution-packages/:packageId/rerun',
-  force_rerun_package: '/execution-packages/:packageId/force-rerun',
   approve_review_packet: '/review-packets/:reviewPacketId/approve',
   request_review_changes: '/review-packets/:reviewPacketId/request-changes',
 };
@@ -366,28 +360,9 @@ const markPackageReadyCommandSchema = z
     }
   });
 
-const runPackageCommandSchema = z
-  .object({
-    type: z.literal('run_package'),
-    object_type: z.literal('execution_package'),
-    ...commandBaseSchema,
-    package_id: nonEmptyTrimmedStringSchema,
-  })
-  .strict()
-  .superRefine((command, ctx) => {
-    if (command.object_id !== command.package_id) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['object_id'],
-        message: 'object_id must match package_id',
-      });
-    }
-  });
-
 export const productCommandSchema = z.discriminatedUnion('type', [
   generatePackagesCommandSchema,
   markPackageReadyCommandSchema,
-  runPackageCommandSchema,
 ]);
 export type ProductCommand = z.infer<typeof productCommandSchema>;
 
@@ -574,39 +549,6 @@ export const productLaneResponseSchema = z
   });
 export type ProductLaneResponse = z.infer<typeof productLaneResponseSchema>;
 
-export const runPackageRequestSchema = z
-  .object({
-    execution_package_id: z.string().min(1),
-    requested_by_actor_id: z.string().min(1),
-    executor_type: executorTypeSchema.optional(),
-    workflow_only: z.boolean().default(false),
-    idempotency_key: z.string().min(1).optional(),
-  })
-  .strict();
-export type RunPackageRequest = z.infer<typeof runPackageRequestSchema>;
-
-export const rerunPackageRequestSchema = z
-  .object({
-    execution_package_id: z.string().min(1),
-    previous_run_session_id: z.string().min(1),
-    review_packet_id: z.string().min(1).optional(),
-    requested_changes_context: z.array(requestedChangeSchema).default([]),
-    requested_by_actor_id: z.string().min(1),
-    executor_type: executorTypeSchema.optional(),
-    workflow_only: z.boolean().default(false),
-    idempotency_key: z.string().min(1).optional(),
-  })
-  .strict();
-export type RerunPackageRequest = z.infer<typeof rerunPackageRequestSchema>;
-
-export const forceRerunPackageRequestSchema = rerunPackageRequestSchema
-  .extend({
-    force: z.literal(true).default(true),
-    force_reason: z.string().min(1),
-  })
-  .strict();
-export type ForceRerunPackageRequest = z.infer<typeof forceRerunPackageRequestSchema>;
-
 export const runEventTypeSchema = z.enum([
   'run_queued',
   'worker_lease_acquired',
@@ -722,15 +664,6 @@ export const runCommandResponseSchema = z.discriminatedUnion('status', [
   }),
 ]);
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
-
-export const runPackageResponseSchema = runAcceptedResponseSchema;
-export type RunPackageResponse = RunAcceptedResponse;
-
-export const rerunPackageResponseSchema = runAcceptedResponseSchema;
-export type RerunPackageResponse = RunAcceptedResponse;
-
-export const forceRerunPackageResponseSchema = runAcceptedResponseSchema;
-export type ForceRerunPackageResponse = RunAcceptedResponse;
 
 export const evidenceChainSourceSchema = z.enum([
   'run_event',

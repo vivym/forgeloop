@@ -59,23 +59,24 @@ pnpm build
 pnpm smoke:delivery
 ```
 
-`pnpm smoke:delivery` runs `tests/smoke/delivery-smoke.test.ts`. It covers:
+`pnpm smoke:delivery` runs the smoke suite, including `tests/smoke/delivery-smoke.test.ts`. It covers:
 
-- Work Item -> Spec approval -> Plan approval -> Package run -> Review approval.
-- Work Item -> Spec approval -> Plan approval -> Package run -> changes_requested -> rerun -> new RunSession -> new ReviewPacket -> approve.
-- Stale open ReviewPacket archival when `force-rerun` replaces run evidence before human decision.
+- Work Item -> Spec approval -> Plan approval -> ready package evidence.
+- Public package `run`, `rerun`, and `force-rerun` routes returning the retired-entrypoint 410 response without creating run state.
+- Review evidence remaining stable when retired package rerun routes are requested.
 
 ## Dogfood
 
-Run the deterministic Delivery dogfood flow with:
+Run the deterministic Plan Item Workflow product-loop dogfood flow with:
 
 ```bash
-pnpm dogfood:delivery
+pnpm dogfood:plan-item-workflow-product-loop
 ```
 
-`pnpm dogfood:delivery` starts an in-process `volatile_demo` API, creates approved spec/plan/package fixtures, runs fake-driver packages through the async run API, and prints event progress before terminal completion. It verifies:
+`pnpm dogfood:plan-item-workflow-product-loop` starts an in-process `volatile_demo` API, creates a workflow-backed Plan Item, drives Superpowers-style document gates, and starts execution through the workflow-owned command path. It verifies:
 
-- `POST /execution-packages/:packageId/run` returns `status: accepted` with a `run_session_id` and no synchronous `workflow_result`.
+- `POST /plan-item-workflows/:workflowId/execution/start` returns workflow-owned execution continuity evidence.
+- `POST /execution-packages/:packageId/run`, `/rerun`, and `/force-rerun` are retired public entrypoints that return `410` with `legacy_execution_entrypoint_disabled`.
 - `/run-sessions/:id/events` backfills `run_queued` and live driver events.
 - `waiting_for_input` is visible before terminal status.
 - `POST /run-sessions/:id/input` persists a `user_input` event before worker delivery.
@@ -83,32 +84,16 @@ pnpm dogfood:delivery
 - A replacement worker reclaims an expired recoverable run lease and does not duplicate already-applied input.
 - Final changed files, checks, artifacts, and Review Packet approval still complete.
 
-Real `local_codex` acceptance is separate from the deterministic fake-driver dogfood pass. It is opt-in and disabled by default:
+Real runtime acceptance is separate from the deterministic fake-driver dogfood pass. It is opt-in and disabled by default:
 
 ```bash
-pnpm dogfood:delivery:local-codex
-FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1 pnpm dogfood:delivery:local-codex
+pnpm dogfood:plan-item-workflow-product-loop:real
+FORGELOOP_REAL_RUNTIME_ACCEPTANCE=1 pnpm dogfood:plan-item-workflow-product-loop:real
 ```
 
-`pnpm dogfood:delivery:local-codex` exits with a documented skipped status unless `FORGELOOP_ENABLE_REAL_CODEX_DOGFOOD=1` is set. When enabled, it requires the local `codex` command and authenticated runtime, refuses a dirty source checkout, creates a bounded `executor_type: local_codex` package, attempts the `codex app-server` path before `codex exec --json --dangerously-bypass-approvals-and-sandbox` fallback, verifies public live events before terminal status, and checks terminal changed files, checks, artifacts, and Review Packet evidence. During Task 5 development only, `FORGELOOP_LOCAL_CODEX_DOGFOOD_ALLOW_DIRTY=1` permits dirty files if and only if the dirty list is limited to the expected Task 5 files recorded by the script report.
+`pnpm dogfood:plan-item-workflow-product-loop:real` exits with a documented skipped status unless `FORGELOOP_REAL_RUNTIME_ACCEPTANCE=1` is set. When enabled, it uses the workflow-owned Plan Item command path, proves single Codex session continuity across Brainstorming, Spec Doc, and Implementation Plan Doc turns, and verifies that execution package runtime state is not created before the workflow reaches `execution_ready`.
 
-The dogfood script writes `docs/superpowers/reports/delivery-loop-verification.md` with preflight notes, expected outcomes, and the last dogfood result summary.
-
-Run the durable one-command dogfood flow with:
-
-```bash
-pnpm dogfood:delivery:durable
-```
-
-`pnpm dogfood:delivery:durable` uses `FORGELOOP_DATABASE_URL` when provided and never drops that database. Without it, the script looks for a running Docker Postgres container with a published `5432/tcp` container port on any host port, creates a temporary `forgeloop_dogfood_<timestamp>` database, runs schema push and `pnpm dogfood:delivery`, verifies durable PASS markers in the generated report, then drops only the temporary database it created. Set `FORGELOOP_DOGFOOD_START_POSTGRES=1` to allow the script to start and remove a disposable Postgres container when no candidate exists.
-
-Run the three Delivery dogfood Work Items from `docs/dogfood/delivery-dogfood-work-items.md` with:
-
-```bash
-pnpm dogfood:delivery:work-items
-```
-
-The script creates feature, bugfix, and test/refactor Work Items, approves their Spec and Plan records, runs Execution Packages, records Review Packets, and exercises `changes_requested -> rerun -> approve` for the browser Run Console item. It writes `docs/superpowers/reports/delivery-dogfood-work-items-completion.md`.
+The old package-run dogfood commands were retired with the public package run routes. Product execution must enter through `POST /plan-item-workflows/:workflowId/execution/start`, not through an Execution Package `run`, `rerun`, or `force-rerun` command.
 
 ## API
 
@@ -127,9 +112,8 @@ Core delivery endpoints include:
 - `POST /plans/:planId/approve`
 - `POST /plan-revisions/:planRevisionId/execution-packages`
 - `POST /execution-packages/:packageId/mark-ready`
-- `POST /execution-packages/:packageId/run`
-- `POST /execution-packages/:packageId/rerun`
-- `POST /execution-packages/:packageId/force-rerun`
+- `POST /plan-item-workflows/:workflowId/execution/start`
+- Retired tombstone routes: `POST /execution-packages/:packageId/run`, `/rerun`, and `/force-rerun` return `410 legacy_execution_entrypoint_disabled`.
 - `GET /run-sessions/:runSessionId`
 - `GET /run-sessions/:runSessionId/events`
 - `GET /run-sessions/:runSessionId/events/stream`
@@ -149,14 +133,14 @@ Run the web app with:
 pnpm dev:web
 ```
 
-The web workbench targets the control-plane API and exposes the delivery objects, package run controls, review decisions, cockpit, and evidence views.
+The web workbench targets the control-plane API and exposes delivery objects, Plan Item Workflow execution, review decisions, cockpit, and evidence views.
 
-To start a local workflow-only run in the web app:
+To start a workflow-owned execution in the web app:
 
 1. Start `pnpm dev:api` and `pnpm dev:web`.
-2. Open the Vite URL, create or select a Work Item with approved Spec and Plan, then create and mark an Execution Package ready.
-3. In the `Run/Review` panel, keep `Executor` as `mock`, keep `workflow only` checked, and choose `Run`.
-4. Select the created run from the `Run` dropdown. The `Run Console` appears in the same `Run/Review` panel and backfills prior events before the SSE stream appends new ones.
+2. Open the Vite URL, create or select a Plan Item, and drive the workflow through Brainstorming, Spec, and Implementation Plan approval.
+3. When the workflow reaches execution readiness, start execution from the Plan Item Workflow execution gate.
+4. Select the created run from the run view. The Run Console backfills prior events before the SSE stream appends new ones.
 5. Use the Run Console input, cancel, and resume controls to create accepted run commands and visible run events.
 
 ## Delivery Boundaries

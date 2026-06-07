@@ -38,7 +38,6 @@ import type {
   RunEventStream,
   RunEventStreamHandlers,
   RunOperatorCommandResponse,
-  RunPackageBody,
   RunSession,
   RunQueuedWorkflowActionResponse,
   BugDetail,
@@ -593,25 +592,6 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         body,
         ...actorRequest(actorCommandActorId(body)),
       }),
-    runPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
-      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/run`, {
-        method: 'POST',
-        body,
-        actorId,
-      }),
-    rerunPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
-      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/rerun`, {
-        method: 'POST',
-        body,
-        actorId,
-      }),
-    forceRerunPackage: (packageId: string, actorId: string, body: RunPackageBody) =>
-      request<Record<string, unknown>>(`/execution-packages/${encodeURIComponent(packageId)}/force-rerun`, {
-        method: 'POST',
-        body,
-        actorId,
-      }),
-
     getRunSession: (runSessionId: string) => request<RunSession>(`/run-sessions/${encodeURIComponent(runSessionId)}`),
     listRunEvents: async (runSessionId: string, options: { after?: string; actorId: string }) =>
       request<RunEventListResponse>(

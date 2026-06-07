@@ -35,10 +35,10 @@ describe('async run API', () => {
       .post(`/execution-packages/${executionPackage.id}/run`)
       .set(actorHeaderName, actorOwner)
       .send({ workflow_only: true })
-      .expect(409);
+      .expect(410);
 
     expect(response.body).toMatchObject({
-      code: 'workflow_legacy_entrypoint_disabled',
+      code: 'legacy_execution_entrypoint_disabled',
     });
     expect(response.body).not.toHaveProperty('run_session_id');
     expect(response.body).not.toHaveProperty('workflow_result');
@@ -62,6 +62,9 @@ describe('async run API', () => {
     await request(app.getHttpServer())
       .post(`/execution-packages/${executionPackage.id}/run`)
       .send({ requested_by_actor_id: 'actor-owner', workflow_only: true })
-      .expect(400);
+      .expect(410)
+      .expect(({ body }) => {
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
+      });
   });
 });

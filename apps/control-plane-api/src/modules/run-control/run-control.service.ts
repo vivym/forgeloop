@@ -7,7 +7,6 @@ import {
   Injectable,
   NotFoundException,
   UnauthorizedException,
-  UnprocessableEntityException,
 } from '@nestjs/common';
 import type { MessageEvent } from '@nestjs/common';
 import type {
@@ -18,19 +17,17 @@ import type {
   RunOperatorCommandResponse,
 } from '@forgeloop/contracts';
 import { publicRunEventSchema } from '@forgeloop/contracts';
-import type { DeliveryRepository, TraceLinkRecord } from '@forgeloop/db';
+import type { DeliveryRepository } from '@forgeloop/db';
 import {
   DomainError,
   type ExecutionPackage,
   type ObjectEvent,
-  type ReviewPacket,
   type RunCommand,
   type RunEvent,
   type RunRuntimeMetadata,
   type RunSession,
   transitionExecutionPackage,
   transitionRunSession,
-  validateForceRerunAllowed,
 } from '@forgeloop/domain';
 import type { RunWorker } from '@forgeloop/run-worker';
 import { buildRunSpec, loadRunContext } from '@forgeloop/workflow';
@@ -44,10 +41,8 @@ import {
   RUN_DURABILITY_MODE,
   type RunDurabilityMode,
 } from '../core/control-plane-tokens';
-import type { RunControlDto, RunInputDto, RunPackageDto } from '../delivery/dto';
-import { ExecutionPackageService } from '../execution-packages/execution-package.service';
+import type { RunControlDto, RunInputDto } from '../delivery/dto';
 import { serializePublicRunSession } from '../query/public-run-session-projection';
-import { ReviewEvidenceService } from '../review-evidence/review-evidence.service';
 import {
   createRunEventStreamToken as signRunEventStreamToken,
   resolveRunEventStreamTokenSecret,
@@ -56,25 +51,11 @@ import {
 } from './run-event-stream-token';
 import { DELIVERY_RUN_WORKER } from './run-worker.token';
 
-type RunReplacementRecordedPayload = {
-  mode: 'rerun_package' | 'force_rerun_package';
-  execution_package_id: string;
-  work_item_id: string;
-  new_run_session_id: string;
-  previous_run_session_id: string;
-  triggering_review_packet_id?: string;
-  previous_review_packet_id?: string;
-  new_review_packet_id?: string;
-};
-
 type RunEventAccessOptions = {
   after?: string;
   actorContext?: ActorContext;
   streamToken?: string;
 };
-
-const traceReplacementModeFor = (mode: 'rerun' | 'force_rerun'): RunReplacementRecordedPayload['mode'] =>
-  mode === 'rerun' ? 'rerun_package' : 'force_rerun_package';
 
 const terminalRunStatuses = new Set<RunSession['status']>(['succeeded', 'failed', 'timed_out', 'cancelled']);
 const streamPollMs = 500;
@@ -88,163 +69,14 @@ export class RunControlService {
     @Inject(DELIVERY_RUN_WORKER) private readonly runWorker: RunWorker,
     @Inject(RUN_DURABILITY_MODE) private readonly durabilityMode: RunDurabilityMode,
     @Inject(ControlPlaneRuntimeService) private readonly controlPlaneRuntime: ControlPlaneRuntimeService,
-    @Inject(ExecutionPackageService) private readonly executionPackageService: ExecutionPackageService,
     @Inject(AuditWriterService) private readonly audit: AuditWriterService,
-    @Inject(ReviewEvidenceService) private readonly reviewEvidenceService: ReviewEvidenceService,
   ) {}
 
-  async runPackage(
+  rejectRetiredExecutionPackageStart(
     packageId: string,
-    dto: RunPackageDto,
     mode: 'run' | 'rerun' | 'force_rerun',
-    actorContext: ActorContext = {},
-  ): Promise<RunAcceptedResponse> {
-    const result = await this.repository.withObjectLock(`execution-package:${packageId}`, async (repository) =>
-      this.runPackageWithRepository(repository, packageId, dto, mode, actorContext),
-    );
-    this.kickRunWorker();
-    return result;
-  }
-
-  async runPackageWithRepository(
-    repository: DeliveryRepository,
-    packageId: string,
-    dto: RunPackageDto,
-    mode: 'run' | 'rerun' | 'force_rerun',
-    actorContext: ActorContext,
-  ): Promise<RunAcceptedResponse> {
-    const executionPackage = this.requireFound(await repository.getExecutionPackage(packageId), `ExecutionPackage ${packageId}`);
-    await this.assertPublicRunPackageMutationAllowed(repository, executionPackage, mode);
-    await this.executionPackageService.assertExecutionPackageGraphStillCurrent(repository, executionPackage);
-    const reviewPackets = await repository.listReviewPacketsForPackage(packageId);
-    const requestedByActorId = this.resolveRunActor({
-      ...(actorContext.authenticatedActorId === undefined ? {} : { authenticatedActorId: actorContext.authenticatedActorId }),
-    });
-    if (mode === 'run') {
-      const activeRunSession = await repository.findActiveRunSessionForPackage(packageId);
-      if (activeRunSession !== undefined) {
-        throw new UnprocessableEntityException({
-          code: 'automation_gate_pending',
-          message: 'Active run session blocks duplicate run enqueue.',
-        });
-      }
-      const openReviewPacket = await repository.findOpenReviewPacketForPackage(packageId);
-      if (openReviewPacket !== undefined) {
-        throw new UnprocessableEntityException({
-          code: 'automation_gate_pending',
-          message: 'Open review packet blocks run enqueue.',
-        });
-      }
-    }
-    const validation = this.validateRunRequest(packageId, executionPackage, reviewPackets, dto, mode, requestedByActorId);
-    const previousReviewPacket =
-      mode === 'run'
-        ? undefined
-        : reviewPackets.find((reviewPacket) => reviewPacket.run_session_id === validation.previousRunSessionId);
-    if (mode === 'force_rerun' && validation.currentOpenReviewPacket !== undefined) {
-      try {
-        validateForceRerunAllowed(executionPackage, reviewPackets, validation.requestedByActorId);
-      } catch (error) {
-        if (error instanceof DomainError && error.code === 'FORCE_RERUN_FORBIDDEN') {
-          throw new ForbiddenException(error.message);
-        }
-        throw error;
-      }
-      await this.reviewEvidenceService.archiveReviewPacket(validation.currentOpenReviewPacket, 'force_rerun', repository);
-    }
-    const workflowOnly = dto.workflow_only ?? false;
-    const executorType: ExecutorType = workflowOnly ? 'mock' : (dto.executor_type ?? 'mock');
-    const runSessionId = this.id('run-session');
-    const queuedAt = this.now();
-    const queuedPackage =
-      mode === 'force_rerun'
-        ? transitionExecutionPackage(executionPackage, {
-            type: 'force_rerun',
-            run_session_id: runSessionId,
-            has_open_review_packet: true,
-            at: queuedAt,
-          })
-        : transitionExecutionPackage(executionPackage, {
-            type: mode,
-            run_session_id: runSessionId,
-            at: queuedAt,
-          });
-    const runSession = transitionRunSession(undefined, {
-      type: 'create',
-      id: runSessionId,
-      execution_package_id: packageId,
-      requested_by_actor_id: validation.requestedByActorId,
-      executor_type: executorType,
-      at: queuedAt,
-    });
-    await repository.saveExecutionPackage(queuedPackage);
-    await repository.saveRunSession({
-      ...runSession,
-      ...(executionPackage.workflow_id === undefined ? {} : { workflow_id: executionPackage.workflow_id }),
-      ...(executionPackage.codex_session_id === undefined ? {} : { codex_session_id: executionPackage.codex_session_id }),
-      ...(executionPackage.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: executionPackage.codex_session_turn_id }),
-      runtime_metadata: this.initialRuntimeMetadata(),
-    });
-    const context = await loadRunContext(repository, runSessionId);
-    const runSpec = buildRunSpec(context, { defaultExecutorType: executorType, workflowOnly });
-    await repository.saveRunSession({
-      ...runSession,
-      ...(executionPackage.workflow_id === undefined ? {} : { workflow_id: executionPackage.workflow_id }),
-      ...(executionPackage.codex_session_id === undefined ? {} : { codex_session_id: executionPackage.codex_session_id }),
-      ...(executionPackage.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: executionPackage.codex_session_turn_id }),
-      executor_type: executorType,
-      run_spec: runSpec,
-      runtime_metadata: this.initialRuntimeMetadata(),
-    });
-    await repository.appendRunEvent({
-      id: this.id('run-event'),
-      run_session_id: runSessionId,
-      event_type: 'run_queued',
-      source: 'api',
-      visibility: 'public',
-      summary: 'Run queued.',
-      payload: { execution_package_id: packageId, mode, workflow_only: workflowOnly, executor_type: executorType },
-      created_at: queuedAt,
-    });
-    await this.eventWithRepository(
-      repository,
-      'execution_package',
-      packageId,
-      mode === 'force_rerun' ? 'force_rerun_requested' : `${mode}_requested`,
-      validation.requestedByActorId,
-      { run_session_id: runSessionId },
-    );
-    if (mode !== 'run' && validation.previousRunSessionId !== undefined) {
-      const triggeringReviewPacket = validation.currentOpenReviewPacket ?? previousReviewPacket;
-      await this.recordRunReplacementTrace({
-        repository,
-        mode,
-        executionPackage: queuedPackage,
-        previousRunSessionId: validation.previousRunSessionId,
-        newRunSessionId: runSessionId,
-        requestedByActorId: validation.requestedByActorId,
-        ...(previousReviewPacket === undefined ? {} : { previousReviewPacket }),
-        ...(triggeringReviewPacket === undefined ? {} : { triggeringReviewPacket }),
-        at: queuedAt,
-      });
-    }
-
-    return {
-      status: 'accepted',
-      run_session_id: runSessionId,
-      execution_package_id: packageId,
-    };
-  }
-
-  runPackageReplacementContext(
-    packageId: string,
-    executionPackage: ExecutionPackage,
-    reviewPackets: ReviewPacket[],
-    dto: RunPackageDto,
-    mode: 'run' | 'rerun' | 'force_rerun',
-    requestedByActorId: string,
-  ): { requestedByActorId: string; previousRunSessionId?: string; currentOpenReviewPacket?: ReviewPacket } {
-    return this.validateRunRequest(packageId, executionPackage, reviewPackets, dto, mode, requestedByActorId);
+  ): never {
+    throw this.legacyExecutionEntrypointDisabled(packageId, mode);
   }
 
   async getRunSession(runSessionId: string): Promise<RunSession> {
@@ -521,113 +353,12 @@ export class RunControlService {
     return this.enqueueRunWithRepositoryInternal(repository, executionPackage, input);
   }
 
-  async recordRunReplacementTrace(input: {
-    repository?: DeliveryRepository;
-    mode: 'rerun' | 'force_rerun';
-    executionPackage: ExecutionPackage;
-    previousRunSessionId: string;
-    newRunSessionId: string;
-    requestedByActorId: string;
-    previousReviewPacket?: ReviewPacket;
-    triggeringReviewPacket?: ReviewPacket;
-    at: string;
-  }): Promise<void> {
-    await this.reviewEvidenceService.bestEffortTraceWrite(async () => {
-      const repository = input.repository ?? this.repository;
-      const traceEventId = `trace-event:run-replacement:${input.newRunSessionId}`;
-      const payload: RunReplacementRecordedPayload = {
-        mode: traceReplacementModeFor(input.mode),
-        execution_package_id: input.executionPackage.id,
-        work_item_id: input.executionPackage.work_item_id,
-        new_run_session_id: input.newRunSessionId,
-        previous_run_session_id: input.previousRunSessionId,
-        ...(input.triggeringReviewPacket === undefined ? {} : { triggering_review_packet_id: input.triggeringReviewPacket.id }),
-        ...(input.previousReviewPacket === undefined ? {} : { previous_review_packet_id: input.previousReviewPacket.id }),
-      };
-
-      await this.audit.traceEvent(
-        {
-          id: traceEventId,
-          event_type: 'run_replacement_recorded',
-          subject_type: 'run_session',
-          subject_id: input.newRunSessionId,
-          actor_id: input.requestedByActorId,
-          summary: `Run ${input.newRunSessionId} replaces ${input.previousRunSessionId}.`,
-          payload,
-          created_at: input.at,
-        },
-        repository,
-      );
-
-      const links = [
-        this.traceLink(traceEventId, 'belongs_to', 'work_item', input.executionPackage.work_item_id, input.at),
-        this.traceLink(traceEventId, 'belongs_to', 'execution_package', input.executionPackage.id, input.at),
-        this.traceLink(traceEventId, 'generated_by', 'run_session', input.newRunSessionId, input.at),
-        this.traceLink(traceEventId, 'supersedes', 'run_session', input.previousRunSessionId, input.at),
-      ];
-      if (input.previousReviewPacket !== undefined) {
-        links.push(this.traceLink(traceEventId, 'replaces', 'review_packet', input.previousReviewPacket.id, input.at));
-      }
-      if (input.triggeringReviewPacket !== undefined) {
-        links.push(this.traceLink(traceEventId, 'belongs_to', 'review_packet', input.triggeringReviewPacket.id, input.at));
-      }
-
-      for (const link of links) {
-        await this.audit.traceLink(link, repository);
-      }
-    });
-  }
-
   kickRunWorker(): void {
     try {
       this.runWorker.kick();
     } catch {
       // The durable repository state is authoritative; kick is only an in-process wake-up.
     }
-  }
-
-  private validateRunRequest(
-    packageId: string,
-    executionPackage: ExecutionPackage,
-    reviewPackets: ReviewPacket[],
-    dto: RunPackageDto,
-    mode: 'run' | 'rerun' | 'force_rerun',
-    requestedByActorId: string,
-  ): { requestedByActorId: string; previousRunSessionId?: string; currentOpenReviewPacket?: ReviewPacket } {
-    if (dto.execution_package_id !== undefined && dto.execution_package_id !== packageId) {
-      throw new BadRequestException('execution_package_id must match packageId path parameter');
-    }
-
-    if (mode === 'run') {
-      return { requestedByActorId };
-    }
-
-    const previousRunSessionId = this.required(dto.previous_run_session_id, 'previous_run_session_id');
-    if (executionPackage.last_run_session_id !== previousRunSessionId) {
-      throw new BadRequestException('previous_run_session_id must match the package current last_run_session_id');
-    }
-
-    if (mode === 'rerun') {
-      return { requestedByActorId, previousRunSessionId };
-    }
-
-    if (dto.force !== true) {
-      throw new BadRequestException('force must be true for force-rerun');
-    }
-    this.required(dto.force_reason, 'force_reason');
-
-    const currentOpenReviewPacket = reviewPackets.find(
-      (reviewPacket) =>
-        reviewPacket.run_session_id === previousRunSessionId &&
-        reviewPacket.decision === 'none' &&
-        (reviewPacket.status === 'ready' || reviewPacket.status === 'in_review'),
-    );
-
-    if (currentOpenReviewPacket === undefined) {
-      throw new BadRequestException('force-rerun requires a current open ready or in_review ReviewPacket');
-    }
-
-    return { requestedByActorId, previousRunSessionId, currentOpenReviewPacket };
   }
 
   private async enqueueRunWithRepositoryInternal(
@@ -763,23 +494,6 @@ export class RunControlService {
     }
   }
 
-  private traceLink(
-    traceEventId: string,
-    relationship: TraceLinkRecord['relationship'],
-    objectType: string,
-    objectId: string,
-    at: string,
-  ): TraceLinkRecord {
-    return {
-      id: `trace-link:${traceEventId}:${relationship}:${objectType}:${objectId}`,
-      trace_event_id: traceEventId,
-      relationship,
-      object_type: objectType,
-      object_id: objectId,
-      created_at: at,
-    };
-  }
-
   private async eventWithRepository(
     repository: DeliveryRepository,
     objectType: string,
@@ -822,14 +536,10 @@ export class RunControlService {
     return value;
   }
 
-  private async assertPublicRunPackageMutationAllowed(
-    _repository: DeliveryRepository,
-    executionPackage: ExecutionPackage,
-    mode: 'run' | 'rerun' | 'force_rerun',
-  ): Promise<void> {
-    throw new DomainError(
-      'workflow_legacy_entrypoint_disabled',
-      `workflow_legacy_entrypoint_disabled: Execution Package ${executionPackage.id} ${mode} must use PlanItemWorkflowService`,
+  private legacyExecutionEntrypointDisabled(packageId: string, mode: 'run' | 'rerun' | 'force_rerun'): DomainError {
+    return new DomainError(
+      'legacy_execution_entrypoint_disabled',
+      `legacy_execution_entrypoint_disabled: Execution Package ${packageId} ${mode} must use PlanItemWorkflowService`,
     );
   }
 

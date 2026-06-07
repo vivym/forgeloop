@@ -85,6 +85,7 @@ export type DomainErrorCode =
   | 'codex_session_runner_unavailable'
   | 'codex_session_fork_invalid'
   | 'codex_generation_workload_unsupported'
+  | 'legacy_execution_entrypoint_disabled'
   | 'workflow_legacy_entrypoint_disabled'
   | 'workflow_wave5_entrypoint_disabled'
   | 'workflow_invalid_message_action'

@@ -22,7 +22,6 @@ import {
   useMyWorkQuery,
   usePipelineQuery,
   useQaHandoffsQuery,
-  useRunPackageMutation,
   useProductActionCommandMutation,
   useProductLaneQuery,
   usePlanItemWorkflowCommandMutation,
@@ -32,6 +31,7 @@ import {
   useUnlinkReleaseExecutionPackageMutation,
   useUnlinkReleaseWorkItemMutation,
 } from '../../apps/web/src/shared/api/hooks';
+import * as apiHooks from '../../apps/web/src/shared/api/hooks';
 import { createForgeloopCommandApi } from '../../apps/web/src/shared/api/commands';
 import { createForgeloopQueryApi } from '../../apps/web/src/shared/api/query';
 import { queryKeys } from '../../apps/web/src/shared/api/query-keys';
@@ -741,40 +741,10 @@ describe('Web product API hooks', () => {
     queryClient.clear();
   });
 
-  it('rejects run_package ProductAction commands from the Wave 5 product action surface', async () => {
-    const fetchMock = installProductApiMock();
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-    const action = {
-      id: 'run-package-product-action',
-      lane_id: 'requirements',
-      priority: 'primary',
-      label: 'Run package',
-      enabled: true,
-      kind: 'command',
-      command: {
-        type: 'run_package',
-        object_type: 'execution_package',
-        object_id: executionPackage.id,
-        scope_ref: { type: 'requirement', id: workItem.id },
-        package_id: executionPackage.id,
-      },
-    } as const;
-
-    const mutation = renderHook(() => useProductActionCommandMutation({ projectId, action }), { wrapper });
-    await expect(mutation.result.current.mutateAsync({ actorId })).rejects.toThrow(
-      'Run package actions are not executable from the Wave 5 product action surface.',
-    );
-
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      `http://localhost:3000/execution-packages/${executionPackage.id}/run`,
-      expect.anything(),
-    );
-
-    mutation.unmount();
-    queryClient.clear();
+  it('does not expose legacy public execution package start hooks', () => {
+    expect((apiHooks as Record<string, unknown>).useRunPackageMutation).toBeUndefined();
+    expect((apiHooks as Record<string, unknown>).useRerunPackageMutation).toBeUndefined();
+    expect((apiHooks as Record<string, unknown>).useForceRerunPackageMutation).toBeUndefined();
   });
 
   it('invalidates delivery surfaces after package lifecycle hooks change package state', async () => {
@@ -790,7 +760,6 @@ describe('Web product API hooks', () => {
         gate_state: 'not_submitted',
         version: executionPackage.version + 1,
       },
-      [`POST /execution-packages/${executionPackage.id}/run`]: { run_session_id: 'run-cache-refresh' },
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
@@ -814,9 +783,6 @@ describe('Web product API hooks', () => {
     });
     const markReady = renderHook(() => useMarkPackageReadyMutation(executionPackage.id), { wrapper });
     await markReady.result.current.mutateAsync({ actor_id: actorId, expected_package_version: executionPackage.version });
-    const runPackage = renderHook(() => useRunPackageMutation(executionPackage.id), { wrapper });
-    await runPackage.result.current.mutateAsync({ actorId });
-
     expect(fetchMock).toHaveBeenCalledWith(
       `http://localhost:3000/plan-revisions/${planRevision.id}/generate-packages`,
       expect.objectContaining({ method: 'POST' }),
@@ -829,17 +795,12 @@ describe('Web product API hooks', () => {
       `http://localhost:3000/execution-packages/${executionPackage.id}/mark-ready`,
       expect.objectContaining({ method: 'POST' }),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      `http://localhost:3000/execution-packages/${executionPackage.id}/run`,
-      expect.objectContaining({ method: 'POST' }),
-    );
     expectDeliverySurfaceInvalidation(invalidateSpy);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.package(executionPackage.id) });
 
     generatePackages.unmount();
     createPackage.unmount();
     markReady.unmount();
-    runPackage.unmount();
     queryClient.clear();
   });
 

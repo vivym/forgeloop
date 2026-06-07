@@ -158,9 +158,9 @@ describe('durable delivery object IDs', () => {
         executor_type: 'mock',
         workflow_only: true,
       })
-      .expect(409)
+      .expect(410)
       .expect(({ body }) => {
-        expect(body.code).toBe('workflow_legacy_entrypoint_disabled');
+        expect(body.code).toBe('legacy_execution_entrypoint_disabled');
       });
     expect(await repository.listRunSessionsForPackage(executionPackage.id)).toEqual([]);
   });
