@@ -17,6 +17,7 @@ import {
   type CodexRuntimeProfile,
   type CodexRuntimeProfileRevision,
   type CodexRuntimeScope,
+  type CodexSessionStaleTerminalizationAttempt,
   type DevelopmentPlan,
   type DevelopmentPlanItem,
   type ExecutionPackage,
@@ -384,14 +385,6 @@ interface Wave7LineageRepositoryFixture {
   previousRunWorkerLeaseId: string;
 }
 
-type Wave7ExecutionContinuationLineage = ExecutionContinuationLineage & {
-  codex_session_turn_id?: string;
-  previous_capsule_digest: string;
-  expected_input_capsule_digest: string;
-  previous_codex_session_lease_id: string;
-  previous_run_worker_lease_id?: string;
-};
-
 const wave7ReviewPacket = (
   fixture: Wave7LineageRepositoryFixture,
   overrides: Partial<ReviewPacket> = {},
@@ -542,8 +535,8 @@ const wave7RunSessionAttemptLineage = (
 
 const wave7ExecutionContinuationLineage = (
   fixture: Wave7LineageRepositoryFixture,
-  overrides: Partial<Wave7ExecutionContinuationLineage> = {},
-): Wave7ExecutionContinuationLineage => ({
+  overrides: Partial<ExecutionContinuationLineage> = {},
+): ExecutionContinuationLineage => ({
   id: testUuid(`wave7-continuation:${fixture.workflowId}:1`),
   workflow_id: fixture.workflowId,
   run_session_id: fixture.runSessionId,
@@ -783,7 +776,7 @@ const wave7LineageRepositoryContract = (
 
   testCase('persists Wave 7 stale terminalization audit fields', async () => {
     const { repository, fixture } = await createRepository();
-    const attempt = {
+    const attempt: CodexSessionStaleTerminalizationAttempt = {
       id: testUuid(`wave7-stale-attempt:${fixture.workflowId}`),
       codex_session_id: fixture.sessionId,
       codex_session_turn_id: fixture.turnId,
@@ -804,7 +797,7 @@ const wave7LineageRepositoryContract = (
       actual_run_session_updated_at: later,
       expected_codex_thread_id_digest: `sha256:${'9'.repeat(64)}`,
       created_at: later,
-    } as Parameters<DeliveryRepository['saveStaleCodexSessionTerminalizationAttempt']>[0] & Record<string, unknown>;
+    };
 
     await repository.saveStaleCodexSessionTerminalizationAttempt(attempt);
 

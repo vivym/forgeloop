@@ -197,8 +197,13 @@ export interface ExecutionContinuationLineage {
   codex_session_id: string;
   queued_action_id: string;
   continuation_kind: 'existing_job_input' | 'replay_current_continuation' | 'relaunch_after_fencing';
-  previous_runtime_job_id?: string;
+  previous_runtime_job_id: string;
   new_runtime_job_id?: string;
+  codex_session_turn_id?: string;
+  previous_capsule_digest: string;
+  expected_input_capsule_digest: string;
+  previous_codex_session_lease_id: string;
+  previous_run_worker_lease_id?: string;
   created_by_actor_id: string;
   created_at: IsoDateTime;
 }
@@ -310,6 +315,16 @@ export interface CodexSessionStaleTerminalizationAttempt {
   expected_input_capsule_digest?: string;
   attempted_output_capsule_digest?: string;
   attempted_codex_thread_id_digest?: string;
+  workflow_id?: string;
+  run_session_id?: string;
+  runtime_job_id?: string;
+  expected_workflow_status?: string;
+  actual_workflow_status?: string;
+  expected_run_session_status?: string;
+  actual_run_session_status?: string;
+  expected_run_session_updated_at?: IsoDateTime;
+  actual_run_session_updated_at?: IsoDateTime;
+  expected_codex_thread_id_digest?: string;
   failure_code: string;
   created_at: IsoDateTime;
 }

@@ -540,14 +540,6 @@ const createWorkflowPlanItemActionGenerationLineageMatches = (
   );
 };
 
-type ExecutionContinuationLineageWithProof = ExecutionContinuationLineage & {
-  codex_session_turn_id?: string;
-  previous_capsule_digest?: string;
-  expected_input_capsule_digest?: string;
-  previous_codex_session_lease_id?: string;
-  previous_run_worker_lease_id?: string;
-};
-
 const hasLineageText = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 
 const validateRunSessionAttemptLineage = (lineage: RunSessionAttemptLineage): void => {
@@ -574,12 +566,11 @@ const validateRunSessionAttemptLineage = (lineage: RunSessionAttemptLineage): vo
 };
 
 const validateExecutionContinuationLineage = (lineage: ExecutionContinuationLineage): void => {
-  const record = lineage as ExecutionContinuationLineageWithProof;
   if (
-    !hasLineageText(record.previous_runtime_job_id) ||
-    !hasLineageText(record.previous_capsule_digest) ||
-    !hasLineageText(record.expected_input_capsule_digest) ||
-    !hasLineageText(record.previous_codex_session_lease_id)
+    !hasLineageText(lineage.previous_runtime_job_id) ||
+    !hasLineageText(lineage.previous_capsule_digest) ||
+    !hasLineageText(lineage.expected_input_capsule_digest) ||
+    !hasLineageText(lineage.previous_codex_session_lease_id)
   ) {
     throw new DomainError(
       'workflow_invalid_transition',
