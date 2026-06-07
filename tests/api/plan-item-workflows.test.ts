@@ -685,6 +685,27 @@ describe('Plan Item Workflow API', () => {
       .expect(200);
 
     expect(second.body.execution_run_summary).toEqual(first.body.execution_run_summary);
+    await request(app.getHttpServer())
+      .get(`/query/development-plans/${seeded.plan.id}/items/${seeded.item.id}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_item_workflow).toMatchObject({
+          id: seeded.workflow.id,
+          status: 'execution_running',
+          execution_run_summary: {
+            run_session_id: first.body.execution_run_summary.run_session_id,
+            status: 'queued',
+            execution_package_version: first.body.execution_run_summary.execution_package_version,
+            input_capsule_digest: first.body.execution_run_summary.input_capsule_digest,
+            workspace_bundle_digest: first.body.execution_run_summary.workspace_bundle_digest,
+            codex_thread_id_digest: first.body.execution_run_summary.codex_thread_id_digest,
+          },
+        });
+        expect(body.plan_item_workflow.execution_run_summary).not.toHaveProperty('execution_package_id');
+        expect(body.plan_item_workflow.execution_run_summary).not.toHaveProperty('runtime_job_id');
+        expect(body.plan_item_workflow.execution_run_summary).not.toHaveProperty('codex_session_turn_id');
+        expect(JSON.stringify(body.plan_item_workflow)).not.toMatch(/codex_thread_id":"|artifact:\/\/internal|lease-token|credential_binding_id/i);
+      });
     const runSessions = await repository.listRunSessions();
     const workflowRuns = runSessions.filter((runSession) => runSession.workflow_id === seeded.workflow.id);
     expect(workflowRuns).toHaveLength(1);
@@ -748,6 +769,43 @@ describe('Plan Item Workflow API', () => {
     expect(JSON.stringify(startAuditEvent)).not.toContain('artifact://internal');
     expect(JSON.stringify(startAuditEvent)).not.toContain('lease-token');
     expect(JSON.stringify(startAuditEvent)).not.toContain('auth_json');
+  });
+
+  it('fails closed instead of projecting execution supervision without runtime-job lineage', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '56565658');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech, {
+      environment: 'local_dogfood',
+    });
+
+    const started = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+      .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-lineage-missing' })
+      .expect(201);
+
+    const runSession = await repository.getRunSession(started.body.execution_run_summary.run_session_id);
+    if (runSession === undefined) throw new Error('Expected started run session');
+    await repository.saveRunSession({
+      ...runSession,
+      runtime_metadata: {
+        ...runSession.runtime_metadata,
+        remote_runtime_job_id: undefined,
+      },
+      updated_at: '2026-06-06T00:20:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .get(`/query/development-plans/${seeded.plan.id}/items/${seeded.item.id}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.plan_item_workflow).toMatchObject({
+          id: seeded.workflow.id,
+          status: 'execution_running',
+        });
+        expect(body.plan_item_workflow.execution_run_summary).toBeUndefined();
+      });
   });
 
   it('prefers repo-scoped run execution credentials over project-wide fallback credentials', async () => {

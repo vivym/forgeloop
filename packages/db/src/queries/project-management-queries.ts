@@ -8,6 +8,7 @@ import type {
   MyWorkQueueItem,
   ObjectRef,
   ProductObjectRef,
+  PlanItemWorkflowExecutionRunSummary,
   PlanItemWorkflowReadiness,
   PlanItemWorkflowTimelineEvent,
   ProductSafeDisabledReason,
@@ -81,6 +82,11 @@ type ExecutionRuntimeEvidenceProjection = {
   mounted_task_workspace_digest: string;
   changed_files: string[];
 };
+const planItemRunSessionRecencyValue = (runSession: RunSession): number => {
+  const parsed = Date.parse(runSession.finished_at ?? runSession.updated_at);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
 type DashboardCommandAction = {
   href: string;
   id: string;
@@ -589,6 +595,7 @@ async function planItemWorkflowProjection(repository: DeliveryRepository, workfl
     queued_actions: queuedActions,
     timeline_events,
     readiness: await planItemWorkflowReadinessProjection(repository, workflow),
+    execution_run_summary: await planItemWorkflowExecutionRunSummaryProjection(repository, workflow, session),
     context_preview: {
       digest: queuedActions[0]?.context_preview_digest ?? `sha256:${'0'.repeat(64)}`,
       ...(session.latest_capsule_digest === undefined ? {} : { capsule_digest: session.latest_capsule_digest }),
@@ -604,6 +611,71 @@ async function planItemWorkflowProjection(repository: DeliveryRepository, workfl
       updated_at: workflow.updated_at,
     },
   });
+}
+
+async function planItemWorkflowExecutionRunSummaryProjection(
+  repository: DeliveryRepository,
+  workflow: NonNullable<Awaited<ReturnType<DeliveryRepository['getPlanItemWorkflow']>>>,
+  session: NonNullable<Awaited<ReturnType<DeliveryRepository['getCodexSession']>>>,
+): Promise<PlanItemWorkflowExecutionRunSummary | undefined> {
+  if (workflow.execution_package_id === undefined) return undefined;
+  const executionPackage = await repository.getExecutionPackage(workflow.execution_package_id);
+  if (
+    executionPackage === undefined ||
+    executionPackage.workflow_id !== workflow.id ||
+    executionPackage.codex_session_id !== session.id
+  ) {
+    return undefined;
+  }
+  const runSession = (await repository.listRunSessionsForPackage(executionPackage.id))
+    .filter(
+      (candidate) =>
+        candidate.workflow_id === workflow.id &&
+        candidate.codex_session_id === session.id &&
+        candidate.execution_package_id === executionPackage.id &&
+        candidate.codex_session_turn_id !== undefined,
+    )
+    .sort(
+      (left, right) =>
+        planItemRunSessionRecencyValue(right) - planItemRunSessionRecencyValue(left) || right.id.localeCompare(left.id),
+    )[0];
+  if (runSession === undefined || runSession.codex_session_turn_id === undefined) return undefined;
+  const runtimeJobId = runSession.runtime_metadata?.remote_runtime_job_id;
+  if (runtimeJobId === undefined) return undefined;
+
+  const [turn, runtimeJob] = await Promise.all([
+    repository.getCodexSessionTurn(runSession.codex_session_turn_id),
+    repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId }),
+  ]);
+  if (
+    turn === undefined ||
+    runtimeJob === undefined ||
+    turn.workflow_id !== workflow.id ||
+    turn.codex_session_id !== session.id ||
+    runtimeJob.target_kind !== 'run_execution' ||
+    runtimeJob.target_type !== 'run_session' ||
+    runtimeJob.target_id !== runSession.id ||
+    runtimeJob.workflow_id !== workflow.id ||
+    runtimeJob.codex_session_id !== session.id ||
+    runtimeJob.codex_session_turn_id !== turn.id
+  ) {
+    return undefined;
+  }
+
+  const inputCapsuleDigest = turn.input_capsule_digest ?? turn.expected_input_capsule_digest;
+  const workspaceBundleDigest = runSession.runtime_metadata?.remote_workspace_bundle_digest;
+  const codexThreadIdDigest = turn.codex_thread_id_digest ?? session.codex_thread_id_digest;
+  return {
+    run_session_id: runSession.id,
+    status: runSession.status,
+    execution_package_version: executionPackage.version,
+    ...(inputCapsuleDigest === undefined ? {} : { input_capsule_digest: inputCapsuleDigest }),
+    ...(workspaceBundleDigest === undefined ? {} : { workspace_bundle_digest: workspaceBundleDigest }),
+    ...(codexThreadIdDigest === undefined ? {} : { codex_thread_id_digest: codexThreadIdDigest }),
+    ...(runSession.started_at === undefined ? {} : { started_at: runSession.started_at }),
+    updated_at: runSession.updated_at,
+    ...(runSession.finished_at === undefined ? {} : { finished_at: runSession.finished_at }),
+  };
 }
 
 async function planItemWorkflowReadinessProjection(

@@ -35,6 +35,9 @@ type PlanItemExecutionHandoffRealDogfoodReport =
       source: 'real_control_plane_runtime';
       workflow_id: string;
       route_calls: Array<{ route: 'POST /plan-item-workflows/:workflowId/execution/start'; runtime_call: true; status: string }>;
+      remote_worker: {
+        processed: number;
+      };
       execution_run_summary: {
         run_session_id: string;
         status: string;
@@ -52,6 +55,11 @@ type PlanItemExecutionHandoffRealDogfoodReport =
       };
       report_policy: 'public_safe_digests_counts_ids_only';
     };
+
+type PlanItemExecutionHandoffRealDogfoodDeps = {
+  fetchImpl?: typeof fetch;
+  runRemoteWorkerOnce?: () => Promise<{ processed: number; iterations?: number }>;
+};
 
 const reportMarker = 'PLAN_ITEM_EXECUTION_HANDOFF_REAL_DOGFOOD_REPORT_JSON:';
 const unsafeReportPattern =
@@ -137,16 +145,30 @@ const emitReport = (report: PlanItemExecutionHandoffRealDogfoodReport): void => 
   console.log(`${reportMarker}${JSON.stringify(report)}`);
 };
 
+const defaultRunRemoteWorkerOnce = async (): Promise<{ processed: number; iterations?: number }> => {
+  const { loadCodexRemoteWorkerDogfoodConfig, runCodexRemoteWorkerDogfood } = await import('./codex-remote-worker-dogfood');
+  const config = loadCodexRemoteWorkerDogfoodConfig({
+    ...process.env,
+    FORGELOOP_CODEX_WORKER_CAPABILITIES: optionalEnv(process.env, 'FORGELOOP_CODEX_WORKER_CAPABILITIES') ?? 'run_execution',
+    FORGELOOP_CODEX_REMOTE_WORKER_RUN_MODE: 'run_once',
+  });
+  return runCodexRemoteWorkerDogfood(config);
+};
+
 export const runPlanItemExecutionHandoffRealDogfood = async (
   config: PlanItemExecutionHandoffRealDogfoodConfig,
+  deps: PlanItemExecutionHandoffRealDogfoodDeps = {},
 ): Promise<Extract<PlanItemExecutionHandoffRealDogfoodReport, { status: 'PASS' }>> => {
-  const response = await fetch(`${config.controlPlaneUrl}/plan-item-workflows/${encodeURIComponent(config.workflowId)}/execution/start`, {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const response = await fetchImpl(`${config.controlPlaneUrl}/plan-item-workflows/${encodeURIComponent(config.workflowId)}/execution/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(planItemExecutionHandoffRealDogfoodStartBody(config)),
   });
   const body = await response.json().catch(() => undefined) as {
     id?: string;
+    development_plan_id?: string;
+    development_plan_item_id?: string;
     status?: string;
     execution_run_summary?: PlanItemWorkflowExecutionRunSummary;
   } | undefined;
@@ -167,18 +189,69 @@ export const runPlanItemExecutionHandoffRealDogfood = async (
   assertSha256Digest(summary.input_capsule_digest, 'input_capsule_digest');
   assertSha256Digest(summary.workspace_bundle_digest, 'workspace_bundle_digest');
   assertSha256Digest(summary.codex_thread_id_digest, 'codex_thread_id_digest');
-  if (!['code_review', 'completed'].includes(body.status ?? '') || !['succeeded', 'completed'].includes(summary.status)) {
+  if (body.status !== 'execution_running' || !['queued', 'running', 'resuming', 'waiting_for_input'].includes(summary.status)) {
+    throw new PlanItemExecutionHandoffRealDogfoodBlocker({
+      status: 'BLOCKED',
+      blocker_code: 'plan_item_execution_handoff_real_start_did_not_enqueue_runtime_work',
+    });
+  }
+  if (body.development_plan_id === undefined || body.development_plan_item_id === undefined) {
+    throw new PlanItemExecutionHandoffRealDogfoodBlocker({
+      status: 'BLOCKED',
+      blocker_code: 'plan_item_execution_handoff_real_item_linkage_missing',
+    });
+  }
+  assertSafeId(body.development_plan_id, 'development_plan_id');
+  assertSafeId(body.development_plan_item_id, 'development_plan_item_id');
+
+  const workerResult = await (deps.runRemoteWorkerOnce ?? defaultRunRemoteWorkerOnce)();
+  if (!Number.isInteger(workerResult.processed) || workerResult.processed < 1) {
+    throw new PlanItemExecutionHandoffRealDogfoodBlocker({
+      status: 'BLOCKED',
+      blocker_code: 'plan_item_execution_handoff_real_worker_did_not_process_run_execution',
+    });
+  }
+
+  const projectionResponse = await fetchImpl(
+    `${config.controlPlaneUrl}/query/development-plans/${encodeURIComponent(body.development_plan_id)}/items/${encodeURIComponent(body.development_plan_item_id)}`,
+    { method: 'GET', headers: { Accept: 'application/json' } },
+  );
+  const projection = await projectionResponse.json().catch(() => undefined) as {
+    plan_item_workflow?: {
+      id?: string;
+      status?: string;
+      execution_run_summary?: PlanItemWorkflowExecutionRunSummary;
+    };
+  } | undefined;
+  const terminalWorkflow = projection?.plan_item_workflow;
+  const terminalSummary = terminalWorkflow?.execution_run_summary;
+  if (!projectionResponse.ok || terminalWorkflow?.id !== config.workflowId || terminalSummary?.run_session_id !== summary.run_session_id) {
+    throw new PlanItemExecutionHandoffRealDogfoodBlocker({
+      status: 'BLOCKED',
+      blocker_code: 'plan_item_execution_handoff_real_terminal_projection_missing',
+    });
+  }
+  assertSafeId(terminalSummary.run_session_id, 'run_session_id');
+  assertSha256Digest(terminalSummary.input_capsule_digest, 'input_capsule_digest');
+  assertSha256Digest(terminalSummary.workspace_bundle_digest, 'workspace_bundle_digest');
+  assertSha256Digest(terminalSummary.codex_thread_id_digest, 'codex_thread_id_digest');
+  if (
+    terminalWorkflow.status !== 'code_review' ||
+    terminalSummary.status !== 'succeeded' ||
+    terminalSummary.codex_thread_id_digest !== summary.codex_thread_id_digest
+  ) {
     throw new PlanItemExecutionHandoffRealDogfoodBlocker({
       status: 'BLOCKED',
       blocker_code: 'plan_item_execution_handoff_real_terminal_evidence_missing',
     });
   }
-  if (typeof summary.finished_at !== 'string' || Number.isNaN(Date.parse(summary.finished_at))) {
+  if (typeof terminalSummary.finished_at !== 'string' || Number.isNaN(Date.parse(terminalSummary.finished_at))) {
     throw new PlanItemExecutionHandoffRealDogfoodBlocker({
       status: 'BLOCKED',
       blocker_code: 'plan_item_execution_handoff_real_finished_at_missing',
     });
   }
+
   return {
     status: 'PASS',
     source: 'real_control_plane_runtime',
@@ -187,17 +260,20 @@ export const runPlanItemExecutionHandoffRealDogfood = async (
       {
         route: 'POST /plan-item-workflows/:workflowId/execution/start',
         runtime_call: true,
-        status: body.status ?? 'unknown',
+        status: body.status,
       },
     ],
+    remote_worker: {
+      processed: workerResult.processed,
+    },
     execution_run_summary: {
-      run_session_id: summary.run_session_id,
-      status: summary.status,
-      ...(summary.execution_package_version === undefined ? {} : { execution_package_version: summary.execution_package_version }),
-      input_capsule_digest: summary.input_capsule_digest,
-      workspace_bundle_digest: summary.workspace_bundle_digest,
-      codex_thread_id_digest: summary.codex_thread_id_digest,
-      finished_at: summary.finished_at,
+      run_session_id: terminalSummary.run_session_id,
+      status: terminalSummary.status,
+      ...(terminalSummary.execution_package_version === undefined ? {} : { execution_package_version: terminalSummary.execution_package_version }),
+      input_capsule_digest: terminalSummary.input_capsule_digest,
+      workspace_bundle_digest: terminalSummary.workspace_bundle_digest,
+      codex_thread_id_digest: terminalSummary.codex_thread_id_digest,
+      finished_at: terminalSummary.finished_at,
     },
     session_continuity: {
       same_codex_session: true,

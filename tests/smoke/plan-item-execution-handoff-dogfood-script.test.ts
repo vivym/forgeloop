@@ -71,8 +71,9 @@ const dogfoodChildEnv = (): NodeJS.ProcessEnv => {
     'COREPACK_HOME',
   ];
   const env: NodeJS.ProcessEnv = {
-    NO_PROXY: '127.0.0.1,localhost',
-    no_proxy: '127.0.0.1,localhost',
+    NO_PROXY: '*',
+    no_proxy: '*',
+    NODE_USE_ENV_PROXY: '0',
     HTTP_PROXY: '',
     HTTPS_PROXY: '',
     ALL_PROXY: '',
@@ -187,63 +188,98 @@ describe('Plan Item execution handoff dogfood scripts', () => {
       FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-tech-lead',
       FORGELOOP_PLAN_ITEM_EXECUTION_HANDOFF_WORKFLOW_ID: 'workflow-1',
     });
-    const originalFetch = globalThis.fetch;
     const requestBodies: unknown[] = [];
-    globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events: string[] = [];
+    const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      events.push(`fetch:${String(url)}`);
       requestBodies.push(init?.body === undefined ? undefined : JSON.parse(String(init.body)));
+      if (String(url) === 'http://control-plane.local/query/development-plans/development-plan-1/items/item-1') {
+        return new Response(
+          JSON.stringify({
+            plan_item_workflow: {
+              id: 'workflow-1',
+              status: 'code_review',
+              execution_run_summary: {
+                run_session_id: 'run-session-visible',
+                execution_package_id: 'execution-package-hidden',
+                runtime_job_id: 'runtime-job-hidden',
+                codex_session_turn_id: 'turn-hidden',
+                status: 'succeeded',
+                execution_package_version: 3,
+                input_capsule_digest: `sha256:${'1'.repeat(64)}`,
+                workspace_bundle_digest: `sha256:${'2'.repeat(64)}`,
+                codex_thread_id_digest: `sha256:${'3'.repeat(64)}`,
+                finished_at: '2026-06-06T00:10:00.000Z',
+              },
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
       return new Response(
         JSON.stringify({
           id: 'workflow-1',
-          status: 'code_review',
+          development_plan_id: 'development-plan-1',
+          development_plan_item_id: 'item-1',
+          status: 'execution_running',
           execution_run_summary: {
             run_session_id: 'run-session-visible',
             execution_package_id: 'execution-package-hidden',
             runtime_job_id: 'runtime-job-hidden',
             codex_session_turn_id: 'turn-hidden',
-            status: 'succeeded',
+            status: 'queued',
             execution_package_version: 3,
             input_capsule_digest: `sha256:${'1'.repeat(64)}`,
             workspace_bundle_digest: `sha256:${'2'.repeat(64)}`,
             codex_thread_id_digest: `sha256:${'3'.repeat(64)}`,
-            finished_at: '2026-06-06T00:10:00.000Z',
           },
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
     }) as typeof fetch;
 
-    try {
-      const report = await runPlanItemExecutionHandoffRealDogfood(config!);
+    const report = await runPlanItemExecutionHandoffRealDogfood(config!, {
+      fetchImpl,
+      runRemoteWorkerOnce: async () => {
+        events.push('worker:run_execution');
+        return { processed: 1 };
+      },
+    });
 
-      expect(requestBodies).toEqual([
-        {
-          actor_id: 'actor-tech-lead',
-          idempotency_key: 'plan-item-execution-handoff-real-dogfood',
-          rationale_markdown: 'Start Plan Item execution handoff real runtime dogfood.',
-        },
-      ]);
-      expect(report).toMatchObject({
-        status: 'PASS',
-        workflow_id: 'workflow-1',
-        execution_run_summary: {
-          run_session_id: 'run-session-visible',
-          status: 'succeeded',
-          input_capsule_digest: `sha256:${'1'.repeat(64)}`,
-          workspace_bundle_digest: `sha256:${'2'.repeat(64)}`,
-          codex_thread_id_digest: `sha256:${'3'.repeat(64)}`,
-          finished_at: '2026-06-06T00:10:00.000Z',
-        },
-        session_continuity: {
-          same_codex_session: true,
-          resume_thread: true,
-          input_capsule_restored: true,
-          output_capsule_expected: true,
-        },
-      });
-      expect(JSON.stringify(report)).not.toMatch(/execution-package-hidden|runtime-job-hidden|turn-hidden|artifact:\/\/|\/Users\/|lease-token|credential/i);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    expect(events).toEqual([
+      'fetch:http://control-plane.local/plan-item-workflows/workflow-1/execution/start',
+      'worker:run_execution',
+      'fetch:http://control-plane.local/query/development-plans/development-plan-1/items/item-1',
+    ]);
+    expect(requestBodies).toEqual([
+      {
+        actor_id: 'actor-tech-lead',
+        idempotency_key: 'plan-item-execution-handoff-real-dogfood',
+        rationale_markdown: 'Start Plan Item execution handoff real runtime dogfood.',
+      },
+      undefined,
+    ]);
+    expect(report).toMatchObject({
+      status: 'PASS',
+      workflow_id: 'workflow-1',
+      remote_worker: { processed: 1 },
+      route_calls: [{ status: 'execution_running' }],
+      execution_run_summary: {
+        run_session_id: 'run-session-visible',
+        status: 'succeeded',
+        input_capsule_digest: `sha256:${'1'.repeat(64)}`,
+        workspace_bundle_digest: `sha256:${'2'.repeat(64)}`,
+        codex_thread_id_digest: `sha256:${'3'.repeat(64)}`,
+        finished_at: '2026-06-06T00:10:00.000Z',
+      },
+      session_continuity: {
+        same_codex_session: true,
+        resume_thread: true,
+        input_capsule_restored: true,
+        output_capsule_expected: true,
+      },
+    });
+    expect(JSON.stringify(report)).not.toMatch(/execution-package-hidden|runtime-job-hidden|turn-hidden|artifact:\/\/|\/Users\/|lease-token|credential/i);
   });
 
   it('real dogfood blocks start-only running responses without terminal handoff evidence', async () => {
@@ -253,8 +289,7 @@ describe('Plan Item execution handoff dogfood scripts', () => {
       FORGELOOP_CODEX_RUNTIME_SETUP_ACTOR_ID: 'actor-tech-lead',
       FORGELOOP_PLAN_ITEM_EXECUTION_HANDOFF_WORKFLOW_ID: 'workflow-1',
     });
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
+    const fetchImpl = (async () =>
       new Response(
         JSON.stringify({
           id: 'workflow-1',
@@ -270,16 +305,12 @@ describe('Plan Item execution handoff dogfood scripts', () => {
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       )) as typeof fetch;
 
-    try {
-      await expect(runPlanItemExecutionHandoffRealDogfood(config!)).rejects.toMatchObject({
-        report: {
-          status: 'BLOCKED',
-          blocker_code: 'plan_item_execution_handoff_real_terminal_evidence_missing',
-        },
-      });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    await expect(runPlanItemExecutionHandoffRealDogfood(config!, { fetchImpl })).rejects.toMatchObject({
+      report: {
+        status: 'BLOCKED',
+        blocker_code: 'plan_item_execution_handoff_real_item_linkage_missing',
+      },
+    });
   });
 
   it('no-baggage guard flags Task 8 public-start and stale-continuity names', () => {

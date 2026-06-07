@@ -27,6 +27,14 @@ export const planItemExecutionHandoffDogfoodCommand =
   'tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/plan-item-execution-handoff-dogfood.ts' as const;
 export const planItemExecutionHandoffProductStartRoute = 'POST /plan-item-workflows/:workflowId/execution/start' as const;
 
+const forceLocalDogfoodNoProxy = (): void => {
+  process.env.NO_PROXY = '*';
+  process.env.no_proxy = '*';
+  for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) {
+    delete process.env[key];
+  }
+};
+
 type Sha256Digest = `sha256:${string}`;
 
 type WorkflowDto = {
@@ -618,6 +626,7 @@ export const runPlanItemExecutionHandoffDogfood = async (): Promise<PlanItemExec
 };
 
 const main = async (): Promise<number> => {
+  forceLocalDogfoodNoProxy();
   console.log('start execution from Plan Item Workflow');
   const report = await runPlanItemExecutionHandoffDogfood();
   console.log(`${reportMarker}${JSON.stringify(report)}`);
