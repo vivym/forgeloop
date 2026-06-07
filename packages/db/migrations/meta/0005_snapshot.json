@@ -7483,11 +7483,41 @@
           "name": "previous_runtime_job_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "new_runtime_job_id": {
           "name": "new_runtime_job_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "codex_session_turn_id": {
+          "name": "codex_session_turn_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "previous_capsule_digest": {
+          "name": "previous_capsule_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expected_input_capsule_digest": {
+          "name": "expected_input_capsule_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "previous_codex_session_lease_id": {
+          "name": "previous_codex_session_lease_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "previous_run_worker_lease_id": {
+          "name": "previous_run_worker_lease_id",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -7594,6 +7624,32 @@
           "tableTo": "plan_item_workflow_queued_actions",
           "columnsFrom": [
             "queued_action_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "execution_continuation_lineages_codex_session_turn_id_codex_session_turns_id_fk": {
+          "name": "execution_continuation_lineages_codex_session_turn_id_codex_session_turns_id_fk",
+          "tableFrom": "execution_continuation_lineages",
+          "tableTo": "codex_session_turns",
+          "columnsFrom": [
+            "codex_session_turn_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "execution_continuation_lineages_previous_codex_session_lease_id_codex_session_leases_id_fk": {
+          "name": "execution_continuation_lineages_previous_codex_session_lease_id_codex_session_leases_id_fk",
+          "tableFrom": "execution_continuation_lineages",
+          "tableTo": "codex_session_leases",
+          "columnsFrom": [
+            "previous_codex_session_lease_id"
           ],
           "columnsTo": [
             "id"

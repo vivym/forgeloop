@@ -461,6 +461,69 @@ const createWorkflowPlanItemActionGenerationLineageMatches = (
   );
 };
 
+type ExecutionContinuationLineageWithProof = ExecutionContinuationLineage & {
+  codex_session_turn_id?: string;
+  previous_capsule_digest?: string;
+  expected_input_capsule_digest?: string;
+  previous_codex_session_lease_id?: string;
+  previous_run_worker_lease_id?: string;
+};
+
+const hasLineageText = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+const validateRunSessionAttemptLineage = (lineage: RunSessionAttemptLineage): void => {
+  if (
+    lineage.attempt_kind === 'review_fix' &&
+    (!hasLineageText(lineage.previous_run_session_id) || !hasLineageText(lineage.previous_review_packet_id))
+  ) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: Review fix run session attempt lineage ${lineage.run_session_id} is missing predecessor lineage`,
+    );
+  }
+  if (
+    lineage.attempt_kind === 'first_execution' &&
+    (lineage.previous_run_session_id !== undefined ||
+      lineage.previous_review_packet_id !== undefined ||
+      lineage.review_response_id !== undefined)
+  ) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: First execution run session attempt lineage ${lineage.run_session_id} cannot carry review-fix predecessor lineage`,
+    );
+  }
+};
+
+const validateExecutionContinuationLineage = (lineage: ExecutionContinuationLineage): void => {
+  const record = lineage as ExecutionContinuationLineageWithProof;
+  if (
+    !hasLineageText(record.previous_runtime_job_id) ||
+    !hasLineageText(record.previous_capsule_digest) ||
+    !hasLineageText(record.expected_input_capsule_digest) ||
+    !hasLineageText(record.previous_codex_session_lease_id)
+  ) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: Execution continuation lineage ${lineage.id} is missing proof lineage`,
+    );
+  }
+  if (
+    (lineage.continuation_kind === 'existing_job_input' || lineage.continuation_kind === 'replay_current_continuation') &&
+    lineage.new_runtime_job_id !== undefined
+  ) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: Execution continuation lineage ${lineage.id} cannot create a new runtime job for ${lineage.continuation_kind}`,
+    );
+  }
+  if (lineage.continuation_kind === 'relaunch_after_fencing' && !hasLineageText(lineage.new_runtime_job_id)) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: Execution continuation lineage ${lineage.id} requires a new runtime job for relaunch_after_fencing`,
+    );
+  }
+};
+
 const workflowRunExecutionJobLineageMatches = (job: CodexRuntimeJob): boolean => {
   if (!isWorkflowRunExecutionJob(job)) {
     return true;
@@ -7063,6 +7126,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveRunSessionAttemptLineage(lineage: RunSessionAttemptLineage): Promise<void> {
+    validateRunSessionAttemptLineage(lineage);
     if (this.runSessionAttemptLineages.has(lineage.run_session_id)) {
       throw new DomainError(
         'workflow_invalid_transition',
@@ -7079,6 +7143,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async saveExecutionContinuationLineage(lineage: ExecutionContinuationLineage): Promise<void> {
+    validateExecutionContinuationLineage(lineage);
     const queuedAction = this.planItemWorkflowQueuedActions.get(lineage.queued_action_id);
     if (queuedAction === undefined || queuedAction.workflow_id !== lineage.workflow_id) {
       throw new DomainError(

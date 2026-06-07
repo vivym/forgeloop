@@ -4,7 +4,13 @@ import type { ExecutionContinuationLineage, RunSession, RunSessionAttemptLineage
 
 import { runSessionStatus, timestampColumn } from './_shared';
 import { actors } from './actor';
-import { codex_sessions, codex_session_turns, plan_item_workflow_queued_actions, plan_item_workflows } from './plan-item-workflow';
+import {
+  codex_session_leases,
+  codex_sessions,
+  codex_session_turns,
+  plan_item_workflow_queued_actions,
+  plan_item_workflows,
+} from './plan-item-workflow';
 import { review_packets, review_responses } from './review-packet';
 
 export const run_sessions = pgTable(
@@ -88,8 +94,15 @@ export const execution_continuation_lineages = pgTable(
       .notNull()
       .references(() => plan_item_workflow_queued_actions.id),
     continuationKind: text('continuation_kind').$type<ExecutionContinuationLineage['continuation_kind']>().notNull(),
-    previousRuntimeJobId: uuid('previous_runtime_job_id'),
+    previousRuntimeJobId: uuid('previous_runtime_job_id').notNull(),
     newRuntimeJobId: uuid('new_runtime_job_id'),
+    codexSessionTurnId: uuid('codex_session_turn_id').references(() => codex_session_turns.id),
+    previousCapsuleDigest: text('previous_capsule_digest').notNull(),
+    expectedInputCapsuleDigest: text('expected_input_capsule_digest').notNull(),
+    previousCodexSessionLeaseId: uuid('previous_codex_session_lease_id')
+      .notNull()
+      .references(() => codex_session_leases.id),
+    previousRunWorkerLeaseId: text('previous_run_worker_lease_id'),
     createdByActorId: uuid('created_by_actor_id')
       .notNull()
       .references(() => actors.id),

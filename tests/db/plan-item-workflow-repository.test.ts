@@ -37,6 +37,7 @@ import {
   createDbClient,
   DrizzleDeliveryRepository,
   InMemoryDeliveryRepository,
+  execution_continuation_lineages,
   plan_item_workflows,
   type AttachCodexSessionRunnerRuntimeJobInput,
   type CodexLaunchLease,
@@ -379,7 +380,17 @@ interface Wave7LineageRepositoryFixture {
   projectId: string;
   repoId: string;
   developmentPlanItemId: string;
+  previousCodexSessionLeaseId: string;
+  previousRunWorkerLeaseId: string;
 }
+
+type Wave7ExecutionContinuationLineage = ExecutionContinuationLineage & {
+  codex_session_turn_id?: string;
+  previous_capsule_digest: string;
+  expected_input_capsule_digest: string;
+  previous_codex_session_lease_id: string;
+  previous_run_worker_lease_id?: string;
+};
 
 const wave7ReviewPacket = (
   fixture: Wave7LineageRepositoryFixture,
@@ -524,7 +535,6 @@ const wave7RunSessionAttemptLineage = (
   attempt_kind: 'review_fix',
   previous_run_session_id: fixture.previousRunSessionId,
   previous_review_packet_id: fixture.reviewPacketId,
-  review_response_id: testUuid(`wave7-review-response:${fixture.workflowId}:latest`),
   created_by_actor_id: fixture.actorId,
   created_at: now,
   ...overrides,
@@ -532,16 +542,21 @@ const wave7RunSessionAttemptLineage = (
 
 const wave7ExecutionContinuationLineage = (
   fixture: Wave7LineageRepositoryFixture,
-  overrides: Partial<ExecutionContinuationLineage> = {},
-): ExecutionContinuationLineage => ({
+  overrides: Partial<Wave7ExecutionContinuationLineage> = {},
+): Wave7ExecutionContinuationLineage => ({
   id: testUuid(`wave7-continuation:${fixture.workflowId}:1`),
   workflow_id: fixture.workflowId,
   run_session_id: fixture.runSessionId,
   codex_session_id: fixture.sessionId,
   queued_action_id: fixture.queuedActionId,
-  continuation_kind: 'existing_job_input',
+  continuation_kind: 'relaunch_after_fencing',
   previous_runtime_job_id: testUuid(`wave7-runtime-previous:${fixture.workflowId}`),
   new_runtime_job_id: testUuid(`wave7-runtime-new:${fixture.workflowId}`),
+  codex_session_turn_id: fixture.turnId,
+  previous_capsule_digest: `sha256:${'4'.repeat(64)}`,
+  expected_input_capsule_digest: `sha256:${'5'.repeat(64)}`,
+  previous_codex_session_lease_id: fixture.previousCodexSessionLeaseId,
+  previous_run_worker_lease_id: fixture.previousRunWorkerLeaseId,
   created_by_actor_id: fixture.actorId,
   created_at: later,
   ...overrides,
@@ -564,6 +579,16 @@ const wave7LineageRepositoryContract = (
   createRepository: () => Promise<{ repository: DeliveryRepository; fixture: Wave7LineageRepositoryFixture }>,
   testCase: typeof it = it,
 ) => {
+  testCase('defines execution continuation proof columns in the schema', () => {
+    const table = execution_continuation_lineages as unknown as Record<string, { name: string } | undefined>;
+
+    expect(table.codexSessionTurnId?.name).toBe('codex_session_turn_id');
+    expect(table.previousCapsuleDigest?.name).toBe('previous_capsule_digest');
+    expect(table.expectedInputCapsuleDigest?.name).toBe('expected_input_capsule_digest');
+    expect(table.previousCodexSessionLeaseId?.name).toBe('previous_codex_session_lease_id');
+    expect(table.previousRunWorkerLeaseId?.name).toBe('previous_run_worker_lease_id');
+  });
+
   testCase('orders review packet evidence refs deterministically', async () => {
     const { repository, fixture } = await createRepository();
     await repository.saveReviewPacket(wave7ReviewPacket(fixture));
@@ -614,6 +639,7 @@ const wave7LineageRepositoryContract = (
   testCase('rejects duplicate run session attempt lineage rows', async () => {
     const { repository, fixture } = await createRepository();
     const lineage = wave7RunSessionAttemptLineage(fixture);
+    await repository.saveReviewPacket(wave7ReviewPacket(fixture));
 
     await repository.saveRunSessionAttemptLineage(lineage);
 
@@ -629,9 +655,61 @@ const wave7LineageRepositoryContract = (
     await expect(repository.listRunSessionAttemptLineage(fixture.workflowId)).resolves.toEqual([lineage]);
   });
 
+  testCase('enforces run session attempt lineage kind invariants', async () => {
+    const { repository, fixture } = await createRepository();
+    await repository.saveReviewPacket(wave7ReviewPacket(fixture));
+
+    await expect(
+      repository.saveRunSessionAttemptLineage(
+        wave7RunSessionAttemptLineage(fixture, {
+          run_session_id: testUuid(`wave7-attempt:${fixture.workflowId}:missing-run`),
+          previous_run_session_id: undefined,
+        }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      repository.saveRunSessionAttemptLineage(
+        wave7RunSessionAttemptLineage(fixture, {
+          run_session_id: testUuid(`wave7-attempt:${fixture.workflowId}:missing-packet`),
+          previous_review_packet_id: undefined,
+        }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      repository.saveRunSessionAttemptLineage(
+        wave7RunSessionAttemptLineage(fixture, {
+          run_session_id: testUuid(`wave7-attempt:${fixture.workflowId}:first-with-run`),
+          attempt_kind: 'first_execution',
+        }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      repository.saveRunSessionAttemptLineage(
+        wave7RunSessionAttemptLineage(fixture, {
+          run_session_id: testUuid(`wave7-attempt:${fixture.workflowId}:first-with-response`),
+          attempt_kind: 'first_execution',
+          previous_run_session_id: undefined,
+          previous_review_packet_id: undefined,
+          review_response_id: testUuid(`wave7-review-response:${fixture.workflowId}:forbidden`),
+        }),
+      ),
+    ).rejects.toThrow();
+
+    const firstExecution = wave7RunSessionAttemptLineage(fixture, {
+      run_session_id: fixture.runSessionId,
+      attempt_kind: 'first_execution',
+      previous_run_session_id: undefined,
+      previous_review_packet_id: undefined,
+      review_response_id: undefined,
+    });
+    await repository.saveRunSessionAttemptLineage(firstExecution);
+    await expect(repository.listRunSessionAttemptLineage(fixture.workflowId)).resolves.toEqual([firstExecution]);
+  });
+
   testCase('requires queued action lineage and does not create another run attempt', async () => {
     const { repository, fixture } = await createRepository();
     const attempt = wave7RunSessionAttemptLineage(fixture);
+    await repository.saveReviewPacket(wave7ReviewPacket(fixture));
     await repository.saveRunSessionAttemptLineage(attempt);
 
     await expect(
@@ -647,6 +725,60 @@ const wave7LineageRepositoryContract = (
     await repository.saveExecutionContinuationLineage(continuation);
     await expect(repository.listExecutionContinuationLineage(fixture.workflowId)).resolves.toEqual([continuation]);
     await expect(repository.listRunSessionAttemptLineage(fixture.workflowId)).resolves.toEqual([attempt]);
+  });
+
+  testCase('enforces execution continuation kind runtime job invariants', async () => {
+    const { repository, fixture } = await createRepository();
+    await expect(
+      repository.saveExecutionContinuationLineage(
+        wave7ExecutionContinuationLineage(fixture, {
+          id: testUuid(`wave7-continuation:${fixture.workflowId}:existing-invalid`),
+          continuation_kind: 'existing_job_input',
+        }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      repository.saveExecutionContinuationLineage(
+        wave7ExecutionContinuationLineage(fixture, {
+          id: testUuid(`wave7-continuation:${fixture.workflowId}:replay-invalid`),
+          continuation_kind: 'replay_current_continuation',
+        }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      repository.saveExecutionContinuationLineage(
+        wave7ExecutionContinuationLineage(fixture, {
+          id: testUuid(`wave7-continuation:${fixture.workflowId}:relaunch-invalid`),
+          new_runtime_job_id: undefined,
+        }),
+      ),
+    ).rejects.toThrow();
+
+    const existingJobInput = wave7ExecutionContinuationLineage(fixture, {
+      id: testUuid(`wave7-continuation:${fixture.workflowId}:existing-valid`),
+      continuation_kind: 'existing_job_input',
+      new_runtime_job_id: undefined,
+      created_at: now,
+    });
+    const replayCurrent = wave7ExecutionContinuationLineage(fixture, {
+      id: testUuid(`wave7-continuation:${fixture.workflowId}:replay-valid`),
+      continuation_kind: 'replay_current_continuation',
+      new_runtime_job_id: undefined,
+      created_at: later,
+    });
+    const relaunch = wave7ExecutionContinuationLineage(fixture, {
+      id: testUuid(`wave7-continuation:${fixture.workflowId}:relaunch-valid`),
+      created_at: '2026-05-31T00:02:00.000Z',
+    });
+    await repository.saveExecutionContinuationLineage(existingJobInput);
+    await repository.saveExecutionContinuationLineage(replayCurrent);
+    await repository.saveExecutionContinuationLineage(relaunch);
+
+    await expect(repository.listExecutionContinuationLineage(fixture.workflowId)).resolves.toEqual([
+      existingJobInput,
+      replayCurrent,
+      relaunch,
+    ]);
   });
 
   testCase('persists Wave 7 stale terminalization audit fields', async () => {
@@ -2629,6 +2761,7 @@ describe('Plan Item Workflow repository', () => {
       const repository = new InMemoryDeliveryRepository();
       await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
       await repository.createCodexSessionTurn(turnInput);
+      await repository.claimCodexSessionLease(leaseInput);
       const fixture: Wave7LineageRepositoryFixture = {
         workflowId: 'workflow-1',
         sessionId: 'session-1',
@@ -2646,6 +2779,8 @@ describe('Plan Item Workflow repository', () => {
         projectId: 'project-1',
         repoId: 'repo-1',
         developmentPlanItemId: 'item-1',
+        previousCodexSessionLeaseId: leaseInput.lease_id,
+        previousRunWorkerLeaseId: 'run-worker-lease-wave7',
       };
       await repository.saveExecutionPackage(wave7ExecutionPackage(fixture));
       await repository.saveRunSession(wave7RunSession(fixture, fixture.previousRunSessionId));
@@ -8156,6 +8291,7 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
       async () => {
         const repository = await createDrizzleWorkflowRepository();
         await seedDrizzleWorkflow(repository);
+        await repository.claimCodexSessionLease(drizzleLeaseInput);
         const fixture: Wave7LineageRepositoryFixture = {
           workflowId: uuidFixture.workflowId,
           sessionId: uuidFixture.sessionId,
@@ -8173,6 +8309,8 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
           projectId: uuidFixture.projectId,
           repoId: 'repo-drizzle',
           developmentPlanItemId: uuidFixture.developmentPlanItemId,
+          previousCodexSessionLeaseId: drizzleLeaseInput.lease_id,
+          previousRunWorkerLeaseId: 'run-worker-lease-wave7-drizzle',
         };
         await repository.saveExecutionPackage(wave7ExecutionPackage(fixture));
         await repository.saveRunSession(wave7RunSession(fixture, fixture.previousRunSessionId));

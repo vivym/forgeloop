@@ -5,8 +5,13 @@ CREATE TABLE "execution_continuation_lineages" (
 	"codex_session_id" uuid NOT NULL,
 	"queued_action_id" uuid NOT NULL,
 	"continuation_kind" text NOT NULL,
-	"previous_runtime_job_id" uuid,
+	"previous_runtime_job_id" uuid NOT NULL,
 	"new_runtime_job_id" uuid,
+	"codex_session_turn_id" uuid,
+	"previous_capsule_digest" text NOT NULL,
+	"expected_input_capsule_digest" text NOT NULL,
+	"previous_codex_session_lease_id" uuid NOT NULL,
+	"previous_run_worker_lease_id" text,
 	"created_by_actor_id" uuid NOT NULL,
 	"created_at" timestamp with time zone NOT NULL
 );
@@ -68,6 +73,8 @@ ALTER TABLE "execution_continuation_lineages" ADD CONSTRAINT "execution_continua
 ALTER TABLE "execution_continuation_lineages" ADD CONSTRAINT "execution_continuation_lineages_run_session_id_run_sessions_id_fk" FOREIGN KEY ("run_session_id") REFERENCES "public"."run_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "execution_continuation_lineages" ADD CONSTRAINT "execution_continuation_lineages_codex_session_id_codex_sessions_id_fk" FOREIGN KEY ("codex_session_id") REFERENCES "public"."codex_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "execution_continuation_lineages" ADD CONSTRAINT "execution_continuation_lineages_queued_action_id_plan_item_workflow_queued_actions_id_fk" FOREIGN KEY ("queued_action_id") REFERENCES "public"."plan_item_workflow_queued_actions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "execution_continuation_lineages" ADD CONSTRAINT "execution_continuation_lineages_codex_session_turn_id_codex_session_turns_id_fk" FOREIGN KEY ("codex_session_turn_id") REFERENCES "public"."codex_session_turns"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "execution_continuation_lineages" ADD CONSTRAINT "execution_continuation_lineages_previous_codex_session_lease_id_codex_session_leases_id_fk" FOREIGN KEY ("previous_codex_session_lease_id") REFERENCES "public"."codex_session_leases"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "execution_continuation_lineages" ADD CONSTRAINT "execution_continuation_lineages_created_by_actor_id_actors_id_fk" FOREIGN KEY ("created_by_actor_id") REFERENCES "public"."actors"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "run_session_attempt_lineages" ADD CONSTRAINT "run_session_attempt_lineages_run_session_id_run_sessions_id_fk" FOREIGN KEY ("run_session_id") REFERENCES "public"."run_sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "run_session_attempt_lineages" ADD CONSTRAINT "run_session_attempt_lineages_workflow_id_plan_item_workflows_id_fk" FOREIGN KEY ("workflow_id") REFERENCES "public"."plan_item_workflows"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
