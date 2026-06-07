@@ -4119,6 +4119,43 @@ describe('codex runtime repository behavior', () => {
     await expect(repository.getAutomationActionRun(target.target_id)).resolves.toBeUndefined();
   });
 
+  it('rejects review response generation jobs whose workload runtime job id does not match the persisted job', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const target = generationTarget({
+      target_type: 'plan_item_workflow_action',
+      target_id: 'plan-item-workflow-action-1',
+      target_kind: 'generation',
+    });
+    const input = await runtimeJobInput(repository, {
+      runtime_job_id: 'runtime-job-review-response-owner-1',
+      launch_lease_id: 'runtime-launch-lease-review-response-owner-1',
+      envelope_id: 'runtime-envelope-review-response-owner-1',
+      job_request_id: 'runtime-job-request-review-response-owner-1',
+      target,
+      input_json: reviewResponseWorkload({
+        runtime_job_id: 'runtime-job-review-response-workload-1',
+        plan_item_workflow_action_id: target.target_id,
+      }),
+      input_digest: tokenHash('runtime-review-response-owner-input-1'),
+      action_type: undefined,
+      action_attempt: undefined,
+      action_claim_token_hash: undefined,
+      precondition_fingerprint: undefined,
+      workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+    });
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+    expect(sealerCalls).toHaveLength(0);
+  });
+
   it('replays runtime jobs by job_request_id without resealing a new launch token', async () => {
     const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
     const repository = createRepository(createEnvelopeSealer(sealerCalls));

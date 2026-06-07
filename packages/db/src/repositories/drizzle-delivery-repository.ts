@@ -112,6 +112,7 @@ import {
   collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
+  validateCodexGenerationWorkload,
   validateCodexRuntimeJobArtifactIntake,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
@@ -528,16 +529,19 @@ const createWorkflowPlanItemActionGenerationLineageMatches = (
   if (input.workflow_id === undefined || input.codex_session_id === undefined || input.codex_session_turn_id === undefined) {
     return false;
   }
-  const workload = input.input_json;
-  return (
-    workload.schema_version === 'codex_generation_workload.v1' &&
-    workload.task_kind === 'review_response' &&
-    workload.plan_item_workflow_action_id === input.target.target_id &&
-    workload.plan_item_workflow_id === input.workflow_id &&
-    workload.codex_session_id === input.codex_session_id &&
-    workload.codex_session_turn_id === input.codex_session_turn_id &&
-    workload.action_run_id === undefined
-  );
+  try {
+    const workload = validateCodexGenerationWorkload(input.input_json);
+    return (
+      workload.task_kind === 'review_response' &&
+      workload.runtime_job_id === input.runtime_job_id &&
+      workload.plan_item_workflow_action_id === input.target.target_id &&
+      workload.plan_item_workflow_id === input.workflow_id &&
+      workload.codex_session_id === input.codex_session_id &&
+      workload.codex_session_turn_id === input.codex_session_turn_id
+    );
+  } catch {
+    return false;
+  }
 };
 
 const hasLineageText = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
@@ -4707,9 +4711,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (!createWorkflowRunExecutionLineageMatches(input)) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workflow execution lineage was rejected.');
     }
-    if (!createWorkflowPlanItemActionGenerationLineageMatches(input)) {
-      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workflow action generation lineage was rejected.');
-    }
     return this.withAdvisoryLocks(this.codexRuntimeJobCreateLockKeys(input), async (repository) =>
       (repository as DrizzleDeliveryRepository).createOrReplayCodexRuntimeJobWithLeaseAndEnvelopeUnlocked(input),
     );
@@ -6113,6 +6114,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .limit(1);
     if (existingLeaseForTargetAttempt !== undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job target attempt already has a launch lease.');
+    }
+    if (!createWorkflowPlanItemActionGenerationLineageMatches(input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workflow action generation lineage was rejected.');
     }
 
     if (!(await this.codexRuntimeJobCreateIdsAreUnused(input))) {
