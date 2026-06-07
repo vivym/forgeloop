@@ -1370,13 +1370,7 @@ export class CodexRuntimeService {
       now,
     });
     if (download.internal_artifact_object_id === undefined) {
-      if (download.archive_bytes_base64 === undefined) {
-        throw new BadRequestException('Workspace bundle bytes were rejected');
-      }
-      return {
-        ...download,
-        bytes: Buffer.from(download.archive_bytes_base64, 'base64'),
-      };
+      throw new BadRequestException('Workspace bundle artifact object is required');
     }
     const stored = await this.internalArtifacts.getObject(download.archive_ref);
     if (

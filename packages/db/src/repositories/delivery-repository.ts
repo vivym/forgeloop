@@ -573,7 +573,6 @@ export interface PendingWorkspaceBundleReplayInput extends PendingWorkspaceBundl
   id: string;
   run_session_id: string;
   execution_package_id: string;
-  archive_bytes_base64?: string;
   request_digest: string;
   created_at: string;
 }
@@ -777,7 +776,6 @@ export interface GetWorkspaceBundleDownloadForRuntimeJobInput {
 
 export interface WorkspaceBundleDownloadForRuntimeJob {
   bundle_id: string;
-  archive_bytes_base64?: string;
   archive_ref: string;
   internal_artifact_object_id?: string;
   archive_digest: string;

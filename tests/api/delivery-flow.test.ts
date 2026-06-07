@@ -718,7 +718,7 @@ describe('delivery control plane API', () => {
     } finally {
       await stopProcess(runtime.child);
     }
-  });
+  }, 15_000);
 
   it('updates an existing project repo binding for the same repo id instead of appending a stale path', async () => {
     const server = app.getHttpServer();

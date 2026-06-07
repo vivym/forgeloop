@@ -906,7 +906,6 @@ type CodexPendingWorkspaceBundleDbRecord = PendingWorkspaceBundleInput & {
   id: string;
   run_session_id: string;
   execution_package_id: string;
-  archive_bytes_base64?: string;
   request_digest: string;
   runtime_job_id?: string;
   status: string;
@@ -4935,8 +4934,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       .limit(1);
     const lease = leaseRow === undefined ? undefined : fromDbRecord<RunWorkerLease>(leaseRow as Record<string, unknown>);
     const runSession = runSessionRow === undefined ? undefined : fromDbRecord<RunSession>(runSessionRow as Record<string, unknown>);
-    const archiveBytes =
-      input.archive_bytes_base64 === undefined ? undefined : Buffer.from(input.archive_bytes_base64, 'base64');
     const object =
       input.internal_artifact_object_id === undefined ? undefined : await this.getInternalArtifactObjectById(input.internal_artifact_object_id);
     if (
@@ -4946,11 +4943,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 	      lease.id !== input.run_worker_lease_id ||
 	      lease.status !== 'active' ||
 	      lease.expires_at <= input.created_at ||
-	      (input.internal_artifact_object_id === undefined && archiveBytes === undefined) ||
-	      (archiveBytes !== undefined &&
-        (archiveBytes.toString('base64') !== input.archive_bytes_base64 ||
-          archiveBytes.byteLength !== input.size_bytes ||
-          rawSha256(archiveBytes) !== input.archive_digest)) ||
+	      input.internal_artifact_object_id === undefined ||
       input.expires_at <= input.created_at ||
       input.pending_artifact_ref !==
         `artifact://internal/workspace_bundle/run_session/${input.run_session_id}/${input.bundle_id}` ||
@@ -4988,7 +4981,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         : { internal_artifact_object_id: input.internal_artifact_object_id }),
       archive_digest: input.archive_digest,
       manifest_digest: input.manifest_digest,
-      ...(input.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: input.archive_bytes_base64 }),
       size_bytes: input.size_bytes,
       run_worker_lease_id: input.run_worker_lease_id,
       workspace_acquisition_digest: input.workspace_acquisition_digest,
@@ -5023,8 +5015,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         existing.size_bytes === input.size_bytes &&
         existing.expires_at === input.expires_at &&
         existing.workspace_acquisition_digest === input.workspace_acquisition_digest &&
-        valuesEqual(existing.workspace_acquisition_json, input.workspace_acquisition_json) &&
-        existing.archive_bytes_base64 === input.archive_bytes_base64
+        valuesEqual(existing.workspace_acquisition_json, input.workspace_acquisition_json)
       ) {
         return;
       }
@@ -5179,19 +5170,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle download was denied.');
     }
-    if (pending.archive_bytes_base64 !== undefined) {
-      const archiveBytes = Buffer.from(pending.archive_bytes_base64, 'base64');
-      if (
-        archiveBytes.byteLength !== pending.size_bytes ||
-        rawSha256(archiveBytes) !== pending.archive_digest ||
-        workspaceBundleArchiveManifestDigest(archiveBytes) !== pending.manifest_digest
-      ) {
-        throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workspace bundle bytes were rejected.');
-      }
-    }
     return {
       bundle_id: pending.bundle_id,
-      ...(pending.archive_bytes_base64 === undefined ? {} : { archive_bytes_base64: pending.archive_bytes_base64 }),
       archive_ref: pending.pending_artifact_ref,
       ...(pending.internal_artifact_object_id === undefined
         ? {}
@@ -6360,7 +6340,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       stored.internal_artifact_object_id === input.internal_artifact_object_id &&
       stored.archive_digest === input.archive_digest &&
       stored.manifest_digest === input.manifest_digest &&
-      stored.archive_bytes_base64 === input.archive_bytes_base64 &&
       stored.run_worker_lease_id === input.run_worker_lease_id &&
       stored.size_bytes === input.size_bytes &&
       stored.workspace_acquisition_digest === input.workspace_acquisition_digest &&
@@ -6407,7 +6386,6 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       stored.internal_artifact_object_id === pending.internal_artifact_object_id &&
       stored.archive_digest === pending.archive_digest &&
       stored.manifest_digest === pending.manifest_digest &&
-      stored.archive_bytes_base64 === pending.archive_bytes_base64 &&
       stored.run_worker_lease_id === pending.run_worker_lease_id &&
       stored.size_bytes === pending.size_bytes &&
       stored.expires_at === pending.expires_at &&

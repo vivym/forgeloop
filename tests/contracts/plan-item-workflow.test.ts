@@ -374,5 +374,30 @@ describe('plan item workflow contracts', () => {
         updated_at: '2026-06-03T00:00:00.000Z',
       }),
     ).toThrow();
+    expect(() =>
+      planItemWorkflowPublicDtoSchema.parse({
+        id: 'workflow-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'item-1',
+        status: 'execution_running',
+        session: {
+          status: 'running',
+          role: 'active',
+          continuity_state: 'running',
+          can_continue: false,
+        },
+        queued_actions: [],
+        timeline_events: [],
+        execution_run_summary: {
+          run_session_id: 'run-session-1',
+          execution_package_id: 'execution-package-internal-boundary',
+          runtime_job_id: 'runtime-job-internal-boundary',
+          codex_session_turn_id: 'turn-internal-boundary',
+          status: 'running',
+        },
+        created_at: '2026-06-03T00:00:00.000Z',
+        updated_at: '2026-06-03T00:00:00.000Z',
+      }),
+    ).toThrow();
   });
 });

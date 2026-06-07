@@ -421,7 +421,6 @@ export const codex_pending_workspace_bundles = pgTable(
     internalArtifactObjectId: uuid('internal_artifact_object_id').references(() => internal_artifact_objects.id),
     archiveDigest: text('archive_digest').notNull(),
     manifestDigest: text('manifest_digest').notNull(),
-    archiveBytesBase64: text('archive_bytes_base64'),
     sizeBytes: integer('size_bytes').notNull(),
     workspaceAcquisitionDigest: text('workspace_acquisition_digest').notNull(),
     workspaceAcquisitionJson: jsonb('workspace_acquisition_json').$type<Record<string, unknown>>().notNull(),

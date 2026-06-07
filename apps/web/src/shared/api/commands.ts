@@ -180,6 +180,7 @@ export interface StartPlanItemWorkflowBrainstormingBody {
 export interface StartPlanItemWorkflowExecutionBody {
   actor_id: string;
   idempotency_key?: string;
+  rationale_markdown?: string;
 }
 
 export interface ReadyForCodeReviewBody extends ActorCommandBody {

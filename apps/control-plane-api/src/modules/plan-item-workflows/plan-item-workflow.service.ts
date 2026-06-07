@@ -54,11 +54,11 @@ import type {
   PlanItemWorkflowStatus,
   WorkflowTransitionEvidenceObjectType,
 } from '@forgeloop/contracts';
-import { type ApplyPlanItemWorkflowTransitionInput, type DeliveryRepository } from '@forgeloop/db';
+import { LocalInternalArtifactStore, type ApplyPlanItemWorkflowTransitionInput, type DeliveryRepository } from '@forgeloop/db';
 
 import type { ActorContext } from '../auth/actor-context';
 import { BrainstormingService } from '../brainstorming/brainstorming.service';
-import { DELIVERY_REPOSITORY } from '../core/control-plane-tokens';
+import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../core/control-plane-tokens';
 import { executionPackageActorFields } from '../execution-packages/execution-package-actor-fields';
 import { SpecPlanService, type ProductGenerationScheduleResult } from '../spec-plan/spec-plan.service';
 import type {
@@ -188,6 +188,7 @@ const runtimeNetworkProviderConfigDigest = (revision: CodexRuntimeProfileRevisio
 export class PlanItemWorkflowService {
   constructor(
     @Inject(DELIVERY_REPOSITORY) private readonly repository: DeliveryRepository,
+    @Inject(INTERNAL_ARTIFACT_STORE_ROOT) private readonly internalArtifactStoreRoot: string,
     @Inject(BrainstormingService) private readonly brainstorming: BrainstormingService,
     @Inject(SpecPlanService) private readonly specPlan: SpecPlanService,
   ) {}
@@ -1539,12 +1540,39 @@ export class PlanItemWorkflowService {
           reason: input.rationale_markdown,
         };
         await this.validateTransitionEvidence(repository, workflow, transitionInput);
+        const workspaceBundleArtifact = await new LocalInternalArtifactStore({
+          root: this.internalArtifactStoreRoot,
+          repository,
+          requestId: `plan-item-workflow-execution-${workflow.id}`,
+        }).putObject({
+          artifact_id: workspaceBundle.id,
+          kind: 'workspace_bundle',
+          owner_type: 'run_session',
+          owner_id: runSessionId,
+          visibility: 'internal',
+          content_type: 'application/vnd.forgeloop.workspace-bundle',
+          declared_size_bytes: String(workspaceBundle.bytes.byteLength),
+          declared_artifact_digest: workspaceBundle.archive_digest,
+          idempotency_key: workspaceBundle.id,
+          metadata_json: {
+            manifest_digest: workspaceBundle.manifest_digest,
+            execution_package_id: queuedPackage.id,
+            run_worker_lease_id: runWorkerLease.id,
+            workspace_acquisition_digest: workspaceAcquisitionDigest,
+          },
+          created_by_actor_type: 'system',
+          created_by_actor_id: input.actor_id,
+          now,
+          max_size_bytes: 100 * 1024 * 1024,
+          bytes: workspaceBundle.bytes,
+        });
         const pendingWorkspaceBundle = {
           id: randomUUID(),
           bundle_id: workspaceBundle.id,
           run_session_id: runSessionId,
           execution_package_id: queuedPackage.id,
           pending_artifact_ref: pendingWorkspaceBundleRef,
+          internal_artifact_object_id: workspaceBundleArtifact.id,
           archive_digest: workspaceBundle.archive_digest,
           manifest_digest: workspaceBundle.manifest_digest,
           run_worker_lease_id: runWorkerLease.id,
@@ -1552,11 +1580,11 @@ export class PlanItemWorkflowService {
           workspace_acquisition_digest: workspaceAcquisitionDigest,
           workspace_acquisition_json: workspaceAcquisition,
           expires_at: runtimeExpiresAt,
-          archive_bytes_base64: workspaceBundle.bytes.toString('base64'),
           request_digest: codexCanonicalDigest({
             runtime_job_id: runtimeJobId,
             workspace_bundle_id: workspaceBundle.id,
             archive_digest: workspaceBundle.archive_digest,
+            internal_artifact_object_id: workspaceBundleArtifact.id,
           }),
           created_at: now,
         };
@@ -2194,9 +2222,6 @@ export class PlanItemWorkflowService {
   private executionRunSummary(input: WorkflowExecutionStartLineage): PlanItemWorkflowExecutionRunSummary {
     return {
       run_session_id: input.runSessionId,
-      execution_package_id: input.executionPackage.id,
-      ...(input.runtimeJobId === undefined ? {} : { runtime_job_id: input.runtimeJobId }),
-      ...(input.executionTurnId === undefined ? {} : { codex_session_turn_id: input.executionTurnId }),
       status: input.status,
       execution_package_version: input.executionPackage.version,
       ...(input.inputCapsuleDigest === undefined ? {} : { input_capsule_digest: input.inputCapsuleDigest }),

@@ -282,9 +282,6 @@ export type PlanItemWorkflowReadiness = z.infer<typeof planItemWorkflowReadiness
 export const planItemWorkflowExecutionRunSummarySchema = z
   .object({
     run_session_id: nonEmpty,
-    execution_package_id: nonEmpty,
-    runtime_job_id: nonEmpty.optional(),
-    codex_session_turn_id: nonEmpty.optional(),
     status: nonEmpty,
     execution_package_version: z.number().int().nonnegative().optional(),
     input_capsule_digest: safeDigest.optional(),

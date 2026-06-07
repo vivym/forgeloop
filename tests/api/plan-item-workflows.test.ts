@@ -668,13 +668,13 @@ describe('Plan Item Workflow API', () => {
       session: expect.objectContaining({ continuity_state: 'running' }),
       execution_run_summary: {
         run_session_id: expect.any(String),
-        execution_package_id: expect.any(String),
-        runtime_job_id: expect.any(String),
-        codex_session_turn_id: expect.any(String),
         input_capsule_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         codex_thread_id_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       },
     });
+    expect(first.body.execution_run_summary).not.toHaveProperty('execution_package_id');
+    expect(first.body.execution_run_summary).not.toHaveProperty('runtime_job_id');
+    expect(first.body.execution_run_summary).not.toHaveProperty('codex_session_turn_id');
     expect(JSON.stringify(first.body)).not.toContain('codex_thread_id":"');
     expect(JSON.stringify(first.body)).not.toContain('artifact://internal');
     expect(JSON.stringify(first.body)).not.toContain('lease-token');
@@ -701,12 +701,17 @@ describe('Plan Item Workflow API', () => {
     expect(activeSession?.credential_binding_id).not.toBe(workflowRuns[0]?.runtime_metadata?.credential_binding_id);
     const turns = await repository.listCodexSessionTurns(seeded.workflow.active_codex_session_id!);
     expect(turns.filter((turn) => turn.intent === 'execute_plan')).toHaveLength(1);
-    const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: first.body.execution_run_summary.runtime_job_id });
+    const publicRunSession = await repository.getRunSession(first.body.execution_run_summary.run_session_id);
+    const runtimeJobId = publicRunSession?.runtime_metadata?.remote_runtime_job_id;
+    const executionTurnId = publicRunSession?.codex_session_turn_id;
+    expect(runtimeJobId).toEqual(expect.any(String));
+    expect(executionTurnId).toEqual(expect.any(String));
+    const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId! });
     expect(runtimeJob).toMatchObject({
       target_kind: 'run_execution',
       workflow_id: seeded.workflow.id,
       codex_session_id: seeded.workflow.active_codex_session_id,
-      codex_session_turn_id: first.body.execution_run_summary.codex_session_turn_id,
+      codex_session_turn_id: executionTurnId,
     });
     expect(runtimeJob?.input_json).toMatchObject({
       plan_item_workflow_id: seeded.workflow.id,
@@ -725,9 +730,9 @@ describe('Plan Item Workflow API', () => {
       plan_item_id: seeded.item.id,
       repo_binding_id: seeded.ids.repo,
       codex_session_id: seeded.workflow.active_codex_session_id,
-      codex_session_turn_id: first.body.execution_run_summary.codex_session_turn_id,
+      codex_session_turn_id: executionTurnId,
       run_session_id: first.body.execution_run_summary.run_session_id,
-      runtime_job_id: first.body.execution_run_summary.runtime_job_id,
+      runtime_job_id: runtimeJobId,
       input_capsule_digest: first.body.execution_run_summary.input_capsule_digest,
       codex_thread_id_digest: first.body.execution_run_summary.codex_thread_id_digest,
     });
@@ -809,15 +814,17 @@ describe('Plan Item Workflow API', () => {
       .send({ actor_id: seeded.ids.actorTech, idempotency_key: 'start-execution-terminal-gap' })
       .expect(201);
 
-    const runtimeJobId = started.body.execution_run_summary.runtime_job_id;
-    const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
+    const startedRunSession = await repository.getRunSession(started.body.execution_run_summary.run_session_id);
+    const runtimeJobId = startedRunSession?.runtime_metadata?.remote_runtime_job_id;
+    expect(runtimeJobId).toEqual(expect.any(String));
+    const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId! });
     if (runtimeJob === undefined) throw new Error('Expected runtime job');
     const privateRepository = repository as unknown as {
       codexRuntimeJobs: Map<string, { job: unknown }>;
     };
-    const privateRecord = privateRepository.codexRuntimeJobs.get(runtimeJobId);
+    const privateRecord = privateRepository.codexRuntimeJobs.get(runtimeJobId!);
     if (privateRecord === undefined) throw new Error('Expected private runtime job record');
-    privateRepository.codexRuntimeJobs.set(runtimeJobId, {
+    privateRepository.codexRuntimeJobs.set(runtimeJobId!, {
       ...privateRecord,
       job: {
         ...runtimeJob,

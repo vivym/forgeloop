@@ -660,6 +660,9 @@ const workflowRunExecutionWorkload = (
     run_session_id?: string;
     execution_package_id?: string;
     execution_package_version?: number;
+    workspace_bundle_id?: string;
+    workspace_bundle_digest?: string;
+    workspace_acquisition_json?: Record<string, unknown>;
   } = {},
 ): Record<string, unknown> => {
   const workflowId = overrides.workflow_id ?? 'workflow-1';
@@ -678,8 +681,8 @@ const workflowRunExecutionWorkload = (
     run_session_id: overrides.run_session_id ?? 'workflow-run-session-1',
     execution_package_id: overrides.execution_package_id ?? 'workflow-execution-package-1',
     execution_package_version: overrides.execution_package_version ?? 1,
-    workspace_bundle_id: 'workflow-workspace-bundle-1',
-    workspace_bundle_digest: fixtureDigest('4'),
+    workspace_bundle_id: overrides.workspace_bundle_id ?? 'workflow-workspace-bundle-1',
+    workspace_bundle_digest: overrides.workspace_bundle_digest ?? fixtureDigest('4'),
     package_prompt_ref: 'artifact://codex-runtime-jobs/workflow-runtime-job-1/prompt',
     package_prompt_digest: fixtureDigest('5'),
     execution_context_ref: 'artifact://codex-runtime-jobs/workflow-runtime-job-1/context',
@@ -688,10 +691,17 @@ const workflowRunExecutionWorkload = (
     output_schema_version: 'codex_run_execution_result.v1',
     created_at: now,
     expires_at: expiresAt,
-    workspace_acquisition_json: {
-      manifest_digest: fixtureDigest('8'),
-      size_bytes: 128,
-    },
+    workspace_acquisition_json:
+      overrides.workspace_acquisition_json ??
+      {
+        schema_version: 'workspace_bundle_acquisition.v1',
+        bundle_id: overrides.workspace_bundle_id ?? 'workflow-workspace-bundle-1',
+        archive_ref: 'artifact://internal/workspace_bundle/run_session/workflow-run-session-1/workflow-workspace-bundle-1',
+        archive_digest: overrides.workspace_bundle_digest ?? fixtureDigest('4'),
+        manifest_digest: fixtureDigest('8'),
+        size_bytes: 128,
+        expires_at: expiresAt,
+      },
     codex_session_runtime_context: {
       schema_version: 'codex_session_runtime_context.v1',
       codex_session_id: codexSessionId,
@@ -859,6 +869,9 @@ const workflowRunExecutionRuntimeJobInput = async (
         codex_session_turn_id: run.codex_session_turn_id,
         run_session_id: run.id,
         execution_package_id: run.execution_package_id,
+        workspace_bundle_id: pendingWorkspaceBundle.bundle_id,
+        workspace_bundle_digest: pendingWorkspaceBundle.archive_digest,
+        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
       }),
       input_digest: tokenHash(`workflow-runtime-input-${runtimeJobId}`),
       workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
@@ -4434,8 +4447,7 @@ describe('codex runtime repository behavior', () => {
       expires_at: expiresAt,
     };
 
-    await expect(
-      repository.createPendingWorkspaceBundleArtifact({
+    const legacyInlineBytesBundle = {
         id: '99999999-9999-4999-8999-999999999999',
         bundle_id: workspaceAcquisitionJson.bundle_id,
         run_session_id: run.id,
@@ -4451,7 +4463,10 @@ describe('codex runtime repository behavior', () => {
         expires_at: expiresAt,
         request_digest: tokenHash('pending-workspace-request-byte-only'),
         created_at: now,
-      }),
+      } as Parameters<DeliveryRepository['createPendingWorkspaceBundleArtifact']>[0] & { archive_bytes_base64: string };
+
+    await expect(
+      repository.createPendingWorkspaceBundleArtifact(legacyInlineBytesBundle),
     ).rejects.toMatchObject<Partial<DomainError>>({
       name: 'DomainError',
       code: 'codex_runtime_job_unavailable',

@@ -123,7 +123,7 @@ Operator note: Set `FORGELOOP_ARTIFACT_STORE_ROOT` to a private local directory 
 
 ## Workflow Execution Dogfood
 
-The workflow execution dogfood path starts from the Plan Item Workflow command path. The remote worker restores the latest Codex runtime capsule, resumes the same Codex thread, starts Codex app-server in Docker, uploads public-safe evidence, and terminalizes through workflow-owned session and runtime-job lineage guards.
+The run execution dogfood path starts from the Plan Item Workflow command path. The remote worker restores the latest Codex runtime capsule, resumes the same Codex thread, starts Codex app-server in Docker, uploads public-safe evidence, and terminalizes through workflow-owned session and runtime-job lineage guards.
 
 Use:
 

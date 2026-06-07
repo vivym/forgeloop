@@ -624,6 +624,9 @@ const workflowRunExecutionWorkload = (
     run_session_id?: string;
     execution_package_id?: string;
     execution_package_version?: number;
+    workspace_bundle_id?: string;
+    workspace_bundle_digest?: string;
+    workspace_acquisition_json?: Record<string, unknown>;
   } = {},
 ): Record<string, unknown> => {
   const workflowId = overrides.workflow_id ?? 'workflow-1';
@@ -639,8 +642,8 @@ const workflowRunExecutionWorkload = (
     run_session_id: overrides.run_session_id ?? 'runtime-run-session-1',
     execution_package_id: overrides.execution_package_id ?? 'execution-package-1',
     execution_package_version: overrides.execution_package_version ?? 1,
-    workspace_bundle_id: 'attached-pending-bundle-1',
-    workspace_bundle_digest: `sha256:${'4'.repeat(64)}`,
+    workspace_bundle_id: overrides.workspace_bundle_id ?? 'attached-pending-bundle-1',
+    workspace_bundle_digest: overrides.workspace_bundle_digest ?? `sha256:${'4'.repeat(64)}`,
     package_prompt_ref: 'artifact://codex-runtime-jobs/attached-runtime-job-1/prompt',
     package_prompt_digest: `sha256:${'5'.repeat(64)}`,
     execution_context_ref: 'artifact://codex-runtime-jobs/attached-runtime-job-1/context',
@@ -649,10 +652,17 @@ const workflowRunExecutionWorkload = (
     output_schema_version: 'codex_run_execution_result.v1',
     created_at: now,
     expires_at: runtimeExpiresAt,
-    workspace_acquisition_json: {
-      manifest_digest: `sha256:${'8'.repeat(64)}`,
-      size_bytes: 128,
-    },
+    workspace_acquisition_json:
+      overrides.workspace_acquisition_json ??
+      {
+        schema_version: 'workspace_bundle_acquisition.v1',
+        bundle_id: overrides.workspace_bundle_id ?? 'attached-pending-bundle-1',
+        archive_ref: 'artifact://internal/workspace_bundle/run_session/runtime-run-session-1/attached-pending-bundle-1',
+        archive_digest: overrides.workspace_bundle_digest ?? `sha256:${'4'.repeat(64)}`,
+        manifest_digest: `sha256:${'8'.repeat(64)}`,
+        size_bytes: 128,
+        expires_at: runtimeExpiresAt,
+      },
     codex_session_runtime_context: {
       schema_version: 'codex_session_runtime_context.v1',
       codex_session_id: codexSessionId,
@@ -977,6 +987,14 @@ const createAcceptedSessionRuntimeJob = async (
           })
         ).worker;
   const sessionToken = 'session-token-1';
+  const inputJson = isWorkflowExecutionWorkload
+    ? {
+        ...(overrides.input_json as Record<string, unknown>),
+        workspace_bundle_id: pendingBundle.bundle_id,
+        workspace_bundle_digest: pendingBundle.archive_digest,
+        workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
+      }
+    : { codex_session_id: 'session-1', task: 'continue Codex session' };
   const input = {
     runtime_job_id: runtimeJobId,
     launch_lease_id: 'attached-launch-lease-1',
@@ -993,7 +1011,7 @@ const createAcceptedSessionRuntimeJob = async (
     docker_image_digest: revision.docker_image_digest,
     network_policy_digest: codexCanonicalDigest(revision.network_policy),
     network_provider_config_digest: dockerProxyConfig().provider_config_digest,
-    input_json: { codex_session_id: 'session-1', task: 'continue Codex session' },
+    input_json: inputJson,
     input_digest: tokenHash('attached-runtime-input-1'),
     workspace_acquisition_json: pendingBundle.workspace_acquisition_json,
     workspace_acquisition_digest: pendingBundle.workspace_acquisition_digest,
@@ -1747,7 +1765,10 @@ const runExecutionTerminalResult = (overrides: Record<string, unknown> = {}) => 
   ...overrides,
 });
 
-const seedWorkflowExecutionRunning = async (repository: InMemoryDeliveryRepository) => {
+const seedWorkflowExecutionRunning = async (
+  repository: InMemoryDeliveryRepository,
+  overrides: { session_lease_expires_at?: string } = {},
+) => {
   await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
   await seedWorkflowActiveApprovalFields(repository);
   await repository.saveExecutionPackage(executionPackage({
@@ -1788,7 +1809,10 @@ const seedWorkflowExecutionRunning = async (repository: InMemoryDeliveryReposito
     evidence_object_id: 'execution-package-1',
   });
   await repository.createCodexSessionTurn(turnInput);
-  const claimedSessionLease = await repository.claimCodexSessionLease({ ...leaseInput, expires_at: runtimeExpiresAt });
+  const claimedSessionLease = await repository.claimCodexSessionLease({
+    ...leaseInput,
+    expires_at: overrides.session_lease_expires_at ?? runtimeExpiresAt,
+  });
   const runtime = await createAcceptedSessionRuntimeJob(repository, {
     input_json: workflowRunExecutionWorkload(),
     input_digest: tokenHash('workflow-run-execution-runtime-input'),
@@ -4761,31 +4785,13 @@ describe('Plan Item Workflow repository', () => {
 
   it('records stale workflow execution terminalization evidence when the session lease is expired', async () => {
     const repository = new InMemoryDeliveryRepository();
-    const seeded = await seedWorkflowExecutionRunning(repository);
+    const seeded = await seedWorkflowExecutionRunning(repository, { session_lease_expires_at: '2026-05-31T00:09:00.000Z' });
     const staleInput = workflowExecutionTerminalizationInput(seeded, 'succeeded');
     const attempted = {
       ...staleInput,
-      codex_session_turn_terminalization: {
-        ...staleInput.codex_session_turn_terminalization,
-        now: runtimeExpiresAt,
-      },
-      runtime_job_terminalization: {
-        ...staleInput.runtime_job_terminalization,
-        now: runtimeExpiresAt,
-      },
-      run_session_update: {
-        ...staleInput.run_session_update,
-        finished_at: runtimeExpiresAt,
-        updated_at: runtimeExpiresAt,
-      },
-      workflow_transition: {
-        ...staleInput.workflow_transition,
-        created_at: runtimeExpiresAt,
-      },
       stale_attempt: {
         ...staleInput.stale_attempt,
         id: 'stale-workflow-execution-expired-lease',
-        created_at: runtimeExpiresAt,
         failure_code: 'codex_session_stale_terminalization',
       },
     };

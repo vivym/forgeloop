@@ -617,9 +617,6 @@ describe('Development Plan routes', () => {
       },
       execution_run_summary: workflowExecutionRunSummaryFixture({
         run_session_id: 'run-session-visible',
-        execution_package_id: 'execution-package-hidden',
-        runtime_job_id: 'runtime-job-hidden',
-        codex_session_turn_id: 'turn-hidden',
         input_capsule_digest: `sha256:${'1'.repeat(64)}`,
         workspace_bundle_digest: `sha256:${'2'.repeat(64)}`,
         codex_thread_id_digest: `sha256:${'3'.repeat(64)}`,
@@ -1151,9 +1148,6 @@ function workflowProjectionFixture(overrides: Record<string, unknown> = {}) {
 function workflowExecutionRunSummaryFixture(overrides: Record<string, unknown> = {}) {
   return {
     run_session_id: 'run-session-1',
-    execution_package_id: 'execution-package-1',
-    runtime_job_id: 'runtime-job-1',
-    codex_session_turn_id: 'session-turn-1',
     status: 'running',
     execution_package_version: 7,
     input_capsule_digest: `sha256:${'a'.repeat(64)}`,

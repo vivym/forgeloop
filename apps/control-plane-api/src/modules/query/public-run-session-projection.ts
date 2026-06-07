@@ -83,6 +83,9 @@ const serializePublicRuntimeMetadata = (
     ...(runtimeMetadata.driver_kind === undefined ? {} : { driver_kind: runtimeMetadata.driver_kind }),
     ...(runtimeMetadata.driver_status === undefined ? {} : { driver_status: runtimeMetadata.driver_status }),
     ...publicDockerRuntimeEvidence(runtimeMetadata),
+    ...(runtimeMetadata.worker_lease_status === undefined || runtimeMetadata.worker_id === undefined
+      ? {}
+      : { worker_id: runtimeMetadata.worker_id }),
     ...(runtimeMetadata.worker_lease_status === undefined ? {} : { worker_lease_status: runtimeMetadata.worker_lease_status }),
     ...(runtimeMetadata.worker_lease_heartbeat_at === undefined
       ? {}

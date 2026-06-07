@@ -10,9 +10,13 @@ export type CodexRuntimeSuperpowersBaggagePattern =
   | 'legacy_workflow_direct_plan_generation'
   | 'legacy_workflow_direct_execution_start'
   | 'legacy_public_execution_package_start'
+  | 'legacy_public_execution_start_root'
   | 'legacy_workflow_run_session_control'
   | 'wave5_forbidden_session_mutation'
   | 'workflow_composer_generation_action'
+  | 'public_owner_actor_alias'
+  | 'execution_package_start_root_label'
+  | 'legacy_inline_workspace_bundle_bytes'
   | 'public_raw_codex_runtime_ref'
   | 'raw_runtime_route'
   | 'host_codex_home'
@@ -138,6 +142,12 @@ const wave5WorkflowProductFiles = new Set([
   'apps/web/src/shared/api/query-keys.ts',
   'apps/web/src/shared/api/types.ts',
   'tests/web/fixtures/product-api-mock.ts',
+]);
+const planItemExecutionStartPublicFiles = new Set([
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts',
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.controller.ts',
+  'apps/web/src/features/development-plans/plan-item-workflow-workspace.tsx',
+  'apps/web/src/shared/api/commands.ts',
 ]);
 
 export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
@@ -324,6 +334,12 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
   },
   {
     file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'legacy_inline_workspace_bundle_bytes',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches retired inline workspace bundle bytes.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
     pattern: 'legacy_workflow_direct_spec_generation',
     owner: 'negative-test',
     reason: 'Negative test fixture proves the strict gate catches Wave 5 direct Spec Doc routes.',
@@ -434,6 +450,12 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     reason: 'The guard must name the retired public execution package start patterns it scans for.',
   },
   {
+    file: 'scripts/check-codex-runtime-superpowers-no-baggage.ts',
+    pattern: 'legacy_inline_workspace_bundle_bytes',
+    owner: 'internal-runtime-storage',
+    reason: 'The guard must name the retired inline workspace bundle byte field it scans for.',
+  },
+  {
     file: 'scripts/codex-runtime-superpowers-dogfood.ts',
     pattern: 'host_codex_home',
     owner: 'internal-runtime-storage',
@@ -483,6 +505,11 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
     /['"]dogfood:(?:delivery(?::(?:durable|local-codex|work-items))?|release-flow(?::strict)?)['"]/,
     /\bscripts\/(?:delivery-(?:dogfood|durable-dogfood|local-codex-dogfood|dogfood-work-items)|release-flow(?:-strict)?-dogfood)\.ts\b/,
   ],
+  legacy_public_execution_start_root: [
+    /\/(?:requirements|initiatives|bugs|tech-debt|sources?|specs?|implementation-plans|work-items|development-plan-items|tasks?)\/[^"'`\s]+\/execution\/start(?:\/|\b)/,
+    /\b(?:Source|Spec|Implementation Plan|generic Work Item|DevelopmentPlanItem|Task)\b.*\bexecution\/start\b/i,
+    /\bstartExecutionFrom(?:Source|Spec|ImplementationPlan|WorkItem|DevelopmentPlanItem|Task)\b/,
+  ],
   legacy_workflow_run_session_control: [
     /\/?(?:plan-item-workflows\/[^"'`\s]+\/)?run-sessions\/[^"'`\s]+\/(?:input|cancel|resume)(?:\/|\b)/,
   ],
@@ -495,6 +522,15 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
     /\baction:\s*['"](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)['"]/,
     /<option\s+value=["'](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)["']/,
     /\bWorkflowMessageAction\b.*\b(?:generate_spec_doc|generate_implementation_plan_doc|start_execution)\b/,
+  ],
+  public_owner_actor_alias: [
+    /\bowner_actor_id\b/,
+  ],
+  execution_package_start_root_label: [
+    /\bStart from Execution Package\b/i,
+  ],
+  legacy_inline_workspace_bundle_bytes: [
+    /\barchive_bytes_base64\b/,
   ],
   public_raw_codex_runtime_ref: [
     /\bcodex_thread_id\b(?!_digest)/,
@@ -562,6 +598,9 @@ const isIgnoredHistoricalPath = (
   }
   if (pattern === 'legacy_public_execution_package_start' && activePackageScriptFiles.has(file)) {
     return false;
+  }
+  if (pattern === 'public_owner_actor_alias' && !planItemExecutionStartPublicFiles.has(file)) {
+    return true;
   }
   const isWave5ProductPatternOutsideWave5Files =
     [
@@ -649,6 +688,9 @@ const isAllowed = (input: {
   (input.pattern === 'legacy_public_execution_package_start' &&
     input.file === 'apps/control-plane-api/src/modules/run-control/execution-package-runs.controller.ts' &&
     /@Post\('execution-packages\/:packageId\/(?:run|rerun|force-rerun)'\)/.test(input.line)) ||
+  (input.pattern === 'legacy_codex_session_snapshot' &&
+    (input.file === 'scripts/plan-item-execution-handoff-dogfood.ts' ||
+      input.file === 'tests/smoke/plan-item-execution-handoff-dogfood-script.test.ts')) ||
   (input.pattern === 'wave5_forbidden_session_mutation' &&
     input.file === 'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service.ts' &&
     /assertActorCanMutateWorkflow|manual_decision_kind|workflow_invalid_transition/.test(input.line)) ||
@@ -696,7 +738,7 @@ const patternsForFile = (
     return patterns;
   }
   if (legacyCodexSessionSnapshotScanRoots.some((root) => file === root || file.startsWith(`${root}/`))) {
-    return patterns.filter(([pattern]) => pattern === 'legacy_codex_session_snapshot');
+    return patterns.filter(([pattern]) => pattern === 'legacy_codex_session_snapshot' || pattern === 'legacy_inline_workspace_bundle_bytes');
   }
   return patterns;
 };
@@ -716,7 +758,16 @@ const scanFile = (input: {
   const lines = content.split(/\r?\n/);
   const violations: CodexRuntimeSuperpowersNoBaggageViolation[] = [];
   for (const [lineIndex, line] of lines.entries()) {
+    const shouldUseStartRootPattern =
+      baggagePatterns.legacy_public_execution_start_root.some((expression) => expression.test(line)) &&
+      !baggagePatterns.legacy_public_execution_package_start.some((expression) => expression.test(line));
     for (const [pattern, expressions] of patternsForFile(input.file)) {
+      if (
+        shouldUseStartRootPattern &&
+        (pattern === 'legacy_work_items_route' || pattern === 'raw_runtime_route')
+      ) {
+        continue;
+      }
       if (isIgnoredHistoricalPath(input.file, pattern, input.activePackageScriptFiles)) {
         continue;
       }

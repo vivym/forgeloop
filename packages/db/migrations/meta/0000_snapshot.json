@@ -10954,12 +10954,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "archive_bytes_base64": {
-          "name": "archive_bytes_base64",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "size_bytes": {
           "name": "size_bytes",
           "type": "integer",

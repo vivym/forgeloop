@@ -1068,7 +1068,12 @@ const setupWorkflowOwnedRunExecution = async (idPrefix: string, options: { drive
     .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
     .send({ actor_id: seeded.ids.actorTech, idempotency_key: `runtime-control-plane-workflow-start-${idPrefix}` })
     .expect(201);
-  const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: started.body.execution_run_summary.runtime_job_id });
+  const startedRunSession = await repository.getRunSession(started.body.execution_run_summary.run_session_id);
+  const runtimeJobId = startedRunSession?.runtime_metadata?.remote_runtime_job_id;
+  if (runtimeJobId === undefined) {
+    throw new Error('Expected workflow execution start to bind a runtime job to the run session');
+  }
+  const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
   if (runtimeJob === undefined) {
     throw new Error('Expected workflow execution start to create a runtime job');
   }
@@ -3221,7 +3226,7 @@ describe('codex runtime control-plane APIs', () => {
       target_kind: 'run_execution',
       workflow_id: seeded.workflow.id,
       codex_session_id: seeded.workflow.active_codex_session_id,
-      codex_session_turn_id: started.body.execution_run_summary.codex_session_turn_id,
+      codex_session_turn_id: runtimeJob.codex_session_turn_id,
     });
 
     await terminalizeWorkflowRuntimeJobRequest(app, {
@@ -3238,7 +3243,7 @@ describe('codex runtime control-plane APIs', () => {
       status: 'succeeded',
       changed_files: ['packages/domain/src/codex-runtime.ts'],
     });
-    await expect(repository.getCodexSessionTurn(started.body.execution_run_summary.codex_session_turn_id)).resolves.toMatchObject({
+    await expect(repository.getCodexSessionTurn(runtimeJob.codex_session_turn_id!)).resolves.toMatchObject({
       status: 'succeeded',
     });
     await expect(repository.getCodexSession(seeded.workflow.active_codex_session_id!)).resolves.toMatchObject({
@@ -3326,7 +3331,7 @@ describe('codex runtime control-plane APIs', () => {
       await expect(repository.getRunSession(started.body.execution_run_summary.run_session_id)).resolves.toMatchObject({
         status: expectedRunStatus,
       });
-      const terminalTurn = await repository.getCodexSessionTurn(started.body.execution_run_summary.codex_session_turn_id);
+      const terminalTurn = await repository.getCodexSessionTurn(runtimeJob.codex_session_turn_id!);
       expect(terminalTurn).toMatchObject({
         status: expectedRunStatus,
       });
@@ -3351,7 +3356,7 @@ describe('codex runtime control-plane APIs', () => {
   it('records stale workflow-owned terminalization without mutating active execution state', async () => {
     const { app, repository, seeded, started, runtimeJob, sessionToken } = await setupWorkflowOwnedRunExecution('61616161');
     const sessionBefore = await repository.getCodexSession(seeded.workflow.active_codex_session_id!);
-    const turnBefore = await repository.getCodexSessionTurn(started.body.execution_run_summary.codex_session_turn_id);
+    const turnBefore = await repository.getCodexSessionTurn(runtimeJob.codex_session_turn_id!);
     const runBefore = await repository.getRunSession(started.body.execution_run_summary.run_session_id);
     const runtimeJobBefore = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJob.id });
     const staleNow = new Date(Date.parse(process.env.FORGELOOP_AUTOMATION_TEST_NOW ?? now) + 11 * 60_000).toISOString();
@@ -3370,13 +3375,13 @@ describe('codex runtime control-plane APIs', () => {
 
     await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_running' });
     await expect(repository.getRunSession(started.body.execution_run_summary.run_session_id)).resolves.toEqual(runBefore);
-    await expect(repository.getCodexSessionTurn(started.body.execution_run_summary.codex_session_turn_id)).resolves.toEqual(turnBefore);
+    await expect(repository.getCodexSessionTurn(runtimeJob.codex_session_turn_id!)).resolves.toEqual(turnBefore);
     await expect(repository.getCodexRuntimeJob({ runtime_job_id: runtimeJob.id })).resolves.toEqual(runtimeJobBefore);
     await expect(repository.getCodexSession(seeded.workflow.active_codex_session_id!)).resolves.toEqual(sessionBefore);
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(seeded.workflow.active_codex_session_id!)).resolves.toEqual([
       expect.objectContaining({
         codex_session_id: seeded.workflow.active_codex_session_id,
-        codex_session_turn_id: started.body.execution_run_summary.codex_session_turn_id,
+        codex_session_turn_id: runtimeJob.codex_session_turn_id,
         attempted_output_capsule_digest: terminalResult.output_capsule.digest,
         failure_code: 'codex_session_stale_terminalization',
       }),
@@ -3386,7 +3391,7 @@ describe('codex runtime control-plane APIs', () => {
   it('rejects stale workflow-owned terminalization without worker session proof', async () => {
     const { app, repository, seeded, started, runtimeJob } = await setupWorkflowOwnedRunExecution('61616162');
     const sessionBefore = await repository.getCodexSession(seeded.workflow.active_codex_session_id!);
-    const turnBefore = await repository.getCodexSessionTurn(started.body.execution_run_summary.codex_session_turn_id);
+    const turnBefore = await repository.getCodexSessionTurn(runtimeJob.codex_session_turn_id!);
     const runBefore = await repository.getRunSession(started.body.execution_run_summary.run_session_id);
     const runtimeJobBefore = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJob.id });
     const staleNow = new Date(Date.parse(process.env.FORGELOOP_AUTOMATION_TEST_NOW ?? now) + 11 * 60_000).toISOString();
@@ -3408,7 +3413,7 @@ describe('codex runtime control-plane APIs', () => {
 
     await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toMatchObject({ status: 'execution_running' });
     await expect(repository.getRunSession(started.body.execution_run_summary.run_session_id)).resolves.toEqual(runBefore);
-    await expect(repository.getCodexSessionTurn(started.body.execution_run_summary.codex_session_turn_id)).resolves.toEqual(turnBefore);
+    await expect(repository.getCodexSessionTurn(runtimeJob.codex_session_turn_id!)).resolves.toEqual(turnBefore);
     await expect(repository.getCodexRuntimeJob({ runtime_job_id: runtimeJob.id })).resolves.toEqual(runtimeJobBefore);
     await expect(repository.getCodexSession(seeded.workflow.active_codex_session_id!)).resolves.toEqual(sessionBefore);
     await expect(repository.listStaleCodexSessionTerminalizationAttempts(seeded.workflow.active_codex_session_id!)).resolves.toEqual([]);
@@ -3432,7 +3437,7 @@ describe('codex runtime control-plane APIs', () => {
     await expect(repository.getRunSession(started.body.execution_run_summary.run_session_id)).resolves.toMatchObject({
       status: 'queued',
     });
-    const turn = await repository.getCodexSessionTurn(started.body.execution_run_summary.codex_session_turn_id);
+    const turn = await repository.getCodexSessionTurn(runtimeJob.codex_session_turn_id!);
     expect(turn).toMatchObject({
       status: 'running',
     });

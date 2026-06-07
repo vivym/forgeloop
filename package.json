@@ -26,6 +26,8 @@
     "dogfood:codex-runtime-capsule-discovery": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-capsule-discovery.ts",
     "dogfood:codex-runtime-capsule-restore": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-capsule-restore-dogfood.ts",
     "dogfood:codex-runtime:superpowers": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/codex-runtime-superpowers-dogfood.ts",
+    "dogfood:plan-item-execution-handoff": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/plan-item-execution-handoff-dogfood.ts",
+    "dogfood:plan-item-execution-handoff:real": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/plan-item-execution-handoff-real-dogfood.ts",
     "dogfood:plan-item-workflow-product-loop": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/plan-item-workflow-product-loop-dogfood.ts",
     "dogfood:plan-item-workflow-product-loop:real": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/plan-item-workflow-product-loop-real-dogfood.ts",
     "check:codex-runtime-superpowers-no-baggage": "tsx --tsconfig apps/control-plane-api/tsconfig.json scripts/check-codex-runtime-superpowers-no-baggage.ts",

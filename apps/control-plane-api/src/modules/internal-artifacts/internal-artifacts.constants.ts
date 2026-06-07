@@ -117,5 +117,6 @@ const internalArtifactUploadMiddleware = (
 };
 
 export const registerInternalArtifactUploadMiddleware = (app: MiddlewareApp): void => {
+  app.post(INTERNAL_ARTIFACT_UPLOAD_WIRE_PATH, internalArtifactUploadMiddleware);
   app.post(INTERNAL_ARTIFACT_UPLOAD_MIDDLEWARE_ROUTE_PATH, internalArtifactUploadMiddleware);
 };

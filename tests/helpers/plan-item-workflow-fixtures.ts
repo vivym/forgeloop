@@ -193,7 +193,7 @@ export async function seedDevelopmentPlanItem(app: INestApplication, options: { 
   };
   await repository.saveDevelopmentPlanItemRevision(itemRevision);
 
-  return { ids: fixtureIds, plan: { id: fixtureIds.plan }, item: { id: fixtureIds.item } };
+  return { ids: fixtureIds, plan: { id: fixtureIds.plan }, item: { id: fixtureIds.item, revision_id: fixtureIds.itemRevision } };
 }
 
 export async function startWorkflow(app: INestApplication, developmentPlanId: string, itemId: string) {
@@ -1016,6 +1016,7 @@ async function seedSpecRevisionForWorkflow(
     spec_id: seeded.ids.spec,
     work_item_id: seeded.ids.sourceRequirement,
     development_plan_item_id: seeded.item.id,
+    development_plan_item_revision_id: seeded.item.revision_id,
     workflow_id: seeded.workflow.id,
     codex_session_id: seeded.workflow.active_codex_session_id,
     codex_session_turn_id: turn.id,
@@ -1085,7 +1086,19 @@ async function seedImplementationPlanRevisionForWorkflow(
     revision_number: 1,
     summary: 'Approved implementation plan.',
     content: 'Implementation plan content.',
-    structured_document: { steps: ['implement workflow transition service'] },
+    structured_document: {
+      steps: ['implement workflow transition service'],
+      validation_strategy: ['Focused API tests', 'deterministic handoff dogfood'],
+      required_checks: [
+        {
+          check_id: 'deterministic-handoff-dogfood',
+          command: 'pnpm dogfood:plan-item-execution-handoff',
+          timeout_seconds: 120,
+          blocks_review: true,
+        },
+      ],
+      handoff_criteria: ['Worker resumes the same Codex thread and terminalizes a new capsule.'],
+    },
     author_actor_id: seeded.ids.actorTech,
     created_at: now,
     approved_at: now,
