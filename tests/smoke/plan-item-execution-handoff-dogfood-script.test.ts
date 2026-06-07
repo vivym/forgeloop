@@ -70,9 +70,10 @@ const dogfoodChildEnv = (): NodeJS.ProcessEnv => {
     'PNPM_HOME',
     'COREPACK_HOME',
   ];
+  const noProxy = 'localhost,127.0.0.1,::1,*';
   const env: NodeJS.ProcessEnv = {
-    NO_PROXY: '*',
-    no_proxy: '*',
+    NO_PROXY: noProxy,
+    no_proxy: noProxy,
     NODE_USE_ENV_PROXY: '0',
     HTTP_PROXY: '',
     HTTPS_PROXY: '',
@@ -83,6 +84,12 @@ const dogfoodChildEnv = (): NodeJS.ProcessEnv => {
     npm_config_proxy: '',
     npm_config_http_proxy: '',
     npm_config_https_proxy: '',
+    npm_config_all_proxy: '',
+    npm_config_noproxy: '',
+    npm_config_no_proxy: '',
+    GLOBAL_AGENT_HTTP_PROXY: '',
+    GLOBAL_AGENT_HTTPS_PROXY: '',
+    GLOBAL_AGENT_NO_PROXY: '',
   };
   for (const key of keysToKeep) {
     if (process.env[key] !== undefined) env[key] = process.env[key];

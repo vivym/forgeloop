@@ -27,6 +27,7 @@ const actorId = 'automation-daemon';
 const daemonIdentity = 'internal-artifact-api-test';
 const apps: INestApplication[] = [];
 const artifactRoots: string[] = [];
+const socketPaths: string[] = [];
 
 const rawSha256 = (bytes: Uint8Array): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const seededSha256 = (seed: string): string => `sha256:${createHash('sha256').update(seed).digest('hex')}`;
@@ -51,6 +52,13 @@ const bootApp = async (): Promise<INestApplication> => {
   await app.init();
   apps.push(app);
   return app;
+};
+
+const listenOnLocalSocket = async (app: INestApplication): Promise<string> => {
+  const socketPath = join('/tmp', `flia-${process.pid}-${socketPaths.length + 1}.sock`);
+  socketPaths.push(socketPath);
+  await app.listen(socketPath);
+  return socketPath;
 };
 
 const signedRequest = (app: INestApplication) => {
@@ -167,6 +175,7 @@ describe('internal artifact API', () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     await Promise.all(apps.splice(0).map((app) => app.close()));
+    await Promise.all(socketPaths.splice(0).map((socketPath) => rm(socketPath, { force: true })));
     await Promise.all(artifactRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
@@ -545,17 +554,12 @@ describe('internal artifact API', () => {
 
   it('rejects large JSON uploads through the upload middleware before JSON parsing', async () => {
     const app = await bootApp();
-    await app.listen(0);
-    const address = app.getHttpServer().address();
-    if (typeof address === 'string' || address === null) {
-      throw new Error('Expected TCP test server address');
-    }
+    const socketPath = await listenOnLocalSocket(app);
 
     const statusCode = await new Promise<number>((resolve, reject) => {
       const req = http.request(
         {
-          host: '127.0.0.1',
-          port: address.port,
+          socketPath,
           method: 'POST',
           path: INTERNAL_ARTIFACT_UPLOAD_WIRE_PATH,
           headers: {
@@ -577,17 +581,12 @@ describe('internal artifact API', () => {
 
   it('rejects oversized upload content length before accepting the body', async () => {
     const app = await bootApp();
-    await app.listen(0);
-    const address = app.getHttpServer().address();
-    if (typeof address === 'string' || address === null) {
-      throw new Error('Expected TCP test server address');
-    }
+    const socketPath = await listenOnLocalSocket(app);
 
     const statusCode = await new Promise<number>((resolve, reject) => {
       const req = http.request(
         {
-          host: '127.0.0.1',
-          port: address.port,
+          socketPath,
           method: 'POST',
           path: INTERNAL_ARTIFACT_UPLOAD_WIRE_PATH,
           headers: {

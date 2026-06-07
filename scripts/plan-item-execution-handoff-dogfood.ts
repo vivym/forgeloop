@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import { existsSync, rmSync } from 'node:fs';
+import type { Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -28,11 +30,108 @@ export const planItemExecutionHandoffDogfoodCommand =
 export const planItemExecutionHandoffProductStartRoute = 'POST /plan-item-workflows/:workflowId/execution/start' as const;
 
 const forceLocalDogfoodNoProxy = (): void => {
-  process.env.NO_PROXY = '*';
-  process.env.no_proxy = '*';
-  for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) {
+  const noProxy = 'localhost,127.0.0.1,::1,*';
+  process.env.NO_PROXY = noProxy;
+  process.env.no_proxy = noProxy;
+  process.env.NODE_USE_ENV_PROXY = '0';
+  for (const key of [
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'ALL_PROXY',
+    'http_proxy',
+    'https_proxy',
+    'all_proxy',
+    'npm_config_proxy',
+    'npm_config_http_proxy',
+    'npm_config_https_proxy',
+    'npm_config_all_proxy',
+    'npm_config_noproxy',
+    'npm_config_no_proxy',
+    'GLOBAL_AGENT_HTTP_PROXY',
+    'GLOBAL_AGENT_HTTPS_PROXY',
+    'GLOBAL_AGENT_NO_PROXY',
+  ]) {
     delete process.env[key];
   }
+};
+
+type SupertestServer = Server & {
+  address(): ReturnType<Server['address']>;
+  listen(path: string): Server;
+};
+
+type SupertestWithServer = request.Test & {
+  _forgeloopWaitForListening?: boolean;
+  _server?: Server;
+  emit(eventName: string | symbol, ...args: unknown[]): boolean;
+};
+
+const installLocalSupertestSocket = (): (() => void) => {
+  const originalServerAddress = request.Test.prototype.serverAddress;
+  const originalEnd = request.Test.prototype.end;
+  const socketPaths = new Set<string>();
+  let socketCounter = 0;
+  let restored = false;
+
+  const isServer = (app: Parameters<typeof originalServerAddress>[0]): app is SupertestServer =>
+    typeof app !== 'string' && 'address' in app && 'listen' in app;
+
+  request.Test.prototype.serverAddress = function serverAddress(app: Parameters<typeof originalServerAddress>[0], path: string) {
+    if (!isServer(app)) {
+      return originalServerAddress.call(this, app, path);
+    }
+
+    const address = app.address();
+    if (app.listening === true && typeof address === 'string' && existsSync(address)) {
+      return `http+unix://${encodeURIComponent(address)}${path}`;
+    }
+    if (app.listening === true && address !== null) {
+      return originalServerAddress.call(this, app, path);
+    }
+
+    socketCounter += 1;
+    const socketPath = join('/tmp', `flst-${process.pid}-${socketCounter}.sock`);
+    socketPaths.add(socketPath);
+    const test = this as SupertestWithServer;
+    test._server = app.listen(socketPath);
+    test._forgeloopWaitForListening = true;
+    return `http+unix://${encodeURIComponent(socketPath)}${path}`;
+  };
+
+  request.Test.prototype.end = function end(...args: Parameters<typeof originalEnd>) {
+    const test = this as SupertestWithServer;
+    if (test._forgeloopWaitForListening !== true || test._server?.listening === true) {
+      return originalEnd.apply(this, args);
+    }
+
+    const server = test._server;
+    if (server === undefined) {
+      return originalEnd.apply(this, args);
+    }
+
+    const callback = args[0];
+    server.once('listening', () => {
+      originalEnd.apply(this, args);
+    });
+    server.once('error', (error: Error) => {
+      if (callback !== undefined) {
+        callback(error, {} as request.Response);
+        return;
+      }
+      test.emit('error', error);
+    });
+    return this;
+  };
+
+  return () => {
+    if (restored) return;
+    restored = true;
+    request.Test.prototype.serverAddress = originalServerAddress;
+    request.Test.prototype.end = originalEnd;
+    for (const socketPath of socketPaths) {
+      rmSync(socketPath, { force: true });
+    }
+  };
 };
 
 type Sha256Digest = `sha256:${string}`;
@@ -496,132 +595,137 @@ const terminalizeWorkflowRuntimeJob = async (
 };
 
 export const runPlanItemExecutionHandoffDogfood = async (): Promise<PlanItemExecutionHandoffDogfoodReport> => {
-  const capturedLaunchTokens = new Map<string, string>();
-  const { app, repository } = await bootDogfoodApp(capturedLaunchTokens);
+  const cleanupSupertestSocket = installLocalSupertestSocket();
   try {
-    const seeded = await runWorkflowToExecutionReady(app, repository);
-    const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
-    if (readyWorkflow?.execution_package_id === undefined) {
-      throw new Error('plan_item_execution_handoff_dogfood_missing_execution_package');
-    }
-    const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow.execution_package_id);
-    if (readyExecutionPackage === undefined) {
-      throw new Error('plan_item_execution_handoff_dogfood_missing_ready_package');
-    }
-    await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage.repo_id, seeded.ids.actorTech);
+    const capturedLaunchTokens = new Map<string, string>();
+    const { app, repository } = await bootDogfoodApp(capturedLaunchTokens);
+    try {
+      const seeded = await runWorkflowToExecutionReady(app, repository);
+      const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+      if (readyWorkflow?.execution_package_id === undefined) {
+        throw new Error('plan_item_execution_handoff_dogfood_missing_execution_package');
+      }
+      const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow.execution_package_id);
+      if (readyExecutionPackage === undefined) {
+        throw new Error('plan_item_execution_handoff_dogfood_missing_ready_package');
+      }
+      await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage.repo_id, seeded.ids.actorTech);
 
-    const start = await requireStatus(
-      request(app.getHttpServer())
-        .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
-        .send({
-          actor_id: seeded.ids.actorTech,
-          idempotency_key: 'plan-item-execution-handoff-dogfood',
-          rationale_markdown: 'Start deterministic Plan Item execution handoff dogfood.',
-        }),
-      201,
-      'execution_start',
-    );
-    const startedWorkflow = workflowDto(start.body);
-    if (startedWorkflow.status !== 'execution_running' || startedWorkflow.execution_run_summary?.run_session_id === undefined) {
-      throw new Error('plan_item_execution_handoff_dogfood_start_summary_missing');
-    }
-    const publicStartSummary = startedWorkflow.execution_run_summary as Record<string, unknown>;
-    if (
-      publicStartSummary.execution_package_id !== undefined ||
-      publicStartSummary.runtime_job_id !== undefined ||
-      publicStartSummary.codex_session_turn_id !== undefined
-    ) {
-      throw new Error('plan_item_execution_handoff_dogfood_public_summary_leaked_internal_ids');
-    }
-    const startedRunSession = await repository.getRunSession(startedWorkflow.execution_run_summary.run_session_id);
-    if (
-      startedRunSession === undefined ||
-      startedRunSession.runtime_metadata?.remote_runtime_job_id === undefined ||
-      startedRunSession.codex_session_turn_id === undefined
-    ) {
-      throw new Error('plan_item_execution_handoff_dogfood_internal_lineage_missing');
-    }
-    const runtimeJobId = startedRunSession.runtime_metadata.remote_runtime_job_id;
-    const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
-    if (runtimeJob === undefined) {
-      throw new Error('plan_item_execution_handoff_dogfood_runtime_job_missing');
-    }
-    await driveWorkflowRuntimeJobToRunning(repository, runtimeJob, capturedLaunchTokens);
-    await terminalizeWorkflowRuntimeJob(app, runtimeJob);
+      const start = await requireStatus(
+        request(app.getHttpServer())
+          .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+          .send({
+            actor_id: seeded.ids.actorTech,
+            idempotency_key: 'plan-item-execution-handoff-dogfood',
+            rationale_markdown: 'Start deterministic Plan Item execution handoff dogfood.',
+          }),
+        201,
+        'execution_start',
+      );
+      const startedWorkflow = workflowDto(start.body);
+      if (startedWorkflow.status !== 'execution_running' || startedWorkflow.execution_run_summary?.run_session_id === undefined) {
+        throw new Error('plan_item_execution_handoff_dogfood_start_summary_missing');
+      }
+      const publicStartSummary = startedWorkflow.execution_run_summary as Record<string, unknown>;
+      if (
+        publicStartSummary.execution_package_id !== undefined ||
+        publicStartSummary.runtime_job_id !== undefined ||
+        publicStartSummary.codex_session_turn_id !== undefined
+      ) {
+        throw new Error('plan_item_execution_handoff_dogfood_public_summary_leaked_internal_ids');
+      }
+      const startedRunSession = await repository.getRunSession(startedWorkflow.execution_run_summary.run_session_id);
+      if (
+        startedRunSession === undefined ||
+        startedRunSession.runtime_metadata?.remote_runtime_job_id === undefined ||
+        startedRunSession.codex_session_turn_id === undefined
+      ) {
+        throw new Error('plan_item_execution_handoff_dogfood_internal_lineage_missing');
+      }
+      const runtimeJobId = startedRunSession.runtime_metadata.remote_runtime_job_id;
+      const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
+      if (runtimeJob === undefined) {
+        throw new Error('plan_item_execution_handoff_dogfood_runtime_job_missing');
+      }
+      await driveWorkflowRuntimeJobToRunning(repository, runtimeJob, capturedLaunchTokens);
+      await terminalizeWorkflowRuntimeJob(app, runtimeJob);
 
-    const workflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
-    const runSession = await repository.getRunSession(startedWorkflow.execution_run_summary.run_session_id);
-    const turn = await repository.getCodexSessionTurn(startedRunSession.codex_session_turn_id);
-    const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id!);
-    const terminalResult = workflowRunTerminalResult(runtimeJob);
-    if (
-      workflow?.status !== 'code_review' ||
-      runSession?.status !== 'succeeded' ||
-      turn?.status !== 'succeeded' ||
-      session?.status !== 'idle' ||
-      session.latest_capsule_digest !== terminalResult.output_capsule.digest
-    ) {
-      throw new Error('plan_item_execution_handoff_dogfood_terminal_state_mismatch');
-    }
+      const workflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+      const runSession = await repository.getRunSession(startedWorkflow.execution_run_summary.run_session_id);
+      const turn = await repository.getCodexSessionTurn(startedRunSession.codex_session_turn_id);
+      const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id!);
+      const terminalResult = workflowRunTerminalResult(runtimeJob);
+      if (
+        workflow?.status !== 'code_review' ||
+        runSession?.status !== 'succeeded' ||
+        turn?.status !== 'succeeded' ||
+        session?.status !== 'idle' ||
+        session.latest_capsule_digest !== terminalResult.output_capsule.digest
+      ) {
+        throw new Error('plan_item_execution_handoff_dogfood_terminal_state_mismatch');
+      }
 
-    const inputCapsuleDigest = startedWorkflow.execution_run_summary.input_capsule_digest;
-    const codexThreadIdDigest = startedWorkflow.execution_run_summary.codex_thread_id_digest;
-    const workspaceBundleDigest = startedWorkflow.execution_run_summary.workspace_bundle_digest;
-    if (inputCapsuleDigest === undefined || codexThreadIdDigest === undefined || workspaceBundleDigest === undefined) {
-      throw new Error('plan_item_execution_handoff_dogfood_public_digest_missing');
+      const inputCapsuleDigest = startedWorkflow.execution_run_summary.input_capsule_digest;
+      const codexThreadIdDigest = startedWorkflow.execution_run_summary.codex_thread_id_digest;
+      const workspaceBundleDigest = startedWorkflow.execution_run_summary.workspace_bundle_digest;
+      if (inputCapsuleDigest === undefined || codexThreadIdDigest === undefined || workspaceBundleDigest === undefined) {
+        throw new Error('plan_item_execution_handoff_dogfood_public_digest_missing');
+      }
+      const report: PlanItemExecutionHandoffDogfoodReport = {
+        status: 'PASS',
+        source: 'deterministic_fake_worker',
+        package_script_command: 'pnpm dogfood:plan-item-execution-handoff',
+        workflow_id: seeded.workflow.id,
+        route_calls: [{ route: planItemExecutionHandoffProductStartRoute, runtime_call: true, status: 'execution_running' }],
+        worker_steps: ['accept', 'claim_envelope', 'materialize', 'start', 'terminalize'],
+        execution_start: {
+          route: planItemExecutionHandoffProductStartRoute,
+          body_keys: ['actor_id', 'idempotency_key', 'rationale_markdown'],
+          accepted_public_start_root: 'PlanItemWorkflow',
+          rejected_public_start_roots: [
+            'Source',
+            'Spec',
+            'Implementation Plan',
+            'generic Work Item',
+            'DevelopmentPlanItem',
+            'ExecutionPackage',
+          ],
+        },
+        terminal_state: {
+          workflow_status: 'code_review',
+          run_session_status: 'succeeded',
+          turn_status: 'succeeded',
+          session_status: 'idle',
+        },
+        session_continuity: {
+          same_codex_session: session.id === seeded.workflow.active_codex_session_id,
+          resume_thread: true,
+          session_digest: sha256(session.id),
+          execution_turn_digest: sha256(turn.id),
+          thread_digest: codexThreadIdDigest as Sha256Digest,
+          input_capsule_digest: inputCapsuleDigest as Sha256Digest,
+          output_capsule_digest: terminalResult.output_capsule.digest as Sha256Digest,
+          memory_bundle_digest: terminalResult.output_memory_bundle_digest as Sha256Digest,
+          environment_manifest_digest: terminalResult.output_environment_manifest_digest as Sha256Digest,
+        },
+        no_baggage: {
+          owner_actor_id_rejected: true,
+          legacy_public_package_starts_rejected: true,
+          old_start_roots_rejected: true,
+          inline_workspace_bundle_bytes_rejected: true,
+          public_report_policy: 'public_safe_digests_counts_ids_only',
+        },
+      };
+      if (!report.session_continuity.same_codex_session) {
+        throw new Error('plan_item_execution_handoff_dogfood_session_replaced');
+      }
+      assertPublicSafeReport(report);
+      return report;
+    } finally {
+      await app.close();
     }
-    const report: PlanItemExecutionHandoffDogfoodReport = {
-      status: 'PASS',
-      source: 'deterministic_fake_worker',
-      package_script_command: 'pnpm dogfood:plan-item-execution-handoff',
-      workflow_id: seeded.workflow.id,
-      route_calls: [{ route: planItemExecutionHandoffProductStartRoute, runtime_call: true, status: 'execution_running' }],
-      worker_steps: ['accept', 'claim_envelope', 'materialize', 'start', 'terminalize'],
-      execution_start: {
-        route: planItemExecutionHandoffProductStartRoute,
-        body_keys: ['actor_id', 'idempotency_key', 'rationale_markdown'],
-        accepted_public_start_root: 'PlanItemWorkflow',
-        rejected_public_start_roots: [
-          'Source',
-          'Spec',
-          'Implementation Plan',
-          'generic Work Item',
-          'DevelopmentPlanItem',
-          'ExecutionPackage',
-        ],
-      },
-      terminal_state: {
-        workflow_status: 'code_review',
-        run_session_status: 'succeeded',
-        turn_status: 'succeeded',
-        session_status: 'idle',
-      },
-      session_continuity: {
-        same_codex_session: session.id === seeded.workflow.active_codex_session_id,
-        resume_thread: true,
-        session_digest: sha256(session.id),
-        execution_turn_digest: sha256(turn.id),
-        thread_digest: codexThreadIdDigest as Sha256Digest,
-        input_capsule_digest: inputCapsuleDigest as Sha256Digest,
-        output_capsule_digest: terminalResult.output_capsule.digest as Sha256Digest,
-        memory_bundle_digest: terminalResult.output_memory_bundle_digest as Sha256Digest,
-        environment_manifest_digest: terminalResult.output_environment_manifest_digest as Sha256Digest,
-      },
-      no_baggage: {
-        owner_actor_id_rejected: true,
-        legacy_public_package_starts_rejected: true,
-        old_start_roots_rejected: true,
-        inline_workspace_bundle_bytes_rejected: true,
-        public_report_policy: 'public_safe_digests_counts_ids_only',
-      },
-    };
-    if (!report.session_continuity.same_codex_session) {
-      throw new Error('plan_item_execution_handoff_dogfood_session_replaced');
-    }
-    assertPublicSafeReport(report);
-    return report;
   } finally {
-    await app.close();
+    cleanupSupertestSocket();
   }
 };
 
