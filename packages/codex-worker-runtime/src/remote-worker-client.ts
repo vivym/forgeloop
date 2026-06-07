@@ -1983,6 +1983,10 @@ const validateCodexSessionTerminalization = (value: unknown): void => {
 type ParsedCodexSessionTerminalization = {
   schema_version: 'codex_session_terminalization.v1';
   lease_token: string;
+  codex_session_lease_id?: string;
+  codex_session_lease_epoch?: number;
+  codex_session_worker_id?: string;
+  codex_session_worker_session_digest?: string;
   codex_session_id: string;
   codex_session_turn_id: string;
   expected_input_capsule_digest?: string;
@@ -2000,6 +2004,10 @@ type ParsedCodexSessionTerminalization = {
 const codexSessionTerminalizationKeys = new Set([
   'schema_version',
   'lease_token',
+  'codex_session_lease_id',
+  'codex_session_lease_epoch',
+  'codex_session_worker_id',
+  'codex_session_worker_session_digest',
   'codex_session_id',
   'codex_session_turn_id',
   'expected_input_capsule_digest',
@@ -2025,8 +2033,25 @@ const optionalTerminalizationString = (value: Record<string, unknown>, key: stri
   return item;
 };
 
+const optionalTerminalizationPositiveInteger = (value: Record<string, unknown>, key: string): number | undefined => {
+  const item = value[key];
+  if (item === undefined) {
+    return undefined;
+  }
+  if (typeof item !== 'number' || !Number.isInteger(item) || item <= 0) {
+    throw new Error('codex_generation_workload_unsupported');
+  }
+  return item;
+};
+
 const spreadTerminalizationString = <K extends keyof ParsedCodexSessionTerminalization>(
   value: string | undefined,
+  key: K,
+): Pick<ParsedCodexSessionTerminalization, K> | Record<string, never> =>
+  value === undefined ? {} : ({ [key]: value } as Pick<ParsedCodexSessionTerminalization, K>);
+
+const spreadTerminalizationNumber = <K extends keyof ParsedCodexSessionTerminalization>(
+  value: number | undefined,
   key: K,
 ): Pick<ParsedCodexSessionTerminalization, K> | Record<string, never> =>
   value === undefined ? {} : ({ [key]: value } as Pick<ParsedCodexSessionTerminalization, K>);
@@ -2052,6 +2077,16 @@ const parseCodexSessionTerminalization = (value: unknown): ParsedCodexSessionTer
   return {
     schema_version: 'codex_session_terminalization.v1',
     lease_token: leaseToken,
+    ...spreadTerminalizationString(optionalTerminalizationString(value, 'codex_session_lease_id'), 'codex_session_lease_id'),
+    ...spreadTerminalizationNumber(
+      optionalTerminalizationPositiveInteger(value, 'codex_session_lease_epoch'),
+      'codex_session_lease_epoch',
+    ),
+    ...spreadTerminalizationString(optionalTerminalizationString(value, 'codex_session_worker_id'), 'codex_session_worker_id'),
+    ...spreadTerminalizationString(
+      optionalTerminalizationString(value, 'codex_session_worker_session_digest'),
+      'codex_session_worker_session_digest',
+    ),
     codex_session_id: codexSessionId,
     codex_session_turn_id: codexSessionTurnId,
     ...spreadTerminalizationString(optionalTerminalizationString(value, 'expected_input_capsule_digest'), 'expected_input_capsule_digest'),

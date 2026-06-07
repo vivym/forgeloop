@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
@@ -45,7 +45,13 @@ import {
   type CodexCredentialBindingPublic,
   type CodexRuntimeProfileRevision,
 } from '@forgeloop/domain';
-import type { RequiredCheckSpec } from '@forgeloop/contracts';
+import {
+  createWorkspaceBundleArchive,
+  createWorkspaceBundleManifest,
+  workspaceBundleArchiveDigest,
+  workspaceBundleManifestDigest,
+} from '@forgeloop/codex-worker-runtime';
+import type { RequiredCheckSpec, RunSpec } from '@forgeloop/contracts';
 import type {
   PlanItemWorkflowExecutionRunSummary,
   PlanItemWorkflowPublicDto,
@@ -55,6 +61,7 @@ import type {
   WorkflowTransitionEvidenceObjectType,
 } from '@forgeloop/contracts';
 import { LocalInternalArtifactStore, type ApplyPlanItemWorkflowTransitionInput, type DeliveryRepository } from '@forgeloop/db';
+import { buildRunSpec, loadRunContext } from '@forgeloop/workflow';
 
 import type { ActorContext } from '../auth/actor-context';
 import { BrainstormingService } from '../brainstorming/brainstorming.service';
@@ -159,6 +166,10 @@ type WorkflowExecutionInputContinuity = {
   input_environment_manifest_ref: string;
   input_environment_manifest_digest: string;
 };
+type WorkflowExecutionPayload = {
+  packagePrompt: string;
+  executionContext: Record<string, unknown>;
+};
 type WorkflowExecutionStartLineage = {
   workflow: PlanItemWorkflow;
   session: CodexSession;
@@ -174,8 +185,6 @@ type WorkflowExecutionStartLineage = {
   codexThreadIdDigest?: string;
   status: string;
 };
-
-const sha256Bytes = (bytes: Uint8Array): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 const runtimeNetworkProviderConfigDigest = (revision: CodexRuntimeProfileRevision): string | undefined => {
   const policy = revision.network_policy;
@@ -1373,21 +1382,36 @@ export class PlanItemWorkflowService {
             ? executionPackage
             : transitionExecutionPackage(executionPackage, { type: 'mark_ready', at: now });
         const queuedPackage = transitionExecutionPackage(readyPackage, { type: 'run', run_session_id: runSessionId, at: now });
+        const runningPackage = transitionExecutionPackage(queuedPackage, { type: 'workflow_start', at: now });
         const runSession = transitionRunSession(undefined, {
           type: 'create',
           id: runSessionId,
-          execution_package_id: queuedPackage.id,
+          execution_package_id: runningPackage.id,
           requested_by_actor_id: input.actor_id,
           executor_type: 'local_codex',
           at: now,
         });
-        const workspaceBundle = this.workflowExecutionWorkspaceBundle(queuedPackage, workflow, executionTurn.id, now);
-        await repository.saveExecutionPackage(queuedPackage);
+        await repository.saveExecutionPackage(runningPackage);
         await repository.saveRunSession({
           ...runSession,
           workflow_id: workflow.id,
           codex_session_id: session.id,
           codex_session_turn_id: executionTurn.id,
+          executor_type: 'local_codex',
+        });
+        const runSpec = buildRunSpec(await loadRunContext(repository, runSessionId), {
+          defaultExecutorType: 'local_codex',
+          workflowOnly: false,
+        });
+        const workflowExecutionPayload = this.workflowExecutionPayload(runningPackage, this.workflowExecutionRemoteRunSpec(runSpec));
+        const workspaceBundle = this.workflowExecutionWorkspaceBundle(now, workflowExecutionPayload);
+        await repository.saveRunSession({
+          ...runSession,
+          workflow_id: workflow.id,
+          codex_session_id: session.id,
+          codex_session_turn_id: executionTurn.id,
+          executor_type: 'local_codex',
+          run_spec: runSpec,
           runtime_metadata: {
             durability_mode: 'durable',
             driver_kind: 'app_server',
@@ -1455,29 +1479,20 @@ export class PlanItemWorkflowService {
           development_plan_id: workflow.development_plan_id,
           development_plan_item_id: workflow.development_plan_item_id,
           run_session_id: runSessionId,
-          execution_package_id: queuedPackage.id,
-          execution_package_version: queuedPackage.version,
+          execution_package_id: runningPackage.id,
+          execution_package_version: runningPackage.version,
           workspace_bundle_id: workspaceBundle.id,
           workspace_bundle_digest: workspaceBundle.archive_digest,
-          package_prompt_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/prompt`,
-          package_prompt_digest: codexCanonicalDigest({
-            workflow_id: workflow.id,
-            execution_package_id: queuedPackage.id,
-            objective: queuedPackage.objective,
-          }),
-          execution_context_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/context`,
-          execution_context_digest: codexCanonicalDigest({
-            workflow_id: workflow.id,
-            readiness_record_id: readiness.id,
-            active_spec_doc_revision_id: workflow.active_spec_doc_revision_id,
-            active_implementation_plan_doc_revision_id: workflow.active_implementation_plan_doc_revision_id,
-          }),
+          package_prompt_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/package-prompt`,
+          package_prompt_digest: codexCanonicalDigest(workflowExecutionPayload.packagePrompt),
+          execution_context_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/execution-context`,
+          execution_context_digest: codexCanonicalDigest(workflowExecutionPayload.executionContext),
           path_policy_digest: codexCanonicalDigest({
-            allowed_paths: queuedPackage.allowed_paths,
-            forbidden_paths: queuedPackage.forbidden_paths,
-            source_mutation_policy: queuedPackage.source_mutation_policy,
+            allowed_paths: runningPackage.allowed_paths,
+            forbidden_paths: runningPackage.forbidden_paths,
+            source_mutation_policy: runningPackage.source_mutation_policy,
           }),
-          required_checks_digest: codexCanonicalDigest(queuedPackage.required_checks),
+          required_checks_digest: codexCanonicalDigest(runningPackage.required_checks),
           output_schema_version: 'codex_run_execution_result.v1',
           created_at: now,
           expires_at: runtimeExpiresAt,
@@ -1486,7 +1501,7 @@ export class PlanItemWorkflowService {
             schema_version: 'codex_session_runtime_context.v1',
             codex_session_id: session.id,
             codex_session_turn_id: executionTurn.id,
-            lease_id: codexLease.lease.id,
+            lease_id: launchLeaseId,
             lease_epoch: codexLease.lease.lease_epoch,
             worker_id: runtimeBinding.worker.id,
             worker_session_digest: workerSessionDigest,
@@ -1504,6 +1519,10 @@ export class PlanItemWorkflowService {
           codex_session_terminalization: {
             schema_version: 'codex_session_terminalization.v1',
             lease_token: leaseToken,
+            codex_session_lease_id: codexLease.lease.id,
+            codex_session_lease_epoch: codexLease.lease.lease_epoch,
+            codex_session_worker_id: runtimeBinding.worker.id,
+            codex_session_worker_session_digest: workerSessionDigest,
             codex_session_id: session.id,
             codex_session_turn_id: executionTurn.id,
             expected_input_capsule_digest: inputCapsule.digest,
@@ -1518,7 +1537,7 @@ export class PlanItemWorkflowService {
         await this.writeWorkflowExecutionStartAudit(repository, {
           workflow,
           session,
-          executionPackage: queuedPackage,
+          executionPackage: runningPackage,
           runSessionId,
           runtimeJobId,
           executionTurnId: executionTurn.id,
@@ -1534,7 +1553,7 @@ export class PlanItemWorkflowService {
           actor_id: input.actor_id,
           to_status: 'execution_running',
           evidence_object_type: 'execution_package',
-          evidence_object_id: queuedPackage.id,
+          evidence_object_id: runningPackage.id,
           codex_session_turn_id: executionTurn.id,
           supporting_evidence: [{ object_type: 'run_session', object_id: runSessionId }],
           reason: input.rationale_markdown,
@@ -1556,7 +1575,7 @@ export class PlanItemWorkflowService {
           idempotency_key: workspaceBundle.id,
           metadata_json: {
             manifest_digest: workspaceBundle.manifest_digest,
-            execution_package_id: queuedPackage.id,
+            execution_package_id: runningPackage.id,
             run_worker_lease_id: runWorkerLease.id,
             workspace_acquisition_digest: workspaceAcquisitionDigest,
           },
@@ -1570,7 +1589,7 @@ export class PlanItemWorkflowService {
           id: randomUUID(),
           bundle_id: workspaceBundle.id,
           run_session_id: runSessionId,
-          execution_package_id: queuedPackage.id,
+          execution_package_id: runningPackage.id,
           pending_artifact_ref: pendingWorkspaceBundleRef,
           internal_artifact_object_id: workspaceBundleArtifact.id,
           archive_digest: workspaceBundle.archive_digest,
@@ -1598,8 +1617,8 @@ export class PlanItemWorkflowService {
             target_type: 'run_session',
             target_id: runSessionId,
             target_kind: 'run_execution',
-            project_id: queuedPackage.project_id,
-            repo_id: queuedPackage.repo_id,
+            project_id: runningPackage.project_id,
+            repo_id: runningPackage.repo_id,
           },
           launch_attempt: 1,
           worker_id: runtimeBinding.worker.id,
@@ -1618,12 +1637,12 @@ export class PlanItemWorkflowService {
           workspace_acquisition_json: workspaceAcquisition,
           workspace_acquisition_digest: workspaceAcquisitionDigest,
           pending_workspace_bundle: pendingWorkspaceBundle,
-          execution_package_id: queuedPackage.id,
+          execution_package_id: runningPackage.id,
           run_worker_lease_id: runWorkerLease.id,
           run_worker_lease_token_hash: codexCredentialPayloadDigest(runWorkerLeaseToken),
           run_session_status: runSession.status,
           run_session_updated_at: runSession.updated_at,
-          execution_package_version: queuedPackage.version,
+          execution_package_version: runningPackage.version,
           workflow_id: workflow.id,
           codex_session_id: session.id,
           codex_session_turn_id: executionTurn.id,
@@ -1643,7 +1662,7 @@ export class PlanItemWorkflowService {
           result_json: {
             workflow_id: updated.id,
             readiness_record_id: readiness.id,
-            execution_package_id: queuedPackage.id,
+            execution_package_id: runningPackage.id,
             run_session_id: runSessionId,
             runtime_job_id: runtimeJobId,
             codex_session_id: session.id,
@@ -1661,7 +1680,7 @@ export class PlanItemWorkflowService {
             execution_run_summary: this.executionRunSummary({
               workflow: updated,
               session: runningSession ?? codexLease.session,
-              executionPackage: queuedPackage,
+              executionPackage: runningPackage,
               runSessionId,
               runtimeJobId,
               executionTurnId: executionTurn.id,
@@ -1998,42 +2017,60 @@ export class PlanItemWorkflowService {
     return selectedPool[0]!;
   }
 
+  private workflowExecutionRemoteRunSpec(runSpec: RunSpec): RunSpec {
+    return {
+      ...runSpec,
+      repo: {
+        ...runSpec.repo,
+        local_path: '/workspace',
+      },
+    };
+  }
+
+  private workflowExecutionPayload(executionPackage: ExecutionPackage, remoteRunSpec: RunSpec): WorkflowExecutionPayload {
+    const packagePrompt = [
+      `Objective: ${executionPackage.objective}`,
+      '',
+      `Package instructions: ${remoteRunSpec.context.package_instructions}`,
+    ].join('\n');
+
+    return {
+      packagePrompt,
+      executionContext: {
+        schema_version: 'codex_run_execution_context.v1',
+        run_spec: remoteRunSpec,
+      },
+    };
+  }
+
   private workflowExecutionWorkspaceBundle(
-    executionPackage: ExecutionPackage,
-    workflow: PlanItemWorkflow,
-    executionTurnId: string,
     now: string,
+    payload: WorkflowExecutionPayload,
   ): { id: string; bytes: Buffer; archive_digest: string; manifest_digest: string } {
     const id = randomUUID();
-    const manifest = {
-      schema_version: 'workspace_bundle.v1',
-      bundle_id: id,
-      workflow_id: workflow.id,
-      execution_package_id: executionPackage.id,
-      codex_session_turn_id: executionTurnId,
-      created_at: now,
-      package_policy_digest: executionPackage.manifest_digest,
-      workspace_policy_digest: this.workflowExecutionWorkspacePolicyDigest(
-        this.requireString(executionPackage.manifest_digest, 'Execution Package policy digest is missing'),
-      ),
-      required_checks: executionPackage.required_checks,
-      required_artifact_kinds: executionPackage.required_artifact_kinds,
-      allowed_paths: executionPackage.allowed_paths,
-      forbidden_paths: executionPackage.forbidden_paths,
-      source_mutation_policy: executionPackage.source_mutation_policy,
-      entries: [],
-    };
-    const archive = {
-      schema_version: 'workspace_bundle_archive.v1',
-      manifest,
-      entries: [],
-    };
-    const bytes = Buffer.from(JSON.stringify(archive), 'utf8');
+    const files = [
+      {
+        path: '.forgeloop/codex-runtime/package-prompt.txt',
+        content: payload.packagePrompt,
+      },
+      {
+        path: '.forgeloop/codex-runtime/execution-context.json',
+        content: JSON.stringify(payload.executionContext),
+      },
+    ];
+    const manifest = createWorkspaceBundleManifest({
+      bundleId: id,
+      createdAt: now,
+      allowedPaths: ['**'],
+      forbiddenPaths: ['.git/**', 'node_modules/**'],
+      files,
+    });
+    const bytes = createWorkspaceBundleArchive({ manifest, files });
     return {
       id,
       bytes,
-      archive_digest: sha256Bytes(bytes),
-      manifest_digest: sha256Bytes(Buffer.from(JSON.stringify(manifest), 'utf8')),
+      archive_digest: workspaceBundleArchiveDigest(bytes),
+      manifest_digest: workspaceBundleManifestDigest(manifest),
     };
   }
 

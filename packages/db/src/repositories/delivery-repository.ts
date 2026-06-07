@@ -878,6 +878,7 @@ export type TerminalizeWorkflowExecutionResult =
       stale: false;
       runtime_job: CodexRuntimeJob;
       run_session: RunSession;
+      execution_package: ExecutionPackage;
       session: CodexSession;
       turn: CodexSessionTurn;
       workflow: PlanItemWorkflow;

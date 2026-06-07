@@ -441,6 +441,10 @@ const codexRunExecutionResumeThreadContinuationKeys = new Set([
 const codexSessionTerminalizationKeys = new Set([
   'schema_version',
   'lease_token',
+  'codex_session_lease_id',
+  'codex_session_lease_epoch',
+  'codex_session_worker_id',
+  'codex_session_worker_session_digest',
   'codex_session_id',
   'codex_session_turn_id',
   'expected_input_capsule_digest',
@@ -458,6 +462,10 @@ const codexSessionTerminalizationKeys = new Set([
 export interface CodexSessionTerminalizationV1 {
   schema_version: 'codex_session_terminalization.v1';
   lease_token: string;
+  codex_session_lease_id?: string;
+  codex_session_lease_epoch?: number;
+  codex_session_worker_id?: string;
+  codex_session_worker_session_digest?: string;
   codex_session_id: string;
   codex_session_turn_id: string;
   expected_input_capsule_digest?: string;
@@ -514,6 +522,10 @@ export type CodexWorkflowRunExecutionRuntimeContextV1 = CodexSessionRuntimeConte
 };
 
 export type CodexWorkflowRunExecutionTerminalizationV1 = CodexSessionTerminalizationV1 & {
+  codex_session_lease_id: string;
+  codex_session_lease_epoch: number;
+  codex_session_worker_id: string;
+  codex_session_worker_session_digest: string;
   expected_input_capsule_digest: string;
   input_capsule_id: string;
   input_capsule_ref: string;
@@ -1013,6 +1025,14 @@ const requireRunExecutionWorkloadInteger = (input: Record<string, unknown>, fiel
   return value;
 };
 
+const requireRunExecutionWorkloadPositiveInteger = (input: Record<string, unknown>, field: string): number => {
+  const value = input[field];
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${field} must be a positive integer.`);
+  }
+  return value;
+};
+
 const requireRunExecutionWorkspaceAcquisition = (value: unknown): CodexRunExecutionWorkspaceAcquisitionV1 => {
   if (!isPlainObject(value) || value.schema_version !== 'workspace_bundle_acquisition.v1') {
     throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: workspace_acquisition_json is required.');
@@ -1037,6 +1057,10 @@ const requireRunExecutionTerminalization = (value: unknown): CodexWorkflowRunExe
   return {
     schema_version: 'codex_session_terminalization.v1',
     lease_token: requireRunExecutionWorkloadString(value, 'lease_token'),
+    codex_session_lease_id: requireRunExecutionWorkloadString(value, 'codex_session_lease_id'),
+    codex_session_lease_epoch: requireRunExecutionWorkloadPositiveInteger(value, 'codex_session_lease_epoch'),
+    codex_session_worker_id: requireRunExecutionWorkloadString(value, 'codex_session_worker_id'),
+    codex_session_worker_session_digest: requireRunExecutionWorkloadDigest(value, 'codex_session_worker_session_digest'),
     codex_session_id: requireRunExecutionWorkloadString(value, 'codex_session_id'),
     codex_session_turn_id: requireRunExecutionWorkloadString(value, 'codex_session_turn_id'),
     expected_input_capsule_digest: requireRunExecutionWorkloadDigest(value, 'expected_input_capsule_digest'),

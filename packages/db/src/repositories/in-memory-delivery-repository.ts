@@ -117,6 +117,7 @@ import {
   isOpenReviewPacketStatus,
   isWorkItemAutomationTerminal,
   normalizeAutomationCapabilities,
+  transitionExecutionPackage,
 } from '@forgeloop/domain';
 
 import type {
@@ -1189,39 +1190,39 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     };
   }
 
-	async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
-		const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
-		let credential =
-			input.credential_binding_id === undefined
-				? undefined
-				: this.getScopedCodexCredentialBindingPublic({
-					credential_binding_id: input.credential_binding_id,
-					target_kind: input.target_kind,
-					...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
-					project_id: input.project_id,
-					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-					now: input.now,
-				});
-		if (credential === undefined && input.credential_binding_id === undefined && profileRevision !== undefined) {
-			const candidates = await this.listCodexCredentialBindingReadinessCandidates({
-				project_id: input.project_id,
-				...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-				runtime_profile_id: profileRevision.profile_id,
-				target_kind: input.target_kind,
-				now: input.now,
-			});
-			const modelProviderCandidate = candidates.filter((candidate) => candidate.purpose === 'model_provider');
-			if (modelProviderCandidate.length === 1) {
-				credential = this.getScopedCodexCredentialBindingPublic({
-					credential_binding_id: modelProviderCandidate[0]!.id,
-					target_kind: input.target_kind,
-					runtime_profile_id: profileRevision.profile_id,
-					project_id: input.project_id,
-					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-					now: input.now,
-				});
-			}
-		}
+  async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
+    const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
+    let credential =
+      input.credential_binding_id === undefined
+        ? undefined
+        : this.getScopedCodexCredentialBindingPublic({
+          credential_binding_id: input.credential_binding_id,
+          target_kind: input.target_kind,
+          ...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
+          project_id: input.project_id,
+          ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+          now: input.now,
+        });
+    if (credential === undefined && input.credential_binding_id === undefined && profileRevision !== undefined) {
+      const candidates = await this.listCodexCredentialBindingReadinessCandidates({
+        project_id: input.project_id,
+        ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+        runtime_profile_id: profileRevision.profile_id,
+        target_kind: input.target_kind,
+        now: input.now,
+      });
+      const modelProviderCandidate = candidates.filter((candidate) => candidate.purpose === 'model_provider');
+      if (modelProviderCandidate.length === 1) {
+        credential = this.getScopedCodexCredentialBindingPublic({
+          credential_binding_id: modelProviderCandidate[0]!.id,
+          target_kind: input.target_kind,
+          runtime_profile_id: profileRevision.profile_id,
+          project_id: input.project_id,
+          ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+          now: input.now,
+        });
+      }
+    }
     const profileNetworkPolicy = profileRevision === undefined ? undefined : normalizeCodexRuntimeNetworkPolicy(profileRevision.network_policy);
     const worker =
       profileRevision !== undefined && profileNetworkPolicy !== undefined
@@ -2477,12 +2478,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (
       activeLease === undefined ||
       runSession === undefined ||
-	      runSession.execution_package_id !== input.execution_package_id ||
-	      activeLease.id !== input.run_worker_lease_id ||
-	      activeLease.status !== 'active' ||
-	      activeLease.expires_at <= input.created_at ||
-	      input.internal_artifact_object_id === undefined
-	    ) {
+        runSession.execution_package_id !== input.execution_package_id ||
+        activeLease.id !== input.run_worker_lease_id ||
+        activeLease.status !== 'active' ||
+        activeLease.expires_at <= input.created_at ||
+        input.internal_artifact_object_id === undefined
+      ) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job pending workspace bundle fence was rejected.');
     }
     if (
@@ -5196,10 +5197,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       const workflow = this.planItemWorkflows.get(input.workflow_id);
       const runSession = this.runSessions.get(input.run_session_id);
       const runtimeRecord = this.codexRuntimeJobs.get(input.runtime_job_id);
+      const executionPackage = runSession === undefined ? undefined : this.executionPackages.get(runSession.execution_package_id);
       if (
         workflow === undefined ||
         runSession === undefined ||
         runtimeRecord === undefined ||
+        executionPackage === undefined ||
         workflow.status !== input.expected_workflow_status ||
         runSession.status !== input.expected_run_session_status ||
         (input.expected_run_session_updated_at !== undefined && runSession.updated_at !== input.expected_run_session_updated_at) ||
@@ -5213,6 +5216,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         runtimeRecord.job.target_id !== input.run_session_id ||
         runtimeRecord.job.id !== input.runtime_job_terminalization.runtime_job_id ||
         runtimeRecord.job.launch_lease_id !== input.runtime_job_terminalization.launch_lease_id ||
+        executionPackage.id !== runSession.execution_package_id ||
         !workflowRunExecutionJobLineageMatches(runtimeRecord.job)
       ) {
         throw new DomainError(
@@ -5256,12 +5260,27 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
         ...(nextWorkflowStatus === 'blocked' ? { previous_status: workflow.status } : {}),
         updated_at: input.workflow_transition.created_at,
       };
+      const updatedExecutionPackage = transitionExecutionPackage(
+        executionPackage,
+        input.runtime_job_terminalization.terminal_status === 'succeeded'
+          ? {
+              type: 'execution_succeeded',
+              at: input.workflow_transition.created_at,
+            }
+          : {
+              type: 'execution_failed_blocked',
+              blocked_reason: input.run_session_update.failure_reason ?? input.runtime_job_terminalization.terminal_status,
+              at: input.workflow_transition.created_at,
+            },
+      );
       this.runSessions.set(updatedRunSession.id, clone(updatedRunSession));
+      this.executionPackages.set(updatedExecutionPackage.id, clone(updatedExecutionPackage));
       this.planItemWorkflows.set(updatedWorkflow.id, clone(updatedWorkflow));
       return {
         stale: false,
         runtime_job: clone(runtimeJob),
         run_session: clone(updatedRunSession),
+        execution_package: clone(updatedExecutionPackage),
         session,
         turn,
         workflow: clone(updatedWorkflow),

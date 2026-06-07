@@ -200,6 +200,10 @@ const runExecutionWorkload = (
     codex_session_terminalization: {
       schema_version: 'codex_session_terminalization.v1',
       lease_token: 'session-terminalization-token-secret',
+      codex_session_lease_id: 'session-lease-1',
+      codex_session_lease_epoch: 1,
+      codex_session_worker_id: 'worker-1',
+      codex_session_worker_session_digest: codexCredentialPayloadDigest('session-1'),
       codex_session_id: 'session-1',
       codex_session_turn_id: 'session-turn-1',
       expected_input_capsule_digest: digest('b'),

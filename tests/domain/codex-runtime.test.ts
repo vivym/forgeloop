@@ -125,13 +125,13 @@ const workflowRunExecutionWorkload = {
     expires_at: '2026-06-06T00:10:00.000Z',
   },
   codex_session_runtime_context: {
-    schema_version: 'codex_session_runtime_context.v1',
-    codex_session_id: 'session-1',
-    codex_session_turn_id: 'turn-execution-1',
-    lease_id: 'lease-1',
-    lease_epoch: 2,
-    worker_id: 'worker-1',
-    worker_session_digest: digestC,
+	    schema_version: 'codex_session_runtime_context.v1',
+	    codex_session_id: 'session-1',
+	    codex_session_turn_id: 'turn-execution-1',
+	    lease_id: 'launch-lease-1',
+	    lease_epoch: 2,
+	    worker_id: 'worker-1',
+	    worker_session_digest: digestC,
     expected_input_capsule_digest: digestA,
     turn_group_status: 'complete',
     continuation: {
@@ -140,12 +140,16 @@ const workflowRunExecutionWorkload = {
       codex_thread_id_digest: workflowRunExecutionThreadDigest,
     },
   },
-  codex_session_terminalization: {
-    schema_version: 'codex_session_terminalization.v1',
-    lease_token: 'lease-token-secret',
-    codex_session_id: 'session-1',
-    codex_session_turn_id: 'turn-execution-1',
-    input_capsule_id: 'capsule-1',
+	  codex_session_terminalization: {
+	    schema_version: 'codex_session_terminalization.v1',
+	    lease_token: 'lease-token-secret',
+	    codex_session_lease_id: 'session-lease-1',
+	    codex_session_lease_epoch: 2,
+	    codex_session_worker_id: 'worker-1',
+	    codex_session_worker_session_digest: digestC,
+	    codex_session_id: 'session-1',
+	    codex_session_turn_id: 'turn-execution-1',
+	    input_capsule_id: 'capsule-1',
     input_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
     input_capsule_digest: digestA,
     input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
@@ -161,13 +165,13 @@ const expectedWorkflowRunExecutionContinuation = {
   codex_session_turn_id: 'turn-execution-1',
   input_capsule_digest: digestA,
   input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/memory-1',
-  input_memory_bundle_digest: digestB,
-  input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
-  input_environment_manifest_digest: digestC,
-  lease_id: 'lease-1',
-  lease_epoch: 2,
-  worker_id: 'worker-1',
-  worker_session_digest: digestC,
+	  input_memory_bundle_digest: digestB,
+	  input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/env-1',
+	  input_environment_manifest_digest: digestC,
+	  lease_id: 'launch-lease-1',
+	  lease_epoch: 2,
+	  worker_id: 'worker-1',
+	  worker_session_digest: digestC,
   codex_thread_id_digest: workflowRunExecutionThreadDigest,
 };
 
@@ -627,18 +631,30 @@ describe('codex runtime domain contracts', () => {
       'codex_generation_workload_unsupported',
     );
 
-    expectDomainErrorCode(
-      () =>
-        validateCodexRunExecutionWorkload({
-          ...workflowRunExecutionWorkload,
-          codex_session_runtime_context: {
+	    expectDomainErrorCode(
+	      () =>
+	        validateCodexRunExecutionWorkload({
+	          ...workflowRunExecutionWorkload,
+	          codex_session_runtime_context: {
             ...workflowRunExecutionWorkload.codex_session_runtime_context,
             continuation: { kind: 'start_thread' },
           },
-        }),
-      'codex_generation_workload_unsupported',
-    );
-  });
+	        }),
+	      'codex_generation_workload_unsupported',
+	    );
+
+	    expectDomainErrorCode(
+	      () =>
+	        validateCodexRunExecutionWorkload({
+	          ...workflowRunExecutionWorkload,
+	          codex_session_terminalization: {
+	            ...workflowRunExecutionWorkload.codex_session_terminalization,
+	            codex_session_lease_id: undefined,
+	          },
+	        }),
+	      'codex_generation_workload_unsupported',
+	    );
+	  });
 
   it('validates workflow-owned run-execution workload continuity against active session and worker expectations', () => {
     expect(

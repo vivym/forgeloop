@@ -117,6 +117,7 @@ import {
   isWorkItemAutomationTerminal,
   normalizeAutomationCapabilities,
   parseInternalArtifactRef,
+  transitionExecutionPackage,
 } from '@forgeloop/domain';
 
 import * as schema from '../schema';
@@ -2862,10 +2863,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     const workflow = await this.getPlanItemWorkflow(input.workflow_id);
     const runSession = await this.getRunSession(input.run_session_id);
     const runtimeJob = await this.getCodexRuntimeJob({ runtime_job_id: input.runtime_job_id });
+    const executionPackage = runSession === undefined ? undefined : await this.getExecutionPackage(runSession.execution_package_id);
     if (
       workflow === undefined ||
       runSession === undefined ||
       runtimeJob === undefined ||
+      executionPackage === undefined ||
       workflow.status !== input.expected_workflow_status ||
       runSession.status !== input.expected_run_session_status ||
       (input.expected_run_session_updated_at !== undefined && runSession.updated_at !== input.expected_run_session_updated_at) ||
@@ -2879,6 +2882,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       runtimeJob.target_id !== input.run_session_id ||
       runtimeJob.id !== input.runtime_job_terminalization.runtime_job_id ||
       runtimeJob.launch_lease_id !== input.runtime_job_terminalization.launch_lease_id ||
+      executionPackage.id !== runSession.execution_package_id ||
       !workflowRunExecutionJobLineageMatches(runtimeJob)
     ) {
       throw new DomainError(
@@ -2923,6 +2927,19 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       ...(nextWorkflowStatus === 'blocked' ? { previous_status: workflow.status } : {}),
       updated_at: input.workflow_transition.created_at,
     };
+    const updatedExecutionPackage = transitionExecutionPackage(
+      executionPackage,
+      input.runtime_job_terminalization.terminal_status === 'succeeded'
+        ? {
+            type: 'execution_succeeded',
+            at: input.workflow_transition.created_at,
+          }
+        : {
+            type: 'execution_failed_blocked',
+            blocked_reason: input.run_session_update.failure_reason ?? input.runtime_job_terminalization.terminal_status,
+            at: input.workflow_transition.created_at,
+          },
+    );
     const runSessionPredicates = [
       eq(run_sessions.id, updatedRunSession.id),
       eq(run_sessions.status, input.expected_run_session_status),
@@ -2946,7 +2963,12 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         ),
       )
       .returning();
-    if (runSessionRow === undefined || workflowRow === undefined) {
+    const [executionPackageRow] = await this.db
+      .update(execution_packages)
+      .set(toDbRecord(updatedExecutionPackage, execution_packages) as never)
+      .where(and(eq(execution_packages.id, updatedExecutionPackage.id), eq(execution_packages.version, executionPackage.version)))
+      .returning();
+    if (runSessionRow === undefined || workflowRow === undefined || executionPackageRow === undefined) {
       throw new DomainError(
         'codex_session_stale_terminalization',
         `codex_session_stale_terminalization: Workflow execution ${input.workflow_id} terminalization is stale`,
@@ -2956,6 +2978,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       stale: false,
       runtime_job: terminalRuntimeJob,
       run_session: updatedRunSession,
+      execution_package: updatedExecutionPackage,
       session,
       turn,
       workflow: updatedWorkflow,
@@ -4028,39 +4051,39 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     };
   }
 
-	async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
-		const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
-		let credential =
-			input.credential_binding_id === undefined
-				? undefined
-				: await this.getScopedCodexCredentialBindingPublic({
-					credential_binding_id: input.credential_binding_id,
-					target_kind: input.target_kind,
-					...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
-					project_id: input.project_id,
-					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-					now: input.now,
-				});
-		if (credential === undefined && input.credential_binding_id === undefined && profileRevision !== undefined) {
-			const candidates = await this.listCodexCredentialBindingReadinessCandidates({
-				project_id: input.project_id,
-				...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-				runtime_profile_id: profileRevision.profile_id,
-				target_kind: input.target_kind,
-				now: input.now,
-			});
-			const modelProviderCandidate = candidates.filter((candidate) => candidate.purpose === 'model_provider');
-			if (modelProviderCandidate.length === 1) {
-				credential = await this.getScopedCodexCredentialBindingPublic({
-					credential_binding_id: modelProviderCandidate[0]!.id,
-					target_kind: input.target_kind,
-					runtime_profile_id: profileRevision.profile_id,
-					project_id: input.project_id,
-					...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
-					now: input.now,
-				});
-			}
-		}
+  async getCodexRuntimeStatus(input: GetCodexRuntimeStatusInput): Promise<CodexRuntimeStatusProjection> {
+    const profileRevision = await this.getActiveCodexRuntimeProfileRevision(input);
+    let credential =
+      input.credential_binding_id === undefined
+        ? undefined
+        : await this.getScopedCodexCredentialBindingPublic({
+          credential_binding_id: input.credential_binding_id,
+          target_kind: input.target_kind,
+          ...(input.runtime_profile_id === undefined ? {} : { runtime_profile_id: input.runtime_profile_id }),
+          project_id: input.project_id,
+          ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+          now: input.now,
+        });
+    if (credential === undefined && input.credential_binding_id === undefined && profileRevision !== undefined) {
+      const candidates = await this.listCodexCredentialBindingReadinessCandidates({
+        project_id: input.project_id,
+        ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+        runtime_profile_id: profileRevision.profile_id,
+        target_kind: input.target_kind,
+        now: input.now,
+      });
+      const modelProviderCandidate = candidates.filter((candidate) => candidate.purpose === 'model_provider');
+      if (modelProviderCandidate.length === 1) {
+        credential = await this.getScopedCodexCredentialBindingPublic({
+          credential_binding_id: modelProviderCandidate[0]!.id,
+          target_kind: input.target_kind,
+          runtime_profile_id: profileRevision.profile_id,
+          project_id: input.project_id,
+          ...(input.repo_id === undefined ? {} : { repo_id: input.repo_id }),
+          now: input.now,
+        });
+      }
+    }
     const profileNetworkPolicy = profileRevision === undefined ? undefined : normalizeCodexRuntimeNetworkPolicy(profileRevision.network_policy);
     const worker =
       profileRevision === undefined || profileNetworkPolicy === undefined
@@ -4939,11 +4962,11 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (
       lease === undefined ||
       runSession === undefined ||
-	      runSession.execution_package_id !== input.execution_package_id ||
-	      lease.id !== input.run_worker_lease_id ||
-	      lease.status !== 'active' ||
-	      lease.expires_at <= input.created_at ||
-	      input.internal_artifact_object_id === undefined ||
+        runSession.execution_package_id !== input.execution_package_id ||
+        lease.id !== input.run_worker_lease_id ||
+        lease.status !== 'active' ||
+        lease.expires_at <= input.created_at ||
+        input.internal_artifact_object_id === undefined ||
       input.expires_at <= input.created_at ||
       input.pending_artifact_ref !==
         `artifact://internal/workspace_bundle/run_session/${input.run_session_id}/${input.bundle_id}` ||

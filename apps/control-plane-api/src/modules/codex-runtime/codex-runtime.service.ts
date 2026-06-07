@@ -1565,11 +1565,11 @@ export class CodexRuntimeService {
       codex_session_turn_terminalization: {
         session_id: runtimeContext.codex_session_id,
         turn_id: runtimeContext.codex_session_turn_id,
-        lease_id: runtimeContext.lease_id,
+        lease_id: terminalization.codex_session_lease_id,
         lease_token_hash: codexCredentialPayloadDigest(terminalization.lease_token),
-        lease_epoch: runtimeContext.lease_epoch,
-        worker_id: runtimeContext.worker_id,
-        worker_session_digest: runtimeContext.worker_session_digest,
+        lease_epoch: terminalization.codex_session_lease_epoch,
+        worker_id: terminalization.codex_session_worker_id,
+        worker_session_digest: terminalization.codex_session_worker_session_digest,
         status: turnStatus,
         expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest,
         input_capsule_id: terminalization.input_capsule_id,
@@ -1628,10 +1628,10 @@ export class CodexRuntimeService {
         id: randomUuid(),
         codex_session_id: runtimeContext.codex_session_id,
         codex_session_turn_id: runtimeContext.codex_session_turn_id,
-        lease_id: runtimeContext.lease_id,
-        lease_epoch: runtimeContext.lease_epoch,
-        worker_id: runtimeContext.worker_id,
-        worker_session_digest: runtimeContext.worker_session_digest,
+        lease_id: terminalization.codex_session_lease_id,
+        lease_epoch: terminalization.codex_session_lease_epoch,
+        worker_id: terminalization.codex_session_worker_id,
+        worker_session_digest: terminalization.codex_session_worker_session_digest,
         expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest,
         ...(workflowResult?.output_capsule.digest === undefined
           ? {}
@@ -1769,15 +1769,19 @@ export class CodexRuntimeService {
         `codex_session_stale_terminalization: Runtime job ${input.runtimeJob.id} CodexSession terminalization refs are invalid`,
       );
     }
+    const terminalizationLeaseId = terminalization.codex_session_lease_id ?? runtimeContext.lease_id;
+    const terminalizationLeaseEpoch = terminalization.codex_session_lease_epoch ?? runtimeContext.lease_epoch;
+    const terminalizationWorkerId = terminalization.codex_session_worker_id ?? runtimeContext.worker_id;
+    const terminalizationWorkerSessionDigest = terminalization.codex_session_worker_session_digest ?? runtimeContext.worker_session_digest;
     try {
       await this.repository.terminalizeCodexSessionTurn({
         session_id: runtimeContext.codex_session_id,
         turn_id: runtimeContext.codex_session_turn_id,
-        lease_id: runtimeContext.lease_id,
+        lease_id: terminalizationLeaseId,
         lease_token_hash: codexCredentialPayloadDigest(terminalization.lease_token),
-        lease_epoch: runtimeContext.lease_epoch,
-        worker_id: runtimeContext.worker_id,
-        worker_session_digest: runtimeContext.worker_session_digest,
+        lease_epoch: terminalizationLeaseEpoch,
+        worker_id: terminalizationWorkerId,
+        worker_session_digest: terminalizationWorkerSessionDigest,
         status: input.terminalStatus === 'cancelled' ? 'cancelled' : 'failed',
         ...(runtimeContext.expected_input_capsule_digest === undefined
           ? {}

@@ -4,9 +4,13 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
-import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { ProductGenerationResultService } from '../../apps/control-plane-api/src/modules/automation/product-generation-result.service';
-import type { DeliveryRepository } from '../../packages/db/src';
+import { LocalInternalArtifactStore, type DeliveryRepository } from '../../packages/db/src';
+import {
+  workspaceBundleArchiveDigest,
+  workspaceBundleManifestDigest,
+} from '../../packages/codex-worker-runtime/src/workspace-bundle';
 import {
   codexCanonicalDigest,
   codexCredentialPayloadDigest,
@@ -727,24 +731,108 @@ describe('Plan Item Workflow API', () => {
     const executionTurnId = publicRunSession?.codex_session_turn_id;
     expect(runtimeJobId).toEqual(expect.any(String));
     expect(executionTurnId).toEqual(expect.any(String));
-    const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId! });
-    expect(runtimeJob).toMatchObject({
-      target_kind: 'run_execution',
-      workflow_id: seeded.workflow.id,
-      codex_session_id: seeded.workflow.active_codex_session_id,
-      codex_session_turn_id: executionTurnId,
-    });
-    expect(runtimeJob?.input_json).toMatchObject({
-      plan_item_workflow_id: seeded.workflow.id,
-      codex_session_runtime_context: {
-        continuation: {
-          kind: 'resume_thread',
-          codex_thread_id_digest: first.body.execution_run_summary.codex_thread_id_digest,
+      const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId! });
+      expect(runtimeJob).toMatchObject({
+        target_kind: 'run_execution',
+        workflow_id: seeded.workflow.id,
+        codex_session_id: seeded.workflow.active_codex_session_id,
+        codex_session_turn_id: executionTurnId,
+      });
+      const workload = runtimeJob?.input_json as {
+        execution_package_version: number;
+        package_prompt_digest: string;
+        execution_context_digest: string;
+        workspace_bundle_digest: string;
+        workspace_acquisition_json: {
+          archive_ref: string;
+          archive_digest: string;
+          manifest_digest: string;
+        };
+        codex_session_runtime_context: {
+          lease_id: string;
+          lease_epoch: number;
+          worker_id: string;
+          worker_session_digest: string;
+          continuation: {
+            codex_thread_id_digest: string;
+          };
+        };
+        codex_session_terminalization: {
+          codex_session_lease_id: string;
+          codex_session_lease_epoch: number;
+          codex_session_worker_id: string;
+          codex_session_worker_session_digest: string;
+        };
+      };
+      expect(workload).toMatchObject({
+        plan_item_workflow_id: seeded.workflow.id,
+        codex_session_runtime_context: {
+          continuation: {
+            kind: 'resume_thread',
+            codex_thread_id_digest: first.body.execution_run_summary.codex_thread_id_digest,
+          },
         },
-      },
-    });
+      });
+      expect(workload.codex_session_runtime_context.lease_id).toBe(runtimeJob?.launch_lease_id);
+      expect(workload.codex_session_terminalization.codex_session_lease_id).not.toBe(runtimeJob?.launch_lease_id);
+      expect(workload.codex_session_terminalization.codex_session_lease_epoch).toBe(workload.codex_session_runtime_context.lease_epoch);
+      expect(workload.codex_session_terminalization.codex_session_worker_id).toBe(workload.codex_session_runtime_context.worker_id);
+      expect(workload.codex_session_terminalization.codex_session_worker_session_digest).toBe(
+        workload.codex_session_runtime_context.worker_session_digest,
+      );
+      const startedExecutionPackage = await repository.getExecutionPackage(readyExecutionPackage!.id);
+      expect(startedExecutionPackage).toMatchObject({
+        phase: 'execution',
+        activity_state: 'ai_running',
+        version: workload.execution_package_version,
+      });
+      const artifactStore = new LocalInternalArtifactStore({
+        root: app.get(INTERNAL_ARTIFACT_STORE_ROOT) as string,
+        repository,
+        requestId: 'plan-item-workflow-execution-test',
+      });
+      const storedBundle = await artifactStore.getObject(workload.workspace_acquisition_json.archive_ref);
+      const archive = JSON.parse(Buffer.from(storedBundle.bytes).toString('utf8')) as {
+        manifest: {
+          entries: Array<{ path: string; digest: string; size_bytes: number; type: string }>;
+        };
+        entries: Array<{ path: string; type: string; content_base64: string }>;
+      };
+      expect(workspaceBundleArchiveDigest(storedBundle.bytes)).toBe(workload.workspace_bundle_digest);
+      expect(workspaceBundleManifestDigest(archive.manifest)).toBe(workload.workspace_acquisition_json.manifest_digest);
+      expect(workload.workspace_acquisition_json.archive_digest).toBe(workload.workspace_bundle_digest);
+      const bundleEntries = new Map(
+        archive.entries.map((entry) => [entry.path, Buffer.from(entry.content_base64, 'base64').toString('utf8')]),
+      );
+      const packagePrompt = bundleEntries.get('.forgeloop/codex-runtime/package-prompt.txt');
+      if (packagePrompt === undefined) {
+        throw new Error('Expected run execution package prompt in workspace bundle');
+      }
+      const executionContext = JSON.parse(bundleEntries.get('.forgeloop/codex-runtime/execution-context.json') ?? 'null') as {
+        schema_version: string;
+        run_spec: {
+          run_session_id: string;
+          execution_package_id: string;
+          expected_package_version: number;
+          repo: { local_path: string };
+        };
+      };
+      expect(packagePrompt).toContain(`Objective: ${startedExecutionPackage?.objective}`);
+      expect(codexCanonicalDigest(packagePrompt)).toBe(workload.package_prompt_digest);
+      expect(executionContext).toMatchObject({
+        schema_version: 'codex_run_execution_context.v1',
+        run_spec: {
+          run_session_id: first.body.execution_run_summary.run_session_id,
+          execution_package_id: startedExecutionPackage?.id,
+          expected_package_version: startedExecutionPackage?.version,
+          repo: { local_path: '/workspace' },
+        },
+      });
+      expect(codexCanonicalDigest(executionContext)).toBe(workload.execution_context_digest);
+      expect(JSON.stringify(archive.manifest)).not.toContain('package_policy_digest');
+      expect(JSON.stringify(archive.manifest)).not.toContain('workspace_policy_digest');
 
-    const events = await repository.listTraceEventsForSubject('plan_item_workflow', seeded.workflow.id);
+      const events = await repository.listTraceEventsForSubject('plan_item_workflow', seeded.workflow.id);
     const startAuditEvent = events.find((event) => event.event_type === 'workflow_execution_started');
     expect(startAuditEvent?.payload).toMatchObject({
       workflow_id: seeded.workflow.id,
