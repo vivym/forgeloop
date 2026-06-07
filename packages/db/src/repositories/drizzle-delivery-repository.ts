@@ -69,9 +69,13 @@ import type {
   ReleaseWorkItem,
   QaHandoff,
   ReviewPacket,
+  ReviewPacketEvidenceRef,
+  ReviewResponse,
   RunCommand,
   RunEvent,
   RunSession,
+  RunSessionAttemptLineage,
+  ExecutionContinuationLineage,
   RunWorkerLease,
   Spec,
   SpecRevision,
@@ -188,7 +192,11 @@ import {
   release_execution_packages,
   release_work_items,
   releases,
+  execution_continuation_lineages,
+  review_packet_evidence_refs,
   review_packets,
+  review_responses,
+  run_session_attempt_lineages,
   run_commands,
   run_event_counters,
   run_events,
@@ -236,6 +244,7 @@ import type {
   CreateOrReplayAutomationActionRunInput,
   DisableAutomationProjectSettingsInput,
   ExecutionPackageGenerationPackageRecord,
+  FindCurrentReviewPacketForWorkflowInput,
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
   FindCodexWorkerForSessionRunnerInput,
@@ -505,6 +514,30 @@ const createWorkflowRunExecutionLineageMatches = (input: CreateOrReplayCodexRunt
   } catch {
     return false;
   }
+};
+
+const createWorkflowPlanItemActionGenerationLineageMatches = (
+  input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+): boolean => {
+  if (input.target.target_type !== 'plan_item_workflow_action') {
+    return true;
+  }
+  if (input.target.target_kind !== 'generation') {
+    return false;
+  }
+  if (input.workflow_id === undefined || input.codex_session_id === undefined || input.codex_session_turn_id === undefined) {
+    return false;
+  }
+  const workload = input.input_json;
+  return (
+    workload.schema_version === 'codex_generation_workload.v1' &&
+    workload.task_kind === 'review_response' &&
+    workload.plan_item_workflow_action_id === input.target.target_id &&
+    workload.plan_item_workflow_id === input.workflow_id &&
+    workload.codex_session_id === input.codex_session_id &&
+    workload.codex_session_turn_id === input.codex_session_turn_id &&
+    workload.action_run_id === undefined
+  );
 };
 
 const workflowRunExecutionJobLineageMatches = (job: CodexRuntimeJob): boolean => {
@@ -4620,6 +4653,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (!createWorkflowRunExecutionLineageMatches(input)) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workflow execution lineage was rejected.');
     }
+    if (!createWorkflowPlanItemActionGenerationLineageMatches(input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workflow action generation lineage was rejected.');
+    }
     return this.withAdvisoryLocks(this.codexRuntimeJobCreateLockKeys(input), async (repository) =>
       (repository as DrizzleDeliveryRepository).createOrReplayCodexRuntimeJobWithLeaseAndEnvelopeUnlocked(input),
     );
@@ -6423,6 +6459,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   private codexRuntimeJobHasRequiredLaunchFence(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): boolean {
     if (input.target.target_kind === 'generation') {
+      if (input.target.target_type === 'plan_item_workflow_action') {
+        return true;
+      }
       return (
         input.action_type !== undefined &&
         input.action_attempt !== undefined &&
@@ -8768,6 +8807,122 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return row === undefined ? undefined : fromDbRecord<ReviewPacket>(row);
   }
 
+  async saveReviewPacketEvidenceRef(ref: ReviewPacketEvidenceRef): Promise<void> {
+    await this.upsert(review_packet_evidence_refs, review_packet_evidence_refs.id, ref);
+  }
+
+  async listReviewPacketEvidenceRefs(reviewPacketId: string): Promise<ReviewPacketEvidenceRef[]> {
+    return this.listWhere<ReviewPacketEvidenceRef>(
+      review_packet_evidence_refs,
+      eq(review_packet_evidence_refs.reviewPacketId, reviewPacketId),
+      [review_packet_evidence_refs.createdAt, review_packet_evidence_refs.id],
+    );
+  }
+
+  async saveReviewResponse(response: ReviewResponse): Promise<void> {
+    await this.upsert(review_responses, review_responses.id, response);
+  }
+
+  async getReviewResponse(id: string): Promise<ReviewResponse | undefined> {
+    return this.getById(review_responses, review_responses.id, id);
+  }
+
+  async getLatestReviewResponseForWorkflow(workflowId: string): Promise<ReviewResponse | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(review_responses)
+      .where(eq(review_responses.workflowId, workflowId))
+      .orderBy(desc(review_responses.createdAt), desc(review_responses.id))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<ReviewResponse>(row as Record<string, unknown>);
+  }
+
+  async saveRunSessionAttemptLineage(lineage: RunSessionAttemptLineage): Promise<void> {
+    const existing = await this.getById(
+      run_session_attempt_lineages,
+      run_session_attempt_lineages.runSessionId,
+      lineage.run_session_id,
+    );
+    if (existing !== undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Run session attempt lineage ${lineage.run_session_id} already exists`,
+      );
+    }
+    await this.db.insert(run_session_attempt_lineages).values(toDbRecord(lineage, run_session_attempt_lineages) as never);
+  }
+
+  async listRunSessionAttemptLineage(workflowId: string): Promise<RunSessionAttemptLineage[]> {
+    return this.listWhere<RunSessionAttemptLineage>(
+      run_session_attempt_lineages,
+      eq(run_session_attempt_lineages.workflowId, workflowId),
+      [run_session_attempt_lineages.createdAt, run_session_attempt_lineages.runSessionId],
+    );
+  }
+
+  async saveExecutionContinuationLineage(lineage: ExecutionContinuationLineage): Promise<void> {
+    const queuedAction = await this.getById<PlanItemWorkflowQueuedAction>(
+      plan_item_workflow_queued_actions,
+      plan_item_workflow_queued_actions.id,
+      lineage.queued_action_id,
+    );
+    if (queuedAction === undefined || queuedAction.workflow_id !== lineage.workflow_id) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Execution continuation lineage ${lineage.id} queued action provenance is invalid`,
+      );
+    }
+    await this.upsert(execution_continuation_lineages, execution_continuation_lineages.id, lineage);
+  }
+
+  async listExecutionContinuationLineage(workflowId: string): Promise<ExecutionContinuationLineage[]> {
+    return this.listWhere<ExecutionContinuationLineage>(
+      execution_continuation_lineages,
+      eq(execution_continuation_lineages.workflowId, workflowId),
+      [execution_continuation_lineages.createdAt, execution_continuation_lineages.queuedActionId],
+    );
+  }
+
+  async findCurrentReviewPacketForWorkflow(
+    input: FindCurrentReviewPacketForWorkflowInput,
+  ): Promise<ReviewPacket | undefined> {
+    const executionPackage = await this.getExecutionPackage(input.execution_package_id);
+    const packageVersion = executionPackage?.execution_package_version ?? executionPackage?.version;
+    if (executionPackage === undefined || packageVersion !== input.execution_package_version) {
+      return undefined;
+    }
+    const conditions = [
+      eq(review_packets.workflowId, input.workflow_id),
+      eq(review_packets.executionPackageId, input.execution_package_id),
+      eq(review_packets.runSessionId, input.previous_run_session_id),
+      eq(review_packets.specRevisionId, input.approved_spec_revision_id),
+      eq(review_packets.planRevisionId, input.approved_implementation_plan_revision_id),
+      input.expected_review_packet_id === undefined ? undefined : eq(review_packets.id, input.expected_review_packet_id),
+      inArray(review_packets.status, input.allowed_statuses),
+      isNull(review_packets.supersededByReviewPacketId),
+    ].filter((condition) => condition !== undefined);
+    const rows = await this.db
+      .select()
+      .from(review_packets)
+      .where(and(...conditions))
+      .orderBy(desc(review_packets.createdAt), desc(review_packets.id));
+    return rows.map((row) => fromDbRecord<ReviewPacket>(row as Record<string, unknown>)).find((reviewPacket) => {
+      if (reviewPacket.status === 'archived') {
+        return false;
+      }
+      if (reviewPacket.status === 'completed' && !input.allowed_completed_decisions.includes(reviewPacket.decision as 'changes_requested')) {
+        return false;
+      }
+      if (input.expected_review_packet_digest !== undefined) {
+        const digest = reviewPacket.current_digest ?? codexCanonicalDigest(reviewPacket);
+        if (digest !== input.expected_review_packet_digest) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
   async resolveAutomationProjectSettings(
     input: ResolveAutomationProjectSettingsInput,
   ): Promise<AutomationProjectSettings> {
@@ -10421,6 +10576,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async codexGenerationFenceIsActive(record: CodexLaunchLeaseDbRecord, now: string): Promise<boolean> {
+    if (record.target_type === 'plan_item_workflow_action') {
+      return true;
+    }
     const actionRun = await this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, record.target_id);
     if (
       actionRun === undefined ||

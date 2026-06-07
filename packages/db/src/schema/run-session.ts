@@ -1,10 +1,11 @@
 import { sql } from 'drizzle-orm';
-import { jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import type { RunSession } from '@forgeloop/domain';
+import { index, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import type { ExecutionContinuationLineage, RunSession, RunSessionAttemptLineage } from '@forgeloop/domain';
 
 import { runSessionStatus, timestampColumn } from './_shared';
 import { actors } from './actor';
-import { codex_sessions, codex_session_turns, plan_item_workflows } from './plan-item-workflow';
+import { codex_sessions, codex_session_turns, plan_item_workflow_queued_actions, plan_item_workflows } from './plan-item-workflow';
+import { review_packets, review_responses } from './review-packet';
 
 export const run_sessions = pgTable(
   'run_sessions',
@@ -43,5 +44,59 @@ export const run_sessions = pgTable(
       .where(
         sql`${table.codexSessionId} is not null and ${table.status} in ('queued','running','waiting_for_input','stalled','resuming','cancel_requested')`,
       ),
+  ],
+);
+
+export const run_session_attempt_lineages = pgTable(
+  'run_session_attempt_lineages',
+  {
+    runSessionId: uuid('run_session_id')
+      .primaryKey()
+      .references(() => run_sessions.id),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => plan_item_workflows.id),
+    codexSessionId: uuid('codex_session_id')
+      .notNull()
+      .references(() => codex_sessions.id),
+    attemptKind: text('attempt_kind').$type<RunSessionAttemptLineage['attempt_kind']>().notNull(),
+    previousRunSessionId: uuid('previous_run_session_id').references(() => run_sessions.id),
+    previousReviewPacketId: uuid('previous_review_packet_id').references(() => review_packets.id),
+    reviewResponseId: uuid('review_response_id').references(() => review_responses.id),
+    createdByActorId: uuid('created_by_actor_id')
+      .notNull()
+      .references(() => actors.id),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [index('run_session_attempt_lineages_workflow_created_idx').on(table.workflowId, table.createdAt, table.runSessionId)],
+);
+
+export const execution_continuation_lineages = pgTable(
+  'execution_continuation_lineages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => plan_item_workflows.id),
+    runSessionId: uuid('run_session_id')
+      .notNull()
+      .references(() => run_sessions.id),
+    codexSessionId: uuid('codex_session_id')
+      .notNull()
+      .references(() => codex_sessions.id),
+    queuedActionId: uuid('queued_action_id')
+      .notNull()
+      .references(() => plan_item_workflow_queued_actions.id),
+    continuationKind: text('continuation_kind').$type<ExecutionContinuationLineage['continuation_kind']>().notNull(),
+    previousRuntimeJobId: uuid('previous_runtime_job_id'),
+    newRuntimeJobId: uuid('new_runtime_job_id'),
+    createdByActorId: uuid('created_by_actor_id')
+      .notNull()
+      .references(() => actors.id),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    index('execution_continuation_lineages_workflow_created_idx').on(table.workflowId, table.createdAt, table.queuedActionId),
+    index('execution_continuation_lineages_run_session_idx').on(table.runSessionId),
   ],
 );

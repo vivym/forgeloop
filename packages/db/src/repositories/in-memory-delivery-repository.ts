@@ -68,9 +68,13 @@ import type {
   ReleaseWorkItem,
   QaHandoff,
   ReviewPacket,
+  ReviewPacketEvidenceRef,
+  ReviewResponse,
   RunCommand,
   RunEvent,
   RunSession,
+  RunSessionAttemptLineage,
+  ExecutionContinuationLineage,
   RunWorkerLease,
   ResolvedCodexCredential,
   Spec,
@@ -154,6 +158,7 @@ import type {
   CreateOrReplayAutomationActionRunInput,
   DisableAutomationProjectSettingsInput,
   ExecutionPackageGenerationPackageRecord,
+  FindCurrentReviewPacketForWorkflowInput,
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
   FindCodexWorkerForSessionRunnerInput,
@@ -430,6 +435,30 @@ const createWorkflowRunExecutionLineageMatches = (input: CreateOrReplayCodexRunt
   } catch {
     return false;
   }
+};
+
+const createWorkflowPlanItemActionGenerationLineageMatches = (
+  input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+): boolean => {
+  if (input.target.target_type !== 'plan_item_workflow_action') {
+    return true;
+  }
+  if (input.target.target_kind !== 'generation') {
+    return false;
+  }
+  if (input.workflow_id === undefined || input.codex_session_id === undefined || input.codex_session_turn_id === undefined) {
+    return false;
+  }
+  const workload = input.input_json;
+  return (
+    workload.schema_version === 'codex_generation_workload.v1' &&
+    workload.task_kind === 'review_response' &&
+    workload.plan_item_workflow_action_id === input.target.target_id &&
+    workload.plan_item_workflow_id === input.workflow_id &&
+    workload.codex_session_id === input.codex_session_id &&
+    workload.codex_session_turn_id === input.codex_session_turn_id &&
+    workload.action_run_id === undefined
+  );
 };
 
 const workflowRunExecutionJobLineageMatches = (job: CodexRuntimeJob): boolean => {
@@ -932,6 +961,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly runCommands = new Map<string, RunCommand>();
   private readonly runWorkerLeases = new Map<string, RunWorkerLease>();
   private readonly reviewPackets = new Map<string, ReviewPacket>();
+  private readonly reviewPacketEvidenceRefs = new Map<string, ReviewPacketEvidenceRef>();
+  private readonly reviewResponses = new Map<string, ReviewResponse>();
+  private readonly runSessionAttemptLineages = new Map<string, RunSessionAttemptLineage>();
+  private readonly executionContinuationLineages = new Map<string, ExecutionContinuationLineage>();
   private readonly releases = new Map<string, Release>();
   private readonly releaseWorkItems = new Map<string, ReleaseWorkItem>();
   private readonly releaseWorkItemOrders = new Map<string, number>();
@@ -1617,6 +1650,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     validateCodexLaunchTargetKind(input.target.target_type, input.target.target_kind);
     if (!createWorkflowRunExecutionLineageMatches(input)) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workflow execution lineage was rejected.');
+    }
+    if (!createWorkflowPlanItemActionGenerationLineageMatches(input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workflow action generation lineage was rejected.');
     }
 
     const replayByRequestId = this.codexRuntimeJobRequestIds.get(input.job_request_id);
@@ -7001,6 +7037,107 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(openReviewPacket);
   }
 
+  async saveReviewPacketEvidenceRef(ref: ReviewPacketEvidenceRef): Promise<void> {
+    this.reviewPacketEvidenceRefs.set(ref.id, clone(ref));
+  }
+
+  async listReviewPacketEvidenceRefs(reviewPacketId: string): Promise<ReviewPacketEvidenceRef[]> {
+    return valuesFor(this.reviewPacketEvidenceRefs)
+      .filter((ref) => ref.review_packet_id === reviewPacketId)
+      .sort(byCreatedAtThenId);
+  }
+
+  async saveReviewResponse(response: ReviewResponse): Promise<void> {
+    this.reviewResponses.set(response.id, clone(response));
+  }
+
+  async getReviewResponse(id: string): Promise<ReviewResponse | undefined> {
+    return this.cloneMaybe(this.reviewResponses.get(id));
+  }
+
+  async getLatestReviewResponseForWorkflow(workflowId: string): Promise<ReviewResponse | undefined> {
+    const response = valuesFor(this.reviewResponses)
+      .filter((candidate) => candidate.workflow_id === workflowId)
+      .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id))[0];
+    return this.cloneMaybe(response);
+  }
+
+  async saveRunSessionAttemptLineage(lineage: RunSessionAttemptLineage): Promise<void> {
+    if (this.runSessionAttemptLineages.has(lineage.run_session_id)) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Run session attempt lineage ${lineage.run_session_id} already exists`,
+      );
+    }
+    this.runSessionAttemptLineages.set(lineage.run_session_id, clone(lineage));
+  }
+
+  async listRunSessionAttemptLineage(workflowId: string): Promise<RunSessionAttemptLineage[]> {
+    return valuesFor(this.runSessionAttemptLineages)
+      .filter((lineage) => lineage.workflow_id === workflowId)
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.run_session_id.localeCompare(right.run_session_id));
+  }
+
+  async saveExecutionContinuationLineage(lineage: ExecutionContinuationLineage): Promise<void> {
+    const queuedAction = this.planItemWorkflowQueuedActions.get(lineage.queued_action_id);
+    if (queuedAction === undefined || queuedAction.workflow_id !== lineage.workflow_id) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Execution continuation lineage ${lineage.id} queued action provenance is invalid`,
+      );
+    }
+    this.executionContinuationLineages.set(lineage.id, clone(lineage));
+  }
+
+  async listExecutionContinuationLineage(workflowId: string): Promise<ExecutionContinuationLineage[]> {
+    return valuesFor(this.executionContinuationLineages)
+      .filter((lineage) => lineage.workflow_id === workflowId)
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.queued_action_id.localeCompare(right.queued_action_id));
+  }
+
+  async findCurrentReviewPacketForWorkflow(
+    input: FindCurrentReviewPacketForWorkflowInput,
+  ): Promise<ReviewPacket | undefined> {
+    const executionPackage = this.executionPackages.get(input.execution_package_id);
+    const packageVersion = executionPackage?.execution_package_version ?? executionPackage?.version;
+    if (executionPackage === undefined || packageVersion !== input.execution_package_version) {
+      return undefined;
+    }
+    const reviewPacket = valuesFor(this.reviewPackets)
+      .filter((candidate) => this.reviewPacketMatchesCurrentWorkflowLookup(candidate, input))
+      .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id))[0];
+    return this.cloneMaybe(reviewPacket);
+  }
+
+  private reviewPacketMatchesCurrentWorkflowLookup(
+    reviewPacket: ReviewPacket,
+    input: FindCurrentReviewPacketForWorkflowInput,
+  ): boolean {
+    if (
+      reviewPacket.status === 'archived' ||
+      reviewPacket.superseded_by_review_packet_id !== undefined ||
+      reviewPacket.workflow_id !== input.workflow_id ||
+      reviewPacket.execution_package_id !== input.execution_package_id ||
+      reviewPacket.run_session_id !== input.previous_run_session_id ||
+      reviewPacket.spec_revision_id !== input.approved_spec_revision_id ||
+      reviewPacket.plan_revision_id !== input.approved_implementation_plan_revision_id ||
+      (input.expected_review_packet_id !== undefined && reviewPacket.id !== input.expected_review_packet_id) ||
+      !input.allowed_statuses.includes(reviewPacket.status as 'ready' | 'in_review' | 'completed')
+    ) {
+      return false;
+    }
+    if (reviewPacket.status === 'completed' && !input.allowed_completed_decisions.includes(reviewPacket.decision as 'changes_requested')) {
+      return false;
+    }
+    if (input.expected_review_packet_digest !== undefined) {
+      const digest = reviewPacket.current_digest ?? codexCanonicalDigest(reviewPacket);
+      if (digest !== input.expected_review_packet_digest) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   async resolveAutomationProjectSettings(
     input: ResolveAutomationProjectSettingsInput,
   ): Promise<AutomationProjectSettings> {
@@ -9284,6 +9421,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   private codexRuntimeJobHasRequiredLaunchFence(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): boolean {
     if (input.target.target_kind === 'generation') {
+      if (input.target.target_type === 'plan_item_workflow_action') {
+        return true;
+      }
       return (
         input.action_type !== undefined &&
         input.action_attempt !== undefined &&
@@ -9357,6 +9497,9 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   private codexGenerationFenceIsActive(record: CodexLaunchLeasePrivateRecord, now: string): boolean {
+    if (record.lease.target.target_type === 'plan_item_workflow_action') {
+      return true;
+    }
     const actionRun = this.automationActionRuns.get(record.lease.target.target_id);
     if (
       actionRun === undefined ||

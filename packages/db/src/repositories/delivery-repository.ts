@@ -71,10 +71,14 @@ import type {
   ReleaseExecutionPackage,
   ReleaseWorkItem,
   ReviewPacket,
+  ReviewPacketEvidenceRef,
+  ReviewResponse,
   QaHandoff,
   RunCommand,
   RunEvent,
   RunSession,
+  RunSessionAttemptLineage,
+  ExecutionContinuationLineage,
   RunWorkerLease,
   Spec,
   SpecRevision,
@@ -887,6 +891,19 @@ export type TerminalizeWorkflowExecutionResult =
       stale: true;
       stale_attempt: CodexSessionStaleTerminalizationAttempt;
     };
+
+export interface FindCurrentReviewPacketForWorkflowInput {
+  workflow_id: string;
+  execution_package_id: string;
+  execution_package_version: number;
+  previous_run_session_id: string;
+  approved_spec_revision_id: string;
+  approved_implementation_plan_revision_id: string;
+  expected_review_packet_id?: string;
+  expected_review_packet_digest?: string;
+  allowed_statuses: Array<'ready' | 'in_review' | 'completed'>;
+  allowed_completed_decisions: Array<'changes_requested'>;
+}
 
 export interface RecoverStaleCodexRuntimeJobsInput {
   stale_before: string;
@@ -1962,6 +1979,16 @@ export interface DeliveryRepository {
   listReviewPackets(projectId?: string): Promise<ReviewPacket[]>;
   listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
   findOpenReviewPacketForPackage(executionPackageId: string): Promise<ReviewPacket | undefined>;
+  saveReviewPacketEvidenceRef(ref: ReviewPacketEvidenceRef): Promise<void>;
+  listReviewPacketEvidenceRefs(reviewPacketId: string): Promise<ReviewPacketEvidenceRef[]>;
+  saveReviewResponse(response: ReviewResponse): Promise<void>;
+  getReviewResponse(id: string): Promise<ReviewResponse | undefined>;
+  getLatestReviewResponseForWorkflow(workflowId: string): Promise<ReviewResponse | undefined>;
+  saveRunSessionAttemptLineage(lineage: RunSessionAttemptLineage): Promise<void>;
+  listRunSessionAttemptLineage(workflowId: string): Promise<RunSessionAttemptLineage[]>;
+  saveExecutionContinuationLineage(lineage: ExecutionContinuationLineage): Promise<void>;
+  listExecutionContinuationLineage(workflowId: string): Promise<ExecutionContinuationLineage[]>;
+  findCurrentReviewPacketForWorkflow(input: FindCurrentReviewPacketForWorkflowInput): Promise<ReviewPacket | undefined>;
 
   resolveAutomationProjectSettings(input: ResolveAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;
   setAutomationProjectSettings(input: SetAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;

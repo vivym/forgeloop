@@ -25,6 +25,11 @@ import {
   type PlanItemWorkflowQueuedAction,
   type PlanItemWorkflow,
   type PlanItemWorkflowTransition,
+  type ExecutionContinuationLineage,
+  type ReviewPacket,
+  type ReviewPacketEvidenceRef,
+  type ReviewResponse,
+  type RunSessionAttemptLineage,
   type RunSession,
 } from '@forgeloop/domain';
 
@@ -354,6 +359,369 @@ const workflowQueuedActionRepositoryContract = (
         action_id: testUuid('plan-item-workflow-action-running'),
       }),
     ).resolves.toMatchObject({ status: 'running' });
+  });
+};
+
+interface Wave7LineageRepositoryFixture {
+  workflowId: string;
+  sessionId: string;
+  turnId: string;
+  actorId: string;
+  executionPackageId: string;
+  executionPackageVersion: number;
+  runSessionId: string;
+  previousRunSessionId: string;
+  reviewPacketId: string;
+  supersededReviewPacketId: string;
+  queuedActionId: string;
+  approvedSpecRevisionId: string;
+  approvedImplementationPlanRevisionId: string;
+  projectId: string;
+  repoId: string;
+  developmentPlanItemId: string;
+}
+
+const wave7ReviewPacket = (
+  fixture: Wave7LineageRepositoryFixture,
+  overrides: Partial<ReviewPacket> = {},
+): ReviewPacket => ({
+  id: fixture.reviewPacketId,
+  run_session_id: fixture.previousRunSessionId,
+  execution_package_id: fixture.executionPackageId,
+  workflow_id: fixture.workflowId,
+  codex_session_id: fixture.sessionId,
+  codex_session_turn_id: fixture.turnId,
+  reviewer_actor_id: fixture.actorId,
+  spec_revision_id: fixture.approvedSpecRevisionId,
+  plan_revision_id: fixture.approvedImplementationPlanRevisionId,
+  status: 'completed',
+  decision: 'changes_requested',
+  current_digest: `sha256:${'7'.repeat(64)}`,
+  summary: 'Changes requested.',
+  changed_files: [],
+  check_result_summary: 'Focused checks need follow-up.',
+  self_review: {
+    status: 'succeeded',
+    summary: 'Implementation needs a follow-up.',
+    spec_plan_alignment: 'Aligned with the approved plan.',
+    test_assessment: 'Tests identify the follow-up work.',
+    risk_notes: [],
+    follow_up_questions: [],
+  },
+  independent_ai_review: {
+    status: 'changes_requested',
+    summary: 'Reviewer requested changes.',
+    run_session_id: fixture.previousRunSessionId,
+    execution_package_id: fixture.executionPackageId,
+    risk_notes: [],
+  },
+  test_mapping: [],
+  risk_notes: [],
+  reviewed_by_actor_id: fixture.actorId,
+  reviewed_at: later,
+  requested_changes: [
+    {
+      title: 'Persist lineage',
+      description: 'Capture the review response and continuation lineage.',
+      severity: 'major',
+      suggested_validation: 'Run focused DB repository tests.',
+    },
+  ],
+  created_at: now,
+  updated_at: later,
+  completed_at: later,
+  ...overrides,
+});
+
+const wave7ExecutionPackage = (
+  fixture: Wave7LineageRepositoryFixture,
+  overrides: Partial<ExecutionPackage> = {},
+): ExecutionPackage =>
+  executionPackage({
+    id: fixture.executionPackageId,
+    work_item_id: fixture.developmentPlanItemId,
+    development_plan_item_id: fixture.developmentPlanItemId,
+    workflow_id: fixture.workflowId,
+    codex_session_id: fixture.sessionId,
+    codex_session_turn_id: fixture.turnId,
+    spec_id: testUuid(`wave7-spec:${fixture.workflowId}`),
+    spec_revision_id: fixture.approvedSpecRevisionId,
+    plan_id: testUuid(`wave7-plan:${fixture.workflowId}`),
+    plan_revision_id: fixture.approvedImplementationPlanRevisionId,
+    execution_plan_id: testUuid(`wave7-execution-plan:${fixture.workflowId}`),
+    execution_plan_revision_id: fixture.approvedImplementationPlanRevisionId,
+    project_id: fixture.projectId,
+    repo_id: fixture.repoId,
+    owner_actor_id: fixture.actorId,
+    reviewer_actor_id: fixture.actorId,
+    qa_owner_actor_id: fixture.actorId,
+    version: fixture.executionPackageVersion,
+    execution_package_version: fixture.executionPackageVersion,
+    current_run_session_id: fixture.runSessionId,
+    last_run_session_id: fixture.previousRunSessionId,
+    ...overrides,
+  });
+
+const wave7RunSession = (
+  fixture: Wave7LineageRepositoryFixture,
+  id: string,
+  overrides: Partial<RunSession> = {},
+): RunSession =>
+  runSession({
+    id,
+    execution_package_id: fixture.executionPackageId,
+    workflow_id: fixture.workflowId,
+    codex_session_id: fixture.sessionId,
+    codex_session_turn_id: fixture.turnId,
+    requested_by_actor_id: fixture.actorId,
+    status: 'succeeded',
+    updated_at: id === fixture.previousRunSessionId ? now : later,
+    ...overrides,
+  });
+
+const wave7EvidenceRef = (
+  fixture: Wave7LineageRepositoryFixture,
+  overrides: Partial<ReviewPacketEvidenceRef> = {},
+): ReviewPacketEvidenceRef => ({
+  id: testUuid(`wave7-evidence:${fixture.workflowId}:1`),
+  review_packet_id: fixture.reviewPacketId,
+  workflow_id: fixture.workflowId,
+  ref_kind: 'github_comment_url',
+  display_text: 'Reviewer comment',
+  url: 'https://github.com/owner/repo/pull/7#discussion_r1',
+  digest: `sha256:${'1'.repeat(64)}`,
+  created_by_actor_id: fixture.actorId,
+  created_at: now,
+  ...overrides,
+});
+
+const wave7ReviewResponse = (
+  fixture: Wave7LineageRepositoryFixture,
+  overrides: Partial<ReviewResponse> = {},
+): ReviewResponse => ({
+  id: testUuid(`wave7-review-response:${fixture.workflowId}:1`),
+  workflow_id: fixture.workflowId,
+  codex_session_id: fixture.sessionId,
+  codex_session_turn_id: fixture.turnId,
+  review_packet_id: fixture.reviewPacketId,
+  previous_run_session_id: fixture.previousRunSessionId,
+  status: 'succeeded',
+  content_digest: `sha256:${'2'.repeat(64)}`,
+  rendered_markdown_artifact_ref: `artifact://internal/review_response/${fixture.workflowId}/response.md`,
+  created_by_actor_id: fixture.actorId,
+  created_at: now,
+  updated_at: now,
+  ...overrides,
+});
+
+const wave7RunSessionAttemptLineage = (
+  fixture: Wave7LineageRepositoryFixture,
+  overrides: Partial<RunSessionAttemptLineage> = {},
+): RunSessionAttemptLineage => ({
+  run_session_id: fixture.runSessionId,
+  workflow_id: fixture.workflowId,
+  codex_session_id: fixture.sessionId,
+  attempt_kind: 'review_fix',
+  previous_run_session_id: fixture.previousRunSessionId,
+  previous_review_packet_id: fixture.reviewPacketId,
+  review_response_id: testUuid(`wave7-review-response:${fixture.workflowId}:latest`),
+  created_by_actor_id: fixture.actorId,
+  created_at: now,
+  ...overrides,
+});
+
+const wave7ExecutionContinuationLineage = (
+  fixture: Wave7LineageRepositoryFixture,
+  overrides: Partial<ExecutionContinuationLineage> = {},
+): ExecutionContinuationLineage => ({
+  id: testUuid(`wave7-continuation:${fixture.workflowId}:1`),
+  workflow_id: fixture.workflowId,
+  run_session_id: fixture.runSessionId,
+  codex_session_id: fixture.sessionId,
+  queued_action_id: fixture.queuedActionId,
+  continuation_kind: 'existing_job_input',
+  previous_runtime_job_id: testUuid(`wave7-runtime-previous:${fixture.workflowId}`),
+  new_runtime_job_id: testUuid(`wave7-runtime-new:${fixture.workflowId}`),
+  created_by_actor_id: fixture.actorId,
+  created_at: later,
+  ...overrides,
+});
+
+const wave7CurrentReviewLookup = (fixture: Wave7LineageRepositoryFixture) => ({
+  workflow_id: fixture.workflowId,
+  execution_package_id: fixture.executionPackageId,
+  execution_package_version: fixture.executionPackageVersion,
+  previous_run_session_id: fixture.previousRunSessionId,
+  approved_spec_revision_id: fixture.approvedSpecRevisionId,
+  approved_implementation_plan_revision_id: fixture.approvedImplementationPlanRevisionId,
+  expected_review_packet_id: fixture.reviewPacketId,
+  expected_review_packet_digest: `sha256:${'7'.repeat(64)}`,
+  allowed_statuses: ['ready', 'in_review', 'completed'] as Array<'ready' | 'in_review' | 'completed'>,
+  allowed_completed_decisions: ['changes_requested'] as Array<'changes_requested'>,
+});
+
+const wave7LineageRepositoryContract = (
+  createRepository: () => Promise<{ repository: DeliveryRepository; fixture: Wave7LineageRepositoryFixture }>,
+  testCase: typeof it = it,
+) => {
+  testCase('orders review packet evidence refs deterministically', async () => {
+    const { repository, fixture } = await createRepository();
+    await repository.saveReviewPacket(wave7ReviewPacket(fixture));
+    const first = wave7EvidenceRef(fixture, {
+      id: testUuid(`wave7-evidence:${fixture.workflowId}:a`),
+      created_at: now,
+      display_text: 'First evidence',
+    });
+    const second = wave7EvidenceRef(fixture, {
+      id: testUuid(`wave7-evidence:${fixture.workflowId}:b`),
+      created_at: later,
+      display_text: 'Second evidence',
+    });
+    await repository.saveReviewPacketEvidenceRef(second);
+    await repository.saveReviewPacketEvidenceRef(first);
+
+    await expect(repository.listReviewPacketEvidenceRefs(fixture.reviewPacketId)).resolves.toEqual([first, second]);
+  });
+
+  testCase('returns only the latest review response for the workflow', async () => {
+    const { repository, fixture } = await createRepository();
+    await repository.saveReviewPacket(wave7ReviewPacket(fixture));
+    const older = wave7ReviewResponse(fixture, {
+      id: testUuid(`wave7-review-response:${fixture.workflowId}:older`),
+      created_at: now,
+      updated_at: now,
+    });
+    const latest = wave7ReviewResponse(fixture, {
+      id: testUuid(`wave7-review-response:${fixture.workflowId}:latest`),
+      created_at: later,
+      updated_at: later,
+      content_digest: `sha256:${'3'.repeat(64)}`,
+    });
+    const otherWorkflow = wave7ReviewResponse(fixture, {
+      id: testUuid(`wave7-review-response:${fixture.workflowId}:other-workflow`),
+      workflow_id: testUuid(`wave7-other-workflow:${fixture.workflowId}`),
+      created_at: '2026-05-31T00:02:00.000Z',
+      updated_at: '2026-05-31T00:02:00.000Z',
+    });
+    await repository.saveReviewResponse(older);
+    await repository.saveReviewResponse(otherWorkflow);
+    await repository.saveReviewResponse(latest);
+
+    await expect(repository.getReviewResponse(older.id)).resolves.toEqual(older);
+    await expect(repository.getLatestReviewResponseForWorkflow(fixture.workflowId)).resolves.toEqual(latest);
+  });
+
+  testCase('rejects duplicate run session attempt lineage rows', async () => {
+    const { repository, fixture } = await createRepository();
+    const lineage = wave7RunSessionAttemptLineage(fixture);
+
+    await repository.saveRunSessionAttemptLineage(lineage);
+
+    await expect(
+      repository.saveRunSessionAttemptLineage({
+        ...lineage,
+        attempt_kind: 'first_execution',
+        previous_run_session_id: undefined,
+        previous_review_packet_id: undefined,
+        review_response_id: undefined,
+      }),
+    ).rejects.toThrow();
+    await expect(repository.listRunSessionAttemptLineage(fixture.workflowId)).resolves.toEqual([lineage]);
+  });
+
+  testCase('requires queued action lineage and does not create another run attempt', async () => {
+    const { repository, fixture } = await createRepository();
+    const attempt = wave7RunSessionAttemptLineage(fixture);
+    await repository.saveRunSessionAttemptLineage(attempt);
+
+    await expect(
+      repository.saveExecutionContinuationLineage(
+        wave7ExecutionContinuationLineage(fixture, {
+          id: testUuid(`wave7-continuation:${fixture.workflowId}:missing-action`),
+          queued_action_id: testUuid(`wave7-missing-action:${fixture.workflowId}`),
+        }),
+      ),
+    ).rejects.toThrow();
+
+    const continuation = wave7ExecutionContinuationLineage(fixture);
+    await repository.saveExecutionContinuationLineage(continuation);
+    await expect(repository.listExecutionContinuationLineage(fixture.workflowId)).resolves.toEqual([continuation]);
+    await expect(repository.listRunSessionAttemptLineage(fixture.workflowId)).resolves.toEqual([attempt]);
+  });
+
+  testCase('persists Wave 7 stale terminalization audit fields', async () => {
+    const { repository, fixture } = await createRepository();
+    const attempt = {
+      id: testUuid(`wave7-stale-attempt:${fixture.workflowId}`),
+      codex_session_id: fixture.sessionId,
+      codex_session_turn_id: fixture.turnId,
+      worker_id: 'worker-wave7',
+      worker_session_digest: `sha256:${'4'.repeat(64)}`,
+      expected_input_capsule_digest: `sha256:${'5'.repeat(64)}`,
+      attempted_output_capsule_digest: `sha256:${'6'.repeat(64)}`,
+      attempted_codex_thread_id_digest: `sha256:${'8'.repeat(64)}`,
+      failure_code: 'codex_session_stale_terminalization',
+      workflow_id: fixture.workflowId,
+      run_session_id: fixture.runSessionId,
+      runtime_job_id: testUuid(`wave7-stale-runtime:${fixture.workflowId}`),
+      expected_workflow_status: 'execution_running',
+      actual_workflow_status: 'execution_review',
+      expected_run_session_status: 'running',
+      actual_run_session_status: 'succeeded',
+      expected_run_session_updated_at: now,
+      actual_run_session_updated_at: later,
+      expected_codex_thread_id_digest: `sha256:${'9'.repeat(64)}`,
+      created_at: later,
+    } as Parameters<DeliveryRepository['saveStaleCodexSessionTerminalizationAttempt']>[0] & Record<string, unknown>;
+
+    await repository.saveStaleCodexSessionTerminalizationAttempt(attempt);
+
+    await expect(repository.listStaleCodexSessionTerminalizationAttempts(fixture.sessionId)).resolves.toEqual([
+      expect.objectContaining({
+        id: attempt.id,
+        workflow_id: fixture.workflowId,
+        run_session_id: fixture.runSessionId,
+        runtime_job_id: attempt.runtime_job_id,
+        expected_workflow_status: 'execution_running',
+        actual_workflow_status: 'execution_review',
+        expected_run_session_status: 'running',
+        actual_run_session_status: 'succeeded',
+        expected_run_session_updated_at: now,
+        actual_run_session_updated_at: later,
+        expected_codex_thread_id_digest: `sha256:${'9'.repeat(64)}`,
+      }),
+    ]);
+  });
+
+  testCase('finds completed changes-requested review packets as current workflow review packets', async () => {
+    const { repository, fixture } = await createRepository();
+    const reviewPacket = wave7ReviewPacket(fixture);
+    await repository.saveReviewPacket(reviewPacket);
+
+    await expect(repository.findOpenReviewPacketForPackage(fixture.executionPackageId)).resolves.toBeUndefined();
+    await expect(repository.findCurrentReviewPacketForWorkflow(wave7CurrentReviewLookup(fixture))).resolves.toEqual(reviewPacket);
+  });
+
+  testCase('rejects superseded review packets as current workflow review packets', async () => {
+    const { repository, fixture } = await createRepository();
+    await repository.saveReviewPacket(
+      wave7ReviewPacket(fixture, {
+        superseded_by_review_packet_id: fixture.supersededReviewPacketId,
+      }),
+    );
+
+    await expect(repository.findCurrentReviewPacketForWorkflow(wave7CurrentReviewLookup(fixture))).resolves.toBeUndefined();
+  });
+
+  testCase('rejects digest-mismatched review packets as current workflow review packets', async () => {
+    const { repository, fixture } = await createRepository();
+    await repository.saveReviewPacket(
+      wave7ReviewPacket(fixture, {
+        current_digest: `sha256:${'0'.repeat(64)}`,
+      }),
+    );
+
+    await expect(repository.findCurrentReviewPacketForWorkflow(wave7CurrentReviewLookup(fixture))).resolves.toBeUndefined();
   });
 };
 
@@ -2253,6 +2621,53 @@ describe('Plan Item Workflow repository', () => {
           implementationPlanRevisionId: 'implementation-plan-revision-1',
         },
       };
+    });
+  });
+
+  describe('Wave 7 lineage persistence contract', () => {
+    wave7LineageRepositoryContract(async () => {
+      const repository = new InMemoryDeliveryRepository();
+      await repository.createPlanItemWorkflowWithInitialSession(baseWorkflowInput);
+      await repository.createCodexSessionTurn(turnInput);
+      const fixture: Wave7LineageRepositoryFixture = {
+        workflowId: 'workflow-1',
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        actorId: 'actor-tech',
+        executionPackageId: 'execution-package-wave7',
+        executionPackageVersion: 7,
+        runSessionId: 'run-session-wave7-fix',
+        previousRunSessionId: 'run-session-wave7-previous',
+        reviewPacketId: 'review-packet-wave7-current',
+        supersededReviewPacketId: 'review-packet-wave7-next',
+        queuedActionId: testUuid('wave7-in-memory-queued-action'),
+        approvedSpecRevisionId: 'spec-revision-1',
+        approvedImplementationPlanRevisionId: 'implementation-plan-revision-1',
+        projectId: 'project-1',
+        repoId: 'repo-1',
+        developmentPlanItemId: 'item-1',
+      };
+      await repository.saveExecutionPackage(wave7ExecutionPackage(fixture));
+      await repository.saveRunSession(wave7RunSession(fixture, fixture.previousRunSessionId));
+      await repository.saveRunSession(wave7RunSession(fixture, fixture.runSessionId, { status: 'queued' }));
+      await repository.createOrReplayPlanItemWorkflowQueuedAction(
+        queuedActionFixture(
+          {
+            workflowId: fixture.workflowId,
+            sessionId: fixture.sessionId,
+            actorId: fixture.actorId,
+            boundaryRevisionId: 'boundary-summary-revision-1',
+            specRevisionId: fixture.approvedSpecRevisionId,
+            implementationPlanRevisionId: fixture.approvedImplementationPlanRevisionId,
+          },
+          {
+            id: fixture.queuedActionId,
+            kind: 'continue_execution',
+            idempotency_key: `sha256:${'8'.repeat(64)}`,
+          },
+        ),
+      );
+      return { repository, fixture };
     });
   });
 
@@ -7731,6 +8146,55 @@ describe('Plan Item Workflow Drizzle repository critical paths', () => {
             implementationPlanRevisionId: uuidFixture.executionPlanRevisionId,
           },
         };
+      },
+      drizzleTest,
+    );
+  });
+
+  describe('Wave 7 lineage persistence contract', () => {
+    wave7LineageRepositoryContract(
+      async () => {
+        const repository = await createDrizzleWorkflowRepository();
+        await seedDrizzleWorkflow(repository);
+        const fixture: Wave7LineageRepositoryFixture = {
+          workflowId: uuidFixture.workflowId,
+          sessionId: uuidFixture.sessionId,
+          turnId: uuidFixture.turnId,
+          actorId: uuidFixture.actorTechId,
+          executionPackageId: testUuid('wave7-drizzle-execution-package'),
+          executionPackageVersion: 7,
+          runSessionId: testUuid('wave7-drizzle-run-session-fix'),
+          previousRunSessionId: testUuid('wave7-drizzle-run-session-previous'),
+          reviewPacketId: testUuid('wave7-drizzle-review-packet-current'),
+          supersededReviewPacketId: testUuid('wave7-drizzle-review-packet-next'),
+          queuedActionId: testUuid('wave7-drizzle-queued-action'),
+          approvedSpecRevisionId: uuidFixture.specRevisionId,
+          approvedImplementationPlanRevisionId: uuidFixture.executionPlanRevisionId,
+          projectId: uuidFixture.projectId,
+          repoId: 'repo-drizzle',
+          developmentPlanItemId: uuidFixture.developmentPlanItemId,
+        };
+        await repository.saveExecutionPackage(wave7ExecutionPackage(fixture));
+        await repository.saveRunSession(wave7RunSession(fixture, fixture.previousRunSessionId));
+        await repository.saveRunSession(wave7RunSession(fixture, fixture.runSessionId, { status: 'queued' }));
+        await repository.createOrReplayPlanItemWorkflowQueuedAction(
+          queuedActionFixture(
+            {
+              workflowId: fixture.workflowId,
+              sessionId: fixture.sessionId,
+              actorId: fixture.actorId,
+              boundaryRevisionId: uuidFixture.boundarySummaryRevisionId,
+              specRevisionId: fixture.approvedSpecRevisionId,
+              implementationPlanRevisionId: fixture.approvedImplementationPlanRevisionId,
+            },
+            {
+              id: fixture.queuedActionId,
+              kind: 'continue_execution',
+              idempotency_key: `sha256:${'8'.repeat(64)}`,
+            },
+          ),
+        );
+        return { repository, fixture };
       },
       drizzleTest,
     );
