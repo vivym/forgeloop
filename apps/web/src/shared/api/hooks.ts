@@ -8,6 +8,7 @@ import {
   type RequestWorkflowArtifactChangesBody,
   type RevisionCompareQuery,
   type RunQueuedWorkflowActionBody,
+  type StartPlanItemWorkflowExecutionBody,
   type StartPlanItemWorkflowBrainstormingBody,
   type WorkflowArtifactType,
   type WorkflowMessageCommandBody,
@@ -628,6 +629,17 @@ export function usePlanItemWorkflowCommandMutation(input: { developmentPlanId: s
       mutationFn: (body: EvaluateWorkflowExecutionReadinessBody) =>
         createCommandApi().evaluateWorkflowExecutionReadiness(requiredId(input.workflowId, 'workflowId'), body),
       onSuccess: invalidate,
+    }),
+    startExecution: useMutation({
+      mutationFn: (body: StartPlanItemWorkflowExecutionBody) =>
+        createCommandApi().startPlanItemWorkflowExecution(requiredId(input.workflowId, 'workflowId'), body),
+      onSuccess: (workflow) =>
+        Promise.all([
+          invalidate(),
+          workflow.execution_run_summary?.run_session_id === undefined
+            ? Promise.resolve()
+            : invalidateRunDetail(queryClient, workflow.execution_run_summary.run_session_id),
+        ]),
     }),
   };
 }

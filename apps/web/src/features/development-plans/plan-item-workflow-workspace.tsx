@@ -255,6 +255,47 @@ export function PlanItemWorkflowWorkspace({
             >
               Evaluate readiness
             </Button>
+            {model.canStartExecution ? (
+              <Button
+                disabled={runningLabel !== undefined}
+                onClick={() => void run('Start execution', () => commandMutations.startExecution.mutateAsync({ actor_id: actorId }))}
+                type="button"
+              >
+                <CirclePlay className="h-4 w-4" aria-hidden="true" />
+                Start execution
+              </Button>
+            ) : null}
+          </section>
+
+          <section aria-label="Execution supervision" className="grid gap-3 rounded-md border border-border bg-background p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-text-primary">Execution supervision</p>
+              <StatusPill tone={model.executionRunSummary?.status === 'running' ? 'info' : 'neutral'}>
+                {model.executionRunSummary?.status ?? model.workflow.status}
+              </StatusPill>
+            </div>
+            {model.executionRunSummary ? (
+              <div className="grid gap-2 text-sm">
+                <div className="grid gap-1">
+                  <span className="text-xs font-semibold uppercase tracking-normal text-text-muted">Run session</span>
+                  <span className="break-words text-text-secondary">{model.executionRunSummary.runSessionId}</span>
+                </div>
+                {model.executionRunSummary.executionPackageVersion !== undefined ? (
+                  <div className="grid gap-1">
+                    <span className="text-xs font-semibold uppercase tracking-normal text-text-muted">Package version</span>
+                    <span className="text-text-secondary">{model.executionRunSummary.executionPackageVersion}</span>
+                  </div>
+                ) : null}
+                {model.executionRunSummary.digestRows.map((row) => (
+                  <div className="grid gap-1" key={row.label}>
+                    <span className="text-xs font-semibold uppercase tracking-normal text-text-muted">{row.label}</span>
+                    <span className="break-all font-mono text-xs text-text-secondary">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-text-secondary">Execution has not started from this Plan Item workflow.</p>
+            )}
           </section>
         </div>
       </aside>

@@ -177,6 +177,11 @@ export interface StartPlanItemWorkflowBrainstormingBody {
   actor_id: string;
 }
 
+export interface StartPlanItemWorkflowExecutionBody {
+  actor_id: string;
+  idempotency_key?: string;
+}
+
 export interface ReadyForCodeReviewBody extends ActorCommandBody {
   summary: string;
   changed_surfaces: string[];
@@ -519,6 +524,12 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
       ),
     evaluateWorkflowExecutionReadiness: (workflowId: string, body: EvaluateWorkflowExecutionReadinessBody) =>
       request<PlanItemWorkflowPublicDto>(`/plan-item-workflows/${encodeURIComponent(workflowId)}/execution-readiness/evaluate`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    startPlanItemWorkflowExecution: (workflowId: string, body: StartPlanItemWorkflowExecutionBody) =>
+      request<PlanItemWorkflowPublicDto>(`/plan-item-workflows/${encodeURIComponent(workflowId)}/execution/start`, {
         method: 'POST',
         body,
         ...actorRequest(body.actor_id),
