@@ -50,11 +50,15 @@ This is one large wave, but it is not several independent products: every task d
   - Add turn intent for code-mutating review fixes, for example `fix_review_feedback`.
   - Add public DTO projections for attempt history, latest review response, recovery options.
   - Add command body schemas for continue, respond, request-fix, abandon/new-session.
+- Modify `packages/contracts/src/executor.ts`
+  - Extend `RunSpec.review_context` so fix attempts retain canonical Review Packet id/digest, evidence refs, ReviewResponse ids, previous run session id, approved document revision ids, execution package id/version, path policy digest, and required checks.
 - Modify `packages/domain/src/plan-item-workflow.ts`
   - Add domain interfaces for `ReviewResponse`, `ReviewPacketEvidenceRef`, `RunSessionAttemptLineage`, `ExecutionContinuationLineage`.
   - Add `abandon_new_session` transition helper.
   - Add recoverability and fallback mapping helpers.
   - Extend public projection without raw runtime refs.
+- Modify `packages/domain/src/states.ts`
+  - Deep-clone the expanded `RunSpec.review_context` fields during run-session state transitions.
 - Modify `packages/domain/src/codex-runtime.ts`
   - Add `CodexLaunchTarget.target_type = plan_item_workflow_action`.
   - Make `CodexGenerationWorkloadV1` discriminated by target type.
@@ -65,6 +69,7 @@ This is one large wave, but it is not several independent products: every task d
   - Extend `ReviewPacket` with `superseded_by_review_packet_id?: string` and `current_digest?: string`.
   - Add Wave 7 domain error codes such as `workflow_review_packet_not_current`, `workflow_review_packet_digest_mismatch`, `workflow_review_packet_evidence_unsafe`, and `workflow_execution_cancel_pending`.
 - Test:
+  - `tests/contracts/contracts.test.ts`
   - `tests/contracts/plan-item-workflow.test.ts`
   - `tests/domain/plan-item-workflow.test.ts`
   - `tests/domain/codex-runtime.test.ts`
@@ -161,12 +166,16 @@ This is one large wave, but it is not several independent products: every task d
 ## Task 1: Contracts And Domain Surface
 
 **Files:**
+- Modify: `packages/contracts/src/executor.ts`
 - Modify: `packages/contracts/src/plan-item-workflow.ts`
 - Modify: `packages/domain/src/plan-item-workflow.ts`
+- Modify: `packages/domain/src/states.ts`
 - Modify: `packages/domain/src/codex-runtime.ts`
 - Modify: `packages/domain/src/types.ts`
+- Test: `tests/contracts/contracts.test.ts`
 - Test: `tests/contracts/plan-item-workflow.test.ts`
 - Test: `tests/domain/plan-item-workflow.test.ts`
+- Test: `tests/domain/states.test.ts`
 - Test: `tests/domain/codex-runtime.test.ts`
 
 - [ ] **Step 1: Write failing contract tests for new action and decision enums**
@@ -245,12 +254,61 @@ recovery_options: [
 
 Also assert that adding `codex_thread_id`, capsule refs, memory refs, local paths, worker ids, or lease tokens throws.
 
+Add contract tests for the four Wave 7 command bodies:
+
+- `continueWorkflowExecutionBodySchema` accepts actor/idempotency/input and explicit cancel-recovery confirmation fields, rejects raw runtime refs.
+- `respondToWorkflowReviewBodySchema` requires `expected_review_packet_id` and `expected_review_packet_digest`, rejects raw runtime refs.
+- `requestWorkflowReviewFixBodySchema` requires `expected_review_packet_id` and `expected_review_packet_digest`, rejects raw runtime refs.
+- `abandonWorkflowSessionBodySchema` requires matrix `next_action`, typed confirmation phrase, and reason, rejects raw runtime refs.
+
+In `tests/contracts/contracts.test.ts`, add `runSpecSchema` tests proving `review_context` preserves the full canonical fix context:
+
+```ts
+const parsed = runSpecSchema.parse({
+  ...validRunSpec,
+  review_context: {
+    latest_decision: 'changes_requested',
+    review_packet_id: 'review-packet-1',
+    review_packet_digest: `sha256:${'a'.repeat(64)}`,
+    previous_run_session_id: 'run-previous-1',
+    approved_spec_revision_id: 'spec-revision-1',
+    approved_implementation_plan_revision_id: 'plan-revision-1',
+    execution_package_id: 'execution-package-1',
+    execution_package_version: 3,
+    path_policy_digest: `sha256:${'b'.repeat(64)}`,
+    required_checks: validRunSpec.required_checks,
+    evidence_refs: [
+      {
+        id: 'evidence-1',
+        ref_kind: 'github_comment_url',
+        display_text: 'Reviewer comment',
+        digest: `sha256:${'c'.repeat(64)}`,
+      },
+    ],
+    review_response_ids: ['review-response-1'],
+    requested_changes: [
+      {
+        title: 'Fix retry handling',
+        description: 'The retry branch must preserve the original session.',
+        severity: 'major',
+      },
+    ],
+  },
+});
+expect(parsed.review_context.review_packet_id).toBe('review-packet-1');
+expect(parsed.review_context.evidence_refs).toHaveLength(1);
+```
+
+Also assert `changes_requested` rejects missing `review_packet_id`, `review_packet_digest`, `previous_run_session_id`, approved document revision ids, execution package id/version, path policy digest, or empty `requested_changes`.
+
+In `tests/domain/states.test.ts`, add a failing test proving run-session transitions deep-clone expanded `RunSpec.review_context` arrays and objects. Mutating the original `review_context.evidence_refs`, `review_context.review_response_ids`, `review_context.required_checks`, or `review_context.requested_changes` after a transition must not mutate the stored run session.
+
 - [ ] **Step 3: Run contract tests to verify failure**
 
 Run:
 
 ```bash
-pnpm test tests/contracts/plan-item-workflow.test.ts
+pnpm test tests/contracts/contracts.test.ts tests/contracts/plan-item-workflow.test.ts
 ```
 
 Expected: FAIL because schemas do not yet include the Wave 7 enums and projection fields.
@@ -364,6 +422,40 @@ export const planItemWorkflowRecoveryOptionSchema = z.object({
 
 Add the arrays to `planItemWorkflowPublicDtoSchema`.
 
+Add the four strict command body schemas in `packages/contracts/src/plan-item-workflow.ts` and export their inferred TypeScript types. In `apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts`, import and re-export these schemas instead of defining divergent local command body schemas.
+
+In `packages/contracts/src/executor.ts`, extend `reviewContextSchema` with strict canonical fix fields:
+
+```ts
+review_packet_id: z.string().min(1).optional(),
+review_packet_digest: z.string().min(1).optional(),
+previous_run_session_id: z.string().min(1).optional(),
+approved_spec_revision_id: z.string().min(1).optional(),
+approved_implementation_plan_revision_id: z.string().min(1).optional(),
+execution_package_id: z.string().min(1).optional(),
+execution_package_version: z.number().int().nonnegative().optional(),
+path_policy_digest: z.string().min(1).optional(),
+required_checks: z.array(requiredCheckSpecSchema).optional(),
+evidence_refs: z.array(z.object({
+  id: z.string().min(1),
+  ref_kind: z.enum(['github_comment_url', 'github_thread_url', 'markdown_excerpt', 'image_attachment', 'internal_artifact', 'check_log_summary']),
+  display_text: z.string().min(1),
+  digest: z.string().min(1),
+})).default([]),
+review_response_ids: z.array(z.string().min(1)).default([]),
+```
+
+Add `superRefine` rules so `latest_decision = changes_requested` requires all canonical fix fields and at least one requested change. This keeps the signed fix context and `RunSpec.review_context` structurally aligned.
+
+In `packages/domain/src/states.ts`, update `cloneRunSpec` so it deep-clones the expanded `review_context` fields:
+
+- `requested_changes`
+- `evidence_refs`
+- `review_response_ids`
+- `required_checks`
+
+Do not leave these arrays shared by reference.
+
 - [ ] **Step 8: Implement domain interfaces and helpers**
 
 In `packages/domain/src/plan-item-workflow.ts`, add interfaces:
@@ -437,7 +529,7 @@ Add fix-loop fields to `CodexRunExecutionWorkloadV1` and validator key sets.
 Run:
 
 ```bash
-pnpm test tests/contracts/plan-item-workflow.test.ts tests/domain/plan-item-workflow.test.ts tests/domain/codex-runtime.test.ts
+pnpm test tests/contracts/contracts.test.ts tests/contracts/plan-item-workflow.test.ts tests/domain/plan-item-workflow.test.ts tests/domain/codex-runtime.test.ts tests/domain/states.test.ts
 ```
 
 Expected: PASS.
@@ -445,7 +537,7 @@ Expected: PASS.
 - [ ] **Step 11: Commit Task 1**
 
 ```bash
-git add packages/contracts/src/plan-item-workflow.ts packages/domain/src/plan-item-workflow.ts packages/domain/src/codex-runtime.ts packages/domain/src/types.ts tests/contracts/plan-item-workflow.test.ts tests/domain/plan-item-workflow.test.ts tests/domain/codex-runtime.test.ts
+git add packages/contracts/src/executor.ts packages/contracts/src/plan-item-workflow.ts packages/domain/src/plan-item-workflow.ts packages/domain/src/codex-runtime.ts packages/domain/src/states.ts packages/domain/src/types.ts tests/contracts/contracts.test.ts tests/contracts/plan-item-workflow.test.ts tests/domain/plan-item-workflow.test.ts tests/domain/codex-runtime.test.ts tests/domain/states.test.ts
 git commit -m "feat: add Wave 7 workflow contracts"
 ```
 
@@ -966,31 +1058,25 @@ git commit -m "feat: add Wave 7 workflow helpers"
 Add tests for:
 
 - `waiting_for_input + running job + matching active leases` returns existing-job continuation and creates no new runtime job.
+- `waiting_for_input + running job + matching active leases` terminalizes the `continue_execution` queued action as `succeeded`.
 - `waiting_for_input + materializing job` rejects `workflow_execution_not_ready_for_input`.
 - `stalled + active expired heartbeat` blocks with `workflow_execution_writer_still_active`.
 - `stalled + terminal runtime job + released/expired run-worker lease` creates a relaunch runtime job for the same `RunSession`.
+- `stalled + terminal runtime job + released/expired run-worker lease` terminalizes the `continue_execution` queued action as `succeeded` after the replacement runtime job is durably created.
 - relaunch runtime job uses `resume_thread`, the same active `CodexSession.id`, and `expected_input_capsule_digest` from the latest safe capsule.
 - `resuming + active queued/accepted/materializing/running runtime job + matching leases` replays the current continuation command and creates no new runtime job.
+- `resuming + active queued/accepted/materializing/running runtime job + matching leases` terminalizes the replayed `continue_execution` queued action as `succeeded`.
 - `resuming + terminal runtime job + released/expired run-worker lease` creates a relaunch runtime job for the same `RunSession`.
+- `resuming + terminal runtime job + released/expired run-worker lease` terminalizes the `continue_execution` queued action as `succeeded` after the replacement runtime job is durably created.
 - `cancel_requested + queued/running turn or runtime job that can still terminalize` rejects `workflow_execution_cancel_pending`.
 - `cancel_requested + cancelled/stale terminal runtime job + released/expired/absent run-worker lease` rejects unless the request explicitly chooses recovery rather than accepting cancellation.
 - `cancel_requested` recovery requires both `cancel_recovery_decision` and `cancel_recovery_confirmation_phrase`.
+- explicit `cancel_requested` recovery relaunch terminalizes the `continue_execution` queued action as `succeeded` after the replacement runtime job is durably created.
 - any unlisted state rejects.
 
-- [ ] **Step 2: Add command DTO**
+- [ ] **Step 2: Re-export command DTO**
 
-In `plan-item-workflow.dto.ts`:
-
-```ts
-export const continueWorkflowExecutionBodySchema = z.object({
-  actor_id: nonEmpty,
-  idempotency_key: nonEmpty.optional(),
-  input_markdown: nonEmpty.optional(),
-  cancel_recovery_decision: z.enum(['recover_instead_of_accept_cancel']).optional(),
-  cancel_recovery_confirmation_phrase: z.literal('recover cancelled execution').optional(),
-  recovery_rationale_markdown: nonEmpty.optional(),
-}).strict();
-```
+In `plan-item-workflow.dto.ts`, re-export `continueWorkflowExecutionBodySchema` and `ContinueWorkflowExecutionBodyDto` from `@forgeloop/contracts`. Do not create a separate local Zod schema.
 
 - [ ] **Step 3: Add controller route**
 
@@ -1027,9 +1113,10 @@ For `existing_job_input`:
 1. Create or reuse `PlanItemWorkflowQueuedAction(kind = continue_execution)`.
 2. Persist `ExecutionContinuationLineage(continuation_kind = existing_job_input)`.
 3. Append trusted input/continuation event to the existing runtime job if the current app-server channel supports it.
-4. Append `ObjectEvent`.
-5. Keep workflow status `execution_running`.
-6. Return public projection.
+4. Mark the `continue_execution` queued action `succeeded` in the same transaction as the lineage/event write.
+5. Append command-specific `ObjectEvent`.
+6. Keep workflow status `execution_running`.
+7. Return public projection.
 
 If the channel cannot append input yet, fail closed with `workflow_execution_not_ready_for_input`.
 
@@ -1041,9 +1128,10 @@ For `replay_current_continuation`:
 2. Verify the current continuation action, runtime job, Codex session lease, run-worker lease, worker id, worker session digest, run session id, and Codex session turn id still match durable state.
 3. Create or reuse `PlanItemWorkflowQueuedAction(kind = continue_execution)` with the same continuation idempotency key.
 4. Persist `ExecutionContinuationLineage(continuation_kind = replay_current_continuation)` with no `new_runtime_job_id`.
-5. Append `ObjectEvent`.
-6. Keep workflow status `execution_running`.
-7. Return public projection.
+5. Mark the `continue_execution` queued action `succeeded` in the same transaction as the lineage/event write.
+6. Append command-specific `ObjectEvent`.
+7. Keep workflow status `execution_running`.
+8. Return public projection.
 
 This mode must never create a new `RunSession`, new `CodexRuntimeJob`, or replacement `CodexSessionTurn`.
 
@@ -1066,8 +1154,10 @@ For `relaunch_after_fencing`:
 4. Create a new `CodexSessionTurn(intent = continue_execution)`.
 5. Create a new `CodexRuntimeJob(target_kind = run_execution)` for the same `RunSession` with `codex_session_runtime_context.continuation.kind = resume_thread`, `expected_input_capsule_digest = active CodexSession.latest_capsule_digest`, and the latest capsule restore manifest.
 6. Persist `ExecutionContinuationLineage(continuation_kind = relaunch_after_fencing)`.
-7. If workflow is `blocked`, recover only through manual decision `recover` to `execution_running`.
-8. Return public projection.
+7. Mark the `continue_execution` queued action `succeeded` once the replacement runtime job is durably created and claimable; do not wait for execution terminalization to close the product command.
+8. Append command-specific `ObjectEvent`.
+9. If workflow is `blocked`, recover only through manual decision `recover` to `execution_running`.
+10. Return public projection.
 
 - [ ] **Step 9: Run Task 5 tests**
 
@@ -1103,6 +1193,7 @@ Assert:
 - allowed only in `code_review`.
 - rejects when another workflow action is queued or running for the active session.
 - rejects when the active Codex session is not idle and claimable.
+- rejects when latest capsule, memory bundle, or environment manifest is missing, unsafe, or digest-mismatched.
 - accepts current `ready` Review Packet.
 - accepts current `in_review` Review Packet.
 - accepts current completed `changes_requested` Review Packet.
@@ -1114,7 +1205,7 @@ Assert:
 - rejects cross-tenant, cross-workflow, cross-plan-item, cross-repo, and cross-credential attempts through the shared workflow authorization helper.
 - creates no `RunSession`.
 - creates no `PlanItemWorkflowTransition`.
-- appends `ObjectEvent`.
+- appends `ObjectEvent` only as part of queued-action terminalization after `ReviewResponse` persistence.
 
 - [ ] **Step 2: Write failing API tests for request fix**
 
@@ -1137,23 +1228,22 @@ Assert:
 
 - [ ] **Step 3: Add command DTOs**
 
-```ts
-export const respondToWorkflowReviewBodySchema = z.object({
-  actor_id: nonEmpty,
-  idempotency_key: nonEmpty.optional(),
-  expected_review_packet_id: nonEmpty,
-  expected_review_packet_digest: nonEmpty,
-  response_prompt_markdown: nonEmpty.optional(),
-}).strict();
+In `apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts`, import the strict command body schemas and inferred types from `@forgeloop/contracts`:
 
-export const requestWorkflowReviewFixBodySchema = z.object({
-  actor_id: nonEmpty,
-  idempotency_key: nonEmpty.optional(),
-  expected_review_packet_id: nonEmpty,
-  expected_review_packet_digest: nonEmpty,
-  rationale_markdown: nonEmpty.optional(),
-}).strict();
+```ts
+export {
+  continueWorkflowExecutionBodySchema,
+  respondToWorkflowReviewBodySchema,
+  requestWorkflowReviewFixBodySchema,
+  abandonWorkflowSessionBodySchema,
+  type ContinueWorkflowExecutionBodyDto,
+  type RespondToWorkflowReviewBodyDto,
+  type RequestWorkflowReviewFixBodyDto,
+  type AbandonWorkflowSessionBodyDto,
+} from '@forgeloop/contracts';
 ```
+
+Do not create separate local Zod schemas for these command bodies.
 
 - [ ] **Step 4: Add controller routes**
 
@@ -1169,7 +1259,7 @@ In service:
 1. Require `code_review`.
 2. Require no queued or running workflow action for the active session.
 3. Require idle, claimable active `CodexSession`.
-4. Require safe latest capsule.
+4. Require safe latest capsule, required memory bundle, and required environment manifest with digest matches.
 5. Load current Review Packet and evidence refs with `command_kind = respond_to_review`, request `expected_review_packet_id`, request `expected_review_packet_digest`, current execution package version, active approved Spec revision id, and active approved Implementation Plan revision id.
 6. Create or replay `PlanItemWorkflowQueuedAction(kind = respond_to_review)`.
 7. Create `CodexSessionTurn(intent = address_review_feedback)`.
@@ -1258,25 +1348,9 @@ Assert stale terminalization records Wave 7 fields and does not overwrite:
 - Review Packet.
 - ReviewResponse.
 
-- [ ] **Step 3: Add abandon DTO and route**
+- [ ] **Step 3: Re-export abandon DTO and add route**
 
-```ts
-export const abandonWorkflowSessionBodySchema = z.object({
-  actor_id: nonEmpty,
-  next_action: z.enum([
-    'respond_to_review',
-    'request_fix',
-    'start_execution',
-    'review_implementation_plan',
-    'generate_implementation_plan',
-    'review_spec',
-    'generate_spec',
-    'brainstorm',
-  ]),
-  confirmation_phrase: z.literal('abandon current Codex session'),
-  reason_markdown: nonEmpty,
-}).strict();
-```
+In `plan-item-workflow.dto.ts`, re-export `abandonWorkflowSessionBodySchema` and `AbandonWorkflowSessionBodyDto` from `@forgeloop/contracts`. Do not create a separate local Zod schema.
 
 - [ ] **Step 4: Implement abandon command**
 
@@ -1446,6 +1520,12 @@ Add deterministic dogfood test asserting report includes:
 - stale terminalization cannot overwrite newer continuation/fix attempt.
 - abandon/new-session requires explicit confirmation.
 
+Add real dogfood script tests asserting:
+
+- default run prints `SKIPPED_NON_ACCEPTANCE`.
+- acceptance env run must print `PASS` with same thread digest, monotonic capsule sequence, matching expected input capsule digests, read-only review response, and separate fix `RunSession`.
+- final verification rejects `SKIPPED_NON_ACCEPTANCE` when acceptance env is set.
+
 - [ ] **Step 2: Add package scripts**
 
 In `package.json`:
@@ -1477,6 +1557,21 @@ Default to:
 ```
 
 Require explicit env vars before making network/control-plane calls.
+
+When acceptance env vars are set, the real dogfood must execute and emit:
+
+```json
+{
+  "status": "PASS",
+  "same_thread_digest": true,
+  "monotonic_capsule_sequence": true,
+  "expected_input_capsule_digests_match": true,
+  "review_response_read_only": true,
+  "fix_attempt_new_run_session": true
+}
+```
+
+`SKIPPED_NON_ACCEPTANCE` is acceptable only for local non-acceptance runs. It must not satisfy the final acceptance gate.
 
 - [ ] **Step 5: Add no-baggage guard checks**
 
@@ -1511,6 +1606,7 @@ Expected:
 
 - Deterministic dogfood prints PASS report.
 - Real dogfood prints skipped report unless acceptance env is explicitly enabled.
+- With acceptance env enabled, real dogfood prints PASS and proves same thread digest, monotonic capsule sequence, expected input capsule digests, read-only review response, and separate fix `RunSession`.
 
 - [ ] **Step 8: Run full verification**
 
@@ -1519,10 +1615,11 @@ Run:
 ```bash
 pnpm test
 pnpm build
+FORGELOOP_WAVE7_REAL_DOGFOOD_ACCEPTANCE=1 pnpm dogfood:plan-item-execution-continuation-review-fix-loop:real
 git diff --check
 ```
 
-Expected: all commands exit 0.
+Expected: all commands exit 0. The acceptance-mode real dogfood must print `status = PASS`; `SKIPPED_NON_ACCEPTANCE` fails this final verification step.
 
 - [ ] **Step 9: Commit Task 9**
 
@@ -1546,6 +1643,8 @@ git commit -m "test: add Wave 7 workflow dogfood"
 - [ ] Stale terminalization cannot overwrite newer continuation/fix state.
 - [ ] Public DTO and UI expose no raw thread ids, capsule refs, memory refs, environment refs, local paths, credential payloads, worker ids, or lease tokens.
 - [ ] Forbidden legacy public routes fail closed.
+- [ ] Deterministic dogfood prints PASS.
+- [ ] Real-runtime dogfood prints PASS in acceptance mode and is not counted as passed when skipped.
 - [ ] `pnpm test` passes.
 - [ ] `pnpm build` passes.
 - [ ] `git diff --check` passes.
