@@ -491,6 +491,7 @@ const wave7EvidenceRef = (
   review_packet_id: fixture.reviewPacketId,
   workflow_id: fixture.workflowId,
   ref_kind: 'github_comment_url',
+  visibility: 'public',
   display_text: 'Reviewer comment',
   url: 'https://github.com/owner/repo/pull/7#discussion_r1',
   digest: `sha256:${'1'.repeat(64)}`,

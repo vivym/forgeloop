@@ -360,6 +360,12 @@ export function queuedActionLabel(kind: PlanItemWorkflowPublicDto['queued_action
       return 'Implementation Plan Doc generation';
     case 'revise_implementation_plan_doc':
       return 'Implementation Plan Doc revision';
+    case 'continue_execution':
+      return 'Execution continuation';
+    case 'respond_to_review':
+      return 'Review response';
+    case 'request_fix':
+      return 'Review fix request';
   }
 }
 

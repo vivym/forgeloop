@@ -16,11 +16,13 @@ import {
   codexCredentialPayloadDigest,
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
+  reviewPacketInputDigest,
   type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
   type CodexRuntimeCapsule,
   type CodexRuntimeJob,
   type CodexRuntimeProfileRevision,
+  type ReviewPacketEvidenceRef,
   type RunSession,
 } from '../../packages/domain/src';
 import {
@@ -371,6 +373,15 @@ describe('Plan Item Workflow API', () => {
       if (executionRuntimeJobId === undefined) throw new Error('Expected run execution runtime job');
       const executionRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: executionRuntimeJobId }))!;
       await terminalizeWorkflowExecutionForReviewSetup(repository, executionRuntimeJob, runSession, 'review-response-runtime-execution');
+      const reviewExecutionPackage = (await repository.getExecutionPackage(executionPackage.id))!;
+      await repository.saveRunSessionAttemptLineage({
+        run_session_id: runSession.id,
+        workflow_id: seeded.workflow.id,
+        codex_session_id: executionRuntimeJob.codex_session_id!,
+        attempt_kind: 'first_execution',
+        created_by_actor_id: seeded.ids.actorTech,
+        created_at: '2026-05-31T00:03:00.000Z',
+      });
       const reviewPacket = {
         id: stableUuid({ kind: 'review-response-runtime-packet', workflowId: seeded.workflow.id }),
         workflow_id: seeded.workflow.id,
@@ -395,7 +406,28 @@ describe('Plan Item Workflow API', () => {
       };
       await repository.saveReviewPacket({
         ...reviewPacket,
-        current_digest: codexCanonicalDigest(reviewPacket),
+        current_digest: reviewPacketInputDigest({
+          packet: reviewPacket,
+          evidence_refs: [],
+          previous_run_session_id: runSession.id,
+          execution_package_id: reviewExecutionPackage.id,
+          execution_package_version: reviewExecutionPackage.execution_package_version ?? reviewExecutionPackage.version,
+          approved_spec_revision_id: seeded.specRevisionId,
+          approved_implementation_plan_revision_id: seeded.implementationPlanRevisionId,
+        }),
+      });
+      await repository.saveReviewResponse({
+        id: stableUuid({ kind: 'review-response-runtime-existing-response', workflowId: seeded.workflow.id }),
+        workflow_id: seeded.workflow.id,
+        codex_session_id: executionRuntimeJob.codex_session_id!,
+        codex_session_turn_id: runSession.codex_session_turn_id,
+        review_packet_id: reviewPacket.id,
+        previous_run_session_id: runSession.id,
+        status: 'succeeded',
+        content_digest: codexCanonicalDigest('Existing review response.'),
+        created_by_actor_id: seeded.ids.actorTech,
+        created_at: '2026-05-31T00:04:00.000Z',
+        updated_at: '2026-05-31T00:04:00.000Z',
       });
       const codeReviewWorkflow = (await repository.getPlanItemWorkflow(seeded.workflow.id))!;
       const session = (await repository.getCodexSession(codeReviewWorkflow.active_codex_session_id!))!;
@@ -424,11 +456,52 @@ describe('Plan Item Workflow API', () => {
         created_at: '2026-05-31T00:03:00.000Z',
         updated_at: '2026-05-31T00:03:00.000Z',
       });
+      await repository.saveExecutionContinuationLineage({
+        id: stableUuid({ kind: 'review-response-runtime-continuation', workflowId: seeded.workflow.id }),
+        workflow_id: seeded.workflow.id,
+        run_session_id: runSession.id,
+        codex_session_id: executionRuntimeJob.codex_session_id!,
+        queued_action_id: action.id,
+        continuation_kind: 'relaunch_after_fencing',
+        previous_runtime_job_id: executionRuntimeJob.id,
+        new_runtime_job_id: stableUuid({ kind: 'review-response-runtime-continuation-runtime', workflowId: seeded.workflow.id }),
+        previous_capsule_digest: codexCanonicalDigest({ kind: 'previous-capsule', workflow_id: seeded.workflow.id }),
+        expected_input_capsule_digest: codexCanonicalDigest({ kind: 'expected-capsule', workflow_id: seeded.workflow.id }),
+        previous_codex_session_lease_id: stableUuid({ kind: 'previous-session-lease', workflowId: seeded.workflow.id }),
+        created_by_actor_id: seeded.ids.actorTech,
+        created_at: '2026-05-31T00:03:30.000Z',
+      });
 
       const runReviewResponseAction = await request(app.getHttpServer())
         .post(`/plan-item-workflows/${seeded.workflow.id}/actions/${action.id}/run`)
         .send({ actor_id: seeded.ids.actorTech });
       expect(runReviewResponseAction.status, JSON.stringify(runReviewResponseAction.body)).toBe(201);
+      expect(runReviewResponseAction.body.workflow.attempt_history).toEqual([
+        expect.objectContaining({
+          run_session_id: runSession.id,
+          attempt_kind: 'first_execution',
+          status: 'succeeded',
+          continuation_events: [
+            expect.objectContaining({
+              continuation_kind: 'relaunch_after_fencing',
+            }),
+          ],
+        }),
+      ]);
+      expect(runReviewResponseAction.body.workflow.latest_review_response).toMatchObject({
+        review_packet_id: reviewPacket.id,
+        previous_run_session_id: runSession.id,
+        status: 'succeeded',
+      });
+      expect(runReviewResponseAction.body.workflow.recovery_options).toContainEqual(
+        expect.objectContaining({
+          action_id: 'abandon_new_session',
+          enabled: false,
+          blocker_code: 'workflow_not_blocked',
+        }),
+      );
+      expect(JSON.stringify(runReviewResponseAction.body.workflow)).not.toContain(executionRuntimeJob.id);
+      expect(JSON.stringify(runReviewResponseAction.body.workflow)).not.toContain('previous-session-lease');
 
       const runningAction = (await repository.getPlanItemWorkflowQueuedAction({
         workflow_id: seeded.workflow.id,
@@ -463,6 +536,97 @@ describe('Plan Item Workflow API', () => {
         process.env.FORGELOOP_PLAN_ITEM_WORKFLOW_GENERATION_MODE = priorMode;
       }
     }
+  });
+
+  it('rejects review response scheduling when Review Packet evidence changes after the stored digest', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545468', {
+      evidenceRefs: ({ workflowId, reviewPacketId, actorId }) => [
+        {
+          id: stableUuid({ kind: 'review-response-runtime-evidence-stale', workflowId }),
+          review_packet_id: reviewPacketId,
+          workflow_id: workflowId,
+          ref_kind: 'github_comment_url',
+          visibility: 'public',
+          display_text: 'Reviewer comment added after digest.',
+          url: 'https://github.com/owner/repo/pull/7#discussion_r2',
+          digest: codexCanonicalDigest({ kind: 'review-response-runtime-evidence-stale', workflowId }),
+          created_by_actor_id: actorId,
+          created_at: '2026-05-31T00:03:15.000Z',
+        },
+      ],
+      currentDigest: ({ reviewPacket, runSession, executionPackage, seeded }) =>
+        reviewPacketInputDigest({
+          packet: reviewPacket,
+          evidence_refs: [],
+          previous_run_session_id: runSession.id,
+          execution_package_id: executionPackage.id,
+          execution_package_version: executionPackage.execution_package_version ?? executionPackage.version,
+          approved_spec_revision_id: seeded.specRevisionId,
+          approved_implementation_plan_revision_id: seeded.implementationPlanRevisionId,
+        }),
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/actions/${fixture.action.id}/run`)
+      .send({ actor_id: fixture.seeded.ids.actorTech })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_review_packet_digest_mismatch');
+      });
+  });
+
+  it('rejects private IPv6 Review Packet evidence URLs before scheduling review response runtime work', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545469', {
+      evidenceRefs: ({ workflowId, reviewPacketId, actorId }) => [
+        {
+          id: stableUuid({ kind: 'review-response-runtime-evidence-unsafe', workflowId }),
+          review_packet_id: reviewPacketId,
+          workflow_id: workflowId,
+          ref_kind: 'github_comment_url',
+          visibility: 'public',
+          display_text: 'Unsafe private IPv6 URL evidence.',
+          url: 'http://[fc00::1]/private-review',
+          digest: codexCanonicalDigest({ kind: 'review-response-runtime-evidence-unsafe', workflowId }),
+          created_by_actor_id: actorId,
+          created_at: '2026-05-31T00:03:15.000Z',
+        },
+      ],
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/actions/${fixture.action.id}/run`)
+      .send({ actor_id: fixture.seeded.ids.actorTech })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_review_packet_evidence_unsafe');
+      });
+  });
+
+  it('rejects runtime-owned internal artifact evidence refs before scheduling review response runtime work', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545470', {
+      evidenceRefs: ({ workflowId, reviewPacketId, actorId }) => [
+        {
+          id: stableUuid({ kind: 'review-response-runtime-evidence-runtime-ref', workflowId }),
+          review_packet_id: reviewPacketId,
+          workflow_id: workflowId,
+          ref_kind: 'internal_artifact',
+          visibility: 'internal',
+          display_text: 'Unsafe runtime-owned internal evidence.',
+          internal_object_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/generated_payload',
+          digest: codexCanonicalDigest({ kind: 'review-response-runtime-evidence-runtime-ref', workflowId }),
+          created_by_actor_id: actorId,
+          created_at: '2026-05-31T00:03:15.000Z',
+        },
+      ],
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/actions/${fixture.action.id}/run`)
+      .send({ actor_id: fixture.seeded.ids.actorTech })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_review_packet_evidence_unsafe');
+      });
   });
 
   it('running queued Spec Doc generation creates a draft revision and moves to review without execution', async () => {
@@ -1765,6 +1929,117 @@ async function runWorkflowToExecutionReady(app: INestApplication, idPrefix: stri
     .expect(201);
 
   return { ...seeded, boundaryRevisionId, specRevisionId, implementationPlanRevisionId };
+}
+
+async function seedReviewResponseRuntimeAction(
+  app: INestApplication,
+  idPrefix: string,
+  options: {
+    evidenceRefs?: (input: { workflowId: string; reviewPacketId: string; actorId: string }) => ReviewPacketEvidenceRef[];
+    currentDigest?: (input: {
+      reviewPacket: Parameters<typeof reviewPacketInputDigest>[0]['packet'];
+      evidenceRefs: ReviewPacketEvidenceRef[];
+      runSession: RunSession;
+      executionPackage: NonNullable<Awaited<ReturnType<DeliveryRepository['getExecutionPackage']>>>;
+      seeded: Awaited<ReturnType<typeof runWorkflowToExecutionReady>>;
+    }) => string;
+  } = {},
+) {
+  const seeded = await runWorkflowToExecutionReady(app, idPrefix);
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const readyWorkflow = (await repository.getPlanItemWorkflow(seeded.workflow.id))!;
+  const executionPackage = (await repository.getExecutionPackage(readyWorkflow.execution_package_id!))!;
+  await seedRunExecutionRuntime(repository, seeded.ids.project, executionPackage.repo_id, seeded.ids.actorTech);
+  const started = await request(app.getHttpServer())
+    .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+    .send({ actor_id: seeded.ids.actorTech, idempotency_key: `review-response-runtime-start-${idPrefix}` })
+    .expect(201);
+  const runSession = (await repository.getRunSession(started.body.execution_run_summary.run_session_id))!;
+  const executionRuntimeJobId = runSession.runtime_metadata?.remote_runtime_job_id;
+  if (executionRuntimeJobId === undefined) throw new Error('Expected run execution runtime job');
+  const executionRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: executionRuntimeJobId }))!;
+  await terminalizeWorkflowExecutionForReviewSetup(repository, executionRuntimeJob, runSession, `review-response-runtime-${idPrefix}`);
+  const reviewExecutionPackage = (await repository.getExecutionPackage(executionPackage.id))!;
+  await repository.saveRunSessionAttemptLineage({
+    run_session_id: runSession.id,
+    workflow_id: seeded.workflow.id,
+    codex_session_id: executionRuntimeJob.codex_session_id!,
+    attempt_kind: 'first_execution',
+    created_by_actor_id: seeded.ids.actorTech,
+    created_at: '2026-05-31T00:03:00.000Z',
+  });
+  const reviewPacket = {
+    id: stableUuid({ kind: 'review-response-runtime-packet', workflowId: seeded.workflow.id, idPrefix }),
+    workflow_id: seeded.workflow.id,
+    codex_session_id: executionRuntimeJob.codex_session_id,
+    codex_session_turn_id: runSession.codex_session_turn_id,
+    execution_package_id: executionPackage.id,
+    run_session_id: runSession.id,
+    reviewer_actor_id: seeded.ids.actorTech,
+    spec_revision_id: seeded.specRevisionId,
+    plan_revision_id: seeded.implementationPlanRevisionId,
+    status: 'completed' as const,
+    decision: 'changes_requested' as const,
+    summary: 'Review requests a response.',
+    changed_files: [],
+    check_result_summary: 'Checks passed.',
+    self_review: { status: 'done', summary: 'Self review complete.' },
+    risk_notes: ['Review response should be read-only.'],
+    requested_changes: [{ id: 'change-1', severity: 'medium', body: 'Explain the failed assumption.' }],
+    created_at: '2026-05-31T00:03:00.000Z',
+    updated_at: '2026-05-31T00:03:00.000Z',
+    completed_at: '2026-05-31T00:03:00.000Z',
+  };
+  const evidenceRefs =
+    options.evidenceRefs?.({
+      workflowId: seeded.workflow.id,
+      reviewPacketId: reviewPacket.id,
+      actorId: seeded.ids.actorTech,
+    }) ?? [];
+  await repository.saveReviewPacket({
+    ...reviewPacket,
+    current_digest:
+      options.currentDigest?.({ reviewPacket, evidenceRefs, runSession, executionPackage: reviewExecutionPackage, seeded }) ??
+      reviewPacketInputDigest({
+        packet: reviewPacket,
+        evidence_refs: evidenceRefs,
+        previous_run_session_id: runSession.id,
+        execution_package_id: reviewExecutionPackage.id,
+        execution_package_version: reviewExecutionPackage.execution_package_version ?? reviewExecutionPackage.version,
+        approved_spec_revision_id: seeded.specRevisionId,
+        approved_implementation_plan_revision_id: seeded.implementationPlanRevisionId,
+      }),
+  });
+  for (const evidenceRef of evidenceRefs) {
+    await repository.saveReviewPacketEvidenceRef(evidenceRef);
+  }
+  const codeReviewWorkflow = (await repository.getPlanItemWorkflow(seeded.workflow.id))!;
+  const session = (await repository.getCodexSession(codeReviewWorkflow.active_codex_session_id!))!;
+  const action = await repository.createOrReplayPlanItemWorkflowQueuedAction({
+    id: stableUuid({ kind: 'review-response-runtime-action', workflowId: seeded.workflow.id, idPrefix }),
+    workflow_id: seeded.workflow.id,
+    codex_session_id: session.id,
+    kind: 'respond_to_review',
+    status: 'queued',
+    expected_input_capsule_digest: session.latest_capsule_digest!,
+    context_preview_digest: codexCanonicalDigest({
+      workflow_id: codeReviewWorkflow.id,
+      codex_session_id: session.id,
+      development_plan_id: codeReviewWorkflow.development_plan_id,
+      development_plan_item_id: codeReviewWorkflow.development_plan_item_id,
+      workflow_status: codeReviewWorkflow.status,
+      active_boundary_summary_revision_id: codeReviewWorkflow.active_boundary_summary_revision_id ?? null,
+      active_spec_doc_revision_id: codeReviewWorkflow.active_spec_doc_revision_id ?? null,
+      active_implementation_plan_doc_revision_id: codeReviewWorkflow.active_implementation_plan_doc_revision_id ?? null,
+      latest_capsule_digest: session.latest_capsule_digest ?? null,
+      action_kind: 'respond_to_review',
+    }),
+    idempotency_key: codexCanonicalDigest({ kind: 'review-response-runtime-idempotency', workflow_id: seeded.workflow.id, idPrefix }),
+    created_by_actor_id: seeded.ids.actorTech,
+    created_at: '2026-05-31T00:03:00.000Z',
+    updated_at: '2026-05-31T00:03:00.000Z',
+  });
+  return { seeded, repository, executionPackage, runSession, reviewPacket, evidenceRefs, action };
 }
 
 async function claimStartupActionForMessageTest(repository: DeliveryRepository, workflowId: string) {

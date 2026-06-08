@@ -33,6 +33,7 @@ CREATE TABLE "review_packet_evidence_refs" (
 	"review_packet_id" uuid NOT NULL,
 	"workflow_id" uuid NOT NULL,
 	"ref_kind" text NOT NULL,
+	"visibility" text NOT NULL,
 	"display_text" text NOT NULL,
 	"url" text,
 	"internal_object_ref" text,

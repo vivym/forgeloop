@@ -7,6 +7,7 @@ import {
   assertWorkflowMessageAllowed,
   buildPlanItemWorkflowQueuedActionIdempotencyKey,
   codexSessionPublicProjection,
+  determineAbandonNewSessionFallback,
   isSameStatusWorkflowEventActionKind,
   mapQueuedActionKindToTurnIntent,
   planItemWorkflowPublicProjection,
@@ -345,6 +346,50 @@ describe('plan item workflow domain', () => {
         manual_decision_kind: 'abandon_new_session',
       }),
     ).toThrow(/workflow_invalid_transition/);
+  });
+
+  it.each([
+    [
+      'current Review Packet',
+      { has_current_review_packet: true },
+      { target_status: 'code_review', expected_next_action: 'review_current_packet' },
+    ],
+    [
+      'valid readiness',
+      { has_valid_execution_readiness: true },
+      { target_status: 'execution_ready', expected_next_action: 'start_execution' },
+    ],
+    [
+      'unapproved Implementation Plan Doc',
+      { has_unapproved_implementation_plan_doc: true },
+      { target_status: 'implementation_plan_review', expected_next_action: 'review_implementation_plan' },
+    ],
+    [
+      'approved Spec Doc only',
+      { has_approved_spec_doc: true },
+      {
+        target_status: 'implementation_plan_generation_queued',
+        expected_next_action: 'generate_implementation_plan_doc',
+        queued_action_kind: 'generate_implementation_plan_doc',
+      },
+    ],
+    [
+      'unapproved Spec Doc',
+      { has_unapproved_spec_doc: true },
+      { target_status: 'spec_review', expected_next_action: 'review_spec' },
+    ],
+    [
+      'approved Boundary Summary only',
+      { has_approved_boundary_summary: true },
+      { target_status: 'spec_generation_queued', expected_next_action: 'generate_spec_doc', queued_action_kind: 'generate_spec_doc' },
+    ],
+    [
+      'no Boundary Summary',
+      {},
+      { target_status: 'brainstorming', expected_next_action: 'continue_brainstorming', queued_action_kind: 'continue_brainstorming' },
+    ],
+  ] as const)('deterministically maps abandon_new_session fallback for %s', (_label, input, expected) => {
+    expect(determineAbandonNewSessionFallback(input)).toEqual(expected);
   });
 
   it('projects attempt history and recovery options without raw runtime refs', () => {

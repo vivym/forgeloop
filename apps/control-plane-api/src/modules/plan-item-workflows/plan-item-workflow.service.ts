@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
+  assertReviewPacketEvidenceRefsAreSafe,
   assertPlanItemWorkflowTransitionAllowed,
   assertQueuedActionCanRun,
   assertWorkflowMessageAllowed,
@@ -14,6 +15,7 @@ import {
   codexWorkspaceAcquisitionDigest,
   mapQueuedActionKindToTurnIntent,
   planItemWorkflowPublicProjection,
+  reviewPacketInputDigest,
   transitionRunSession,
   type BrainstormingSession,
   type BoundaryAnswer,
@@ -36,6 +38,8 @@ import {
   type Spec,
   type PlanItemWorkflow,
   type PlanItemWorkflowQueuedAction,
+  type ReviewPacket,
+  type ReviewPacketEvidenceRef,
   type SpecRevision,
   type WorkflowPersistenceRefs,
   type WorkflowManualDecision,
@@ -54,6 +58,8 @@ import {
 import type { RequiredCheckSpec, RunSpec } from '@forgeloop/contracts';
 import type {
   PlanItemWorkflowExecutionRunSummary,
+  PlanItemWorkflowAttemptHistory,
+  PlanItemWorkflowRecoveryOption,
   PlanItemWorkflowPublicDto,
   PlanItemWorkflowReadiness,
   PlanItemWorkflowQueuedActionKind,
@@ -245,7 +251,7 @@ export class PlanItemWorkflowService {
           actor_id: dto.actor_id,
         });
 
-        return this.toPublicWorkflowDto(updated, created.session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, created.session, [queuedAction]);
       }),
     );
   }
@@ -389,7 +395,7 @@ export class PlanItemWorkflowService {
           message_id: messageId,
           queued_action_id: queuedAction.id,
         });
-        return this.toPublicWorkflowDto(workflow, session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [queuedAction]);
       }),
     );
   }
@@ -411,7 +417,7 @@ export class PlanItemWorkflowService {
           );
         }
         if (action.status !== 'queued') {
-          const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [action]);
+          const publicWorkflow = await this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [action]);
           return { workflow: publicWorkflow, queued_action: this.publicQueuedAction(publicWorkflow, action.id) };
         }
         assertQueuedActionCanRun({
@@ -443,7 +449,7 @@ export class PlanItemWorkflowService {
           });
           if (actionWithTurn.kind === 'respond_to_review' || this.shouldUseRuntimeGenerationBridge()) {
             await this.scheduleQueuedActionRuntimeGeneration(repository, workflow, session, actionWithTurn, turn, input.actor_id);
-            const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [actionWithTurn]);
+            const publicWorkflow = await this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [actionWithTurn]);
             return {
               workflow: publicWorkflow,
               queued_action: this.publicQueuedAction(publicWorkflow, actionWithTurn.id),
@@ -457,13 +463,18 @@ export class PlanItemWorkflowService {
             turn,
             input.actor_id,
           );
-          const publicWorkflow = this.toPublicWorkflowDto(handled.workflow, handled.session, handled.queued_actions ?? [handled.action]);
+          const publicWorkflow = await this.toPublicWorkflowDtoWithRepository(
+            repository,
+            handled.workflow,
+            handled.session,
+            handled.queued_actions ?? [handled.action],
+          );
           return {
             workflow: publicWorkflow,
             queued_action: this.publicQueuedAction(publicWorkflow, handled.action.id),
           };
         }
-        const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [queuedAction]);
+        const publicWorkflow = await this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [queuedAction]);
         return { workflow: publicWorkflow, queued_action: this.publicQueuedAction(publicWorkflow, queuedAction.id) };
       }),
     );
@@ -598,26 +609,18 @@ export class PlanItemWorkflowService {
       workflow.active_implementation_plan_doc_revision_id,
       'Workflow approved Implementation Plan Doc is missing',
     );
-    const packet = await repository.findCurrentReviewPacketForWorkflow({
-      workflow_id: workflow.id,
-      execution_package_id: executionPackage.id,
-      execution_package_version: packageVersion,
+    const currentReviewPacket = await this.requireCurrentReviewPacketForWorkflow(repository, workflow, {
       previous_run_session_id: previousRunSessionId,
+      execution_package_version: packageVersion,
       approved_spec_revision_id: approvedSpecRevisionId,
       approved_implementation_plan_revision_id: approvedPlanRevisionId,
-      allowed_statuses: ['ready', 'in_review', 'completed'],
-      allowed_completed_decisions: ['changes_requested'],
+      command_kind: 'respond_to_review',
     });
-    if (packet === undefined) {
-      throw new DomainError('workflow_review_packet_not_current', 'Current Review Packet is missing');
-    }
-    const evidenceRefs = await repository.listReviewPacketEvidenceRefs(packet.id);
-    const digest = packet.current_digest ?? codexCanonicalDigest(packet);
     const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
     const contextManifest = await this.ensureDeterministicContextManifest(repository, workflow, item, action.created_by_actor_id);
     return {
-      review_packet_id: packet.id,
-      review_packet_digest: digest,
+      review_packet_id: currentReviewPacket.packet.id,
+      review_packet_digest: currentReviewPacket.digest,
       previous_run_session_id: previousRunSessionId,
       context_manifest: contextManifest,
       project_id: executionPackage.project_id,
@@ -626,17 +629,17 @@ export class PlanItemWorkflowService {
         schema_version: 'review_response_context.v1',
         plan_item_workflow_id: workflow.id,
         plan_item_workflow_action_id: action.id,
-        review_packet_id: packet.id,
-        review_packet_digest: digest,
+        review_packet_id: currentReviewPacket.packet.id,
+        review_packet_digest: currentReviewPacket.digest,
         previous_run_session_id: previousRunSessionId,
         execution_package_id: executionPackage.id,
         execution_package_version: packageVersion,
         approved_spec_revision_id: approvedSpecRevisionId,
         approved_implementation_plan_revision_id: approvedPlanRevisionId,
-        changed_files: packet.changed_files,
-        check_result_summary: packet.check_result_summary,
-        risk_notes: packet.risk_notes,
-        evidence_refs: evidenceRefs.map((ref) => ({
+        changed_files: currentReviewPacket.packet.changed_files,
+        check_result_summary: currentReviewPacket.packet.check_result_summary,
+        risk_notes: currentReviewPacket.packet.risk_notes,
+        evidence_refs: currentReviewPacket.evidenceRefs.map((ref) => ({
           id: ref.id,
           ref_kind: ref.ref_kind,
           display_text: ref.display_text,
@@ -646,6 +649,54 @@ export class PlanItemWorkflowService {
         })),
       },
     };
+  }
+
+  private async requireCurrentReviewPacketForWorkflow(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    input: {
+      previous_run_session_id: string;
+      execution_package_version: number;
+      approved_spec_revision_id: string;
+      approved_implementation_plan_revision_id: string;
+      expected_review_packet_id?: string;
+      expected_review_packet_digest?: string;
+      command_kind: 'respond_to_review' | 'request_fix';
+    },
+  ): Promise<{ packet: ReviewPacket; evidenceRefs: ReviewPacketEvidenceRef[]; digest: string }> {
+    const executionPackageId = this.requireString(workflow.execution_package_id, 'Workflow execution package is missing');
+    const packet = await repository.findCurrentReviewPacketForWorkflow({
+      workflow_id: workflow.id,
+      execution_package_id: executionPackageId,
+      execution_package_version: input.execution_package_version,
+      previous_run_session_id: input.previous_run_session_id,
+      approved_spec_revision_id: input.approved_spec_revision_id,
+      approved_implementation_plan_revision_id: input.approved_implementation_plan_revision_id,
+      ...(input.expected_review_packet_id === undefined ? {} : { expected_review_packet_id: input.expected_review_packet_id }),
+      allowed_statuses: input.command_kind === 'respond_to_review' ? ['ready', 'in_review', 'completed'] : ['completed'],
+      allowed_completed_decisions: ['changes_requested'],
+    });
+    if (packet === undefined) {
+      throw new DomainError('workflow_review_packet_not_current', 'Current Review Packet is missing');
+    }
+    const evidenceRefs = await repository.listReviewPacketEvidenceRefs(packet.id);
+    assertReviewPacketEvidenceRefsAreSafe(packet, evidenceRefs);
+    const digest = reviewPacketInputDigest({
+      packet,
+      evidence_refs: evidenceRefs,
+      previous_run_session_id: input.previous_run_session_id,
+      execution_package_id: executionPackageId,
+      execution_package_version: input.execution_package_version,
+      approved_spec_revision_id: input.approved_spec_revision_id,
+      approved_implementation_plan_revision_id: input.approved_implementation_plan_revision_id,
+    });
+    if (packet.current_digest !== undefined && packet.current_digest !== digest) {
+      throw new DomainError('workflow_review_packet_digest_mismatch', 'Current Review Packet stored digest is stale');
+    }
+    if (input.expected_review_packet_digest !== undefined && digest !== input.expected_review_packet_digest) {
+      throw new DomainError('workflow_review_packet_digest_mismatch', 'Current Review Packet digest does not match request');
+    }
+    return { packet, evidenceRefs, digest };
   }
 
   private blockQueuedWorkflowAction(
@@ -1375,7 +1426,7 @@ export class PlanItemWorkflowService {
           active_implementation_plan_doc_revision_id: implementationPlanRevision.id,
           ...(executionPackage === undefined ? {} : { execution_package_id: executionPackage.id }),
         });
-        return this.toPublicWorkflowDto(updated, session, [], {
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, session, [], {
           readiness: this.readinessProjectionForRecord(readiness),
         });
       }),
@@ -1399,7 +1450,7 @@ export class PlanItemWorkflowService {
         if (workflow.status === 'execution_running') {
           return {
             status_code: 200,
-            workflow: this.toPublicWorkflowDto(workflow, session, [], {
+            workflow: await this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [], {
               execution_run_summary: await this.requireExistingExecutionRunSummary(repository, workflow, session),
             }),
           };
@@ -1789,7 +1840,7 @@ export class PlanItemWorkflowService {
         const runningSession = await repository.getCodexSession(session.id);
         return {
           status_code: 201,
-          workflow: this.toPublicWorkflowDto(updated, runningSession ?? codexLease.session, [], {
+          workflow: await this.toPublicWorkflowDtoWithRepository(repository, updated, runningSession ?? codexLease.session, [], {
             execution_run_summary: this.executionRunSummary({
               workflow: updated,
               session: runningSession ?? codexLease.session,
@@ -2421,7 +2472,7 @@ export class PlanItemWorkflowService {
           actor_id: input.actor_id,
           source_revision_id: revision.id,
         });
-        return this.toPublicWorkflowDto(updated, session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, session, [queuedAction]);
       }),
     );
   }
@@ -2483,7 +2534,7 @@ export class PlanItemWorkflowService {
           actor_id: input.actor_id,
           source_revision_id: revisionId,
         });
-        return this.toPublicWorkflowDto(updated, session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, session, [queuedAction]);
       }),
     );
   }
@@ -2534,7 +2585,7 @@ export class PlanItemWorkflowService {
           );
         }
         const session = await this.requireActiveSession(repository, workflow);
-        return this.toPublicWorkflowDto(workflow, session, [], {
+        return this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [], {
           readiness: this.notEvaluatedReadiness(true),
         });
       }),
@@ -2595,7 +2646,7 @@ export class PlanItemWorkflowService {
           source_revision_id: revisionId,
           change_request_id: changeRequestId,
         });
-        return this.toPublicWorkflowDto(updated, session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, session, [queuedAction]);
       }),
     );
   }
@@ -3001,7 +3052,7 @@ export class PlanItemWorkflowService {
     input: ManualDecisionTransitionInput,
   ) {
     const { updated, session } = await this.performManualDecisionTransitionRecordWithRepository(repository, workflow, input);
-    return this.toPublicWorkflowDto(updated, session);
+    return this.toPublicWorkflowDtoWithRepository(repository, updated, session);
   }
 
   private async performManualDecisionTransitionRecordWithRepository(
@@ -4228,6 +4279,9 @@ export class PlanItemWorkflowService {
     options: {
       readiness?: PlanItemWorkflowReadiness;
       execution_run_summary?: PlanItemWorkflowExecutionRunSummary;
+      attempt_history?: PlanItemWorkflowAttemptHistory[];
+      latest_review_response?: PlanItemWorkflowPublicDto['latest_review_response'];
+      recovery_options?: PlanItemWorkflowRecoveryOption[];
       blockers?: Parameters<typeof planItemWorkflowPublicProjection>[0]['blockers'];
     } = {},
   ) {
@@ -4250,8 +4304,129 @@ export class PlanItemWorkflowService {
       },
       ...(options.readiness === undefined ? {} : { readiness: options.readiness }),
       ...(options.execution_run_summary === undefined ? {} : { execution_run_summary: options.execution_run_summary }),
+      ...(options.attempt_history === undefined ? {} : { attempt_history: options.attempt_history }),
+      ...(options.latest_review_response === undefined ? {} : { latest_review_response: options.latest_review_response }),
+      ...(options.recovery_options === undefined ? {} : { recovery_options: options.recovery_options }),
       ...(options.blockers === undefined ? {} : { blockers: options.blockers }),
     });
+  }
+
+  private async toPublicWorkflowDtoWithRepository(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    queuedActions: readonly PlanItemWorkflowQueuedAction[] = [],
+    options: {
+      readiness?: PlanItemWorkflowReadiness;
+      execution_run_summary?: PlanItemWorkflowExecutionRunSummary;
+      blockers?: Parameters<typeof planItemWorkflowPublicProjection>[0]['blockers'];
+    } = {},
+  ): Promise<PlanItemWorkflowPublicDto> {
+    const [attemptHistory, latestReviewResponse] = await Promise.all([
+      this.workflowAttemptHistory(repository, workflow.id),
+      this.workflowLatestReviewResponse(repository, workflow.id),
+    ]);
+    return this.toPublicWorkflowDto(workflow, session, queuedActions, {
+      ...options,
+      attempt_history: attemptHistory,
+      ...(latestReviewResponse === undefined ? {} : { latest_review_response: latestReviewResponse }),
+      recovery_options: this.workflowRecoveryOptions(workflow),
+    });
+  }
+
+  private async workflowAttemptHistory(
+    repository: DeliveryRepository,
+    workflowId: string,
+  ): Promise<PlanItemWorkflowAttemptHistory[]> {
+    const [attempts, continuations] = await Promise.all([
+      repository.listRunSessionAttemptLineage(workflowId),
+      repository.listExecutionContinuationLineage(workflowId),
+    ]);
+    return Promise.all(
+      attempts.map(async (attempt) => {
+        const runSession = await repository.getRunSession(attempt.run_session_id);
+        return {
+          run_session_id: attempt.run_session_id,
+          attempt_kind: attempt.attempt_kind,
+          ...(attempt.previous_run_session_id === undefined ? {} : { previous_run_session_id: attempt.previous_run_session_id }),
+          ...(attempt.previous_review_packet_id === undefined ? {} : { previous_review_packet_id: attempt.previous_review_packet_id }),
+          status: runSession?.status ?? 'unknown',
+          continuation_events: continuations
+            .filter((continuation) => continuation.run_session_id === attempt.run_session_id)
+            .map((continuation) => ({
+              queued_action_id: continuation.queued_action_id,
+              continuation_kind: continuation.continuation_kind,
+              created_at: continuation.created_at,
+            })),
+          created_at: attempt.created_at,
+          updated_at: runSession?.updated_at ?? attempt.created_at,
+        };
+      }),
+    );
+  }
+
+  private async workflowLatestReviewResponse(
+    repository: DeliveryRepository,
+    workflowId: string,
+  ): Promise<PlanItemWorkflowPublicDto['latest_review_response'] | undefined> {
+    const response = await repository.getLatestReviewResponseForWorkflow(workflowId);
+    if (response === undefined) {
+      return undefined;
+    }
+    return {
+      id: response.id,
+      review_packet_id: response.review_packet_id,
+      previous_run_session_id: response.previous_run_session_id,
+      status: response.status,
+      created_at: response.created_at,
+    };
+  }
+
+  private workflowRecoveryOptions(workflow: PlanItemWorkflow): PlanItemWorkflowRecoveryOption[] {
+    const canContinueSameSession = workflow.status === 'execution_running';
+    const canAbandonNewSession = workflow.status === 'blocked';
+    return [
+      {
+        action_id: 'continue_same_session',
+        enabled: canContinueSameSession,
+        ...(canContinueSameSession
+          ? {}
+          : {
+              blocker_code: 'workflow_execution_not_active',
+              warning_copy: 'There is no active interrupted execution to continue.',
+            }),
+        required_confirmation_kind: 'none',
+      },
+      {
+        action_id: 'abandon_new_session',
+        enabled: canAbandonNewSession,
+        ...(canAbandonNewSession
+          ? {}
+          : {
+              blocker_code: 'workflow_not_blocked',
+              warning_copy: 'Abandon and start a new session is only available for blocked workflows.',
+            }),
+        required_confirmation_kind: 'typed_phrase',
+      },
+      {
+        action_id: 'archive_workflow',
+        enabled: workflow.status !== 'archived',
+        ...(workflow.status === 'archived'
+          ? {
+              blocker_code: 'workflow_already_archived',
+              warning_copy: 'The workflow is already archived.',
+            }
+          : {}),
+        required_confirmation_kind: 'typed_phrase',
+      },
+      {
+        action_id: 'fork_unavailable',
+        enabled: false,
+        blocker_code: 'workflow_fork_not_implemented',
+        warning_copy: 'Fork recovery is outside this wave.',
+        required_confirmation_kind: 'none',
+      },
+    ];
   }
 
   private publicQueuedAction(workflow: PlanItemWorkflowPublicDto, actionId: string) {

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isIP } from 'node:net';
 import {
   planItemWorkflowAttemptHistorySchema,
   planItemWorkflowLatestReviewResponseSchema,
@@ -18,7 +19,9 @@ import type {
   WorkflowManualDecisionKind,
   WorkflowTransitionEvidenceObjectType,
 } from '@forgeloop/contracts';
-import { DomainError, type IsoDateTime } from './types.js';
+import { codexCanonicalDigest } from './codex-runtime.js';
+import { parseInternalArtifactRef } from './internal-artifacts.js';
+import { DomainError, type IsoDateTime, type ReviewPacket } from './types.js';
 
 export const planItemWorkflowStatusValues = [
   'not_started',
@@ -155,6 +158,7 @@ export interface ReviewPacketEvidenceRef {
     | 'image_attachment'
     | 'internal_artifact'
     | 'check_log_summary';
+  visibility: 'public' | 'internal';
   display_text: string;
   url?: string;
   internal_object_ref?: string;
@@ -162,6 +166,215 @@ export interface ReviewPacketEvidenceRef {
   created_by_actor_id: string;
   created_at: IsoDateTime;
 }
+
+export const reviewPacketInputDigest = (input: {
+  packet: ReviewPacket;
+  evidence_refs: readonly ReviewPacketEvidenceRef[];
+  previous_run_session_id: string;
+  execution_package_id: string;
+  execution_package_version: number;
+  approved_spec_revision_id: string;
+  approved_implementation_plan_revision_id: string;
+}): string => {
+  const { current_digest: _currentDigest, superseded_by_review_packet_id: _supersededByReviewPacketId, ...packet } = input.packet;
+  return codexCanonicalDigest({
+    schema_version: 'review_packet_input_digest.v1',
+    packet,
+    evidence_refs: [...input.evidence_refs]
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
+      .map((ref) => ({
+        id: ref.id,
+        review_packet_id: ref.review_packet_id,
+        workflow_id: ref.workflow_id,
+        ref_kind: ref.ref_kind,
+        visibility: ref.visibility,
+        display_text: ref.display_text,
+        ...(ref.url === undefined ? {} : { url: ref.url }),
+        ...(ref.internal_object_ref === undefined ? {} : { internal_object_ref: ref.internal_object_ref }),
+        digest: ref.digest,
+      })),
+    previous_run_session_id: input.previous_run_session_id,
+    execution_package_id: input.execution_package_id,
+    execution_package_version: input.execution_package_version,
+    approved_spec_revision_id: input.approved_spec_revision_id,
+    approved_implementation_plan_revision_id: input.approved_implementation_plan_revision_id,
+  });
+};
+
+export const assertReviewPacketEvidenceRefsAreSafe = (
+  packet: ReviewPacket,
+  evidenceRefs: readonly ReviewPacketEvidenceRef[],
+): void => {
+  const digestPattern = /^sha256:[a-f0-9]{64}$/;
+  for (const ref of evidenceRefs) {
+    if (
+      ref.review_packet_id !== packet.id ||
+      ref.workflow_id !== packet.workflow_id ||
+      !digestPattern.test(ref.digest) ||
+      ref.display_text.trim().length === 0 ||
+      (ref.visibility !== 'public' && ref.visibility !== 'internal')
+    ) {
+      throw new DomainError('workflow_review_packet_evidence_unsafe', 'Review Packet evidence ref is not safe for this workflow');
+    }
+    if (!reviewPacketEvidenceRefShapeIsSafe(ref)) {
+      throw new DomainError('workflow_review_packet_evidence_unsafe', 'Review Packet evidence ref kind does not match its safe ref shape');
+    }
+    if (ref.url !== undefined && !publicEvidenceUrlIsSafe(ref.url)) {
+      throw new DomainError('workflow_review_packet_evidence_unsafe', 'Review Packet evidence URL must be public http(s)');
+    }
+    if (ref.internal_object_ref !== undefined && !internalArtifactEvidenceRefIsSafe(ref.internal_object_ref, packet)) {
+      throw new DomainError('workflow_review_packet_evidence_unsafe', 'Review Packet evidence internal ref must be canonical evidence');
+    }
+  }
+};
+
+const reviewPacketEvidenceRefShapeIsSafe = (ref: ReviewPacketEvidenceRef): boolean => {
+  const hasUrl = ref.url !== undefined;
+  const hasInternalRef = ref.internal_object_ref !== undefined;
+  switch (ref.ref_kind) {
+    case 'github_comment_url':
+    case 'github_thread_url':
+      return ref.visibility === 'public' && hasUrl && !hasInternalRef;
+    case 'image_attachment':
+      return ref.visibility === 'public' && hasUrl && !hasInternalRef;
+    case 'markdown_excerpt':
+    case 'check_log_summary':
+      return ref.visibility === 'public' && !hasUrl && !hasInternalRef;
+    case 'internal_artifact':
+      return ref.visibility === 'internal' && !hasUrl && hasInternalRef;
+  }
+};
+
+const publicEvidenceUrlIsSafe = (rawUrl: string): boolean => {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (url.username !== '' || url.password !== '' || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
+    return false;
+  }
+  const host = normalizeEvidenceUrlHostname(url.hostname);
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || ipHostIsUnsafeForPublicEvidence(host)) {
+    return false;
+  }
+  return true;
+};
+
+const normalizeEvidenceUrlHostname = (hostname: string): string => {
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+};
+
+const ipHostIsUnsafeForPublicEvidence = (host: string): boolean => {
+  const version = isIP(host);
+  if (version === 4) {
+    return !ipv4HostIsPublic(host);
+  }
+  if (version === 6) {
+    return !ipv6HostIsPublic(host);
+  }
+  return false;
+};
+
+const ipv4HostIsPublic = (host: string): boolean => {
+  const parts = host.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [first, second] = parts as [number, number, number, number];
+  if (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    first >= 224 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19))
+  ) {
+    return false;
+  }
+  return true;
+};
+
+const ipv6HostIsPublic = (host: string): boolean => {
+  const mappedIpv4 = ipv4FromMappedIpv6(host);
+  if (mappedIpv4 !== undefined) {
+    return ipv4HostIsPublic(mappedIpv4);
+  }
+  if (host === '::' || host === '::1') {
+    return false;
+  }
+  const firstHextet = firstIpv6Hextet(host);
+  if (firstHextet === undefined) {
+    return false;
+  }
+  return (
+    (firstHextet & 0xfe00) !== 0xfc00 &&
+    (firstHextet & 0xffc0) !== 0xfe80 &&
+    (firstHextet & 0xffc0) !== 0xfec0 &&
+    (firstHextet & 0xff00) !== 0xff00
+  );
+};
+
+const firstIpv6Hextet = (host: string): number | undefined => {
+  const first = host.split(':').find((segment) => segment.length > 0) ?? '0';
+  const parsed = Number.parseInt(first, 16);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 0xffff ? parsed : undefined;
+};
+
+const ipv4FromMappedIpv6 = (host: string): string | undefined => {
+  if (!host.startsWith('::ffff:')) {
+    return undefined;
+  }
+  const suffix = host.slice('::ffff:'.length);
+  if (isIP(suffix) === 4) {
+    return suffix;
+  }
+  const groups = suffix.split(':').filter((group) => group.length > 0);
+  if (groups.length !== 2) {
+    return undefined;
+  }
+  const [high, low] = groups.map((group) => Number.parseInt(group, 16));
+  if (
+    high === undefined ||
+    low === undefined ||
+    !Number.isInteger(high) ||
+    !Number.isInteger(low) ||
+    high < 0 ||
+    high > 0xffff ||
+    low < 0 ||
+    low > 0xffff
+  ) {
+    return undefined;
+  }
+  return `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
+};
+
+const internalArtifactEvidenceRefIsSafe = (ref: string, packet: ReviewPacket): boolean => {
+  let parsed: ReturnType<typeof parseInternalArtifactRef>;
+  try {
+    parsed = parseInternalArtifactRef(ref);
+  } catch {
+    return false;
+  }
+  if (parsed.owner_type === 'review_packet') {
+    return parsed.owner_id === packet.id && ['review_packet', 'logs', 'raw_metadata', 'generated_payload'].includes(parsed.kind);
+  }
+  if (parsed.owner_type === 'run_session') {
+    return parsed.owner_id === packet.run_session_id && ['logs', 'raw_metadata', 'generated_payload', 'execution_patch'].includes(parsed.kind);
+  }
+  if (parsed.owner_type === 'execution_package') {
+    return (
+      parsed.owner_id === packet.execution_package_id &&
+      ['review_packet', 'logs', 'raw_metadata', 'generated_payload', 'execution_patch'].includes(parsed.kind)
+    );
+  }
+  return false;
+};
 
 export interface ReviewResponse {
   id: string;
@@ -462,6 +675,50 @@ export const assertAbandonNewSessionTransitionAllowed = (input: {
     'workflow_invalid_transition',
     `workflow_invalid_transition: Invalid abandon_new_session transition ${input.from_status}->${input.to_status}`,
   );
+};
+
+export const determineAbandonNewSessionFallback = (input: {
+  has_current_review_packet?: boolean;
+  has_valid_execution_readiness?: boolean;
+  has_unapproved_implementation_plan_doc?: boolean;
+  has_approved_spec_doc?: boolean;
+  has_unapproved_spec_doc?: boolean;
+  has_approved_boundary_summary?: boolean;
+}): {
+  target_status: PlanItemWorkflowStatus;
+  expected_next_action:
+    | 'review_current_packet'
+    | 'start_execution'
+    | 'review_implementation_plan'
+    | 'generate_implementation_plan_doc'
+    | 'review_spec'
+    | 'generate_spec_doc'
+    | 'continue_brainstorming';
+  queued_action_kind?: PlanItemWorkflowQueuedActionKind;
+} => {
+  if (input.has_current_review_packet === true) {
+    return { target_status: 'code_review', expected_next_action: 'review_current_packet' };
+  }
+  if (input.has_valid_execution_readiness === true) {
+    return { target_status: 'execution_ready', expected_next_action: 'start_execution' };
+  }
+  if (input.has_unapproved_implementation_plan_doc === true) {
+    return { target_status: 'implementation_plan_review', expected_next_action: 'review_implementation_plan' };
+  }
+  if (input.has_approved_spec_doc === true) {
+    return {
+      target_status: 'implementation_plan_generation_queued',
+      expected_next_action: 'generate_implementation_plan_doc',
+      queued_action_kind: 'generate_implementation_plan_doc',
+    };
+  }
+  if (input.has_unapproved_spec_doc === true) {
+    return { target_status: 'spec_review', expected_next_action: 'review_spec' };
+  }
+  if (input.has_approved_boundary_summary === true) {
+    return { target_status: 'spec_generation_queued', expected_next_action: 'generate_spec_doc', queued_action_kind: 'generate_spec_doc' };
+  }
+  return { target_status: 'brainstorming', expected_next_action: 'continue_brainstorming', queued_action_kind: 'continue_brainstorming' };
 };
 
 export const assertWorkflowManualDecisionAllowedForTransition = (

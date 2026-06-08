@@ -16,10 +16,12 @@ import {
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
   codexWorkspaceAcquisitionDigest,
+  assertReviewPacketEvidenceRefsAreSafe,
   buildInternalArtifactRef,
   collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
   runtimeArtifactUploadProofPayload,
+  reviewPacketInputDigest,
   validateCodexLaunchTargetKind,
   validateCodexGenerationWorkload,
   validateCodexDockerRuntimeEvidence,
@@ -1625,7 +1627,6 @@ export class CodexRuntimeService {
         approved_spec_revision_id: reviewContext.approved_spec_revision_id,
         approved_implementation_plan_revision_id: reviewContext.approved_implementation_plan_revision_id,
         expected_review_packet_id: workload.review_packet_id,
-        expected_review_packet_digest: workload.review_packet_digest,
         allowed_statuses: ['ready', 'in_review', 'completed'],
         allowed_completed_decisions: ['changes_requested'],
       });
@@ -1633,6 +1634,29 @@ export class CodexRuntimeService {
         throw new DomainError(
           'workflow_review_packet_not_current',
           `workflow_review_packet_not_current: Review Packet ${workload.review_packet_id} is no longer current for review response terminalization`,
+        );
+      }
+      const currentEvidenceRefs = await repository.listReviewPacketEvidenceRefs(currentPacket.id);
+      assertReviewPacketEvidenceRefsAreSafe(currentPacket, currentEvidenceRefs);
+      const currentReviewPacketDigest = reviewPacketInputDigest({
+        packet: currentPacket,
+        evidence_refs: currentEvidenceRefs,
+        previous_run_session_id: reviewContext.previous_run_session_id,
+        execution_package_id: reviewContext.execution_package_id,
+        execution_package_version: reviewContext.execution_package_version,
+        approved_spec_revision_id: reviewContext.approved_spec_revision_id,
+        approved_implementation_plan_revision_id: reviewContext.approved_implementation_plan_revision_id,
+      });
+      if (currentPacket.current_digest !== undefined && currentPacket.current_digest !== currentReviewPacketDigest) {
+        throw new DomainError(
+          'workflow_review_packet_digest_mismatch',
+          `workflow_review_packet_digest_mismatch: Review Packet ${workload.review_packet_id} stored digest is stale`,
+        );
+      }
+      if (currentReviewPacketDigest !== workload.review_packet_digest) {
+        throw new DomainError(
+          'workflow_review_packet_digest_mismatch',
+          `workflow_review_packet_digest_mismatch: Review Packet ${workload.review_packet_id} input digest changed before terminalization`,
         );
       }
       const runtimeJob = await repository.terminalizeCodexRuntimeJob({

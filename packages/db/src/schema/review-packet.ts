@@ -56,6 +56,7 @@ export const review_packet_evidence_refs = pgTable(
       .notNull()
       .references(() => plan_item_workflows.id),
     refKind: text('ref_kind').$type<ReviewPacketEvidenceRef['ref_kind']>().notNull(),
+    visibility: text('visibility').$type<ReviewPacketEvidenceRef['visibility']>().notNull(),
     displayText: text('display_text').notNull(),
     url: text('url'),
     internalObjectRef: text('internal_object_ref'),

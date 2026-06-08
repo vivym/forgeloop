@@ -8396,6 +8396,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "visibility": {
+          "name": "visibility",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "display_text": {
           "name": "display_text",
           "type": "text",

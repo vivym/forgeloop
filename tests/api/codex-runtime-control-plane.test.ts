@@ -30,6 +30,7 @@ import {
   codexRuntimeNetworkPolicyDigest,
   codexRuntimeProfileRevisionDigest,
   codexWorkspaceAcquisitionDigest,
+  reviewPacketInputDigest,
   runtimeArtifactUploadProofPayload,
   type ExecutionPackage,
   type CodexRuntimeCapsule,
@@ -3543,6 +3544,7 @@ describe('codex runtime control-plane APIs', () => {
         now: sessionAfterExecution.updated_at,
       });
     }
+    const reviewExecutionPackage = (await repository.getExecutionPackage(executionPackage.id))!;
     const sessionBeforeReviewResponse = (await repository.getCodexSession(sessionAfterExecution.id))!;
     expect(sessionBeforeReviewResponse.runner_worker_id).toBeUndefined();
     expect(sessionBeforeReviewResponse.runner_runtime_job_id).toBeUndefined();
@@ -3571,7 +3573,16 @@ describe('codex runtime control-plane APIs', () => {
       updated_at: now,
       completed_at: now,
     };
-    await repository.saveReviewPacket({ ...reviewPacket, current_digest: codexCanonicalDigest(reviewPacket) });
+    const reviewPacketDigest = reviewPacketInputDigest({
+      packet: reviewPacket,
+      evidence_refs: [],
+      previous_run_session_id: runSession.id,
+      execution_package_id: reviewExecutionPackage.id,
+      execution_package_version: reviewExecutionPackage.execution_package_version ?? reviewExecutionPackage.version,
+      approved_spec_revision_id: seeded.specRevisionId,
+      approved_implementation_plan_revision_id: seeded.implementationPlanRevisionId,
+    });
+    await repository.saveReviewPacket({ ...reviewPacket, current_digest: reviewPacketDigest });
     const codeReviewWorkflow = (await repository.getPlanItemWorkflow(seeded.workflow.id))!;
     const session = (await repository.getCodexSession(codeReviewWorkflow.active_codex_session_id!))!;
     const actionContextPreviewDigest = codexCanonicalDigest({
@@ -3697,10 +3708,61 @@ describe('codex runtime control-plane APIs', () => {
         workspace_acquisition_json: workspaceAcquisition,
       },
     });
+
+    await repository.saveReviewPacketEvidenceRef({
+      id: deterministicRuntimeArtifactId(seeded.workflow.id, 'review-response-drifted-evidence'),
+      review_packet_id: reviewPacket.id,
+      workflow_id: seeded.workflow.id,
+      ref_kind: 'markdown_excerpt',
+      visibility: 'public',
+      display_text: 'Evidence added after the review response runtime job was scheduled.',
+      digest: sha('abcdef'),
+      created_by_actor_id: seeded.ids.actorTech,
+      created_at: '2026-05-31T00:02:45.000Z',
+    });
+    const digestDriftRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: runningRuntimeJob.id }))!;
+    const digestDriftRuntimeJobBefore = (await repository.getCodexRuntimeJob({ runtime_job_id: digestDriftRuntimeJob.id }))!;
+    const digestDriftActionBefore = await repository.getPlanItemWorkflowQueuedAction({
+      workflow_id: seeded.workflow.id,
+      action_id: action.id,
+    });
+    const digestDriftTurnBefore = await repository.getCodexSessionTurn(digestDriftActionBefore!.codex_session_turn_id!);
+    const digestDriftSessionBefore = await repository.getCodexSession(session.id);
+    const digestDriftWorkflowBefore = await repository.getPlanItemWorkflow(seeded.workflow.id);
+    const digestDriftReviewPacketBefore = await repository.getReviewPacket(reviewPacket.id);
+    const digestDriftEventsBefore = await repository.listObjectEvents(seeded.workflow.id, 'plan_item_workflow');
+    const digestDriftLeaseBefore = runtimePrivate.codexLaunchLeases.get(digestDriftRuntimeJob.launch_lease_id);
+    await expect(repository.getLatestReviewResponseForWorkflow(seeded.workflow.id)).resolves.toBeUndefined();
+
+    await terminalizeWorkflowRuntimeJobRequest(app, {
+      runtimeJob: digestDriftRuntimeJob,
+      sessionToken: `plan-item-workflow-session-${seeded.ids.project}`,
+      terminalStatus: 'succeeded',
+      reasonCode: 'codex_runtime_job_succeeded',
+      terminalResult: reviewResponseTerminalResult(digestDriftRuntimeJob),
+      nonceSuffix: 'terminal-review-response-digest-drift',
+    })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code, JSON.stringify(body)).toBe('workflow_review_packet_digest_mismatch');
+      });
+
+    await expect(repository.getCodexRuntimeJob({ runtime_job_id: digestDriftRuntimeJob.id })).resolves.toEqual(digestDriftRuntimeJobBefore);
+    await expect(repository.getPlanItemWorkflowQueuedAction({ workflow_id: seeded.workflow.id, action_id: action.id })).resolves.toEqual(
+      digestDriftActionBefore,
+    );
+    await expect(repository.getCodexSessionTurn(digestDriftActionBefore!.codex_session_turn_id!)).resolves.toEqual(digestDriftTurnBefore);
+    await expect(repository.getCodexSession(session.id)).resolves.toEqual(digestDriftSessionBefore);
+    await expect(repository.getPlanItemWorkflow(seeded.workflow.id)).resolves.toEqual(digestDriftWorkflowBefore);
+    await expect(repository.getReviewPacket(reviewPacket.id)).resolves.toEqual(digestDriftReviewPacketBefore);
+    await expect(repository.getLatestReviewResponseForWorkflow(seeded.workflow.id)).resolves.toBeUndefined();
+    await expect(repository.listObjectEvents(seeded.workflow.id, 'plan_item_workflow')).resolves.toEqual(digestDriftEventsBefore);
+    expect(runtimePrivate.codexLaunchLeases.get(digestDriftRuntimeJob.launch_lease_id)).toEqual(digestDriftLeaseBefore);
+
     await repository.saveReviewPacket({
       ...reviewPacket,
       superseded_by_review_packet_id: deterministicRuntimeArtifactId(seeded.workflow.id, 'review-response-superseding-packet'),
-      current_digest: codexCanonicalDigest(reviewPacket),
+      current_digest: reviewPacketDigest,
     });
     const supersededRuntimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: runningRuntimeJob.id }))!;
     const supersededRuntimeJobBefore = (await repository.getCodexRuntimeJob({ runtime_job_id: supersededRuntimeJob.id }))!;
