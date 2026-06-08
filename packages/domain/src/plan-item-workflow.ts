@@ -590,6 +590,7 @@ const exactTransitions = new Set<string>([
   'execution_ready->execution_running|execution_package|',
   'execution_running->code_review|run_session|',
   'execution_running->code_review|commit|',
+  'code_review->execution_running|run_session|',
   'code_review->qa|review_packet|',
   'code_review->qa|pull_request|',
   'code_review->qa|manual_decision|override',

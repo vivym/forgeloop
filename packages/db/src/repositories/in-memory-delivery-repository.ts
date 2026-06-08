@@ -7193,11 +7193,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     if (reviewPacket.status === 'completed' && !input.allowed_completed_decisions.includes(reviewPacket.decision as 'changes_requested')) {
       return false;
     }
-    if (input.expected_review_packet_digest !== undefined) {
-      const digest = reviewPacket.current_digest ?? codexCanonicalDigest(reviewPacket);
-      if (digest !== input.expected_review_packet_digest) {
+    if (
+      input.expected_review_packet_digest !== undefined &&
+      reviewPacket.current_digest !== undefined &&
+      reviewPacket.current_digest !== input.expected_review_packet_digest
+    ) {
         return false;
-      }
     }
     return true;
   }
@@ -7349,6 +7350,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.objectLocks.withLock(`command-idempotency:${input.idempotency_key}`, () =>
       this.claimCommandIdempotencyUnlocked(input),
     );
+  }
+
+  async getCommandIdempotency(idempotencyKey: string): Promise<CommandIdempotencyRecord | undefined> {
+    return this.cloneMaybe(this.commandIdempotencyRecords.get(idempotencyKey));
   }
 
   async renewCommandIdempotency(input: RenewCommandIdempotencyInput): Promise<CommandIdempotencyRecord> {

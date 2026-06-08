@@ -7,6 +7,8 @@ import {
   continueWorkflowExecutionBodySchema,
   evaluateWorkflowExecutionReadinessBodySchema,
   requestWorkflowArtifactChangesBodySchema,
+  requestWorkflowReviewFixBodySchema,
+  respondToWorkflowReviewBodySchema,
   runQueuedWorkflowActionBodySchema,
   startBrainstormingWorkflowSchema,
   startWorkflowExecutionBodySchema,
@@ -15,6 +17,8 @@ import {
   type ContinueWorkflowExecutionBodyDto,
   type EvaluateWorkflowExecutionReadinessBodyDto,
   type RequestWorkflowArtifactChangesBodyDto,
+  type RequestWorkflowReviewFixBodyDto,
+  type RespondToWorkflowReviewBodyDto,
   type RunQueuedWorkflowActionBodyDto,
   type StartBrainstormingWorkflowDto,
   type StartWorkflowExecutionBodyDto,
@@ -103,5 +107,25 @@ export class PlanItemWorkflowController {
     @Body(new ZodValidationPipe(continueWorkflowExecutionBodySchema)) body: ContinueWorkflowExecutionBodyDto,
   ) {
     return this.service.continueExecution(workflowId, body);
+  }
+
+  @Post('plan-item-workflows/:workflowId/code-review/respond')
+  respondToReview(
+    @Param('workflowId') workflowId: string,
+    @Body(new ZodValidationPipe(respondToWorkflowReviewBodySchema)) body: RespondToWorkflowReviewBodyDto,
+  ) {
+    return this.service.respondToReview(workflowId, body);
+  }
+
+  @Post('plan-item-workflows/:workflowId/code-review/request-fix')
+  requestReviewFix(
+    @Param('workflowId') workflowId: string,
+    @Body(new ZodValidationPipe(requestWorkflowReviewFixBodySchema)) body: RequestWorkflowReviewFixBodyDto,
+    @Res({ passthrough: true }) response: StatusResponse,
+  ) {
+    return this.service.requestReviewFix(workflowId, body).then((result) => {
+      response.status(result.status_code);
+      return result.workflow;
+    });
   }
 }

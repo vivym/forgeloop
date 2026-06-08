@@ -14,7 +14,13 @@ import type {
 } from '@forgeloop/domain';
 
 import { InMemoryDeliveryRepository } from '../../packages/db/src/index';
-import { transitionExecutionPackage, transitionReviewPacket, transitionRunSession } from '../../packages/domain/src/index';
+import {
+  codexCanonicalDigest,
+  reviewPacketInputDigest,
+  transitionExecutionPackage,
+  transitionReviewPacket,
+  transitionRunSession,
+} from '../../packages/domain/src/index';
 import { createPackageExecutionActivities, executePackageRun, reviewPacketIdForRunSession } from '../../packages/workflow/src/index';
 
 const now = '2026-05-05T00:00:00.000Z';
@@ -482,31 +488,34 @@ describe('executePackageRun', () => {
         suggested_validation: 'Run pnpm test tests/workflow',
       },
     ];
-    const previousReviewPacket = transitionReviewPacket(
-      transitionReviewPacket(undefined, {
-        type: 'create',
-        id: 'review-packet:run-session-previous',
-        run_session_id: 'run-session-previous',
-        execution_package_id: 'execution-package-1',
-        reviewer_actor_id: 'actor-reviewer',
-        spec_revision_id: 'spec-revision-1',
-        plan_revision_id: 'plan-revision-1',
-        changed_files: [],
-        check_result_summary: 'Previous run needs changes.',
-        self_review: successfulSelfReview(),
-        risk_notes: [],
-        at: now,
-      }),
-      {
-        type: 'request_changes',
-        summary: 'Please address review feedback.',
-        reviewed_by_actor_id: 'actor-reviewer',
-        reviewed_at: now,
-        requested_changes: requestedChanges,
-        at: now,
-      },
-    );
-    const { repository, runSessionId } = await createFixture({
+    const previousReviewPacket = {
+      ...transitionReviewPacket(
+        transitionReviewPacket(undefined, {
+          type: 'create',
+          id: 'review-packet:run-session-previous',
+          run_session_id: 'run-session-previous',
+          execution_package_id: 'execution-package-1',
+          reviewer_actor_id: 'actor-reviewer',
+          spec_revision_id: 'spec-revision-1',
+          plan_revision_id: 'plan-revision-1',
+          changed_files: [],
+          check_result_summary: 'Previous run needs changes.',
+          self_review: successfulSelfReview(),
+          risk_notes: [],
+          at: now,
+        }),
+        {
+          type: 'request_changes',
+          summary: 'Please address review feedback.',
+          reviewed_by_actor_id: 'actor-reviewer',
+          reviewed_at: now,
+          requested_changes: requestedChanges,
+          at: now,
+        },
+      ),
+      current_digest: `sha256:${'7'.repeat(64)}`,
+    };
+    const { repository, runSessionId, executionPackage } = await createFixture({
       packageState: 'review_changes_requested',
       previousReviewPacket,
       runSessionId: 'run-session-rerun',
@@ -527,6 +536,29 @@ describe('executePackageRun', () => {
 
     expect(capturedRunSpec?.review_context).toEqual({
       latest_decision: 'changes_requested',
+      review_packet_id: previousReviewPacket.id,
+      review_packet_digest: reviewPacketInputDigest({
+        packet: previousReviewPacket,
+        evidence_refs: [],
+        previous_run_session_id: previousReviewPacket.run_session_id,
+        execution_package_id: executionPackage.id,
+        execution_package_version: executionPackage.version,
+        approved_spec_revision_id: previousReviewPacket.spec_revision_id,
+        approved_implementation_plan_revision_id: previousReviewPacket.plan_revision_id,
+      }),
+      previous_run_session_id: previousReviewPacket.run_session_id,
+      approved_spec_revision_id: previousReviewPacket.spec_revision_id,
+      approved_implementation_plan_revision_id: previousReviewPacket.plan_revision_id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+      path_policy_digest: codexCanonicalDigest({
+        allowed_paths: executionPackage.allowed_paths,
+        forbidden_paths: executionPackage.forbidden_paths,
+        source_mutation_policy: executionPackage.source_mutation_policy,
+      }),
+      required_checks: [...requiredChecks],
+      evidence_refs: [],
+      review_response_ids: [],
       requested_changes: requestedChanges,
     });
     expect(capturedSelfReviewInput?.requested_changes_context).toEqual(requestedChanges);

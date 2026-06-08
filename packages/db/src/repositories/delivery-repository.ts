@@ -1998,6 +1998,7 @@ export interface DeliveryRepository {
   listActiveManualPathHolds(input: ListActiveManualPathHoldsInput): Promise<ManualPathHold[]>;
   requestManualPathHold(input: RequestManualPathHoldInput): Promise<ManualPathHold>;
   resolveManualPathHold(input: ResolveManualPathHoldInput): Promise<ManualPathHold>;
+  getCommandIdempotency(idempotencyKey: string): Promise<CommandIdempotencyRecord | undefined>;
   claimCommandIdempotency(input: ClaimCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;
   renewCommandIdempotency(input: RenewCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;
   completeCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;

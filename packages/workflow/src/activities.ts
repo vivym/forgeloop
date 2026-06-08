@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   executorResultSchema,
   runSpecSchema,
@@ -20,6 +22,8 @@ import {
 import { artifactIdForRunSessionArtifact, finalizePackageRunWithExecutorResult } from './execution-finalizer';
 
 type IsoDateTime = string;
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 type ExecutionPackagePhase = 'draft' | 'ready' | 'queued' | 'execution' | 'review' | 'integration' | 'test_gate' | 'release' | 'archived';
 type ExecutionPackageActivityState =
   | 'idle'
@@ -55,6 +59,60 @@ type RunSessionStatus =
   | 'failed'
   | 'timed_out'
   | 'cancelled';
+
+const unsupportedJsonValue = () => new Error('Workflow canonical digest only supports JSON-compatible values.');
+
+const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+const canonicalize = (value: unknown, objectProperty = false): JsonValue | undefined => {
+  if (value === undefined && objectProperty) {
+    return undefined;
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol' || value === undefined) {
+    throw unsupportedJsonValue();
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw unsupportedJsonValue();
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => {
+      const canonicalEntry = canonicalize(entry);
+      if (canonicalEntry === undefined) {
+        throw unsupportedJsonValue();
+      }
+      return canonicalEntry;
+    });
+  }
+  if (isPlainObject(value)) {
+    return Object.entries(value)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => compareCodeUnits(left, right))
+      .reduce<Record<string, JsonValue>>((accumulator, [key, entry]) => {
+        const canonicalEntry = canonicalize(entry, true);
+        if (canonicalEntry !== undefined) {
+          accumulator[key] = canonicalEntry;
+        }
+        return accumulator;
+      }, {});
+  }
+  throw unsupportedJsonValue();
+};
+
+const canonicalDigest = (value: unknown): string => `sha256:${createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex')}`;
 
 export interface ProjectRepoRecord {
   id: string;
@@ -200,6 +258,8 @@ export interface ReviewPacketRecord {
   reviewed_by_actor_id?: string;
   reviewed_at?: IsoDateTime;
   requested_changes: RequestedChange[];
+  superseded_by_review_packet_id?: string;
+  current_digest?: string;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
   completed_at?: IsoDateTime;
@@ -522,13 +582,16 @@ const legacyPlanRevisionForPackage = async (
   );
 };
 
-const latestRequestedChanges = (reviewPackets: ReviewPacketRecord[]): RunSpec['review_context'] => {
+const latestRequestedChanges = (
+  reviewPackets: ReviewPacketRecord[],
+  executionPackage: ExecutionPackageRecord,
+): RunSpec['review_context'] => {
   const requestedChangePackets = reviewPackets
     .filter((packet) => packet.status === 'completed' && packet.decision === 'changes_requested')
     .sort((left, right) =>
       (left.completed_at ?? left.updated_at ?? left.created_at).localeCompare(
         right.completed_at ?? right.updated_at ?? right.created_at,
-      ),
+      ) || left.id.localeCompare(right.id),
     );
   const latest = requestedChangePackets.at(-1);
 
@@ -536,8 +599,36 @@ const latestRequestedChanges = (reviewPackets: ReviewPacketRecord[]): RunSpec['r
     return { latest_decision: 'none', requested_changes: [] };
   }
 
+  const evidenceRefs: NonNullable<RunSpec['review_context']['evidence_refs']> = [];
+  const { current_digest: _currentDigest, superseded_by_review_packet_id: _supersededByReviewPacketId, ...digestPacket } = latest;
+  const reviewPacketDigest = canonicalDigest({
+    schema_version: 'review_packet_input_digest.v1',
+    packet: digestPacket,
+    evidence_refs: evidenceRefs,
+    previous_run_session_id: latest.run_session_id,
+    execution_package_id: executionPackage.id,
+    execution_package_version: executionPackage.version,
+    approved_spec_revision_id: latest.spec_revision_id,
+    approved_implementation_plan_revision_id: latest.plan_revision_id,
+  });
+
   return {
     latest_decision: 'changes_requested',
+    review_packet_id: latest.id,
+    review_packet_digest: reviewPacketDigest,
+    previous_run_session_id: latest.run_session_id,
+    approved_spec_revision_id: latest.spec_revision_id,
+    approved_implementation_plan_revision_id: latest.plan_revision_id,
+    execution_package_id: executionPackage.id,
+    execution_package_version: executionPackage.version,
+    path_policy_digest: canonicalDigest({
+      allowed_paths: executionPackage.allowed_paths,
+      forbidden_paths: executionPackage.forbidden_paths,
+      source_mutation_policy: executionPackage.source_mutation_policy,
+    }),
+    required_checks: executionPackage.required_checks.map(clone),
+    evidence_refs: evidenceRefs,
+    review_response_ids: [],
     requested_changes: latest.requested_changes.map(clone),
   };
 };
@@ -576,7 +667,7 @@ export const loadRunContext = async (
     ),
     `ProjectRepo ${executionPackage.repo_id}`,
   );
-  const reviewContext = latestRequestedChanges(await repository.listReviewPacketsForPackage(executionPackage.id));
+  const reviewContext = latestRequestedChanges(await repository.listReviewPacketsForPackage(executionPackage.id), executionPackage);
 
   return { runSession, executionPackage, workItem, specRevision, planRevision, projectRepo, reviewContext };
 };

@@ -19,9 +19,11 @@ import {
   reviewPacketInputDigest,
   type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
+  type CodexRunExecutionWorkloadV1,
   type CodexRuntimeCapsule,
   type CodexRuntimeJob,
   type CodexRuntimeProfileRevision,
+  type ExecutionPackage,
   type ReviewPacketEvidenceRef,
   type RunSession,
 } from '../../packages/domain/src';
@@ -627,6 +629,804 @@ describe('Plan Item Workflow API', () => {
       .expect(({ body }) => {
         expect(body.code).toBe('workflow_review_packet_evidence_unsafe');
       });
+  });
+
+  it('responds to code review through the public command without creating execution state', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545471', {
+      createAction: false,
+      reviewPacketPatch: {
+        status: 'ready',
+        decision: 'none',
+        completed_at: undefined,
+      },
+    });
+    const transitionCountBefore = (await fixture.repository.listPlanItemWorkflowTransitions(fixture.seeded.workflow.id)).length;
+
+    const response = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+        response_prompt_markdown: 'Draft a concise response for the open review packet.',
+      })
+      .expect(201);
+
+    expect(response.body.status).toBe('code_review');
+    expect(response.body.queued_actions).toContainEqual(
+      expect.objectContaining({ kind: 'respond_to_review', status: 'running' }),
+    );
+    const action = (await fixture.repository.listActivePlanItemWorkflowQueuedActions(fixture.seeded.workflow.id)).find(
+      (candidate) => candidate.kind === 'respond_to_review',
+    );
+    expect(action).toMatchObject({
+      kind: 'respond_to_review',
+      status: 'running',
+      codex_session_turn_id: expect.any(String),
+    });
+    const turns = await fixture.repository.listCodexSessionTurns(fixture.seeded.workflow.active_codex_session_id!);
+    expect(turns).toContainEqual(expect.objectContaining({ id: action!.codex_session_turn_id, intent: 'address_review_feedback' }));
+    const runtimeJob = workflowActionRuntimeJob(fixture.repository, action!.id);
+    expect(runtimeJob).toMatchObject({
+      target_type: 'plan_item_workflow_action',
+      target_kind: 'generation',
+      target_id: action!.id,
+      workflow_id: fixture.seeded.workflow.id,
+      codex_session_id: fixture.seeded.workflow.active_codex_session_id,
+      codex_session_turn_id: action!.codex_session_turn_id,
+    });
+    expect(runtimeJob?.input_json).toMatchObject({
+      task_kind: 'review_response',
+      review_packet_id: fixture.reviewPacket.id,
+      review_packet_digest: fixture.reviewPacket.current_digest,
+    });
+    expect(runtimeJob?.workspace_acquisition_json).toMatchObject({
+      signed_context_json: {
+        review_packet_id: fixture.reviewPacket.id,
+        review_packet_digest: fixture.reviewPacket.current_digest,
+        response_prompt_markdown: 'Draft a concise response for the open review packet.',
+      },
+    });
+    const runSessions = await fixture.repository.listRunSessionsForPackage(fixture.executionPackage.id);
+    expect(runSessions.map((candidate) => candidate.id)).toEqual([fixture.runSession.id]);
+    await expect(fixture.repository.listPlanItemWorkflowTransitions(fixture.seeded.workflow.id)).resolves.toHaveLength(transitionCountBefore);
+    expect(await fixture.repository.getAutomationActionRun(action!.id)).toBeUndefined();
+  });
+
+  it('responds to in-review Review Packets through the public command', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545479', {
+      createAction: false,
+      reviewPacketPatch: {
+        status: 'in_review',
+        decision: 'none',
+        completed_at: undefined,
+      },
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.status).toBe('code_review');
+        expect(body.queued_actions).toContainEqual(expect.objectContaining({ kind: 'respond_to_review', status: 'running' }));
+      });
+  });
+
+  it('responds when the current Review Packet stores no digest but the request carries the canonical digest', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545491', {
+      createAction: false,
+      reviewPacketPatch: {
+        status: 'ready',
+        decision: 'none',
+        completed_at: undefined,
+      },
+    });
+    await fixture.repository.saveReviewPacket({
+      ...fixture.reviewPacket,
+      current_digest: undefined,
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.status).toBe('code_review');
+        expect(body.queued_actions).toContainEqual(expect.objectContaining({ kind: 'respond_to_review', status: 'running' }));
+      });
+  });
+
+  it('rejects review response command for completed approved Review Packets', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545472', {
+      createAction: false,
+      reviewPacketPatch: {
+        decision: 'approved',
+        requested_changes: [],
+      },
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_review_packet_not_current');
+      });
+  });
+
+  it('rejects review response while another workflow action is active', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545485', {
+      createAction: false,
+      reviewPacketPatch: {
+        status: 'ready',
+        decision: 'none',
+        completed_at: undefined,
+      },
+    });
+    const session = await fixture.repository.getCodexSession(fixture.seeded.workflow.active_codex_session_id!);
+    if (session === undefined) {
+      throw new Error('Expected active Codex session fixture');
+    }
+    await fixture.repository.createOrReplayPlanItemWorkflowQueuedAction({
+      id: stableUuid({ kind: 'respond-active-action-conflict', workflowId: fixture.seeded.workflow.id }),
+      workflow_id: fixture.seeded.workflow.id,
+      codex_session_id: session.id,
+      kind: 'continue_execution',
+      status: 'queued',
+      expected_input_capsule_digest: session.latest_capsule_digest,
+      context_preview_digest: codexCanonicalDigest({ kind: 'respond-active-action-context', workflowId: fixture.seeded.workflow.id }),
+      idempotency_key: codexCanonicalDigest({ kind: 'respond-active-action-idempotency', workflowId: fixture.seeded.workflow.id }),
+      created_by_actor_id: fixture.seeded.ids.actorTech,
+      created_at: '2026-05-31T00:04:00.000Z',
+      updated_at: '2026-05-31T00:04:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_action_already_pending');
+      });
+  });
+
+  it('rejects review response when the active Codex session is not idle', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545486', {
+      createAction: false,
+      reviewPacketPatch: {
+        status: 'ready',
+        decision: 'none',
+        completed_at: undefined,
+      },
+    });
+    const session = await fixture.repository.getCodexSession(fixture.seeded.workflow.active_codex_session_id!);
+    if (session === undefined) {
+      throw new Error('Expected active Codex session fixture');
+    }
+    privatePlanItemWorkflowRepository(fixture.repository).codexSessions.set(session.id, {
+      ...session,
+      status: 'running',
+      updated_at: '2026-05-31T00:04:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_invalid_transition');
+      });
+  });
+
+  it.each([
+    ['memory bundle', { latest_memory_bundle_ref: undefined }],
+    ['environment manifest', { latest_environment_manifest_ref: undefined }],
+  ] as const)('rejects review response when active session %s continuity input is missing', async (_label, patch) => {
+    const fixture = await seedReviewResponseRuntimeAction(app, `5454548${_label === 'memory bundle' ? '7' : '8'}`, {
+      createAction: false,
+      reviewPacketPatch: {
+        status: 'ready',
+        decision: 'none',
+        completed_at: undefined,
+      },
+    });
+    const session = await fixture.repository.getCodexSession(fixture.seeded.workflow.active_codex_session_id!);
+    if (session === undefined) {
+      throw new Error('Expected active Codex session fixture');
+    }
+    privatePlanItemWorkflowRepository(fixture.repository).codexSessions.set(session.id, {
+      ...session,
+      ...patch,
+      updated_at: '2026-05-31T00:04:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe(
+          _label === 'memory bundle' ? 'codex_memory_bundle_missing' : 'codex_environment_manifest_missing',
+        );
+      });
+  });
+
+  it('rejects review response when latest memory lineage is stale', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545489', {
+      createAction: false,
+      reviewPacketPatch: {
+        status: 'ready',
+        decision: 'none',
+        completed_at: undefined,
+      },
+    });
+    const session = await fixture.repository.getCodexSession(fixture.seeded.workflow.active_codex_session_id!);
+    if (session === undefined) {
+      throw new Error('Expected active Codex session fixture');
+    }
+    privatePlanItemWorkflowRepository(fixture.repository).codexSessions.set(session.id, {
+      ...session,
+      latest_memory_bundle_digest: codexCanonicalDigest({ kind: 'stale-review-response-memory', workflowId: fixture.seeded.workflow.id }),
+      updated_at: '2026-05-31T00:04:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('codex_runtime_capsule_stale');
+      });
+  });
+
+  it('replays the same review response command while the first response action is running', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545474', {
+      createAction: false,
+      reviewPacketPatch: {
+        status: 'ready',
+        decision: 'none',
+        completed_at: undefined,
+      },
+    });
+
+    const first = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        idempotency_key: 'same-respond-command',
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(201);
+
+    const firstActionId = first.body.queued_actions.find(
+      (candidate: { kind: string }) => candidate.kind === 'respond_to_review',
+    )?.id;
+
+    const replay = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        idempotency_key: 'same-respond-command',
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      });
+    expect(replay.status, JSON.stringify(replay.body)).toBe(201);
+    expect(replay.body.queued_actions).toContainEqual(
+      expect.objectContaining({ id: firstActionId, kind: 'respond_to_review', status: 'running' }),
+    );
+    const activeActions = await fixture.repository.listActivePlanItemWorkflowQueuedActions(fixture.seeded.workflow.id);
+    expect(activeActions.filter((candidate) => candidate.kind === 'respond_to_review')).toHaveLength(1);
+  });
+
+  it('replays a terminal review response command without creating a second action or runtime job', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545484', {
+      createAction: false,
+      reviewPacketPatch: {
+        status: 'ready',
+        decision: 'none',
+        completed_at: undefined,
+      },
+    });
+    const commandBody = {
+      actor_id: fixture.seeded.ids.actorTech,
+      idempotency_key: 'same-respond-command-terminal',
+      expected_review_packet_id: fixture.reviewPacket.id,
+      expected_review_packet_digest: fixture.reviewPacket.current_digest,
+    };
+
+    const first = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send(commandBody)
+      .expect(201);
+    const actionId = first.body.queued_actions.find((candidate: { kind: string }) => candidate.kind === 'respond_to_review')?.id;
+    expect(actionId).toEqual(expect.any(String));
+    const runtimeJob = workflowActionRuntimeJob(fixture.repository, actionId);
+    expect(runtimeJob).toBeDefined();
+
+    const terminalCapsuleDigest = capsuleDigest('respond-terminal-replay-output-capsule');
+    await fixture.repository.terminalizePlanItemWorkflowQueuedAction({
+      workflow_id: fixture.seeded.workflow.id,
+      action_id: actionId,
+      status: 'succeeded',
+      output_capsule_id: stableUuid({ kind: 'respond-terminal-replay-output-capsule' }),
+      output_capsule_digest: terminalCapsuleDigest,
+      output_capsule_sequence: 100,
+      codex_thread_id_digest: codexThreadIdDigest('thread-1'),
+      now: '2026-05-31T00:05:00.000Z',
+    });
+    privatePlanItemWorkflowRepository(fixture.repository).codexRuntimeJobs.set(runtimeJob!.id, {
+      job: {
+        ...runtimeJob!,
+        status: 'terminal',
+        terminal_status: 'succeeded',
+        terminal_reason_code: 'completed',
+        finished_at: '2026-05-31T00:05:00.000Z',
+        updated_at: '2026-05-31T00:05:00.000Z',
+      },
+    });
+    await fixture.repository.saveReviewResponse({
+      id: stableUuid({ kind: 'respond-terminal-replay-review-response', workflowId: fixture.seeded.workflow.id }),
+      workflow_id: fixture.seeded.workflow.id,
+      codex_session_id: fixture.seeded.workflow.active_codex_session_id!,
+      codex_session_turn_id: runtimeJob!.codex_session_turn_id!,
+      review_packet_id: fixture.reviewPacket.id,
+      previous_run_session_id: fixture.runSession.id,
+      status: 'succeeded',
+      content_digest: codexCanonicalDigest('Review response generated.'),
+      created_by_actor_id: fixture.seeded.ids.actorTech,
+      created_at: '2026-05-31T00:05:00.000Z',
+      updated_at: '2026-05-31T00:05:00.000Z',
+    });
+    privatePlanItemWorkflowRepository(fixture.repository).codexSessions.set(fixture.seeded.workflow.active_codex_session_id!, {
+      ...(await fixture.repository.getCodexSession(fixture.seeded.workflow.active_codex_session_id!))!,
+      status: 'idle',
+      latest_capsule_id: stableUuid({ kind: 'respond-terminal-replay-output-capsule' }),
+      latest_capsule_digest: terminalCapsuleDigest,
+      latest_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${fixture.seeded.workflow.active_codex_session_id}/memory-terminal-replay`,
+      latest_memory_bundle_digest: capsuleDigest('respond-terminal-replay-memory'),
+      latest_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${fixture.seeded.workflow.active_codex_session_id}/env-terminal-replay`,
+      latest_environment_manifest_digest: capsuleDigest('respond-terminal-replay-env'),
+      updated_at: '2026-05-31T00:05:00.000Z',
+    });
+
+    await expect(
+      fixture.repository.getPlanItemWorkflowQueuedAction({
+        workflow_id: fixture.seeded.workflow.id,
+        action_id: actionId,
+      }),
+    ).resolves.toMatchObject({ id: actionId, status: 'succeeded' });
+    const latestSession = await fixture.repository.getCodexSession(fixture.seeded.workflow.active_codex_session_id!);
+    expect(latestSession?.status).toBe('idle');
+    expect(latestSession?.latest_capsule_digest).toBe(terminalCapsuleDigest);
+
+    const replay = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/respond`)
+      .send(commandBody)
+      .expect(201);
+    expect(replay.body.queued_actions).toContainEqual(
+      expect.objectContaining({ id: actionId, kind: 'respond_to_review', status: 'succeeded' }),
+    );
+    const responseActions = (await fixture.repository.listPlanItemWorkflowQueuedActions(fixture.seeded.workflow.id)).filter(
+      (action) => action.kind === 'respond_to_review',
+    );
+    expect(responseActions).toEqual([expect.objectContaining({ id: actionId, status: 'succeeded' })]);
+    const runtimeJobs = Array.from(privatePlanItemWorkflowRepository(fixture.repository).codexRuntimeJobs.values())
+      .map((record) => record.job)
+      .filter((job) => job.target_type === 'plan_item_workflow_action' && job.target_id === actionId);
+    expect(runtimeJobs).toHaveLength(1);
+    expect(runtimeJobs[0]).toMatchObject({ id: runtimeJob!.id, status: 'terminal' });
+  });
+
+  it('requests a review fix by creating a new run execution attempt in the same Codex session', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545473', {
+      createAction: false,
+      evidenceRefs: ({ workflowId, reviewPacketId, actorId }) => [
+        {
+          id: stableUuid({ kind: 'request-fix-evidence', workflowId }),
+          review_packet_id: reviewPacketId,
+          workflow_id: workflowId,
+          ref_kind: 'github_comment_url',
+          visibility: 'public',
+          display_text: 'Reviewer requested a focused fix.',
+          url: 'https://github.com/owner/repo/pull/7#discussion_r3',
+          digest: codexCanonicalDigest({ kind: 'request-fix-evidence', workflowId }),
+          created_by_actor_id: actorId,
+          created_at: '2026-05-31T00:03:15.000Z',
+        },
+      ],
+    });
+    await fixture.repository.saveReviewResponse({
+      id: stableUuid({ kind: 'request-fix-review-response', workflowId: fixture.seeded.workflow.id }),
+      workflow_id: fixture.seeded.workflow.id,
+      codex_session_id: fixture.seeded.workflow.active_codex_session_id!,
+      codex_session_turn_id: fixture.runSession.codex_session_turn_id!,
+      review_packet_id: fixture.reviewPacket.id,
+      previous_run_session_id: fixture.runSession.id,
+      status: 'succeeded',
+      content_digest: codexCanonicalDigest('Addressed review response.'),
+      created_by_actor_id: fixture.seeded.ids.actorTech,
+      created_at: '2026-05-31T00:04:00.000Z',
+      updated_at: '2026-05-31T00:04:00.000Z',
+    });
+
+    const response = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+        fix_instruction_markdown: 'Apply only the requested review fix.',
+      });
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+
+    expect(response.body.status).toBe('execution_running');
+    expect(response.body.attempt_history).toContainEqual(
+      expect.objectContaining({
+        attempt_kind: 'review_fix',
+        previous_run_session_id: fixture.runSession.id,
+        previous_review_packet_id: fixture.reviewPacket.id,
+      }),
+    );
+    const runSessions = await fixture.repository.listRunSessionsForPackage(fixture.executionPackage.id);
+    expect(runSessions).toHaveLength(2);
+    const fixRunSession = runSessions.find((candidate) => candidate.id !== fixture.runSession.id);
+    expect(fixRunSession).toMatchObject({
+      workflow_id: fixture.seeded.workflow.id,
+      codex_session_id: fixture.seeded.workflow.active_codex_session_id,
+      executor_type: 'local_codex',
+    });
+    expect(fixRunSession?.run_spec?.review_context).toMatchObject({
+      latest_decision: 'changes_requested',
+      review_packet_id: fixture.reviewPacket.id,
+      review_packet_digest: fixture.reviewPacket.current_digest,
+      previous_run_session_id: fixture.runSession.id,
+      approved_spec_revision_id: fixture.seeded.specRevisionId,
+      approved_implementation_plan_revision_id: fixture.seeded.implementationPlanRevisionId,
+      execution_package_id: fixture.executionPackage.id,
+      execution_package_version: fixture.executionPackage.execution_package_version ?? fixture.executionPackage.version,
+      path_policy_digest: codexCanonicalDigest({
+        allowed_paths: fixture.executionPackage.allowed_paths,
+        forbidden_paths: fixture.executionPackage.forbidden_paths,
+        source_mutation_policy: fixture.executionPackage.source_mutation_policy,
+      }),
+      evidence_refs: [
+        {
+          id: fixture.evidenceRefs[0]!.id,
+          ref_kind: 'github_comment_url',
+          display_text: 'Reviewer requested a focused fix.',
+          digest: fixture.evidenceRefs[0]!.digest,
+        },
+      ],
+      review_response_ids: [expect.any(String)],
+      requested_changes: [
+        {
+          title: 'Review change',
+          description: 'Explain the failed assumption.',
+          severity: 'major',
+        },
+      ],
+    });
+    const runtimeJobId = fixRunSession?.runtime_metadata?.remote_runtime_job_id;
+    expect(runtimeJobId).toEqual(expect.any(String));
+    const runtimeJob = await fixture.repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId! });
+    expect(runtimeJob).toMatchObject({ target_kind: 'run_execution', target_type: 'run_session', target_id: fixRunSession!.id });
+    const workload = runtimeJob?.input_json as CodexRunExecutionWorkloadV1;
+    expect(workload).toMatchObject({
+      run_session_id: fixRunSession!.id,
+      previous_run_session_id: fixture.runSession.id,
+      previous_review_packet_id: fixture.reviewPacket.id,
+      review_packet_digest: fixture.reviewPacket.current_digest,
+      signed_context_json: {
+        schema_version: 'review_fix_context.v1',
+        review_packet_id: fixture.reviewPacket.id,
+        review_packet_digest: fixture.reviewPacket.current_digest,
+        previous_run_session_id: fixture.runSession.id,
+        fix_instruction_markdown: 'Apply only the requested review fix.',
+      },
+      codex_session_runtime_context: {
+        codex_session_id: fixture.seeded.workflow.active_codex_session_id,
+        expected_input_capsule_digest: fixture.seeded.workflow.active_codex_session_id
+          ? (await fixture.repository.getCodexSession(fixture.seeded.workflow.active_codex_session_id))?.latest_capsule_digest
+          : undefined,
+        continuation: { kind: 'resume_thread' },
+      },
+    });
+    await expect(fixture.repository.getReviewPacket(fixture.reviewPacket.id)).resolves.toMatchObject({
+      id: fixture.reviewPacket.id,
+      run_session_id: fixture.runSession.id,
+    });
+  });
+
+  it('replays a completed review fix command through command idempotency', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545475', { createAction: false });
+
+    const commandBody = {
+      actor_id: fixture.seeded.ids.actorTech,
+      idempotency_key: 'request-fix-replay',
+      expected_review_packet_id: fixture.reviewPacket.id,
+      expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      fix_instruction_markdown: 'Replay should return the original fix run.',
+    };
+    const first = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send(commandBody)
+      .expect(201);
+    const second = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send(commandBody)
+      .expect(200);
+
+    expect(second.body.execution_run_summary).toMatchObject({
+      run_session_id: first.body.execution_run_summary.run_session_id,
+      input_capsule_digest: first.body.execution_run_summary.input_capsule_digest,
+      workspace_bundle_digest: first.body.execution_run_summary.workspace_bundle_digest,
+      codex_thread_id_digest: first.body.execution_run_summary.codex_thread_id_digest,
+    });
+    const runSessions = await fixture.repository.listRunSessionsForPackage(fixture.executionPackage.id);
+    expect(runSessions.filter((candidate) => candidate.id !== fixture.runSession.id)).toHaveLength(1);
+  });
+
+  it('rejects completed review fix replay when the idempotency key is reused with different preconditions', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545490', { createAction: false });
+
+    const commandBody = {
+      actor_id: fixture.seeded.ids.actorTech,
+      idempotency_key: 'request-fix-replay-precondition-drift',
+      expected_review_packet_id: fixture.reviewPacket.id,
+      expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      fix_instruction_markdown: 'Replay drift should not be accepted.',
+    };
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send(commandBody)
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        ...commandBody,
+        expected_review_packet_digest: `sha256:${'9'.repeat(64)}`,
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_recovery_required');
+      });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        ...commandBody,
+        fix_instruction_markdown: 'Changed instruction must not replay the original fix.',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_recovery_required');
+      });
+  });
+
+  it('rejects review fix while another workflow action is active', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545480', { createAction: false });
+    const session = await fixture.repository.getCodexSession(fixture.seeded.workflow.active_codex_session_id!);
+    if (session === undefined) {
+      throw new Error('Expected active Codex session fixture');
+    }
+    await fixture.repository.createOrReplayPlanItemWorkflowQueuedAction({
+      id: stableUuid({ kind: 'request-fix-active-action', workflowId: fixture.seeded.workflow.id }),
+      workflow_id: fixture.seeded.workflow.id,
+      codex_session_id: session.id,
+      kind: 'respond_to_review',
+      status: 'queued',
+      expected_input_capsule_digest: session.latest_capsule_digest,
+      context_preview_digest: codexCanonicalDigest({ kind: 'request-fix-active-action-context', workflowId: fixture.seeded.workflow.id }),
+      idempotency_key: codexCanonicalDigest({ kind: 'request-fix-active-action-idempotency', workflowId: fixture.seeded.workflow.id }),
+      created_by_actor_id: fixture.seeded.ids.actorTech,
+      created_at: '2026-05-31T00:04:00.000Z',
+      updated_at: '2026-05-31T00:04:00.000Z',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_action_already_pending');
+      });
+  });
+
+  it('rejects review fix when the changes-requested packet has no requested changes', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545481', {
+      createAction: false,
+      reviewPacketPatch: {
+        requested_changes: [],
+      },
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_review_packet_not_current');
+      });
+  });
+
+  it('rejects review fix when the previous run session is not terminal', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545482', { createAction: false });
+    mutateRunSession(fixture.repository, fixture.runSession.id, { status: 'running' });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_invalid_transition');
+      });
+  });
+
+  it('builds review fix RunSpec from the current execution package policy instead of the previous run spec', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545483', { createAction: false });
+    const currentRequiredChecks = [
+      {
+        check_id: 'review-fix-current-check',
+        display_name: 'Current review fix check',
+        command: 'pnpm test',
+        timeout_seconds: 180,
+        blocks_review: true,
+      },
+    ];
+    mutateExecutionPackage(fixture.repository, fixture.executionPackage.id, {
+      allowed_paths: ['apps/control-plane-api/src/modules/plan-item-workflows/**'],
+      forbidden_paths: ['legacy/**'],
+      required_checks: currentRequiredChecks,
+    });
+
+    const response = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      });
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+
+    const fixRunSession = await fixture.repository.getRunSession(response.body.execution_run_summary.run_session_id);
+    expect(fixRunSession?.run_spec).toMatchObject({
+      allowed_paths: ['apps/control-plane-api/src/modules/plan-item-workflows/**'],
+      forbidden_paths: ['legacy/**'],
+      required_checks: currentRequiredChecks,
+      context: { required_checks: currentRequiredChecks },
+      review_context: {
+        required_checks: currentRequiredChecks,
+        path_policy_digest: codexCanonicalDigest({
+          allowed_paths: ['apps/control-plane-api/src/modules/plan-item-workflows/**'],
+          forbidden_paths: ['legacy/**'],
+          source_mutation_policy: fixture.executionPackage.source_mutation_policy,
+        }),
+      },
+    });
+    const runtimeJobId = fixRunSession?.runtime_metadata?.remote_runtime_job_id;
+    const runtimeJob = runtimeJobId === undefined ? undefined : await fixture.repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
+    expect(runtimeJob?.input_json).toMatchObject({
+      required_checks_digest: codexCanonicalDigest(currentRequiredChecks),
+    });
+  });
+
+  it('rejects review fix when the execution package no longer belongs to the active workflow session', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545476', { createAction: false });
+    mutateExecutionPackage(fixture.repository, fixture.executionPackage.id, {
+      codex_session_id: stableUuid({ kind: 'foreign-session', workflowId: fixture.seeded.workflow.id }),
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_evidence_not_owned');
+      });
+  });
+
+  it('rejects review fix when latest memory lineage is stale', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545478', { createAction: false });
+    const session = await fixture.repository.getCodexSession(fixture.seeded.workflow.active_codex_session_id!);
+    if (session === undefined) {
+      throw new Error('Expected active Codex session fixture');
+    }
+    privatePlanItemWorkflowRepository(fixture.repository).codexSessions.set(session.id, {
+      ...session,
+      latest_memory_bundle_digest: codexCanonicalDigest({ kind: 'stale-review-fix-memory', workflowId: fixture.seeded.workflow.id }),
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('codex_runtime_capsule_stale');
+      });
+  });
+
+  it('does not carry failed review responses into review fix lineage', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '54545477', { createAction: false });
+    await fixture.repository.saveReviewResponse({
+      id: stableUuid({ kind: 'request-fix-failed-review-response', workflowId: fixture.seeded.workflow.id }),
+      workflow_id: fixture.seeded.workflow.id,
+      codex_session_id: fixture.seeded.workflow.active_codex_session_id!,
+      codex_session_turn_id: fixture.runSession.codex_session_turn_id!,
+      review_packet_id: fixture.reviewPacket.id,
+      previous_run_session_id: fixture.runSession.id,
+      status: 'failed',
+      content_digest: codexCanonicalDigest('Failed review response.'),
+      created_by_actor_id: fixture.seeded.ids.actorTech,
+      created_at: '2026-05-31T00:04:00.000Z',
+      updated_at: '2026-05-31T00:04:00.000Z',
+    });
+
+    const response = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/code-review/request-fix`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        expected_review_packet_id: fixture.reviewPacket.id,
+        expected_review_packet_digest: fixture.reviewPacket.current_digest,
+      })
+      .expect(201);
+
+    const fixRunSession = await fixture.repository.getRunSession(response.body.execution_run_summary.run_session_id);
+    expect(fixRunSession?.run_spec?.review_context?.review_response_ids).toEqual([]);
+    const attemptHistory = await fixture.repository.listRunSessionAttemptLineage(fixture.seeded.workflow.id);
+    const reviewFixAttempt = attemptHistory.find((attempt) => attempt.run_session_id === fixRunSession?.id);
+    expect(reviewFixAttempt).toMatchObject({ attempt_kind: 'review_fix' });
+    expect(reviewFixAttempt).not.toHaveProperty('review_response_id');
   });
 
   it('running queued Spec Doc generation creates a draft revision and moves to review without execution', async () => {
@@ -2356,6 +3156,8 @@ async function seedReviewResponseRuntimeAction(
       executionPackage: NonNullable<Awaited<ReturnType<DeliveryRepository['getExecutionPackage']>>>;
       seeded: Awaited<ReturnType<typeof runWorkflowToExecutionReady>>;
     }) => string;
+    createAction?: boolean;
+    reviewPacketPatch?: Partial<Parameters<DeliveryRepository['saveReviewPacket']>[0]>;
   } = {},
 ) {
   const seeded = await runWorkflowToExecutionReady(app, idPrefix);
@@ -2398,10 +3200,11 @@ async function seedReviewResponseRuntimeAction(
     check_result_summary: 'Checks passed.',
     self_review: { status: 'done', summary: 'Self review complete.' },
     risk_notes: ['Review response should be read-only.'],
-    requested_changes: [{ id: 'change-1', severity: 'medium', body: 'Explain the failed assumption.' }],
+    requested_changes: [{ title: 'Review change', description: 'Explain the failed assumption.', severity: 'major' as const }],
     created_at: '2026-05-31T00:03:00.000Z',
     updated_at: '2026-05-31T00:03:00.000Z',
     completed_at: '2026-05-31T00:03:00.000Z',
+    ...options.reviewPacketPatch,
   };
   const evidenceRefs =
     options.evidenceRefs?.({
@@ -2428,6 +3231,10 @@ async function seedReviewResponseRuntimeAction(
   }
   const codeReviewWorkflow = (await repository.getPlanItemWorkflow(seeded.workflow.id))!;
   const session = (await repository.getCodexSession(codeReviewWorkflow.active_codex_session_id!))!;
+  const currentReviewPacket = (await repository.getReviewPacket(reviewPacket.id))!;
+  if (options.createAction === false) {
+    return { seeded, repository, executionPackage: reviewExecutionPackage, runSession, reviewPacket: currentReviewPacket, evidenceRefs };
+  }
   const action = await repository.createOrReplayPlanItemWorkflowQueuedAction({
     id: stableUuid({ kind: 'review-response-runtime-action', workflowId: seeded.workflow.id, idPrefix }),
     workflow_id: seeded.workflow.id,
@@ -2452,7 +3259,7 @@ async function seedReviewResponseRuntimeAction(
     created_at: '2026-05-31T00:03:00.000Z',
     updated_at: '2026-05-31T00:03:00.000Z',
   });
-  return { seeded, repository, executionPackage, runSession, reviewPacket, evidenceRefs, action };
+  return { seeded, repository, executionPackage: reviewExecutionPackage, runSession, reviewPacket: currentReviewPacket, evidenceRefs, action };
 }
 
 async function claimStartupActionForMessageTest(repository: DeliveryRepository, workflowId: string) {
@@ -2513,6 +3320,8 @@ async function startWorkflowOwnedExecution(app: INestApplication, idPrefix: stri
 }
 
 type PrivatePlanItemWorkflowRepository = {
+  executionPackages: Map<string, ExecutionPackage>;
+  runSessions: Map<string, RunSession>;
   codexRuntimeJobs: Map<string, { job: CodexRuntimeJob } & Record<string, unknown>>;
   codexSessions: Map<string, Record<string, unknown>>;
   codexSessionLeases: Map<string, Record<string, unknown>>;
@@ -2533,6 +3342,32 @@ type PrivatePlanItemWorkflowRepository = {
 
 function privatePlanItemWorkflowRepository(repository: DeliveryRepository): PrivatePlanItemWorkflowRepository {
   return repository as unknown as PrivatePlanItemWorkflowRepository;
+}
+
+function mutateExecutionPackage(repository: DeliveryRepository, executionPackageId: string, patch: Partial<ExecutionPackage>) {
+  const privateRepository = privatePlanItemWorkflowRepository(repository);
+  const executionPackage = privateRepository.executionPackages.get(executionPackageId);
+  if (executionPackage === undefined) {
+    throw new Error(`Expected private execution package ${executionPackageId}`);
+  }
+  privateRepository.executionPackages.set(executionPackageId, {
+    ...executionPackage,
+    ...patch,
+    updated_at: '2026-06-03T03:00:00.000Z',
+  });
+}
+
+function mutateRunSession(repository: DeliveryRepository, runSessionId: string, patch: Partial<RunSession>) {
+  const privateRepository = privatePlanItemWorkflowRepository(repository);
+  const runSession = privateRepository.runSessions.get(runSessionId);
+  if (runSession === undefined) {
+    throw new Error(`Expected private run session ${runSessionId}`);
+  }
+  privateRepository.runSessions.set(runSessionId, {
+    ...runSession,
+    ...patch,
+    updated_at: '2026-06-03T03:00:00.000Z',
+  });
 }
 
 function overwriteRuntimeJob(repository: DeliveryRepository, runtimeJobId: string, patch: Partial<CodexRuntimeJob>) {
@@ -2557,6 +3392,12 @@ function workflowRunExecutionRuntimeJobIds(repository: DeliveryRepository, workf
     .filter((job) => job.workflow_id === workflowId && job.target_kind === 'run_execution')
     .map((job) => job.id)
     .sort();
+}
+
+function workflowActionRuntimeJob(repository: DeliveryRepository, actionId: string): CodexRuntimeJob | undefined {
+  return Array.from(privatePlanItemWorkflowRepository(repository).codexRuntimeJobs.values())
+    .map((record) => record.job)
+    .find((job) => job.target_type === 'plan_item_workflow_action' && job.target_id === actionId);
 }
 
 function privateRunCommands(repository: DeliveryRepository) {

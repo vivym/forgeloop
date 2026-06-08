@@ -466,6 +466,7 @@ const codexRunExecutionWorkloadKeys = new Set([
   'previous_run_session_id',
   'previous_review_packet_id',
   'review_packet_digest',
+  'signed_context_json',
   'output_schema_version',
   'created_at',
   'expires_at',
@@ -561,6 +562,7 @@ export interface CodexRunExecutionWorkloadV1 {
   previous_run_session_id?: string;
   previous_review_packet_id?: string;
   review_packet_digest?: string;
+  signed_context_json?: Record<string, unknown>;
   output_schema_version: string;
   created_at: string;
   expires_at: string;
@@ -1071,6 +1073,14 @@ const requireRunExecutionWorkloadDigest = (input: Record<string, unknown>, field
   return value;
 };
 
+const requireRunExecutionWorkloadPlainObject = (input: Record<string, unknown>, field: string): Record<string, unknown> => {
+  const value = input[field];
+  if (!isPlainObject(value)) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${field} must be an object.`);
+  }
+  return value;
+};
+
 const validateCodexSessionTerminalization = (value: unknown): CodexSessionTerminalizationV1 => {
   if (!isPlainObject(value) || value.schema_version !== 'codex_session_terminalization.v1') {
     throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: session terminalization is unsupported.');
@@ -1400,6 +1410,9 @@ export const validateCodexRunExecutionWorkload = (value: unknown): CodexWorkflow
           review_packet_digest: requireRunExecutionWorkloadDigest(value, 'review_packet_digest'),
         }
       : {}),
+    ...(value.signed_context_json === undefined
+      ? {}
+      : { signed_context_json: requireRunExecutionWorkloadPlainObject(value, 'signed_context_json') }),
     output_schema_version: 'codex_run_execution_result.v1',
     created_at: requireRunExecutionWorkloadString(value, 'created_at'),
     expires_at: requireRunExecutionWorkloadString(value, 'expires_at'),

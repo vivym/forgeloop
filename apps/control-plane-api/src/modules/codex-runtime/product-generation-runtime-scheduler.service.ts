@@ -14,6 +14,7 @@ import {
   type CodexGenerationWorkloadV1,
   type CodexSession,
   type CodexSessionTurn,
+  type CodexRuntimeCapsule,
   type CodexRuntimeJob,
   type ContextManifest,
   type PlanItemWorkflowQueuedAction,
@@ -442,6 +443,77 @@ export class ProductGenerationRuntimeSchedulerService {
     return repository.getCodexRuntimeJob({ runtime_job_id: this.runtimeJobIdForPlanItemWorkflowAction(action, taskKind) });
   }
 
+  private async requireReviewResponseContinuationInputs(
+    repository: DeliveryRepository,
+    input: {
+      workflowId: string;
+      session: CodexSession;
+      turn: CodexSessionTurn;
+    },
+  ): Promise<{
+    latestCapsule: CodexRuntimeCapsule;
+    latestMemoryBundleRef: string;
+    latestMemoryBundleDigest: string;
+    latestEnvironmentManifestRef: string;
+    latestEnvironmentManifestDigest: string;
+  }> {
+    const latestCapsuleId = input.session.latest_capsule_id;
+    const latestCapsuleDigest = input.session.latest_capsule_digest;
+    const latestMemoryBundleRef = input.session.latest_memory_bundle_ref;
+    const latestMemoryBundleDigest = input.session.latest_memory_bundle_digest;
+    const latestEnvironmentManifestRef = input.session.latest_environment_manifest_ref;
+    const latestEnvironmentManifestDigest = input.session.latest_environment_manifest_digest;
+    if (latestCapsuleId === undefined || latestCapsuleDigest === undefined) {
+      throw new DomainError(
+        'codex_runtime_capsule_missing',
+        `codex_runtime_capsule_missing: Codex session ${input.session.id} review response continuation inputs are unavailable`,
+      );
+    }
+    if (latestMemoryBundleRef === undefined || latestMemoryBundleDigest === undefined) {
+      throw new DomainError(
+        'codex_memory_bundle_missing',
+        `codex_memory_bundle_missing: Codex session ${input.session.id} review response continuation inputs are unavailable`,
+      );
+    }
+    if (latestEnvironmentManifestRef === undefined || latestEnvironmentManifestDigest === undefined) {
+      throw new DomainError(
+        'codex_environment_manifest_missing',
+        `codex_environment_manifest_missing: Codex session ${input.session.id} review response continuation inputs are unavailable`,
+      );
+    }
+    const latestCapsule = await repository.getCodexRuntimeCapsule(latestCapsuleId);
+    const producerTurn = latestCapsule === undefined ? undefined : await repository.getCodexSessionTurn(latestCapsule.created_from_turn_id);
+    if (
+      latestCapsule === undefined ||
+      latestCapsule.codex_session_id !== input.session.id ||
+      latestCapsule.digest !== latestCapsuleDigest ||
+      latestCapsule.codex_thread_id_digest !== input.session.codex_thread_id_digest ||
+      input.turn.expected_input_capsule_digest !== latestCapsuleDigest ||
+      producerTurn === undefined ||
+      producerTurn.workflow_id !== input.workflowId ||
+      producerTurn.codex_session_id !== input.session.id ||
+      producerTurn.status !== 'succeeded' ||
+      producerTurn.output_capsule_id !== latestCapsule.id ||
+      producerTurn.output_capsule_digest !== latestCapsule.digest ||
+      producerTurn.output_memory_bundle_ref !== latestMemoryBundleRef ||
+      producerTurn.output_memory_bundle_digest !== latestMemoryBundleDigest ||
+      producerTurn.output_environment_manifest_ref !== latestEnvironmentManifestRef ||
+      producerTurn.output_environment_manifest_digest !== latestEnvironmentManifestDigest
+    ) {
+      throw new DomainError(
+        'codex_runtime_capsule_stale',
+        `codex_runtime_capsule_stale: Codex session ${input.session.id} review response continuation lineage is stale`,
+      );
+    }
+    return {
+      latestCapsule,
+      latestMemoryBundleRef,
+      latestMemoryBundleDigest,
+      latestEnvironmentManifestRef,
+      latestEnvironmentManifestDigest,
+    };
+  }
+
   private async createPlanItemWorkflowActionRuntimeJob(input: {
     repository: DeliveryRepository;
     action: PlanItemWorkflowQueuedAction;
@@ -537,36 +609,11 @@ export class ProductGenerationRuntimeSchedulerService {
         'workflow_legacy_entrypoint_disabled: Review response runtime requires a bound Codex session turn',
       );
     }
-    const latestCapsuleId = session.latest_capsule_id;
-    const latestCapsuleDigest = session.latest_capsule_digest;
-    const latestMemoryBundleRef = session.latest_memory_bundle_ref;
-    const latestMemoryBundleDigest = session.latest_memory_bundle_digest;
-    const latestEnvironmentManifestRef = session.latest_environment_manifest_ref;
-    const latestEnvironmentManifestDigest = session.latest_environment_manifest_digest;
-    if (latestCapsuleId === undefined || latestCapsuleDigest === undefined) {
-      throw new DomainError(
-        'codex_runtime_capsule_missing',
-        `codex_runtime_capsule_missing: Codex session ${session.id} review response continuation inputs are unavailable`,
-      );
-    }
-    if (latestMemoryBundleRef === undefined || latestMemoryBundleDigest === undefined) {
-      throw new DomainError(
-        'codex_memory_bundle_missing',
-        `codex_memory_bundle_missing: Codex session ${session.id} review response continuation inputs are unavailable`,
-      );
-    }
-    if (latestEnvironmentManifestRef === undefined || latestEnvironmentManifestDigest === undefined) {
-      throw new DomainError(
-        'codex_environment_manifest_missing',
-        `codex_environment_manifest_missing: Codex session ${session.id} review response continuation inputs are unavailable`,
-      );
-    }
-    if (turn.expected_input_capsule_digest !== latestCapsuleDigest) {
-      throw new DomainError(
-        'codex_runtime_capsule_missing',
-        `codex_runtime_capsule_missing: Codex session ${session.id} review response expected capsule digest is stale`,
-      );
-    }
+    const continuationInputs = await this.requireReviewResponseContinuationInputs(input.repository, {
+      workflowId: input.action.workflow_id,
+      session,
+      turn,
+    });
 
     const providerConfigDigest = networkProviderConfigDigest(profileRevision.network_policy);
     const workerTarget = {
@@ -624,7 +671,7 @@ export class ProductGenerationRuntimeSchedulerService {
       lease_token_hash: codexCredentialPayloadDigest(leaseToken),
       worker_id: worker.id,
       worker_session_digest: workerSessionDigest,
-      expected_input_capsule_digest: latestCapsuleDigest,
+      expected_input_capsule_digest: continuationInputs.latestCapsule.digest,
       now: input.now,
       expires_at: isoAfter(input.now, runtimeJobTtlMs),
     });
@@ -664,7 +711,7 @@ export class ProductGenerationRuntimeSchedulerService {
         lease_epoch: claimed.lease.lease_epoch,
         worker_id: worker.id,
         worker_session_digest: claimed.lease.worker_session_digest,
-        expected_input_capsule_digest: latestCapsuleDigest,
+        expected_input_capsule_digest: continuationInputs.latestCapsule.digest,
         ...(liveRunnerOwner?.runner_runtime_job_id === undefined
           ? {}
           : { runner_runtime_job_id: liveRunnerOwner.runner_runtime_job_id }),
@@ -683,16 +730,16 @@ export class ProductGenerationRuntimeSchedulerService {
         lease_token: leaseToken,
         codex_session_id: session.id,
         codex_session_turn_id: turn.id,
-        expected_input_capsule_digest: latestCapsuleDigest,
-        input_capsule_id: latestCapsuleId,
-        input_capsule_digest: latestCapsuleDigest,
-        input_capsule_ref: `artifact://internal/codex_runtime_capsule/codex_session/${session.id}/${latestCapsuleId}`,
+        expected_input_capsule_digest: continuationInputs.latestCapsule.digest,
+        input_capsule_id: continuationInputs.latestCapsule.id,
+        input_capsule_digest: continuationInputs.latestCapsule.digest,
+        input_capsule_ref: continuationInputs.latestCapsule.artifact_ref,
         ...(turn.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: turn.base_memory_bundle_ref }),
         ...(turn.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: turn.base_memory_bundle_digest }),
-        input_memory_bundle_ref: latestMemoryBundleRef,
-        input_memory_bundle_digest: latestMemoryBundleDigest,
-        input_environment_manifest_ref: latestEnvironmentManifestRef,
-        input_environment_manifest_digest: latestEnvironmentManifestDigest,
+        input_memory_bundle_ref: continuationInputs.latestMemoryBundleRef,
+        input_memory_bundle_digest: continuationInputs.latestMemoryBundleDigest,
+        input_environment_manifest_ref: continuationInputs.latestEnvironmentManifestRef,
+        input_environment_manifest_digest: continuationInputs.latestEnvironmentManifestDigest,
       },
     };
     const workspaceAcquisition = {
