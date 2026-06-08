@@ -4927,6 +4927,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       .sort(byCreatedAtThenId);
   }
 
+  async getCodexSessionLease(id: string): Promise<CodexSessionLease | undefined> {
+    return this.cloneMaybe(this.codexSessionLeases.get(id));
+  }
+
   async claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
     if (this.codexSessionLeases.has(input.lease_id)) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not unique`);

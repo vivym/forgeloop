@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import {
   codexSessionPublicDtoSchema,
+  continueWorkflowExecutionBodySchema,
   planItemWorkflowPublicDtoSchema,
   workflowMessageActionSchema,
+  type ContinueWorkflowExecutionBodyDto,
 } from '@forgeloop/contracts';
 
 const nonEmpty = z.string().trim().min(1);
@@ -69,4 +71,5 @@ export const startWorkflowExecutionBodySchema = z
   .strict();
 export type StartWorkflowExecutionBodyDto = z.infer<typeof startWorkflowExecutionBodySchema>;
 
-export { codexSessionPublicDtoSchema, planItemWorkflowPublicDtoSchema };
+export { codexSessionPublicDtoSchema, continueWorkflowExecutionBodySchema, planItemWorkflowPublicDtoSchema };
+export type { ContinueWorkflowExecutionBodyDto };

@@ -74,6 +74,8 @@ export type DomainErrorCode =
   | 'workflow_active_session_conflict'
   | 'workflow_execution_already_running'
   | 'workflow_execution_recovery_required'
+  | 'workflow_execution_not_ready_for_input'
+  | 'workflow_execution_writer_still_active'
   | 'codex_session_lease_conflict'
   | 'codex_session_lease_expired'
   | 'codex_session_stale_terminalization'

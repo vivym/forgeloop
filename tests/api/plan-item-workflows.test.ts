@@ -1140,6 +1140,419 @@ describe('Plan Item Workflow API', () => {
     expect(JSON.stringify(startAuditEvent)).not.toContain('auth_json');
   });
 
+  it('continues waiting execution by appending input to the existing runtime job', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565670');
+    await saveRunSessionStatus(started.repository, started.runSession, 'waiting_for_input');
+    overwriteRuntimeJob(started.repository, started.runtimeJob.id, { status: 'running' });
+    const beforeJobIds = workflowRunExecutionRuntimeJobIds(started.repository, started.workflow.id);
+
+    const response = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-waiting-input',
+        input_markdown: 'The implementation can continue with the approved scope.',
+      })
+      .expect(201);
+
+    expect(response.body).toMatchObject({
+      status: 'execution_running',
+      execution_run_summary: {
+        run_session_id: started.runSession.id,
+        status: 'resuming',
+      },
+    });
+    expect(JSON.stringify(response.body)).not.toContain(started.runtimeJob.id);
+    expect(workflowRunExecutionRuntimeJobIds(started.repository, started.workflow.id)).toEqual(beforeJobIds);
+
+    const [lineage] = await started.repository.listExecutionContinuationLineage(started.workflow.id);
+    expect(lineage).toMatchObject({
+      run_session_id: started.runSession.id,
+      continuation_kind: 'existing_job_input',
+      previous_runtime_job_id: started.runtimeJob.id,
+      previous_capsule_digest: started.runtimeJobInputCapsuleDigest,
+      expected_input_capsule_digest: started.session.latest_capsule_digest,
+    });
+    expect(lineage).not.toHaveProperty('new_runtime_job_id');
+    const action = (await started.repository.listPlanItemWorkflowQueuedActions(started.workflow.id)).find(
+      (candidate) => candidate.kind === 'continue_execution',
+    );
+    expect(action).toMatchObject({ status: 'succeeded' });
+    const commands = privateRunCommands(started.repository).filter((command) => command.run_session_id === started.runSession.id);
+    expect(commands).toContainEqual(
+      expect.objectContaining({
+        command_type: 'input',
+        status: 'pending',
+        target_turn_id: started.runSession.codex_session_turn_id,
+        payload: expect.objectContaining({
+          message: 'The implementation can continue with the approved scope.',
+          input_markdown: 'The implementation can continue with the approved scope.',
+        }),
+      }),
+    );
+  });
+
+  it('replays a completed continue execution idempotency key without duplicating input commands', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565680');
+    await saveRunSessionStatus(started.repository, started.runSession, 'waiting_for_input');
+    overwriteRuntimeJob(started.repository, started.runtimeJob.id, { status: 'running' });
+    const body = {
+      actor_id: started.seeded.ids.actorTech,
+      idempotency_key: 'continue-waiting-input-replay',
+      input_markdown: 'Continue once only.',
+    };
+
+    await request(app.getHttpServer()).post(`/plan-item-workflows/${started.workflow.id}/execution/continue`).send(body).expect(201);
+    const commandsAfterFirst = privateRunCommands(started.repository).filter(
+      (command) => command.run_session_id === started.runSession.id && command.command_type === 'input',
+    );
+    const lineagesAfterFirst = await started.repository.listExecutionContinuationLineage(started.workflow.id);
+    await request(app.getHttpServer()).post(`/plan-item-workflows/${started.workflow.id}/execution/continue`).send(body).expect(201);
+
+    const commandsAfterSecond = privateRunCommands(started.repository).filter(
+      (command) => command.run_session_id === started.runSession.id && command.command_type === 'input',
+    );
+    const lineagesAfterSecond = await started.repository.listExecutionContinuationLineage(started.workflow.id);
+    expect(commandsAfterSecond).toEqual(commandsAfterFirst);
+    expect(lineagesAfterSecond).toEqual(lineagesAfterFirst);
+  });
+
+  it('fails closed when active continuation runtime job targets an older capsule', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565681');
+    await saveRunSessionStatus(started.repository, started.runSession, 'waiting_for_input');
+    overwriteRuntimeJob(started.repository, started.runtimeJob.id, { status: 'running' });
+    await advanceSessionLatestCapsuleDigest(started.repository, started.session.id, 'latest-capsule-after-runtime-job');
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-old-capsule-active-job',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_recovery_required');
+      });
+
+    await expect(started.repository.listExecutionContinuationLineage(started.workflow.id)).resolves.toHaveLength(0);
+  });
+
+  it('fails closed when active continuation turn or worker session ownership is stale', async () => {
+    const staleTurn = await startWorkflowOwnedExecution(app, '56565682');
+    await saveRunSessionStatus(staleTurn.repository, staleTurn.runSession, 'resuming');
+    overwriteRuntimeJob(staleTurn.repository, staleTurn.runtimeJob.id, { status: 'materializing' });
+    markCodexSessionTurnStatus(staleTurn.repository, staleTurn.runSession.codex_session_turn_id!, 'succeeded');
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${staleTurn.workflow.id}/execution/continue`)
+      .send({
+        actor_id: staleTurn.seeded.ids.actorTech,
+        idempotency_key: 'continue-stale-turn',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_recovery_required');
+      });
+
+    const staleWorkerSession = await startWorkflowOwnedExecution(app, '56565683');
+    await saveRunSessionStatus(staleWorkerSession.repository, staleWorkerSession.runSession, 'resuming');
+    overwriteRuntimeJob(staleWorkerSession.repository, staleWorkerSession.runtimeJob.id, { status: 'materializing' });
+    mutateCodexSessionLeaseForRuntimeJob(staleWorkerSession.repository, staleWorkerSession.runtimeJob, {
+      worker_session_digest: codexCanonicalDigest({ stale: 'worker-session-digest' }),
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${staleWorkerSession.workflow.id}/execution/continue`)
+      .send({
+        actor_id: staleWorkerSession.seeded.ids.actorTech,
+        idempotency_key: 'continue-stale-worker-session',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_recovery_required');
+      });
+  });
+
+  it('rejects waiting execution when the runtime job is not running', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565671');
+    await saveRunSessionStatus(started.repository, started.runSession, 'waiting_for_input');
+    overwriteRuntimeJob(started.repository, started.runtimeJob.id, { status: 'materializing' });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-waiting-materializing',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_not_ready_for_input');
+      });
+
+    await expect(started.repository.listExecutionContinuationLineage(started.workflow.id)).resolves.toHaveLength(0);
+  });
+
+  it('blocks stalled continuation while the previous writer can still terminalize', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565677');
+    await saveRunSessionStatus(started.repository, started.runSession, 'stalled');
+    overwriteRuntimeJob(started.repository, started.runtimeJob.id, { status: 'running' });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-stalled-writer-active',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_writer_still_active');
+      });
+
+    await expect(started.repository.listExecutionContinuationLineage(started.workflow.id)).resolves.toHaveLength(0);
+  });
+
+  it('relaunches stalled execution after the previous writer is fenced', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565672');
+    await saveRunSessionStatus(started.repository, started.runSession, 'stalled');
+    await makePreviousExecutionWriterRecoverable(started.repository, started.runtimeJob, started.runSession, 'failed');
+    const beforeJobIds = workflowRunExecutionRuntimeJobIds(started.repository, started.workflow.id);
+
+    const response = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-stalled-relaunch',
+      })
+      .expect(201);
+
+    const updatedRunSession = await started.repository.getRunSession(started.runSession.id);
+    expect(updatedRunSession).toMatchObject({
+      id: started.runSession.id,
+      status: 'resuming',
+      codex_session_id: started.session.id,
+      codex_session_turn_id: expect.any(String),
+    });
+    const afterJobIds = workflowRunExecutionRuntimeJobIds(started.repository, started.workflow.id);
+    expect(afterJobIds).toHaveLength(beforeJobIds.length + 1);
+    const newRuntimeJobId = updatedRunSession?.runtime_metadata?.remote_runtime_job_id;
+    expect(newRuntimeJobId).toEqual(expect.any(String));
+    expect(newRuntimeJobId).not.toBe(started.runtimeJob.id);
+    const newRuntimeJob = await started.repository.getCodexRuntimeJob({ runtime_job_id: newRuntimeJobId! });
+    const workload = newRuntimeJob?.input_json as {
+      run_session_id: string;
+      codex_session_runtime_context: {
+        codex_session_id: string;
+        codex_session_turn_id: string;
+        expected_input_capsule_digest: string;
+        continuation: { kind: string; codex_thread_id_digest: string };
+      };
+    };
+    expect(workload).toMatchObject({
+      run_session_id: started.runSession.id,
+      codex_session_runtime_context: {
+        codex_session_id: started.session.id,
+        codex_session_turn_id: updatedRunSession?.codex_session_turn_id,
+        expected_input_capsule_digest: started.session.latest_capsule_digest,
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id_digest: started.session.codex_thread_id_digest,
+        },
+      },
+    });
+    expect(response.body.execution_run_summary).toMatchObject({
+      run_session_id: started.runSession.id,
+      status: 'resuming',
+      input_capsule_digest: started.session.latest_capsule_digest,
+    });
+
+    const [lineage] = await started.repository.listExecutionContinuationLineage(started.workflow.id);
+    expect(lineage).toMatchObject({
+      continuation_kind: 'relaunch_after_fencing',
+      previous_runtime_job_id: started.runtimeJob.id,
+      new_runtime_job_id: newRuntimeJobId,
+      previous_capsule_digest: started.runtimeJobInputCapsuleDigest,
+      expected_input_capsule_digest: started.session.latest_capsule_digest,
+    });
+    const action = (await started.repository.listPlanItemWorkflowQueuedActions(started.workflow.id)).find(
+      (candidate) => candidate.kind === 'continue_execution',
+    );
+    expect(action).toMatchObject({ status: 'succeeded', codex_session_turn_id: updatedRunSession?.codex_session_turn_id });
+  });
+
+  it('relaunches stalled execution when the run-worker lease is still active but expired', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565684');
+    await saveRunSessionStatus(started.repository, started.runSession, 'stalled');
+    overwriteRuntimeJob(started.repository, started.runtimeJob.id, {
+      status: 'terminal',
+      terminal_status: 'failed',
+      terminal_at: '2026-06-03T03:01:00.000Z',
+    });
+    expireCodexSessionLeaseForRuntimeJob(started.repository, started.runtimeJob);
+    expireCodexLaunchLease(started.repository, started.runtimeJob.launch_lease_id);
+    expireRunWorkerLeaseWithoutStatusMutation(started.repository, started.runSession.id);
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-stalled-expired-active-run-worker-lease',
+      })
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.execution_run_summary).toMatchObject({
+          run_session_id: started.runSession.id,
+          status: 'resuming',
+        });
+      });
+
+    const [lineage] = await started.repository.listExecutionContinuationLineage(started.workflow.id);
+    expect(lineage).toMatchObject({
+      continuation_kind: 'relaunch_after_fencing',
+      previous_runtime_job_id: started.runtimeJob.id,
+      previous_run_worker_lease_id: expect.any(String),
+    });
+  });
+
+  it('relaunches terminal resuming execution after the previous continuation writer is fenced', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565678');
+    await saveRunSessionStatus(started.repository, started.runSession, 'resuming');
+    await makePreviousExecutionWriterRecoverable(started.repository, started.runtimeJob, started.runSession, 'failed');
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-resuming-relaunch',
+      })
+      .expect(201);
+
+    const updatedRunSession = await started.repository.getRunSession(started.runSession.id);
+    const [lineage] = await started.repository.listExecutionContinuationLineage(started.workflow.id);
+    expect(updatedRunSession).toMatchObject({
+      id: started.runSession.id,
+      status: 'resuming',
+      codex_session_turn_id: expect.any(String),
+    });
+    expect(updatedRunSession?.runtime_metadata?.remote_runtime_job_id).not.toBe(started.runtimeJob.id);
+    expect(lineage).toMatchObject({
+      continuation_kind: 'relaunch_after_fencing',
+      previous_runtime_job_id: started.runtimeJob.id,
+      new_runtime_job_id: updatedRunSession?.runtime_metadata?.remote_runtime_job_id,
+    });
+  });
+
+  it('replays current resuming execution without creating a replacement runtime job', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565673');
+    await saveRunSessionStatus(started.repository, started.runSession, 'resuming');
+    overwriteRuntimeJob(started.repository, started.runtimeJob.id, { status: 'materializing' });
+    const beforeJobIds = workflowRunExecutionRuntimeJobIds(started.repository, started.workflow.id);
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-resuming-replay',
+      })
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.execution_run_summary).toMatchObject({
+          run_session_id: started.runSession.id,
+          status: 'resuming',
+        });
+      });
+
+    expect(workflowRunExecutionRuntimeJobIds(started.repository, started.workflow.id)).toEqual(beforeJobIds);
+    const [lineage] = await started.repository.listExecutionContinuationLineage(started.workflow.id);
+    expect(lineage).toMatchObject({
+      continuation_kind: 'replay_current_continuation',
+      previous_runtime_job_id: started.runtimeJob.id,
+      previous_capsule_digest: started.runtimeJobInputCapsuleDigest,
+      expected_input_capsule_digest: started.session.latest_capsule_digest,
+    });
+    expect(lineage).not.toHaveProperty('new_runtime_job_id');
+  });
+
+  it('rejects continuation from unlisted active run states', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565679');
+    await saveRunSessionStatus(started.repository, started.runSession, 'running');
+    overwriteRuntimeJob(started.repository, started.runtimeJob.id, { status: 'running' });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-running-unlisted-state',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_not_ready_for_input');
+      });
+
+    await expect(started.repository.listExecutionContinuationLineage(started.workflow.id)).resolves.toHaveLength(0);
+  });
+
+  it('keeps cancel_requested executions pending unless explicit recovery is safe and confirmed', async () => {
+    const pending = await startWorkflowOwnedExecution(app, '56565674');
+    await saveRunSessionStatus(pending.repository, pending.runSession, 'cancel_requested');
+    await makePreviousExecutionWriterRecoverable(pending.repository, pending.runtimeJob, pending.runSession, 'cancelled');
+    markCodexSessionTurnStatus(pending.repository, pending.runSession.codex_session_turn_id!, 'cancelled');
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${pending.workflow.id}/execution/continue`)
+      .send({
+        actor_id: pending.seeded.ids.actorTech,
+        idempotency_key: 'continue-cancel-without-confirmation',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_cancel_pending');
+      });
+
+    const unsafe = await startWorkflowOwnedExecution(app, '56565675');
+    await saveRunSessionStatus(unsafe.repository, unsafe.runSession, 'cancel_requested');
+    overwriteRuntimeJob(unsafe.repository, unsafe.runtimeJob.id, { status: 'running' });
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${unsafe.workflow.id}/execution/continue`)
+      .send({
+        actor_id: unsafe.seeded.ids.actorTech,
+        idempotency_key: 'continue-cancel-writer-active',
+        cancel_recovery_decision: 'recover_instead_of_accept_cancel',
+        cancel_recovery_confirmation_phrase: 'recover cancelled execution',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_cancel_pending');
+      });
+
+    const recoverable = await startWorkflowOwnedExecution(app, '56565676');
+    await saveRunSessionStatus(recoverable.repository, recoverable.runSession, 'cancel_requested');
+    await makePreviousExecutionWriterRecoverable(recoverable.repository, recoverable.runtimeJob, recoverable.runSession, 'cancelled');
+    markCodexSessionTurnStatus(recoverable.repository, recoverable.runSession.codex_session_turn_id!, 'cancelled');
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${recoverable.workflow.id}/execution/continue`)
+      .send({
+        actor_id: recoverable.seeded.ids.actorTech,
+        idempotency_key: 'continue-cancel-recover',
+        cancel_recovery_decision: 'recover_instead_of_accept_cancel',
+        cancel_recovery_confirmation_phrase: 'recover cancelled execution',
+      })
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.execution_run_summary).toMatchObject({
+          run_session_id: recoverable.runSession.id,
+          status: 'resuming',
+        });
+      });
+
+    const [lineage] = await recoverable.repository.listExecutionContinuationLineage(recoverable.workflow.id);
+    expect(lineage).toMatchObject({
+      continuation_kind: 'relaunch_after_fencing',
+      previous_runtime_job_id: recoverable.runtimeJob.id,
+      new_runtime_job_id: expect.any(String),
+    });
+  });
+
   it('fails closed instead of projecting execution supervision without runtime-job lineage', async () => {
     const seeded = await runWorkflowToExecutionReady(app, '56565658');
     const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -2060,6 +2473,208 @@ async function claimStartupActionForMessageTest(repository: DeliveryRepository, 
     status: 'cancelled',
     blocked_reason_code: 'test_clear_active_action',
     now: '2026-06-03T00:00:01.000Z',
+  });
+}
+
+async function startWorkflowOwnedExecution(app: INestApplication, idPrefix: string) {
+  const seeded = await runWorkflowToExecutionReady(app, idPrefix);
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const readyWorkflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+  const readyExecutionPackage = await repository.getExecutionPackage(readyWorkflow!.execution_package_id!);
+  await seedRunExecutionRuntime(repository, seeded.ids.project, readyExecutionPackage!.repo_id, seeded.ids.actorTech, {
+    environment: 'local_dogfood',
+  });
+  const response = await request(app.getHttpServer())
+    .post(`/plan-item-workflows/${seeded.workflow.id}/execution/start`)
+    .send({ actor_id: seeded.ids.actorTech, idempotency_key: `start-${idPrefix}` })
+    .expect(201);
+  const workflow = await repository.getPlanItemWorkflow(seeded.workflow.id);
+  const session = await repository.getCodexSession(workflow!.active_codex_session_id!);
+  const executionPackage = await repository.getExecutionPackage(workflow!.execution_package_id!);
+  const runSession = await repository.getRunSession(response.body.execution_run_summary.run_session_id);
+  const runtimeJobId = runSession?.runtime_metadata?.remote_runtime_job_id;
+  const runtimeJob = runtimeJobId === undefined ? undefined : await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
+  if (workflow === undefined || session === undefined || executionPackage === undefined || runSession === undefined || runtimeJob === undefined) {
+    throw new Error(`Expected started workflow execution fixture ${idPrefix}`);
+  }
+  const workload = runtimeJob.input_json as {
+    codex_session_runtime_context: { expected_input_capsule_digest: string };
+  };
+  return {
+    seeded,
+    repository,
+    workflow,
+    session,
+    executionPackage,
+    runSession,
+    runtimeJob,
+    runtimeJobInputCapsuleDigest: workload.codex_session_runtime_context.expected_input_capsule_digest,
+  };
+}
+
+type PrivatePlanItemWorkflowRepository = {
+  codexRuntimeJobs: Map<string, { job: CodexRuntimeJob } & Record<string, unknown>>;
+  codexSessions: Map<string, Record<string, unknown>>;
+  codexSessionLeases: Map<string, Record<string, unknown>>;
+  codexLaunchLeases: Map<string, { lease: Record<string, unknown> } & Record<string, unknown>>;
+  codexSessionTurns: Map<string, Record<string, unknown>>;
+  runWorkerLeases: Map<string, Record<string, unknown>>;
+  runCommands: Map<
+    string,
+    {
+      run_session_id: string;
+      command_type: string;
+      status: string;
+      target_turn_id?: string;
+      payload: Record<string, unknown>;
+    }
+  >;
+};
+
+function privatePlanItemWorkflowRepository(repository: DeliveryRepository): PrivatePlanItemWorkflowRepository {
+  return repository as unknown as PrivatePlanItemWorkflowRepository;
+}
+
+function overwriteRuntimeJob(repository: DeliveryRepository, runtimeJobId: string, patch: Partial<CodexRuntimeJob>) {
+  const privateRepository = privatePlanItemWorkflowRepository(repository);
+  const record = privateRepository.codexRuntimeJobs.get(runtimeJobId);
+  if (record === undefined) {
+    throw new Error(`Expected private runtime job ${runtimeJobId}`);
+  }
+  privateRepository.codexRuntimeJobs.set(runtimeJobId, {
+    ...record,
+    job: {
+      ...record.job,
+      ...patch,
+      updated_at: '2026-06-03T03:00:00.000Z',
+    },
+  });
+}
+
+function workflowRunExecutionRuntimeJobIds(repository: DeliveryRepository, workflowId: string): string[] {
+  return Array.from(privatePlanItemWorkflowRepository(repository).codexRuntimeJobs.values())
+    .map((record) => record.job)
+    .filter((job) => job.workflow_id === workflowId && job.target_kind === 'run_execution')
+    .map((job) => job.id)
+    .sort();
+}
+
+function privateRunCommands(repository: DeliveryRepository) {
+  return Array.from(privatePlanItemWorkflowRepository(repository).runCommands.values());
+}
+
+async function saveRunSessionStatus(repository: DeliveryRepository, runSession: RunSession, status: RunSession['status']) {
+  await repository.saveRunSession({
+    ...runSession,
+    status,
+    updated_at: '2026-06-03T03:00:00.000Z',
+  });
+}
+
+async function makePreviousExecutionWriterRecoverable(
+  repository: DeliveryRepository,
+  runtimeJob: CodexRuntimeJob,
+  runSession: RunSession,
+  terminalStatus: 'failed' | 'cancelled',
+) {
+  overwriteRuntimeJob(repository, runtimeJob.id, {
+    status: 'terminal',
+    terminal_status: terminalStatus,
+    terminal_at: '2026-06-03T03:01:00.000Z',
+  });
+  const workerLease = await repository.getRunWorkerLease(runSession.id);
+  if (workerLease?.status === 'active') {
+    await repository.releaseRunWorkerLease(runSession.id, workerLease.worker_id, workerLease.lease_token, '2026-06-03T03:00:30.000Z');
+  }
+  expireCodexSessionLeaseForRuntimeJob(repository, runtimeJob);
+  expireCodexLaunchLease(repository, runtimeJob.launch_lease_id);
+}
+
+function expireCodexSessionLeaseForRuntimeJob(repository: DeliveryRepository, runtimeJob: CodexRuntimeJob) {
+  const workload = runtimeJob.input_json as {
+    codex_session_terminalization: { codex_session_lease_id: string };
+  };
+  mutateCodexSessionLeaseForRuntimeJob(repository, runtimeJob, {
+    status: 'active',
+    expires_at: '2000-01-01T00:00:00.000Z',
+    updated_at: '2026-06-03T03:00:00.000Z',
+  });
+}
+
+function mutateCodexSessionLeaseForRuntimeJob(
+  repository: DeliveryRepository,
+  runtimeJob: CodexRuntimeJob,
+  patch: Record<string, unknown>,
+) {
+  const workload = runtimeJob.input_json as {
+    codex_session_terminalization: { codex_session_lease_id: string };
+  };
+  const privateRepository = privatePlanItemWorkflowRepository(repository);
+  const lease = privateRepository.codexSessionLeases.get(workload.codex_session_terminalization.codex_session_lease_id);
+  if (lease === undefined) {
+    throw new Error(`Expected Codex session lease ${workload.codex_session_terminalization.codex_session_lease_id}`);
+  }
+  privateRepository.codexSessionLeases.set(workload.codex_session_terminalization.codex_session_lease_id, {
+    ...lease,
+    ...patch,
+  });
+}
+
+function expireCodexLaunchLease(repository: DeliveryRepository, launchLeaseId: string) {
+  const privateRepository = privatePlanItemWorkflowRepository(repository);
+  const record = privateRepository.codexLaunchLeases.get(launchLeaseId);
+  if (record === undefined) {
+    throw new Error(`Expected Codex launch lease ${launchLeaseId}`);
+  }
+  privateRepository.codexLaunchLeases.set(launchLeaseId, {
+    ...record,
+    lease: {
+      ...record.lease,
+      status: 'expired',
+      expires_at: '2000-01-01T00:00:00.000Z',
+    },
+  });
+}
+
+function expireRunWorkerLeaseWithoutStatusMutation(repository: DeliveryRepository, runSessionId: string) {
+  const privateRepository = privatePlanItemWorkflowRepository(repository);
+  const lease = privateRepository.runWorkerLeases.get(runSessionId);
+  if (lease === undefined) {
+    throw new Error(`Expected run worker lease for ${runSessionId}`);
+  }
+  privateRepository.runWorkerLeases.set(runSessionId, {
+    ...lease,
+    status: 'active',
+    expires_at: '2000-01-01T00:00:00.000Z',
+    heartbeat_at: '1999-12-31T23:59:59.000Z',
+  });
+}
+
+function markCodexSessionTurnStatus(repository: DeliveryRepository, turnId: string, status: string) {
+  const privateRepository = privatePlanItemWorkflowRepository(repository);
+  const turn = privateRepository.codexSessionTurns.get(turnId);
+  if (turn === undefined) {
+    throw new Error(`Expected Codex session turn ${turnId}`);
+  }
+  privateRepository.codexSessionTurns.set(turnId, {
+    ...turn,
+    status,
+    updated_at: '2026-06-03T03:00:00.000Z',
+  });
+}
+
+function advanceSessionLatestCapsuleDigest(repository: DeliveryRepository, sessionId: string, label: string) {
+  const privateRepository = privatePlanItemWorkflowRepository(repository);
+  const session = privateRepository.codexSessions.get(sessionId);
+  if (session === undefined) {
+    throw new Error(`Expected Codex session ${sessionId}`);
+  }
+  privateRepository.codexSessions.set(sessionId, {
+    ...session,
+    latest_capsule_digest: capsuleDigest(label),
+    latest_memory_bundle_digest: capsuleDigest(`${label}-memory`),
+    latest_environment_manifest_digest: capsuleDigest(`${label}-environment`),
+    updated_at: '2026-06-03T03:00:00.000Z',
   });
 }
 

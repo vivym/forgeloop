@@ -1366,7 +1366,12 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       }
       break;
     case 'resume_requested':
-      if (runSession.status === 'waiting_for_input' || runSession.status === 'stalled' || runSession.status === 'resuming') {
+      if (
+        runSession.status === 'waiting_for_input' ||
+        runSession.status === 'stalled' ||
+        runSession.status === 'resuming' ||
+        runSession.status === 'cancel_requested'
+      ) {
         return { ...runSession, status: 'resuming', updated_at: at };
       }
       break;

@@ -8,6 +8,7 @@ import {
   assertWorkflowMessageAllowed,
   assertWorkflowActorAuthorized,
   buildPlanItemWorkflowQueuedActionIdempotencyKey,
+  codexRuntimeJobIsActive,
   codexCredentialPayloadDigest,
   codexCanonicalDigest,
   codexRuntimeJobInputDigest,
@@ -24,22 +25,29 @@ import {
   type BoundarySummary,
   type BoundarySummaryRevision,
   type CodexSession,
+  type CodexSessionLease,
   type CodexSessionTurn,
+  type CodexLaunchLease,
   type CodexRunExecutionWorkloadV1,
   type CodexRuntimeJob,
   type CodexWorkerRegistration,
   type ContextManifest,
   type DevelopmentPlanItem,
+  type DomainErrorCode,
   type ExecutionPlanDocument,
   type ExecutionPlanRevision,
   type ExecutionPackage,
+  type ExecutionContinuationLineage,
   type ExecutionReadinessRecord,
+  type RunRuntimeMetadata,
   type RunSession,
   type Spec,
   type PlanItemWorkflow,
   type PlanItemWorkflowQueuedAction,
   type ReviewPacket,
   type ReviewPacketEvidenceRef,
+  type RunCommand,
+  type RunWorkerLease,
   type SpecRevision,
   type WorkflowPersistenceRefs,
   type WorkflowManualDecision,
@@ -77,6 +85,7 @@ import { SpecPlanService, type ProductGenerationScheduleResult } from '../spec-p
 import { ProductGenerationRuntimeSchedulerService } from '../codex-runtime/product-generation-runtime-scheduler.service';
 import type {
   ApproveWorkflowArtifactRevisionBodyDto,
+  ContinueWorkflowExecutionBodyDto,
   EvaluateWorkflowExecutionReadinessBodyDto,
   RequestWorkflowArtifactChangesBodyDto,
   RunQueuedWorkflowActionBodyDto,
@@ -192,12 +201,45 @@ type WorkflowExecutionStartLineage = {
   codexThreadIdDigest?: string;
   status: string;
 };
+type ContinuationDecision =
+  | {
+      mode: 'existing_job_input';
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+      codexSessionLease: CodexSessionLease;
+      runWorkerLease: RunWorkerLease;
+      launchLease: CodexLaunchLease;
+    }
+  | {
+      mode: 'replay_current_continuation';
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+      codexSessionLease: CodexSessionLease;
+      runWorkerLease: RunWorkerLease;
+      launchLease: CodexLaunchLease;
+    }
+  | {
+      mode: 'relaunch_after_fencing';
+      runSession: RunSession;
+      previousRuntimeJob: CodexRuntimeJob;
+      previousCodexSessionLease: CodexSessionLease;
+      previousRunWorkerLease?: RunWorkerLease;
+      cancelRecovery?: boolean;
+    }
+  | { mode: 'reject'; code: DomainErrorCode };
 
 const runtimeNetworkProviderConfigDigest = (revision: CodexRuntimeProfileRevision): string | undefined => {
   const policy = revision.network_policy;
   return policy.mode === 'egress_allowlist' && policy.provider === 'docker_network_proxy'
     ? policy.provider_config.provider_config_digest
     : undefined;
+};
+
+const stableUuid = (scope: Record<string, unknown>): string => {
+  const hex = codexCanonicalDigest(scope).replace(/^sha256:/, '');
+  const version = `4${hex.slice(13, 16)}`;
+  const variant = `${((Number.parseInt(hex.slice(16, 17), 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}`;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${version}-${variant}-${hex.slice(20, 32)}`;
 };
 
 @Injectable()
@@ -1857,6 +1899,1066 @@ export class PlanItemWorkflowService {
         };
       }),
     );
+  }
+
+  async continueExecution(workflowId: string, input: ContinueWorkflowExecutionBodyDto) {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'start_execution');
+        if (workflow.status !== 'execution_running') {
+          throw new DomainError('workflow_invalid_transition', 'Execution continuation requires execution_running');
+        }
+        const session = await this.requireActiveSession(repository, workflow);
+        const executionPackage = this.requireFound(
+          await repository.getExecutionPackage(this.requireString(workflow.execution_package_id, 'Workflow execution package is missing')),
+          `ExecutionPackage ${workflow.execution_package_id}`,
+        );
+        const runSession = this.requireFound(
+          await repository.findActiveRunSessionForPackage(executionPackage.id),
+          `active RunSession for ExecutionPackage ${executionPackage.id}`,
+        );
+        const runtimeJob = this.requireFound(
+          await repository.getCodexRuntimeJob({
+            runtime_job_id: this.requireString(runSession.runtime_metadata?.remote_runtime_job_id, 'Workflow execution runtime job is missing'),
+          }),
+          `CodexRuntimeJob ${runSession.runtime_metadata?.remote_runtime_job_id}`,
+        );
+
+        const decision = await this.classifyExecutionContinuation(repository, {
+          workflow,
+          session,
+          executionPackage,
+          runSession,
+          runtimeJob,
+          input,
+        });
+        if (decision.mode === 'reject') {
+          throw new DomainError(decision.code, `${decision.code}: Workflow execution cannot continue from its current state`);
+        }
+
+        const action = await this.createAndClaimContinueExecutionAction(repository, workflow, session, input, decision.mode);
+        if (action.status === 'succeeded') {
+          const currentRunSession = this.requireFound(
+            await repository.getRunSession(runSession.id),
+            `RunSession ${runSession.id}`,
+          );
+          const currentRuntimeJobId = this.requireString(
+            currentRunSession.runtime_metadata?.remote_runtime_job_id,
+            'Workflow execution runtime job is missing',
+          );
+          return this.continuedExecutionProjection(repository, workflow, session, executionPackage, currentRunSession, currentRuntimeJobId);
+        }
+        if (decision.mode === 'existing_job_input') {
+          return this.completeExistingJobInputContinuation(repository, workflow, session, executionPackage, action, decision, input);
+        }
+        if (decision.mode === 'replay_current_continuation') {
+          return this.completeReplayCurrentContinuation(repository, workflow, session, executionPackage, action, decision);
+        }
+        return this.completeRelaunchAfterFencingContinuation(repository, workflow, session, executionPackage, action, decision, input);
+      }),
+    );
+  }
+
+  private async classifyExecutionContinuation(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      executionPackage: ExecutionPackage;
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+      input: ContinueWorkflowExecutionBodyDto;
+    },
+  ): Promise<ContinuationDecision> {
+    const { workflow, session, executionPackage, runSession, runtimeJob } = input;
+    if (!this.workflowExecutionRuntimeTargetMatches({ workflow, session, executionPackage, runSession, runtimeJob })) {
+      return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+    }
+    const now = this.now();
+    const codexSessionLease = await this.resolveRuntimeJobCodexSessionLeaseForContinuation(repository, session, runtimeJob);
+    const runWorkerLease = await repository.getRunWorkerLease(runSession.id);
+    const launchLease = await repository.getCodexLaunchLeasePublicStatus({ launch_lease_id: runtimeJob.launch_lease_id });
+    const runtimeJobActive = codexRuntimeJobIsActive(runtimeJob);
+    const activeRuntimeJobLineageValid =
+      this.runtimeJobInputCapsuleDigestMatchesSession(runtimeJob, session) &&
+      (await this.runtimeJobTurnIsRunning(repository, runSession, runtimeJob));
+    const leasesActive =
+      codexSessionLease !== undefined &&
+      this.codexSessionLeaseIsActive(codexSessionLease, session, runtimeJob, now) &&
+      runWorkerLease !== undefined &&
+      this.runWorkerLeaseIsActive(runWorkerLease, runtimeJob, now) &&
+      launchLease !== undefined &&
+      this.codexLaunchLeaseIsActive(launchLease, runtimeJob, now);
+
+    if (runSession.status === 'waiting_for_input') {
+      if (runtimeJob.status === 'running' && leasesActive && activeRuntimeJobLineageValid) {
+        return { mode: 'existing_job_input', runSession, runtimeJob, codexSessionLease, runWorkerLease, launchLease };
+      }
+      if (runtimeJob.status === 'running' && leasesActive) {
+        return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+      }
+      return { mode: 'reject', code: 'workflow_execution_not_ready_for_input' };
+    }
+
+    if (runSession.status === 'resuming') {
+      if (runtimeJobActive && leasesActive && activeRuntimeJobLineageValid) {
+        return { mode: 'replay_current_continuation', runSession, runtimeJob, codexSessionLease, runWorkerLease, launchLease };
+      }
+      if (runtimeJobActive && leasesActive) {
+        return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+      }
+      const previousCodexSessionLease = await this.recoverExpiredCodexSessionLeaseForContinuation(repository, {
+        workflow,
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (
+        runtimeJob.status === 'terminal' &&
+        previousCodexSessionLease !== undefined &&
+        this.runWorkerLeaseIsRecoverable(runWorkerLease, now)
+      ) {
+        return {
+          mode: 'relaunch_after_fencing',
+          runSession,
+          previousRuntimeJob: runtimeJob,
+          previousCodexSessionLease,
+          ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+        };
+      }
+      return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+    }
+
+    if (runSession.status === 'stalled') {
+      if (runtimeJob.status !== 'terminal') {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      const previousCodexSessionLease = await this.recoverExpiredCodexSessionLeaseForContinuation(repository, {
+        workflow,
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (previousCodexSessionLease === undefined) {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      if (!this.runWorkerLeaseIsRecoverable(runWorkerLease, now)) {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      return {
+        mode: 'relaunch_after_fencing',
+        runSession,
+        previousRuntimeJob: runtimeJob,
+        previousCodexSessionLease,
+        ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+      };
+    }
+
+    if (runSession.status === 'cancel_requested') {
+      if (
+        input.input.cancel_recovery_decision !== 'recover_instead_of_accept_cancel' ||
+        input.input.cancel_recovery_confirmation_phrase !== 'recover cancelled execution'
+      ) {
+        return { mode: 'reject', code: 'workflow_execution_cancel_pending' };
+      }
+      const turn =
+        runSession.codex_session_turn_id === undefined ? undefined : await repository.getCodexSessionTurn(runSession.codex_session_turn_id);
+      if (
+        runtimeJobActive ||
+        (codexSessionLease !== undefined && this.codexSessionLeaseCanStillTerminalize(codexSessionLease, session, runtimeJob, now)) ||
+        (runWorkerLease !== undefined && this.runWorkerLeaseIsActive(runWorkerLease, runtimeJob, now)) ||
+        (launchLease !== undefined && this.codexLaunchLeaseIsActive(launchLease, runtimeJob, now)) ||
+        (turn?.status !== 'cancelled' && turn?.status !== 'stale')
+      ) {
+        return { mode: 'reject', code: 'workflow_execution_cancel_pending' };
+      }
+      const previousCodexSessionLease = await this.recoverExpiredCodexSessionLeaseForContinuation(repository, {
+        workflow,
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (
+        runtimeJob.status !== 'terminal' ||
+        previousCodexSessionLease === undefined ||
+        !this.runWorkerLeaseIsRecoverable(runWorkerLease, now)
+      ) {
+        return { mode: 'reject', code: 'workflow_execution_cancel_pending' };
+      }
+      return {
+        mode: 'relaunch_after_fencing',
+        runSession,
+        previousRuntimeJob: runtimeJob,
+        previousCodexSessionLease,
+        ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+        cancelRecovery: true,
+      };
+    }
+
+    return { mode: 'reject', code: 'workflow_execution_not_ready_for_input' };
+  }
+
+  private workflowExecutionRuntimeTargetMatches(input: {
+    workflow: PlanItemWorkflow;
+    session: CodexSession;
+    executionPackage: ExecutionPackage;
+    runSession: RunSession;
+    runtimeJob: CodexRuntimeJob;
+  }): boolean {
+    const { workflow, session, executionPackage, runSession, runtimeJob } = input;
+    let workload: ReturnType<typeof validateCodexRunExecutionWorkload>;
+    try {
+      workload = validateCodexRunExecutionWorkload(runtimeJob.input_json);
+    } catch {
+      return false;
+    }
+    const workloadInputCapsuleDigest = workload.codex_session_runtime_context.expected_input_capsule_digest;
+    return (
+      workloadInputCapsuleDigest !== undefined &&
+      runtimeJob.input_digest === codexRuntimeJobInputDigest(workload) &&
+      runSession.execution_package_id === executionPackage.id &&
+      runSession.workflow_id === workflow.id &&
+      runSession.codex_session_id === session.id &&
+      runSession.codex_session_turn_id !== undefined &&
+      runtimeJob.target_type === 'run_session' &&
+      runtimeJob.target_id === runSession.id &&
+      runtimeJob.target_kind === 'run_execution' &&
+      runtimeJob.workflow_id === workflow.id &&
+      runtimeJob.codex_session_id === session.id &&
+      runtimeJob.codex_session_turn_id === runSession.codex_session_turn_id &&
+      runtimeJob.repo_id === executionPackage.repo_id &&
+      workload.runtime_job_id === runtimeJob.id &&
+      workload.plan_item_workflow_id === workflow.id &&
+      workload.development_plan_id === workflow.development_plan_id &&
+      workload.development_plan_item_id === workflow.development_plan_item_id &&
+      workload.run_session_id === runSession.id &&
+      workload.execution_package_id === executionPackage.id &&
+      workload.execution_package_version === executionPackage.version &&
+      workload.workspace_bundle_digest === runSession.runtime_metadata?.remote_workspace_bundle_digest &&
+      workload.codex_session_runtime_context.codex_session_id === session.id &&
+      workload.codex_session_runtime_context.codex_session_turn_id === runSession.codex_session_turn_id &&
+      workload.codex_session_runtime_context.continuation.codex_thread_id_digest === session.codex_thread_id_digest &&
+      workload.codex_session_terminalization.codex_session_id === session.id &&
+      workload.codex_session_terminalization.codex_session_turn_id === runSession.codex_session_turn_id &&
+      workload.codex_session_terminalization.expected_input_capsule_digest === workloadInputCapsuleDigest &&
+      workload.codex_session_terminalization.input_capsule_digest === workloadInputCapsuleDigest
+    );
+  }
+
+  private requireRuntimeJobInputCapsuleDigest(runtimeJob: CodexRuntimeJob, message: string): string {
+    const workload = validateCodexRunExecutionWorkload(runtimeJob.input_json);
+    return this.requireString(workload.codex_session_runtime_context.expected_input_capsule_digest, message);
+  }
+
+  private runtimeJobInputCapsuleDigestMatchesSession(runtimeJob: CodexRuntimeJob, session: CodexSession): boolean {
+    try {
+      return this.requireRuntimeJobInputCapsuleDigest(runtimeJob, 'Runtime input capsule digest is missing') === session.latest_capsule_digest;
+    } catch {
+      return false;
+    }
+  }
+
+  private async runtimeJobTurnIsRunning(
+    repository: DeliveryRepository,
+    runSession: RunSession,
+    runtimeJob: CodexRuntimeJob,
+  ): Promise<boolean> {
+    const turnId = runSession.codex_session_turn_id;
+    if (turnId === undefined || runtimeJob.codex_session_turn_id !== turnId) {
+      return false;
+    }
+    const turn = await repository.getCodexSessionTurn(turnId);
+    return turn !== undefined && turn.status === 'running';
+  }
+
+  private async resolveRuntimeJobCodexSessionLeaseForContinuation(
+    repository: DeliveryRepository,
+    session: CodexSession,
+    runtimeJob: CodexRuntimeJob,
+  ): Promise<CodexSessionLease | undefined> {
+    const activeLease = session.active_lease_id === undefined ? undefined : await repository.getCodexSessionLease(session.active_lease_id);
+    if (activeLease !== undefined && activeLease.worker_id === runtimeJob.worker_id) {
+      return activeLease;
+    }
+    let workload: ReturnType<typeof validateCodexRunExecutionWorkload>;
+    try {
+      workload = validateCodexRunExecutionWorkload(runtimeJob.input_json);
+    } catch {
+      return activeLease;
+    }
+    const workloadLease = await repository.getCodexSessionLease(workload.codex_session_terminalization.codex_session_lease_id);
+    return workloadLease ?? activeLease;
+  }
+
+  private codexSessionLeaseIsActive(
+    lease: CodexSessionLease,
+    session: CodexSession,
+    runtimeJob: CodexRuntimeJob,
+    now: string,
+  ): boolean {
+    return this.codexSessionLeaseCanStillTerminalize(lease, session, runtimeJob, now);
+  }
+
+  private codexSessionLeaseCanStillTerminalize(
+    lease: CodexSessionLease,
+    session: CodexSession,
+    runtimeJob: CodexRuntimeJob,
+    now: string,
+  ): boolean {
+    return (
+      lease.status === 'active' &&
+      lease.expires_at > now &&
+      lease.codex_session_id === session.id &&
+      session.active_lease_id === lease.id &&
+      lease.worker_id === runtimeJob.worker_id &&
+      this.codexSessionLeaseWorkerSessionDigestMatchesRuntimeJob(lease, runtimeJob)
+    );
+  }
+
+  private codexSessionLeaseWorkerSessionDigestMatchesRuntimeJob(
+    lease: CodexSessionLease,
+    runtimeJob: CodexRuntimeJob,
+  ): boolean {
+    try {
+      const workload = validateCodexRunExecutionWorkload(runtimeJob.input_json);
+      return (
+        lease.worker_session_digest === workload.codex_session_runtime_context.worker_session_digest &&
+        lease.worker_session_digest === workload.codex_session_terminalization.codex_session_worker_session_digest
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private runWorkerLeaseIsActive(lease: RunWorkerLease, runtimeJob: CodexRuntimeJob, now: string): boolean {
+    return lease.status === 'active' && lease.expires_at > now && lease.worker_id === runtimeJob.worker_id;
+  }
+
+  private codexLaunchLeaseIsActive(lease: CodexLaunchLease, runtimeJob: CodexRuntimeJob, now: string): boolean {
+    return (
+      lease.id === runtimeJob.launch_lease_id &&
+      lease.worker_id === runtimeJob.worker_id &&
+      lease.expires_at > now &&
+      (lease.status === 'active' || lease.status === 'materialized')
+    );
+  }
+
+  private codexSessionLeaseIsRecoverable(lease: CodexSessionLease, session: CodexSession): boolean {
+    return (
+      lease.codex_session_id === session.id &&
+      (lease.status === 'released' || lease.status === 'expired' || lease.status === 'fenced' || lease.status === 'stale')
+    );
+  }
+
+  private runWorkerLeaseIsRecoverable(lease: RunWorkerLease | undefined, now: string): boolean {
+    return lease === undefined || lease.status === 'released' || lease.status === 'expired' || lease.expires_at <= now;
+  }
+
+  private async recoverExpiredCodexSessionLeaseForContinuation(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      lease: CodexSessionLease | undefined;
+      now: string;
+    },
+  ): Promise<CodexSessionLease | undefined> {
+    const { workflow, session, lease, now } = input;
+    if (lease === undefined) {
+      return undefined;
+    }
+    if (this.codexSessionLeaseIsRecoverable(lease, session)) {
+      return lease;
+    }
+    if (
+      lease.status !== 'active' ||
+      lease.expires_at > now ||
+      lease.codex_session_id !== session.id ||
+      session.active_lease_id !== lease.id
+    ) {
+      return undefined;
+    }
+    try {
+      const recovered = await repository.recoverCodexSessionLeaseForClaim({
+        session_id: session.id,
+        workflow_id: workflow.id,
+        lease_id: lease.id,
+        lease_token_hash: lease.lease_token_hash,
+        worker_id: lease.worker_id,
+        worker_session_digest: lease.worker_session_digest,
+        lease_epoch: lease.lease_epoch,
+        ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+        ...(session.latest_capsule_id === undefined ? {} : { input_capsule_id: session.latest_capsule_id }),
+        ...(session.latest_capsule_digest === undefined ? {} : { input_capsule_digest: session.latest_capsule_digest }),
+        ...(session.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: session.base_memory_bundle_ref }),
+        ...(session.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: session.base_memory_bundle_digest }),
+        ...(session.latest_memory_bundle_ref === undefined ? {} : { input_memory_bundle_ref: session.latest_memory_bundle_ref }),
+        ...(session.latest_memory_bundle_digest === undefined ? {} : { input_memory_bundle_digest: session.latest_memory_bundle_digest }),
+        ...(session.latest_environment_manifest_ref === undefined
+          ? {}
+          : { input_environment_manifest_ref: session.latest_environment_manifest_ref }),
+        ...(session.latest_environment_manifest_digest === undefined
+          ? {}
+          : { input_environment_manifest_digest: session.latest_environment_manifest_digest }),
+        now,
+      });
+      return recovered.lease;
+    } catch (error) {
+      if (error instanceof DomainError) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async createAndClaimContinueExecutionAction(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    input: ContinueWorkflowExecutionBodyDto,
+    mode: ContinuationDecision['mode'],
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const now = this.now();
+    const contextPreviewDigest = codexCanonicalDigest({
+      schema_version: 'continue_execution_context_preview.v1',
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      workflow_status: workflow.status,
+      mode,
+      expected_input_capsule_digest: session.latest_capsule_digest ?? null,
+      input_markdown_digest: input.input_markdown === undefined ? null : codexCanonicalDigest(input.input_markdown),
+      cancel_recovery_decision: input.cancel_recovery_decision ?? null,
+    });
+    const requestDigest = codexCanonicalDigest({
+      schema_version: 'continue_execution_request.v1',
+      workflow_id: workflow.id,
+      actor_id: input.actor_id,
+      expected_input_capsule_digest: session.latest_capsule_digest ?? null,
+      input_markdown_digest: input.input_markdown === undefined ? null : codexCanonicalDigest(input.input_markdown),
+      cancel_recovery_decision: input.cancel_recovery_decision ?? null,
+      cancel_recovery_confirmation_phrase: input.cancel_recovery_confirmation_phrase ?? null,
+    });
+    const idempotencyKey = codexCanonicalDigest({
+      schema_version: 'continue_execution_idempotency.v2',
+      workflow_id: workflow.id,
+      actor_id: input.actor_id,
+      client_idempotency_key: input.idempotency_key ?? requestDigest,
+      request_digest: requestDigest,
+    });
+    const existingAction = (await repository.listPlanItemWorkflowQueuedActions(workflow.id)).find(
+      (candidate) => candidate.kind === 'continue_execution' && candidate.idempotency_key === idempotencyKey,
+    );
+    if (existingAction !== undefined) {
+      if (existingAction.status === 'stale' || existingAction.status === 'cancelled' || existingAction.status === 'failed') {
+        throw new DomainError(
+          'workflow_action_not_runnable',
+          `workflow_action_not_runnable: Continue execution action ${existingAction.id} is ${existingAction.status}`,
+        );
+      }
+      if (existingAction.status !== 'queued' && existingAction.status !== 'running') {
+        return existingAction;
+      }
+      const claimedExisting = await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+        workflow_id: workflow.id,
+        action_id: existingAction.id,
+        now,
+      });
+      return claimedExisting.action;
+    }
+    const action = await repository.createOrReplayPlanItemWorkflowQueuedAction({
+      id: randomUUID(),
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      kind: 'continue_execution',
+      status: 'queued',
+      ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+      context_preview_digest: contextPreviewDigest,
+      idempotency_key: idempotencyKey,
+      created_by_actor_id: input.actor_id,
+      created_at: now,
+      updated_at: now,
+    });
+    const claimed = await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+      workflow_id: workflow.id,
+      action_id: action.id,
+      now,
+    });
+    return claimed.action;
+  }
+
+  private async completeExistingJobInputContinuation(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    action: PlanItemWorkflowQueuedAction,
+    decision: Extract<ContinuationDecision, { mode: 'existing_job_input' }>,
+    input: ContinueWorkflowExecutionBodyDto,
+  ): Promise<PlanItemWorkflowPublicDto> {
+    const now = this.now();
+    const updatedRunSession = transitionRunSession(decision.runSession, { type: 'resume_requested', at: now });
+    const runtimeMetadata = this.requireRunRuntimeMetadata(updatedRunSession, 'Execution continuation requires runtime metadata');
+    await repository.saveRunSession({
+      ...updatedRunSession,
+      runtime_metadata: {
+        ...runtimeMetadata,
+        driver_status: 'active',
+      },
+    });
+    const currentRunWorkerLease = await repository.getRunWorkerLease(decision.runSession.id);
+    if (
+      currentRunWorkerLease === undefined ||
+      !this.runWorkerLeaseIsActive(currentRunWorkerLease, decision.runtimeJob, now) ||
+      currentRunWorkerLease.id !== decision.runWorkerLease.id
+    ) {
+      throw new DomainError('workflow_execution_writer_still_active', 'Workflow execution writer lease changed before input continuation');
+    }
+    const command: RunCommand = {
+      id: randomUUID(),
+      run_session_id: decision.runSession.id,
+      command_type: 'input',
+      status: 'pending',
+      actor_id: input.actor_id,
+      payload: {
+        schema_version: 'plan_item_workflow_continue_execution_input.v1',
+        workflow_id: workflow.id,
+        queued_action_id: action.id,
+        message: input.input_markdown ?? 'Continue execution.',
+        input_markdown: input.input_markdown ?? 'Continue execution.',
+      },
+      ...(decision.runSession.codex_session_turn_id === undefined ? {} : { target_turn_id: decision.runSession.codex_session_turn_id }),
+      created_at: now,
+      updated_at: now,
+    };
+    await repository.supersedePendingRunCommands(decision.runSession.id, ['input'], now);
+    await repository.saveRunCommand(command);
+    await this.persistContinuationLineageAndTerminalAction(repository, workflow, session, action, {
+      runSession: updatedRunSession,
+      continuationKind: 'existing_job_input',
+      previousRuntimeJobId: decision.runtimeJob.id,
+      previousCapsuleDigest: this.requireRuntimeJobInputCapsuleDigest(
+        decision.runtimeJob,
+        'Execution continuation requires previous runtime input capsule digest',
+      ),
+      expectedInputCapsuleDigest: this.requireString(session.latest_capsule_digest, 'Execution continuation requires a latest capsule digest'),
+      previousCodexSessionLeaseId: decision.codexSessionLease.id,
+      previousRunWorkerLeaseId: decision.runWorkerLease.id,
+      ...(decision.runSession.codex_session_turn_id === undefined ? {} : { codexSessionTurnId: decision.runSession.codex_session_turn_id }),
+      actorId: input.actor_id,
+      eventPayload: { mode: 'existing_job_input', run_command_id: command.id, runtime_job_id: decision.runtimeJob.id },
+      now,
+    });
+    return this.continuedExecutionProjection(repository, workflow, session, executionPackage, updatedRunSession, decision.runtimeJob.id);
+  }
+
+  private async completeReplayCurrentContinuation(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    action: PlanItemWorkflowQueuedAction,
+    decision: Extract<ContinuationDecision, { mode: 'replay_current_continuation' }>,
+  ): Promise<PlanItemWorkflowPublicDto> {
+    const now = this.now();
+    await this.persistContinuationLineageAndTerminalAction(repository, workflow, session, action, {
+      runSession: decision.runSession,
+      continuationKind: 'replay_current_continuation',
+      previousRuntimeJobId: decision.runtimeJob.id,
+      previousCapsuleDigest: this.requireRuntimeJobInputCapsuleDigest(
+        decision.runtimeJob,
+        'Execution continuation requires previous runtime input capsule digest',
+      ),
+      expectedInputCapsuleDigest: this.requireString(session.latest_capsule_digest, 'Execution continuation requires a latest capsule digest'),
+      previousCodexSessionLeaseId: decision.codexSessionLease.id,
+      previousRunWorkerLeaseId: decision.runWorkerLease.id,
+      ...(decision.runSession.codex_session_turn_id === undefined ? {} : { codexSessionTurnId: decision.runSession.codex_session_turn_id }),
+      actorId: action.created_by_actor_id,
+      eventPayload: { mode: 'replay_current_continuation', runtime_job_id: decision.runtimeJob.id },
+      now,
+    });
+    return this.continuedExecutionProjection(repository, workflow, session, executionPackage, decision.runSession, decision.runtimeJob.id);
+  }
+
+  private async completeRelaunchAfterFencingContinuation(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    action: PlanItemWorkflowQueuedAction,
+    decision: Extract<ContinuationDecision, { mode: 'relaunch_after_fencing' }>,
+    input: ContinueWorkflowExecutionBodyDto,
+  ): Promise<PlanItemWorkflowPublicDto> {
+    const scheduled = await this.scheduleContinuationRelaunchRuntimeJob(repository, {
+      workflow,
+      session,
+      executionPackage,
+      action,
+      runSession: decision.runSession,
+      previousRuntimeJob: decision.previousRuntimeJob,
+      actorId: input.actor_id,
+      cancelRecovery: decision.cancelRecovery === true,
+    });
+    await this.persistContinuationLineageAndTerminalAction(repository, workflow, scheduled.session, action, {
+      runSession: scheduled.runSession,
+      continuationKind: 'relaunch_after_fencing',
+      previousRuntimeJobId: decision.previousRuntimeJob.id,
+      newRuntimeJobId: scheduled.runtimeJob.id,
+      previousCapsuleDigest: this.requireRuntimeJobInputCapsuleDigest(
+        decision.previousRuntimeJob,
+        'Execution continuation requires previous runtime input capsule digest',
+      ),
+      expectedInputCapsuleDigest: this.requireString(scheduled.session.latest_capsule_digest, 'Execution continuation requires a latest capsule digest'),
+      previousCodexSessionLeaseId: decision.previousCodexSessionLease.id,
+      ...(decision.previousRunWorkerLease?.id === undefined ? {} : { previousRunWorkerLeaseId: decision.previousRunWorkerLease.id }),
+      codexSessionTurnId: scheduled.turn.id,
+      actorId: input.actor_id,
+      eventPayload: {
+        mode: 'relaunch_after_fencing',
+        previous_runtime_job_id: decision.previousRuntimeJob.id,
+        new_runtime_job_id: scheduled.runtimeJob.id,
+        cancel_recovery: decision.cancelRecovery === true,
+        cancel_recovery_decision: input.cancel_recovery_decision ?? null,
+      },
+      now: scheduled.now,
+    });
+    return this.continuedExecutionProjection(
+      repository,
+      workflow,
+      scheduled.session,
+      executionPackage,
+      scheduled.runSession,
+      scheduled.runtimeJob.id,
+    );
+  }
+
+  private requireRunRuntimeMetadata(runSession: RunSession, message: string): RunRuntimeMetadata {
+    if (runSession.runtime_metadata === undefined) {
+      throw new DomainError('workflow_evidence_missing', message);
+    }
+    return runSession.runtime_metadata;
+  }
+
+  private async persistContinuationLineageAndTerminalAction(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    action: PlanItemWorkflowQueuedAction,
+    input: {
+      runSession: RunSession;
+      continuationKind: ExecutionContinuationLineage['continuation_kind'];
+      previousRuntimeJobId: string;
+      newRuntimeJobId?: string;
+      previousCapsuleDigest: string;
+      expectedInputCapsuleDigest: string;
+      previousCodexSessionLeaseId: string;
+      previousRunWorkerLeaseId?: string;
+      codexSessionTurnId?: string;
+      actorId: string;
+      eventPayload: Record<string, unknown>;
+      now: string;
+    },
+  ): Promise<void> {
+    const lineageId = stableUuid({
+      schema_version: 'execution_continuation_lineage_id.v1',
+      workflow_id: workflow.id,
+      run_session_id: input.runSession.id,
+      queued_action_id: action.id,
+      continuation_kind: input.continuationKind,
+      previous_runtime_job_id: input.previousRuntimeJobId,
+      new_runtime_job_id: input.newRuntimeJobId ?? null,
+    });
+    await repository.saveExecutionContinuationLineage({
+      id: lineageId,
+      workflow_id: workflow.id,
+      run_session_id: input.runSession.id,
+      codex_session_id: session.id,
+      queued_action_id: action.id,
+      continuation_kind: input.continuationKind,
+      previous_runtime_job_id: input.previousRuntimeJobId,
+      ...(input.newRuntimeJobId === undefined ? {} : { new_runtime_job_id: input.newRuntimeJobId }),
+      ...(input.codexSessionTurnId === undefined ? {} : { codex_session_turn_id: input.codexSessionTurnId }),
+      previous_capsule_digest: input.previousCapsuleDigest,
+      expected_input_capsule_digest: input.expectedInputCapsuleDigest,
+      previous_codex_session_lease_id: input.previousCodexSessionLeaseId,
+      ...(input.previousRunWorkerLeaseId === undefined ? {} : { previous_run_worker_lease_id: input.previousRunWorkerLeaseId }),
+      created_by_actor_id: input.actorId,
+      created_at: input.now,
+    });
+
+    if (action.status === 'running') {
+      await repository.terminalizePlanItemWorkflowQueuedAction({
+        workflow_id: workflow.id,
+        action_id: action.id,
+        status: 'succeeded',
+        ...(input.codexSessionTurnId === undefined ? {} : { codex_session_turn_id: input.codexSessionTurnId }),
+        now: input.now,
+      });
+    } else if (action.status !== 'succeeded') {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${action.id} is not running`,
+      );
+    }
+
+    const eventId = stableUuid({
+      schema_version: 'execution_continuation_event_id.v1',
+      workflow_id: workflow.id,
+      queued_action_id: action.id,
+      lineage_id: lineageId,
+    });
+    const existingEvents = await repository.listObjectEvents(workflow.id, 'plan_item_workflow');
+    if (!existingEvents.some((event) => event.id === eventId)) {
+      await repository.appendObjectEvent({
+        id: eventId,
+        object_type: 'plan_item_workflow',
+        object_id: workflow.id,
+        event_type: 'workflow_execution_continued',
+        actor_type: 'human',
+        actor_id: input.actorId,
+        payload: {
+          schema_version: 'plan_item_workflow_execution_continued.v1',
+          continuation_kind: input.continuationKind,
+          queued_action_id: action.id,
+          lineage_id: lineageId,
+          run_session_id: input.runSession.id,
+          ...input.eventPayload,
+        },
+        metadata: {
+          codex_session_id: session.id,
+          ...(input.codexSessionTurnId === undefined ? {} : { codex_session_turn_id: input.codexSessionTurnId }),
+          previous_runtime_job_id: input.previousRuntimeJobId,
+          ...(input.newRuntimeJobId === undefined ? {} : { new_runtime_job_id: input.newRuntimeJobId }),
+          previous_capsule_digest: input.previousCapsuleDigest,
+          expected_input_capsule_digest: input.expectedInputCapsuleDigest,
+        },
+        created_at: input.now,
+      });
+    }
+  }
+
+  private continuedExecutionProjection(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    runSession: RunSession,
+    runtimeJobId: string,
+  ): Promise<PlanItemWorkflowPublicDto> {
+    return this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [], {
+      execution_run_summary: this.executionRunSummary({
+        workflow,
+        session,
+        executionPackage,
+        runSessionId: runSession.id,
+        runtimeJobId,
+        ...(runSession.codex_session_turn_id === undefined ? {} : { executionTurnId: runSession.codex_session_turn_id }),
+        ...(session.latest_capsule_digest === undefined ? {} : { inputCapsuleDigest: session.latest_capsule_digest }),
+        ...(runSession.runtime_metadata?.remote_workspace_bundle_digest === undefined
+          ? {}
+          : { workspaceBundleDigest: runSession.runtime_metadata.remote_workspace_bundle_digest }),
+        ...(session.codex_thread_id_digest === undefined ? {} : { codexThreadIdDigest: session.codex_thread_id_digest }),
+        status: runSession.status,
+      }),
+    });
+  }
+
+  private async scheduleContinuationRelaunchRuntimeJob(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      executionPackage: ExecutionPackage;
+      action: PlanItemWorkflowQueuedAction;
+      runSession: RunSession;
+      previousRuntimeJob: CodexRuntimeJob;
+      actorId: string;
+      cancelRecovery: boolean;
+    },
+  ): Promise<{
+      session: CodexSession;
+      turn: CodexSessionTurn;
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+      now: string;
+    }> {
+    const { workflow, session, executionPackage, action, runSession, previousRuntimeJob, actorId } = input;
+    if (previousRuntimeJob.status !== 'terminal') {
+      throw new DomainError('workflow_execution_writer_still_active', 'Execution continuation relaunch requires terminal previous runtime job');
+    }
+    const now = this.now();
+    const inputCapsule = await this.requireLatestExecutionInputCapsule(repository, session);
+    const inputContinuity = this.requireExecutionInputContinuity(session);
+    const runtimeBinding = await this.resolveActiveExecutionRuntimeBinding(repository, executionPackage, now);
+    const runtimeExpiresAt = new Date(Date.parse(now) + 10 * 60_000).toISOString();
+    const workerSessionDigest = await repository.getCodexWorkerSessionDigest(runtimeBinding.worker.id);
+    if (workerSessionDigest === undefined) {
+      throw new DomainError('workflow_runtime_binding_unavailable', 'Execution worker session digest is unavailable');
+    }
+    const executionTurn = await this.createWorkflowChildTurn(
+      repository,
+      workflow,
+      session,
+      actorId,
+      'continue_execution',
+      `continue-execution:${runSession.id}:${action.id}`,
+    );
+    const sessionWithTurn = (await repository.getCodexSession(session.id)) ?? session;
+    const runtimeJobId = randomUUID();
+    const launchLeaseId = randomUUID();
+    const envelopeId = randomUUID();
+    const leaseToken = `codex-session-execution-continuation:${randomUUID()}`;
+    const runWorkerLeaseToken = `run-worker-execution-continuation:${randomUUID()}`;
+    const runSpec = buildRunSpec(await loadRunContext(repository, runSession.id), {
+      defaultExecutorType: 'local_codex',
+      workflowOnly: false,
+    });
+    const workflowExecutionPayload = this.workflowExecutionPayload(executionPackage, this.workflowExecutionRemoteRunSpec(runSpec));
+    const workspaceBundle = this.workflowExecutionWorkspaceBundle(now, workflowExecutionPayload);
+    const resumedRunSession = transitionRunSession(runSession, { type: 'resume_requested', at: now });
+    const runtimeMetadata = this.requireRunRuntimeMetadata(runSession, 'Execution continuation relaunch requires runtime metadata');
+    const runSessionWithRuntime: RunSession = {
+      ...resumedRunSession,
+      codex_session_id: session.id,
+      codex_session_turn_id: executionTurn.id,
+      executor_type: 'local_codex',
+      run_spec: runSpec,
+      runtime_metadata: {
+        ...runtimeMetadata,
+        driver_kind: 'app_server',
+        driver_status: 'not_started',
+        recovery_attempt_count: runtimeMetadata.recovery_attempt_count + 1,
+        effective_dangerous_mode: 'confirmed',
+        runtime_profile_id: runtimeBinding.runtime_profile_id,
+        runtime_profile_revision_id: runtimeBinding.runtime_profile_revision_id,
+        runtime_profile_digest: runtimeBinding.runtime_profile_digest,
+        runtime_target_kind: 'run_execution',
+        source_access_mode: 'path_policy_scoped',
+        environment: runtimeBinding.environment,
+        credential_binding_id: runtimeBinding.credential_binding_id,
+        credential_binding_version_id: runtimeBinding.credential_binding_version_id,
+        credential_payload_digest: runtimeBinding.credential_payload_digest,
+        launch_lease_id: launchLeaseId,
+        docker_image_digest: runtimeBinding.docker_image_digest,
+        network_policy_digest: runtimeBinding.network_policy_digest,
+        ...(runtimeBinding.network_provider_config_digest === undefined
+          ? {}
+          : { network_provider_config_digest: runtimeBinding.network_provider_config_digest }),
+        remote_runtime_job_id: runtimeJobId,
+        remote_runtime_job_created: true,
+        remote_workspace_bundle_digest: workspaceBundle.archive_digest,
+        remote_workspace_manifest_digest: workspaceBundle.manifest_digest,
+        remote_workspace_bundle_size_bytes: workspaceBundle.bytes.byteLength,
+        remote_workspace_bundle_expires_at: runtimeExpiresAt,
+      },
+    };
+    await repository.saveRunSession(runSessionWithRuntime);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: runtimeBinding.worker.id,
+      lease_token: runWorkerLeaseToken,
+      now,
+      expires_at: runtimeExpiresAt,
+    });
+    const codexLease = await repository.claimCodexSessionLease({
+      session_id: session.id,
+      workflow_id: workflow.id,
+      lease_id: randomUUID(),
+      lease_token_hash: codexCredentialPayloadDigest(leaseToken),
+      worker_id: runtimeBinding.worker.id,
+      worker_session_digest: workerSessionDigest,
+      expected_input_capsule_digest: inputCapsule.digest,
+      input_capsule_id: inputCapsule.id,
+      input_capsule_digest: inputCapsule.digest,
+      ...(session.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: session.base_memory_bundle_ref }),
+      ...(session.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: session.base_memory_bundle_digest }),
+      ...inputContinuity,
+      now,
+      expires_at: runtimeExpiresAt,
+    });
+    const pendingWorkspaceBundleRef = `artifact://internal/workspace_bundle/run_session/${runSession.id}/${workspaceBundle.id}`;
+    const workspaceAcquisition = {
+      schema_version: 'workspace_bundle_acquisition.v1' as const,
+      bundle_id: workspaceBundle.id,
+      archive_ref: pendingWorkspaceBundleRef,
+      archive_digest: workspaceBundle.archive_digest,
+      manifest_digest: workspaceBundle.manifest_digest,
+      size_bytes: workspaceBundle.bytes.byteLength,
+      expires_at: runtimeExpiresAt,
+    };
+    const workspaceAcquisitionDigest = this.requireString(
+      codexWorkspaceAcquisitionDigest(workspaceAcquisition),
+      'Workspace acquisition digest missing',
+    );
+    const workload: CodexRunExecutionWorkloadV1 = validateCodexRunExecutionWorkload({
+      schema_version: 'codex_run_execution_workload.v1',
+      runtime_job_id: runtimeJobId,
+      plan_item_workflow_id: workflow.id,
+      development_plan_id: workflow.development_plan_id,
+      development_plan_item_id: workflow.development_plan_item_id,
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+      workspace_bundle_id: workspaceBundle.id,
+      workspace_bundle_digest: workspaceBundle.archive_digest,
+      package_prompt_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/package-prompt`,
+      package_prompt_digest: codexCanonicalDigest(workflowExecutionPayload.packagePrompt),
+      execution_context_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/execution-context`,
+      execution_context_digest: codexCanonicalDigest(workflowExecutionPayload.executionContext),
+      path_policy_digest: codexCanonicalDigest({
+        allowed_paths: executionPackage.allowed_paths,
+        forbidden_paths: executionPackage.forbidden_paths,
+        source_mutation_policy: executionPackage.source_mutation_policy,
+      }),
+      required_checks_digest: codexCanonicalDigest(executionPackage.required_checks),
+      output_schema_version: 'codex_run_execution_result.v1',
+      created_at: now,
+      expires_at: runtimeExpiresAt,
+      workspace_acquisition_json: workspaceAcquisition,
+      codex_session_runtime_context: {
+        schema_version: 'codex_session_runtime_context.v1',
+        codex_session_id: session.id,
+        codex_session_turn_id: executionTurn.id,
+        lease_id: launchLeaseId,
+        lease_epoch: codexLease.lease.lease_epoch,
+        worker_id: runtimeBinding.worker.id,
+        worker_session_digest: workerSessionDigest,
+        expected_input_capsule_digest: inputCapsule.digest,
+        turn_group_status: 'complete',
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: this.requireString(session.codex_thread_id, 'Execution continuation requires a Codex thread id'),
+          codex_thread_id_digest: this.requireString(
+            session.codex_thread_id_digest,
+            'Execution continuation requires a Codex thread id digest',
+          ),
+        },
+      },
+      codex_session_terminalization: {
+        schema_version: 'codex_session_terminalization.v1',
+        lease_token: leaseToken,
+        codex_session_lease_id: codexLease.lease.id,
+        codex_session_lease_epoch: codexLease.lease.lease_epoch,
+        codex_session_worker_id: runtimeBinding.worker.id,
+        codex_session_worker_session_digest: workerSessionDigest,
+        codex_session_id: session.id,
+        codex_session_turn_id: executionTurn.id,
+        expected_input_capsule_digest: inputCapsule.digest,
+        input_capsule_id: inputCapsule.id,
+        input_capsule_ref: inputCapsule.artifact_ref,
+        input_capsule_digest: inputCapsule.digest,
+        ...(session.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: session.base_memory_bundle_ref }),
+        ...(session.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: session.base_memory_bundle_digest }),
+        ...inputContinuity,
+      },
+    });
+    const workspaceBundleArtifact = await new LocalInternalArtifactStore({
+      root: this.internalArtifactStoreRoot,
+      repository,
+      requestId: `plan-item-workflow-execution-continuation-${workflow.id}`,
+    }).putObject({
+      artifact_id: workspaceBundle.id,
+      kind: 'workspace_bundle',
+      owner_type: 'run_session',
+      owner_id: runSession.id,
+      visibility: 'internal',
+      content_type: 'application/vnd.forgeloop.workspace-bundle',
+      declared_size_bytes: String(workspaceBundle.bytes.byteLength),
+      declared_artifact_digest: workspaceBundle.archive_digest,
+      idempotency_key: workspaceBundle.id,
+      metadata_json: {
+        manifest_digest: workspaceBundle.manifest_digest,
+        execution_package_id: executionPackage.id,
+        run_worker_lease_id: runWorkerLease.id,
+        workspace_acquisition_digest: workspaceAcquisitionDigest,
+        previous_runtime_job_id: previousRuntimeJob.id,
+        continuation_action_id: action.id,
+        cancel_recovery: input.cancelRecovery,
+      },
+      created_by_actor_type: 'system',
+      created_by_actor_id: actorId,
+      now,
+      max_size_bytes: 100 * 1024 * 1024,
+      bytes: workspaceBundle.bytes,
+    });
+    const pendingWorkspaceBundle = {
+      id: randomUUID(),
+      bundle_id: workspaceBundle.id,
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      pending_artifact_ref: pendingWorkspaceBundleRef,
+      internal_artifact_object_id: workspaceBundleArtifact.id,
+      archive_digest: workspaceBundle.archive_digest,
+      manifest_digest: workspaceBundle.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: workspaceBundle.bytes.byteLength,
+      workspace_acquisition_digest: workspaceAcquisitionDigest,
+      workspace_acquisition_json: workspaceAcquisition,
+      expires_at: runtimeExpiresAt,
+      request_digest: codexCanonicalDigest({
+        runtime_job_id: runtimeJobId,
+        workspace_bundle_id: workspaceBundle.id,
+        archive_digest: workspaceBundle.archive_digest,
+        internal_artifact_object_id: workspaceBundleArtifact.id,
+      }),
+      created_at: now,
+    };
+    await repository.createPendingWorkspaceBundleArtifact(pendingWorkspaceBundle);
+    const runtimeJobResult = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      runtime_job_id: runtimeJobId,
+      launch_lease_id: launchLeaseId,
+      envelope_id: envelopeId,
+      job_request_id: codexCanonicalDigest({
+        kind: 'plan_item_workflow_execution_continue',
+        workflow_id: workflow.id,
+        run_session_id: runSession.id,
+        queued_action_id: action.id,
+        previous_runtime_job_id: previousRuntimeJob.id,
+      }),
+      target: {
+        target_type: 'run_session',
+        target_id: runSession.id,
+        target_kind: 'run_execution',
+        project_id: executionPackage.project_id,
+        repo_id: executionPackage.repo_id,
+      },
+      launch_attempt: previousRuntimeJob.launch_attempt + 1,
+      worker_id: runtimeBinding.worker.id,
+      runtime_profile_revision_id: runtimeBinding.runtime_profile_revision_id,
+      runtime_profile_digest: runtimeBinding.runtime_profile_digest,
+      credential_binding_id: runtimeBinding.credential_binding_id,
+      credential_binding_version_id: runtimeBinding.credential_binding_version_id,
+      credential_payload_digest: runtimeBinding.credential_payload_digest,
+      docker_image_digest: runtimeBinding.docker_image_digest,
+      network_policy_digest: runtimeBinding.network_policy_digest,
+      ...(runtimeBinding.network_provider_config_digest === undefined
+        ? {}
+        : { network_provider_config_digest: runtimeBinding.network_provider_config_digest }),
+      input_json: workload as unknown as Record<string, unknown>,
+      input_digest: codexRuntimeJobInputDigest(workload),
+      workspace_acquisition_json: workspaceAcquisition,
+      workspace_acquisition_digest: workspaceAcquisitionDigest,
+      pending_workspace_bundle: pendingWorkspaceBundle,
+      execution_package_id: executionPackage.id,
+      run_worker_lease_id: runWorkerLease.id,
+      run_worker_lease_token_hash: codexCredentialPayloadDigest(runWorkerLeaseToken),
+      run_session_status: runSessionWithRuntime.status,
+      run_session_updated_at: runSessionWithRuntime.updated_at,
+      execution_package_version: executionPackage.version,
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      codex_session_turn_id: executionTurn.id,
+      expires_at: runtimeExpiresAt,
+      now,
+    });
+    const persistedRunSession = this.requireFound(await repository.getRunSession(runSession.id), `RunSession ${runSession.id}`);
+    return {
+      session: (await repository.getCodexSession(session.id)) ?? codexLease.session ?? sessionWithTurn,
+      turn: executionTurn,
+      runSession: persistedRunSession,
+      runtimeJob: runtimeJobResult.runtime_job,
+      now,
+    };
   }
 
   private async requireExistingExecutionRunSummary(

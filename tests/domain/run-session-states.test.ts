@@ -93,6 +93,15 @@ describe('long-running run session states', () => {
     expect(cancelled.status).toBe('cancelled');
   });
 
+  it('allows explicit recovery flow to resume a cancel-requested non-terminal run', () => {
+    const running = transitionRunSession(createSession(), { type: 'workflow_start' });
+    const cancelRequested = transitionRunSession(running, { type: 'cancel_requested' });
+    const resuming = transitionRunSession(cancelRequested, { type: 'resume_requested' });
+
+    expect(resuming.status).toBe('resuming');
+    expect('finished_at' in resuming).toBe(false);
+  });
+
   it('rejects resume requests for terminal runs', () => {
     const running = transitionRunSession(createSession(), { type: 'workflow_start' });
     const cancelled = transitionRunSession(running, { type: 'cancel' });

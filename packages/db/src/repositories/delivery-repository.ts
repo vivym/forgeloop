@@ -1704,6 +1704,7 @@ export interface DeliveryRepository {
   getCodexRuntimeCapsule(id: string): Promise<CodexRuntimeCapsule | undefined>;
   saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void>;
   listStaleCodexSessionTerminalizationAttempts(sessionId: string): Promise<CodexSessionStaleTerminalizationAttempt[]>;
+  getCodexSessionLease(id: string): Promise<CodexSessionLease | undefined>;
   claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }>;
   recoverCodexSessionLeaseForClaim(
     input: RecoverCodexSessionLeaseForClaimInput,

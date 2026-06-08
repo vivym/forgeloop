@@ -4,6 +4,7 @@ import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import {
   approveWorkflowArtifactRevisionBodySchema,
   artifactTypeSchema,
+  continueWorkflowExecutionBodySchema,
   evaluateWorkflowExecutionReadinessBodySchema,
   requestWorkflowArtifactChangesBodySchema,
   runQueuedWorkflowActionBodySchema,
@@ -11,6 +12,7 @@ import {
   startWorkflowExecutionBodySchema,
   workflowMessageCommandBodySchema,
   type ApproveWorkflowArtifactRevisionBodyDto,
+  type ContinueWorkflowExecutionBodyDto,
   type EvaluateWorkflowExecutionReadinessBodyDto,
   type RequestWorkflowArtifactChangesBodyDto,
   type RunQueuedWorkflowActionBodyDto,
@@ -93,5 +95,13 @@ export class PlanItemWorkflowController {
       response.status(result.status_code);
       return result.workflow;
     });
+  }
+
+  @Post('plan-item-workflows/:workflowId/execution/continue')
+  continueExecution(
+    @Param('workflowId') workflowId: string,
+    @Body(new ZodValidationPipe(continueWorkflowExecutionBodySchema)) body: ContinueWorkflowExecutionBodyDto,
+  ) {
+    return this.service.continueExecution(workflowId, body);
   }
 }

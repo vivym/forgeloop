@@ -3301,7 +3301,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return { workflow: updatedWorkflow, selectedSession: activeSelected };
   }
 
-  private async getCodexSessionLease(id: string): Promise<CodexSessionLease | undefined> {
+  async getCodexSessionLease(id: string): Promise<CodexSessionLease | undefined> {
     return this.getById(codex_session_leases, codex_session_leases.id, id);
   }
 
