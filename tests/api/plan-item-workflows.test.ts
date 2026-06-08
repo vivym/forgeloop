@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
 import { ProductGenerationResultService } from '../../apps/control-plane-api/src/modules/automation/product-generation-result.service';
+import { PlanItemWorkflowService } from '../../apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.service';
 import { LocalInternalArtifactStore, type DeliveryRepository } from '../../packages/db/src';
 import {
   workspaceBundleArchiveDigest,
@@ -107,6 +108,133 @@ describe('Plan Item Workflow API', () => {
       .expect(400);
 
     await expect(repository.getActivePlanItemWorkflowByItem(item.id)).resolves.toBeUndefined();
+  });
+
+  it('requires typed confirmation before abandoning the active workflow session', async () => {
+    const seeded = await seedWorkflow(app, { idPrefix: '51515154' });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/recovery/abandon-and-new-session`)
+      .send({
+        actor_id: seeded.ids.actorTech,
+        next_action: 'brainstorm',
+        reason: 'Restart from trusted product artifacts.',
+      })
+      .expect(400);
+  });
+
+  it('rejects abandon/new-session when requested next_action does not match trusted fallback', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '51515155', { createAction: false });
+    mutateWorkflow(fixture.repository, fixture.seeded.workflow.id, {
+      status: 'blocked',
+      previous_status: 'code_review',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/recovery/abandon-and-new-session`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        next_action: 'brainstorm',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'The current session is unsafe.',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_abandon_next_action_mismatch');
+      });
+  });
+
+  it('abandons an unsafe session and returns to code_review when a current Review Packet is trusted', async () => {
+    const fixture = await seedReviewResponseRuntimeAction(app, '51515156');
+    const workflowBefore = (await fixture.repository.getPlanItemWorkflow(fixture.seeded.workflow.id))!;
+    const oldSessionId = workflowBefore.active_codex_session_id!;
+    const oldSession = (await fixture.repository.getCodexSession(oldSessionId))!;
+    mutateWorkflow(fixture.repository, fixture.seeded.workflow.id, {
+      status: 'blocked',
+      previous_status: 'code_review',
+    });
+
+    const response = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${fixture.seeded.workflow.id}/recovery/abandon-and-new-session`)
+      .send({
+        actor_id: fixture.seeded.ids.actorTech,
+        next_action: 'request_fix',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'The current session is unsafe, but the Review Packet remains trusted.',
+      });
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+
+    const workflow = (await fixture.repository.getPlanItemWorkflow(fixture.seeded.workflow.id))!;
+    const archivedSession = (await fixture.repository.getCodexSession(oldSessionId))!;
+    const newSession = (await fixture.repository.getCodexSession(workflow.active_codex_session_id!))!;
+    const action = (await fixture.repository.getPlanItemWorkflowQueuedAction({
+      workflow_id: fixture.seeded.workflow.id,
+      action_id: fixture.action!.id,
+    }))!;
+
+    expect(response.body).toMatchObject({ status: 'code_review' });
+    expect(workflow.active_codex_session_id).not.toBe(oldSessionId);
+    expect(archivedSession).toMatchObject({ id: oldSessionId, status: 'archived', archived_at: expect.any(String) });
+    expect(newSession).toMatchObject({ id: workflow.active_codex_session_id, status: 'idle', role: 'active' });
+    expect(newSession.latest_capsule_id).toBeUndefined();
+    expect(newSession.latest_capsule_digest).toBeUndefined();
+    expect(newSession.codex_thread_id_digest).toBeUndefined();
+    expect(oldSession.latest_capsule_digest).toEqual(expect.any(String));
+    expect(action.status).toBe('stale');
+  });
+
+  it('abandons an unsafe session and returns to execution_ready when readiness is still trusted', async () => {
+    const seeded = await runWorkflowToExecutionReady(app, '51515157');
+    const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+    const workflowBefore = (await repository.getPlanItemWorkflow(seeded.workflow.id))!;
+    const oldSessionId = workflowBefore.active_codex_session_id!;
+    const oldSession = (await repository.getCodexSession(oldSessionId))!;
+    mutateWorkflow(repository, seeded.workflow.id, {
+      status: 'blocked',
+      previous_status: 'execution_ready',
+    });
+
+    const response = await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${seeded.workflow.id}/recovery/abandon-and-new-session`)
+      .send({
+        actor_id: seeded.ids.actorTech,
+        next_action: 'start_execution',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'The current session cannot safely continue.',
+      });
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    expect(response.body.status).toBe('execution_ready');
+
+    const workflow = (await repository.getPlanItemWorkflow(seeded.workflow.id))!;
+    const archivedSession = (await repository.getCodexSession(oldSessionId))!;
+    const newSession = (await repository.getCodexSession(workflow.active_codex_session_id!))!;
+    expect(workflow.active_codex_session_id).not.toBe(oldSessionId);
+    expect(archivedSession.status).toBe('archived');
+    expect(newSession).toMatchObject({ status: 'idle', role: 'active' });
+    expect(newSession.latest_capsule_digest).toBeUndefined();
+    expect(oldSession.latest_capsule_digest).toEqual(expect.any(String));
+  });
+
+  it('rejects abandon/new-session while an old execution runtime job can still terminalize', async () => {
+    const started = await startWorkflowOwnedExecution(app, '51515158');
+    await saveRunSessionStatus(started.repository, started.runSession, 'stalled');
+    mutateWorkflow(started.repository, started.workflow.id, {
+      status: 'blocked',
+      previous_status: 'execution_running',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/recovery/abandon-and-new-session`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        next_action: 'start_execution',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'The current session is unsafe.',
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe('workflow_execution_writer_still_active');
+      });
   });
 
   it('/messages records human input and creates queued continuation without claiming a lease', async () => {
@@ -426,6 +554,8 @@ describe('Plan Item Workflow API', () => {
         review_packet_id: reviewPacket.id,
         previous_run_session_id: runSession.id,
         status: 'succeeded',
+        summary: 'Existing response summary.',
+        response_markdown: 'Existing review response.',
         content_digest: codexCanonicalDigest('Existing review response.'),
         created_by_actor_id: seeded.ids.actorTech,
         created_at: '2026-05-31T00:04:00.000Z',
@@ -494,6 +624,8 @@ describe('Plan Item Workflow API', () => {
         review_packet_id: reviewPacket.id,
         previous_run_session_id: runSession.id,
         status: 'succeeded',
+        summary: 'Existing response summary.',
+        response_markdown: 'Existing review response.',
       });
       expect(runReviewResponseAction.body.workflow.recovery_options).toContainEqual(
         expect.objectContaining({
@@ -2089,6 +2221,18 @@ describe('Plan Item Workflow API', () => {
         expect(body.code).toBe('workflow_execution_not_ready_for_input');
       });
 
+    await expect(publicWorkflowProjectionForTest(app, started.workflow.id)).resolves.toMatchObject({
+      recovery_options: [
+        expect.objectContaining({
+          action_id: 'continue_same_session',
+          enabled: false,
+          blocker_code: 'workflow_execution_not_ready_for_input',
+        }),
+        expect.any(Object),
+        expect.any(Object),
+        expect.any(Object),
+      ],
+    });
     await expect(started.repository.listExecutionContinuationLineage(started.workflow.id)).resolves.toHaveLength(0);
   });
 
@@ -2108,6 +2252,18 @@ describe('Plan Item Workflow API', () => {
         expect(body.code).toBe('workflow_execution_writer_still_active');
       });
 
+    await expect(publicWorkflowProjectionForTest(app, started.workflow.id)).resolves.toMatchObject({
+      recovery_options: [
+        expect.objectContaining({
+          action_id: 'continue_same_session',
+          enabled: false,
+          blocker_code: 'workflow_execution_writer_still_active',
+        }),
+        expect.any(Object),
+        expect.any(Object),
+        expect.any(Object),
+      ],
+    });
     await expect(started.repository.listExecutionContinuationLineage(started.workflow.id)).resolves.toHaveLength(0);
   });
 
@@ -2177,6 +2333,65 @@ describe('Plan Item Workflow API', () => {
       (candidate) => candidate.kind === 'continue_execution',
     );
     expect(action).toMatchObject({ status: 'succeeded', codex_session_turn_id: updatedRunSession?.codex_session_turn_id });
+  });
+
+  it('recovers blocked execution back to running before continuing the same session', async () => {
+    const started = await startWorkflowOwnedExecution(app, '56565685');
+    await saveRunSessionStatus(started.repository, started.runSession, 'stalled');
+    await makePreviousExecutionWriterRecoverable(started.repository, started.runtimeJob, started.runSession, 'failed');
+    mutateWorkflow(started.repository, started.workflow.id, {
+      status: 'blocked',
+      previous_status: 'execution_running',
+    });
+
+    await request(app.getHttpServer())
+      .post(`/plan-item-workflows/${started.workflow.id}/execution/continue`)
+      .send({
+        actor_id: started.seeded.ids.actorTech,
+        idempotency_key: 'continue-blocked-execution-recovery',
+      })
+      .expect(201)
+      .expect(({ body }) => {
+        expect(body.status).toBe('execution_running');
+        expect(body.execution_run_summary).toMatchObject({
+          run_session_id: started.runSession.id,
+          status: 'resuming',
+        });
+        expect(body.recovery_options).toContainEqual(
+          expect.objectContaining({
+            action_id: 'continue_same_session',
+            enabled: true,
+          }),
+        );
+      });
+
+    const workflow = await started.repository.getPlanItemWorkflow(started.workflow.id);
+    const runSession = await started.repository.getRunSession(started.runSession.id);
+    const transitions = await started.repository.listPlanItemWorkflowTransitions(started.workflow.id);
+    const [lineage] = await started.repository.listExecutionContinuationLineage(started.workflow.id);
+
+    expect(workflow).toMatchObject({
+      status: 'execution_running',
+      active_codex_session_id: started.session.id,
+    });
+    expect(workflow?.previous_status).toBeUndefined();
+    expect(runSession).toMatchObject({
+      id: started.runSession.id,
+      codex_session_id: started.session.id,
+      status: 'resuming',
+    });
+    expect(transitions).toContainEqual(
+      expect.objectContaining({
+        from_status: 'blocked',
+        to_status: 'execution_running',
+        evidence_object_type: 'manual_decision',
+      }),
+    );
+    expect(lineage).toMatchObject({
+      run_session_id: started.runSession.id,
+      codex_session_id: started.session.id,
+      continuation_kind: 'relaunch_after_fencing',
+    });
   });
 
   it('relaunches stalled execution when the run-worker lease is still active but expired', async () => {
@@ -3320,6 +3535,7 @@ async function startWorkflowOwnedExecution(app: INestApplication, idPrefix: stri
 }
 
 type PrivatePlanItemWorkflowRepository = {
+  planItemWorkflows: Map<string, { status: string; previous_status?: string; updated_at: string } & Record<string, unknown>>;
   executionPackages: Map<string, ExecutionPackage>;
   runSessions: Map<string, RunSession>;
   codexRuntimeJobs: Map<string, { job: CodexRuntimeJob } & Record<string, unknown>>;
@@ -3342,6 +3558,23 @@ type PrivatePlanItemWorkflowRepository = {
 
 function privatePlanItemWorkflowRepository(repository: DeliveryRepository): PrivatePlanItemWorkflowRepository {
   return repository as unknown as PrivatePlanItemWorkflowRepository;
+}
+
+function mutateWorkflow(
+  repository: DeliveryRepository,
+  workflowId: string,
+  patch: { status?: string; previous_status?: string },
+) {
+  const privateRepository = privatePlanItemWorkflowRepository(repository);
+  const workflow = privateRepository.planItemWorkflows.get(workflowId);
+  if (workflow === undefined) {
+    throw new Error(`Expected private workflow ${workflowId}`);
+  }
+  privateRepository.planItemWorkflows.set(workflowId, {
+    ...workflow,
+    ...patch,
+    updated_at: '2026-06-03T03:00:00.000Z',
+  });
 }
 
 function mutateExecutionPackage(repository: DeliveryRepository, executionPackageId: string, patch: Partial<ExecutionPackage>) {
@@ -4165,4 +4398,20 @@ async function createRunExecutionCredentialBinding(
     secret_payload_json: secretPayload,
   });
   return { credentialBindingId, credentialVersionId };
+}
+
+async function publicWorkflowProjectionForTest(app: INestApplication, workflowId: string) {
+  const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
+  const service = app.get(PlanItemWorkflowService) as unknown as {
+    toPublicWorkflowDtoWithRepository(
+      repository: DeliveryRepository,
+      workflow: NonNullable<Awaited<ReturnType<DeliveryRepository['getPlanItemWorkflow']>>>,
+      session: NonNullable<Awaited<ReturnType<DeliveryRepository['getCodexSession']>>>,
+    ): Promise<unknown>;
+  };
+  const workflow = await repository.getPlanItemWorkflow(workflowId);
+  expect(workflow).toBeDefined();
+  const session = await repository.getCodexSession(workflow!.active_codex_session_id!);
+  expect(session).toBeDefined();
+  return service.toPublicWorkflowDtoWithRepository(repository, workflow!, session!);
 }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import {
   planItemWorkflowAttemptHistorySchema,
+  planItemWorkflowCurrentReviewPacketSchema,
   planItemWorkflowLatestReviewResponseSchema,
   planItemWorkflowRecoveryOptionSchema,
 } from '@forgeloop/contracts';
@@ -384,6 +385,8 @@ export interface ReviewResponse {
   review_packet_id: string;
   previous_run_session_id: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'blocked';
+  summary?: string;
+  response_markdown?: string;
   content_digest?: string;
   rendered_markdown_artifact_ref?: string;
   created_by_actor_id: string;
@@ -646,6 +649,15 @@ export const assertPlanItemWorkflowTransitionAllowed = (input: TransitionCheck):
     return;
   }
 
+  if (
+    input.evidence_object_type === 'manual_decision' &&
+    input.manual_decision_kind === 'abandon_new_session' &&
+    input.from_status === 'blocked' &&
+    abandonNewSessionFallbackTargets.has(input.to_status)
+  ) {
+    return;
+  }
+
   throw new DomainError('workflow_invalid_transition', `workflow_invalid_transition: Invalid workflow transition ${transitionKey(input)}`);
 };
 
@@ -679,7 +691,7 @@ export const assertAbandonNewSessionTransitionAllowed = (input: {
 };
 
 export const determineAbandonNewSessionFallback = (input: {
-  has_current_review_packet?: boolean;
+  current_review_packet_next_action?: 'respond_to_review' | 'request_fix';
   has_valid_execution_readiness?: boolean;
   has_unapproved_implementation_plan_doc?: boolean;
   has_approved_spec_doc?: boolean;
@@ -687,39 +699,69 @@ export const determineAbandonNewSessionFallback = (input: {
   has_approved_boundary_summary?: boolean;
 }): {
   target_status: PlanItemWorkflowStatus;
-  expected_next_action:
-    | 'review_current_packet'
+  recommended_next_action:
+    | 'respond_to_review'
+    | 'request_fix'
     | 'start_execution'
     | 'review_implementation_plan'
-    | 'generate_implementation_plan_doc'
+    | 'generate_implementation_plan'
     | 'review_spec'
-    | 'generate_spec_doc'
-    | 'continue_brainstorming';
+    | 'generate_spec'
+    | 'brainstorm';
+  expected_next_actions: readonly (
+    | 'respond_to_review'
+    | 'request_fix'
+    | 'start_execution'
+    | 'review_implementation_plan'
+    | 'generate_implementation_plan'
+    | 'review_spec'
+    | 'generate_spec'
+    | 'brainstorm'
+  )[];
   queued_action_kind?: PlanItemWorkflowQueuedActionKind;
 } => {
-  if (input.has_current_review_packet === true) {
-    return { target_status: 'code_review', expected_next_action: 'review_current_packet' };
+  if (input.current_review_packet_next_action !== undefined) {
+    return {
+      target_status: 'code_review',
+      recommended_next_action: input.current_review_packet_next_action,
+      expected_next_actions: ['respond_to_review', 'request_fix'],
+    };
   }
   if (input.has_valid_execution_readiness === true) {
-    return { target_status: 'execution_ready', expected_next_action: 'start_execution' };
+    return { target_status: 'execution_ready', recommended_next_action: 'start_execution', expected_next_actions: ['start_execution'] };
   }
   if (input.has_unapproved_implementation_plan_doc === true) {
-    return { target_status: 'implementation_plan_review', expected_next_action: 'review_implementation_plan' };
+    return {
+      target_status: 'implementation_plan_review',
+      recommended_next_action: 'review_implementation_plan',
+      expected_next_actions: ['review_implementation_plan'],
+    };
   }
   if (input.has_approved_spec_doc === true) {
     return {
       target_status: 'implementation_plan_generation_queued',
-      expected_next_action: 'generate_implementation_plan_doc',
+      recommended_next_action: 'generate_implementation_plan',
+      expected_next_actions: ['generate_implementation_plan'],
       queued_action_kind: 'generate_implementation_plan_doc',
     };
   }
   if (input.has_unapproved_spec_doc === true) {
-    return { target_status: 'spec_review', expected_next_action: 'review_spec' };
+    return { target_status: 'spec_review', recommended_next_action: 'review_spec', expected_next_actions: ['review_spec'] };
   }
   if (input.has_approved_boundary_summary === true) {
-    return { target_status: 'spec_generation_queued', expected_next_action: 'generate_spec_doc', queued_action_kind: 'generate_spec_doc' };
+    return {
+      target_status: 'spec_generation_queued',
+      recommended_next_action: 'generate_spec',
+      expected_next_actions: ['generate_spec'],
+      queued_action_kind: 'generate_spec_doc',
+    };
   }
-  return { target_status: 'brainstorming', expected_next_action: 'continue_brainstorming', queued_action_kind: 'continue_brainstorming' };
+  return {
+    target_status: 'brainstorming',
+    recommended_next_action: 'brainstorm',
+    expected_next_actions: ['brainstorm'],
+    queued_action_kind: 'continue_brainstorming',
+  };
 };
 
 export const assertWorkflowManualDecisionAllowedForTransition = (
@@ -928,6 +970,7 @@ export const planItemWorkflowPublicProjection = (input: {
   readiness?: PlanItemWorkflowPublicDto['readiness'];
   execution_run_summary?: PlanItemWorkflowPublicDto['execution_run_summary'];
   attempt_history?: PlanItemWorkflowPublicDto['attempt_history'];
+  current_review_packet?: PlanItemWorkflowPublicDto['current_review_packet'];
   latest_review_response?: PlanItemWorkflowPublicDto['latest_review_response'];
   recovery_options?: PlanItemWorkflowPublicDto['recovery_options'];
   blockers?: PlanItemWorkflowPublicDto['blockers'];
@@ -972,6 +1015,9 @@ export const planItemWorkflowPublicProjection = (input: {
   ...(input.readiness === undefined ? {} : { readiness: input.readiness }),
   ...(input.execution_run_summary === undefined ? {} : { execution_run_summary: input.execution_run_summary }),
   attempt_history: (input.attempt_history ?? []).map((attempt) => planItemWorkflowAttemptHistorySchema.parse(attempt)),
+  ...(input.current_review_packet === undefined
+    ? {}
+    : { current_review_packet: planItemWorkflowCurrentReviewPacketSchema.parse(input.current_review_packet) }),
   ...(input.latest_review_response === undefined
     ? {}
     : { latest_review_response: planItemWorkflowLatestReviewResponseSchema.parse(input.latest_review_response) }),

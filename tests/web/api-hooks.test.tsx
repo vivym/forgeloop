@@ -943,6 +943,21 @@ describe('Web product API hooks', () => {
         id: workflowId,
         readiness: { state: 'blocked', can_evaluate: true, blocker_codes: ['implementation_plan_doc_missing'] },
       }),
+      [`POST /plan-item-workflows/${workflowId}/execution/continue`]: workflowProjectionFixture({
+        id: workflowId,
+        status: 'execution_running',
+        execution_run_summary: { run_session_id: 'run-session-wave7', status: 'resuming' },
+      }),
+      [`POST /plan-item-workflows/${workflowId}/code-review/respond`]: workflowProjectionFixture({ id: workflowId, status: 'code_review' }),
+      [`POST /plan-item-workflows/${workflowId}/code-review/request-fix`]: workflowProjectionFixture({
+        id: workflowId,
+        status: 'execution_running',
+        execution_run_summary: { run_session_id: 'run-session-fix', status: 'running' },
+      }),
+      [`POST /plan-item-workflows/${workflowId}/recovery/abandon-and-new-session`]: workflowProjectionFixture({
+        id: workflowId,
+        status: 'code_review',
+      }),
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
@@ -976,6 +991,27 @@ describe('Web product API hooks', () => {
       reason_markdown: 'Clarify acceptance criteria.',
     });
     await workflowCommands.result.current.evaluateReadiness.mutateAsync({ actor_id: 'actor-reviewer' });
+    await workflowCommands.result.current.continueExecution.mutateAsync({
+      actor_id: 'actor-reviewer',
+      input_markdown: 'Continue same session.',
+    });
+    await workflowCommands.result.current.respondToReview.mutateAsync({
+      actor_id: 'actor-reviewer',
+      expected_review_packet_id: 'review-packet-1',
+      expected_review_packet_digest: safeDigest('d'),
+    });
+    await workflowCommands.result.current.requestFix.mutateAsync({
+      actor_id: 'actor-reviewer',
+      expected_review_packet_id: 'review-packet-1',
+      expected_review_packet_digest: safeDigest('d'),
+      fix_instruction_markdown: 'Fix requested review changes.',
+    });
+    await workflowCommands.result.current.abandonNewSession.mutateAsync({
+      actor_id: 'actor-reviewer',
+      next_action: 'request_fix',
+      confirmation_phrase: 'abandon current session and start new session',
+      reason: 'Current session cannot safely continue.',
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       `http://localhost:3000/plan-item-workflows/${workflowId}/messages`,
@@ -1021,6 +1057,52 @@ describe('Web product API hooks', () => {
         method: 'POST',
         headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
         body: JSON.stringify({ actor_id: 'actor-reviewer' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/plan-item-workflows/${workflowId}/execution/continue`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
+        body: JSON.stringify({ actor_id: 'actor-reviewer', input_markdown: 'Continue same session.' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/plan-item-workflows/${workflowId}/code-review/respond`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
+        body: JSON.stringify({
+          actor_id: 'actor-reviewer',
+          expected_review_packet_id: 'review-packet-1',
+          expected_review_packet_digest: safeDigest('d'),
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/plan-item-workflows/${workflowId}/code-review/request-fix`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
+        body: JSON.stringify({
+          actor_id: 'actor-reviewer',
+          expected_review_packet_id: 'review-packet-1',
+          expected_review_packet_digest: safeDigest('d'),
+          fix_instruction_markdown: 'Fix requested review changes.',
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:3000/plan-item-workflows/${workflowId}/recovery/abandon-and-new-session`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
+        body: JSON.stringify({
+          actor_id: 'actor-reviewer',
+          next_action: 'request_fix',
+          confirmation_phrase: 'abandon current session and start new session',
+          reason: 'Current session cannot safely continue.',
+        }),
       }),
     );
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.planItemWorkflow(workflowId) });

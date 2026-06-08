@@ -50,6 +50,8 @@ CREATE TABLE "review_responses" (
 	"review_packet_id" uuid NOT NULL,
 	"previous_run_session_id" uuid NOT NULL,
 	"status" text NOT NULL,
+	"summary" text,
+	"response_markdown" text,
 	"content_digest" text,
 	"rendered_markdown_artifact_ref" text,
 	"created_by_actor_id" uuid NOT NULL,

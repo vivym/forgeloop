@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { reviewDecisionSchema, reviewPacketStatusSchema } from './review.js';
+
 const nonEmpty = z.string().trim().min(1);
 const isoDateTime = z.string().datetime();
 const safeDigest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -329,15 +331,61 @@ export const planItemWorkflowLatestReviewResponseSchema = z
     review_packet_id: nonEmpty,
     previous_run_session_id: nonEmpty,
     status: z.enum(['queued', 'running', 'succeeded', 'failed', 'blocked']),
+    summary: nonEmpty.optional(),
+    response_markdown: nonEmpty.optional(),
     created_at: isoDateTime,
   })
   .strict();
 export type PlanItemWorkflowLatestReviewResponse = z.infer<typeof planItemWorkflowLatestReviewResponseSchema>;
 
+export const planItemWorkflowCurrentReviewPacketEvidenceRefSchema = z
+  .object({
+    id: nonEmpty,
+    ref_kind: z.enum([
+      'github_comment_url',
+      'github_thread_url',
+      'markdown_excerpt',
+      'image_attachment',
+      'internal_artifact',
+      'check_log_summary',
+    ]),
+    visibility: z.enum(['public', 'internal']),
+    display_text: nonEmpty,
+    digest: safeDigest,
+    url: z.string().url().optional(),
+  })
+  .strict();
+export type PlanItemWorkflowCurrentReviewPacketEvidenceRef = z.infer<typeof planItemWorkflowCurrentReviewPacketEvidenceRefSchema>;
+
+export const planItemWorkflowCurrentReviewPacketSchema = z
+  .object({
+    id: nonEmpty,
+    digest: safeDigest,
+    previous_run_session_id: nonEmpty,
+    status: reviewPacketStatusSchema,
+    decision: reviewDecisionSchema,
+    summary: nonEmpty.optional(),
+    evidence_refs: z.array(planItemWorkflowCurrentReviewPacketEvidenceRefSchema).default([]),
+  })
+  .strict();
+export type PlanItemWorkflowCurrentReviewPacket = z.infer<typeof planItemWorkflowCurrentReviewPacketSchema>;
+
 export const planItemWorkflowRecoveryOptionSchema = z
   .object({
     action_id: z.enum(['continue_same_session', 'abandon_new_session', 'archive_workflow', 'fork_unavailable']),
     enabled: z.boolean(),
+    next_action: z
+      .enum([
+        'respond_to_review',
+        'request_fix',
+        'start_execution',
+        'review_implementation_plan',
+        'generate_implementation_plan',
+        'review_spec',
+        'generate_spec',
+        'brainstorm',
+      ])
+      .optional(),
     blocker_code: nonEmpty.optional(),
     warning_copy: nonEmpty.optional(),
     required_confirmation_kind: z.enum(['none', 'typed_phrase', 'confirmation_token']),
@@ -373,6 +421,7 @@ export const planItemWorkflowPublicDtoSchema = z
     readiness: planItemWorkflowReadinessSchema.optional(),
     execution_run_summary: planItemWorkflowExecutionRunSummarySchema.optional(),
     attempt_history: z.array(planItemWorkflowAttemptHistorySchema).default([]),
+    current_review_packet: planItemWorkflowCurrentReviewPacketSchema.optional(),
     latest_review_response: planItemWorkflowLatestReviewResponseSchema.optional(),
     recovery_options: z.array(planItemWorkflowRecoveryOptionSchema).default([]),
     blockers: z.array(planItemWorkflowBlockerSchema).default([]),
@@ -432,13 +481,14 @@ export const abandonWorkflowSessionBodySchema = z
     actor_id: nonEmpty,
     idempotency_key: nonEmpty.optional(),
     next_action: z.enum([
-      'code_review',
-      'execution_ready',
-      'implementation_plan_review',
-      'implementation_plan_generation_queued',
-      'spec_review',
-      'spec_generation_queued',
-      'brainstorming',
+      'respond_to_review',
+      'request_fix',
+      'start_execution',
+      'review_implementation_plan',
+      'generate_implementation_plan',
+      'review_spec',
+      'generate_spec',
+      'brainstorm',
     ]),
     confirmation_phrase: z.literal('abandon current session and start new session'),
     reason: nonEmpty,

@@ -148,6 +148,7 @@ import type {
   CreateCodexCredentialBindingWithVersionInput,
   CreateCodexRuntimeProfileWithRevisionInput,
   CreatePlanItemWorkflowWithInitialSessionInput,
+  ReplaceActiveCodexSessionForWorkflowInput,
   BindReservedCodexRuntimeJobArtifactInput,
   CreateCodexRuntimeJobArtifactInput,
   PreflightCreateCodexRuntimeJobArtifactInput,
@@ -4381,6 +4382,73 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     }
     this.assertCanSaveCodexSession(session);
     this.codexSessions.set(session.id, clone(session));
+  }
+
+  async replaceActiveCodexSessionForWorkflow(
+    input: ReplaceActiveCodexSessionForWorkflowInput,
+  ): Promise<{ workflow: PlanItemWorkflow; previous_session: CodexSession; session: CodexSession }> {
+    const workflow = this.planItemWorkflows.get(input.workflow_id);
+    const previousSession = this.codexSessions.get(input.previous_session_id);
+    if (
+      workflow === undefined ||
+      previousSession === undefined ||
+      workflow.active_codex_session_id !== previousSession.id ||
+      previousSession.owner_type !== 'plan_item_workflow' ||
+      previousSession.owner_id !== workflow.id ||
+      previousSession.role !== 'active' ||
+      previousSession.status === 'archived' ||
+      this.codexSessions.has(input.new_session_id)
+    ) {
+      throw new DomainError(
+        'workflow_active_session_conflict',
+        `workflow_active_session_conflict: Cannot replace active Codex session for workflow ${input.workflow_id}`,
+      );
+    }
+    const {
+      active_lease_id: _activeLeaseId,
+      runner_worker_id: _runnerWorkerId,
+      runner_launch_lease_id: _runnerLaunchLeaseId,
+      runner_runtime_job_id: _runnerRuntimeJobId,
+      runner_expires_at: _runnerExpiresAt,
+      ...previousSessionBase
+    } = clone(previousSession);
+    const archivedPrevious: CodexSession = {
+      ...previousSessionBase,
+      status: 'archived',
+      archived_at: input.now,
+      updated_at: input.now,
+    };
+    const session: CodexSession = {
+      id: input.new_session_id,
+      owner_type: 'plan_item_workflow',
+      owner_id: workflow.id,
+      status: 'idle',
+      role: 'active',
+      runtime_profile_id: input.runtime_profile_id,
+      runtime_profile_revision_id: input.runtime_profile_revision_id,
+      credential_binding_id: input.credential_binding_id,
+      credential_binding_version_id: input.credential_binding_version_id,
+      lease_epoch: 0,
+      created_by_actor_id: input.actor_id,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    const updatedWorkflow: PlanItemWorkflow = {
+      ...clone(workflow),
+      active_codex_session_id: session.id,
+      updated_at: input.now,
+    };
+    this.assertCanSaveCodexSession(archivedPrevious);
+    this.assertCanSavePlanItemWorkflow(updatedWorkflow);
+    this.codexSessions.set(archivedPrevious.id, clone(archivedPrevious));
+    this.assertCanSaveCodexSession(session);
+    this.codexSessions.set(session.id, clone(session));
+    this.planItemWorkflows.set(updatedWorkflow.id, clone(updatedWorkflow));
+    return {
+      workflow: clone(updatedWorkflow),
+      previous_session: clone(archivedPrevious),
+      session: clone(session),
+    };
   }
 
   async createCodexSessionTurn(turn: CodexSessionTurn): Promise<void> {

@@ -321,6 +321,8 @@ describe('plan item workflow contracts', () => {
         review_packet_id: 'review-packet-1',
         previous_run_session_id: 'run-1',
         status: 'succeeded',
+        summary: 'Review response summary.',
+        response_markdown: 'The implementation needs one follow-up fix.',
         created_at: '2026-06-07T00:03:00.000Z',
       },
       recovery_options: [
@@ -338,6 +340,8 @@ describe('plan item workflow contracts', () => {
 
     expect(workflow.attempt_history).toHaveLength(1);
     expect(workflow.latest_review_response?.review_packet_id).toBe('review-packet-1');
+    expect(workflow.latest_review_response?.summary).toBe('Review response summary.');
+    expect(workflow.latest_review_response?.response_markdown).toBe('The implementation needs one follow-up fix.');
     for (const field of [
       'codex_thread_id',
       'latest_capsule_ref',
@@ -408,18 +412,26 @@ describe('plan item workflow contracts', () => {
     expect(
       abandonWorkflowSessionBodySchema.parse({
         actor_id: 'actor-tech',
-        next_action: 'code_review',
+        next_action: 'request_fix',
         confirmation_phrase: 'abandon current session and start new session',
         reason: 'The current session cannot be resumed safely.',
       }).next_action,
-    ).toBe('code_review');
+    ).toBe('request_fix');
+    expect(() =>
+      abandonWorkflowSessionBodySchema.parse({
+        actor_id: 'actor-tech',
+        next_action: 'request_fix',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'The current session cannot be resumed safely.',
+        lease_token: 'raw-token',
+      }),
+    ).toThrow();
     expect(() =>
       abandonWorkflowSessionBodySchema.parse({
         actor_id: 'actor-tech',
         next_action: 'code_review',
         confirmation_phrase: 'abandon current session and start new session',
-        reason: 'The current session cannot be resumed safely.',
-        lease_token: 'raw-token',
+        reason: 'Target status is not an explicit product next action.',
       }),
     ).toThrow();
   });

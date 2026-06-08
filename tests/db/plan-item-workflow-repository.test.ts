@@ -511,6 +511,8 @@ const wave7ReviewResponse = (
   review_packet_id: fixture.reviewPacketId,
   previous_run_session_id: fixture.previousRunSessionId,
   status: 'succeeded',
+  summary: 'Review response summary.',
+  response_markdown: 'The reviewer response content is visible in product UI.',
   content_digest: `sha256:${'2'.repeat(64)}`,
   rendered_markdown_artifact_ref: `artifact://internal/review_response/${fixture.workflowId}/response.md`,
   created_by_actor_id: fixture.actorId,

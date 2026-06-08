@@ -640,6 +640,69 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
     }
   });
 
+  it('flags Wave 7 product surfaces that expose direct run-session controls, fork, automation action runs, or raw runtime refs', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-wave7-'));
+    const forbiddenLines = [
+      'await fetch("/plan-item-workflows/workflow-1/run-sessions/run-1/resume");',
+      'await fetch("/plan-item-workflows/workflow-1/execution-packages/package-1/rerun");',
+      'const packageRerun = workflowOwnedExecutionPackageRerun;',
+      'const directResume = workflowRunSessionResume;',
+      'await fetch("/plan-item-workflows/workflow-1/select-fork");',
+      "const reviewResponseTarget = 'automation_action_run';",
+      'const reviewResponseActionRun = payload.action_run_id;',
+      'const rawThread = workflow.codex_thread_id;',
+      'const rawSession = workflow.codex_session_id;',
+      'const rawTurn = workflow.codex_session_turn_id;',
+      'const rawCapsule = workflow.latest_capsule_id;',
+      'const memory = workflow.latest_memory_bundle_ref;',
+      'const env = workflow.latest_environment_manifest_ref;',
+      'const internalRef = evidence.internal_object_ref;',
+      'const lease = workflow.lease_token;',
+      'const worker = workflow.worker_id;',
+      'const credential = workflow.credential_binding_id;',
+      'const runtimeProfile = workflow.runtime_profile_revision_id;',
+      'const artifact = "artifact://internal/codex_runtime_capsule/capsule-1";',
+      'const localPath = "/Users/example/.codex/session.json";',
+    ];
+    try {
+      const fixtureFile = 'apps/web/src/features/development-plans/plan-item-workflow-workspace.tsx';
+      mkdirSync(join(tempRoot, 'apps/web/src/features/development-plans'), { recursive: true });
+      writeFileSync(join(tempRoot, fixtureFile), forbiddenLines.join('\n'));
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: [fixtureFile],
+        allowlist: [],
+      });
+
+      expect(result.violations.map((violation) => violation.excerpt)).toEqual(forbiddenLines);
+      expect(result.violations.map((violation) => violation.pattern)).toEqual([
+        'legacy_workflow_run_session_control',
+        'legacy_public_execution_package_start',
+        'wave7_workflow_execution_package_rerun',
+        'wave7_direct_run_session_control',
+        'wave7_public_fork_before_wave8',
+        'wave7_review_response_automation_action_run',
+        'wave7_review_response_automation_action_run',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'wave7_public_raw_runtime_ref',
+        'wave7_public_raw_runtime_ref',
+        'wave7_public_raw_runtime_ref',
+        'wave7_public_raw_runtime_ref',
+        'wave7_public_raw_runtime_ref',
+        'wave7_public_raw_runtime_ref',
+        'wave7_public_raw_runtime_ref',
+        'wave7_public_raw_runtime_ref',
+        'public_raw_codex_runtime_ref',
+        'public_raw_codex_runtime_ref',
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('flags active legacy Codex session snapshot vocabulary', () => {
     const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-snapshots-'));
     const legacyLines = [

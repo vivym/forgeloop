@@ -351,42 +351,57 @@ describe('plan item workflow domain', () => {
   it.each([
     [
       'current Review Packet',
-      { has_current_review_packet: true },
-      { target_status: 'code_review', expected_next_action: 'review_current_packet' },
+      { current_review_packet_next_action: 'request_fix' },
+      { target_status: 'code_review', recommended_next_action: 'request_fix', expected_next_actions: ['respond_to_review', 'request_fix'] },
     ],
     [
       'valid readiness',
       { has_valid_execution_readiness: true },
-      { target_status: 'execution_ready', expected_next_action: 'start_execution' },
+      { target_status: 'execution_ready', recommended_next_action: 'start_execution', expected_next_actions: ['start_execution'] },
     ],
     [
       'unapproved Implementation Plan Doc',
       { has_unapproved_implementation_plan_doc: true },
-      { target_status: 'implementation_plan_review', expected_next_action: 'review_implementation_plan' },
+      {
+        target_status: 'implementation_plan_review',
+        recommended_next_action: 'review_implementation_plan',
+        expected_next_actions: ['review_implementation_plan'],
+      },
     ],
     [
       'approved Spec Doc only',
       { has_approved_spec_doc: true },
       {
         target_status: 'implementation_plan_generation_queued',
-        expected_next_action: 'generate_implementation_plan_doc',
+        recommended_next_action: 'generate_implementation_plan',
+        expected_next_actions: ['generate_implementation_plan'],
         queued_action_kind: 'generate_implementation_plan_doc',
       },
     ],
     [
       'unapproved Spec Doc',
       { has_unapproved_spec_doc: true },
-      { target_status: 'spec_review', expected_next_action: 'review_spec' },
+      { target_status: 'spec_review', recommended_next_action: 'review_spec', expected_next_actions: ['review_spec'] },
     ],
     [
       'approved Boundary Summary only',
       { has_approved_boundary_summary: true },
-      { target_status: 'spec_generation_queued', expected_next_action: 'generate_spec_doc', queued_action_kind: 'generate_spec_doc' },
+      {
+        target_status: 'spec_generation_queued',
+        recommended_next_action: 'generate_spec',
+        expected_next_actions: ['generate_spec'],
+        queued_action_kind: 'generate_spec_doc',
+      },
     ],
     [
       'no Boundary Summary',
       {},
-      { target_status: 'brainstorming', expected_next_action: 'continue_brainstorming', queued_action_kind: 'continue_brainstorming' },
+      {
+        target_status: 'brainstorming',
+        recommended_next_action: 'brainstorm',
+        expected_next_actions: ['brainstorm'],
+        queued_action_kind: 'continue_brainstorming',
+      },
     ],
   ] as const)('deterministically maps abandon_new_session fallback for %s', (_label, input, expected) => {
     expect(determineAbandonNewSessionFallback(input)).toEqual(expected);

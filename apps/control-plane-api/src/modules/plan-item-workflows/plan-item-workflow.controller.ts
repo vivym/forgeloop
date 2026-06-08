@@ -4,6 +4,7 @@ import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import {
   approveWorkflowArtifactRevisionBodySchema,
   artifactTypeSchema,
+  abandonWorkflowSessionBodySchema,
   continueWorkflowExecutionBodySchema,
   evaluateWorkflowExecutionReadinessBodySchema,
   requestWorkflowArtifactChangesBodySchema,
@@ -14,6 +15,7 @@ import {
   startWorkflowExecutionBodySchema,
   workflowMessageCommandBodySchema,
   type ApproveWorkflowArtifactRevisionBodyDto,
+  type AbandonWorkflowSessionBodyDto,
   type ContinueWorkflowExecutionBodyDto,
   type EvaluateWorkflowExecutionReadinessBodyDto,
   type RequestWorkflowArtifactChangesBodyDto,
@@ -127,5 +129,13 @@ export class PlanItemWorkflowController {
       response.status(result.status_code);
       return result.workflow;
     });
+  }
+
+  @Post('plan-item-workflows/:workflowId/recovery/abandon-and-new-session')
+  abandonAndStartNewSession(
+    @Param('workflowId') workflowId: string,
+    @Body(new ZodValidationPipe(abandonWorkflowSessionBodySchema)) body: AbandonWorkflowSessionBodyDto,
+  ) {
+    return this.service.abandonAndStartNewSession(workflowId, body);
   }
 }

@@ -314,6 +314,18 @@ export interface CreatePlanItemWorkflowWithInitialSessionInput {
   now: string;
 }
 
+export interface ReplaceActiveCodexSessionForWorkflowInput {
+  workflow_id: string;
+  previous_session_id: string;
+  new_session_id: string;
+  runtime_profile_id: string;
+  runtime_profile_revision_id: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+  actor_id: string;
+  now: string;
+}
+
 export interface ClaimCodexSessionLeaseInput {
   session_id: string;
   workflow_id: string;
@@ -1695,6 +1707,9 @@ export interface DeliveryRepository {
   savePlanItemWorkflowArtifactChangeRequest(request: PlanItemWorkflowArtifactChangeRequest): Promise<void>;
   getCodexSession(id: string): Promise<CodexSession | undefined>;
   saveCodexSession(session: CodexSession): Promise<void>;
+  replaceActiveCodexSessionForWorkflow(
+    input: ReplaceActiveCodexSessionForWorkflowInput,
+  ): Promise<{ workflow: PlanItemWorkflow; previous_session: CodexSession; session: CodexSession }>;
   createCodexSessionTurn(turn: CodexSessionTurn): Promise<void>;
   getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined>;
   listCodexSessionTurns(sessionId: string): Promise<CodexSessionTurn[]>;

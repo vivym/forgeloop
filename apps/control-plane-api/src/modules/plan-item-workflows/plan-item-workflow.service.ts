@@ -14,6 +14,7 @@ import {
   codexRuntimeJobInputDigest,
   codexRuntimeNetworkPolicyDigest,
   codexWorkspaceAcquisitionDigest,
+  determineAbandonNewSessionFallback,
   mapQueuedActionKindToTurnIntent,
   planItemWorkflowPublicProjection,
   reviewPacketInputDigest,
@@ -66,7 +67,7 @@ import {
   workspaceBundleArchiveDigest,
   workspaceBundleManifestDigest,
 } from '@forgeloop/codex-worker-runtime';
-import { runSpecSchema, type ArtifactKind, type RequiredCheckSpec, type RunSpec } from '@forgeloop/contracts';
+import { planItemWorkflowQueuedActionKindSchema, runSpecSchema, type ArtifactKind, type RequiredCheckSpec, type RunSpec } from '@forgeloop/contracts';
 import type {
   PlanItemWorkflowExecutionRunSummary,
   PlanItemWorkflowAttemptHistory,
@@ -88,6 +89,7 @@ import { SpecPlanService, type ProductGenerationScheduleResult } from '../spec-p
 import { ProductGenerationRuntimeSchedulerService } from '../codex-runtime/product-generation-runtime-scheduler.service';
 import type {
   ApproveWorkflowArtifactRevisionBodyDto,
+  AbandonWorkflowSessionBodyDto,
   ContinueWorkflowExecutionBodyDto,
   EvaluateWorkflowExecutionReadinessBodyDto,
   RequestWorkflowArtifactChangesBodyDto,
@@ -117,6 +119,17 @@ type WorkflowTransitionCommandDto = {
     digest?: string | undefined;
   }> | undefined;
 };
+type AbandonNewSessionPublicNextAction = PlanItemWorkflowRecoveryOption['next_action'];
+const abandonNewSessionPublicNextActions = new Set<NonNullable<AbandonNewSessionPublicNextAction>>([
+  'respond_to_review',
+  'request_fix',
+  'start_execution',
+  'review_implementation_plan',
+  'generate_implementation_plan',
+  'review_spec',
+  'generate_spec',
+  'brainstorm',
+]);
 type ExecutionReadinessBlockerCode =
   | 'boundary_summary_revision_missing'
   | 'spec_doc_revision_missing'
@@ -1923,9 +1936,9 @@ export class PlanItemWorkflowService {
   async continueExecution(workflowId: string, input: ContinueWorkflowExecutionBodyDto) {
     return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
       lockedRepository.withDeliveryTransaction(async (repository) => {
-        const workflow = await this.requireWorkflow(repository, workflowId);
+        let workflow = await this.requireWorkflow(repository, workflowId);
         await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'start_execution');
-        if (workflow.status !== 'execution_running') {
+        if (workflow.status !== 'execution_running' && !(workflow.status === 'blocked' && workflow.previous_status === 'execution_running')) {
           throw new DomainError('workflow_invalid_transition', 'Execution continuation requires execution_running');
         }
         const session = await this.requireActiveSession(repository, workflow);
@@ -1954,6 +1967,19 @@ export class PlanItemWorkflowService {
         });
         if (decision.mode === 'reject') {
           throw new DomainError(decision.code, `${decision.code}: Workflow execution cannot continue from its current state`);
+        }
+        if (workflow.status === 'blocked') {
+          const recovered = await this.performManualDecisionTransitionRecordWithRepository(
+            repository,
+            workflow,
+            this.manualDecisionInput({
+              actor_id: input.actor_id,
+              to_status: 'execution_running',
+              manual_decision_kind: 'recover',
+              reason: 'Continue same Codex session after execution recovery.',
+            }),
+          );
+          workflow = recovered.updated;
         }
 
         const action = await this.createAndClaimContinueExecutionAction(repository, workflow, session, input, decision.mode);
@@ -2177,6 +2203,69 @@ export class PlanItemWorkflowService {
           await this.blockReviewFixCommandIdempotencyAfterError(repository, commandClaim, commandClaimToken, error);
           throw error;
         }
+      }),
+    );
+  }
+
+  async abandonAndStartNewSession(workflowId: string, input: AbandonWorkflowSessionBodyDto): Promise<PlanItemWorkflowPublicDto> {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'recover');
+        if (workflow.status !== 'blocked') {
+          throw new DomainError('workflow_invalid_transition', 'Abandon and new session requires blocked workflow');
+        }
+        const session = await this.requireActiveSession(repository, workflow);
+        const now = this.now();
+        await this.assertNoActiveTerminalizableWorkflowRuntime(repository, session, now);
+        const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+        const fallback = await this.determineAbandonNewSessionFallbackForWorkflow(repository, workflow);
+        if (!fallback.expected_next_actions.includes(input.next_action)) {
+          throw new DomainError(
+            'workflow_abandon_next_action_mismatch',
+            `workflow_abandon_next_action_mismatch: requested ${input.next_action} but trusted fallback requires ${fallback.expected_next_actions.join(' or ')}`,
+          );
+        }
+        const runtimeBinding = await this.resolveActiveGenerationRuntimeBinding(repository, item, now);
+        await repository.markDependentPlanItemWorkflowQueuedActionsStale({
+          workflow_id: workflow.id,
+          action_kinds: [...planItemWorkflowQueuedActionKindSchema.options],
+          reason: 'abandon_new_session',
+          now,
+        });
+        await this.performManualDecisionTransitionRecordWithRepository(
+          repository,
+          workflow,
+          this.manualDecisionInput({
+            actor_id: input.actor_id,
+            to_status: fallback.target_status,
+            manual_decision_kind: 'abandon_new_session',
+            reason: input.reason,
+          }),
+        );
+        const replacement = await repository.replaceActiveCodexSessionForWorkflow({
+          workflow_id: workflow.id,
+          previous_session_id: session.id,
+          new_session_id: randomUUID(),
+          ...runtimeBinding,
+          actor_id: input.actor_id,
+          now: this.now(),
+        });
+        const queuedActions =
+          fallback.queued_action_kind === undefined
+            ? []
+            : [
+                await this.enqueueWorkflowAction(repository, replacement.workflow, replacement.session, {
+                  kind: fallback.queued_action_kind,
+                  actor_id: input.actor_id,
+                }),
+              ];
+        return this.toPublicWorkflowDtoWithRepository(
+          repository,
+          replacement.workflow,
+          replacement.session,
+          queuedActions,
+        );
       }),
     );
   }
@@ -3237,6 +3326,102 @@ export class PlanItemWorkflowService {
     return { mode: 'reject', code: 'workflow_execution_not_ready_for_input' };
   }
 
+  private async classifyExecutionContinuationReadOnly(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      executionPackage: ExecutionPackage;
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+    },
+  ): Promise<ContinuationDecision> {
+    const { workflow, session, executionPackage, runSession, runtimeJob } = input;
+    if (!this.workflowExecutionRuntimeTargetMatches({ workflow, session, executionPackage, runSession, runtimeJob })) {
+      return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+    }
+    const now = this.now();
+    const codexSessionLease = await this.resolveRuntimeJobCodexSessionLeaseForContinuation(repository, session, runtimeJob);
+    const runWorkerLease = await repository.getRunWorkerLease(runSession.id);
+    const launchLease = await repository.getCodexLaunchLeasePublicStatus({ launch_lease_id: runtimeJob.launch_lease_id });
+    const runtimeJobActive = codexRuntimeJobIsActive(runtimeJob);
+    const activeRuntimeJobLineageValid =
+      this.runtimeJobInputCapsuleDigestMatchesSession(runtimeJob, session) &&
+      (await this.runtimeJobTurnIsRunning(repository, runSession, runtimeJob));
+    const leasesActive =
+      codexSessionLease !== undefined &&
+      this.codexSessionLeaseIsActive(codexSessionLease, session, runtimeJob, now) &&
+      runWorkerLease !== undefined &&
+      this.runWorkerLeaseIsActive(runWorkerLease, runtimeJob, now) &&
+      launchLease !== undefined &&
+      this.codexLaunchLeaseIsActive(launchLease, runtimeJob, now);
+
+    if (runSession.status === 'waiting_for_input') {
+      if (runtimeJob.status === 'running' && leasesActive && activeRuntimeJobLineageValid) {
+        return { mode: 'existing_job_input', runSession, runtimeJob, codexSessionLease, runWorkerLease, launchLease };
+      }
+      if (runtimeJob.status === 'running' && leasesActive) {
+        return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+      }
+      return { mode: 'reject', code: 'workflow_execution_not_ready_for_input' };
+    }
+
+    if (runSession.status === 'resuming') {
+      if (runtimeJobActive && leasesActive && activeRuntimeJobLineageValid) {
+        return { mode: 'replay_current_continuation', runSession, runtimeJob, codexSessionLease, runWorkerLease, launchLease };
+      }
+      if (runtimeJobActive && leasesActive) {
+        return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+      }
+      const previousCodexSessionLease = this.recoverableCodexSessionLeaseForContinuationReadOnly({
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (
+        runtimeJob.status === 'terminal' &&
+        previousCodexSessionLease !== undefined &&
+        this.runWorkerLeaseIsRecoverable(runWorkerLease, now)
+      ) {
+        return {
+          mode: 'relaunch_after_fencing',
+          runSession,
+          previousRuntimeJob: runtimeJob,
+          previousCodexSessionLease,
+          ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+        };
+      }
+      return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+    }
+
+    if (runSession.status === 'stalled') {
+      if (runtimeJob.status !== 'terminal') {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      const previousCodexSessionLease = this.recoverableCodexSessionLeaseForContinuationReadOnly({
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (previousCodexSessionLease === undefined || !this.runWorkerLeaseIsRecoverable(runWorkerLease, now)) {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      return {
+        mode: 'relaunch_after_fencing',
+        runSession,
+        previousRuntimeJob: runtimeJob,
+        previousCodexSessionLease,
+        ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+      };
+    }
+
+    if (runSession.status === 'cancel_requested') {
+      return { mode: 'reject', code: 'workflow_execution_cancel_pending' };
+    }
+
+    return { mode: 'reject', code: 'workflow_execution_not_ready_for_input' };
+  }
+
   private workflowExecutionRuntimeTargetMatches(input: {
     workflow: PlanItemWorkflow;
     session: CodexSession;
@@ -3391,6 +3576,29 @@ export class PlanItemWorkflowService {
 
   private runWorkerLeaseIsRecoverable(lease: RunWorkerLease | undefined, now: string): boolean {
     return lease === undefined || lease.status === 'released' || lease.status === 'expired' || lease.expires_at <= now;
+  }
+
+  private recoverableCodexSessionLeaseForContinuationReadOnly(input: {
+    session: CodexSession;
+    lease: CodexSessionLease | undefined;
+    now: string;
+  }): CodexSessionLease | undefined {
+    const { session, lease, now } = input;
+    if (lease === undefined) {
+      return undefined;
+    }
+    if (this.codexSessionLeaseIsRecoverable(lease, session)) {
+      return lease;
+    }
+    if (
+      lease.status === 'active' &&
+      lease.expires_at <= now &&
+      lease.codex_session_id === session.id &&
+      session.active_lease_id === lease.id
+    ) {
+      return lease;
+    }
+    return undefined;
   }
 
   private async recoverExpiredCodexSessionLeaseForContinuation(
@@ -6548,6 +6756,7 @@ export class PlanItemWorkflowService {
       readiness?: PlanItemWorkflowReadiness;
       execution_run_summary?: PlanItemWorkflowExecutionRunSummary;
       attempt_history?: PlanItemWorkflowAttemptHistory[];
+      current_review_packet?: PlanItemWorkflowPublicDto['current_review_packet'];
       latest_review_response?: PlanItemWorkflowPublicDto['latest_review_response'];
       recovery_options?: PlanItemWorkflowRecoveryOption[];
       blockers?: Parameters<typeof planItemWorkflowPublicProjection>[0]['blockers'];
@@ -6573,6 +6782,7 @@ export class PlanItemWorkflowService {
       ...(options.readiness === undefined ? {} : { readiness: options.readiness }),
       ...(options.execution_run_summary === undefined ? {} : { execution_run_summary: options.execution_run_summary }),
       ...(options.attempt_history === undefined ? {} : { attempt_history: options.attempt_history }),
+      ...(options.current_review_packet === undefined ? {} : { current_review_packet: options.current_review_packet }),
       ...(options.latest_review_response === undefined ? {} : { latest_review_response: options.latest_review_response }),
       ...(options.recovery_options === undefined ? {} : { recovery_options: options.recovery_options }),
       ...(options.blockers === undefined ? {} : { blockers: options.blockers }),
@@ -6590,15 +6800,18 @@ export class PlanItemWorkflowService {
       blockers?: Parameters<typeof planItemWorkflowPublicProjection>[0]['blockers'];
     } = {},
   ): Promise<PlanItemWorkflowPublicDto> {
-    const [attemptHistory, latestReviewResponse] = await Promise.all([
+    const [attemptHistory, currentReviewPacket, latestReviewResponse, recoveryOptions] = await Promise.all([
       this.workflowAttemptHistory(repository, workflow.id),
+      this.workflowCurrentReviewPacket(repository, workflow),
       this.workflowLatestReviewResponse(repository, workflow.id),
+      this.workflowRecoveryOptions(repository, workflow),
     ]);
     return this.toPublicWorkflowDto(workflow, session, queuedActions, {
       ...options,
       attempt_history: attemptHistory,
+      ...(currentReviewPacket === undefined ? {} : { current_review_packet: currentReviewPacket }),
       ...(latestReviewResponse === undefined ? {} : { latest_review_response: latestReviewResponse }),
-      recovery_options: this.workflowRecoveryOptions(workflow),
+      recovery_options: recoveryOptions,
     });
   }
 
@@ -6633,6 +6846,74 @@ export class PlanItemWorkflowService {
     );
   }
 
+  private async workflowCurrentReviewPacket(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+  ): Promise<PlanItemWorkflowPublicDto['current_review_packet'] | undefined> {
+    if (
+      workflow.execution_package_id === undefined ||
+      workflow.active_spec_doc_revision_id === undefined ||
+      workflow.active_implementation_plan_doc_revision_id === undefined
+    ) {
+      return undefined;
+    }
+    const executionPackage = await repository.getExecutionPackage(workflow.execution_package_id);
+    if (
+      executionPackage === undefined ||
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.last_run_session_id === undefined
+    ) {
+      return undefined;
+    }
+
+    const executionPackageVersion = executionPackage.execution_package_version ?? executionPackage.version;
+    const packet = await repository.findCurrentReviewPacketForWorkflow({
+      workflow_id: workflow.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackageVersion,
+      previous_run_session_id: executionPackage.last_run_session_id,
+      approved_spec_revision_id: workflow.active_spec_doc_revision_id,
+      approved_implementation_plan_revision_id: workflow.active_implementation_plan_doc_revision_id,
+      allowed_statuses: ['ready', 'in_review', 'completed'],
+      allowed_completed_decisions: ['changes_requested'],
+    });
+    if (packet === undefined) {
+      return undefined;
+    }
+
+    const evidenceRefs = await repository.listReviewPacketEvidenceRefs(packet.id);
+    assertReviewPacketEvidenceRefsAreSafe(packet, evidenceRefs);
+    const digest = reviewPacketInputDigest({
+      packet,
+      evidence_refs: evidenceRefs,
+      previous_run_session_id: executionPackage.last_run_session_id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackageVersion,
+      approved_spec_revision_id: workflow.active_spec_doc_revision_id,
+      approved_implementation_plan_revision_id: workflow.active_implementation_plan_doc_revision_id,
+    });
+    if (packet.current_digest !== undefined && packet.current_digest !== digest) {
+      return undefined;
+    }
+
+    return {
+      id: packet.id,
+      digest,
+      previous_run_session_id: executionPackage.last_run_session_id,
+      status: packet.status,
+      decision: packet.decision,
+      ...(packet.summary === undefined ? {} : { summary: packet.summary }),
+      evidence_refs: evidenceRefs.map((ref) => ({
+        id: ref.id,
+        ref_kind: ref.ref_kind,
+        visibility: ref.visibility,
+        display_text: ref.display_text,
+        digest: ref.digest,
+        ...(ref.url === undefined || ref.visibility !== 'public' ? {} : { url: ref.url }),
+      })),
+    };
+  }
+
   private async workflowLatestReviewResponse(
     repository: DeliveryRepository,
     workflowId: string,
@@ -6646,28 +6927,170 @@ export class PlanItemWorkflowService {
       review_packet_id: response.review_packet_id,
       previous_run_session_id: response.previous_run_session_id,
       status: response.status,
+      ...(response.summary === undefined ? {} : { summary: response.summary }),
+      ...(response.response_markdown === undefined ? {} : { response_markdown: response.response_markdown }),
       created_at: response.created_at,
     };
   }
 
-  private workflowRecoveryOptions(workflow: PlanItemWorkflow): PlanItemWorkflowRecoveryOption[] {
-    const canContinueSameSession = workflow.status === 'execution_running';
+  private async assertNoActiveTerminalizableWorkflowRuntime(
+    repository: DeliveryRepository,
+    session: CodexSession,
+    now: string,
+  ): Promise<void> {
+    const activeLease = session.active_lease_id === undefined ? undefined : await repository.getCodexSessionLease(session.active_lease_id);
+    if (activeLease !== undefined && activeLease.status === 'active' && activeLease.expires_at > now) {
+      throw new DomainError('workflow_execution_writer_still_active', 'Active Codex session lease can still terminalize');
+    }
+    if (session.runner_launch_lease_id !== undefined) {
+      const launchLease = await repository.getCodexLaunchLeasePublicStatus({ launch_lease_id: session.runner_launch_lease_id });
+      if (launchLease !== undefined && launchLease.expires_at > now && (launchLease.status === 'active' || launchLease.status === 'materialized')) {
+        throw new DomainError('workflow_execution_writer_still_active', 'Active Codex launch lease can still terminalize');
+      }
+    }
+    if (session.runner_runtime_job_id !== undefined) {
+      const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: session.runner_runtime_job_id });
+      if (runtimeJob !== undefined && runtimeJob.status !== 'terminal') {
+        throw new DomainError('workflow_execution_writer_still_active', 'Active Codex session runner can still terminalize');
+      }
+    }
+    const activeRunSessions = (await repository.listRunSessions()).filter((runSession) => runSession.codex_session_id === session.id);
+    for (const runSession of activeRunSessions) {
+      const runtimeJobId = runSession.runtime_metadata?.remote_runtime_job_id;
+      if (runtimeJobId === undefined) continue;
+      const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
+      if (runtimeJob === undefined || runtimeJob.status === 'terminal') continue;
+      const runWorkerLease = await repository.getRunWorkerLease(runSession.id);
+      const launchLease = await repository.getCodexLaunchLeasePublicStatus({ launch_lease_id: runtimeJob.launch_lease_id });
+      if (
+        (runWorkerLease !== undefined && this.runWorkerLeaseIsActive(runWorkerLease, runtimeJob, now)) ||
+        (launchLease !== undefined && this.codexLaunchLeaseIsActive(launchLease, runtimeJob, now))
+      ) {
+        throw new DomainError('workflow_execution_writer_still_active', 'Active run worker can still terminalize');
+      }
+    }
+  }
+
+  private async determineAbandonNewSessionFallbackForWorkflow(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+  ): Promise<ReturnType<typeof determineAbandonNewSessionFallback>> {
+    const executionPackage =
+      workflow.execution_package_id === undefined ? undefined : await repository.getExecutionPackage(workflow.execution_package_id);
+    const currentReviewPacket = await this.currentReviewPacketForAbandonFallback(repository, workflow, executionPackage);
+    const hasValidExecutionReadiness = await this.hasValidExecutionReadinessForAbandonFallback(repository, workflow, executionPackage);
+    const implementationPlanRevision =
+      workflow.active_implementation_plan_doc_revision_id === undefined
+        ? undefined
+        : await repository.getExecutionPlanRevision(workflow.active_implementation_plan_doc_revision_id);
+    const specRevision =
+      workflow.active_spec_doc_revision_id === undefined ? undefined : await repository.getSpecRevision(workflow.active_spec_doc_revision_id);
+    const boundaryRevision =
+      workflow.active_boundary_summary_revision_id === undefined
+        ? undefined
+        : await repository.getBoundarySummaryRevisionById(workflow.active_boundary_summary_revision_id);
+    const implementationPlan =
+      implementationPlanRevision === undefined ? undefined : await repository.getExecutionPlan(implementationPlanRevision.execution_plan_id);
+    const spec = specRevision === undefined ? undefined : await repository.getSpec(specRevision.spec_id);
+    const hasApprovedImplementationPlan =
+      implementationPlanRevision !== undefined &&
+      this.isOwnedExecutionPlanRevision(workflow, implementationPlanRevision) &&
+      implementationPlan?.approved_revision_id === implementationPlanRevision.id &&
+      implementationPlan.approved_at !== undefined &&
+      implementationPlan.approved_by_actor_id !== undefined;
+    const hasApprovedSpec =
+      specRevision !== undefined &&
+      this.isOwnedDocumentRevision(workflow, specRevision) &&
+      spec?.approved_revision_id === specRevision.id &&
+      spec.approved_at !== undefined &&
+      spec.approved_by_actor_id !== undefined;
+    const currentReviewPacketNextAction =
+      currentReviewPacket === undefined
+        ? undefined
+        : currentReviewPacket.status === 'completed' && currentReviewPacket.decision === 'changes_requested'
+          ? 'request_fix'
+          : 'respond_to_review';
+    return determineAbandonNewSessionFallback({
+      ...(currentReviewPacketNextAction === undefined ? {} : { current_review_packet_next_action: currentReviewPacketNextAction }),
+      has_valid_execution_readiness: hasValidExecutionReadiness,
+      has_unapproved_implementation_plan_doc:
+        implementationPlanRevision !== undefined &&
+        this.isOwnedExecutionPlanRevision(workflow, implementationPlanRevision) &&
+        !hasApprovedImplementationPlan,
+      has_approved_spec_doc: hasApprovedSpec,
+      has_unapproved_spec_doc:
+        specRevision !== undefined &&
+        this.isOwnedDocumentRevision(workflow, specRevision) &&
+        !hasApprovedSpec,
+      has_approved_boundary_summary:
+        boundaryRevision !== undefined &&
+        this.isOwnedDocumentRevision(workflow, boundaryRevision) &&
+        this.recordApprovedAt(boundaryRevision) !== undefined,
+    });
+  }
+
+  private async currentReviewPacketForAbandonFallback(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    executionPackage: ExecutionPackage | undefined,
+  ): Promise<ReviewPacket | undefined> {
+    if (
+      executionPackage === undefined ||
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.codex_session_id !== workflow.active_codex_session_id ||
+      executionPackage.last_run_session_id === undefined ||
+      workflow.active_spec_doc_revision_id === undefined ||
+      workflow.active_implementation_plan_doc_revision_id === undefined
+    ) {
+      return undefined;
+    }
+    return repository.findCurrentReviewPacketForWorkflow({
+      workflow_id: workflow.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.execution_package_version ?? executionPackage.version,
+      previous_run_session_id: executionPackage.last_run_session_id,
+      approved_spec_revision_id: workflow.active_spec_doc_revision_id,
+      approved_implementation_plan_revision_id: workflow.active_implementation_plan_doc_revision_id,
+      allowed_statuses: ['ready', 'in_review', 'completed'],
+      allowed_completed_decisions: ['changes_requested'],
+    });
+  }
+
+  private async hasValidExecutionReadinessForAbandonFallback(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    executionPackage: ExecutionPackage | undefined,
+  ): Promise<boolean> {
+    if (
+      executionPackage === undefined ||
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.codex_session_id !== workflow.active_codex_session_id
+    ) {
+      return false;
+    }
+    try {
+      await this.requireCurrentExecutionReadinessRecord(repository, workflow, executionPackage);
+      return true;
+    } catch (error) {
+      if (error instanceof DomainError) return false;
+      throw error;
+    }
+  }
+
+  private async workflowRecoveryOptions(repository: DeliveryRepository, workflow: PlanItemWorkflow): Promise<PlanItemWorkflowRecoveryOption[]> {
+    const continueSameSessionOption = await this.workflowContinueSameSessionRecoveryOption(repository, workflow);
     const canAbandonNewSession = workflow.status === 'blocked';
+    const abandonFallback = canAbandonNewSession
+      ? await this.determineAbandonNewSessionFallbackForWorkflow(repository, workflow)
+      : undefined;
+    const abandonNextAction =
+      abandonFallback === undefined ? undefined : this.publicAbandonNewSessionNextAction(abandonFallback.recommended_next_action);
     return [
-      {
-        action_id: 'continue_same_session',
-        enabled: canContinueSameSession,
-        ...(canContinueSameSession
-          ? {}
-          : {
-              blocker_code: 'workflow_execution_not_active',
-              warning_copy: 'There is no active interrupted execution to continue.',
-            }),
-        required_confirmation_kind: 'none',
-      },
+      continueSameSessionOption,
       {
         action_id: 'abandon_new_session',
         enabled: canAbandonNewSession,
+        ...(abandonNextAction === undefined ? {} : { next_action: abandonNextAction }),
         ...(canAbandonNewSession
           ? {}
           : {
@@ -6695,6 +7118,88 @@ export class PlanItemWorkflowService {
         required_confirmation_kind: 'none',
       },
     ];
+  }
+
+  private async workflowContinueSameSessionRecoveryOption(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+  ): Promise<PlanItemWorkflowRecoveryOption> {
+    const disabled = (blockerCode: string): PlanItemWorkflowRecoveryOption => ({
+      action_id: 'continue_same_session',
+      enabled: false,
+      blocker_code: blockerCode,
+      warning_copy: this.continueSameSessionWarningCopy(blockerCode),
+      required_confirmation_kind: 'none',
+    });
+    if (workflow.status !== 'execution_running' && !(workflow.status === 'blocked' && workflow.previous_status === 'execution_running')) {
+      return disabled('workflow_execution_not_active');
+    }
+    try {
+      const session = await this.requireActiveSession(repository, workflow);
+      const executionPackage = this.requireFound(
+        await repository.getExecutionPackage(this.requireString(workflow.execution_package_id, 'Workflow execution package is missing')),
+        `ExecutionPackage ${workflow.execution_package_id}`,
+      );
+      const runSession = this.requireFound(
+        await repository.findActiveRunSessionForPackage(executionPackage.id),
+        `active RunSession for ExecutionPackage ${executionPackage.id}`,
+      );
+      const runtimeJob = this.requireFound(
+        await repository.getCodexRuntimeJob({
+          runtime_job_id: this.requireString(runSession.runtime_metadata?.remote_runtime_job_id, 'Workflow execution runtime job is missing'),
+        }),
+        `CodexRuntimeJob ${runSession.runtime_metadata?.remote_runtime_job_id}`,
+      );
+      const decision = await this.classifyExecutionContinuationReadOnly(repository, {
+        workflow,
+        session,
+        executionPackage,
+        runSession,
+        runtimeJob,
+      });
+      if (decision.mode === 'reject') {
+        return disabled(decision.code);
+      }
+      return {
+        action_id: 'continue_same_session',
+        enabled: true,
+        required_confirmation_kind: 'none',
+      };
+    } catch (error) {
+      if (error instanceof DomainError) {
+        return disabled(error.code);
+      }
+      throw error;
+    }
+  }
+
+  private continueSameSessionWarningCopy(blockerCode: string): string {
+    switch (blockerCode) {
+      case 'workflow_execution_not_active':
+        return 'There is no active interrupted execution to continue.';
+      case 'workflow_execution_not_ready_for_input':
+        return 'The current execution worker is not ready for a continuation input yet.';
+      case 'workflow_execution_writer_still_active':
+        return 'The current execution writer can still terminalize, so starting another writer is unsafe.';
+      case 'workflow_execution_cancel_pending':
+        return 'The current execution cancellation can still terminalize; recover explicitly after cancellation is settled.';
+      case 'workflow_execution_recovery_required':
+        return 'The current execution lineage does not satisfy same-session recovery predicates.';
+      case 'workflow_evidence_missing':
+        return 'Required execution runtime evidence is missing for same-session continuation.';
+      default:
+        return 'Same-session continuation is not available for the current workflow state.';
+    }
+  }
+
+  private publicAbandonNewSessionNextAction(nextAction: NonNullable<AbandonNewSessionPublicNextAction>): AbandonNewSessionPublicNextAction {
+    if (abandonNewSessionPublicNextActions.has(nextAction)) {
+      return nextAction;
+    }
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: abandon/new-session next action ${nextAction} is not public-safe`,
+    );
   }
 
   private publicQueuedAction(workflow: PlanItemWorkflowPublicDto, actionId: string) {

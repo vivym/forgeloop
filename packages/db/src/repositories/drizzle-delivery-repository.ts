@@ -316,6 +316,7 @@ import type {
   ApplyPlanItemWorkflowTransitionInput,
   CreateCodexSessionForkInput,
   CreatePlanItemWorkflowWithInitialSessionInput,
+  ReplaceActiveCodexSessionForWorkflowInput,
   RecoverCodexSessionLeaseForClaimInput,
   RenewCodexSessionLeaseInput,
   RenewCodexSessionRunnerOwnerInput,
@@ -1924,6 +1925,80 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
     await this.assertCanSaveCodexSession(session);
     await this.db.update(codex_sessions).set(toDbRecord(session, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+  }
+
+  async replaceActiveCodexSessionForWorkflow(
+    input: ReplaceActiveCodexSessionForWorkflowInput,
+  ): Promise<{ workflow: PlanItemWorkflow; previous_session: CodexSession; session: CodexSession }> {
+    return this.withObjectLock(`plan-item-workflow:${input.workflow_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).replaceActiveCodexSessionForWorkflowUnlocked(input),
+    );
+  }
+
+  private async replaceActiveCodexSessionForWorkflowUnlocked(
+    input: ReplaceActiveCodexSessionForWorkflowInput,
+  ): Promise<{ workflow: PlanItemWorkflow; previous_session: CodexSession; session: CodexSession }> {
+    const workflow = await this.getPlanItemWorkflow(input.workflow_id);
+    const previousSession = await this.getCodexSession(input.previous_session_id);
+    if (
+      workflow === undefined ||
+      previousSession === undefined ||
+      workflow.active_codex_session_id !== previousSession.id ||
+      previousSession.owner_type !== 'plan_item_workflow' ||
+      previousSession.owner_id !== workflow.id ||
+      previousSession.role !== 'active' ||
+      previousSession.status === 'archived' ||
+      (await this.getCodexSession(input.new_session_id)) !== undefined
+    ) {
+      throw new DomainError(
+        'workflow_active_session_conflict',
+        `workflow_active_session_conflict: Cannot replace active Codex session for workflow ${input.workflow_id}`,
+      );
+    }
+    const {
+      active_lease_id: _activeLeaseId,
+      runner_worker_id: _runnerWorkerId,
+      runner_launch_lease_id: _runnerLaunchLeaseId,
+      runner_runtime_job_id: _runnerRuntimeJobId,
+      runner_expires_at: _runnerExpiresAt,
+      ...previousSessionBase
+    } = previousSession;
+    const archivedPrevious: CodexSession = {
+      ...previousSessionBase,
+      status: 'archived',
+      archived_at: input.now,
+      updated_at: input.now,
+    };
+    const session: CodexSession = {
+      id: input.new_session_id,
+      owner_type: 'plan_item_workflow',
+      owner_id: workflow.id,
+      status: 'idle',
+      role: 'active',
+      runtime_profile_id: input.runtime_profile_id,
+      runtime_profile_revision_id: input.runtime_profile_revision_id,
+      credential_binding_id: input.credential_binding_id,
+      credential_binding_version_id: input.credential_binding_version_id,
+      lease_epoch: 0,
+      created_by_actor_id: input.actor_id,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    const updatedWorkflow: PlanItemWorkflow = {
+      ...workflow,
+      active_codex_session_id: session.id,
+      updated_at: input.now,
+    };
+    await this.assertCanSaveCodexSession(archivedPrevious);
+    await this.assertCanSavePlanItemWorkflow(updatedWorkflow);
+    await this.db.update(codex_sessions).set(toDbRecord(archivedPrevious, codex_sessions) as never).where(eq(codex_sessions.id, archivedPrevious.id));
+    await this.assertCanSaveCodexSession(session);
+    await this.db.insert(codex_sessions).values(toDbRecord(session, codex_sessions) as never);
+    await this.db
+      .update(plan_item_workflows)
+      .set(toDbRecord(updatedWorkflow, plan_item_workflows) as never)
+      .where(eq(plan_item_workflows.id, updatedWorkflow.id));
+    return { workflow: updatedWorkflow, previous_session: archivedPrevious, session };
   }
 
   async createCodexSessionTurn(turn: CodexSessionTurn): Promise<void> {

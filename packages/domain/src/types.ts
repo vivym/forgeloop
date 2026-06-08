@@ -107,6 +107,7 @@ export type DomainErrorCode =
   | 'workflow_review_packet_digest_mismatch'
   | 'workflow_review_packet_evidence_unsafe'
   | 'workflow_execution_cancel_pending'
+  | 'workflow_abandon_next_action_mismatch'
   | 'workflow_capsule_digest_mismatch'
   | 'workflow_context_digest_mismatch';
 

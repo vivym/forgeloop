@@ -1714,6 +1714,12 @@ export class CodexRuntimeService {
       const responseId = randomUuid();
       const generatedPayload = input.terminalResult.generated_payload as Record<string, unknown>;
       const responseMarkdown = typeof generatedPayload.response_markdown === 'string' ? generatedPayload.response_markdown : '';
+      const responseSummary =
+        typeof generatedPayload.public_summary === 'string'
+          ? generatedPayload.public_summary
+          : typeof generatedPayload.summary === 'string'
+            ? generatedPayload.summary
+            : undefined;
       await repository.saveReviewResponse({
         id: responseId,
         workflow_id: workload.plan_item_workflow_id,
@@ -1722,6 +1728,8 @@ export class CodexRuntimeService {
         review_packet_id: workload.review_packet_id,
         previous_run_session_id: reviewContext.previous_run_session_id,
         status: 'succeeded',
+        ...(responseSummary === undefined ? {} : { summary: responseSummary }),
+        ...(responseMarkdown.length === 0 ? {} : { response_markdown: responseMarkdown }),
         content_digest: codexCanonicalDigest(responseMarkdown),
         created_by_actor_id: action.created_by_actor_id,
         created_at: input.now,

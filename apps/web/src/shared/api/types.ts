@@ -33,6 +33,10 @@ import type {
   CreateWorkItemRequest,
   PublicWorkItem,
   WorkItemIntakeContext,
+  ContinueWorkflowExecutionBody,
+  RespondToWorkflowReviewBody,
+  RequestWorkflowReviewFixBody,
+  AbandonWorkflowSessionBody,
 } from '@forgeloop/contracts';
 
 export type {
@@ -108,6 +112,10 @@ export type {
   ProductLaneResponse,
   ProductNavigateAction,
   PlanItemWorkflowPublicDto,
+  ContinueWorkflowExecutionBody,
+  RespondToWorkflowReviewBody,
+  RequestWorkflowReviewFixBody,
+  AbandonWorkflowSessionBody,
   ProductListItem,
   ProductListQuery,
   ProductListResponse,

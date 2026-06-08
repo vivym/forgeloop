@@ -21,6 +21,7 @@ const conflictDomainErrorCodes = new Set<DomainErrorCode>([
   'workflow_execution_not_ready_for_input',
   'workflow_execution_writer_still_active',
   'workflow_execution_cancel_pending',
+  'workflow_abandon_next_action_mismatch',
   'workflow_evidence_not_current',
   'workflow_context_digest_mismatch',
   'workflow_capsule_digest_mismatch',

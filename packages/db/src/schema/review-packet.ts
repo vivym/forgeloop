@@ -90,6 +90,8 @@ export const review_responses = pgTable(
       .references(() => review_packets.id),
     previousRunSessionId: uuid('previous_run_session_id').notNull(),
     status: text('status').$type<ReviewResponse['status']>().notNull(),
+    summary: text('summary'),
+    responseMarkdown: text('response_markdown'),
     contentDigest: text('content_digest'),
     renderedMarkdownArtifactRef: text('rendered_markdown_artifact_ref'),
     createdByActorId: uuid('created_by_actor_id')
