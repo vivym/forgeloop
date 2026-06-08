@@ -68,6 +68,7 @@ import { BrainstormingService } from '../brainstorming/brainstorming.service';
 import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../core/control-plane-tokens';
 import { executionPackageActorFields } from '../execution-packages/execution-package-actor-fields';
 import { SpecPlanService, type ProductGenerationScheduleResult } from '../spec-plan/spec-plan.service';
+import { ProductGenerationRuntimeSchedulerService } from '../codex-runtime/product-generation-runtime-scheduler.service';
 import type {
   ApproveWorkflowArtifactRevisionBodyDto,
   EvaluateWorkflowExecutionReadinessBodyDto,
@@ -200,6 +201,7 @@ export class PlanItemWorkflowService {
     @Inject(INTERNAL_ARTIFACT_STORE_ROOT) private readonly internalArtifactStoreRoot: string,
     @Inject(BrainstormingService) private readonly brainstorming: BrainstormingService,
     @Inject(SpecPlanService) private readonly specPlan: SpecPlanService,
+    @Inject(ProductGenerationRuntimeSchedulerService) private readonly productGenerationRuntime: ProductGenerationRuntimeSchedulerService,
   ) {}
 
   async startBrainstorming(developmentPlanId: string, itemId: string, dto: StartBrainstormingWorkflowDto) {
@@ -439,7 +441,7 @@ export class PlanItemWorkflowService {
             codex_session_turn_id: turn.id,
             now: this.now(),
           });
-          if (this.shouldUseRuntimeGenerationBridge()) {
+          if (actionWithTurn.kind === 'respond_to_review' || this.shouldUseRuntimeGenerationBridge()) {
             await this.scheduleQueuedActionRuntimeGeneration(repository, workflow, session, actionWithTurn, turn, input.actor_id);
             const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [actionWithTurn]);
             return {
@@ -539,7 +541,111 @@ export class PlanItemWorkflowService {
           context,
         );
         return;
+      case 'respond_to_review': {
+        const reviewContext = await this.reviewResponseRuntimeContext(repository, workflow, action);
+        await this.productGenerationRuntime.schedulePlanItemWorkflowReviewResponse({
+          repository,
+          action,
+          review_packet_id: reviewContext.review_packet_id,
+          review_packet_digest: reviewContext.review_packet_digest,
+          previous_run_session_id: reviewContext.previous_run_session_id,
+          prompt_version: 'review-response:v1',
+          context_manifest: reviewContext.context_manifest,
+          signed_context_json: reviewContext.signed_context_json,
+          project_id: reviewContext.project_id,
+          repo_ids: reviewContext.repo_id === undefined ? [] : [reviewContext.repo_id],
+        });
+        return;
+      }
+      case 'continue_execution':
+      case 'request_fix':
+        throw new DomainError(
+          'workflow_action_not_runnable',
+          `workflow_action_not_runnable: ${action.kind} must run through its dedicated workflow command`,
+        );
     }
+  }
+
+  private async reviewResponseRuntimeContext(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    action: PlanItemWorkflowQueuedAction,
+  ): Promise<{
+    review_packet_id: string;
+    review_packet_digest: string;
+    previous_run_session_id: string;
+    context_manifest: ContextManifest;
+    signed_context_json: Record<string, unknown>;
+    project_id: string;
+    repo_id?: string;
+  }> {
+    const executionPackageId = this.requireString(workflow.execution_package_id, 'Workflow execution package is missing');
+    const executionPackage = await repository.getExecutionPackage(executionPackageId);
+    if (
+      executionPackage === undefined ||
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.codex_session_id !== workflow.active_codex_session_id
+    ) {
+      throw new DomainError('workflow_evidence_not_owned', 'Execution Package does not belong to this workflow/session');
+    }
+    const packageVersion = executionPackage.execution_package_version ?? executionPackage.version;
+    const previousRunSessionId = this.requireString(
+      executionPackage.last_run_session_id,
+      'Execution Package previous run session is missing',
+    );
+    const approvedSpecRevisionId = this.requireString(workflow.active_spec_doc_revision_id, 'Workflow approved Spec Doc is missing');
+    const approvedPlanRevisionId = this.requireString(
+      workflow.active_implementation_plan_doc_revision_id,
+      'Workflow approved Implementation Plan Doc is missing',
+    );
+    const packet = await repository.findCurrentReviewPacketForWorkflow({
+      workflow_id: workflow.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: packageVersion,
+      previous_run_session_id: previousRunSessionId,
+      approved_spec_revision_id: approvedSpecRevisionId,
+      approved_implementation_plan_revision_id: approvedPlanRevisionId,
+      allowed_statuses: ['ready', 'in_review', 'completed'],
+      allowed_completed_decisions: ['changes_requested'],
+    });
+    if (packet === undefined) {
+      throw new DomainError('workflow_review_packet_not_current', 'Current Review Packet is missing');
+    }
+    const evidenceRefs = await repository.listReviewPacketEvidenceRefs(packet.id);
+    const digest = packet.current_digest ?? codexCanonicalDigest(packet);
+    const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+    const contextManifest = await this.ensureDeterministicContextManifest(repository, workflow, item, action.created_by_actor_id);
+    return {
+      review_packet_id: packet.id,
+      review_packet_digest: digest,
+      previous_run_session_id: previousRunSessionId,
+      context_manifest: contextManifest,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      signed_context_json: {
+        schema_version: 'review_response_context.v1',
+        plan_item_workflow_id: workflow.id,
+        plan_item_workflow_action_id: action.id,
+        review_packet_id: packet.id,
+        review_packet_digest: digest,
+        previous_run_session_id: previousRunSessionId,
+        execution_package_id: executionPackage.id,
+        execution_package_version: packageVersion,
+        approved_spec_revision_id: approvedSpecRevisionId,
+        approved_implementation_plan_revision_id: approvedPlanRevisionId,
+        changed_files: packet.changed_files,
+        check_result_summary: packet.check_result_summary,
+        risk_notes: packet.risk_notes,
+        evidence_refs: evidenceRefs.map((ref) => ({
+          id: ref.id,
+          ref_kind: ref.ref_kind,
+          display_text: ref.display_text,
+          digest: ref.digest,
+          ...(ref.url === undefined ? {} : { url: ref.url }),
+          ...(ref.internal_object_ref === undefined ? {} : { internal_object_ref: ref.internal_object_ref }),
+        })),
+      },
+    };
   }
 
   private blockQueuedWorkflowAction(
@@ -632,6 +738,13 @@ export class PlanItemWorkflowService {
         output_object_id: revision.id,
       });
       return { workflow: updated, session: terminal.session, action: terminal.action };
+    }
+
+    if (action.kind === 'respond_to_review' || action.kind === 'continue_execution' || action.kind === 'request_fix') {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: ${action.kind} must run through its dedicated runtime path`,
+      );
     }
 
     const revision = await this.writeDeterministicImplementationPlanRevision(repository, workflow, action, turn, actorId);

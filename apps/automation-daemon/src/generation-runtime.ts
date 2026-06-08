@@ -17,15 +17,60 @@ import {
   type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
   type CodexRuntimeStatusProjection,
+  type CodexSessionTerminalizationV1,
 } from '@forgeloop/domain';
 
 import type { AutomationDaemonConfig } from './config.js';
 
-type GenerationTaskKind = 'package_drafts';
-type GenerationInput = CodexGenerationRuntimeTaskInput<Record<string, unknown>>;
+type GenerationTaskKind = 'package_drafts' | 'review_response';
+type AutomationGenerationInput = CodexGenerationRuntimeTaskInput<Record<string, unknown>> & {
+  orchestration: NonNullable<CodexGenerationRuntimeTaskInput<Record<string, unknown>>['orchestration']>;
+};
+type ReviewResponseGenerationRuntimeTaskInput = Omit<
+  CodexGenerationRuntimeTaskInput<Record<string, unknown>>,
+  'actionRunId' | 'orchestration' | 'outputSchemaVersion' | 'codexSessionRuntimeContext'
+> & {
+  outputSchemaVersion: 'review_response.v1';
+  codexSessionRuntimeContext: NonNullable<CodexGenerationRuntimeTaskInput<Record<string, unknown>>['codexSessionRuntimeContext']>;
+  codexSessionTerminalization: CodexSessionTerminalizationV1;
+  orchestration: {
+    targetType: 'plan_item_workflow_action';
+    planItemWorkflowActionId: string;
+    planItemWorkflowId: string;
+    codexSessionId: string;
+    codexSessionTurnId: string;
+    reviewPacketId: string;
+    reviewPacketDigest: string;
+    actionAttempt: number;
+    idempotencyKey: string;
+  };
+};
+type GenerationInput = CodexGenerationRuntimeTaskInput<Record<string, unknown>> | ReviewResponseGenerationRuntimeTaskInput;
 type GeneratedForTask<TTaskKind extends GenerationTaskKind> = TTaskKind extends 'package_drafts'
   ? GeneratedPackageDraftSetV1
+  : TTaskKind extends 'review_response'
+    ? Record<string, unknown>
   : never;
+type ReviewResponseGenerationResult = {
+  taskKind: 'review_response';
+  promptVersion: string;
+  outputSchemaVersion: 'review_response.v1';
+  generated: Record<string, unknown>;
+  generationArtifacts: CodexGenerationResult<GeneratedPackageDraftSetV1>['generationArtifacts'];
+  publicSummary: string;
+};
+type GenerationResultForTask<TTaskKind extends GenerationTaskKind> = TTaskKind extends 'review_response'
+  ? ReviewResponseGenerationResult
+  : CodexGenerationResult<GeneratedForTask<TTaskKind>>;
+
+export interface AutomationReviewResponseGenerationRuntime {
+  generateReviewResponse(
+    input: ReviewResponseGenerationRuntimeTaskInput,
+  ): Promise<ReviewResponseGenerationResult>;
+}
+
+export type AutomationDaemonGenerationRuntime = AutomationPackageDraftGenerationRuntime &
+  Partial<AutomationReviewResponseGenerationRuntime>;
 
 type RemoteRuntimeJobProjection = {
   id?: unknown;
@@ -69,6 +114,32 @@ export interface RemoteCodexGenerationControlPlaneClient {
     input: { claim_token: string; locked_until: string; now?: string },
   ): Promise<unknown>;
 }
+
+const isReviewResponseGenerationInput = (input: GenerationInput): input is ReviewResponseGenerationRuntimeTaskInput =>
+  input.orchestration?.targetType === 'plan_item_workflow_action';
+
+const isAutomationGenerationInput = (input: GenerationInput): input is AutomationGenerationInput =>
+  !isReviewResponseGenerationInput(input) && input.orchestration !== undefined;
+
+const requireGenerationRuntimeTargetFor = (input: GenerationInput) => {
+  if (isReviewResponseGenerationInput(input)) {
+    return {
+      targetType: 'plan_item_workflow_action' as const,
+      targetId: input.orchestration.planItemWorkflowActionId,
+      actionAttempt: input.orchestration.actionAttempt,
+      idempotencyKey: input.orchestration.idempotencyKey,
+    };
+  }
+  if (isAutomationGenerationInput(input)) {
+    return {
+      targetType: 'automation_action_run' as const,
+      targetId: input.orchestration.actionRunId,
+      actionAttempt: input.orchestration.actionAttempt,
+      idempotencyKey: input.orchestration.idempotencyKey,
+    };
+  }
+  throw new Error('codex_runtime_job_denied');
+};
 
 export interface CreateRemoteCodexGenerationRuntimeOptions {
   controlPlaneClient: RemoteCodexGenerationControlPlaneClient;
@@ -125,25 +196,34 @@ export interface CreateLeasedDockerCodexGenerationRuntimeOptions {
     sessionToken: string;
     generationInput: GenerationInput;
   }): Promise<{ leaseId: string; launchToken: string }>;
-  innerRuntimeFactory?: (config: Parameters<typeof createCodexGenerationRuntime>[0]) => AutomationPackageDraftGenerationRuntime;
+  innerRuntimeFactory?: (config: Parameters<typeof createCodexGenerationRuntime>[0]) => AutomationDaemonGenerationRuntime;
   runtimeConfig?: Partial<Parameters<typeof createCodexGenerationRuntime>[0]>;
   onDockerRuntimeEvidence?: (evidence: CodexDockerRuntimeEvidence) => void;
 }
 
 export const createLeasedDockerCodexGenerationRuntime = (
   options: CreateLeasedDockerCodexGenerationRuntimeOptions,
-): AutomationPackageDraftGenerationRuntime => {
+): AutomationDaemonGenerationRuntime => {
   const innerRuntimeFactory = options.innerRuntimeFactory ?? createCodexGenerationRuntime;
 
   const generateWithLease = async <T>(
     taskKind: GenerationTaskKind,
     input: GenerationInput,
-    call: (runtime: AutomationPackageDraftGenerationRuntime, input: GenerationInput) => Promise<T>,
+    call: (runtime: AutomationDaemonGenerationRuntime, input: GenerationInput) => Promise<T>,
   ): Promise<T> => {
     if (input.orchestration === undefined) {
       throw new Error('codex_launch_lease_denied');
     }
-    if (input.codexSessionRuntimeContext !== undefined) {
+    if (!isReviewResponseGenerationInput(input) && input.codexSessionRuntimeContext !== undefined) {
+      throw new CodexGenerationError('codex_runtime_capsule_missing', {
+        retryable: false,
+        publicResultJson: { status: 422, code: 'codex_runtime_capsule_missing' },
+      });
+    }
+    if (
+      isReviewResponseGenerationInput(input) &&
+      (input.codexSessionRuntimeContext === undefined || input.codexSessionTerminalization === undefined)
+    ) {
       throw new CodexGenerationError('codex_runtime_capsule_missing', {
         retryable: false,
         publicResultJson: { status: 422, code: 'codex_runtime_capsule_missing' },
@@ -187,7 +267,16 @@ export const createLeasedDockerCodexGenerationRuntime = (
 
   return {
     generatePackageDrafts: (input) =>
-      generateWithLease('package_drafts', input, (runtime, taskInput) => runtime.generatePackageDrafts(taskInput)),
+      generateWithLease('package_drafts', input, (runtime, taskInput) =>
+        runtime.generatePackageDrafts(taskInput as CodexGenerationRuntimeTaskInput<Record<string, unknown>>),
+      ),
+    generateReviewResponse: (input) =>
+      generateWithLease('review_response', input, (runtime, taskInput) => {
+        if (runtime.generateReviewResponse === undefined) {
+          throw new Error('codex_generation_task_kind_unsupported:review_response');
+        }
+        return runtime.generateReviewResponse(taskInput as ReviewResponseGenerationRuntimeTaskInput);
+      }),
   };
 };
 
@@ -214,14 +303,25 @@ const stableWorkloadIsoFor = (input: Record<string, unknown>, offsetMs = 0): str
   return new Date(Date.UTC(2026, 0, 1) + stableOffset + offsetMs).toISOString();
 };
 
-const remoteRuntimeJobIdFor = (input: {
-  actionRunId: string;
+type RemoteRuntimeJobIdentity = {
   actionAttempt: number;
   taskKind: GenerationTaskKind;
   promptVersion: string;
   outputSchemaVersion: string;
   idempotencyKey: string;
-}): string => `codex-generation-job-${codexCanonicalDigest(input).replace(/^sha256:/, '')}`;
+} & (
+  | {
+      targetType: 'automation_action_run';
+      actionRunId: string;
+    }
+  | {
+      targetType: 'plan_item_workflow_action';
+      planItemWorkflowActionId: string;
+    }
+);
+
+const remoteRuntimeJobIdFor = (input: RemoteRuntimeJobIdentity): string =>
+  `codex-generation-job-${codexCanonicalDigest(input).replace(/^sha256:/, '')}`;
 
 const remoteGenerationCancelInput = (runtimeJobId: string, reasonCode = 'codex_runtime_job_cancelled') => ({
   reason_code: reasonCode,
@@ -256,6 +356,8 @@ const validateGeneratedPayloadForTask = <TTaskKind extends GenerationTaskKind>(
   switch (taskKind) {
     case 'package_drafts':
       return validateGeneratedPackageDraftSet(generatedPayload) as GeneratedForTask<TTaskKind>;
+    case 'review_response':
+      return generatedPayload as GeneratedForTask<TTaskKind>;
   }
 };
 
@@ -294,7 +396,7 @@ const validateRemoteTerminalResult = <TTaskKind extends GenerationTaskKind>(
   outputSchemaVersion: string,
   terminalResultJson: unknown,
   requiresRuntimeCapsule: boolean,
-): CodexGenerationResult<GeneratedForTask<TTaskKind>> => {
+): GenerationResultForTask<TTaskKind> => {
   let terminalResult: ReturnType<typeof validateCodexRuntimeJobTerminalResult>;
   try {
     terminalResult = validateCodexRuntimeJobTerminalResult(terminalResultJson);
@@ -357,7 +459,7 @@ const validateRemoteTerminalResult = <TTaskKind extends GenerationTaskKind>(
       ];
     }),
     publicSummary: result.public_summary,
-  };
+  } as GenerationResultForTask<TTaskKind>;
 };
 
 const terminalFailureFor = (runtimeJob: RemoteRuntimeJobProjection): CodexGenerationError => {
@@ -376,7 +478,7 @@ const terminalFailureFor = (runtimeJob: RemoteRuntimeJobProjection): CodexGenera
   });
 };
 
-export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGenerationRuntimeOptions): AutomationPackageDraftGenerationRuntime => {
+export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGenerationRuntimeOptions): AutomationDaemonGenerationRuntime => {
   const now = options.now ?? (() => new Date().toISOString());
   const monotonicNowMs = options.monotonicNowMs ?? (() => Date.now());
   const sleep = options.sleep ?? ((durationMs: number) => new Promise<void>((resolve) => setTimeout(resolve, durationMs)));
@@ -422,12 +524,21 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
 
   const generateWithRemoteJob = async <TTaskKind extends GenerationTaskKind>(
     taskKind: TTaskKind,
-    input: CodexGenerationRuntimeTaskInput<Record<string, unknown>>,
-  ): Promise<CodexGenerationResult<GeneratedForTask<TTaskKind>>> => {
+    input: GenerationInput,
+  ): Promise<GenerationResultForTask<TTaskKind>> => {
     if (input.orchestration === undefined) {
       throw new Error('codex_runtime_job_denied');
     }
-    if (input.codexSessionRuntimeContext !== undefined) {
+    if (!isReviewResponseGenerationInput(input) && input.codexSessionRuntimeContext !== undefined) {
+      throw new CodexGenerationError('codex_runtime_capsule_missing', {
+        retryable: false,
+        publicResultJson: { status: 422, code: 'codex_runtime_capsule_missing' },
+      });
+    }
+    if (
+      isReviewResponseGenerationInput(input) &&
+      (input.codexSessionRuntimeContext === undefined || input.codexSessionTerminalization === undefined)
+    ) {
       throw new CodexGenerationError('codex_runtime_capsule_missing', {
         retryable: false,
         publicResultJson: { status: 422, code: 'codex_runtime_capsule_missing' },
@@ -437,43 +548,88 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
     if (isAborted()) {
       throw new CodexGenerationError('codex_generation_cancelled', { retryable: false });
     }
-    const orchestration = input.orchestration;
+    const target = requireGenerationRuntimeTargetFor(input);
+    const automationInput = isAutomationGenerationInput(input) ? input : undefined;
     const repoId = input.repoIds[0];
     const nowValue = now();
-    const runtimeJobId = remoteRuntimeJobIdFor({
-      actionRunId: orchestration.actionRunId,
-      actionAttempt: orchestration.actionAttempt,
-      taskKind,
-      promptVersion: input.promptVersion,
-      outputSchemaVersion: input.outputSchemaVersion,
-      idempotencyKey: orchestration.idempotencyKey,
-    });
+    const runtimeJobId =
+      target.targetType === 'automation_action_run'
+        ? remoteRuntimeJobIdFor({
+            targetType: 'automation_action_run',
+            actionRunId: target.targetId,
+            actionAttempt: target.actionAttempt,
+            taskKind,
+            promptVersion: input.promptVersion,
+            outputSchemaVersion: input.outputSchemaVersion,
+            idempotencyKey: target.idempotencyKey,
+          })
+        : remoteRuntimeJobIdFor({
+            targetType: 'plan_item_workflow_action',
+            planItemWorkflowActionId: target.targetId,
+            actionAttempt: target.actionAttempt,
+            taskKind,
+            promptVersion: input.promptVersion,
+            outputSchemaVersion: input.outputSchemaVersion,
+            idempotencyKey: target.idempotencyKey,
+          });
     const expiresAt = isoAfter(nowValue, options.waitTimeoutMs);
     const signedContextDigest = codexCanonicalDigest(input.context);
     const signedContextRef = `artifact://codex-runtime-jobs/${runtimeJobId}/workload/signed-context`;
     const workloadTimeSeed = {
-      action_run_id: orchestration.actionRunId,
-      action_attempt: orchestration.actionAttempt,
+      target_type: target.targetType,
+      target_id: target.targetId,
+      action_attempt: target.actionAttempt,
       task_kind: taskKind,
-      idempotency_key: orchestration.idempotencyKey,
+      idempotency_key: target.idempotencyKey,
     };
-    const workload: CodexGenerationWorkloadV1 = {
-      schema_version: 'codex_generation_workload.v1',
-      runtime_job_id: runtimeJobId,
-      action_run_id: orchestration.actionRunId,
-      task_kind: taskKind,
-      prompt_version: input.promptVersion,
-      output_schema_version: input.outputSchemaVersion,
-      signed_context_ref: signedContextRef,
-      signed_context_digest: signedContextDigest,
-      prompt_template_digest: codexCanonicalDigest({
-        task_kind: taskKind,
+    let workload: CodexGenerationWorkloadV1;
+    if (isReviewResponseGenerationInput(input)) {
+      workload = {
+        schema_version: 'codex_generation_workload.v1',
+        runtime_job_id: runtimeJobId,
+        plan_item_workflow_action_id: input.orchestration.planItemWorkflowActionId,
+        plan_item_workflow_id: input.orchestration.planItemWorkflowId,
+        codex_session_id: input.orchestration.codexSessionId,
+        codex_session_turn_id: input.orchestration.codexSessionTurnId,
+        review_packet_id: input.orchestration.reviewPacketId,
+        review_packet_digest: input.orchestration.reviewPacketDigest,
+        task_kind: 'review_response',
+        prompt_version: input.promptVersion,
+        output_schema_version: 'review_response.v1',
+        signed_context_ref: signedContextRef,
+        signed_context_digest: signedContextDigest,
+        prompt_template_digest: codexCanonicalDigest({
+          task_kind: 'review_response',
+          prompt_version: input.promptVersion,
+          output_schema_version: 'review_response.v1',
+        }),
+        created_at: stableWorkloadIsoFor(workloadTimeSeed),
+        expires_at: stableWorkloadIsoFor(workloadTimeSeed, options.waitTimeoutMs),
+        codex_session_runtime_context: input.codexSessionRuntimeContext,
+        codex_session_terminalization: input.codexSessionTerminalization,
+      };
+    } else {
+      if (automationInput === undefined) {
+        throw new Error('codex_runtime_job_denied');
+      }
+      workload = {
+        schema_version: 'codex_generation_workload.v1',
+        runtime_job_id: runtimeJobId,
+        action_run_id: automationInput.orchestration.actionRunId,
+        task_kind: taskKind as Exclude<GenerationTaskKind, 'review_response'>,
         prompt_version: input.promptVersion,
         output_schema_version: input.outputSchemaVersion,
-      }),
-      created_at: stableWorkloadIsoFor(workloadTimeSeed),
-      expires_at: stableWorkloadIsoFor(workloadTimeSeed, options.waitTimeoutMs),
-    };
+        signed_context_ref: signedContextRef,
+        signed_context_digest: signedContextDigest,
+        prompt_template_digest: codexCanonicalDigest({
+          task_kind: taskKind,
+          prompt_version: input.promptVersion,
+          output_schema_version: input.outputSchemaVersion,
+        }),
+        created_at: stableWorkloadIsoFor(workloadTimeSeed),
+        expires_at: stableWorkloadIsoFor(workloadTimeSeed, options.waitTimeoutMs),
+      };
+    }
     const status = await options.controlPlaneClient.getStatus({
       projectId: input.projectId,
       ...(repoId === undefined ? {} : { repoId }),
@@ -492,10 +648,10 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
       runtime_job_id: runtimeJobId,
       launch_lease_id: launchLeaseId,
       envelope_id: envelopeId,
-      job_request_id: `codex-generation-job-request-${orchestration.actionRunId}-${taskKind}-${orchestration.idempotencyKey}`,
+      job_request_id: `codex-generation-job-request-${target.targetId}-${taskKind}-${target.idempotencyKey}`,
       target: {
-        target_type: orchestration.targetType,
-        target_id: orchestration.actionRunId,
+        target_type: target.targetType,
+        target_id: target.targetId,
         target_kind: 'generation',
         project_id: input.projectId,
         ...(repoId === undefined ? {} : { repo_id: repoId }),
@@ -513,11 +669,15 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
         repo_ids: input.repoIds,
         policy_digests: input.policyDigests,
       },
-      launch_attempt: orchestration.actionAttempt,
-      action_type: orchestration.actionType,
-      action_attempt: orchestration.actionAttempt,
-      action_claim_token: orchestration.claimToken,
-      precondition_fingerprint: orchestration.preconditionFingerprint,
+      launch_attempt: target.actionAttempt,
+      ...(isReviewResponseGenerationInput(input)
+        ? {}
+        : {
+            action_type: automationInput?.orchestration.actionType,
+            action_attempt: automationInput?.orchestration.actionAttempt,
+            action_claim_token: automationInput?.orchestration.claimToken,
+            precondition_fingerprint: automationInput?.orchestration.preconditionFingerprint,
+          }),
       expires_at: expiresAt,
     });
 
@@ -594,34 +754,39 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
         await bestEffortCancelRuntimeJob(options.controlPlaneClient, runtimeJobId);
         throw new CodexGenerationError('codex_generation_cancelled', { retryable: false });
       }
-      try {
-        await runWithinWaitDeadline(() =>
-          options.controlPlaneClient.renewAutomationActionRunClaim(orchestration.actionRunId, {
-            claim_token: orchestration.claimToken,
-            locked_until: isoAfter(now(), claimRenewalMs),
-            now: now(),
-          }),
-        );
-      } catch (error) {
-        if (error instanceof RemoteRuntimeJobWaitDeadlineExpired) {
-          break;
+      if (!isReviewResponseGenerationInput(input)) {
+        if (automationInput === undefined) {
+          throw new Error('codex_runtime_job_denied');
         }
-        if (error instanceof RemoteRuntimeJobWaitAborted) {
-          await bestEffortCancelRuntimeJob(options.controlPlaneClient, runtimeJobId);
-          throw new CodexGenerationError('codex_generation_cancelled', { retryable: false });
-        }
-        await bestEffortCancelRuntimeJob(options.controlPlaneClient, runtimeJobId);
-        if (isLostActionClaimRenewalError(error)) {
-          throw new AutomationHttpError(
-            409,
-            { code: 'automation_action_claim_conflict' },
-            'automation_action_claim_conflict',
+        try {
+          await runWithinWaitDeadline(() =>
+            options.controlPlaneClient.renewAutomationActionRunClaim(automationInput.orchestration.actionRunId, {
+              claim_token: automationInput.orchestration.claimToken,
+              locked_until: isoAfter(now(), claimRenewalMs),
+              now: now(),
+            }),
           );
+        } catch (error) {
+          if (error instanceof RemoteRuntimeJobWaitDeadlineExpired) {
+            break;
+          }
+          if (error instanceof RemoteRuntimeJobWaitAborted) {
+            await bestEffortCancelRuntimeJob(options.controlPlaneClient, runtimeJobId);
+            throw new CodexGenerationError('codex_generation_cancelled', { retryable: false });
+          }
+          await bestEffortCancelRuntimeJob(options.controlPlaneClient, runtimeJobId);
+          if (isLostActionClaimRenewalError(error)) {
+            throw new AutomationHttpError(
+              409,
+              { code: 'automation_action_claim_conflict' },
+              'automation_action_claim_conflict',
+            );
+          }
+          throw new CodexGenerationError('codex_app_server_unavailable', {
+            retryable: true,
+            publicResultJson: { status: 503, code: 'codex_app_server_unavailable' },
+          });
         }
-        throw new CodexGenerationError('codex_app_server_unavailable', {
-          retryable: true,
-          publicResultJson: { status: 503, code: 'codex_app_server_unavailable' },
-        });
       }
       if (remainingWaitMs() <= 0) {
         break;
@@ -669,6 +834,7 @@ export const createRemoteCodexGenerationRuntime = (options: CreateRemoteCodexGen
 
   return {
     generatePackageDrafts: (input) => generateWithRemoteJob('package_drafts', input),
+    generateReviewResponse: (input) => generateWithRemoteJob('review_response', input),
   };
 };
 
@@ -678,7 +844,7 @@ export const createAutomationDaemonGenerationRuntime = (
     localDocker?: CreateLeasedDockerCodexGenerationRuntimeOptions;
     remoteOutbound?: { controlPlaneClient: RemoteCodexGenerationControlPlaneClient };
   } = {},
-): AutomationPackageDraftGenerationRuntime | undefined => {
+): AutomationDaemonGenerationRuntime | undefined => {
   const hasEnabledGenerationTask = Object.values(config.generationPlanning.tasks).some((task) => task.enabled);
   if (config.generationPlanning.mode === 'disabled' || !hasEnabledGenerationTask) {
     return undefined;

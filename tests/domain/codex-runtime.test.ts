@@ -698,7 +698,6 @@ describe('codex runtime domain contracts', () => {
       expires_at: '2026-06-07T00:10:00.000Z',
     };
 
-    expect(validateCodexGenerationWorkload(workload)).toEqual(workload);
     const matchingRuntimeContext = {
       schema_version: 'codex_session_runtime_context.v1',
       codex_session_id: 'session-1',
@@ -738,6 +737,23 @@ describe('codex runtime domain contracts', () => {
             ...matchingRuntimeContext,
             codex_session_turn_id: 'turn-other',
           },
+        }),
+      'codex_generation_workload_unsupported',
+    );
+    expectDomainErrorCode(() => validateCodexGenerationWorkload(workload), 'codex_generation_workload_unsupported');
+    expectDomainErrorCode(
+      () =>
+        validateCodexGenerationWorkload({
+          ...workload,
+          codex_session_runtime_context: matchingRuntimeContext,
+        }),
+      'codex_generation_workload_unsupported',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexGenerationWorkload({
+          ...workload,
+          codex_session_terminalization: matchingTerminalization,
         }),
       'codex_generation_workload_unsupported',
     );

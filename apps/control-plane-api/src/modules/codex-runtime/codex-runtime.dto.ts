@@ -33,7 +33,7 @@ const runSessionFenceStatusSchema = z.enum(['queued', 'running', 'resuming']);
 const terminalRuntimeJobStatusSchema = z.enum(['succeeded', 'failed', 'cancelled', 'expired']);
 
 const launchTargetSchema = z.object({
-  target_type: z.enum(['automation_action_run', 'run_session']),
+  target_type: z.enum(['automation_action_run', 'run_session', 'plan_item_workflow_action']),
   target_id: z.string().min(1),
   target_kind: runtimeTargetKindSchema,
   project_id: z.string().min(1),

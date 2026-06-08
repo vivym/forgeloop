@@ -770,24 +770,59 @@ const reviewResponseWorkload = (
     review_packet_id?: string;
     review_packet_digest?: string;
   } = {},
-): Record<string, unknown> => ({
-  schema_version: 'codex_generation_workload.v1',
-  task_kind: 'review_response',
-  runtime_job_id: overrides.runtime_job_id ?? 'runtime-job-review-response-1',
-  prompt_version: 'review-response-prompt.v1',
-  output_schema_version: 'review_response.v1',
-  signed_context_ref: 'artifact://internal/review-response/context',
-  signed_context_digest: fixtureDigest('9'),
-  prompt_template_digest: fixtureDigest('8'),
-  created_at: now,
-  expires_at: expiresAt,
-  plan_item_workflow_action_id: overrides.plan_item_workflow_action_id ?? 'plan-item-workflow-action-1',
-  plan_item_workflow_id: overrides.plan_item_workflow_id ?? 'workflow-1',
-  codex_session_id: overrides.codex_session_id ?? 'session-1',
-  codex_session_turn_id: overrides.codex_session_turn_id ?? 'turn-1',
-  review_packet_id: overrides.review_packet_id ?? 'review-packet-1',
-  review_packet_digest: overrides.review_packet_digest ?? fixtureDigest('7'),
-});
+): Record<string, unknown> => {
+  const codexSessionId = overrides.codex_session_id ?? 'session-1';
+  const codexSessionTurnId = overrides.codex_session_turn_id ?? 'turn-1';
+  const runtimeJobId = overrides.runtime_job_id ?? 'runtime-job-review-response-1';
+  return {
+    schema_version: 'codex_generation_workload.v1',
+    task_kind: 'review_response',
+    runtime_job_id: runtimeJobId,
+    prompt_version: 'review-response-prompt.v1',
+    output_schema_version: 'review_response.v1',
+    signed_context_ref: 'artifact://internal/review-response/context',
+    signed_context_digest: fixtureDigest('9'),
+    prompt_template_digest: fixtureDigest('8'),
+    created_at: now,
+    expires_at: expiresAt,
+    plan_item_workflow_action_id: overrides.plan_item_workflow_action_id ?? 'plan-item-workflow-action-1',
+    plan_item_workflow_id: overrides.plan_item_workflow_id ?? 'workflow-1',
+    codex_session_id: codexSessionId,
+    codex_session_turn_id: codexSessionTurnId,
+    review_packet_id: overrides.review_packet_id ?? 'review-packet-1',
+    review_packet_digest: overrides.review_packet_digest ?? fixtureDigest('7'),
+    codex_session_runtime_context: {
+      schema_version: 'codex_session_runtime_context.v1',
+      codex_session_id: codexSessionId,
+      codex_session_turn_id: codexSessionTurnId,
+      lease_id: `review-response-session-lease-${runtimeJobId}`,
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: tokenHash('session-token-1'),
+      expected_input_capsule_digest: fixtureDigest('b'),
+      turn_group_status: 'complete',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+      },
+    },
+    codex_session_terminalization: {
+      schema_version: 'codex_session_terminalization.v1',
+      lease_token: 'review-response-lease-token-secret',
+      codex_session_id: codexSessionId,
+      codex_session_turn_id: codexSessionTurnId,
+      expected_input_capsule_digest: fixtureDigest('b'),
+      input_capsule_id: 'capsule-review-response-1',
+      input_capsule_ref: `artifact://internal/codex_runtime_capsule/codex_session/${codexSessionId}/capsule-review-response-1`,
+      input_capsule_digest: fixtureDigest('b'),
+      input_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${codexSessionId}/memory-review-response-1`,
+      input_memory_bundle_digest: fixtureDigest('c'),
+      input_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${codexSessionId}/env-review-response-1`,
+      input_environment_manifest_digest: fixtureDigest('d'),
+    },
+  };
+};
 
 const workflowRuntimeJobRecords = (repository: DeliveryRepository): Map<string, { job: { input_json: Record<string, unknown> } }> =>
   (repository as unknown as { codexRuntimeJobs: Map<string, { job: { input_json: Record<string, unknown> } }> }).codexRuntimeJobs;

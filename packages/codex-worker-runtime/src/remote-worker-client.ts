@@ -8,6 +8,7 @@ import {
   codexGenerationTaskKinds,
   type CodexRuntimeCapsule,
   type CodexDockerRuntimeEvidence,
+  type CodexGenerationRuntimeJobResult,
   type CodexGenerationWorkloadV1,
   type CodexLaunchMaterialization,
   type CodexRunExecutionExpectedContinuation,
@@ -18,6 +19,7 @@ import {
   type CodexRuntimeJob,
   type CodexRuntimeTargetKind,
   type CodexRuntimeScope,
+  validateCodexGenerationWorkload,
   validateCodexRunExecutionWorkload,
   validateCodexRunExecutionWorkloadContinuity,
   validateCodexSessionRuntimeContext,
@@ -472,6 +474,9 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
       const generationResult = await runGenerationWithControl(workerSession, job, (signal) =>
         runGeneration(runtime, workloadResponse, job, runner!.materialization, signal),
       );
+      if (workload.task_kind === 'review_response') {
+        assertReviewResponseGenerationResultIsReadOnly(generationResult);
+      }
       failureDiagnostic.failure_stage = 'generation_artifact_upload';
       const uploadedArtifacts = await uploadGenerationArtifacts(workerSession, job, generationResult);
       failureDiagnostic.failure_stage = 'generation_capsule_packaging';
@@ -485,6 +490,9 @@ export const createRemoteCodexWorkerClient = (options: RemoteCodexWorkerClientOp
         runner.appServerSession.publicEvidence,
         outputCapsule,
       );
+      if (workload.task_kind === 'review_response') {
+        assertReviewResponseOutputIsReadOnly(terminalResult);
+      }
       failureDiagnostic.failure_stage = 'generation_terminalize';
       successTerminalAttempted = true;
       await terminalizeWithRetry(workerSession, job, {
@@ -1694,8 +1702,7 @@ const runGeneration = async (
 ): Promise<CodexGenerationResult<Record<string, unknown>>> => {
   const { workload, signedContext } = workloadResponse;
   const contextOperation = generationContextOperation(signedContext);
-  const input = {
-    actionRunId: workload.action_run_id,
+  const commonInput = {
     projectId: job.project_id,
     repoIds: materialization.launch_target.repo_id === undefined ? [] : [materialization.launch_target.repo_id],
     context: signedContext,
@@ -1715,28 +1722,90 @@ const runGeneration = async (
   };
   let result: CodexGenerationResult<Record<string, unknown>>;
   switch (workload.task_kind) {
-    case 'spec_draft':
+    case 'spec_draft': {
+      const input = { ...commonInput, actionRunId: workload.action_run_id };
       result = (await runtime.generateSpecDraft(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
       break;
-    case 'plan_draft':
+    }
+    case 'plan_draft': {
+      const input = { ...commonInput, actionRunId: workload.action_run_id };
       result = (await runtime.generatePlanDraft(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
       break;
-    case 'package_drafts':
+    }
+    case 'package_drafts': {
+      const input = { ...commonInput, actionRunId: workload.action_run_id };
       result = (await runtime.generatePackageDrafts(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
       break;
-    case 'boundary_brainstorming_round':
+    }
+    case 'boundary_brainstorming_round': {
+      const input = { ...commonInput, actionRunId: workload.action_run_id };
       result = (await runtime.generateBoundaryBrainstormingRound(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
       break;
-    case 'development_plan_item_spec_revision':
+    }
+    case 'development_plan_item_spec_revision': {
+      const input = { ...commonInput, actionRunId: workload.action_run_id };
       result = (await runtime.generateDevelopmentPlanItemSpecRevision(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
       break;
-    case 'development_plan_item_execution_plan_revision':
+    }
+    case 'development_plan_item_execution_plan_revision': {
+      const input = { ...commonInput, actionRunId: workload.action_run_id };
       result = (await runtime.generateDevelopmentPlanItemExecutionPlanRevision(input)) as unknown as CodexGenerationResult<Record<string, unknown>>;
       break;
+    }
+    case 'review_response': {
+      const reviewInput = {
+        ...commonInput,
+        planItemWorkflowActionId: workload.plan_item_workflow_action_id,
+        planItemWorkflowId: workload.plan_item_workflow_id,
+        codexSessionId: workload.codex_session_id,
+        codexSessionTurnId: workload.codex_session_turn_id,
+        reviewPacketId: workload.review_packet_id,
+        reviewPacketDigest: workload.review_packet_digest,
+      };
+      const reviewRuntime = runtime as typeof runtime & {
+        generateReviewResponse?: (input: typeof reviewInput) => Promise<CodexGenerationResult<Record<string, unknown>>>;
+      };
+      if (reviewRuntime.generateReviewResponse === undefined) {
+        throw new Error('codex_generation_task_kind_unsupported:review_response');
+      }
+      result = await reviewRuntime.generateReviewResponse(reviewInput);
+      break;
+    }
     default:
-      return assertNeverGenerationTaskKind(workload.task_kind);
+      return assertNeverGenerationTaskKind((workload as { task_kind: never }).task_kind);
   }
   return result;
+};
+
+const reviewResponseMutationArtifactPattern = /patch|diff|changed[_-]?files?|workspace|commit|pull[_-]?request|run[_-]?execution/i;
+
+const assertReviewResponseGenerationResultIsReadOnly = (result: CodexGenerationResult<Record<string, unknown>>): void => {
+  for (const key of Object.keys(result.generated)) {
+    if (reviewResponseMutationArtifactPattern.test(key)) {
+      throw new Error('read_only_review_response_mutation_artifact');
+    }
+  }
+  for (const artifact of result.generationArtifacts) {
+    if (reviewResponseMutationArtifactPattern.test(`${artifact.kind}:${artifact.name}:${artifact.content_type}`)) {
+      throw new Error('read_only_review_response_mutation_artifact');
+    }
+  }
+};
+
+const assertReviewResponseOutputIsReadOnly = (result: CodexGenerationRuntimeJobResult): void => {
+  const payload = result.generated_payload;
+  if (isRecord(payload)) {
+    for (const key of Object.keys(payload)) {
+      if (reviewResponseMutationArtifactPattern.test(key)) {
+        throw new Error('read_only_review_response_mutation_artifact');
+      }
+    }
+  }
+  for (const artifact of result.generation_artifacts) {
+    if (reviewResponseMutationArtifactPattern.test(`${artifact.kind}:${artifact.name}:${artifact.content_type}`)) {
+      throw new Error('read_only_review_response_mutation_artifact');
+    }
+  }
 };
 
 const assertNeverGenerationTaskKind = (taskKind: never): never => {
@@ -1934,19 +2003,16 @@ const requiredGenerationWorkload = (response: unknown): FetchedGenerationWorkloa
   if (!isRecord(response) || !isRecord(response.workload)) {
     throw new Error('codex_runtime_job_unavailable');
   }
-  const workload = response.workload;
-  if (
-    workload.schema_version !== 'codex_generation_workload.v1' ||
-    typeof workload.runtime_job_id !== 'string' ||
-    typeof workload.action_run_id !== 'string' ||
-    typeof workload.task_kind !== 'string'
-  ) {
-    throw new Error('codex_runtime_job_unavailable');
-  }
-  if (!codexGenerationTaskKinds.includes(workload.task_kind as (typeof codexGenerationTaskKinds)[number])) {
+  let typedWorkload: CodexGenerationWorkloadV1;
+  try {
+    typedWorkload = validateCodexGenerationWorkload(response.workload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split(':', 1)[0]?.trim() : undefined;
+    if (message !== undefined && publicRuntimeWorkerErrorCodes.has(message)) {
+      throw new Error(message);
+    }
     throw new Error('codex_generation_workload_unsupported');
   }
-  const typedWorkload = workload as unknown as CodexGenerationWorkloadV1;
   const hasSessionRuntimeContext = typedWorkload.codex_session_runtime_context !== undefined;
   const hasSessionTerminalization = typedWorkload.codex_session_terminalization !== undefined;
   if (hasSessionRuntimeContext !== hasSessionTerminalization) {
@@ -2372,6 +2438,7 @@ const publicRuntimeWorkerErrorCodes = new Set([
   'generated_output_ambiguous',
   'generated_output_schema_invalid',
   'generated_output_too_large',
+  'read_only_review_response_mutation_artifact',
   'codex_runtime_capsule_missing',
   'codex_memory_bundle_missing',
   'codex_environment_manifest_missing',

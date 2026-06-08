@@ -21,6 +21,7 @@ import {
   normalizeCodexRuntimeNetworkPolicy,
   runtimeArtifactUploadProofPayload,
   validateCodexLaunchTargetKind,
+  validateCodexGenerationWorkload,
   validateCodexDockerRuntimeEvidence,
   validateCodexRunExecutionWorkload,
   validateCodexRuntimeJobTerminalResult,
@@ -1433,6 +1434,16 @@ export class CodexRuntimeService {
         now,
       });
     }
+    if (preTerminalRuntimeJob.target_type === 'plan_item_workflow_action' && preTerminalRuntimeJob.target_kind === 'generation') {
+      return this.terminalizePlanItemWorkflowActionRuntimeJob({
+        runtimeJob: preTerminalRuntimeJob,
+        workerId,
+        jobId,
+        input,
+        terminalResult,
+        now,
+      });
+    }
     const runtimeJob = await this.repository.terminalizeCodexRuntimeJob({
       runtime_job_id: jobId,
       launch_lease_id: input.launch_lease_id,
@@ -1479,6 +1490,335 @@ export class CodexRuntimeService {
       });
     }
     return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  private async terminalizePlanItemWorkflowActionRuntimeJob(input: {
+    runtimeJob: CodexRuntimeJob;
+    workerId: string;
+    jobId: string;
+    input: TerminalizeCodexRuntimeJobDto;
+    terminalResult: ReturnType<typeof validateCodexRuntimeJobTerminalResult> | undefined;
+    now: string;
+  }) {
+    if (input.input.terminal_status === 'succeeded' && input.terminalResult !== undefined && 'task_kind' in input.terminalResult) {
+      return this.terminalizePlanItemWorkflowReviewResponseRuntimeJob({
+        runtimeJob: input.runtimeJob,
+        workerId: input.workerId,
+        jobId: input.jobId,
+        input: input.input,
+        terminalResult: input.terminalResult as CodexGenerationRuntimeJobResult,
+        now: input.now,
+      });
+    }
+    const runtimeJob = await this.repository.terminalizeCodexRuntimeJob({
+      runtime_job_id: input.jobId,
+      launch_lease_id: input.input.launch_lease_id,
+      worker_id: input.workerId,
+      worker_session_token: input.input.worker_session_token,
+      nonce: input.input.nonce,
+      nonce_timestamp: input.input.nonce_timestamp,
+      terminal_status: input.input.terminal_status,
+      reason_code: input.input.reason_code,
+      ...(input.input.terminal_result_json === undefined ? {} : { terminal_result_json: input.input.terminal_result_json }),
+      idempotency_key: input.input.terminal_idempotency_key,
+      request_digest: input.input.body_digest,
+      replay_protection: workerReplayProtection(
+        'POST',
+        `/internal/codex-workers/${input.workerId}/runtime-jobs/${input.jobId}/terminal`,
+        input.input.body_digest,
+      ),
+      now: input.now,
+    });
+    await this.failPlanItemWorkflowActionRuntimeJob({
+      runtimeJob,
+      reasonCode: input.input.reason_code,
+      now: input.now,
+    });
+    return { runtime_job: publicRuntimeJob(runtimeJob) };
+  }
+
+  private async terminalizePlanItemWorkflowReviewResponseRuntimeJob(input: {
+    runtimeJob: CodexRuntimeJob;
+    workerId: string;
+    jobId: string;
+    input: TerminalizeCodexRuntimeJobDto;
+    terminalResult: CodexGenerationRuntimeJobResult;
+    now: string;
+  }) {
+    const workload = validateCodexGenerationWorkload(input.runtimeJob.input_json);
+    if (workload.task_kind !== 'review_response') {
+      throw new BadRequestException('Plan item workflow action generation task is unsupported');
+    }
+    if (
+      input.runtimeJob.workflow_id !== workload.plan_item_workflow_id ||
+      input.runtimeJob.codex_session_id !== workload.codex_session_id ||
+      input.runtimeJob.codex_session_turn_id !== workload.codex_session_turn_id ||
+      input.runtimeJob.target_id !== workload.plan_item_workflow_action_id ||
+      input.runtimeJob.id !== workload.runtime_job_id ||
+      input.terminalResult.task_kind !== 'review_response' ||
+      input.terminalResult.output_schema_version !== 'review_response.v1'
+    ) {
+      throw new DomainError(
+        'codex_session_stale_terminalization',
+        `codex_session_stale_terminalization: Review response runtime job ${input.runtimeJob.id} lineage diverged`,
+      );
+    }
+    const runtimeContext = workload.codex_session_runtime_context;
+    const terminalization = workload.codex_session_terminalization;
+    const threadEvidence = input.terminalResult.codex_session_thread;
+    const outputCapsule = input.terminalResult.output_capsule;
+    const outputMemoryBundleRef = input.terminalResult.output_memory_bundle_ref;
+    const outputMemoryBundleDigest = input.terminalResult.output_memory_bundle_digest;
+    const outputEnvironmentManifestRef = input.terminalResult.output_environment_manifest_ref;
+    const outputEnvironmentManifestDigest = input.terminalResult.output_environment_manifest_digest;
+    const reviewContext = this.reviewResponseSignedContextForTerminalization(input.runtimeJob, workload);
+    if (
+      runtimeContext === undefined ||
+      terminalization === undefined ||
+      runtimeContext.lease_id === undefined ||
+      runtimeContext.lease_epoch === undefined ||
+      threadEvidence === undefined ||
+      outputCapsule === undefined ||
+      outputMemoryBundleRef === undefined ||
+      outputMemoryBundleDigest === undefined ||
+      outputEnvironmentManifestRef === undefined ||
+      outputEnvironmentManifestDigest === undefined
+    ) {
+      throw new DomainError(
+        'codex_runtime_capsule_missing',
+        `codex_runtime_capsule_missing: Review response runtime job ${input.runtimeJob.id} terminal result is missing continuation evidence`,
+      );
+    }
+
+    return this.repository.withDeliveryTransaction(async (repository) => {
+      const [workflow, action, turn] = await Promise.all([
+        repository.getPlanItemWorkflow(workload.plan_item_workflow_id),
+        repository.getPlanItemWorkflowQueuedAction({
+          workflow_id: workload.plan_item_workflow_id,
+          action_id: workload.plan_item_workflow_action_id,
+        }),
+        repository.getCodexSessionTurn(workload.codex_session_turn_id),
+      ]);
+      if (
+        workflow === undefined ||
+        action === undefined ||
+        turn === undefined ||
+        workflow.status !== 'code_review' ||
+        workflow.active_codex_session_id !== workload.codex_session_id ||
+        action.status !== 'running' ||
+        action.kind !== 'respond_to_review' ||
+        action.codex_session_id !== workload.codex_session_id ||
+        action.codex_session_turn_id !== workload.codex_session_turn_id ||
+        turn.codex_session_id !== workload.codex_session_id ||
+        turn.workflow_id !== workload.plan_item_workflow_id
+      ) {
+        throw new DomainError(
+          'codex_session_stale_terminalization',
+          `codex_session_stale_terminalization: Review response action ${workload.plan_item_workflow_action_id} terminalization is stale`,
+        );
+      }
+      const currentPacket = await repository.findCurrentReviewPacketForWorkflow({
+        workflow_id: workload.plan_item_workflow_id,
+        execution_package_id: reviewContext.execution_package_id,
+        execution_package_version: reviewContext.execution_package_version,
+        previous_run_session_id: reviewContext.previous_run_session_id,
+        approved_spec_revision_id: reviewContext.approved_spec_revision_id,
+        approved_implementation_plan_revision_id: reviewContext.approved_implementation_plan_revision_id,
+        expected_review_packet_id: workload.review_packet_id,
+        expected_review_packet_digest: workload.review_packet_digest,
+        allowed_statuses: ['ready', 'in_review', 'completed'],
+        allowed_completed_decisions: ['changes_requested'],
+      });
+      if (currentPacket === undefined) {
+        throw new DomainError(
+          'workflow_review_packet_not_current',
+          `workflow_review_packet_not_current: Review Packet ${workload.review_packet_id} is no longer current for review response terminalization`,
+        );
+      }
+      const runtimeJob = await repository.terminalizeCodexRuntimeJob({
+        runtime_job_id: input.jobId,
+        launch_lease_id: input.input.launch_lease_id,
+        worker_id: input.workerId,
+        worker_session_token: input.input.worker_session_token,
+        nonce: input.input.nonce,
+        nonce_timestamp: input.input.nonce_timestamp,
+        terminal_status: input.input.terminal_status,
+        reason_code: input.input.reason_code,
+        ...(input.input.terminal_result_json === undefined ? {} : { terminal_result_json: input.input.terminal_result_json }),
+        idempotency_key: input.input.terminal_idempotency_key,
+        request_digest: input.input.body_digest,
+        replay_protection: workerReplayProtection(
+          'POST',
+          `/internal/codex-workers/${input.workerId}/runtime-jobs/${input.jobId}/terminal`,
+          input.input.body_digest,
+        ),
+        now: input.now,
+      });
+      const terminalized = await repository.terminalizeCodexSessionTurn({
+        session_id: runtimeContext.codex_session_id,
+        turn_id: runtimeContext.codex_session_turn_id,
+        lease_id: runtimeContext.lease_id,
+        lease_token_hash: codexCredentialPayloadDigest(terminalization.lease_token),
+        lease_epoch: runtimeContext.lease_epoch,
+        worker_id: runtimeContext.worker_id,
+        worker_session_digest: runtimeContext.worker_session_digest,
+        status: 'succeeded',
+        ...(runtimeContext.expected_input_capsule_digest === undefined
+          ? {}
+          : { expected_input_capsule_digest: runtimeContext.expected_input_capsule_digest }),
+        app_server_thread_binding_required: true,
+        codex_thread_id: threadEvidence.codex_thread_id,
+        codex_thread_id_digest: threadEvidence.codex_thread_id_digest,
+        output_capsule: outputCapsule,
+        output_memory_bundle_ref: outputMemoryBundleRef,
+        output_memory_bundle_digest: outputMemoryBundleDigest,
+        ...(input.terminalResult.memory_delta_artifact_ref === undefined
+          ? {}
+          : { memory_delta_artifact_ref: input.terminalResult.memory_delta_artifact_ref }),
+        ...(input.terminalResult.memory_delta_digest === undefined ? {} : { memory_delta_digest: input.terminalResult.memory_delta_digest }),
+        output_environment_manifest_ref: outputEnvironmentManifestRef,
+        output_environment_manifest_digest: outputEnvironmentManifestDigest,
+        now: input.now,
+      });
+      const terminalizedThreadDigest = terminalized.turn.codex_thread_id_digest;
+      if (terminalizedThreadDigest === undefined) {
+        throw new DomainError(
+          'codex_session_stale_terminalization',
+          `codex_session_stale_terminalization: Review response turn ${workload.codex_session_turn_id} did not retain thread digest`,
+        );
+      }
+      const responseId = randomUuid();
+      const generatedPayload = input.terminalResult.generated_payload as Record<string, unknown>;
+      const responseMarkdown = typeof generatedPayload.response_markdown === 'string' ? generatedPayload.response_markdown : '';
+      await repository.saveReviewResponse({
+        id: responseId,
+        workflow_id: workload.plan_item_workflow_id,
+        codex_session_id: workload.codex_session_id,
+        codex_session_turn_id: workload.codex_session_turn_id,
+        review_packet_id: workload.review_packet_id,
+        previous_run_session_id: reviewContext.previous_run_session_id,
+        status: 'succeeded',
+        content_digest: codexCanonicalDigest(responseMarkdown),
+        created_by_actor_id: action.created_by_actor_id,
+        created_at: input.now,
+        updated_at: input.now,
+      });
+      await repository.terminalizePlanItemWorkflowQueuedAction({
+        workflow_id: action.workflow_id,
+        action_id: action.id,
+        status: 'succeeded',
+        codex_session_turn_id: turn.id,
+        output_capsule_id: outputCapsule.id,
+        output_capsule_digest: outputCapsule.digest,
+        output_capsule_sequence: outputCapsule.sequence,
+        codex_thread_id_digest: terminalizedThreadDigest,
+        now: input.now,
+      });
+      await repository.appendObjectEvent({
+        id: randomUuid(),
+        object_type: 'plan_item_workflow',
+        object_id: workload.plan_item_workflow_id,
+        event_type: 'review_response_created',
+        actor_id: action.created_by_actor_id,
+        metadata: {
+          runtime_job_id: input.runtimeJob.id,
+          plan_item_workflow_action_id: action.id,
+          evidence_object_type: 'review_response',
+          evidence_object_id: responseId,
+          review_packet_id: workload.review_packet_id,
+        },
+        created_at: input.now,
+      });
+      return { runtime_job: publicRuntimeJob(runtimeJob) };
+    });
+  }
+
+  private reviewResponseSignedContextForTerminalization(
+    runtimeJob: CodexRuntimeJob,
+    workload: CodexGenerationWorkloadV1 & { task_kind: 'review_response' },
+  ): {
+    previous_run_session_id: string;
+    execution_package_id: string;
+    execution_package_version: number;
+    approved_spec_revision_id: string;
+    approved_implementation_plan_revision_id: string;
+  } {
+    const workspaceAcquisition = runtimeJob.workspace_acquisition_json;
+    const signedContext = isRecord(workspaceAcquisition?.signed_context_json)
+      ? workspaceAcquisition.signed_context_json
+      : undefined;
+    const previousRunSessionId = signedContext?.previous_run_session_id;
+    const executionPackageId = signedContext?.execution_package_id;
+    const executionPackageVersion = signedContext?.execution_package_version;
+    const approvedSpecRevisionId = signedContext?.approved_spec_revision_id;
+    const approvedImplementationPlanRevisionId = signedContext?.approved_implementation_plan_revision_id;
+    if (
+      signedContext === undefined ||
+      typeof previousRunSessionId !== 'string' ||
+      previousRunSessionId.length === 0 ||
+      typeof executionPackageId !== 'string' ||
+      executionPackageId.length === 0 ||
+      typeof executionPackageVersion !== 'number' ||
+      typeof approvedSpecRevisionId !== 'string' ||
+      approvedSpecRevisionId.length === 0 ||
+      typeof approvedImplementationPlanRevisionId !== 'string' ||
+      approvedImplementationPlanRevisionId.length === 0 ||
+      signedContext.review_packet_id !== workload.review_packet_id ||
+      signedContext.review_packet_digest !== workload.review_packet_digest
+    ) {
+      throw new DomainError(
+        'workflow_review_packet_not_current',
+        `workflow_review_packet_not_current: Review response runtime job ${runtimeJob.id} is missing current Review Packet lineage`,
+      );
+    }
+    const signedContextDigest = codexCanonicalDigest(signedContext);
+    if (
+      workspaceAcquisition?.signed_context_digest !== signedContextDigest ||
+      workspaceAcquisition.signed_context_digest !== workload.signed_context_digest
+    ) {
+      throw new DomainError(
+        'workflow_review_packet_digest_mismatch',
+        `workflow_review_packet_digest_mismatch: Review response runtime job ${runtimeJob.id} signed context digest is stale`,
+      );
+    }
+    return {
+      previous_run_session_id: previousRunSessionId,
+      execution_package_id: executionPackageId,
+      execution_package_version: executionPackageVersion,
+      approved_spec_revision_id: approvedSpecRevisionId,
+      approved_implementation_plan_revision_id: approvedImplementationPlanRevisionId,
+    };
+  }
+
+  private async failPlanItemWorkflowActionRuntimeJob(input: {
+    runtimeJob: CodexRuntimeJob;
+    reasonCode: string;
+    now: string;
+  }): Promise<void> {
+    if (input.runtimeJob.workflow_id === undefined) {
+      return;
+    }
+    const action = await this.repository.getPlanItemWorkflowQueuedAction({
+      workflow_id: input.runtimeJob.workflow_id,
+      action_id: input.runtimeJob.target_id,
+    });
+    if (action === undefined || action.status !== 'running') {
+      return;
+    }
+    await this.terminalizeCodexSessionTurnForFailedRuntimeJob({
+      runtimeJob: input.runtimeJob,
+      terminalStatus: 'failed',
+      reasonCode: input.reasonCode,
+      now: input.now,
+    });
+    await this.repository.terminalizePlanItemWorkflowQueuedAction({
+      workflow_id: action.workflow_id,
+      action_id: action.id,
+      status: 'failed',
+      ...(action.codex_session_turn_id === undefined ? {} : { codex_session_turn_id: action.codex_session_turn_id }),
+      blocked_reason_code: input.reasonCode,
+      now: input.now,
+    });
   }
 
   private async terminalizeWorkflowOwnedRunExecutionRuntimeJob(input: {

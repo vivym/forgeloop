@@ -12,6 +12,7 @@ import {
   type CodexLaunchMaterialization,
   type CodexRunExecutionWorkloadV1,
   type CodexRuntimeJob,
+  validateCodexRunExecutionWorkload,
 } from '@forgeloop/domain';
 import type { CodexDriverStreamItem, CodexSessionDriver } from '@forgeloop/executor';
 import {
@@ -86,6 +87,66 @@ const generationWorkload = (overrides: Partial<CodexGenerationWorkloadV1> = {}):
 const generationWorkloadResponse = (overrides: Partial<CodexGenerationWorkloadV1> = {}) => ({
   workload: generationWorkload(overrides),
   signed_context: generationSignedContext(),
+});
+
+const reviewResponsePayload = (overrides: Record<string, unknown> = {}) => ({
+  schema_version: 'review_response.v1',
+  response_markdown: 'The implementation addresses the review packet without modifying files.',
+  summary: 'No code changes were made.',
+  public_summary: 'Prepared a read-only review response.',
+  evidence_refs: [
+    {
+      id: 'evidence-1',
+      display_text: 'Review packet',
+      digest: digest('e'),
+    },
+  ],
+  ...overrides,
+});
+
+const reviewResponseWorkload = (overrides: Partial<CodexGenerationWorkloadV1> = {}): CodexGenerationWorkloadV1 =>
+  ({
+    schema_version: 'codex_generation_workload.v1',
+    runtime_job_id: 'runtime-job-1',
+    plan_item_workflow_action_id: 'workflow-action-1',
+    plan_item_workflow_id: 'workflow-1',
+    codex_session_id: 'session-1',
+    codex_session_turn_id: 'session-turn-1',
+    review_packet_id: 'review-packet-1',
+    review_packet_digest: digest('a'),
+    task_kind: 'review_response',
+    prompt_version: 'review-response:v1',
+    output_schema_version: 'review_response.v1',
+    signed_context_ref: 'artifact://codex-runtime-jobs/runtime-job-1/workload/context',
+    signed_context_digest: codexCanonicalDigest({ schema_version: 'review_response_context.v1' }),
+    prompt_template_digest: digest('2'),
+    created_at: '2026-05-23T00:00:00.000Z',
+    expires_at: '2026-05-23T00:10:00.000Z',
+    codex_session_runtime_context: sessionRuntimeContext({
+      expected_input_capsule_digest: digest('b'),
+      turn_group_status: 'complete',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: codexThreadDigest('thread-1'),
+      },
+    }),
+    codex_session_terminalization: sessionTerminalization({
+      expected_input_capsule_digest: digest('b'),
+      input_capsule_id: '11111111-1111-4111-8111-111111111111',
+      input_capsule_digest: digest('b'),
+      input_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/11111111-1111-4111-8111-111111111111',
+      input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/input-memory',
+      input_memory_bundle_digest: digest('c'),
+      input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/input-environment',
+      input_environment_manifest_digest: digest('d'),
+    }),
+    ...overrides,
+  }) as CodexGenerationWorkloadV1;
+
+const reviewResponseWorkloadResponse = (workload: CodexGenerationWorkloadV1 = reviewResponseWorkload()) => ({
+  workload,
+  signed_context: { schema_version: 'review_response_context.v1' },
 });
 
 const sessionRuntimeContext = (overrides: Record<string, unknown> = {}) => ({
@@ -265,6 +326,12 @@ const runExecutionPublicEvidence = () => ({
   selected_execution_mode: 'app_server' as const,
 });
 
+const generationPublicEvidence = () => ({
+  ...runExecutionPublicEvidence(),
+  runtime_target_kind: 'generation' as const,
+  source_access_mode: 'artifact_only' as const,
+});
+
 const runExecutionCapsuleManager = (calls?: string[]) => ({
   materializeBaseMemory: vi.fn(),
   restore: vi.fn(async () => {
@@ -336,7 +403,12 @@ const createRunExecutionHarness = async (
   options: {
     tempSlug?: string;
     workload?: CodexRunExecutionWorkloadV1;
+    workloadFactory?: (fixture: Awaited<ReturnType<typeof runExecutionBundleFixture>>) => CodexRunExecutionWorkloadV1;
     job?: CodexRuntimeJob;
+    jobFactory?: (input: {
+      fixture: Awaited<ReturnType<typeof runExecutionBundleFixture>>;
+      workload: CodexRunExecutionWorkloadV1;
+    }) => CodexRuntimeJob;
     acceptRuntimeJob?: () => Promise<unknown>;
     claimLaunchTokenEnvelope?: (envelope: SealedEnvelope | undefined) => Promise<unknown>;
     fetchRuntimeJobWorkload?: () => Promise<unknown>;
@@ -350,8 +422,9 @@ const createRunExecutionHarness = async (
 ) => {
   const workerTempRoot = await mkdtemp(join(tmpdir(), options.tempSlug ?? 'forgeloop-remote-run-worker-harness-'));
   const fixture = await runExecutionBundleFixture(workerTempRoot);
-  const workload = options.workload ?? fixture.workload;
-  const job = options.job ?? runExecutionRuntimeJob(fixture.archiveDigest, fixture.manifestDigest);
+  const workload = options.workloadFactory?.(fixture) ?? options.workload ?? fixture.workload;
+  const job =
+    options.jobFactory?.({ fixture, workload }) ?? options.job ?? runExecutionRuntimeJob(fixture.archiveDigest, fixture.manifestDigest);
   const calls: string[] = [];
   const terminalized: Record<string, unknown>[] = [];
   const uploadedArtifacts: Record<string, unknown>[] = [];
@@ -1000,6 +1073,269 @@ describe('remote codex worker client', () => {
         task_kind: 'boundary_brainstorming_round',
         generated_payload: generatedBoundaryRound(),
       },
+    });
+  });
+
+  it('terminalizes read-only review response output with capsule, memory, and environment refs', async () => {
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const terminalized: Record<string, unknown>[] = [];
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-remote-review-response-'));
+    const outputCapsule = {
+      id: '22222222-2222-4222-8222-222222222222',
+      codex_session_id: 'session-1',
+      created_from_turn_id: 'session-turn-1',
+      sequence: 2,
+      artifact_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/22222222-2222-4222-8222-222222222222',
+      digest: digest('2'),
+      size_bytes: '123',
+      manifest_digest: digest('3'),
+      thread_state_digest: digest('4'),
+      memory_state_digest: digest('5'),
+      environment_manifest_digest: digest('6'),
+      codex_thread_id_digest: codexThreadDigest('thread-1'),
+      codex_cli_version: '0.133.0',
+      app_server_protocol_digest: digest('7'),
+      runtime_profile_revision_id: 'profile-rev-1',
+      trusted_runtime_manifest_digest: digest('8'),
+      credential_binding_lineage_digest: digest('9'),
+      created_by_actor_id: 'worker-1',
+      created_at: '2026-05-23T00:00:00.000Z',
+    };
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot,
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+        },
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(reviewResponseWorkload()), envelope: { id: 'envelope-1' } }] }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(reviewResponseWorkload()), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+        fetchRuntimeJobWorkload: async () => reviewResponseWorkloadResponse(),
+        materializeRuntimeJob: async () => ({
+          ...materialization(),
+          launch_target: {
+            target_type: 'plan_item_workflow_action',
+            target_id: 'workflow-action-1',
+            target_kind: 'generation',
+            project_id: 'project-1',
+            repo_id: 'repo-1',
+          },
+        }),
+        startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(reviewResponseWorkload()), status: 'running' } }),
+        markCodexSessionRunnerOwner: async () => ({}),
+        appendRuntimeJobEvent: async () => ({}),
+        uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
+          artifact: {
+            kind: input.kind,
+            name: input.name,
+            content_type: input.content_type,
+            digest: input.digest,
+            internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
+          },
+        }),
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: {
+        startFromMaterialization: vi.fn(async (_materialization: CodexLaunchMaterialization, input?: Record<string, unknown>) => {
+          const capsuleHookInput = {
+            codexHomeHostPath: join(workerTempRoot, 'codex-home'),
+            codexHomeContainerPath: '/codex-home' as const,
+            artifactHostPath: join(workerTempRoot, 'artifacts'),
+          };
+          await mkdir(capsuleHookInput.codexHomeHostPath, { recursive: true });
+          await mkdir(capsuleHookInput.artifactHostPath, { recursive: true });
+          await (input?.beforeAppServerStart as ((paths: typeof capsuleHookInput) => Promise<void>) | undefined)?.(capsuleHookInput);
+          await (input?.afterAppServerStart as ((paths: typeof capsuleHookInput) => Promise<void>) | undefined)?.(capsuleHookInput);
+          return {
+            endpoint: 'docker-exec:' + digest('8'),
+            containerWorkspacePath: '/workspace' as const,
+            capsuleHookInput,
+            publicEvidence: generationPublicEvidence(),
+            close: async () => undefined,
+          };
+        }),
+      },
+      generationRuntimeFactory: () =>
+        ({
+          generateReviewResponse: async (input: Record<string, unknown>) => ({
+            taskKind: 'review_response',
+            promptVersion: String(input.promptVersion),
+            outputSchemaVersion: String(input.outputSchemaVersion),
+            generated: reviewResponsePayload(),
+            generationArtifacts: [],
+            codexThread: {
+              codex_thread_id: 'thread-1',
+              codex_thread_id_digest: codexThreadDigest('thread-1'),
+              app_server_turn_id: 'app-server-turn-1',
+            },
+            publicSummary: 'Prepared a read-only review response.',
+          }),
+        }) as unknown as CodexGenerationRuntime,
+      capsuleManager: {
+        materializeBaseMemory: vi.fn(),
+        restore: vi.fn(),
+        repairLocator: vi.fn(),
+        package: vi.fn(async () => ({
+          capsule: outputCapsule,
+          outputMemoryBundleRef: 'artifact://internal/codex_memory_bundle/codex_session/session-1/output-memory',
+          outputMemoryBundleDigest: digest('a'),
+          outputEnvironmentManifestRef: 'artifact://internal/codex_environment_manifest/codex_session/session-1/output-environment',
+          outputEnvironmentManifestDigest: digest('b'),
+        })),
+      },
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-review-response',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'succeeded',
+      terminal_result_json: {
+        task_kind: 'review_response',
+        output_schema_version: 'review_response.v1',
+        generated_payload: reviewResponsePayload(),
+        output_capsule: outputCapsule,
+        output_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/output-memory',
+        output_memory_bundle_digest: digest('a'),
+        output_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/output-environment',
+        output_environment_manifest_digest: digest('b'),
+      },
+    });
+  });
+
+  it.each([
+    ['patch artifact payload', { patch_artifact: { internal_ref: 'artifact://internal/patch', digest: digest('1') } }, []],
+    ['changed files payload', { changed_files: ['README.md'] }, []],
+    ['workspace bundle payload', { workspace_bundle: { id: 'bundle-1' } }, []],
+    ['commit payload', { commit: { sha: 'abc123' } }, []],
+    ['pull request payload', { pull_request: { url: 'https://github.test/pr/1' } }, []],
+    ['run-execution artifact', {}, [{ kind: 'run_execution_patch', name: 'run-execution.patch', content_type: 'text/x-diff' }]],
+  ])('fails review response terminalization for mutation output: %s', async (_name, payloadOverride, artifactOverride) => {
+    let sealedEnvelope: SealedEnvelope | undefined;
+    const terminalized: Record<string, unknown>[] = [];
+    const workerTempRoot = await mkdtemp(join(tmpdir(), 'forgeloop-remote-review-response-mutation-'));
+    const worker = createRemoteCodexWorkerClient({
+      workerId: 'worker-1',
+      workerIdentity: 'remote-dev',
+      version: 'test',
+      bootstrapToken: 'bootstrap-secret',
+      bootstrapTokenVersion: 1,
+      workerTempRoot,
+      allowedScopes: [{ project_id: 'project-1', repo_id: 'repo-1' }],
+      capabilities: ['generation'],
+      dockerImageDigests: [digest('4')],
+      networkPolicyDigests: [digest('b')],
+      hostUid: 501,
+      hostGid: 20,
+      maxConcurrency: 1,
+      controlPlaneClient: {
+        registerWorker: async (input: Record<string, unknown>) => {
+          sealedEnvelope = await sealCodexLaunchTokenEnvelope({
+            plaintext_launch_token: 'launch-token-secret',
+            runtime_job_id: 'runtime-job-1',
+            launch_lease_id: 'lease-1',
+            envelope_id: 'envelope-1',
+            worker_id: 'worker-1',
+            worker_public_key_material: String(input.session_public_key_material),
+            key_id: String(input.session_public_key_id),
+            expires_at: '2026-05-23T00:10:00.000Z',
+          });
+          return { worker: { session_epoch: 1 }, session_token: 'session-1', session_expires_at: 'later' };
+        },
+        heartbeatWorker: async () => ({}),
+        pollRuntimeJobs: async () => ({ runtime_jobs: [{ runtime_job: runtimeJob(reviewResponseWorkload()), envelope: { id: 'envelope-1' } }] }),
+        acceptRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(reviewResponseWorkload()), status: 'accepted' } }),
+        getRuntimeJobControl: async () => ({ control: { cancel_requested: false, drain_requested: false } }),
+        claimLaunchTokenEnvelope: async () => ({ envelope: sealedEnvelope }),
+        fetchRuntimeJobWorkload: async () => reviewResponseWorkloadResponse(),
+        materializeRuntimeJob: async () => materialization(),
+        startRuntimeJob: async () => ({ runtime_job: { ...runtimeJob(reviewResponseWorkload()), status: 'running' } }),
+        appendRuntimeJobEvent: async () => ({}),
+        uploadRuntimeJobArtifact: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => ({
+          artifact: {
+            kind: input.kind,
+            name: input.name,
+            content_type: input.content_type,
+            digest: input.digest,
+            internal_ref: runtimeArtifactRef('runtime-job-1', input.kind),
+          },
+        }),
+        terminalizeRuntimeJob: async (_workerId: string, _jobId: string, input: Record<string, unknown>) => {
+          terminalized.push(input);
+          return {};
+        },
+      },
+      launcher: {
+        startFromMaterialization: vi.fn(async (_materialization: CodexLaunchMaterialization, input?: Record<string, unknown>) => {
+          const capsuleHookInput = {
+            codexHomeHostPath: join(workerTempRoot, 'codex-home'),
+            codexHomeContainerPath: '/codex-home' as const,
+            artifactHostPath: join(workerTempRoot, 'artifacts'),
+          };
+          await mkdir(capsuleHookInput.codexHomeHostPath, { recursive: true });
+          await mkdir(capsuleHookInput.artifactHostPath, { recursive: true });
+          await (input?.beforeAppServerStart as ((paths: typeof capsuleHookInput) => Promise<void>) | undefined)?.(capsuleHookInput);
+          await (input?.afterAppServerStart as ((paths: typeof capsuleHookInput) => Promise<void>) | undefined)?.(capsuleHookInput);
+          return {
+            endpoint: 'docker-exec:' + digest('8'),
+            containerWorkspacePath: '/workspace' as const,
+            capsuleHookInput,
+            publicEvidence: generationPublicEvidence(),
+            close: async () => undefined,
+          };
+        }),
+      },
+      generationRuntimeFactory: () =>
+        ({
+          generateReviewResponse: async (input: Record<string, unknown>) => ({
+            taskKind: 'review_response',
+            promptVersion: String(input.promptVersion),
+            outputSchemaVersion: String(input.outputSchemaVersion),
+            generated: reviewResponsePayload(payloadOverride),
+            generationArtifacts: artifactOverride,
+            publicSummary: 'Mutation output should be rejected.',
+          }),
+        }) as unknown as CodexGenerationRuntime,
+      capsuleManager: runExecutionCapsuleManager(),
+      scavenger: async () => undefined,
+      now: () => '2026-05-23T00:00:00.000Z',
+      nonceFactory: () => 'nonce-review-response-mutation',
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(terminalized[0]).toMatchObject({
+      terminal_status: 'failed',
+      reason_code: 'read_only_review_response_mutation_artifact',
     });
   });
 
@@ -2622,6 +2958,70 @@ describe('remote codex worker client', () => {
     });
     expect(JSON.stringify(harness.terminalized[0])).not.toContain('launch-token-run-secret');
     expect(JSON.stringify(harness.uploadedArtifacts)).not.toContain('artifact://internal/codex_runtime_capsule');
+  });
+
+  it('carries fix-loop lineage and restores the latest capsule before resuming run execution', async () => {
+    const fixLoopWorkload = runExecutionWorkload(undefined, undefined, {
+      previous_run_session_id: 'run-session-previous-1',
+      previous_review_packet_id: 'review-packet-1',
+      review_packet_digest: digest('a'),
+    });
+    expect(validateCodexRunExecutionWorkload(fixLoopWorkload)).toMatchObject({
+      run_session_id: 'run-session-1',
+      previous_run_session_id: 'run-session-previous-1',
+      previous_review_packet_id: 'review-packet-1',
+      review_packet_digest: digest('a'),
+      codex_session_runtime_context: {
+        continuation: { kind: 'resume_thread' },
+        expected_input_capsule_digest: digest('b'),
+        codex_session_id: 'session-1',
+        codex_session_turn_id: 'session-turn-1',
+        turn_group_status: 'complete',
+      },
+    });
+    expect(() =>
+      validateCodexRunExecutionWorkload({
+        ...fixLoopWorkload,
+        previous_review_packet_id: undefined,
+      }),
+    ).toThrow(/fix-loop lineage requires/);
+    expect(() =>
+      validateCodexRunExecutionWorkload({
+        ...fixLoopWorkload,
+        codex_session_runtime_context: {
+          ...fixLoopWorkload.codex_session_runtime_context,
+          expected_input_capsule_digest: undefined,
+        },
+      }),
+    ).toThrow(/expected_input_capsule_digest/);
+    const harness = await createRunExecutionHarness({
+      tempSlug: 'forgeloop-remote-run-worker-fix-loop-',
+      workloadFactory: (fixture) =>
+        runExecutionWorkload(fixture.archiveDigest, fixture.manifestDigest, {
+          previous_run_session_id: 'run-session-previous-1',
+          previous_review_packet_id: 'review-packet-1',
+          review_packet_digest: digest('a'),
+        }),
+      jobFactory: ({ fixture, workload }) => ({
+        ...runExecutionRuntimeJob(fixture.archiveDigest, fixture.manifestDigest),
+        input_json: workload,
+        input_digest: codexCanonicalDigest(workload),
+      }),
+      resumeRun: async function* () {
+        yield {
+          kind: 'terminal',
+          status: 'succeeded',
+          summary: 'Fix loop completed.',
+          runtimeMetadata: { active_turn_id: 'app-server-turn-1', codex_thread_id: 'thread-1' },
+        } satisfies CodexDriverStreamItem;
+      },
+    });
+
+    await expect(harness.worker.runOnce()).resolves.toEqual({ processed: 1 });
+
+    expect(harness.calls.indexOf('restore')).toBeLessThan(harness.calls.indexOf('docker-start'));
+    expect(harness.calls.indexOf('restore')).toBeLessThan(harness.calls.indexOf('terminal'));
+    expect(harness.resumeRun).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed before accept when polled run-execution lineage is incomplete', async () => {

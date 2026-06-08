@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { codexCanonicalDigest } from '../../packages/domain/src/index';
+import { codexCanonicalDigest, type CodexSessionTerminalizationV1 } from '../../packages/domain/src/index';
 import {
   createCodexGenerationRuntime,
   type CodexSessionRuntimeContext,
@@ -278,6 +278,24 @@ const sessionRuntimeContext = (overrides: Partial<CodexSessionRuntimeContext> = 
   worker_session_digest: digest('a'),
   turn_group_status: 'intermediate',
   continuation: { kind: 'start_thread' },
+  ...overrides,
+});
+
+const sessionTerminalization = (
+  overrides: Partial<CodexSessionTerminalizationV1> = {},
+): CodexSessionTerminalizationV1 => ({
+  schema_version: 'codex_session_terminalization.v1',
+  lease_token: 'session-lease-token-1',
+  codex_session_id: 'session-1',
+  codex_session_turn_id: 'session-turn-1',
+  expected_input_capsule_digest: digest('b'),
+  input_capsule_id: '11111111-1111-4111-8111-111111111111',
+  input_capsule_digest: digest('b'),
+  input_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/11111111-1111-4111-8111-111111111111',
+  input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/session-1/input-memory',
+  input_memory_bundle_digest: digest('c'),
+  input_environment_manifest_ref: 'artifact://internal/codex_environment_manifest/codex_session/session-1/input-environment',
+  input_environment_manifest_digest: digest('d'),
   ...overrides,
 });
 
@@ -837,6 +855,262 @@ describe('automation daemon loop', () => {
         },
       });
     }
+  });
+
+  it('routes review response generation through plan item workflow action runtime jobs without automation action claims', async () => {
+    const remoteCalls: Array<{ method: string; args: unknown[] }> = [];
+    const generatedPayload = {
+      schema_version: 'review_response.v1',
+      response_markdown: 'I checked the review packet. No code mutation is needed for this response.',
+      summary: 'Prepared a read-only review response.',
+      public_summary: 'Read-only review response ready.',
+      evidence_refs: [{ id: 'evidence-1', display_text: 'Reviewer comment', digest: digest('a') }],
+    };
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async (input) => {
+          remoteCalls.push({ method: 'getStatus', args: [input] });
+          return {
+            runtime_profile_revision_id: 'profile-rev-1',
+            runtime_profile_digest: digest('1'),
+            credential_binding_id: 'credential-binding-1',
+            credential_binding_version_id: 'credential-version-1',
+            credential_payload_digest: digest('2'),
+            docker_image_digest: digest('3'),
+            network_policy_digest: digest('4'),
+          };
+        },
+        createRuntimeJob: async (input) => {
+          remoteCalls.push({ method: 'createRuntimeJob', args: [input] });
+          return {
+            runtime_job: { id: String(input.runtime_job_id), status: 'queued' },
+            replayed: false,
+          };
+        },
+        renewAutomationActionRunClaim: async (actionRunId, input) => {
+          remoteCalls.push({ method: 'renewAutomationActionRunClaim', args: [actionRunId, input] });
+          return { action_run: { id: actionRunId, status: 'running' } };
+        },
+        getRuntimeJob: async (jobId) => {
+          remoteCalls.push({ method: 'getRuntimeJob', args: [jobId] });
+          return {
+            runtime_job: {
+              id: jobId,
+              status: 'terminal',
+              terminal_status: 'succeeded',
+              terminal_reason_code: 'codex_runtime_job_succeeded',
+              terminal_result_json: {
+                task_kind: 'review_response',
+                prompt_version: 'review-response.remote.v1',
+                output_schema_version: 'review_response.v1',
+                generated_payload: generatedPayload,
+                generated_payload_digest: codexCanonicalDigest(generatedPayload),
+                generation_artifacts: [],
+                codex_session_thread: {
+                  codex_thread_id: 'thread-1',
+                  codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+                  app_server_turn_id: 'app-server-turn-1',
+                },
+                output_capsule: {
+                  id: '22222222-2222-4222-8222-222222222222',
+                  codex_session_id: 'codex-session-1',
+                  created_from_turn_id: 'session-turn-review-1',
+                  sequence: 2,
+                  artifact_ref:
+                    'artifact://internal/codex_runtime_capsule/codex_session/codex-session-1/22222222-2222-4222-8222-222222222222',
+                  digest: digest('d'),
+                  size_bytes: '123',
+                  manifest_digest: digest('e'),
+                  thread_state_digest: digest('f'),
+                  memory_state_digest: digest('a'),
+                  environment_manifest_digest: digest('b'),
+                  codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+                  codex_cli_version: '0.133.0',
+                  app_server_protocol_digest: digest('c'),
+                  runtime_profile_revision_id: 'profile-rev-1',
+                  trusted_runtime_manifest_digest: digest('d'),
+                  credential_binding_lineage_digest: digest('e'),
+                  created_by_actor_id: 'worker-1',
+                  created_at: '2026-05-23T00:00:00.000Z',
+                },
+                output_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/codex-session-1/output-memory',
+                output_memory_bundle_digest: digest('a'),
+                output_environment_manifest_ref:
+                  'artifact://internal/codex_environment_manifest/codex_session/codex-session-1/output-environment',
+                output_environment_manifest_digest: digest('b'),
+                public_summary: 'Remote runtime generated read-only review response.',
+              },
+            },
+          };
+        },
+        cancelRuntimeJob: async (jobId, input) => {
+          remoteCalls.push({ method: 'cancelRuntimeJob', args: [jobId, input] });
+          return {};
+        },
+      },
+    });
+
+    const result = await runtime.generateReviewResponse?.({
+      projectId: 'project-1',
+      repoIds: ['repo-1'],
+      context: { schema_version: 'review_response_context.v1' },
+      promptVersion: 'review-response.remote.v1',
+      outputSchemaVersion: 'review_response.v1',
+      policyDigests: {},
+      codexSessionRuntimeContext: sessionRuntimeContext({
+        codex_session_id: 'codex-session-1',
+        codex_session_turn_id: 'session-turn-review-1',
+        expected_input_capsule_digest: digest('b'),
+        turn_group_status: 'complete',
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: 'thread-1',
+          codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+        },
+      }),
+      codexSessionTerminalization: sessionTerminalization({
+        lease_token: 'review-response-lease-token',
+        codex_session_id: 'codex-session-1',
+        codex_session_turn_id: 'session-turn-review-1',
+        expected_input_capsule_digest: digest('b'),
+        input_capsule_ref:
+          'artifact://internal/codex_runtime_capsule/codex_session/codex-session-1/11111111-1111-4111-8111-111111111111',
+        input_memory_bundle_ref: 'artifact://internal/codex_memory_bundle/codex_session/codex-session-1/input-memory',
+        input_environment_manifest_ref:
+          'artifact://internal/codex_environment_manifest/codex_session/codex-session-1/input-environment',
+      }),
+      orchestration: {
+        targetType: 'plan_item_workflow_action',
+        planItemWorkflowActionId: 'workflow-action-1',
+        planItemWorkflowId: 'workflow-1',
+        codexSessionId: 'codex-session-1',
+        codexSessionTurnId: 'session-turn-review-1',
+        reviewPacketId: 'review-packet-1',
+        reviewPacketDigest: digest('c'),
+        actionAttempt: 1,
+        idempotencyKey: 'review-response-idempotency',
+      },
+    });
+
+    expect(result).toMatchObject({
+      taskKind: 'review_response',
+      outputSchemaVersion: 'review_response.v1',
+      generated: generatedPayload,
+    });
+    expect(remoteCalls.map((call) => call.method)).toEqual(['getStatus', 'createRuntimeJob', 'getRuntimeJob']);
+    const createInput = remoteCalls.find((call) => call.method === 'createRuntimeJob')?.args[0] as Record<string, unknown>;
+    expect(createInput).toMatchObject({
+      target: {
+        target_type: 'plan_item_workflow_action',
+        target_id: 'workflow-action-1',
+        target_kind: 'generation',
+      },
+      input_json: {
+        task_kind: 'review_response',
+        output_schema_version: 'review_response.v1',
+        plan_item_workflow_action_id: 'workflow-action-1',
+        plan_item_workflow_id: 'workflow-1',
+        codex_session_id: 'codex-session-1',
+        codex_session_turn_id: 'session-turn-review-1',
+        codex_session_terminalization: {
+          schema_version: 'codex_session_terminalization.v1',
+          lease_token: 'review-response-lease-token',
+          codex_session_id: 'codex-session-1',
+          codex_session_turn_id: 'session-turn-review-1',
+          expected_input_capsule_digest: digest('b'),
+        },
+        review_packet_id: 'review-packet-1',
+        review_packet_digest: digest('c'),
+      },
+    });
+    expect(JSON.stringify(createInput)).not.toContain('action_run_id');
+  });
+
+  it.each([
+    ['session runtime context', 'codexSessionRuntimeContext'],
+    ['session terminalization', 'codexSessionTerminalization'],
+  ] as const)('rejects review response remote workloads without %s', async (_label, missingField) => {
+    const remoteCalls: Array<{ method: string; args: unknown[] }> = [];
+    const runtime = createRemoteCodexGenerationRuntime({
+      runtimeProfileId: 'profile-1',
+      credentialBindingId: 'credential-binding-1',
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      actionClaimRenewalMs: 30_000,
+      now: () => '2026-05-23T00:00:00.000Z',
+      sleep: async () => undefined,
+      controlPlaneClient: {
+        getStatus: async (input) => {
+          remoteCalls.push({ method: 'getStatus', args: [input] });
+          return {
+            runtime_profile_revision_id: 'profile-rev-1',
+            runtime_profile_digest: digest('1'),
+            credential_binding_id: 'credential-binding-1',
+            credential_binding_version_id: 'credential-version-1',
+            credential_payload_digest: digest('2'),
+            docker_image_digest: digest('3'),
+            network_policy_digest: digest('4'),
+          };
+        },
+        createRuntimeJob: async (input) => {
+          remoteCalls.push({ method: 'createRuntimeJob', args: [input] });
+          return { runtime_job: { id: String(input.runtime_job_id), status: 'queued' } };
+        },
+        renewAutomationActionRunClaim: async () => {
+          throw new Error('review responses must not renew automation action claims');
+        },
+        getRuntimeJob: async (jobId) => {
+          remoteCalls.push({ method: 'getRuntimeJob', args: [jobId] });
+          return { runtime_job: { id: jobId, status: 'running' } };
+        },
+        cancelRuntimeJob: async (jobId, input) => {
+          remoteCalls.push({ method: 'cancelRuntimeJob', args: [jobId, input] });
+          return {};
+        },
+      },
+    });
+
+    const input = {
+        projectId: 'project-1',
+        repoIds: ['repo-1'],
+        context: { schema_version: 'review_response_context.v1' },
+        promptVersion: 'review-response.remote.v1',
+        outputSchemaVersion: 'review_response.v1',
+        policyDigests: {},
+        codexSessionRuntimeContext: sessionRuntimeContext({
+          codex_session_id: 'codex-session-1',
+          codex_session_turn_id: 'session-turn-review-1',
+        }),
+        codexSessionTerminalization: sessionTerminalization({
+          codex_session_id: 'codex-session-1',
+          codex_session_turn_id: 'session-turn-review-1',
+        }),
+        orchestration: {
+          targetType: 'plan_item_workflow_action',
+          planItemWorkflowActionId: 'workflow-action-1',
+          planItemWorkflowId: 'workflow-1',
+          codexSessionId: 'codex-session-1',
+          codexSessionTurnId: 'session-turn-review-1',
+          reviewPacketId: 'review-packet-1',
+          reviewPacketDigest: digest('c'),
+          actionAttempt: 1,
+          idempotencyKey: 'review-response-idempotency',
+        },
+      } satisfies Parameters<NonNullable<typeof runtime.generateReviewResponse>>[0];
+    const malformed = { ...input };
+    delete (malformed as Record<string, unknown>)[missingField];
+
+    await expect(
+      runtime.generateReviewResponse?.(malformed as Parameters<NonNullable<typeof runtime.generateReviewResponse>>[0]),
+    ).rejects.toMatchObject({ name: 'CodexGenerationError', code: 'codex_runtime_capsule_missing', retryable: false });
+    expect(remoteCalls).toEqual([]);
   });
 
   it('cancels the remote runtime job when action claim renewal is lost while waiting', async () => {

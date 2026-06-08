@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { BrainstormingModule } from '../brainstorming/brainstorming.module';
 import { ControlPlaneCoreModule } from '../core/control-plane-core.module';
 import { TrustedAutomationActorGuard } from '../automation/trusted-automation-actor.guard';
+import { ProductGenerationRuntimeSchedulerModule } from '../codex-runtime/product-generation-runtime-scheduler.module';
 import { SpecPlanModule } from '../spec-plan/spec-plan.module';
 import { CodexSessionLeaseService } from './codex-session-lease.service';
 import { InternalCodexSessionController } from './internal-codex-session.controller';
@@ -10,7 +11,7 @@ import { PlanItemWorkflowController } from './plan-item-workflow.controller';
 import { PlanItemWorkflowService } from './plan-item-workflow.service';
 
 @Module({
-  imports: [ControlPlaneCoreModule, BrainstormingModule, SpecPlanModule],
+  imports: [ControlPlaneCoreModule, BrainstormingModule, SpecPlanModule, ProductGenerationRuntimeSchedulerModule],
   controllers: [PlanItemWorkflowController, InternalCodexSessionController],
   providers: [PlanItemWorkflowService, CodexSessionLeaseService, TrustedAutomationActorGuard],
   exports: [PlanItemWorkflowService, CodexSessionLeaseService],

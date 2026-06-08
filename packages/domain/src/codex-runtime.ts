@@ -1170,32 +1170,25 @@ export const validateCodexGenerationWorkload = (value: unknown): CodexGeneration
     if (value.output_schema_version !== 'review_response.v1') {
       throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: review_response output_schema_version is unsupported.');
     }
+    if (base.codex_session_runtime_context === undefined || base.codex_session_terminalization === undefined) {
+      throw unsupportedGenerationWorkload(
+        'codex_generation_workload_unsupported: review_response requires codex session runtime context and terminalization.',
+      );
+    }
     const codexSessionId = requireRunExecutionWorkloadString(value, 'codex_session_id');
     const codexSessionTurnId = requireRunExecutionWorkloadString(value, 'codex_session_turn_id');
-    if (base.codex_session_runtime_context !== undefined) {
-      assertRunExecutionContinuityMatches(
-        base.codex_session_runtime_context.codex_session_id,
-        codexSessionId,
-        'codex_session_id',
-      );
-      assertRunExecutionContinuityMatches(
-        base.codex_session_runtime_context.codex_session_turn_id,
-        codexSessionTurnId,
-        'codex_session_turn_id',
-      );
-    }
-    if (base.codex_session_terminalization !== undefined) {
-      assertRunExecutionContinuityMatches(
-        base.codex_session_terminalization.codex_session_id,
-        codexSessionId,
-        'codex_session_id',
-      );
-      assertRunExecutionContinuityMatches(
-        base.codex_session_terminalization.codex_session_turn_id,
-        codexSessionTurnId,
-        'codex_session_turn_id',
-      );
-    }
+    assertRunExecutionContinuityMatches(base.codex_session_runtime_context.codex_session_id, codexSessionId, 'codex_session_id');
+    assertRunExecutionContinuityMatches(
+      base.codex_session_runtime_context.codex_session_turn_id,
+      codexSessionTurnId,
+      'codex_session_turn_id',
+    );
+    assertRunExecutionContinuityMatches(base.codex_session_terminalization.codex_session_id, codexSessionId, 'codex_session_id');
+    assertRunExecutionContinuityMatches(
+      base.codex_session_terminalization.codex_session_turn_id,
+      codexSessionTurnId,
+      'codex_session_turn_id',
+    );
     return {
       ...base,
       task_kind: 'review_response',
