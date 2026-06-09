@@ -132,27 +132,38 @@ parallel health-state logic or raw runtime endpoints.
 Wave 8 separates product decisions from runtime operations:
 
 - **Tech Lead**
-  - can view Plan Item diagnostics;
-  - can continue the current active session when the workflow is recoverable;
+  - can view Plan Item diagnostics only for workflows in projects where the
+    actor has Tech Lead or equivalent project authority;
+  - can continue the current active session when the workflow is recoverable and
+    the actor is authorized for that Plan Item Workflow, repo binding, and
+    credential binding;
   - can later create forks from productized checkpoints;
   - can later choose the active fork;
   - cannot run global scavenge or release arbitrary worker leases.
 - **Developer**
-  - can view Plan Item diagnostics for assigned work;
+  - can view Plan Item diagnostics for assigned work, explicitly shared
+    workflows, or projects where the actor has developer membership;
   - can continue or respond within the current active session when authorized by
     the Plan Item Workflow;
   - can request Operator recovery;
   - cannot select active forks or run recovery directly unless explicitly
     granted later.
 - **Operator/Admin**
-  - can view the global session health dashboard;
-  - can run recover/scavenge operations;
-  - can mark unrecoverable runtime conditions;
-  - can view safe capsule, worker, lease, queued action, and lineage metadata;
+  - can view the global session health dashboard only within the operator's
+    organization, project, or explicitly assigned support scope;
+  - can run recover/scavenge operations only for sessions in that scope;
+  - can mark unrecoverable runtime conditions only for sessions in that scope;
+  - can view safe capsule, worker, lease, queued action, and lineage metadata in
+    that scope;
   - cannot use recovery actions to silently continue Codex execution.
 
 This split is intentional. Fork/select-fork is a product and technical
 direction decision. Recover/scavenge is an operational safety decision.
+
+All API implementations must derive actor identity and resource scope from
+authenticated server context. Request bodies may carry a reason, idempotency
+key, or `candidate_predicate`; they must not be trusted as the source of actor
+identity or authorization.
 
 ## Fork Semantics For Wave 8
 
@@ -204,9 +215,15 @@ It projects:
 - latest capsule id and digest prefix or full internal digest where only
   server-side code sees it;
 - latest checkpoint or pinned capsule reference where present;
-- active worker lease id and lease age;
-- pending queued action id and kind;
+- active worker lease id, status, worker id, heartbeat, expiry, and lease age;
+- pending queued action id, kind, status, idempotency key, and update time;
 - latest Codex turn id;
+- current runtime job id, status, worker id, launch lease id, expiry, and update
+  time where present;
+- current run session id, status, remote runtime job id, remote run worker lease
+  id, and update time where present;
+- current `CodexSession` runner ownership fields where present;
+- checkpoint pin source and capsule retention pin summary;
 - recovery availability and allowed recovery operation labels;
 - whether Operator intervention is required;
 - whether any retention risk exists;
@@ -291,17 +308,19 @@ Allowed recovery effects:
   explicit stale/orphan reason codes;
 - mark a missing capsule or lineage conflict as unrecoverable when the invariant
   cannot be repaired;
-- reattach the workflow to the latest valid checkpoint when the checkpoint is
-  already productized and digest-verified;
+- publish a safe recovery recommendation that points at the latest valid
+  productized checkpoint when one exists;
 - refresh the health projection;
 - write audit events for every change.
 
-Reattaching to the latest valid checkpoint is a metadata repair, not a product
-stage transition. It may repair stale checkpoint/capsule pointers on the active
-workflow/session only when the target checkpoint is already productized,
-digest-verified, and belongs to the same Plan Item Workflow lineage. It must
-not synthesize a new checkpoint, mutate document contents, create a Codex turn,
-or advance the workflow status.
+Checkpoint recovery is advisory in the first Recovery/Ops slice. Recovery may
+record that a specific checkpoint is the latest safe resume/fork/archive
+candidate, but it must not mutate `PlanItemWorkflow.active_*_revision_id`,
+`execution_package_id`, document revision pointers, or other product evidence
+fields. Any future operation that changes those fields must go through an
+explicit `PlanItemWorkflowTransition` or `WorkflowManualDecision` with evidence
+object type, evidence object id, evidence digest, transition id, actor, and
+reason. This prevents a recovery action from becoming a hidden workflow jump.
 
 Forbidden recovery effects:
 
@@ -321,41 +340,129 @@ lease, or rewrite already recovered state with a contradictory reason.
 
 Recovery must be fenced. A stale recovery candidate captured at time T must be
 revalidated immediately before execution. If a fresh lease, queued action,
-turn, runtime job, or capsule has appeared, the recovery operation must stop or
-recompute rather than acting on stale assumptions.
+turn, runtime job, run session, runner owner, workflow revision pointer, or
+capsule has appeared, the recovery operation must stop or recompute rather than
+acting on stale assumptions.
 
 ### Recovery Candidate Predicate
 
-Every recover/scavenge execute request must carry a candidate predicate captured
-from the health projection. The predicate is not a secret token; it is a compact
-optimistic-concurrency contract that makes the operation safe to retry and safe
-to reject when state changed.
+Every recover/scavenge execute request must carry a `candidate_predicate`
+captured from the health projection. The predicate is not a secret token; it is
+a compact optimistic-concurrency contract that makes the operation safe to retry
+and safe to reject when state changed.
 
 Suggested shape:
 
 ```ts
+type ObservedRef<T> =
+  | { checked: true; state: 'absent' }
+  | ({ checked: true; state: 'present' } & T);
+
 type SessionRecoveryCandidatePredicate = {
   codex_session_id: string;
   workflow_id: string;
   expected_health_state: PlanItemSessionHealthState;
-  expected_active_lease_id?: string;
-  expected_lease_epoch?: number;
-  expected_lease_expires_at?: string;
-  expected_pending_queued_action_id?: string;
-  expected_pending_queued_action_status?: string;
-  expected_latest_turn_id?: string;
-  expected_latest_capsule_id?: string;
-  expected_latest_capsule_digest?: string;
-  expected_runtime_job_id?: string;
-  expected_run_session_id?: string;
+  operation_idempotency_key: string;
+  projection_digest: string;
+  workflow: {
+    id: string;
+    status: PlanItemWorkflowStatus;
+    updated_at: string;
+    active_codex_session_id: string;
+    active_boundary_summary_revision_id: string | null;
+    active_spec_doc_revision_id: string | null;
+    active_implementation_plan_doc_revision_id: string | null;
+    execution_package_id: string | null;
+  };
+  session: {
+    id: string;
+    status: string;
+    role: string;
+    updated_at: string;
+    active_lease_id: string | null;
+    lease_epoch: number;
+    runner_worker_id: string | null;
+    runner_launch_lease_id: string | null;
+    runner_runtime_job_id: string | null;
+    runner_expires_at: string | null;
+    latest_turn_id: string | null;
+    latest_capsule_id: string | null;
+    latest_capsule_digest: string | null;
+  };
+  active_lease: ObservedRef<{
+    id: string;
+    status: string;
+    lease_epoch: number;
+    worker_id: string;
+    worker_session_digest: string;
+    heartbeat_at: string | null;
+    expires_at: string;
+    updated_at: string;
+  }>;
+  pending_queued_action: ObservedRef<{
+    id: string;
+    kind: string;
+    status: string;
+    idempotency_key: string;
+    codex_session_turn_id: string | null;
+    expected_input_capsule_digest: string | null;
+    updated_at: string;
+  }>;
+  latest_turn: ObservedRef<{
+    id: string;
+    status: string;
+    lease_id: string | null;
+    lease_epoch: number | null;
+    runtime_job_id: string | null;
+    expected_input_capsule_digest: string | null;
+    input_capsule_digest: string | null;
+    output_capsule_digest: string | null;
+    updated_at: string;
+  }>;
+  runtime_job: ObservedRef<{
+    id: string;
+    status: string;
+    terminal_status: string | null;
+    worker_id: string;
+    launch_lease_id: string;
+    accepted_worker_session_digest: string | null;
+    expires_at: string;
+    updated_at: string;
+  }>;
+  run_session: ObservedRef<{
+    id: string;
+    status: string;
+    codex_session_id: string | null;
+    codex_session_turn_id: string | null;
+    remote_runtime_job_id: string | null;
+    remote_run_worker_lease_id: string | null;
+    updated_at: string;
+  }>;
+  latest_capsule: ObservedRef<{
+    id: string;
+    digest: string;
+    sequence: number;
+    created_from_turn_id: string;
+    created_at: string;
+  }>;
   observed_at: string;
 };
 ```
 
 Before applying recovery, the service must reload the workflow, session, lease,
 queued action, turn, runtime job, run attempt, and capsule records referenced by
-the predicate. If any expected id, epoch, digest, status, or expiry predicate no
-longer matches, the candidate is skipped with a stale-candidate result.
+the predicate. `ObservedRef` values use `state: 'absent'` to mean the projection
+checked and found no record; missing fields are not allowed to mean "not
+checked." If any expected id, epoch, digest, status, update timestamp, expiry,
+idempotency key, worker session digest, runner ownership field, or active
+workflow revision pointer no longer matches, the candidate is skipped with a
+stale-candidate result.
+
+`operation_idempotency_key` is stable for the exact recovery request. Repeating
+the same key with the same `candidate_predicate` returns the original recovery
+record. Repeating the same key with a different predicate, reason, operation, or
+target session is an idempotency conflict and must fail closed without changing
+state.
 
 ## Scavenge Semantics
 
@@ -426,6 +533,13 @@ Plan Item diagnostics can link to the Operator dashboard only when the viewer is
 authorized. Non-operator users should see a request-recovery action or a clear
 "Operator intervention required" state instead.
 
+`GET /plan-items/:planItemId/session-diagnostics` must resolve the active
+`PlanItemWorkflow` for that Plan Item deterministically. If the Plan Item has no
+active workflow, diagnostics return a no-active-workflow state. If multiple
+non-archived workflows exist, diagnostics must fail closed with a lineage
+conflict or require the caller to use an explicit workflow-scoped route. It must
+not pick an arbitrary workflow.
+
 ## Retention Safety
 
 Wave 8 uses two retention classes:
@@ -440,6 +554,41 @@ Wave 8 uses two retention classes:
 
 The first implementation slice only builds the read-model and safety metadata
 needed to identify pinned state. It does not delete capsules.
+
+Retention safety is modeled per capsule, not as a single session-level boolean.
+The health projection may summarize retention risk, but the operator projection
+must expose each relevant capsule pin:
+
+```ts
+type CapsuleRetentionPin = {
+  capsule_id: string;
+  capsule_digest: string;
+  pin_state: 'pinned' | 'not_cleanable' | 'unpinned_candidate' | 'unknown';
+  pin_reasons: Array<
+    | 'active_session_latest'
+    | 'fork_point'
+    | 'brainstorming_boundary'
+    | 'spec_doc'
+    | 'implementation_plan_doc'
+    | 'execution_checkpoint'
+    | 'review_checkpoint'
+    | 'workflow_transition'
+    | 'recovery_record'
+    | 'object_event'
+    | 'unrecoverable_evidence'
+  >;
+  referenced_by: Array<{
+    object_type: string;
+    object_id: string;
+    relation: string;
+  }>;
+};
+```
+
+`retention_risk` in a health row is only a summary flag. It is true when any
+capsule needed by the active session, fork lineage, checkpoint, recovery record,
+or audit trail is missing a pin, has an unknown pin state, or is incorrectly
+classified as an `unpinned_candidate`.
 
 Later cleanup workers must prove that a capsule is not referenced by any active
 session, fork lineage, product checkpoint, workflow transition, recovery record,
@@ -478,8 +627,8 @@ GET  /plan-items/:planItemId/session-diagnostics
 `POST /session-operations/:sessionId/recover`
 
 - Operator/Admin only.
-- Requires actor id, reason, expected health state or `candidate_predicate`, and
-  optional operation mode.
+- Actor id is derived from authenticated server context.
+- Requires reason, operation idempotency key, and `candidate_predicate`.
 - Revalidates candidate predicates before changing state.
 - Returns before/after health projection and audit id.
 
@@ -489,12 +638,17 @@ GET  /plan-items/:planItemId/session-diagnostics
 - Defaults to dry-run.
 - Execute mode requires explicit confirmation and candidate predicates.
 - Returns per-candidate result.
+- CLI/runbook scavenge support belongs to the first slice as an operator wrapper
+  around the same API semantics. It must not bypass authorization, predicate
+  fencing, idempotency, or audit behavior.
 
 `GET /plan-items/:planItemId/session-diagnostics`
 
 - Authorized Plan Item viewers.
 - Returns local diagnostics for the Plan Item Workflow without exposing global
   operator controls.
+- Resolves exactly one active Plan Item Workflow or fails closed as described in
+  Plan Item Diagnostics.
 
 Names may be adapted to existing Nest modules and web command conventions, but
 the route semantics must remain product-level session operations.
@@ -519,6 +673,8 @@ type PlanItemSessionHealthState =
 
 type PlanItemSessionHealth = {
   id: string;
+  project_id: string;
+  organization_id?: string;
   workflow_id: string;
   development_plan_item_id: string;
   codex_session_id: string;
@@ -528,24 +684,55 @@ type PlanItemSessionHealth = {
   summary: string;
   latest_capsule_id?: string;
   latest_capsule_digest?: string;
+  capsule_retention_pins: CapsuleRetentionPin[];
   latest_checkpoint_object_type?: string;
   latest_checkpoint_object_id?: string;
+  latest_checkpoint_digest?: string;
+  latest_checkpoint_pin_source?: string;
   active_lease_id?: string;
+  active_lease_status?: string;
+  active_lease_worker_id?: string;
+  active_lease_worker_session_digest?: string;
+  active_lease_heartbeat_at?: string;
   active_lease_expires_at?: string;
   pending_queued_action_id?: string;
   pending_queued_action_kind?: string;
+  pending_queued_action_status?: string;
+  pending_queued_action_idempotency_key?: string;
+  pending_queued_action_updated_at?: string;
   latest_codex_turn_id?: string;
+  latest_codex_turn_status?: string;
+  latest_codex_turn_updated_at?: string;
+  runtime_job_id?: string;
+  runtime_job_status?: string;
+  runtime_job_terminal_status?: string;
+  runtime_job_worker_id?: string;
+  runtime_job_launch_lease_id?: string;
+  runtime_job_expires_at?: string;
+  runtime_job_updated_at?: string;
+  run_session_id?: string;
+  run_session_status?: string;
+  run_session_remote_runtime_job_id?: string;
+  run_session_remote_worker_lease_id?: string;
+  run_session_updated_at?: string;
+  session_runner_worker_id?: string;
+  session_runner_launch_lease_id?: string;
+  session_runner_runtime_job_id?: string;
+  session_runner_expires_at?: string;
   recovery_available: boolean;
   recovery_operation_labels: string[];
   operator_intervention_required: boolean;
   retention_risk: boolean;
   lineage_risk: boolean;
+  candidate_predicate?: SessionRecoveryCandidatePredicate;
+  projection_digest: string;
   checked_at: string;
   updated_at: string;
 };
 
 type SessionRecoveryRecord = {
   id: string;
+  operation_idempotency_key: string;
   codex_session_id: string;
   workflow_id: string;
   development_plan_item_id: string;
@@ -554,6 +741,8 @@ type SessionRecoveryRecord = {
   reason: string;
   before_state: PlanItemSessionHealthState;
   after_state: PlanItemSessionHealthState;
+  before_projection_digest: string;
+  after_projection_digest: string;
   affected_lease_ids: string[];
   affected_queued_action_ids: string[];
   affected_turn_ids: string[];
@@ -563,7 +752,7 @@ type SessionRecoveryRecord = {
   candidate_predicate: SessionRecoveryCandidatePredicate;
   result: 'applied' | 'skipped' | 'blocked';
   result_code: string;
-  object_event_id: string;
+  object_event_id?: string;
   created_at: string;
 };
 ```
@@ -572,21 +761,47 @@ Equivalent names are acceptable if they match existing repository conventions.
 The important part is that recovery is a first-class audited product operation,
 not a hidden side effect of a dashboard refresh.
 
+The public Plan Item diagnostics DTO, Operator dashboard DTO, and internal
+recovery predicate DTO must be separate:
+
+- Public Plan Item diagnostics redacts worker session digests, idempotency keys,
+  runtime job internals, full capsule digests, and candidate predicates.
+- Operator dashboard projection includes safe operational metadata needed for
+  diagnosis and candidate creation.
+- Internal recovery predicate includes full fencing fields and is accepted only
+  by recover/scavenge execute routes.
+
 ## Audit Events
 
 Every recover/scavenge operation that changes state must write an `ObjectEvent`.
 
+`SessionRecoveryRecord` is written for applied, skipped, and blocked attempts.
+`object_event_id` is required for `result = 'applied'` because product state
+changed. It may be omitted for skipped or blocked stale-candidate attempts when
+no state changed, unless the implementation chooses to audit no-op attempts as
+events. In either case, API responses must make the no-op reason explicit.
+
+Full `candidate_predicate` payloads are internal recovery-record material.
+`ObjectEvent` payloads must include only a public-safe/redacted predicate
+summary, such as projection digest, operation idempotency key, expected health
+state, affected object ids, and result code. They must not copy worker session
+digests, raw thread ids, local paths, or other internal predicate details into
+public evidence.
+
 Required audit payload:
 
 - actor id;
+- operation idempotency key;
 - operation;
 - reason;
 - before health state;
 - after health state;
+- before projection digest;
+- after projection digest;
 - affected session id;
 - affected workflow id;
 - affected lease/action/turn/runtime-job/run-session/capsule ids;
-- candidate predicate or expected state used for fencing;
+- candidate predicate used for fencing;
 - result code;
 - timestamp.
 
@@ -619,11 +834,15 @@ active Codex session.
 Recover/scavenge should fail closed for:
 
 - missing active workflow;
+- multiple non-archived workflows for a Plan Item diagnostics request unless the
+  route is workflow-scoped;
 - missing active session;
 - archived workflow or archived session;
 - unauthorized actor;
 - stale `candidate_predicate` or expected state mismatch;
 - active fresh lease that supersedes the stale candidate;
+- mismatched worker session digest, queued action idempotency key, run session
+  status, runtime job status, or updated timestamp;
 - capsule digest mismatch;
 - missing required capsule;
 - lineage conflict that cannot be repaired from productized checkpoints;
@@ -646,13 +865,27 @@ Implementation must include focused tests for:
   public projections;
 - recovery idempotency for repeated stale lease recovery;
 - recovery fencing when a fresh lease appears after candidate capture;
+- recovery fencing when an optional predicate field would otherwise hide the
+  difference between observed-absent and not-checked;
+- recovery fencing for changed workflow active revision fields;
+- recovery fencing for changed queued action idempotency, turn status, runtime
+  job status, run session status, runner ownership, and worker session digest;
 - orphan action terminalization with audit event;
 - orphan runtime-job and run-session recovery audit;
 - scavenge dry-run without mutations;
 - scavenge execute with per-candidate applied/skipped/blocked results;
-- Operator authorization for recover/scavenge/dashboard;
+- skipped/blocked recovery records with explicit no-op audit behavior;
+- retention pin projection for active session, fork point, checkpoint, recovery
+  record, and ObjectEvent-referenced capsules;
+- Operator authorization for recover/scavenge/dashboard scoped by organization,
+  project, or assigned support scope;
 - Tech Lead and Developer access to Plan Item diagnostics without global
   recovery powers;
+- actor identity derived from authenticated context rather than request body;
+- Plan Item diagnostics fail closed when no active workflow or multiple active
+  workflows would make workflow selection ambiguous;
+- recovered state does not enable continue/fork/archive without a separate
+  human product action;
 - API route tests for every session operations and Plan Item diagnostics route;
 - browser or component-level UI verification for Operator dashboard and Plan Item
   diagnostics, including at least one blocked state and one recovered state;
@@ -676,13 +909,17 @@ Wave 8 Recovery/Ops Foundation is accepted when:
    recovered, or needs Operator intervention.
 7. Recovery never invokes Codex, creates sessions, forks, advances workflow
    status, or retries execution automatically.
-8. Recovery and scavenge actions are auditable through `ObjectEvent` and
-   recovery records.
+8. Recovery and scavenge actions are auditable through recovery records; applied
+   state changes also have `ObjectEvent` evidence, while skipped or blocked
+   no-op attempts expose explicit no-op result codes.
 9. Capsule/checkpoint diagnostics do not expose raw capsule contents, raw
    `~/.codex` paths, secrets, or raw thread ids.
-10. Retention projection marks active/fork/checkpoint/audit-referenced capsules
-    as pinned or not-cleanable, and no cleanup deletes capsules in this slice.
-11. No legacy `p0` or retired execution-package public route can bypass Plan
+10. Retention projection marks each active/fork/checkpoint/recovery/audit
+    referenced capsule with a `CapsuleRetentionPin`; no cleanup deletes capsules
+    in this slice.
+11. A recovered session cannot continue, fork, archive, or change product stage
+    until a separate authorized human product action is submitted.
+12. No legacy `p0` or retired execution-package public route can bypass Plan
     Item Workflow or Session Operations semantics.
 
 ## Later Wave 8 Slices
